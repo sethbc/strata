@@ -57,9 +57,9 @@ local voices = {
       spread = 0.3
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -80,9 +80,9 @@ local voices = {
       spread = 0.4
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -101,9 +101,9 @@ local voices = {
       spread = 0.2
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -125,9 +125,9 @@ local voices = {
       spread = 0.35
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -149,9 +149,9 @@ local voices = {
       spread = 0.25
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -173,9 +173,9 @@ local voices = {
       spread = 0.4
     },
     crossmod = {
-      source = 0,
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   }
