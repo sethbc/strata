@@ -572,43 +572,81 @@ end
 -- Redraw
 function redraw()
   screen.clear()
-  
+
   -- Title
   screen.level(15)
   screen.move(0, 8)
   screen.text("STRATA")
-  
-  screen.move(90, 8)
+
+  -- Master density (top right)
+  screen.move(70, 8)
   screen.level(4)
-  screen.text("density: " .. string.format("%.2f", master_density))
-  
-  -- Voice list
+  screen.text("dens:" .. string.format("%.2f", master_density))
+
+  -- Voice list (left column, 0-60px)
   voice_list:redraw()
-  
-  -- Selected voice info
+
+  -- Right column divider
+  screen.level(1)
+  screen.move(62, 10)
+  screen.line(62, 52)
+  screen.stroke()
+
+  -- Selected voice info (right column, 65-128px)
   local v = voices[selected_voice]
-  screen.move(0, 55)
-  screen.level(frozen[selected_voice] and 3 or 8)
-  if v.name == "resonator" then
-    screen.text("freq: " .. string.format("%.0f", v.params.freq))
-  elseif v.name == "fm" then
-    screen.text("index: " .. string.format("%.1f", v.params.index))
-  elseif v.name == "folder" then
-    screen.text("fold: " .. string.format("%.1f", v.params.fold))
-  elseif v.name == "sub" then
-    screen.text("drift: " .. string.format("%.3f", v.params.drift))
-  elseif v.name == "pulse" then
-    screen.text("width: " .. string.format("%.2f", v.params.width))
-  elseif v.name == "karplus" then
-    screen.text("decay: " .. string.format("%.1f", v.params.decay))
-  elseif v.name == "ring" then
-    screen.text("ratio: " .. string.format("%.2f", v.params.ratio))
+  screen.level(15)
+  screen.move(65, 18)
+  screen.text(string.upper(v.name))
+
+  -- Status indicators
+  screen.level(4)
+  screen.move(65, 26)
+  local status = v.active and "ON" or "OFF"
+  screen.text(status)
+  if frozen[selected_voice] then
+    screen.move(90, 26)
+    screen.level(8)
+    screen.text("[FREEZE]")
   end
-  
+
+  -- Main parameter
+  screen.level(frozen[selected_voice] and 3 or 10)
+  screen.move(65, 36)
+  if v.name == "resonator" then
+    screen.text("freq")
+    screen.move(65, 44)
+    screen.text(string.format("%.0f Hz", v.params.freq))
+  elseif v.name == "fm" then
+    screen.text("index")
+    screen.move(65, 44)
+    screen.text(string.format("%.1f", v.params.index))
+  elseif v.name == "folder" then
+    screen.text("fold")
+    screen.move(65, 44)
+    screen.text(string.format("%.1f", v.params.fold))
+  elseif v.name == "sub" then
+    screen.text("drift")
+    screen.move(65, 44)
+    screen.text(string.format("%.3f", v.params.drift))
+  elseif v.name == "pulse" then
+    screen.text("width")
+    screen.move(65, 44)
+    screen.text(string.format("%.2f", v.params.width))
+  elseif v.name == "karplus" then
+    screen.text("decay")
+    screen.move(65, 44)
+    screen.text(string.format("%.1f s", v.params.decay))
+  elseif v.name == "ring" then
+    screen.text("ratio")
+    screen.move(65, 44)
+    screen.text(string.format("%.2f", v.params.ratio))
+  end
+
+  -- Key hints (bottom)
   screen.move(0, 64)
   screen.level(4)
   screen.text("K2:rand K3:" .. (v.active and "freeze" or "start"))
-  
+
   screen.update()
 end
 

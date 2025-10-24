@@ -136,6 +136,67 @@ When making significant changes to the codebase, ensure both documentation files
 - New patterns or conventions introduced
 - Changes to the signal flow or engine commands
 
+### IMPORTANT: Always update the UI when adding features or changing the codebase
+
+**The norns screen is 128×64 pixels - every pixel matters.** The UI must evolve with the codebase to remain usable and informative.
+
+#### UI Design Principles for norns
+
+1. **Screen Constraints**:
+   - Total resolution: 128×64 pixels
+   - Use column layouts to maximize information density without overlapping
+   - Current layout: Left column (0-60px) for voice list, Right column (65-128px) for parameters
+   - Reserve bottom row (y=64) for key hints
+
+2. **Scrolling Lists**:
+   - Use `UI.ScrollingList` for lists that exceed visible space
+   - Set `num_visible` appropriately (currently 5 for 7 voices)
+   - Set `num_above_selected` for context (currently 1)
+   - Always set `active = true` and update `index` when selection changes
+
+3. **Information Hierarchy**:
+   - Title/app name at top (y=8)
+   - Critical global params in header (master density)
+   - Selected item details in dedicated column
+   - Helper text at bottom (key functions)
+
+#### When Adding New Features, Update the UI to:
+
+1. **Display New Parameters**:
+   - Add new parameters to the right column display
+   - Consider abbreviating labels if space is tight (e.g., "dens" instead of "density")
+   - Use appropriate units (Hz, s, %, etc.)
+   - Update the parameter value display in the `redraw()` function
+
+2. **Add New Voices**:
+   - Voice list automatically scrolls with more than 5 voices
+   - Add parameter display case in `redraw()` function
+   - Update `get_param_spec()` with controlspec for new parameters
+   - Consider whether right column layout needs adjustment
+
+3. **Add New Status Indicators**:
+   - Place indicators in consistent locations (currently status at y=26)
+   - Use brightness levels to show importance (15=bright, 4=dim, 1=subtle)
+   - Consider using `[BRACKETS]` for state indicators like `[FREEZE]`
+
+4. **Maintain Visual Balance**:
+   - Keep divider line between columns (x=62)
+   - Preserve alignment of related information
+   - Use consistent spacing between UI elements
+   - Test with all voices to ensure nothing overlaps or clips
+
+#### UI Update Checklist
+
+Before completing any feature addition, verify:
+- [ ] New parameters are visible in the UI without overlapping
+- [ ] Voice list scrolling still works correctly
+- [ ] All status indicators are clearly visible
+- [ ] Parameter values display with appropriate precision and units
+- [ ] Key hints at bottom reflect current functionality
+- [ ] UI works correctly for all 7 voices
+- [ ] No text or graphics extend beyond screen bounds (128×64)
+- [ ] Visual hierarchy remains clear (title → list → details → hints)
+
 ### CRITICAL: Always keep the Lua script and SuperCollider engine synchronized
 
 **This is the most important rule for this codebase.** The dual-language architecture requires strict synchronization between [strata.lua](strata.lua) and [lib/Engine_Strata.sc](lib/Engine_Strata.sc).
@@ -219,10 +280,17 @@ end)
 
 ### UI Updates
 
-The `update_voice_list()` function recreates the `UI.List` on every change. The list shows:
+The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. The list shows:
 - Active status (● for on, ○ for off)
 - Voice name
 - Freeze status ([F] suffix)
+
+The UI uses a two-column layout:
+- **Left column (0-60px)**: Scrolling voice list (5 visible at a time)
+- **Right column (65-128px)**: Selected voice details (name, status, main parameter)
+- **Divider (x=62)**: Subtle vertical line separating columns
+
+The `redraw()` function handles all screen drawing and must be updated whenever new UI elements are added.
 
 ## SuperCollider Architecture
 
