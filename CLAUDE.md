@@ -39,15 +39,28 @@ Each of the 4 voices follows this path:
 
 ### Lua ↔ SuperCollider Communication
 
-The Lua script controls the engine through these commands:
-- `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` - Start a voice
-- `engine.voiceOff(voice)` - Stop a voice (gates off with release envelope)
-- `engine.setVoiceParam(voice, param, value)` - Update synthesis parameters
-- `engine.setGrainParam(voice, param, value)` - Update granular parameters
-- `engine.setMasterDrift(amount)` - Control tape drift effect
-- `engine.setReverb(mix, size, damp)` - Update reverb settings
+**IMPORTANT**: This section documents the current engine command interface. Keep it updated when adding/modifying commands.
 
-Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua (subtract 1 when calling engine commands).
+The Lua script controls the engine through these commands:
+
+| Lua Command | SC Signature | Purpose |
+|-------------|--------------|---------|
+| `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"isfffff"` | Start a voice with initial parameters |
+| `engine.voiceOff(voice)` | `"i"` | Stop a voice (gates off with release envelope) |
+| `engine.setVoiceParam(voice, param, value)` | `"isf"` | Update synthesis parameters dynamically |
+| `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
+| `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
+| `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
+
+**Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`).
+
+**Current Voice Parameters** (as of latest sync):
+- **Resonator**: freq, rq, noise, mod1, mod2, amp, pan
+- **FM**: freq, ratio, index, modFreq, amp, pan
+- **Folder**: freq, fold, mod, amp, pan
+- **Sub**: freq, drift, amp
+
+**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread
 
 ## Development & Testing
 
@@ -97,13 +110,55 @@ When making significant changes to the codebase, ensure both documentation files
 - New patterns or conventions introduced
 - Changes to the signal flow or engine commands
 
-### Always keep the lua script and the supercollider engine synchronized when changes are made to the codebase
+### CRITICAL: Always keep the Lua script and SuperCollider engine synchronized
 
-When making significant changes to the codebase, ensure both the lua scripts and the supercollider files reflect:
-- New features or architectural changes
-- Updated workflows or testing procedures
-- New patterns or conventions introduced
-- Changes to the signal flow or engine commands
+**This is the most important rule for this codebase.** The dual-language architecture requires strict synchronization between [strata.lua](strata.lua) and [lib/Engine_Strata.sc](lib/Engine_Strata.sc).
+
+#### When modifying the SuperCollider engine, you MUST update:
+
+1. **Engine Commands** - If you add/modify `this.addCommand()` in the SC file:
+   - Add corresponding `engine.*` calls in the Lua file
+   - Ensure parameter counts and types match exactly
+   - Update the "Lua ↔ SuperCollider Communication" section in this file
+
+2. **SynthDef Parameters** - If you add/modify SynthDef arguments:
+   - Update the `voices` table in Lua with matching parameter names
+   - Add corresponding params in `add_voice_params()` function
+   - Add to `get_param_spec()` with appropriate controlspec
+   - Ensure `engine.setVoiceParam()` calls use the correct parameter names
+
+3. **Voice-Specific Parameters** - If you change voice parameters:
+   - Update `getVoiceParams()` helper in SC
+   - Update default values in Lua `voices` table
+   - Verify parameter names match between SC SynthDef args and Lua param IDs
+
+#### When modifying the Lua script, you MUST update:
+
+1. **New Engine Calls** - If you add new `engine.*` calls:
+   - Add corresponding `this.addCommand()` in the SC engine
+   - Match the parameter signature exactly (use SC type codes: i=int, f=float, s=string)
+   - Test the command works on norns/maiden
+
+2. **Parameter Changes** - If you modify voice parameters:
+   - Update the corresponding SynthDef arguments in SC
+   - Ensure default values match between Lua and SC
+   - Update voice-specific parameter lists
+
+3. **Granular Parameters** - If you modify grain processing:
+   - Update `\strataGrain` SynthDef arguments
+   - Update `engine.setGrainParam()` calls
+   - Verify parameter names match (e.g., `grainSize`, `grainDensity`, `pitchShift`, `posSpread`)
+
+#### Synchronization Checklist
+
+Before completing any modification task, verify:
+- [ ] All `engine.*` commands in Lua have matching `this.addCommand()` in SC
+- [ ] All SynthDef parameters are accessible from Lua params system
+- [ ] Parameter names match exactly (case-sensitive)
+- [ ] Array indexing conversions are correct (Lua 1-indexed → SC 0-indexed with `-1`)
+- [ ] Default values are consistent between Lua and SC
+- [ ] Documentation in CLAUDE.md reflects any new commands or parameters
+- [ ] README.md is updated if user-facing features changed
 
 ## Key Implementation Patterns
 
