@@ -124,7 +124,7 @@ function init()
   }
   
   -- Reverb
-  params:add_separator("reverb")
+  params:add_separator("strata_reverb")
   params:add{
     type = "control",
     id = "reverb_mix",
@@ -168,12 +168,14 @@ function init()
   lfo_metro.time = 0.1
   lfo_metro.event = lfo_update
   lfo_metro:start()
-  
-  -- Start with first two voices
-  toggle_voice(1)
-  clock.sleep(0.5)
-  toggle_voice(2)
-  
+
+  -- Start with first two voices (delayed)
+  clock.run(function()
+    toggle_voice(1)
+    clock.sleep(0.5)
+    toggle_voice(2)
+  end)
+
   redraw()
 end
 
