@@ -247,6 +247,81 @@ Before completing any modification task, verify:
 - [ ] Documentation in CLAUDE.md reflects any new commands or parameters
 - [ ] README.md is updated if user-facing features changed
 
+### CRITICAL: Always keep grid and arc integration synchronized with codebase updates
+
+**Hardware controller integration must evolve with the codebase.** When adding features, voices, or parameters, the grid and arc interfaces should be reviewed and updated to provide access to new capabilities.
+
+#### When adding new voices, you MUST review:
+
+1. **Grid Integration**:
+   - Update pattern sequencer to handle new voice count (currently 7 voices)
+   - Adjust grid layout if voice count exceeds current row allocation
+   - Update `grid_redraw_*()` functions to display new voices
+   - Ensure voice toggle buttons work for all voices
+   - Update pattern operations (clear, randomize) for new voices
+
+2. **Arc Integration**:
+   - Consider if new voice parameters should be accessible via arc rings
+   - Update `arc_delta()` to handle new voice-specific parameters
+   - Update `arc_redraw()` to display new parameter ranges correctly
+   - Ensure parameter min/max values match between arc feedback and param specs
+
+#### When adding new parameters, you MUST review:
+
+1. **Grid Parameter Manipulation**:
+   - Map new parameters to grid button positions in `manipulate_parameter()`
+   - Update parameter page system if needed (currently 4 pages)
+   - Consider adding dedicated grid controls for critical new parameters
+   - Update grid documentation in README.md
+
+2. **Arc Parameter Control**:
+   - Evaluate if new parameters should replace or augment arc ring mappings
+   - Update `get_param_spec()` to ensure arc can scale parameter ranges correctly
+   - Consider adding new arc rings if 4 rings is limiting (requires arc hardware change)
+
+#### When adding new features, you MUST review:
+
+1. **Grid Feature Integration**:
+   - Determine if feature needs grid UI representation
+   - Add grid buttons for feature controls (play/stop, mode switching, etc.)
+   - Update grid LED feedback to reflect feature state
+   - Ensure feature works correctly when triggered from grid
+   - Test with all grid sizes (256, 128h, 128v, 64)
+
+2. **Arc Feature Integration**:
+   - Evaluate if feature adds controllable parameters
+   - Consider if arc button (2025 model) should trigger feature
+   - Ensure arc LED feedback reflects feature state
+   - Test graceful degradation when arc is not connected
+
+#### When changing voice count or architecture, you MUST update:
+
+1. **Grid Layouts**:
+   - `grid_key_256()`, `grid_key_128h()`, `grid_key_128v()`, `grid_key_64()` - Key handling
+   - `grid_redraw_256()`, `grid_redraw_128h()`, `grid_redraw_128v()`, `grid_redraw_64()` - LED feedback
+   - Pattern storage structure: `patterns[voice_idx][step]`
+   - Voice selection range checks throughout grid code
+
+2. **Arc Voice Selection**:
+   - Update voice-specific parameter mapping in `arc_delta()`
+   - Ensure `arc_redraw()` handles all voice types correctly
+   - Update voice selection via norns E2 to work with arc feedback
+
+#### Hardware Integration Checklist
+
+Before completing any feature addition or architectural change, verify:
+- [ ] Grid pattern sequencer accommodates all voices
+- [ ] Grid layouts (all 4 sizes) reflect current feature set
+- [ ] Grid LED feedback accurately represents system state
+- [ ] Grid buttons trigger all relevant features
+- [ ] Arc rings provide access to most-used parameters
+- [ ] Arc LED feedback displays current parameter values accurately
+- [ ] Arc parameter ranges match controlspecs exactly
+- [ ] All grid/arc functions handle new features gracefully
+- [ ] README.md documents new grid/arc controls
+- [ ] CLAUDE.md updated with grid/arc implementation patterns for new features
+- [ ] Tested with and without hardware connected (graceful degradation)
+
 ## Key Implementation Patterns
 
 ### Voice State Management
