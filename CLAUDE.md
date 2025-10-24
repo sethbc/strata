@@ -574,6 +574,15 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 - **Cleanup**: `scene_sequencer_stop()` called in `cleanup()` to prevent orphaned clocks
 - **Transition State**: `scene_transition_active` flag prevents concurrent transitions
 
+#### Disk Persistence
+- **Storage Location**: `~/dust/data/strata/scenes.data`
+- **File Format**: Lua table serialization using norns `tab` library
+- **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
+- **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
+- **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
+- **What's Saved**: Complete scenes table including all 8 scene slots, populated state, and scene data
+- **Persistence**: Scenes persist across norns reboots, allowing you to build a library of sonic palettes
+
 ### Async Initialization
 
 Voice activation uses `clock.run()` for delayed starts:
@@ -734,6 +743,7 @@ Potential expansion areas:
 - ~~Monome grid integration~~ ✓ Implemented
 - ~~Longer-form automation/sequencing~~ ✓ Implemented (scene system)
 - ~~Multi-source modulation routing~~ ✓ Implemented (3 slots per voice)
-- Preset save/load (scenes provide most of this functionality, could add disk persistence)
+- ~~Scene disk persistence~~ ✓ Implemented (auto-save/load + manual triggers)
 - More voice types (wavetable, additive, granular noise, etc.)
 - Modulation matrix visualization on grid or arc
+- Per-scene naming/tagging system

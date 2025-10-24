@@ -380,6 +380,24 @@ function init()
     end
   }
 
+  params:add{
+    type = "trigger",
+    id = "save_scenes",
+    name = "save scenes to disk",
+    action = function()
+      save_scenes_to_disk()
+    end
+  }
+
+  params:add{
+    type = "trigger",
+    id = "load_scenes",
+    name = "load scenes from disk",
+    action = function()
+      load_scenes_from_disk()
+    end
+  }
+
   -- Reverb
   params:add_separator("strata_reverb")
   params:add{
@@ -437,6 +455,9 @@ function init()
 
   -- Connect grids
   grid_init()
+
+  -- Load saved scenes from disk
+  load_scenes_from_disk()
 
   -- Start with first two voices (delayed)
   clock.run(function()
@@ -1072,6 +1093,40 @@ function scene_sequencer_stop()
   end
   redraw()
   grid_redraw()
+end
+
+-- Scene disk persistence
+local scene_data_dir = norns.state.data .. "strata/"
+local scene_data_file = scene_data_dir .. "scenes.data"
+
+function save_scenes_to_disk()
+  -- Ensure data directory exists
+  if util.file_exists(scene_data_dir) == false then
+    util.make_dir(scene_data_dir)
+  end
+
+  -- Save scenes table to disk
+  tab.save(scenes, scene_data_file)
+  print("scenes saved to " .. scene_data_file)
+end
+
+function load_scenes_from_disk()
+  -- Check if file exists
+  if util.file_exists(scene_data_file) then
+    local loaded_scenes = tab.load(scene_data_file)
+
+    if loaded_scenes then
+      scenes = loaded_scenes
+      print("scenes loaded from " .. scene_data_file)
+
+      -- Update grid display if grids are connected
+      grid_redraw()
+    else
+      print("error loading scenes file")
+    end
+  else
+    print("no saved scenes file found")
+  end
 end
 
 function update_voice_list()
@@ -1877,6 +1932,9 @@ function grid_redraw_64(g)
 end
 
 function cleanup()
+  -- Save scenes to disk before exiting
+  save_scenes_to_disk()
+
   lfo_metro:stop()
   mutation_metro:stop()
   pattern_clock_stop()

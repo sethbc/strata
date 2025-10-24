@@ -63,13 +63,14 @@ The mutation system works alongside the existing LFO system, creating multiple l
 
 Strata includes a comprehensive scene system for longer-form composition and automation:
 - **8 Scene Slots** - Save complete snapshots of all voices, patterns, and parameters
+- **Disk Persistence** - Scenes automatically save to disk and load on startup
 - **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
 - **Scene Sequencer** - Automatically progress through scenes for hands-free composition
 - **Complete State Capture** - Scenes store voice parameters, patterns, freeze states, and global settings
 - **Grid Integration** - Dedicated scene page on grid for performance control
 - **Visual Feedback** - `S1`-`S8` indicator shows current scene on screen
 
-Perfect for creating structured ambient compositions with multiple movements or live performance setups with prepared sonic palettes.
+Perfect for creating structured ambient compositions with multiple movements or live performance setups with prepared sonic palettes. Scenes persist across script restarts, allowing you to build a library of sonic palettes.
 
 ## Installation
 
@@ -343,6 +344,8 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Scene transition time (0-30 seconds)
 - Scene duration (4-120 seconds)
 - Scene sequence length (1-8 scenes)
+- Save scenes to disk (manual trigger)
+- Load scenes from disk (manual trigger)
 
 ### Reverb Section
 - Mix
@@ -388,7 +391,6 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Mas
 The codebase is designed to be extended. Some ideas:
 
 - Add disk persistence for scenes (currently scenes are lost on restart)
-- Multi-source modulation routing (currently one source per voice)
 - Additional voice types (wavetable, additive, granular noise, etc.)
 - MIDI integration for external control
 
