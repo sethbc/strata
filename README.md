@@ -54,9 +54,21 @@ Strata includes an optional mutation system for creating organic, evolving textu
 - **Smart Mutations** - Uses gaussian-like distribution for natural-sounding changes
 - **Selective Application** - Only affects active, non-frozen voices
 - **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance
-- **Visual Feedback** - `[MUT]` indicator appears on screen when mutations are enabled
+- **Visual Feedback** - `[M]` indicator appears on screen when mutations are enabled
 
 The mutation system works alongside the existing LFO system, creating multiple layers of organic movement. Combine with the freeze feature to let some voices evolve while others remain stable.
+
+### Scene System & Automation
+
+Strata includes a comprehensive scene system for longer-form composition and automation:
+- **8 Scene Slots** - Save complete snapshots of all voices, patterns, and parameters
+- **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
+- **Scene Sequencer** - Automatically progress through scenes for hands-free composition
+- **Complete State Capture** - Scenes store voice parameters, patterns, freeze states, and global settings
+- **Grid Integration** - Dedicated scene page on grid for performance control
+- **Visual Feedback** - `S1`-`S8` indicator shows current scene on screen
+
+Perfect for creating structured ambient compositions with multiple movements or live performance setups with prepared sonic palettes.
 
 ## Installation
 
@@ -168,6 +180,20 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 **Row 16: Voice Freeze**
 - Columns 1-7: Freeze/unfreeze each voice
 
+**Scene Page (Page 3)**
+- **Row 1**: Scene recall (instant) - Press to immediately load scenes 1-8
+- **Row 2**: Scene recall (with transition) - Press to smoothly crossfade into scenes 1-8
+- **Row 3**: Scene save - Press to capture current state to scenes 1-8
+- **Row 5, Column 1**: Toggle scene sequencer on/off
+- **Row 5, Columns 3-10**: Set scene sequence length (1-8)
+- **Row 8, Columns 13-16**: Page selection (same as other pages)
+
+Scene LED feedback:
+- Populated scenes glow (brightness 6-8)
+- Current scene is bright (brightness 15)
+- Empty scenes are dim (brightness 2)
+- Sequencer shows next scene position when active
+
 #### 16×8 Grid Layout (128 buttons horizontal)
 
 **Rows 1-7: Pattern Sequencer**
@@ -259,9 +285,37 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
   - Mutation amount: 0.20-0.30 (size of changes relative to parameter range)
 - Freeze voices you want to keep stable while others evolve
 - Combine with cross-modulation for complex, interdependent evolution
-- Watch the `[MUT]` indicator on screen to confirm mutations are active
+- Watch the `[M]` indicator on screen to confirm mutations are active
 - For dramatic changes, increase probability to 0.25+ and amount to 0.40+
 - For subtle drift, decrease both values and increase the mutation rate
+
+### Using Scenes for Composition
+
+**Building a Scene-Based Composition**:
+1. Create your first sonic texture using voices, patterns, and parameters
+2. Navigate to grid page 3 (or use PARAMETERS menu)
+3. Press row 3 to save the scene (scenes 1-8)
+4. Build a contrasting or complementary texture
+5. Save to another scene slot
+6. Repeat until you have 3-8 distinct scenes
+
+**Manual Scene Performance**:
+- Press row 1 buttons for instant scene changes (good for rhythmic switching)
+- Press row 2 buttons for smooth crossfades (good for ambient transitions)
+- Adjust transition time in PARAMETERS to control crossfade duration
+
+**Automatic Scene Sequencing**:
+- Set scene sequence length (how many scenes to cycle through)
+- Set scene duration (how long each scene plays)
+- Set transition time (crossfade duration between scenes)
+- Press row 5, column 1 to start/stop the sequencer
+- Watch `S1`-`S8` indicator on screen (bright = sequencer active)
+
+**Creative Tips**:
+- Use scenes to create song structure: intro → verse → chorus → bridge
+- Combine with mutations: save some scenes with mutations on, others with mutations off
+- Freeze different voices in different scenes for evolving vs static sections
+- Scenes remember pattern data - create rhythmic scenes and ambient scenes
 
 ## Parameters
 
@@ -277,6 +331,12 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Mutation rate (0.5-10 seconds)
 - Mutation probability (0-1, chance per parameter)
 - Mutation amount (0-1, size of changes)
+
+### Scenes Section
+- Scene sequencer (on/off)
+- Scene transition time (0-30 seconds)
+- Scene duration (4-120 seconds)
+- Scene sequence length (1-8 scenes)
 
 ### Reverb Section
 - Mix
@@ -321,10 +381,10 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Mas
 
 The codebase is designed to be extended. Some ideas:
 
-- Add preset save/load functionality
-- Implement longer-form automation/sequencing
+- Add disk persistence for scenes (currently scenes are lost on restart)
 - Multi-source modulation routing (currently one source per voice)
 - Additional voice types (wavetable, additive, granular noise, etc.)
+- MIDI integration for external control
 
 ## Requirements
 

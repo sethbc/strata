@@ -419,6 +419,158 @@ params:set("mutation_rate", 2)  -- Check every 2 seconds
 - **Control**: `mutation_enabled` param action starts/stops the metro
 - **Cleanup**: `mutation_metro:stop()` called in `cleanup()` to prevent orphaned timers
 
+### Scene System for Longer-Form Automation
+
+Strata includes a comprehensive scene system for creating longer-form compositions and automations. Scenes capture complete snapshots of the instrument state and can be recalled manually or sequenced automatically.
+
+#### Architecture
+- **Scene Storage**: `scenes` table - 8 scene slots (numbered 1-8)
+- **Scene Data**: Complete instrument state including:
+  - All voice parameters (synthesis, granular, cross-modulation)
+  - Voice active states and freeze states
+  - Pattern data (all 7 voices × 16 steps)
+  - Global parameters (master density, tempo, reverb, drift, mutations)
+- **Scene Sequencer**: Automatic scene progression with configurable timing
+- **Transition Modes**: Instant recall or smooth crossfade between scenes
+
+#### Core Functions
+
+**Scene Capture** ([strata.lua:737-790](strata.lua#L737-L790)):
+```lua
+function capture_scene(scene_num)
+  -- Captures complete current state:
+  -- - All voice parameters (params, grain, crossmod)
+  -- - Voice active/frozen states
+  -- - All pattern data
+  -- - Global parameters (density, tempo, reverb, mutations, etc.)
+  scenes[scene_num].data = scene_data
+  scenes[scene_num].populated = true
+end
+```
+
+**Scene Recall** ([strata.lua:792-850](strata.lua#L792-L850)):
+```lua
+function recall_scene(scene_num, transition_time)
+  -- Instant recall (transition_time = 0)
+  -- OR smooth transition (transition_time > 0)
+  --   - 20 interpolation steps
+  --   - Crossfades all parameters
+  --   - Uses util.linlin() for smooth curves
+end
+```
+
+**Scene Sequencer** ([strata.lua:915-952](strata.lua#L915-L952)):
+```lua
+function scene_sequencer_start()
+  scene_sequencer_clock = clock.run(function()
+    while scene_sequencer_enabled do
+      recall_scene(scene_sequencer_position, transition_time)
+      clock.sleep(scene_duration)
+      scene_sequencer_position = scene_sequencer_position % seq_length + 1
+    end
+  end)
+end
+```
+
+#### Parameters
+
+Controlled via PARAMS menu (strata_scenes section):
+- `scene_sequencer_enabled` (binary) - Start/stop automatic scene progression
+- `scene_transition_time` (0-30s, default 2s) - Crossfade duration for smooth transitions
+- `scene_duration` (4-120s, default 16s) - How long each scene plays before advancing
+- `scene_sequence_length` (1-8, default 4) - How many scenes to cycle through
+
+#### Grid Integration
+
+Scene controls on **Page 3** (16×16 grid):
+- **Row 1**: Scene recall (instant) - Press to immediately load scene 1-8
+- **Row 2**: Scene recall (with transition) - Press to crossfade into scene 1-8
+- **Row 3**: Scene save - Press to capture current state to scene 1-8
+- **Row 5, Column 1**: Toggle scene sequencer on/off
+- **Row 5, Columns 3-10**: Set sequence length (1-8 scenes)
+
+**LED Feedback**:
+- Populated scenes: brightness 8 (row 1) or 6 (row 2)
+- Current scene: brightness 15 (highlighted in row 1)
+- Empty scenes: brightness 2
+- Active sequencer: brightness 15, shows next scene position
+- Sequence length indicators: brightness 8 for included scenes, 2 for excluded
+
+#### UI Feedback
+
+**Screen Display**:
+- `S1` through `S8` indicator at top-right shows current scene number
+- Brightness level 10 when sequencer is active, 6 when static
+- Mutation indicator abbreviated to `[M]` to make room for scene indicator
+
+#### Implementation Details
+
+**State Capture**:
+- Deep copy of all parameter values (not references)
+- Preserves both the `voices` table state and norns param values
+- Patterns are copied step-by-step to avoid reference issues
+
+**Smooth Transitions**:
+- 20 interpolation steps regardless of transition time
+- Each step calculates `mix = step / steps` (0 to 1)
+- Uses `util.linlin(0, 1, current_val, target_val, mix)` for smooth curves
+- Final step ensures exact target values via `recall_scene_instant()`
+
+**Voice Activation Handling**:
+- Checks if voice state needs to change (on→off or off→on)
+- Uses existing `toggle_voice()` function to properly start/stop voices
+- Preserves freeze states across scene transitions
+
+**Pattern Preservation**:
+- Patterns are restored after all parameter changes
+- Ensures `grid_redraw()` is called to update grid display
+- Pattern sequencer continues playing if it was active
+
+#### Usage Patterns
+
+**Manual Scene Performance**:
+```lua
+-- From grid page 3:
+-- 1. Build your sound
+-- 2. Press row 3 button to save to scene slot
+-- 3. Modify parameters
+-- 4. Save to another slot
+-- 5. Press row 1 buttons to instantly switch between scenes
+-- 6. Press row 2 buttons to smoothly transition between scenes
+```
+
+**Automatic Scene Sequencing**:
+```lua
+-- Setup:
+params:set("scene_transition_time", 3)  -- 3 second crossfades
+params:set("scene_duration", 20)  -- 20 seconds per scene
+params:set("scene_sequence_length", 4)  -- Cycle through scenes 1-4
+params:set("scene_sequencer_enabled", 1)  -- Start sequencer
+
+-- Result: Scenes 1→2→3→4→1... with 3s crossfades, 20s each
+```
+
+**Composition Workflow**:
+1. Create 4-8 distinct scenes with different voice combinations and parameters
+2. Set appropriate transition time (0s for rhythmic changes, 5-10s for ambient evolution)
+3. Set scene duration based on desired pacing
+4. Enable sequencer for hands-free long-form composition
+5. Mutations can still evolve non-frozen voices during scenes
+
+#### Integration with Other Systems
+
+- **Freeze Feature**: Frozen voices are captured and restored per-scene
+- **Mutations**: Mutation settings are per-scene; sequencer can alternate between static and evolving scenes
+- **Pattern Sequencer**: Pattern data is saved per-scene; can switch between different rhythmic patterns
+- **Cross-Modulation**: Modulation routing is per-scene; enables complex evolving relationships
+- **LFO System**: Continues to operate during scenes unless voices are frozen
+
+#### Lifecycle Management
+- **Initialization**: Scenes array initialized in global scope, empty by default
+- **Scene Sequencer Control**: Started/stopped via param action
+- **Cleanup**: `scene_sequencer_stop()` called in `cleanup()` to prevent orphaned clocks
+- **Transition State**: `scene_transition_active` flag prevents concurrent transitions
+
 ### Async Initialization
 
 Voice activation uses `clock.run()` for delayed starts:
@@ -576,7 +728,7 @@ Potential expansion areas:
 - ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented
 - ~~Probability-based parameter mutations~~ ✓ Implemented
 - ~~Monome grid integration~~ ✓ Implemented
-- Preset save/load
+- ~~Longer-form automation/sequencing~~ ✓ Implemented (scene system)
+- Preset save/load (scenes provide most of this functionality, could add disk persistence)
 - More voice types (wavetable, additive, granular noise, etc.)
-- Longer-form automation/sequencing
 - Multi-source modulation routing (currently limited to one source per voice)

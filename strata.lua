@@ -196,6 +196,15 @@ local lfo_metro
 -- Mutation system
 local mutation_metro
 
+-- Scene system
+local scenes = {}
+local num_scenes = 8
+local current_scene = 0  -- 0 = no scene loaded
+local scene_sequencer_position = 1
+local scene_sequencer_enabled = false
+local scene_sequencer_clock = nil
+local scene_transition_active = false
+
 -- Arc device
 local a = nil
 local arc_connected = false
@@ -213,9 +222,10 @@ local pattern_clock = nil
 local tempo = 120
 
 -- Grid UI state
-local grid_page = 1  -- 1=patterns, 2=parameters
+local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes
 local param_page = 1
 local grid_voice_select = 1
+local grid_key1_held = false  -- Track K1 hold for scene save
 
 -- Initialize patterns for each voice
 for i = 1, 7 do
@@ -223,6 +233,15 @@ for i = 1, 7 do
   for step = 1, 16 do
     patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness
   end
+end
+
+-- Initialize scenes
+for i = 1, num_scenes do
+  scenes[i] = {
+    name = "scene " .. i,
+    populated = false,
+    data = {}
+  }
 end
 
 function init()
@@ -308,6 +327,56 @@ function init()
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.25),
     action = function(x)
       -- Amount value used in gentle_mutate()
+    end
+  }
+
+  -- Scene system
+  params:add_separator("strata_scenes")
+
+  params:add{
+    type = "binary",
+    id = "scene_sequencer_enabled",
+    name = "scene sequencer",
+    behavior = "toggle",
+    default = 0,
+    action = function(x)
+      if x == 1 then
+        scene_sequencer_start()
+      else
+        scene_sequencer_stop()
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "scene_transition_time",
+    name = "transition time",
+    controlspec = controlspec.new(0, 30, "lin", 0.5, 2, "s"),
+    action = function(x)
+      -- Transition time used in scene recall
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "scene_duration",
+    name = "scene duration",
+    controlspec = controlspec.new(4, 120, "lin", 1, 16, "s"),
+    action = function(x)
+      -- Time before advancing to next scene
+    end
+  }
+
+  params:add{
+    type = "number",
+    id = "scene_sequence_length",
+    name = "sequence length",
+    min = 1,
+    max = 8,
+    default = 4,
+    action = function(x)
+      -- How many scenes to cycle through
     end
   }
 
@@ -665,6 +734,224 @@ function gentle_mutate()
   end
 end
 
+-- Scene management functions
+function capture_scene(scene_num)
+  if scene_num < 1 or scene_num > num_scenes then return end
+
+  local scene_data = {
+    voices = {},
+    frozen = {},
+    patterns = {},
+    master_density = master_density,
+    tempo = tempo,
+    mutation_enabled = params:get("mutation_enabled"),
+    mutation_rate = params:get("mutation_rate"),
+    mutation_probability = params:get("mutation_probability"),
+    mutation_amount = params:get("mutation_amount"),
+    reverb_mix = params:get("reverb_mix"),
+    reverb_size = params:get("reverb_size"),
+    reverb_damp = params:get("reverb_damp"),
+    drift_amount = params:get("drift_amount")
+  }
+
+  -- Capture voice states
+  for i = 1, #voices do
+    scene_data.voices[i] = {
+      active = voices[i].active,
+      params = {},
+      grain = {},
+      crossmod = {}
+    }
+
+    -- Copy all parameters
+    for key, value in pairs(voices[i].params) do
+      scene_data.voices[i].params[key] = value
+    end
+    for key, value in pairs(voices[i].grain) do
+      scene_data.voices[i].grain[key] = value
+    end
+    for key, value in pairs(voices[i].crossmod) do
+      scene_data.voices[i].crossmod[key] = value
+    end
+
+    scene_data.frozen[i] = frozen[i]
+  end
+
+  -- Capture patterns
+  for i = 1, 7 do
+    scene_data.patterns[i] = {}
+    for step = 1, 16 do
+      scene_data.patterns[i][step] = patterns[i][step]
+    end
+  end
+
+  scenes[scene_num].data = scene_data
+  scenes[scene_num].populated = true
+  print("captured scene " .. scene_num)
+end
+
+function recall_scene(scene_num, transition_time)
+  if scene_num < 1 or scene_num > num_scenes then return end
+  if not scenes[scene_num].populated then
+    print("scene " .. scene_num .. " is empty")
+    return
+  end
+
+  transition_time = transition_time or 0
+  local scene_data = scenes[scene_num].data
+
+  if transition_time > 0 then
+    -- Smooth transition with parameter interpolation
+    scene_transition_active = true
+    clock.run(function()
+      local steps = 20
+      local step_time = transition_time / steps
+
+      for step = 1, steps do
+        local mix = step / steps
+
+        -- Interpolate global parameters
+        params:set("master_density", util.linlin(0, 1, master_density, scene_data.master_density, mix))
+
+        -- Interpolate voice parameters
+        for i = 1, #voices do
+          for key, target_val in pairs(scene_data.voices[i].params) do
+            local current_val = voices[i].params[key]
+            local new_val = util.linlin(0, 1, current_val, target_val, mix)
+            params:set("v" .. i .. "_" .. key, new_val)
+          end
+
+          for key, target_val in pairs(scene_data.voices[i].grain) do
+            local current_val = voices[i].grain[key]
+            local new_val = util.linlin(0, 1, current_val, target_val, mix)
+            local param_name = key == "size" and "grain_size" or
+                             key == "density" and "grain_density" or
+                             key == "pitch" and "grain_pitch" or
+                             key == "spread" and "grain_spread"
+            if param_name then
+              params:set("v" .. i .. "_" .. param_name, new_val)
+            end
+          end
+        end
+
+        clock.sleep(step_time)
+      end
+
+      -- Final state: ensure exact values
+      recall_scene_instant(scene_num)
+      scene_transition_active = false
+    end)
+  else
+    -- Instant recall
+    recall_scene_instant(scene_num)
+  end
+
+  current_scene = scene_num
+  redraw()
+end
+
+function recall_scene_instant(scene_num)
+  local scene_data = scenes[scene_num].data
+
+  -- Restore global parameters
+  params:set("master_density", scene_data.master_density)
+  params:set("tempo", scene_data.tempo)
+  params:set("mutation_enabled", scene_data.mutation_enabled)
+  params:set("mutation_rate", scene_data.mutation_rate)
+  params:set("mutation_probability", scene_data.mutation_probability)
+  params:set("mutation_amount", scene_data.mutation_amount)
+  params:set("reverb_mix", scene_data.reverb_mix)
+  params:set("reverb_size", scene_data.reverb_size)
+  params:set("reverb_damp", scene_data.reverb_damp)
+  params:set("drift_amount", scene_data.drift_amount)
+
+  -- Restore voice states
+  for i = 1, #voices do
+    -- Restore parameters
+    for key, value in pairs(scene_data.voices[i].params) do
+      params:set("v" .. i .. "_" .. key, value)
+    end
+
+    for key, value in pairs(scene_data.voices[i].grain) do
+      local param_name = key == "size" and "grain_size" or
+                       key == "density" and "grain_density" or
+                       key == "pitch" and "grain_pitch" or
+                       key == "spread" and "grain_spread"
+      if param_name then
+        params:set("v" .. i .. "_" .. param_name, value)
+      end
+    end
+
+    for key, value in pairs(scene_data.voices[i].crossmod) do
+      local param_name = key == "source" and "mod_source" or
+                       key == "amp_amt" and "mod_amp_amt" or
+                       key == "freq_amt" and "mod_freq_amt" or
+                       key == "speed" and "mod_speed"
+      if param_name then
+        params:set("v" .. i .. "_" .. param_name, value)
+      end
+    end
+
+    frozen[i] = scene_data.frozen[i]
+
+    -- Handle voice activation
+    if scene_data.voices[i].active and not voices[i].active then
+      toggle_voice(i)
+    elseif not scene_data.voices[i].active and voices[i].active then
+      toggle_voice(i)
+    end
+  end
+
+  -- Restore patterns
+  for i = 1, 7 do
+    for step = 1, 16 do
+      patterns[i][step] = scene_data.patterns[i][step]
+    end
+  end
+
+  update_voice_list()
+  grid_redraw()
+end
+
+function scene_sequencer_start()
+  if scene_sequencer_clock then
+    clock.cancel(scene_sequencer_clock)
+  end
+
+  scene_sequencer_enabled = true
+  scene_sequencer_position = 1
+
+  scene_sequencer_clock = clock.run(function()
+    while scene_sequencer_enabled do
+      local seq_length = params:get("scene_sequence_length")
+
+      -- Recall next scene in sequence
+      if scenes[scene_sequencer_position].populated then
+        recall_scene(scene_sequencer_position, params:get("scene_transition_time"))
+      end
+
+      -- Wait for scene duration
+      clock.sleep(params:get("scene_duration"))
+
+      -- Advance to next scene
+      scene_sequencer_position = scene_sequencer_position % seq_length + 1
+
+      redraw()
+      grid_redraw()
+    end
+  end)
+end
+
+function scene_sequencer_stop()
+  scene_sequencer_enabled = false
+  if scene_sequencer_clock then
+    clock.cancel(scene_sequencer_clock)
+    scene_sequencer_clock = nil
+  end
+  redraw()
+  grid_redraw()
+end
+
 function update_voice_list()
   local items = {}
   for i = 1, #voices do
@@ -768,9 +1055,16 @@ function redraw()
 
   -- Mutation indicator (top right, after freeze status)
   if params:get("mutation_enabled") == 1 then
-    screen.move(110, 8)
+    screen.move(105, 8)
     screen.level(6)
-    screen.text("[MUT]")
+    screen.text("[M]")
+  end
+
+  -- Scene indicator
+  if current_scene > 0 then
+    screen.move(115, 8)
+    screen.level(scene_sequencer_enabled and 10 or 6)
+    screen.text("S" .. current_scene)
   end
 
   -- Main parameter
@@ -1001,7 +1295,29 @@ end
 
 -- 16x16 grid layout
 function grid_key_256(x, y, z)
-  if y >= 1 and y <= 7 then
+  if grid_page == 3 then
+    -- Scene page
+    if y == 1 and x <= 8 then
+      -- Row 1: Scene recall (instant)
+      recall_scene(x, 0)
+    elseif y == 2 and x <= 8 then
+      -- Row 2: Scene recall (with transition)
+      recall_scene(x, params:get("scene_transition_time"))
+    elseif y == 3 and x <= 8 then
+      -- Row 3: Scene save
+      capture_scene(x)
+    elseif y == 5 then
+      -- Row 5: Scene sequencer controls
+      if x == 1 then
+        -- Toggle sequencer
+        local enabled = params:get("scene_sequencer_enabled")
+        params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
+      elseif x >= 3 and x <= 10 then
+        -- Set sequence length
+        params:set("scene_sequence_length", x - 2)
+      end
+    end
+  elseif y >= 1 and y <= 7 then
     -- Rows 1-7: Pattern triggers for each voice
     toggle_pattern_step(y, x)
   elseif y == 8 then
@@ -1254,48 +1570,92 @@ function grid_redraw()
 end
 
 function grid_redraw_256(g)
-  -- Draw patterns (rows 1-7)
-  for voice_idx = 1, 7 do
-    for step = 1, 16 do
-      local brightness = patterns[voice_idx][step]
-      -- Highlight current step
-      if pattern_playing and step == pattern_position then
-        brightness = math.max(brightness, 4)
-        if brightness > 0 then brightness = 15 end
-      end
-      g:led(step, voice_idx, brightness)
+  if grid_page == 3 then
+    -- Scene page
+    -- Row 1: Scene recall (instant)
+    for i = 1, 8 do
+      local brightness = scenes[i].populated and 8 or 2
+      if current_scene == i then brightness = 15 end
+      g:led(i, 1, brightness)
     end
-  end
 
-  -- Row 8: Pattern controls
-  if pattern_playing then
-    g:led(1, 8, 15)
-    g:led(2, 8, 15)
+    -- Row 2: Scene recall (with transition)
+    for i = 1, 8 do
+      local brightness = scenes[i].populated and 6 or 2
+      g:led(i, 2, brightness)
+    end
+
+    -- Row 3: Scene save
+    for i = 1, 8 do
+      g:led(i, 3, 4)
+    end
+
+    -- Row 5: Scene sequencer controls
+    if scene_sequencer_enabled then
+      g:led(1, 5, 15)  -- Sequencer on
+      -- Show next scene in sequence
+      if scene_sequencer_position >= 1 and scene_sequencer_position <= 8 then
+        g:led(scene_sequencer_position, 1, 15)
+      end
+    else
+      g:led(1, 5, 4)  -- Sequencer off
+    end
+
+    -- Sequence length indicators
+    local seq_length = params:get("scene_sequence_length")
+    for i = 1, 8 do
+      g:led(i + 2, 5, i <= seq_length and 8 or 2)
+    end
+
+    -- Page indicators (row 8)
+    for i = 1, 4 do
+      g:led(12 + i, 8, i == grid_page and 15 or 2)
+    end
   else
-    g:led(1, 8, 4)
-    g:led(2, 8, 4)
-  end
+    -- Patterns/parameters pages
+    -- Draw patterns (rows 1-7)
+    for voice_idx = 1, 7 do
+      for step = 1, 16 do
+        local brightness = patterns[voice_idx][step]
+        -- Highlight current step
+        if pattern_playing and step == pattern_position then
+          brightness = math.max(brightness, 4)
+          if brightness > 0 then brightness = 15 end
+        end
+        g:led(step, voice_idx, brightness)
+      end
+    end
 
-  -- Tempo indicators
-  g:led(5, 8, 2)
-  g:led(6, 8, 2)
-  g:led(7, 8, 2)
-  g:led(8, 8, 2)
+    -- Row 8: Pattern controls
+    if pattern_playing then
+      g:led(1, 8, 15)
+      g:led(2, 8, 15)
+    else
+      g:led(1, 8, 4)
+      g:led(2, 8, 4)
+    end
 
-  -- Page indicators
-  for i = 1, 4 do
-    g:led(12 + i, 8, i == grid_page and 15 or 2)
-  end
+    -- Tempo indicators
+    g:led(5, 8, 2)
+    g:led(6, 8, 2)
+    g:led(7, 8, 2)
+    g:led(8, 8, 2)
 
-  -- Row 14: Voice status
-  for i = 1, 7 do
-    g:led(i, 14, i == grid_voice_select and 15 or 4)
-    g:led(i + 8, 14, voices[i].active and 12 or 2)
-  end
+    -- Page indicators
+    for i = 1, 4 do
+      g:led(12 + i, 8, i == grid_page and 15 or 2)
+    end
 
-  -- Row 16: Freeze status
-  for i = 1, 7 do
-    g:led(i, 16, frozen[i] and 12 or 2)
+    -- Row 14: Voice status
+    for i = 1, 7 do
+      g:led(i, 14, i == grid_voice_select and 15 or 4)
+      g:led(i + 8, 14, voices[i].active and 12 or 2)
+    end
+
+    -- Row 16: Freeze status
+    for i = 1, 7 do
+      g:led(i, 16, frozen[i] and 12 or 2)
+    end
   end
 end
 
@@ -1385,6 +1745,7 @@ function cleanup()
   lfo_metro:stop()
   mutation_metro:stop()
   pattern_clock_stop()
+  scene_sequencer_stop()
   for i = 1, #voices do
     if voices[i].active then
       engine.voiceOff(i - 1)
