@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Strata is an ambient granular soundscape generator for monome norns. It combines four unique synthesis voices (Resonator, FM, Folder, Sub) with individual granular processing to create evolving ambient textures.
+Strata is an ambient granular soundscape generator for monome norns. It combines seven unique synthesis voices (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring) with individual granular processing to create evolving ambient textures.
 
 See @README.md for additional project details
 
@@ -33,8 +33,8 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb Bus →
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
 
-Each of the 4 voices follows this path:
-1. Voice synth (strataResonator/strataFM/strataFolder/strataSub) outputs to its own `granBuses[i]`
+Each of the 7 voices follows this path:
+1. Voice synth (strataResonator/strataFM/strataFolder/strataSub/strataPulse/strataKarplus/strataRing) outputs to its own `granBuses[i]`
 2. Granular processor (`strataGrain`) reads from voice bus, outputs to shared `mainBus`
 3. Modulation synth (`strataMod`) analyzes voice bus output and generates control signal to `modBuses[i]`
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
@@ -64,7 +64,7 @@ The Lua script controls the engine through these commands:
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
-| `engine.setModSource(voice, sourceVoice)` | `"ii"` | Set which voice modulates this voice (-1 = none, 0-3 = voice index) |
+| `engine.setModSource(voice, sourceVoice)` | `"ii"` | Set which voice modulates this voice (-1 = none, 0-6 = voice index) |
 | `engine.setModAmpAmt(voice, amount)` | `"if"` | Set amplitude modulation amount (-2 to 2) |
 | `engine.setModFreqAmt(voice, amount)` | `"if"` | Set frequency modulation amount (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Set modulation LFO speed (0.1 to 50) |
@@ -76,11 +76,14 @@ The Lua script controls the engine through these commands:
 - **FM**: freq, ratio, index, modFreq, amp, pan
 - **Folder**: freq, fold, mod, amp, pan
 - **Sub**: freq, drift, amp
+- **Pulse**: freq, width, cutoff, res, amp, pan
+- **Karplus**: freq, decay, damping, excite, amp, pan
+- **Ring**: freq, ratio, mod, brightness, amp, pan
 
 **Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread
 
 **Cross-Modulation Parameters** (per voice):
-- **source**: Which voice modulates this one (0=none, 1-4 in Lua, -1=none, 0-3 in SC)
+- **source**: Which voice modulates this one (0=none, 1-7 in Lua, -1=none, 0-6 in SC)
 - **amp_amt**: Amplitude modulation depth (-2 to 2, bipolar)
 - **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
 - **speed**: Modulation signal LFO speed (0.1 to 50 Hz)
@@ -230,6 +233,9 @@ Each voice type has its own SynthDef with unique parameters:
 - `\strataFM` - Two-operator FM with slow modulation
 - `\strataFolder` - Wavefolder with sine input
 - `\strataSub` - Ultra-low sine with drift
+- `\strataPulse` - Pulse width modulation with resonant filtering
+- `\strataKarplus` - Karplus-Strong plucked string physical model
+- `\strataRing` - Ring modulation between two oscillators
 
 All voice SynthDefs now include cross-modulation inputs:
 - `modBus` - Control bus to read modulation signal from
@@ -245,8 +251,8 @@ Shared processing SynthDefs:
 ### Audio Bus Management
 
 Buses are allocated in `alloc`:
-- 4 stereo `granBuses` (one per voice, for audio)
-- 4 mono `modBuses` (one per voice, for control signals)
+- 7 stereo `granBuses` (one per voice, for audio)
+- 7 mono `modBuses` (one per voice, for control signals)
 - 1 stereo `mainBus` (granular outputs mix here)
 - 1 stereo `reverbBus` (reverb output)
 
@@ -263,9 +269,10 @@ Synths use `gate` with ASR envelopes:
 
 Potential expansion areas:
 - ~~Cross-modulation between voices~~ ✓ Implemented
+- ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented
 - Probability-based parameter mutations
 - Preset save/load
 - Monome grid integration
-- Additional voice types
+- More voice types (wavetable, additive, granular noise, etc.)
 - Longer-form automation/sequencing
 - Multi-source modulation routing (currently limited to one source per voice)

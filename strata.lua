@@ -106,13 +106,85 @@ local voices = {
       freq_amt = 0,
       speed = 10
     }
+  },
+  {
+    name = "pulse",
+    active = false,
+    params = {
+      freq = 120,
+      amp = 0.3,
+      pan = 0,
+      width = 0.5,
+      cutoff = 2000,
+      res = 0.3
+    },
+    grain = {
+      size = 0.12,
+      density = 18,
+      pitch = 1,
+      spread = 0.35
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
+    }
+  },
+  {
+    name = "karplus",
+    active = false,
+    params = {
+      freq = 200,
+      amp = 0.35,
+      pan = 0,
+      decay = 4,
+      damping = 0.5,
+      excite = 0.3
+    },
+    grain = {
+      size = 0.08,
+      density = 22,
+      pitch = 1,
+      spread = 0.25
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
+    }
+  },
+  {
+    name = "ring",
+    active = false,
+    params = {
+      freq = 300,
+      amp = 0.25,
+      pan = 0,
+      ratio = 1.618,
+      mod = 0.2,
+      brightness = 0.5
+    },
+    grain = {
+      size = 0.1,
+      density = 20,
+      pitch = 1,
+      spread = 0.4
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
+    }
   }
 }
 
 local selected_voice = 1
 local selected_param = 1
 local master_density = 1.0
-local frozen = {false, false, false, false}
+local frozen = {false, false, false, false, false, false, false}
 
 -- UI
 local voice_list
@@ -287,7 +359,7 @@ function add_voice_params(voice_idx)
     id = "v" .. voice_idx .. "_mod_source",
     name = "mod source",
     min = 0,
-    max = 4,
+    max = 7,
     default = v.crossmod.source,
     formatter = function(param)
       if param:get() == 0 then
@@ -299,7 +371,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       voices[voice_idx].crossmod.source = x
       if voices[voice_idx].active then
-        -- Convert to SC indexing: 0=none becomes -1, 1-4 become 0-3
+        -- Convert to SC indexing: 0=none becomes -1, 1-7 become 0-6
         local sc_source = x == 0 and -1 or (x - 1)
         engine.setModSource(voice_idx - 1, sc_source)
       end
@@ -360,7 +432,14 @@ function get_param_spec(param_name)
     modFreq = controlspec.new(0.01, 1, "lin", 0.01, 0.05),
     fold = controlspec.new(0.1, 5, "lin", 0.1, 1),
     mod = controlspec.new(0.01, 2, "lin", 0.01, 0.2),
-    drift = controlspec.new(0.001, 0.1, "lin", 0.001, 0.02)
+    drift = controlspec.new(0.001, 0.1, "lin", 0.001, 0.02),
+    width = controlspec.new(0.05, 0.95, "lin", 0.01, 0.5),
+    cutoff = controlspec.new(100, 8000, "exp", 10, 2000, "Hz"),
+    res = controlspec.new(0.1, 1, "lin", 0.01, 0.3),
+    decay = controlspec.new(0.5, 10, "lin", 0.1, 4),
+    damping = controlspec.new(0.1, 0.9, "lin", 0.01, 0.5),
+    excite = controlspec.new(0.1, 2, "lin", 0.01, 0.3),
+    brightness = controlspec.new(0, 1, "lin", 0.01, 0.5)
   }
   return specs[param_name] or controlspec.new(0, 1, "lin", 0.01, 0.5)
 end
@@ -458,6 +537,12 @@ function enc(n, d)
       params:delta("v" .. selected_voice .. "_fold", d)
     elseif v.name == "sub" then
       params:delta("v" .. selected_voice .. "_drift", d)
+    elseif v.name == "pulse" then
+      params:delta("v" .. selected_voice .. "_width", d)
+    elseif v.name == "karplus" then
+      params:delta("v" .. selected_voice .. "_decay", d)
+    elseif v.name == "ring" then
+      params:delta("v" .. selected_voice .. "_ratio", d)
     end
   end
   redraw()
@@ -508,6 +593,12 @@ function redraw()
     screen.text("fold: " .. string.format("%.1f", v.params.fold))
   elseif v.name == "sub" then
     screen.text("drift: " .. string.format("%.3f", v.params.drift))
+  elseif v.name == "pulse" then
+    screen.text("width: " .. string.format("%.2f", v.params.width))
+  elseif v.name == "karplus" then
+    screen.text("decay: " .. string.format("%.1f", v.params.decay))
+  elseif v.name == "ring" then
+    screen.text("ratio: " .. string.format("%.2f", v.params.ratio))
   end
   
   screen.move(0, 64)

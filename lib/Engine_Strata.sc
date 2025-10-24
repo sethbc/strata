@@ -14,13 +14,13 @@ Engine_Strata : CroneEngine {
     }
 
     alloc {
-        // Audio buses for granular processing
-        granBuses = Array.fill(4, { Bus.audio(context.server, 2) });
+        // Audio buses for granular processing (7 voices)
+        granBuses = Array.fill(7, { Bus.audio(context.server, 2) });
         mainBus = Bus.audio(context.server, 2);
         reverbBus = Bus.audio(context.server, 2);
 
         // Control buses for cross-modulation (one per voice)
-        modBuses = Array.fill(4, { Bus.control(context.server, 1) });
+        modBuses = Array.fill(7, { Bus.control(context.server, 1) });
         
         // SynthDefs
 
@@ -137,7 +137,111 @@ Engine_Strata : CroneEngine {
 
             Out.ar(out, sig * env * modAmp);
         }).add;
-        
+
+        SynthDef(\strataPulse, {
+            arg out, gate=1, freq=120, width=0.5, cutoff=2000,
+            res=0.3, amp=0.3, pan=0,
+            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            var sig, env, modSig, modFreq, modAmp, modWidth;
+
+            env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
+
+            // Read modulation signal
+            modSig = In.kr(modBus, 1);
+            modFreq = freq * (1 + (modSig * modFreqAmt));
+            modAmp = amp * (1 + (modSig * modAmpAmt));
+
+            // Modulate pulse width with LFO and cross-mod
+            modWidth = width + (LFNoise1.kr(0.15).range(-0.2, 0.2)) + (modSig * 0.3);
+            modWidth = modWidth.clip(0.05, 0.95);
+
+            sig = Pulse.ar(modFreq * [1, 1.003], modWidth);
+
+            // Dynamic filter with slow modulation
+            cutoff = cutoff * LFNoise1.kr(0.2).range(0.5, 2);
+            sig = RLPF.ar(sig, cutoff.clip(100, 8000), res);
+
+            sig = Balance2.ar(sig[0], sig[1], pan);
+
+            Out.ar(out, sig * env * modAmp * 0.7);
+        }).add;
+
+        SynthDef(\strataKarplus, {
+            arg out, gate=1, freq=200, decay=4, damping=0.5,
+            excite=0.3, amp=0.35, pan=0,
+            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            var sig, env, modSig, modFreq, modAmp, noise, pluck;
+
+            env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
+
+            // Read modulation signal
+            modSig = In.kr(modBus, 1);
+            modFreq = freq * (1 + (modSig * modFreqAmt));
+            modAmp = amp * (1 + (modSig * modAmpAmt));
+
+            // Excitation signal - burst of noise
+            noise = PinkNoise.ar(1);
+            pluck = Decay.ar(Impulse.ar(excite), 0.01, noise);
+
+            // Karplus-Strong with variable decay
+            sig = Pluck.ar(
+                in: pluck,
+                trig: Impulse.ar(excite),
+                maxdelaytime: 0.1,
+                delaytime: modFreq.reciprocal,
+                decaytime: decay,
+                coef: damping.linlin(0, 1, 0.1, 0.9)
+            );
+
+            // Slight detuning for stereo width
+            sig = [sig, Pluck.ar(
+                in: pluck,
+                trig: Impulse.ar(excite),
+                maxdelaytime: 0.1,
+                delaytime: (modFreq * 1.002).reciprocal,
+                decaytime: decay,
+                coef: damping.linlin(0, 1, 0.1, 0.9)
+            )];
+
+            sig = Balance2.ar(sig[0], sig[1], pan);
+            sig = LPF.ar(sig, 4000);  // Gentle high-frequency roll-off
+
+            Out.ar(out, sig * env * modAmp);
+        }).add;
+
+        SynthDef(\strataRing, {
+            arg out, gate=1, freq=300, ratio=1.618, mod=0.2,
+            brightness=0.5, amp=0.25, pan=0,
+            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
+
+            env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
+
+            // Read modulation signal
+            modSig = In.kr(modBus, 1);
+            modFreq = freq * (1 + (modSig * modFreqAmt));
+            modAmp = amp * (1 + (modSig * modAmpAmt));
+
+            // Slowly evolving ratio for inharmonic movement
+            ratio = ratio + (LFNoise1.kr(mod).range(-0.1, 0.1));
+
+            // Two oscillators for ring modulation
+            car = SinOsc.ar(modFreq * [1, 1.005]);
+            modulator = SinOsc.ar(modFreq * ratio);
+
+            // Ring modulation
+            ring = car * modulator;
+
+            // Add some of the original carrier for warmth
+            sig = ring + (car * brightness * 0.3);
+
+            // Gentle filtering
+            sig = LPF.ar(sig, 3000 + (LFNoise1.kr(0.1) * 1000));
+            sig = Balance2.ar(sig[0], sig[1], pan);
+
+            Out.ar(out, sig * env * modAmp);
+        }).add;
+
         // Granular processor
         SynthDef(\strataGrain, {
             arg in, out, gate=1,
@@ -204,7 +308,7 @@ Engine_Strata : CroneEngine {
             var voice = msg[1];
             var bus = granBuses[voice];
             var modBus = modBuses[voice];
-            var synthType = [\strataResonator, \strataFM, \strataFolder, \strataSub][voice];
+            var synthType = [\strataResonator, \strataFM, \strataFolder, \strataSub, \strataPulse, \strataKarplus, \strataRing][voice];
 
             synths[("voice" ++ voice).asSymbol] = Synth(synthType, [
                 \out, bus,
@@ -310,7 +414,10 @@ Engine_Strata : CroneEngine {
             { voice == 0 } { [\rq, 0.1, \noise, 0.5, \mod1, 0.1, \mod2, 0.15] }
             { voice == 1 } { [\ratio, 1.5, \index, 2, \modFreq, 0.05] }
             { voice == 2 } { [\fold, 1, \mod, 0.2] }
-            { voice == 3 } { [\drift, 0.02] };
+            { voice == 3 } { [\drift, 0.02] }
+            { voice == 4 } { [\width, 0.5, \cutoff, 2000, \res, 0.3] }
+            { voice == 5 } { [\decay, 4, \damping, 0.5, \excite, 0.3] }
+            { voice == 6 } { [\ratio, 1.618, \mod, 0.2, \brightness, 0.5] };
     }
     
     free {

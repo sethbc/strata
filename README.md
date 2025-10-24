@@ -4,16 +4,19 @@ An ambient granular soundscape generator for monome norns.
 
 ## Overview
 
-Strata creates evolving ambient textures by combining four unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
+Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
 ## Features
 
-### Four Synthesis Voices
+### Seven Synthesis Voices
 
 1. **Resonator** - Filtered noise through resonant filter banks with slow modulation
-2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres  
+2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
 3. **Folder** - Sine wave through wavefolder with dynamic folding amount
 4. **Sub** - Ultra-low frequency sine wave for grounding the mix
+5. **Pulse** - Pulse width modulation synthesis with resonant filtering for classic analog sounds
+6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
+7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 
 ### Granular Processing
 
@@ -57,12 +60,15 @@ Then restart norns or run `;restart` in maiden.
 ### Encoders
 
 - **E1** - Master density (affects grain density globally)
-- **E2** - Select voice (1-4)
+- **E2** - Select voice (1-7)
 - **E3** - Adjust selected voice's main parameter
   - Resonator: Frequency
   - FM: Modulation index
   - Folder: Fold amount
   - Sub: Drift amount
+  - Pulse: Pulse width
+  - Karplus: Decay time
+  - Ring: Frequency ratio
 
 ### Keys
 
@@ -134,7 +140,7 @@ Each voice includes:
 ### Architecture
 
 The engine uses SuperCollider for synthesis and granular processing:
-- Four independent synthesis voices
+- Seven independent synthesis voices
 - Individual audio buses for each voice
 - Per-voice granular processors using `GrainIn`
 - Cross-modulation routing via control buses
@@ -157,9 +163,9 @@ The codebase is designed to be extended. Some ideas:
 - Implement probability-based parameter mutations
 - Add preset save/load functionality
 - Create monome grid integration for pattern sequencing
-- Add more synthesis voice types
 - Implement longer-form automation/sequencing
 - Multi-source modulation routing (currently one source per voice)
+- Additional voice types (wavetable, additive, granular noise, etc.)
 
 ## Requirements
 
