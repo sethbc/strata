@@ -747,3 +747,4 @@ Potential expansion areas:
 - More voice types (wavetable, additive, granular noise, etc.)
 - Modulation matrix visualization on grid or arc
 - Per-scene naming/tagging system
+- MIDI integration for external control

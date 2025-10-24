@@ -386,14 +386,6 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Mas
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
 
-## Expanding the Script
-
-The codebase is designed to be extended. Some ideas:
-
-- Add disk persistence for scenes (currently scenes are lost on restart)
-- Additional voice types (wavetable, additive, granular noise, etc.)
-- MIDI integration for external control
-
 ## Requirements
 
 - monome norns
