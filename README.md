@@ -48,12 +48,29 @@ Voices can modulate each other for evolving, interdependent textures:
 
 ## Installation
 
+### Method 1: Using maiden's project manager (recommended)
+
+1. Open maiden (norns web IDE at `http://norns.local/maiden`)
+2. Navigate to the project manager by clicking the circular icon in the top right
+3. Click "available" to see available projects
+4. Search for "strata" or scroll to find it
+5. Click "install"
+
+Alternatively, you can install directly from the GitHub URL:
+1. In maiden's project manager, click "catalog"
+2. Enter the repository URL: `https://github.com/sethbc/strata`
+3. Click "install"
+
+### Method 2: Using command line
+
+From maiden's command line (bottom panel):
+
 ```bash
 cd ~/dust/code
-git clone https://github.com/yourusername/strata.git
+git clone https://github.com/sethbc/strata.git
 ```
 
-Then restart norns or run `;restart` in maiden.
+After installation with either method, restart norns or run `;restart` in maiden.
 
 ## Controls
 

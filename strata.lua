@@ -516,7 +516,11 @@ function update_voice_list()
     local freeze = frozen[i] and " [F]" or ""
     items[i] = status .. " " .. voices[i].name .. freeze
   end
-  voice_list = UI.List.new(0, 10, selected_voice, items)
+  voice_list = UI.ScrollingList.new(0, 10, 1, items)
+  voice_list.num_visible = 5
+  voice_list.num_above_selected = 1
+  voice_list.active = true
+  voice_list.index = selected_voice
 end
 
 -- Encoders
