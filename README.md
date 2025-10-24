@@ -113,6 +113,97 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 - Dim rings (level 4/3) indicate inactive voices
 - Ring position shows current parameter value
 
+### Monome Grid (optional)
+
+Strata includes comprehensive grid integration for pattern sequencing and parameter manipulation. Supports multiple grids simultaneously and adapts layout based on grid size.
+
+#### Supported Grid Sizes
+
+- **256 (16×16)** - Full featured layout with patterns, parameters, and controls
+- **128 horizontal (16×8)** - Pattern sequencing with essential controls
+- **128 vertical (8×16)** - Pattern sequencing optimized for vertical layout
+- **64 (8×8)** - Basic pattern sequencing (8 steps per voice)
+
+#### 16×16 Grid Layout (256 buttons)
+
+**Rows 1-7: Pattern Sequencer**
+- Each row represents one voice
+- 16 steps per pattern
+- Press buttons to toggle steps on/off
+- Current step highlighted during playback
+
+**Row 8: Transport & Page Controls**
+- Columns 1-4: Play/stop pattern sequencer
+- Columns 5-8: Tempo adjustment (-10, -1, +1, +10 BPM)
+- Columns 13-16: Page selection (1-4)
+
+**Rows 9-12: Parameter Manipulation** (Page 2)
+- 64 virtual control positions for parameter adjustment
+- Press to randomize parameter values
+- Layout depends on selected parameter page
+
+**Row 13: Parameter Page Selection**
+- Select which parameter set to control (1-4)
+
+**Row 14: Voice Selection & Status**
+- Columns 1-7: Select voice for parameter editing
+- Columns 9-15: Toggle voices on/off
+
+**Row 15: Pattern Operations**
+- Columns 1-7: Clear pattern for each voice
+- Columns 9-15: Randomize pattern for each voice
+
+**Row 16: Voice Freeze**
+- Columns 1-7: Freeze/unfreeze each voice
+
+#### 16×8 Grid Layout (128 buttons horizontal)
+
+**Rows 1-7: Pattern Sequencer**
+- 16 steps per voice pattern
+
+**Row 8: Multi-function Controls**
+- Columns 1-4: Play/stop
+- Column 5: Patterns page
+- Column 6: Parameters page
+- Columns 9-15: Voice toggle on/off
+- Column 16: Cycle voice selection
+
+#### 8×16 Grid Layout (128 buttons vertical)
+
+**Columns 1-7: Pattern Sequencer**
+- 16 steps per voice (vertical orientation)
+
+**Column 8: Controls**
+- Rows 1-7: Toggle voices on/off
+- Row 9: Play/stop sequencer
+- Rows 11-16: Voice selection for parameters
+
+#### 8×8 Grid Layout (64 buttons)
+
+**Rows 1-7: Pattern Sequencer**
+- 8 steps per voice (reduced from 16)
+
+**Row 8: Essential Controls**
+- Column 1: Play/stop
+- Columns 3-7: Toggle first 5 voices
+
+#### Pattern Sequencer Features
+
+- **16-step patterns** per voice (8 steps on 64-button grid)
+- **Per-voice patterns** - each voice has independent pattern
+- **Real-time recording** - toggle steps while playing
+- **Visual feedback** - current step highlighted bright
+- **Tempo control** - 40-300 BPM (adjustable via grid or PARAMS)
+- **Pattern operations** - clear, randomize per voice
+- **Automatic voice triggering** - voices activate when pattern step plays
+
+#### Multi-Grid Support
+
+- Connect up to 4 grids simultaneously
+- Each grid shows the same interface
+- Hot-plug support - connect/disconnect grids while running
+- All grids stay synchronized
+
 ## Usage Tips
 
 ### Getting Started
@@ -210,6 +301,7 @@ The codebase is designed to be extended. Some ideas:
 - monome norns
 - SuperCollider (included with norns)
 - monome arc (optional - provides tactile parameter control with LED feedback)
+- monome grid (optional - provides pattern sequencing and parameter manipulation)
 
 ## Credits
 

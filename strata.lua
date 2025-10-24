@@ -197,6 +197,31 @@ local lfo_metro
 local a = nil
 local arc_connected = false
 
+-- Grid devices (support multiple grids)
+local grids = {}
+local grid_dirty = true
+
+-- Pattern sequencer
+local patterns = {}
+local pattern_length = 16
+local pattern_position = 1
+local pattern_playing = false
+local pattern_clock = nil
+local tempo = 120
+
+-- Grid UI state
+local grid_page = 1  -- 1=patterns, 2=parameters
+local param_page = 1
+local grid_voice_select = 1
+
+-- Initialize patterns for each voice
+for i = 1, 7 do
+  patterns[i] = {}
+  for step = 1, 16 do
+    patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness
+  end
+end
+
 function init()
   -- Set up params
   params:add_separator("strata")
@@ -220,6 +245,18 @@ function init()
     controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
     action = function(x)
       engine.setMasterDrift(x)
+    end
+  }
+
+  params:add{
+    type = "number",
+    id = "tempo",
+    name = "tempo",
+    min = 40,
+    max = 300,
+    default = 120,
+    action = function(x)
+      tempo = x
     end
   }
   
@@ -271,6 +308,9 @@ function init()
 
   -- Connect arc
   arc_init()
+
+  -- Connect grids
+  grid_init()
 
   -- Start with first two voices (delayed)
   clock.run(function()
@@ -783,8 +823,451 @@ function arc_redraw()
   a:refresh()
 end
 
+-- Grid functions
+function grid_init()
+  -- Connect up to 4 grids
+  for i = 1, 4 do
+    local g = grid.connect(i)
+    if g.device then
+      grids[i] = g
+      grids[i].key = function(x, y, z)
+        grid_key(i, x, y, z)
+      end
+      print("grid " .. i .. " connected: " .. g.cols .. "x" .. g.rows)
+    end
+  end
+  grid_redraw()
+end
+
+function grid.add(g)
+  local port = g.port or 1
+  grids[port] = g
+  grids[port].key = function(x, y, z)
+    grid_key(port, x, y, z)
+  end
+  print("grid " .. port .. " connected: " .. g.cols .. "x" .. g.rows)
+  grid_redraw()
+end
+
+function grid.remove(g)
+  local port = g.port or 1
+  grids[port] = nil
+  print("grid " .. port .. " disconnected")
+end
+
+function grid_key(grid_id, x, y, z)
+  if z == 0 then return end  -- Only respond to key presses
+
+  local g = grids[grid_id]
+  if not g then return end
+
+  local cols = g.cols
+  local rows = g.rows
+
+  -- Determine grid layout based on size
+  if rows >= 16 then
+    -- 16x16 grid (256 buttons) - full layout
+    grid_key_256(x, y, z)
+  elseif cols == 16 and rows == 8 then
+    -- 16x8 grid (128 buttons horizontal)
+    grid_key_128h(x, y, z)
+  elseif cols == 8 and rows == 16 then
+    -- 8x16 grid (128 buttons vertical)
+    grid_key_128v(x, y, z)
+  elseif cols == 8 and rows == 8 then
+    -- 8x8 grid (64 buttons)
+    grid_key_64(x, y, z)
+  end
+
+  grid_redraw()
+  redraw()
+end
+
+-- 16x16 grid layout
+function grid_key_256(x, y, z)
+  if y >= 1 and y <= 7 then
+    -- Rows 1-7: Pattern triggers for each voice
+    toggle_pattern_step(y, x)
+  elseif y == 8 then
+    -- Row 8: Pattern controls
+    if x <= 4 then
+      -- Play/stop
+      pattern_toggle()
+    elseif x >= 5 and x <= 8 then
+      -- Tempo controls
+      if x == 5 then params:delta("tempo", -10) end
+      if x == 6 then params:delta("tempo", -1) end
+      if x == 7 then params:delta("tempo", 1) end
+      if x == 8 then params:delta("tempo", 10) end
+    elseif x >= 13 and x <= 16 then
+      -- Page selection
+      grid_page = x - 12
+    end
+  elseif y >= 9 and y <= 12 then
+    -- Rows 9-12: Parameter manipulation
+    if grid_page == 2 then
+      manipulate_parameter(grid_voice_select, (y - 9) * 16 + x, z)
+    end
+  elseif y == 13 then
+    -- Row 13: Parameter page
+    param_page = util.clamp(x, 1, 4)
+  elseif y == 14 then
+    -- Row 14: Voice selection for parameters
+    if x <= 7 then
+      grid_voice_select = x
+    elseif x >= 9 and x <= 15 then
+      -- Toggle voice on/off
+      local voice_idx = x - 8
+      if voice_idx <= 7 then
+        toggle_voice(voice_idx)
+      end
+    end
+  elseif y == 15 then
+    -- Row 15: Pattern operations
+    if x <= 7 then
+      -- Clear pattern for voice
+      clear_pattern(x)
+    elseif x >= 9 and x <= 15 then
+      -- Randomize pattern for voice
+      local voice_idx = x - 8
+      if voice_idx <= 7 then
+        randomize_pattern(voice_idx)
+      end
+    end
+  elseif y == 16 then
+    -- Row 16: Global functions
+    if x <= 7 then
+      -- Freeze voice
+      if x <= 7 then
+        frozen[x] = not frozen[x]
+        update_voice_list()
+      end
+    elseif x >= 9 and x <= 16 then
+      -- Copy/paste patterns
+      -- (Future expansion)
+    end
+  end
+end
+
+-- 16x8 grid layout (128 buttons horizontal)
+function grid_key_128h(x, y, z)
+  if y >= 1 and y <= 7 then
+    -- Rows 1-7: Pattern triggers
+    toggle_pattern_step(y, x)
+  elseif y == 8 then
+    -- Row 8: Multi-function
+    if x <= 4 then
+      pattern_toggle()
+    elseif x == 5 then
+      grid_page = 1  -- Patterns
+    elseif x == 6 then
+      grid_page = 2  -- Parameters
+    elseif x >= 9 and x <= 15 then
+      -- Voice toggle
+      local voice_idx = x - 8
+      if voice_idx <= 7 then
+        toggle_voice(voice_idx)
+      end
+    elseif x == 16 then
+      -- Voice selection for parameters
+      grid_voice_select = grid_voice_select % 7 + 1
+    end
+  end
+end
+
+-- 8x16 grid layout (128 buttons vertical)
+function grid_key_128v(x, y, z)
+  if x >= 1 and x <= 7 then
+    -- Columns 1-7: Pattern triggers
+    if y <= 16 then
+      toggle_pattern_step(x, y)
+    end
+  elseif x == 8 then
+    -- Column 8: Controls
+    if y >= 1 and y <= 7 then
+      toggle_voice(y)
+    elseif y == 9 then
+      pattern_toggle()
+    elseif y >= 11 and y <= 16 then
+      -- Voice selection for parameters
+      grid_voice_select = util.clamp(y - 10, 1, 7)
+    end
+  end
+end
+
+-- 8x8 grid layout (64 buttons)
+function grid_key_64(x, y, z)
+  if y >= 1 and y <= 7 then
+    -- Rows 1-7: Pattern triggers (8 steps)
+    toggle_pattern_step(y, x)
+  elseif y == 8 then
+    -- Row 8: Controls
+    if x == 1 then
+      pattern_toggle()
+    elseif x >= 3 and x <= 7 then
+      toggle_voice(x - 2)
+    end
+  end
+end
+
+function toggle_pattern_step(voice_idx, step)
+  if patterns[voice_idx][step] == 0 then
+    patterns[voice_idx][step] = 15  -- Full brightness
+  else
+    patterns[voice_idx][step] = 0
+  end
+end
+
+function clear_pattern(voice_idx)
+  for step = 1, 16 do
+    patterns[voice_idx][step] = 0
+  end
+end
+
+function randomize_pattern(voice_idx)
+  for step = 1, 16 do
+    if math.random() > 0.5 then
+      patterns[voice_idx][step] = math.random(8, 15)
+    else
+      patterns[voice_idx][step] = 0
+    end
+  end
+end
+
+function manipulate_parameter(voice_idx, param_id, z)
+  -- Map grid positions to voice parameters
+  local param_map = {
+    -- Main synthesis params
+    {id = "freq", name = "frequency"},
+    {id = "amp", name = "amplitude"},
+    {id = "pan", name = "pan"},
+    -- Voice-specific params (indices 4+)
+  }
+
+  local v = voices[voice_idx]
+  if param_id <= 3 then
+    local param_key = param_map[param_id].id
+    if v.params[param_key] then
+      -- Toggle or adjust parameter
+      local param_full_id = "v" .. voice_idx .. "_" .. param_key
+      if params:lookup_param(param_full_id) then
+        -- Simple toggle for now - could be more sophisticated
+        local current = params:get(param_full_id)
+        local spec = params:lookup_param(param_full_id).controlspec
+        if spec then
+          local new_val = util.linlin(0, 1, spec.minval, spec.maxval, math.random())
+          params:set(param_full_id, new_val)
+        end
+      end
+    end
+  end
+end
+
+function pattern_toggle()
+  if pattern_playing then
+    pattern_clock_stop()
+  else
+    pattern_clock_start()
+  end
+end
+
+function pattern_clock_start()
+  if pattern_clock then
+    clock.cancel(pattern_clock)
+  end
+
+  pattern_playing = true
+  pattern_position = 1
+
+  pattern_clock = clock.run(function()
+    while pattern_playing do
+      -- Trigger voices that have active steps
+      for voice_idx = 1, 7 do
+        if patterns[voice_idx][pattern_position] > 0 then
+          -- Trigger voice if not already active
+          if not voices[voice_idx].active then
+            toggle_voice(voice_idx)
+          end
+          -- Could add velocity/accent control here
+        end
+      end
+
+      -- Advance pattern position
+      pattern_position = pattern_position % pattern_length + 1
+
+      grid_dirty = true
+      grid_redraw()
+
+      -- Wait for next step based on tempo
+      clock.sync(1/4)  -- 16th notes
+    end
+  end)
+end
+
+function pattern_clock_stop()
+  pattern_playing = false
+  if pattern_clock then
+    clock.cancel(pattern_clock)
+    pattern_clock = nil
+  end
+  grid_dirty = true
+  grid_redraw()
+end
+
+function grid_redraw()
+  for grid_id, g in pairs(grids) do
+    if g and g.device then
+      local cols = g.cols
+      local rows = g.rows
+
+      g:all(0)
+
+      if rows >= 16 then
+        grid_redraw_256(g)
+      elseif cols == 16 and rows == 8 then
+        grid_redraw_128h(g)
+      elseif cols == 8 and rows == 16 then
+        grid_redraw_128v(g)
+      elseif cols == 8 and rows == 8 then
+        grid_redraw_64(g)
+      end
+
+      g:refresh()
+    end
+  end
+end
+
+function grid_redraw_256(g)
+  -- Draw patterns (rows 1-7)
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do
+      local brightness = patterns[voice_idx][step]
+      -- Highlight current step
+      if pattern_playing and step == pattern_position then
+        brightness = math.max(brightness, 4)
+        if brightness > 0 then brightness = 15 end
+      end
+      g:led(step, voice_idx, brightness)
+    end
+  end
+
+  -- Row 8: Pattern controls
+  if pattern_playing then
+    g:led(1, 8, 15)
+    g:led(2, 8, 15)
+  else
+    g:led(1, 8, 4)
+    g:led(2, 8, 4)
+  end
+
+  -- Tempo indicators
+  g:led(5, 8, 2)
+  g:led(6, 8, 2)
+  g:led(7, 8, 2)
+  g:led(8, 8, 2)
+
+  -- Page indicators
+  for i = 1, 4 do
+    g:led(12 + i, 8, i == grid_page and 15 or 2)
+  end
+
+  -- Row 14: Voice status
+  for i = 1, 7 do
+    g:led(i, 14, i == grid_voice_select and 15 or 4)
+    g:led(i + 8, 14, voices[i].active and 12 or 2)
+  end
+
+  -- Row 16: Freeze status
+  for i = 1, 7 do
+    g:led(i, 16, frozen[i] and 12 or 2)
+  end
+end
+
+function grid_redraw_128h(g)
+  -- Draw patterns (rows 1-7)
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do
+      local brightness = patterns[voice_idx][step]
+      if pattern_playing and step == pattern_position then
+        brightness = math.max(brightness, 4)
+        if brightness > 0 then brightness = 15 end
+      end
+      g:led(step, voice_idx, brightness)
+    end
+  end
+
+  -- Row 8: Controls
+  if pattern_playing then
+    g:led(1, 8, 15)
+    g:led(2, 8, 15)
+  else
+    g:led(1, 8, 4)
+    g:led(2, 8, 4)
+  end
+
+  -- Page indicators
+  g:led(5, 8, grid_page == 1 and 15 or 4)
+  g:led(6, 8, grid_page == 2 and 15 or 4)
+
+  -- Voice status
+  for i = 1, 7 do
+    g:led(i + 8, 8, voices[i].active and 12 or 2)
+  end
+
+  -- Voice selection indicator
+  g:led(16, 8, 8)
+end
+
+function grid_redraw_128v(g)
+  -- Draw patterns (columns 1-7)
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do
+      local brightness = patterns[voice_idx][step]
+      if pattern_playing and step == pattern_position then
+        brightness = math.max(brightness, 4)
+        if brightness > 0 then brightness = 15 end
+      end
+      g:led(voice_idx, step, brightness)
+    end
+  end
+
+  -- Column 8: Controls
+  for i = 1, 7 do
+    g:led(8, i, voices[i].active and 12 or 4)
+  end
+  g:led(8, 9, pattern_playing and 15 or 4)
+
+  -- Voice selection
+  for i = 1, 6 do
+    g:led(8, 10 + i, (i == grid_voice_select) and 15 or 2)
+  end
+end
+
+function grid_redraw_64(g)
+  -- Draw patterns (rows 1-7, 8 steps only)
+  for voice_idx = 1, 7 do
+    for step = 1, 8 do
+      local brightness = patterns[voice_idx][step]
+      if pattern_playing and step == pattern_position and step <= 8 then
+        brightness = math.max(brightness, 4)
+        if brightness > 0 then brightness = 15 end
+      end
+      g:led(step, voice_idx, brightness)
+    end
+  end
+
+  -- Row 8: Controls
+  g:led(1, 8, pattern_playing and 15 or 4)
+  for i = 1, 5 do
+    if i <= 5 then
+      g:led(i + 2, 8, voices[i].active and 12 or 4)
+    end
+  end
+end
+
 function cleanup()
   lfo_metro:stop()
+  pattern_clock_stop()
   for i = 1, #voices do
     if voices[i].active then
       engine.voiceOff(i - 1)

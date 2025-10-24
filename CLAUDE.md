@@ -278,6 +278,54 @@ clock.run(function()
 end)
 ```
 
+### Grid Integration (Optional)
+
+Strata supports monome grid controllers for pattern sequencing and parameter manipulation. The implementation handles multiple grid sizes and multiple simultaneous grids.
+
+#### Device Lifecycle
+- `grid_init()` - Connect to up to 4 grid devices at startup
+- `grid.add(g)` - Global callback when grid connects (hot-plug support)
+- `grid.remove(g)` - Global callback when grid disconnects
+- `grids` table - Stores all connected grids indexed by port (1-4)
+
+#### Grid Size Detection & Adaptive Layouts
+The implementation automatically detects grid dimensions via `g.cols` and `g.rows` and routes to appropriate layout:
+- **16×16 (256 buttons)**: `grid_key_256()` and `grid_redraw_256()` - Full-featured layout
+- **16×8 (128 horizontal)**: `grid_key_128h()` and `grid_redraw_128h()` - Horizontal layout
+- **8×16 (128 vertical)**: `grid_key_128v()` and `grid_redraw_128v()` - Vertical layout
+- **8×8 (64 buttons)**: `grid_key_64()` and `grid_redraw_64()` - Compact layout
+
+#### Pattern Sequencer Implementation
+- **Pattern Storage**: `patterns[voice_idx][step]` - 7 voices × 16 steps, values 0-15
+- **Playback Clock**: `pattern_clock` - Uses `clock.run()` and `clock.sync(1/4)` for tempo-synced 16th notes
+- **Position Tracking**: `pattern_position` - Current step (1-16), wraps around
+- **Pattern Operations**:
+  - `toggle_pattern_step(voice, step)` - Toggle step on/off
+  - `clear_pattern(voice)` - Reset all steps to 0
+  - `randomize_pattern(voice)` - Generate random pattern with 50% density
+
+#### Multi-Grid Synchronization
+- All grids display the same interface simultaneously
+- `grid_redraw()` iterates over `grids` table and updates each grid
+- Shared state (patterns, voice status, pages) ensures consistency
+- Each grid can trigger the same functions independently
+
+#### LED Feedback Patterns
+- **Active steps**: Brightness 15 (full)
+- **Current playback position**: Minimum brightness 4, or 15 if step is active
+- **Voice active status**: Brightness 12
+- **Voice inactive status**: Brightness 2-4
+- **Page indicators**: 15 for selected, 2 for unselected
+- Always call `g:refresh()` after updating LEDs
+
+#### Key Implementation Details
+- Grid key handler checks `z == 0` to ignore key releases (only respond to presses)
+- Use `g:all(0)` to clear all LEDs before redrawing
+- Pattern clock uses `clock.sync()` for tempo-accurate timing
+- Voices auto-activate when pattern step triggers them
+- Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
+- Grid pages allow switching between pattern sequencing and parameter control
+
 ### Arc Integration (Optional)
 
 Strata supports the monome arc controller for tactile parameter control. The implementation follows these patterns:
