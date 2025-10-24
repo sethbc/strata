@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Strata is an ambient granular soundscape generator for monome norns. It combines four unique synthesis voices (Resonator, FM, Folder, Sub) with individual granular processing to create evolving ambient textures.
 
+See @README.md for additional project details
+
 ## Architecture
 
 ### Dual-Language System
@@ -86,6 +88,14 @@ Prefer clarity over brevity. Good examples from this codebase:
 - `selected_voice` over `sv`
 - `master_density` over `density` or `md`
 - `lfo_metro` over `metro` or `lfo`
+
+### Always keep README.md and CLAUDE.md updated as changes are made to the codebase
+
+When making significant changes to the codebase, ensure both documentation files reflect:
+- New features or architectural changes
+- Updated workflows or testing procedures
+- New patterns or conventions introduced
+- Changes to the signal flow or engine commands
 
 ## Key Implementation Patterns
 
