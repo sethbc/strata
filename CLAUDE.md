@@ -97,6 +97,14 @@ When making significant changes to the codebase, ensure both documentation files
 - New patterns or conventions introduced
 - Changes to the signal flow or engine commands
 
+### Always keep the lua script and the supercollider engine synchronized when changes are made to the codebase
+
+When making significant changes to the codebase, ensure both the lua scripts and the supercollider files reflect:
+- New features or architectural changes
+- Updated workflows or testing procedures
+- New patterns or conventions introduced
+- Changes to the signal flow or engine commands
+
 ## Key Implementation Patterns
 
 ### Voice State Management
