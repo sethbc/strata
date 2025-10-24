@@ -92,6 +92,27 @@ After installation with either method, restart norns or run `;restart` in maiden
 - **K2** - Randomize selected voice parameters
 - **K3** - Start/stop voice, or freeze/unfreeze if already active
 
+### Monome Arc (optional)
+
+Strata supports the monome arc controller for hands-on parameter control with visual LED feedback.
+
+#### Arc Encoders
+
+- **Ring 1** - Master density (0.1 to 2.0)
+- **Ring 2** - Selected voice's main parameter (follows E3 mapping)
+- **Ring 3** - Grain size for selected voice
+- **Ring 4** - Grain density for selected voice
+
+#### Arc Button (2025 model)
+
+- **Button** - Same as K3 (start/stop voice, or freeze/unfreeze if already active)
+
+#### LED Feedback
+
+- Bright rings (level 15/12) indicate active voices
+- Dim rings (level 4/3) indicate inactive voices
+- Ring position shows current parameter value
+
 ## Usage Tips
 
 ### Getting Started
@@ -188,6 +209,7 @@ The codebase is designed to be extended. Some ideas:
 
 - monome norns
 - SuperCollider (included with norns)
+- monome arc (optional - provides tactile parameter control with LED feedback)
 
 ## Credits
 

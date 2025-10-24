@@ -193,6 +193,10 @@ local param_names = {}
 -- LFOs for parameter modulation
 local lfo_metro
 
+-- Arc device
+local a = nil
+local arc_connected = false
+
 function init()
   -- Set up params
   params:add_separator("strata")
@@ -264,6 +268,9 @@ function init()
   lfo_metro.time = 0.1
   lfo_metro.event = lfo_update
   lfo_metro:start()
+
+  -- Connect arc
+  arc_init()
 
   -- Start with first two voices (delayed)
   clock.run(function()
@@ -549,6 +556,7 @@ function enc(n, d)
       params:delta("v" .. selected_voice .. "_ratio", d)
     end
   end
+  arc_redraw()
   redraw()
 end
 
@@ -648,6 +656,131 @@ function redraw()
   screen.text("K2:rand K3:" .. (v.active and "freeze" or "start"))
 
   screen.update()
+end
+
+-- Arc functions
+function arc_init()
+  a = arc.connect()
+  a.delta = arc_delta
+  a.key = arc_key
+  arc_redraw()
+end
+
+function arc.add()
+  arc_connected = true
+  arc_init()
+  print("arc connected")
+end
+
+function arc.remove()
+  arc_connected = false
+  a = nil
+  print("arc disconnected")
+end
+
+function arc_delta(n, delta)
+  if n == 1 then
+    -- Encoder 1: Master density
+    params:delta("master_density", delta / 20)
+  elseif n == 2 then
+    -- Encoder 2: Selected voice's main parameter
+    local v = voices[selected_voice]
+    if v.name == "resonator" then
+      params:delta("v" .. selected_voice .. "_freq", delta)
+    elseif v.name == "fm" then
+      params:delta("v" .. selected_voice .. "_index", delta / 10)
+    elseif v.name == "folder" then
+      params:delta("v" .. selected_voice .. "_fold", delta / 10)
+    elseif v.name == "sub" then
+      params:delta("v" .. selected_voice .. "_drift", delta / 100)
+    elseif v.name == "pulse" then
+      params:delta("v" .. selected_voice .. "_width", delta / 100)
+    elseif v.name == "karplus" then
+      params:delta("v" .. selected_voice .. "_decay", delta / 10)
+    elseif v.name == "ring" then
+      params:delta("v" .. selected_voice .. "_ratio", delta / 100)
+    end
+  elseif n == 3 then
+    -- Encoder 3: Grain size
+    params:delta("v" .. selected_voice .. "_grain_size", delta / 100)
+  elseif n == 4 then
+    -- Encoder 4: Grain density
+    params:delta("v" .. selected_voice .. "_grain_density", delta / 10)
+  end
+  arc_redraw()
+  redraw()
+end
+
+function arc_key(n, s)
+  -- Button press (2025 arc) - same as K3
+  if s == 1 then
+    if not voices[selected_voice].active then
+      toggle_voice(selected_voice)
+    else
+      frozen[selected_voice] = not frozen[selected_voice]
+      update_voice_list()
+    end
+    redraw()
+  end
+end
+
+function arc_redraw()
+  if a == nil then return end
+
+  a:all(0)
+
+  -- Ring 1: Master density (0.1 to 2.0)
+  local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
+  a:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
+
+  -- Ring 2: Selected voice's main parameter
+  local v = voices[selected_voice]
+  local param_val = 0
+  local param_min = 0
+  local param_max = 1
+
+  if v.name == "resonator" then
+    param_val = v.params.freq
+    param_min = 20
+    param_max = 2000
+  elseif v.name == "fm" then
+    param_val = v.params.index
+    param_min = 0
+    param_max = 10
+  elseif v.name == "folder" then
+    param_val = v.params.fold
+    param_min = 0.1
+    param_max = 5
+  elseif v.name == "sub" then
+    param_val = v.params.drift
+    param_min = 0.001
+    param_max = 0.1
+  elseif v.name == "pulse" then
+    param_val = v.params.width
+    param_min = 0.05
+    param_max = 0.95
+  elseif v.name == "karplus" then
+    param_val = v.params.decay
+    param_min = 0.5
+    param_max = 10
+  elseif v.name == "ring" then
+    param_val = v.params.ratio
+    param_min = 0.5
+    param_max = 8
+  end
+
+  local param_pos = util.linlin(param_min, param_max, 0, 64, param_val)
+  a:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
+
+  -- Ring 3: Grain size (0.01 to 0.5)
+  local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
+  a:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
+
+  -- Ring 4: Grain density (1 to 100)
+  local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
+  a:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
+
+  a:refresh()
 end
 
 function cleanup()

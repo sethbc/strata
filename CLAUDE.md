@@ -278,6 +278,42 @@ clock.run(function()
 end)
 ```
 
+### Arc Integration (Optional)
+
+Strata supports the monome arc controller for tactile parameter control. The implementation follows these patterns:
+
+#### Device Lifecycle
+- `arc_init()` - Connect to arc device and set up callbacks
+- `arc.add()` - Global callback when arc connects
+- `arc.remove()` - Global callback when arc disconnects
+- Graceful degradation: All arc functions check if `a == nil` before proceeding
+
+#### Input Handling
+- `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4
+  - Ring 1: Master density
+  - Ring 2: Selected voice's main parameter (voice-specific)
+  - Ring 3: Grain size for selected voice
+  - Ring 4: Grain density for selected voice
+- `arc_key(n, s)` - Handle button press (2025 arc models)
+  - Mirrors K3 functionality (toggle/freeze voice)
+
+#### LED Feedback
+- `arc_redraw()` - Update all ring LEDs to reflect current parameter values
+- Called after parameter changes (from encoders or arc)
+- Uses `util.linlin()` to map parameter ranges to 0-64 LED positions
+- Brightness levels indicate voice state:
+  - 15 = active voice primary parameter
+  - 12 = active voice secondary parameters
+  - 4 = inactive voice primary parameter
+  - 3 = inactive voice secondary parameters
+- Uses `a:segment(ring, from, to, level)` for smooth arc visualizations
+
+#### Key Implementation Details
+- Arc encoders use scaled deltas (e.g., `delta / 20`, `delta / 100`) for fine control
+- Parameters ranges must match between arc feedback and param specs
+- Arc redraw is triggered alongside screen redraw for consistency
+- All arc functions are non-blocking and safe to call even without arc connected
+
 ### UI Updates
 
 The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. The list shows:
