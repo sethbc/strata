@@ -29,13 +29,26 @@ This project uses two languages that work together:
 
 ```
 Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb Bus → Master (drift/saturation) → Output
+                  ↓
+              Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
 
 Each of the 4 voices follows this path:
 1. Voice synth (strataResonator/strataFM/strataFolder/strataSub) outputs to its own `granBuses[i]`
 2. Granular processor (`strataGrain`) reads from voice bus, outputs to shared `mainBus`
-3. Reverb (`strataReverb`) processes mainBus, outputs to `reverbBus`
-4. Master (`strataMaster`) applies drift and saturation, outputs to norns output
+3. Modulation synth (`strataMod`) analyzes voice bus output and generates control signal to `modBuses[i]`
+4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
+5. Reverb (`strataReverb`) processes mainBus, outputs to `reverbBus`
+6. Master (`strataMaster`) applies drift and saturation, outputs to norns output
+
+### Cross-Modulation System
+
+Each voice generates a modulation signal (envelope follower + slow LFO) that can modulate other voices:
+- **Modulation Output**: Each voice has a `strataMod` synth that analyzes its audio output and creates a control signal (0-1 range)
+- **Modulation Input**: Each voice synth can read from any mod bus and use it to modulate amplitude and/or frequency
+- **Routing**: Controlled via `setModSource(voice, sourceVoice)` - each voice can be modulated by one source
+- **Depth Control**: `modAmpAmt` and `modFreqAmt` control how much the modulation signal affects each parameter
+- **Signal Character**: The mod signal combines envelope following (70%) with slow LFO movement (30%) for organic evolution
 
 ### Lua ↔ SuperCollider Communication
 
@@ -51,6 +64,10 @@ The Lua script controls the engine through these commands:
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
+| `engine.setModSource(voice, sourceVoice)` | `"ii"` | Set which voice modulates this voice (-1 = none, 0-3 = voice index) |
+| `engine.setModAmpAmt(voice, amount)` | `"if"` | Set amplitude modulation amount (-2 to 2) |
+| `engine.setModFreqAmt(voice, amount)` | `"if"` | Set frequency modulation amount (-2 to 2) |
+| `engine.setModSpeed(voice, speed)` | `"if"` | Set modulation LFO speed (0.1 to 50) |
 
 **Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`).
 
@@ -61,6 +78,12 @@ The Lua script controls the engine through these commands:
 - **Sub**: freq, drift, amp
 
 **Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread
+
+**Cross-Modulation Parameters** (per voice):
+- **source**: Which voice modulates this one (0=none, 1-4 in Lua, -1=none, 0-3 in SC)
+- **amp_amt**: Amplitude modulation depth (-2 to 2, bipolar)
+- **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
+- **speed**: Modulation signal LFO speed (0.1 to 50 Hz)
 
 ## Development & Testing
 
@@ -208,10 +231,22 @@ Each voice type has its own SynthDef with unique parameters:
 - `\strataFolder` - Wavefolder with sine input
 - `\strataSub` - Ultra-low sine with drift
 
+All voice SynthDefs now include cross-modulation inputs:
+- `modBus` - Control bus to read modulation signal from
+- `modAmpAmt` - Amplitude modulation depth (-2 to 2)
+- `modFreqAmt` - Frequency modulation depth (-2 to 2)
+
+Shared processing SynthDefs:
+- `\strataMod` - Envelope follower + LFO for generating modulation signals
+- `\strataGrain` - Granular processor (one per voice)
+- `\strataReverb` - Global reverb processor
+- `\strataMaster` - Master output with drift and saturation
+
 ### Audio Bus Management
 
 Buses are allocated in `alloc`:
-- 4 stereo `granBuses` (one per voice)
+- 4 stereo `granBuses` (one per voice, for audio)
+- 4 mono `modBuses` (one per voice, for control signals)
 - 1 stereo `mainBus` (granular outputs mix here)
 - 1 stereo `reverbBus` (reverb output)
 
@@ -226,10 +261,11 @@ Synths use `gate` with ASR envelopes:
 
 ## Future Extension Points
 
-The README suggests these expansion areas:
-- Cross-modulation between voices
+Potential expansion areas:
+- ~~Cross-modulation between voices~~ ✓ Implemented
 - Probability-based parameter mutations
 - Preset save/load
 - Monome grid integration
 - Additional voice types
 - Longer-form automation/sequencing
+- Multi-source modulation routing (currently limited to one source per voice)

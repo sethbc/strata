@@ -31,6 +31,12 @@ local voices = {
       density = 20,
       pitch = 1,
       spread = 0.5
+    },
+    crossmod = {
+      source = 0,  -- 0 = none, 1-4 = voice number
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
     }
   },
   {
@@ -49,6 +55,12 @@ local voices = {
       density = 15,
       pitch = 1,
       spread = 0.3
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
     }
   },
   {
@@ -66,6 +78,12 @@ local voices = {
       density = 25,
       pitch = 1,
       spread = 0.4
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
     }
   },
   {
@@ -81,6 +99,12 @@ local voices = {
       density = 10,
       pitch = 1,
       spread = 0.2
+    },
+    crossmod = {
+      source = 0,
+      amp_amt = 0,
+      freq_amt = 0,
+      speed = 10
     }
   }
 }
@@ -251,6 +275,72 @@ function add_voice_params(voice_idx)
       voices[voice_idx].grain.spread = x
       if voices[voice_idx].active then
         engine.setGrainParam(voice_idx - 1, "posSpread", x)
+      end
+    end
+  }
+
+  -- Cross-modulation params
+  params:add_separator("voice " .. voice_idx .. " cross-modulation")
+
+  params:add{
+    type = "number",
+    id = "v" .. voice_idx .. "_mod_source",
+    name = "mod source",
+    min = 0,
+    max = 4,
+    default = v.crossmod.source,
+    formatter = function(param)
+      if param:get() == 0 then
+        return "none"
+      else
+        return "voice " .. param:get()
+      end
+    end,
+    action = function(x)
+      voices[voice_idx].crossmod.source = x
+      if voices[voice_idx].active then
+        -- Convert to SC indexing: 0=none becomes -1, 1-4 become 0-3
+        local sc_source = x == 0 and -1 or (x - 1)
+        engine.setModSource(voice_idx - 1, sc_source)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_amp_amt",
+    name = "amp mod amount",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.amp_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.amp_amt = x
+      if voices[voice_idx].active then
+        engine.setModAmpAmt(voice_idx - 1, x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_freq_amt",
+    name = "freq mod amount",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.freq_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.freq_amt = x
+      if voices[voice_idx].active then
+        engine.setModFreqAmt(voice_idx - 1, x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_speed",
+    name = "mod speed",
+    controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
+    action = function(x)
+      voices[voice_idx].crossmod.speed = x
+      if voices[voice_idx].active then
+        engine.setModSpeed(voice_idx - 1, x)
       end
     end
   }

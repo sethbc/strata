@@ -23,6 +23,14 @@ Each synthesis voice is fed through its own granular processor with independent 
 - Pitch shifting (transposition)
 - Position spread (temporal smearing)
 
+### Cross-Modulation
+
+Voices can modulate each other for evolving, interdependent textures:
+- Each voice generates a modulation signal based on its audio output
+- Route any voice to modulate another voice's amplitude and/or frequency
+- Adjustable modulation depth for subtle or dramatic effects
+- Creates organic, evolving relationships between layers
+
 ### Global Controls
 
 - **Master Density** - Controls grain density across all voices simultaneously
@@ -78,12 +86,22 @@ Then restart norns or run `;restart` in maiden.
 - Adjust master density with E1 to create movement
 - Add reverb via the PARAMETERS menu for more space
 
+### Exploring Cross-Modulation
+
+- Open PARAMETERS menu and navigate to a voice's cross-modulation section
+- Set "mod source" to another active voice (e.g., voice 2 modulates voice 1)
+- Adjust "amp mod amount" (0.5 to 1.5 is a good starting range)
+- Try "freq mod amount" for pitch variation (start subtle: 0.1 to 0.3)
+- Experiment with different modulation routing combinations
+- Create feedback loops (voice 1 → 2, voice 2 → 1) for complex evolution
+
 ### Performance Workflow
 
 1. Build up layers by activating voices one at a time
 2. Randomize unfrozen voices to create variation
 3. Use master density for dynamic swells and fades
 4. Freeze/unfreeze voices to create structural changes
+5. Set up cross-modulation for interdependent voice relationships
 
 ## Parameters
 
@@ -105,6 +123,11 @@ Each voice includes:
 - Grain density
 - Grain pitch shift
 - Position spread
+- Cross-modulation controls:
+  - Modulation source (which voice modulates this one)
+  - Amplitude modulation amount
+  - Frequency modulation amount
+  - Modulation speed
 
 ## Technical Details
 
@@ -114,6 +137,8 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Four independent synthesis voices
 - Individual audio buses for each voice
 - Per-voice granular processors using `GrainIn`
+- Cross-modulation routing via control buses
+- Each voice generates a modulation signal from its output
 - Global reverb and master effects chain
 - Soft saturation on master output
 
@@ -121,18 +146,20 @@ The engine uses SuperCollider for synthesis and granular processing:
 
 ```
 Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Master (with drift/saturation) → Output
+                  ↓
+              Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
 
 ## Expanding the Script
 
 The codebase is designed to be extended. Some ideas:
 
-- Add cross-modulation between voices
 - Implement probability-based parameter mutations
 - Add preset save/load functionality
 - Create monome grid integration for pattern sequencing
 - Add more synthesis voice types
 - Implement longer-form automation/sequencing
+- Multi-source modulation routing (currently one source per voice)
 
 ## Requirements
 
