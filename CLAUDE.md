@@ -124,6 +124,28 @@ Since this runs on norns hardware (or norns shield/fates):
 
 ## Code Style Guidelines
 
+### Always use named constants for magic numbers (v2.0+)
+
+**CRITICAL**: The codebase uses named constants defined at the top of [strata.lua](strata.lua:15-19):
+```lua
+local NUM_VOICES = 7        -- Total number of synthesis voices
+local NUM_SCENES = 8        -- Total number of scene slots
+local PATTERN_LENGTH = 16   -- Steps per pattern
+local SCENE_DATA_VERSION = 1  -- Scene file format version
+```
+
+**Always use these constants** instead of hardcoded numbers:
+- Use `NUM_VOICES` in voice loops: `for i = 1, NUM_VOICES do`
+- Use `NUM_SCENES` for scene validation: `if scene_num > NUM_SCENES then return end`
+- Use `PATTERN_LENGTH` for pattern operations: `for step = 1, PATTERN_LENGTH do`
+- Never use hardcoded 7, 8, or 16 in voice/scene/pattern code
+
+**Why this matters**:
+- Makes code maintainable if voice/scene counts change
+- Prevents subtle bugs from inconsistent hardcoded values
+- Self-documents the meaning of these numbers
+- Enables easy extension (e.g., adding voice 8)
+
 ### Always use descriptive variable names
 
 Prefer clarity over brevity. Good examples from this codebase:
@@ -583,6 +605,148 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 - **What's Saved**: Complete scenes table including all 8 scene slots, populated state, and scene data
 - **Persistence**: Scenes persist across norns reboots, allowing you to build a library of sonic palettes
 
+#### Scene Data Validation (v2.0+)
+
+**IMPORTANT**: Always validate scene data before using it to prevent crashes from corrupted files.
+
+The `validate_scene_data()` function ([strata.lua:1144-1180](strata.lua#L1144-L1180)) performs comprehensive checks:
+```lua
+function validate_scene_data(scene_table)
+  -- Type checking
+  if type(scene_table) ~= "table" then return false end
+
+  -- Structure validation
+  for i = 1, NUM_SCENES do
+    if scene_table[i] and scene_table[i].populated then
+      -- Verify required fields exist
+      if not data.voices or not data.patterns then return false end
+
+      -- Verify voice count matches
+      if #data.voices ~= NUM_VOICES then return false end
+
+      -- Verify each voice has complete structure
+      -- (params, grain, crossmod tables)
+    end
+  end
+
+  return true
+end
+```
+
+**When to validate**:
+- Always before loading scenes from disk
+- Before recalling scenes (check scene_data.voices exists)
+- After receiving scene data from external sources
+
+**Error handling patterns**:
+```lua
+-- Graceful degradation with console messages
+if not scene_data or not scene_data.voices then
+  print("error: scene " .. scene_num .. " has invalid data")
+  return
+end
+
+-- Nil-safe iteration
+if scene_data.voices[i] and scene_data.voices[i].params then
+  for key, target_val in pairs(scene_data.voices[i].params) do
+    -- Safe to access
+  end
+end
+```
+
+### Bounds Checking and Safety (v2.0+)
+
+**CRITICAL**: Always validate array indices before accessing to prevent expansion or crashes.
+
+**Pattern bounds checking**:
+```lua
+function toggle_pattern_step(voice_idx, step)
+  -- Bounds checking to prevent array expansion
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  if step < 1 or step > PATTERN_LENGTH then return end
+
+  -- Safe to access
+  patterns[voice_idx][step] = ...
+end
+```
+
+**Scene bounds checking**:
+```lua
+function recall_scene(scene_num, transition_time)
+  if scene_num < 1 or scene_num > num_scenes then return end
+  if not scenes[scene_num].populated then
+    print("scene " .. scene_num .. " is empty")
+    return
+  end
+  -- Safe to proceed
+end
+```
+
+**Apply bounds checking to**:
+- All voice index access (1 to NUM_VOICES)
+- All scene index access (1 to NUM_SCENES)
+- All pattern step access (1 to PATTERN_LENGTH)
+- Grid button coordinates
+- Parameter ranges
+
+### Resource Management and Cleanup (v2.0+)
+
+**IMPORTANT**: Always clean up metros, clocks, and other resources to prevent leaks.
+
+The `cleanup()` function ([strata.lua:2025-2054](strata.lua#L2025-L2054)) demonstrates proper cleanup:
+```lua
+function cleanup()
+  -- Save state before cleanup
+  save_scenes_to_disk()
+
+  -- Stop metros with nil checks
+  if lfo_metro then lfo_metro:stop() end
+
+  -- Sync parameter state with actual state
+  if mutation_metro then
+    mutation_metro:stop()
+    params:set("mutation_enabled", 0)  -- Keep param in sync
+  end
+
+  -- Stop pattern and scene clocks
+  pattern_clock_stop()
+  scene_sequencer_stop()
+
+  -- Cancel transition clocks to prevent orphaned coroutines
+  if scene_transition_clock then
+    clock.cancel(scene_transition_clock)
+    scene_transition_clock = nil
+  end
+
+  -- Turn off all voices
+  for i = 1, NUM_VOICES do
+    if voices[i].active then
+      engine.voiceOff(i - 1)
+    end
+  end
+end
+```
+
+**Clock management patterns**:
+```lua
+-- Before starting a clock, cancel existing one
+if scene_transition_clock then
+  clock.cancel(scene_transition_clock)
+  scene_transition_clock = nil
+end
+
+-- Then start new clock
+scene_transition_clock = clock.run(function()
+  -- Clock body
+end)
+```
+
+**Prevents**:
+- Orphaned clock coroutines
+- Concurrent clocks causing parameter oscillation
+- Memory leaks from uncancelled metros
+- State inconsistencies between params and actual state
+
 ### Async Initialization
 
 Voice activation uses `clock.run()` for delayed starts:
@@ -711,6 +875,16 @@ All voice SynthDefs now include multi-source cross-modulation inputs (3 slots):
 - `modFreqAmt1`, `modFreqAmt2`, `modFreqAmt3` - Frequency modulation depths (-2 to 2)
 - The 3 modulation signals are mixed together (weighted sum) before application
 
+**Modulation Signal Clamping (v2.0+)**:
+To prevent excessive amplitude spikes when multiple modulation sources are active, all SynthDefs now include clamping:
+```supercollider
+// Mix modulation signals with clamping to prevent excessive modulation
+modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+modAmp = (amp * (1 + modSig)).clip(0, 2);
+```
+This prevents the theoretical 4× amplitude spike that could occur with 3 sources all at maximum positive modulation.
+
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
 - `\strataGrain` - Granular processor (one per voice)
@@ -734,17 +908,58 @@ Synths use `gate` with ASR envelopes:
 - Stopping: `synth.set(\gate, 0)` triggers release phase
 - `doneAction: 2` frees the synth after release
 
+## Version History
+
+### Version 2.0 (2025-01-24)
+
+Major stability and code quality release focusing on bug fixes and defensive programming:
+
+**Critical Bug Fixes**:
+- Scene data validation prevents crashes from corrupted files
+- Scene sequencer position bounds checking prevents out-of-bounds access
+- Concurrent scene transition prevention via clock tracking and cancellation
+
+**High Priority Bug Fixes**:
+- Arc initialization race condition fixed
+- Mutation metro state synchronization in cleanup
+- 64-button grid pattern display corrected
+- Pattern/scene bounds checking added throughout
+- Scene transition nil access protection
+
+**Code Quality Improvements**:
+- Named constants (NUM_VOICES, NUM_SCENES, PATTERN_LENGTH) replace magic numbers
+- Comprehensive error handling and validation patterns
+- Resource management with proper cleanup
+- Modulation signal clamping in SuperCollider engine
+
+See [CHANGELOG.md](CHANGELOG.md) for complete details.
+
+### Version 1.0
+
+Initial release with:
+- 7 synthesis voices with granular processing
+- Cross-modulation (3 slots per voice)
+- Probability-based mutations
+- Scene system with disk persistence
+- Grid and arc integration
+- Pattern sequencer
+
 ## Future Extension Points
 
 Potential expansion areas:
-- ~~Cross-modulation between voices~~ ✓ Implemented
-- ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented
-- ~~Probability-based parameter mutations~~ ✓ Implemented
-- ~~Monome grid integration~~ ✓ Implemented
-- ~~Longer-form automation/sequencing~~ ✓ Implemented (scene system)
-- ~~Multi-source modulation routing~~ ✓ Implemented (3 slots per voice)
-- ~~Scene disk persistence~~ ✓ Implemented (auto-save/load + manual triggers)
+- ~~Cross-modulation between voices~~ ✓ Implemented (v1.0)
+- ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented (v1.0)
+- ~~Probability-based parameter mutations~~ ✓ Implemented (v1.0)
+- ~~Monome grid integration~~ ✓ Implemented (v1.0)
+- ~~Longer-form automation/sequencing~~ ✓ Implemented (v1.0 - scene system)
+- ~~Multi-source modulation routing~~ ✓ Implemented (v1.0 - 3 slots per voice)
+- ~~Scene disk persistence~~ ✓ Implemented (v1.0 - auto-save/load + manual triggers)
+- ~~Scene data validation~~ ✓ Implemented (v2.0)
+- ~~Bounds checking and safety~~ ✓ Implemented (v2.0)
+- ~~Modulation signal clamping~~ ✓ Implemented (v2.0)
 - More voice types (wavetable, additive, granular noise, etc.)
 - Modulation matrix visualization on grid or arc
 - Per-scene naming/tagging system
 - MIDI integration for external control
+- Undo/redo for parameter changes
+- Parameter automation recording

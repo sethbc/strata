@@ -57,10 +57,10 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            // Mix modulation signals with clamping to prevent excessive modulation
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modAmp = (amp * (1 + modSig)).clip(0, 2);
 
             noiseSource = PinkNoise.ar(noise) + LFNoise1.ar(100, 0.3);
 
@@ -129,10 +129,10 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            // Mix modulation signals with clamping to prevent excessive modulation
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modAmp = (amp * (1 + modSig)).clip(0, 2);
 
             foldAmt = fold * LFNoise1.kr(mod).range(0.5, 1.5);
             sig = SinOsc.ar(modFreq * [1, 1.002]);
@@ -186,10 +186,10 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            // Mix modulation signals with clamping to prevent excessive modulation
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modAmp = (amp * (1 + modSig)).clip(0, 2);
 
             // Modulate pulse width with LFO and cross-mod
             modWidth = width + (LFNoise1.kr(0.15).range(-0.2, 0.2)) + (modSig * 0.3);
@@ -222,10 +222,10 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            // Mix modulation signals with clamping to prevent excessive modulation
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modAmp = (amp * (1 + modSig)).clip(0, 2);
 
             // Excitation signal - burst of noise
             noise = PinkNoise.ar(1);
@@ -273,10 +273,10 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            // Mix modulation signals with clamping to prevent excessive modulation
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modAmp = (amp * (1 + modSig)).clip(0, 2);
 
             // Slowly evolving ratio for inharmonic movement
             ratio = ratio + (LFNoise1.kr(mod).range(-0.1, 0.1));

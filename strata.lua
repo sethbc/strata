@@ -12,6 +12,12 @@ engine.name = "Strata"
 local MusicUtil = require "musicutil"
 local UI = require "ui"
 
+-- Constants
+local NUM_VOICES = 7
+local NUM_SCENES = 8
+local PATTERN_LENGTH = 16
+local SCENE_DATA_VERSION = 1  -- For future compatibility
+
 -- State
 local voices = {
   {
@@ -198,12 +204,13 @@ local mutation_metro
 
 -- Scene system
 local scenes = {}
-local num_scenes = 8
+local num_scenes = NUM_SCENES
 local current_scene = 0  -- 0 = no scene loaded
 local scene_sequencer_position = 1
 local scene_sequencer_enabled = false
 local scene_sequencer_clock = nil
 local scene_transition_active = false
+local scene_transition_clock = nil  -- Track transition clock for cancellation
 
 -- Arc device
 local a = nil
@@ -215,7 +222,7 @@ local grid_dirty = true
 
 -- Pattern sequencer
 local patterns = {}
-local pattern_length = 16
+local pattern_length = PATTERN_LENGTH
 local pattern_position = 1
 local pattern_playing = false
 local pattern_clock = nil
@@ -228,9 +235,9 @@ local grid_voice_select = 1
 local grid_key1_held = false  -- Track K1 hold for scene save
 
 -- Initialize patterns for each voice
-for i = 1, 7 do
+for i = 1, NUM_VOICES do
   patterns[i] = {}
-  for step = 1, 16 do
+  for step = 1, PATTERN_LENGTH do
     patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness
   end
 end
@@ -916,9 +923,9 @@ function capture_scene(scene_num)
   end
 
   -- Capture patterns
-  for i = 1, 7 do
+  for i = 1, NUM_VOICES do
     scene_data.patterns[i] = {}
-    for step = 1, 16 do
+    for step = 1, PATTERN_LENGTH do
       scene_data.patterns[i][step] = patterns[i][step]
     end
   end
@@ -938,10 +945,22 @@ function recall_scene(scene_num, transition_time)
   transition_time = transition_time or 0
   local scene_data = scenes[scene_num].data
 
+  -- Validate scene data before recalling
+  if not scene_data or not scene_data.voices then
+    print("error: scene " .. scene_num .. " has invalid data")
+    return
+  end
+
   if transition_time > 0 then
+    -- Cancel any existing transition clock to prevent concurrent transitions
+    if scene_transition_clock then
+      clock.cancel(scene_transition_clock)
+      scene_transition_clock = nil
+    end
+
     -- Smooth transition with parameter interpolation
     scene_transition_active = true
-    clock.run(function()
+    scene_transition_clock = clock.run(function()
       local steps = 20
       local step_time = transition_time / steps
 
@@ -953,21 +972,31 @@ function recall_scene(scene_num, transition_time)
 
         -- Interpolate voice parameters
         for i = 1, #voices do
-          for key, target_val in pairs(scene_data.voices[i].params) do
-            local current_val = voices[i].params[key]
-            local new_val = util.linlin(0, 1, current_val, target_val, mix)
-            params:set("v" .. i .. "_" .. key, new_val)
-          end
+          if scene_data.voices[i] then
+            if scene_data.voices[i].params then
+              for key, target_val in pairs(scene_data.voices[i].params) do
+                local current_val = voices[i].params[key]
+                if current_val then
+                  local new_val = util.linlin(0, 1, current_val, target_val, mix)
+                  params:set("v" .. i .. "_" .. key, new_val)
+                end
+              end
+            end
 
-          for key, target_val in pairs(scene_data.voices[i].grain) do
-            local current_val = voices[i].grain[key]
-            local new_val = util.linlin(0, 1, current_val, target_val, mix)
-            local param_name = key == "size" and "grain_size" or
-                             key == "density" and "grain_density" or
-                             key == "pitch" and "grain_pitch" or
-                             key == "spread" and "grain_spread"
-            if param_name then
-              params:set("v" .. i .. "_" .. param_name, new_val)
+            if scene_data.voices[i].grain then
+              for key, target_val in pairs(scene_data.voices[i].grain) do
+                local current_val = voices[i].grain[key]
+                if current_val then
+                  local new_val = util.linlin(0, 1, current_val, target_val, mix)
+                  local param_name = key == "size" and "grain_size" or
+                                   key == "density" and "grain_density" or
+                                   key == "pitch" and "grain_pitch" or
+                                   key == "spread" and "grain_spread"
+                  if param_name then
+                    params:set("v" .. i .. "_" .. param_name, new_val)
+                  end
+                end
+              end
             end
           end
         end
@@ -978,6 +1007,7 @@ function recall_scene(scene_num, transition_time)
       -- Final state: ensure exact values
       recall_scene_instant(scene_num)
       scene_transition_active = false
+      scene_transition_clock = nil
     end)
   else
     -- Instant recall
@@ -1046,8 +1076,8 @@ function recall_scene_instant(scene_num)
   end
 
   -- Restore patterns
-  for i = 1, 7 do
-    for step = 1, 16 do
+  for i = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
       patterns[i][step] = scene_data.patterns[i][step]
     end
   end
@@ -1068,16 +1098,24 @@ function scene_sequencer_start()
     while scene_sequencer_enabled do
       local seq_length = params:get("scene_sequence_length")
 
-      -- Recall next scene in sequence
+      -- Clamp position to valid range (prevents wraparound bugs)
+      scene_sequencer_position = util.clamp(scene_sequencer_position, 1, seq_length)
+
+      -- Recall next scene in sequence (skip empty scenes)
       if scenes[scene_sequencer_position].populated then
         recall_scene(scene_sequencer_position, params:get("scene_transition_time"))
+      else
+        print("skipping empty scene " .. scene_sequencer_position)
       end
 
       -- Wait for scene duration
       clock.sleep(params:get("scene_duration"))
 
-      -- Advance to next scene
-      scene_sequencer_position = scene_sequencer_position % seq_length + 1
+      -- Advance to next scene with proper wraparound
+      scene_sequencer_position = scene_sequencer_position + 1
+      if scene_sequencer_position > seq_length then
+        scene_sequencer_position = 1
+      end
 
       redraw()
       grid_redraw()
@@ -1116,17 +1154,60 @@ function load_scenes_from_disk()
     local loaded_scenes = tab.load(scene_data_file)
 
     if loaded_scenes then
-      scenes = loaded_scenes
-      print("scenes loaded from " .. scene_data_file)
+      -- Validate scene data structure
+      if validate_scene_data(loaded_scenes) then
+        scenes = loaded_scenes
+        print("scenes loaded from " .. scene_data_file)
 
-      -- Update grid display if grids are connected
-      grid_redraw()
+        -- Update grid display if grids are connected
+        grid_redraw()
+      else
+        print("error: scene file corrupted or incompatible version")
+      end
     else
       print("error loading scenes file")
     end
   else
     print("no saved scenes file found")
   end
+end
+
+function validate_scene_data(scene_table)
+  -- Validate scene data structure to prevent crashes
+  if type(scene_table) ~= "table" then return false end
+
+  for i = 1, NUM_SCENES do
+    if scene_table[i] then
+      local scene = scene_table[i]
+
+      -- Check basic structure
+      if type(scene) ~= "table" then return false end
+      if scene.populated == nil then return false end
+
+      -- If populated, validate data structure
+      if scene.populated and scene.data then
+        local data = scene.data
+
+        -- Validate essential fields exist
+        if not data.voices or type(data.voices) ~= "table" then return false end
+        if not data.patterns or type(data.patterns) ~= "table" then return false end
+
+        -- Validate voice count
+        if #data.voices ~= NUM_VOICES then return false end
+
+        -- Validate each voice has required structure
+        for v = 1, NUM_VOICES do
+          local voice = data.voices[v]
+          if not voice or type(voice) ~= "table" then return false end
+          if not voice.params or type(voice.params) ~= "table" then return false end
+          if not voice.grain or type(voice.grain) ~= "table" then return false end
+          if not voice.crossmod or type(voice.crossmod) ~= "table" then return false end
+        end
+      end
+    end
+  end
+
+  return true
 end
 
 function update_voice_list()
@@ -1301,14 +1382,24 @@ end
 -- Arc functions
 function arc_init()
   a = arc.connect()
+  if a and a.device then
+    a.delta = arc_delta
+    a.key = arc_key
+    arc_connected = true
+    arc_redraw()
+  end
+end
+
+function arc.add(device)
+  -- Prevent duplicate initialization
+  if arc_connected and a and a.device then
+    return
+  end
+  arc_connected = true
+  a = device
   a.delta = arc_delta
   a.key = arc_key
   arc_redraw()
-end
-
-function arc.add()
-  arc_connected = true
-  arc_init()
   print("arc connected")
 end
 
@@ -1507,8 +1598,8 @@ function grid_key_256(x, y, z)
         params:set("scene_sequence_length", x - 2)
       end
     end
-  elseif y >= 1 and y <= 7 then
-    -- Rows 1-7: Pattern triggers for each voice
+  elseif y >= 1 and y <= NUM_VOICES then
+    -- Rows 1-NUM_VOICES: Pattern triggers for each voice
     toggle_pattern_step(y, x)
   elseif y == 8 then
     -- Row 8: Pattern controls
@@ -1633,6 +1724,10 @@ function grid_key_64(x, y, z)
 end
 
 function toggle_pattern_step(voice_idx, step)
+  -- Bounds checking to prevent array expansion
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  if step < 1 or step > PATTERN_LENGTH then return end
+
   if patterns[voice_idx][step] == 0 then
     patterns[voice_idx][step] = 15  -- Full brightness
   else
@@ -1641,13 +1736,15 @@ function toggle_pattern_step(voice_idx, step)
 end
 
 function clear_pattern(voice_idx)
-  for step = 1, 16 do
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  for step = 1, PATTERN_LENGTH do
     patterns[voice_idx][step] = 0
   end
 end
 
 function randomize_pattern(voice_idx)
-  for step = 1, 16 do
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  for step = 1, PATTERN_LENGTH do
     if math.random() > 0.5 then
       patterns[voice_idx][step] = math.random(8, 15)
     else
@@ -1704,7 +1801,7 @@ function pattern_clock_start()
   pattern_clock = clock.run(function()
     while pattern_playing do
       -- Trigger voices that have active steps
-      for voice_idx = 1, 7 do
+      for voice_idx = 1, NUM_VOICES do
         if patterns[voice_idx][pattern_position] > 0 then
           -- Trigger voice if not already active
           if not voices[voice_idx].active then
@@ -1803,9 +1900,9 @@ function grid_redraw_256(g)
     end
   else
     -- Patterns/parameters pages
-    -- Draw patterns (rows 1-7)
-    for voice_idx = 1, 7 do
-      for step = 1, 16 do
+    -- Draw patterns (rows 1-NUM_VOICES)
+    for voice_idx = 1, NUM_VOICES do
+      for step = 1, PATTERN_LENGTH do
         local brightness = patterns[voice_idx][step]
         -- Highlight current step
         if pattern_playing and step == pattern_position then
@@ -1850,9 +1947,9 @@ function grid_redraw_256(g)
 end
 
 function grid_redraw_128h(g)
-  -- Draw patterns (rows 1-7)
-  for voice_idx = 1, 7 do
-    for step = 1, 16 do
+  -- Draw patterns (rows 1-NUM_VOICES)
+  for voice_idx = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
       local brightness = patterns[voice_idx][step]
       if pattern_playing and step == pattern_position then
         brightness = math.max(brightness, 4)
@@ -1885,9 +1982,9 @@ function grid_redraw_128h(g)
 end
 
 function grid_redraw_128v(g)
-  -- Draw patterns (columns 1-7)
-  for voice_idx = 1, 7 do
-    for step = 1, 16 do
+  -- Draw patterns (columns 1-NUM_VOICES)
+  for voice_idx = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
       local brightness = patterns[voice_idx][step]
       if pattern_playing and step == pattern_position then
         brightness = math.max(brightness, 4)
@@ -1910,11 +2007,12 @@ function grid_redraw_128v(g)
 end
 
 function grid_redraw_64(g)
-  -- Draw patterns (rows 1-7, 8 steps only)
-  for voice_idx = 1, 7 do
+  -- Draw patterns (rows 1-7, 8 steps only - shows first 8 steps of 16-step pattern)
+  for voice_idx = 1, NUM_VOICES do
     for step = 1, 8 do
       local brightness = patterns[voice_idx][step]
-      if pattern_playing and step == pattern_position and step <= 8 then
+      -- Only highlight if pattern position is within visible range (1-8)
+      if pattern_playing and pattern_position == step then
         brightness = math.max(brightness, 4)
         if brightness > 0 then brightness = 15 end
       end
@@ -1925,9 +2023,7 @@ function grid_redraw_64(g)
   -- Row 8: Controls
   g:led(1, 8, pattern_playing and 15 or 4)
   for i = 1, 5 do
-    if i <= 5 then
-      g:led(i + 2, 8, voices[i].active and 12 or 4)
-    end
+    g:led(i + 2, 8, voices[i].active and 12 or 4)
   end
 end
 
@@ -1935,11 +2031,27 @@ function cleanup()
   -- Save scenes to disk before exiting
   save_scenes_to_disk()
 
-  lfo_metro:stop()
-  mutation_metro:stop()
+  -- Stop metros and clocks
+  if lfo_metro then lfo_metro:stop() end
+
+  -- Sync mutation metro state with param
+  if mutation_metro then
+    mutation_metro:stop()
+    -- Ensure param matches actual state
+    params:set("mutation_enabled", 0)
+  end
+
   pattern_clock_stop()
   scene_sequencer_stop()
-  for i = 1, #voices do
+
+  -- Cancel any active transition clock
+  if scene_transition_clock then
+    clock.cancel(scene_transition_clock)
+    scene_transition_clock = nil
+  end
+
+  -- Turn off all voices
+  for i = 1, NUM_VOICES do
     if voices[i].active then
       engine.voiceOff(i - 1)
     end
