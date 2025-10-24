@@ -30,9 +30,10 @@ Each synthesis voice is fed through its own granular processor with independent 
 
 Voices can modulate each other for evolving, interdependent textures:
 - Each voice generates a modulation signal based on its audio output
-- Route any voice to modulate another voice's amplitude and/or frequency
-- Adjustable modulation depth for subtle or dramatic effects
-- Creates organic, evolving relationships between layers
+- **Multi-Source Routing**: Each voice can be modulated by up to 3 different sources simultaneously
+- Route any combination of voices to modulate another voice's amplitude and/or frequency
+- Adjustable modulation depth per source for subtle or dramatic effects
+- Creates complex, organic, evolving relationships between layers
 
 ### Global Controls
 
@@ -262,11 +263,16 @@ Scene LED feedback:
 ### Exploring Cross-Modulation
 
 - Open PARAMETERS menu and navigate to a voice's cross-modulation section
-- Set "mod source" to another active voice (e.g., voice 2 modulates voice 1)
-- Adjust "amp mod amount" (0.5 to 1.5 is a good starting range)
-- Try "freq mod amount" for pitch variation (start subtle: 0.1 to 0.3)
-- Experiment with different modulation routing combinations
-- Create feedback loops (voice 1 → 2, voice 2 → 1) for complex evolution
+- Each voice has 3 modulation slots that can be independently configured:
+  - **Slot 1**: Set "mod source 1" to another active voice (e.g., voice 2)
+  - Adjust "amp mod 1" (0.5 to 1.5 is a good starting range for amplitude modulation)
+  - Try "freq mod 1" for pitch variation (start subtle: 0.1 to 0.3)
+  - **Slot 2**: Add a second modulation source to create complex interactions
+  - **Slot 3**: Add a third source for even more intricate modulation networks
+- Experiment with different multi-source routing combinations
+- Create modulation networks (voice 1 → 2, voice 2 → 3, voice 3 → 1) for complex evolution
+- Mix multiple sources on a single voice (e.g., voice 1 modulated by voices 2, 4, and 7)
+- Use positive and negative modulation amounts to create push-pull relationships
 
 ### Performance Workflow
 

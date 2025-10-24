@@ -33,9 +33,9 @@ local voices = {
       spread = 0.5
     },
     crossmod = {
-      source = 0,  -- 0 = none, 1-4 = voice number
-      amp_amt = 0,
-      freq_amt = 0,
+      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
+      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
+      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
       speed = 10
     }
   },
@@ -524,16 +524,17 @@ function add_voice_params(voice_idx)
     end
   }
 
-  -- Cross-modulation params
+  -- Cross-modulation params (3 slots)
   params:add_separator("voice " .. voice_idx .. " cross-modulation")
 
+  -- Slot 1
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source",
-    name = "mod source",
+    id = "v" .. voice_idx .. "_mod_source_1",
+    name = "mod source 1",
     min = 0,
     max = 7,
-    default = v.crossmod.source,
+    default = v.crossmod.slot1.source,
     formatter = function(param)
       if param:get() == 0 then
         return "none"
@@ -542,41 +543,141 @@ function add_voice_params(voice_idx)
       end
     end,
     action = function(x)
-      voices[voice_idx].crossmod.source = x
+      voices[voice_idx].crossmod.slot1.source = x
       if voices[voice_idx].active then
-        -- Convert to SC indexing: 0=none becomes -1, 1-7 become 0-6
         local sc_source = x == 0 and -1 or (x - 1)
-        engine.setModSource(voice_idx - 1, sc_source)
+        engine.setModSource(voice_idx - 1, 1, sc_source)
       end
     end
   }
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt",
-    name = "amp mod amount",
-    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.amp_amt),
+    id = "v" .. voice_idx .. "_mod_amp_amt_1",
+    name = "amp mod 1",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
     action = function(x)
-      voices[voice_idx].crossmod.amp_amt = x
+      voices[voice_idx].crossmod.slot1.amp_amt = x
       if voices[voice_idx].active then
-        engine.setModAmpAmt(voice_idx - 1, x)
+        engine.setModAmpAmt(voice_idx - 1, 1, x)
       end
     end
   }
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt",
-    name = "freq mod amount",
-    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.freq_amt),
+    id = "v" .. voice_idx .. "_mod_freq_amt_1",
+    name = "freq mod 1",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
     action = function(x)
-      voices[voice_idx].crossmod.freq_amt = x
+      voices[voice_idx].crossmod.slot1.freq_amt = x
       if voices[voice_idx].active then
-        engine.setModFreqAmt(voice_idx - 1, x)
+        engine.setModFreqAmt(voice_idx - 1, 1, x)
       end
     end
   }
 
+  -- Slot 2
+  params:add{
+    type = "number",
+    id = "v" .. voice_idx .. "_mod_source_2",
+    name = "mod source 2",
+    min = 0,
+    max = 7,
+    default = v.crossmod.slot2.source,
+    formatter = function(param)
+      if param:get() == 0 then
+        return "none"
+      else
+        return "voice " .. param:get()
+      end
+    end,
+    action = function(x)
+      voices[voice_idx].crossmod.slot2.source = x
+      if voices[voice_idx].active then
+        local sc_source = x == 0 and -1 or (x - 1)
+        engine.setModSource(voice_idx - 1, 2, sc_source)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_amp_amt_2",
+    name = "amp mod 2",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.slot2.amp_amt = x
+      if voices[voice_idx].active then
+        engine.setModAmpAmt(voice_idx - 1, 2, x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_freq_amt_2",
+    name = "freq mod 2",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.slot2.freq_amt = x
+      if voices[voice_idx].active then
+        engine.setModFreqAmt(voice_idx - 1, 2, x)
+      end
+    end
+  }
+
+  -- Slot 3
+  params:add{
+    type = "number",
+    id = "v" .. voice_idx .. "_mod_source_3",
+    name = "mod source 3",
+    min = 0,
+    max = 7,
+    default = v.crossmod.slot3.source,
+    formatter = function(param)
+      if param:get() == 0 then
+        return "none"
+      else
+        return "voice " .. param:get()
+      end
+    end,
+    action = function(x)
+      voices[voice_idx].crossmod.slot3.source = x
+      if voices[voice_idx].active then
+        local sc_source = x == 0 and -1 or (x - 1)
+        engine.setModSource(voice_idx - 1, 3, sc_source)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_amp_amt_3",
+    name = "amp mod 3",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.slot3.amp_amt = x
+      if voices[voice_idx].active then
+        engine.setModAmpAmt(voice_idx - 1, 3, x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_mod_freq_amt_3",
+    name = "freq mod 3",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
+    action = function(x)
+      voices[voice_idx].crossmod.slot3.freq_amt = x
+      if voices[voice_idx].active then
+        engine.setModFreqAmt(voice_idx - 1, 3, x)
+      end
+    end
+  }
+
+  -- Global mod speed (shared across all slots)
   params:add{
     type = "control",
     id = "v" .. voice_idx .. "_mod_speed",
@@ -770,9 +871,25 @@ function capture_scene(scene_num)
     for key, value in pairs(voices[i].grain) do
       scene_data.voices[i].grain[key] = value
     end
-    for key, value in pairs(voices[i].crossmod) do
-      scene_data.voices[i].crossmod[key] = value
-    end
+    -- Copy crossmod structure (including nested slots)
+    scene_data.voices[i].crossmod = {
+      slot1 = {
+        source = voices[i].crossmod.slot1.source,
+        amp_amt = voices[i].crossmod.slot1.amp_amt,
+        freq_amt = voices[i].crossmod.slot1.freq_amt
+      },
+      slot2 = {
+        source = voices[i].crossmod.slot2.source,
+        amp_amt = voices[i].crossmod.slot2.amp_amt,
+        freq_amt = voices[i].crossmod.slot2.freq_amt
+      },
+      slot3 = {
+        source = voices[i].crossmod.slot3.source,
+        amp_amt = voices[i].crossmod.slot3.amp_amt,
+        freq_amt = voices[i].crossmod.slot3.freq_amt
+      },
+      speed = voices[i].crossmod.speed
+    }
 
     scene_data.frozen[i] = frozen[i]
   end
@@ -882,15 +999,20 @@ function recall_scene_instant(scene_num)
       end
     end
 
-    for key, value in pairs(scene_data.voices[i].crossmod) do
-      local param_name = key == "source" and "mod_source" or
-                       key == "amp_amt" and "mod_amp_amt" or
-                       key == "freq_amt" and "mod_freq_amt" or
-                       key == "speed" and "mod_speed"
-      if param_name then
-        params:set("v" .. i .. "_" .. param_name, value)
-      end
-    end
+    -- Restore crossmod slots
+    params:set("v" .. i .. "_mod_source_1", scene_data.voices[i].crossmod.slot1.source)
+    params:set("v" .. i .. "_mod_amp_amt_1", scene_data.voices[i].crossmod.slot1.amp_amt)
+    params:set("v" .. i .. "_mod_freq_amt_1", scene_data.voices[i].crossmod.slot1.freq_amt)
+
+    params:set("v" .. i .. "_mod_source_2", scene_data.voices[i].crossmod.slot2.source)
+    params:set("v" .. i .. "_mod_amp_amt_2", scene_data.voices[i].crossmod.slot2.amp_amt)
+    params:set("v" .. i .. "_mod_freq_amt_2", scene_data.voices[i].crossmod.slot2.freq_amt)
+
+    params:set("v" .. i .. "_mod_source_3", scene_data.voices[i].crossmod.slot3.source)
+    params:set("v" .. i .. "_mod_amp_amt_3", scene_data.voices[i].crossmod.slot3.amp_amt)
+    params:set("v" .. i .. "_mod_freq_amt_3", scene_data.voices[i].crossmod.slot3.freq_amt)
+
+    params:set("v" .. i .. "_mod_speed", scene_data.voices[i].crossmod.speed)
 
     frozen[i] = scene_data.frozen[i]
 
@@ -1067,36 +1189,49 @@ function redraw()
     screen.text("S" .. current_scene)
   end
 
+  -- Modulation sources display
+  local v = voices[selected_voice]
+  local mod_sources = {}
+  if v.crossmod.slot1.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot1.source) end
+  if v.crossmod.slot2.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot2.source) end
+  if v.crossmod.slot3.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot3.source) end
+
+  if #mod_sources > 0 then
+    screen.level(4)
+    screen.move(65, 32)
+    screen.text("mod:" .. table.concat(mod_sources, " "))
+  end
+
   -- Main parameter
   screen.level(frozen[selected_voice] and 3 or 10)
-  screen.move(65, 36)
+  screen.move(65, 42)
   if v.name == "resonator" then
     screen.text("freq")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.0f Hz", v.params.freq))
   elseif v.name == "fm" then
     screen.text("index")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.1f", v.params.index))
   elseif v.name == "folder" then
     screen.text("fold")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.1f", v.params.fold))
   elseif v.name == "sub" then
     screen.text("drift")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.3f", v.params.drift))
   elseif v.name == "pulse" then
     screen.text("width")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.2f", v.params.width))
   elseif v.name == "karplus" then
     screen.text("decay")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.1f s", v.params.decay))
   elseif v.name == "ring" then
     screen.text("ratio")
-    screen.move(65, 44)
+    screen.move(65, 50)
     screen.text(string.format("%.2f", v.params.ratio))
   end
 

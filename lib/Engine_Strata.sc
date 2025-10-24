@@ -44,15 +44,23 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataResonator, {
             arg out, gate=1, freq=100, rq=0.1, noise=0.5,
             mod1=0.1, mod2=0.15, amp=0.3, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, noiseSource, modSig, modFreq, modAmp;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(4, 1, 8), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             noiseSource = PinkNoise.ar(noise) + LFNoise1.ar(100, 0.3);
 
@@ -75,15 +83,23 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataFM, {
             arg out, gate=1, freq=80, ratio=1.5, index=2,
             modFreq=0.05, amp=0.25, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, mod, env, carrier, modSig, modFreqVal, modAmp;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(5, 1, 10), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreqVal = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreqVal = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             modFreq = LFNoise1.kr(0.1).range(modFreq * 0.5, modFreq * 2);
             ratio = ratio + LFNoise1.kr(0.08).range(-0.1, 0.1);
@@ -100,15 +116,23 @@ Engine_Strata : CroneEngine {
         
         SynthDef(\strataFolder, {
             arg out, gate=1, freq=60, fold=1, mod=0.2, amp=0.3, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, foldAmt, modSig, modFreq, modAmp;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(3, 1, 6), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             foldAmt = fold * LFNoise1.kr(mod).range(0.5, 1.5);
             sig = SinOsc.ar(modFreq * [1, 1.002]);
@@ -121,16 +145,24 @@ Engine_Strata : CroneEngine {
         
         SynthDef(\strataSub, {
             arg out, gate=1, freq=40, drift=0.02, amp=0.4,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, modFreq, modSig, modAmp;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(8, 1, 12), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
             modFreq = modFreq + LFNoise1.kr(drift).range(-2, 2);
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            modAmp = amp * (1 + modSig);
 
             sig = SinOsc.ar(modFreq ! 2);
             sig = sig + (SinOsc.ar(modFreq * 0.5) * 0.3);
@@ -141,15 +173,23 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataPulse, {
             arg out, gate=1, freq=120, width=0.5, cutoff=2000,
             res=0.3, amp=0.3, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, modSig, modFreq, modAmp, modWidth;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             // Modulate pulse width with LFO and cross-mod
             modWidth = width + (LFNoise1.kr(0.15).range(-0.2, 0.2)) + (modSig * 0.3);
@@ -169,15 +209,23 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataKarplus, {
             arg out, gate=1, freq=200, decay=4, damping=0.5,
             excite=0.3, amp=0.35, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, modSig, modFreq, modAmp, noise, pluck;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             // Excitation signal - burst of noise
             noise = PinkNoise.ar(1);
@@ -212,15 +260,23 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataRing, {
             arg out, gate=1, freq=300, ratio=1.618, mod=0.2,
             brightness=0.5, amp=0.25, pan=0,
-            modBus=0, modAmpAmt=0, modFreqAmt=0;
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
             var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
+            var mod1Sig, mod2Sig, mod3Sig;
 
             env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
 
-            // Read modulation signal
-            modSig = In.kr(modBus, 1);
-            modFreq = freq * (1 + (modSig * modFreqAmt));
-            modAmp = amp * (1 + (modSig * modAmpAmt));
+            // Read and mix modulation signals from 3 sources
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+
+            // Mix modulation signals
+            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
+            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            modAmp = amp * (1 + modSig);
 
             // Slowly evolving ratio for inharmonic movement
             ratio = ratio + (LFNoise1.kr(mod).range(-0.1, 0.1));
@@ -315,7 +371,16 @@ Engine_Strata : CroneEngine {
                 \freq, msg[2],
                 \amp, msg[3],
                 \pan, msg[4],
-                \modBus, modBus  // Default: use own mod bus (will be set to 0 by default)
+                // Initialize all 3 mod bus slots to 0 (no modulation)
+                \modBus1, 0,
+                \modBus2, 0,
+                \modBus3, 0,
+                \modAmpAmt1, 0,
+                \modAmpAmt2, 0,
+                \modAmpAmt3, 0,
+                \modFreqAmt1, 0,
+                \modFreqAmt2, 0,
+                \modFreqAmt3, 0
             ] ++ this.getVoiceParams(voice, msg), target: context.xg);
 
             synths[("grain" ++ voice).asSymbol] = Synth(\strataGrain, [
@@ -362,11 +427,16 @@ Engine_Strata : CroneEngine {
             synths[\reverb].set(\mix, msg[1], \size, msg[2], \damp, msg[3]);
         });
 
-        // Cross-modulation commands
-        this.addCommand(\setModSource, "ii", { arg msg;
+        // Multi-source cross-modulation commands
+        this.addCommand(\setModSource, "iii", { arg msg;
             var voice = msg[1];
-            var sourceVoice = msg[2];
+            var slot = msg[2];  // 1, 2, or 3
+            var sourceVoice = msg[3];
             var sourceBus;
+            var busParam;
+
+            // Determine which bus parameter to set
+            busParam = ("modBus" ++ slot).asSymbol;
 
             // If sourceVoice is -1, disable modulation (use a silent bus)
             if (sourceVoice >= 0) {
@@ -375,19 +445,23 @@ Engine_Strata : CroneEngine {
                 sourceBus = 0;  // Will output silence/zero
             };
 
-            synths[("voice" ++ voice).asSymbol].set(\modBus, sourceBus);
+            synths[("voice" ++ voice).asSymbol].set(busParam, sourceBus);
         });
 
-        this.addCommand(\setModAmpAmt, "if", { arg msg;
+        this.addCommand(\setModAmpAmt, "iif", { arg msg;
             var voice = msg[1];
-            var amount = msg[2];
-            synths[("voice" ++ voice).asSymbol].set(\modAmpAmt, amount);
+            var slot = msg[2];  // 1, 2, or 3
+            var amount = msg[3];
+            var amtParam = ("modAmpAmt" ++ slot).asSymbol;
+            synths[("voice" ++ voice).asSymbol].set(amtParam, amount);
         });
 
-        this.addCommand(\setModFreqAmt, "if", { arg msg;
+        this.addCommand(\setModFreqAmt, "iif", { arg msg;
             var voice = msg[1];
-            var amount = msg[2];
-            synths[("voice" ++ voice).asSymbol].set(\modFreqAmt, amount);
+            var slot = msg[2];  // 1, 2, or 3
+            var amount = msg[3];
+            var amtParam = ("modFreqAmt" ++ slot).asSymbol;
+            synths[("voice" ++ voice).asSymbol].set(amtParam, amount);
         });
 
         this.addCommand(\setModSpeed, "if", { arg msg;

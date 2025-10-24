@@ -45,9 +45,11 @@ Each of the 7 voices follows this path:
 
 Each voice generates a modulation signal (envelope follower + slow LFO) that can modulate other voices:
 - **Modulation Output**: Each voice has a `strataMod` synth that analyzes its audio output and creates a control signal (0-1 range)
-- **Modulation Input**: Each voice synth can read from any mod bus and use it to modulate amplitude and/or frequency
-- **Routing**: Controlled via `setModSource(voice, sourceVoice)` - each voice can be modulated by one source
-- **Depth Control**: `modAmpAmt` and `modFreqAmt` control how much the modulation signal affects each parameter
+- **Modulation Input**: Each voice synth can receive modulation from up to 3 different sources simultaneously
+- **3 Modulation Slots**: Each voice has 3 independent modulation slots, each with its own source and depth controls
+- **Routing**: Controlled via `setModSource(voice, slot, sourceVoice)` where slot is 1-3
+- **Depth Control**: Each slot has independent `modAmpAmt` and `modFreqAmt` controls
+- **Signal Mixing**: The 3 modulation signals are mixed together (weighted sum) before applying to voice parameters
 - **Signal Character**: The mod signal combines envelope following (70%) with slow LFO movement (30%) for organic evolution
 
 ### Lua ↔ SuperCollider Communication
@@ -64,9 +66,9 @@ The Lua script controls the engine through these commands:
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
-| `engine.setModSource(voice, sourceVoice)` | `"ii"` | Set which voice modulates this voice (-1 = none, 0-6 = voice index) |
-| `engine.setModAmpAmt(voice, amount)` | `"if"` | Set amplitude modulation amount (-2 to 2) |
-| `engine.setModFreqAmt(voice, amount)` | `"if"` | Set frequency modulation amount (-2 to 2) |
+| `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Set which voice modulates this voice at given slot (slot=1-3, sourceVoice: -1=none, 0-6=voice index) |
+| `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Set amplitude modulation amount for given slot (-2 to 2) |
+| `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Set frequency modulation amount for given slot (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Set modulation LFO speed (0.1 to 50) |
 
 **Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`).
@@ -82,11 +84,12 @@ The Lua script controls the engine through these commands:
 
 **Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread
 
-**Cross-Modulation Parameters** (per voice):
-- **source**: Which voice modulates this one (0=none, 1-7 in Lua, -1=none, 0-6 in SC)
-- **amp_amt**: Amplitude modulation depth (-2 to 2, bipolar)
-- **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
-- **speed**: Modulation signal LFO speed (0.1 to 50 Hz)
+**Cross-Modulation Parameters** (per voice, 3 slots per voice):
+- **Slot 1, 2, 3** - Each slot has:
+  - **source**: Which voice modulates this slot (0=none, 1-7 in Lua, -1=none, 0-6 in SC)
+  - **amp_amt**: Amplitude modulation depth (-2 to 2, bipolar)
+  - **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
+- **speed**: Modulation signal LFO speed (0.1 to 50 Hz, shared across all slots)
 
 ## Development & Testing
 
@@ -693,10 +696,11 @@ Each voice type has its own SynthDef with unique parameters:
 - `\strataKarplus` - Karplus-Strong plucked string physical model
 - `\strataRing` - Ring modulation between two oscillators
 
-All voice SynthDefs now include cross-modulation inputs:
-- `modBus` - Control bus to read modulation signal from
-- `modAmpAmt` - Amplitude modulation depth (-2 to 2)
-- `modFreqAmt` - Frequency modulation depth (-2 to 2)
+All voice SynthDefs now include multi-source cross-modulation inputs (3 slots):
+- `modBus1`, `modBus2`, `modBus3` - Control buses to read modulation signals from (one per slot)
+- `modAmpAmt1`, `modAmpAmt2`, `modAmpAmt3` - Amplitude modulation depths (-2 to 2)
+- `modFreqAmt1`, `modFreqAmt2`, `modFreqAmt3` - Frequency modulation depths (-2 to 2)
+- The 3 modulation signals are mixed together (weighted sum) before application
 
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
@@ -729,6 +733,7 @@ Potential expansion areas:
 - ~~Probability-based parameter mutations~~ ✓ Implemented
 - ~~Monome grid integration~~ ✓ Implemented
 - ~~Longer-form automation/sequencing~~ ✓ Implemented (scene system)
+- ~~Multi-source modulation routing~~ ✓ Implemented (3 slots per voice)
 - Preset save/load (scenes provide most of this functionality, could add disk persistence)
 - More voice types (wavetable, additive, granular noise, etc.)
-- Multi-source modulation routing (currently limited to one source per voice)
+- Modulation matrix visualization on grid or arc
