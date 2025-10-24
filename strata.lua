@@ -193,6 +193,9 @@ local param_names = {}
 -- LFOs for parameter modulation
 local lfo_metro
 
+-- Mutation system
+local mutation_metro
+
 -- Arc device
 local a = nil
 local arc_connected = false
@@ -259,7 +262,55 @@ function init()
       tempo = x
     end
   }
-  
+
+  -- Probability-based mutations
+  params:add_separator("strata_mutations")
+
+  params:add{
+    type = "binary",
+    id = "mutation_enabled",
+    name = "mutations enabled",
+    behavior = "toggle",
+    default = 0,
+    action = function(x)
+      if x == 1 then
+        mutation_metro:start()
+      else
+        mutation_metro:stop()
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "mutation_rate",
+    name = "mutation rate",
+    controlspec = controlspec.new(0.5, 10, "lin", 0.1, 2, "s"),
+    action = function(x)
+      mutation_metro.time = x
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "mutation_probability",
+    name = "mutation probability",
+    controlspec = controlspec.new(0, 1, "lin", 0.01, 0.15),
+    action = function(x)
+      -- Probability value used in gentle_mutate()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "mutation_amount",
+    name = "mutation amount",
+    controlspec = controlspec.new(0, 1, "lin", 0.01, 0.25),
+    action = function(x)
+      -- Amount value used in gentle_mutate()
+    end
+  }
+
   -- Reverb
   params:add_separator("strata_reverb")
   params:add{
@@ -305,6 +356,12 @@ function init()
   lfo_metro.time = 0.1
   lfo_metro.event = lfo_update
   lfo_metro:start()
+
+  -- Initialize mutation system
+  mutation_metro = metro.init()
+  mutation_metro.time = params:get("mutation_rate")
+  mutation_metro.event = gentle_mutate
+  -- Don't start automatically - controlled by mutation_enabled param
 
   -- Connect arc
   arc_init()
@@ -556,6 +613,58 @@ function lfo_update()
   end
 end
 
+function gentle_mutate()
+  -- Probability-based parameter mutations
+  local probability = params:get("mutation_probability")
+  local amount = params:get("mutation_amount")
+
+  for i = 1, #voices do
+    -- Only mutate active, non-frozen voices
+    if voices[i].active and not frozen[i] then
+      local v = voices[i]
+
+      -- Iterate through synthesis parameters
+      for key, current_val in pairs(v.params) do
+        -- Skip amplitude and pan to preserve stability
+        if key ~= "amp" and key ~= "pan" then
+          -- Check if this parameter should mutate
+          if math.random() < probability then
+            local spec = get_param_spec(key)
+            local range = spec.maxval - spec.minval
+
+            -- Generate mutation delta based on amount
+            -- Using gaussian-like distribution by averaging random values
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
+
+            -- Apply mutation with clamping
+            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
+            params:set("v" .. i .. "_" .. key, new_val)
+          end
+        end
+      end
+
+      -- Occasionally mutate granular parameters (lower probability)
+      if math.random() < probability * 0.5 then
+        local grain_size = v.grain.size
+        local size_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.2
+        params:set("v" .. i .. "_grain_size", util.clamp(grain_size + size_delta, 0.01, 0.5))
+      end
+
+      if math.random() < probability * 0.3 then
+        local grain_pitch = v.grain.pitch
+        local pitch_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 1.0
+        params:set("v" .. i .. "_grain_pitch", util.clamp(grain_pitch + pitch_delta, 0.25, 4))
+      end
+
+      if math.random() < probability * 0.2 then
+        local grain_spread = v.grain.spread
+        local spread_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.3
+        params:set("v" .. i .. "_grain_spread", util.clamp(grain_spread + spread_delta, 0, 1))
+      end
+    end
+  end
+end
+
 function update_voice_list()
   local items = {}
   for i = 1, #voices do
@@ -655,6 +764,13 @@ function redraw()
     screen.move(90, 26)
     screen.level(8)
     screen.text("[FREEZE]")
+  end
+
+  -- Mutation indicator (top right, after freeze status)
+  if params:get("mutation_enabled") == 1 then
+    screen.move(110, 8)
+    screen.level(6)
+    screen.text("[MUT]")
   end
 
   -- Main parameter
@@ -1267,6 +1383,7 @@ end
 
 function cleanup()
   lfo_metro:stop()
+  mutation_metro:stop()
   pattern_clock_stop()
   for i = 1, #voices do
     if voices[i].active then

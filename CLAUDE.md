@@ -342,6 +342,83 @@ Use norns params for all adjustable values:
 3. Reference params with `params:get("id")` or `params:set("id", value)`
 4. Group related params with `params:add_separator()`
 
+### Probability-Based Mutation System
+
+Strata includes a mutation system that applies gentle, probabilistic changes to voice parameters over time, creating organic evolution:
+
+#### Architecture
+- **Mutation Metro**: `mutation_metro` - Timer that periodically calls `gentle_mutate()`
+- **Mutation Function**: `gentle_mutate()` - Applies probability-based parameter changes
+- **Global Parameters**: Controlled via PARAMS menu:
+  - `mutation_enabled` (0/1) - Toggle mutation system on/off
+  - `mutation_rate` (0.5-10s) - How often mutations are checked
+  - `mutation_probability` (0-1) - Chance each parameter will mutate per check
+  - `mutation_amount` (0-1) - Size of mutation delta relative to parameter range
+
+#### Implementation Details
+
+**Mutation Function** ([strata.lua:616-666](strata.lua#L616-L666)):
+```lua
+function gentle_mutate()
+  local probability = params:get("mutation_probability")
+  local amount = params:get("mutation_amount")
+
+  for i = 1, #voices do
+    if voices[i].active and not frozen[i] then
+      -- Check each synthesis parameter
+      for key, current_val in pairs(v.params) do
+        if key ~= "amp" and key ~= "pan" then
+          if math.random() < probability then
+            -- Generate gaussian-like mutation delta
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
+            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
+            params:set("v" .. i .. "_" .. key, new_val)
+          end
+        end
+      end
+
+      -- Granular parameters mutate at lower probabilities
+      -- grain_size: 0.5× probability
+      -- grain_pitch: 0.3× probability
+      -- grain_spread: 0.2× probability
+    end
+  end
+end
+```
+
+**Key Design Decisions**:
+- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement
+- **Frozen Voice Exemption**: Frozen voices are excluded from mutations
+- **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
+- **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
+- **Granular Hierarchy**: Grain parameters mutate less frequently than synthesis parameters
+
+#### Usage Patterns
+
+**Starting Mutations**:
+```lua
+params:set("mutation_enabled", 1)  -- Enable via params
+params:set("mutation_probability", 0.15)  -- 15% chance per parameter
+params:set("mutation_amount", 0.25)  -- 25% of parameter range
+params:set("mutation_rate", 2)  -- Check every 2 seconds
+```
+
+**Recommended Settings**:
+- **Subtle Evolution**: probability=0.1, amount=0.15, rate=3s
+- **Moderate Change**: probability=0.15, amount=0.25, rate=2s (default)
+- **Dramatic Shift**: probability=0.25, amount=0.4, rate=1s
+
+**Integration with Existing Systems**:
+- **LFO System**: Mutations work alongside `lfo_update()` which adds continuous drift
+- **Freeze Feature**: Frozen voices are stable - neither LFO nor mutations affect them
+- **Cross-Modulation**: Mutations can change modulation sources/amounts, creating evolving relationships
+- **UI Feedback**: `[MUT]` indicator appears at top-right when enabled
+
+#### Lifecycle Management
+- **Initialization**: Metro created in `init()` but not started automatically
+- **Control**: `mutation_enabled` param action starts/stops the metro
+- **Cleanup**: `mutation_metro:stop()` called in `cleanup()` to prevent orphaned timers
+
 ### Async Initialization
 
 Voice activation uses `clock.run()` for delayed starts:
@@ -497,9 +574,9 @@ Synths use `gate` with ASR envelopes:
 Potential expansion areas:
 - ~~Cross-modulation between voices~~ ✓ Implemented
 - ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented
-- Probability-based parameter mutations
+- ~~Probability-based parameter mutations~~ ✓ Implemented
+- ~~Monome grid integration~~ ✓ Implemented
 - Preset save/load
-- Monome grid integration
 - More voice types (wavetable, additive, granular noise, etc.)
 - Longer-form automation/sequencing
 - Multi-source modulation routing (currently limited to one source per voice)

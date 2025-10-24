@@ -46,6 +46,18 @@ Voices can modulate each other for evolving, interdependent textures:
 - **Freeze** - Lock a voice's parameters while others continue to evolve
 - **Auto-modulation** - Slow LFOs add subtle movement to frozen voices
 
+### Probability-Based Mutations
+
+Strata includes an optional mutation system for creating organic, evolving textures:
+- **Probabilistic Evolution** - Each parameter has a chance to mutate at regular intervals
+- **Adjustable Behavior** - Control mutation rate, probability, and amount via PARAMETERS menu
+- **Smart Mutations** - Uses gaussian-like distribution for natural-sounding changes
+- **Selective Application** - Only affects active, non-frozen voices
+- **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance
+- **Visual Feedback** - `[MUT]` indicator appears on screen when mutations are enabled
+
+The mutation system works alongside the existing LFO system, creating multiple layers of organic movement. Combine with the freeze feature to let some voices evolve while others remain stable.
+
 ## Installation
 
 ### Method 1: Using maiden's project manager (recommended)
@@ -238,6 +250,19 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 4. Freeze/unfreeze voices to create structural changes
 5. Set up cross-modulation for interdependent voice relationships
 
+### Using Probability-Based Mutations
+
+- Enable mutations via PARAMETERS > mutations enabled
+- Start with conservative settings:
+  - Mutation rate: 2-3 seconds (how often mutations occur)
+  - Mutation probability: 0.10-0.15 (chance each parameter will change)
+  - Mutation amount: 0.20-0.30 (size of changes relative to parameter range)
+- Freeze voices you want to keep stable while others evolve
+- Combine with cross-modulation for complex, interdependent evolution
+- Watch the `[MUT]` indicator on screen to confirm mutations are active
+- For dramatic changes, increase probability to 0.25+ and amount to 0.40+
+- For subtle drift, decrease both values and increase the mutation rate
+
 ## Parameters
 
 All voice parameters and granular settings are available in the PARAMETERS menu for detailed control and automation. Each voice has its own section with synthesis parameters and granular processing controls.
@@ -245,10 +270,17 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 ### Master Section
 - Master density
 - Tape drift amount
+- Tempo
+
+### Mutations Section
+- Mutations enabled (on/off)
+- Mutation rate (0.5-10 seconds)
+- Mutation probability (0-1, chance per parameter)
+- Mutation amount (0-1, size of changes)
 
 ### Reverb Section
 - Mix
-- Size  
+- Size
 - Damping
 
 ### Per-Voice Sections
@@ -289,9 +321,7 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Mas
 
 The codebase is designed to be extended. Some ideas:
 
-- Implement probability-based parameter mutations
 - Add preset save/load functionality
-- Create monome grid integration for pattern sequencing
 - Implement longer-form automation/sequencing
 - Multi-source modulation routing (currently one source per voice)
 - Additional voice types (wavetable, additive, granular noise, etc.)
