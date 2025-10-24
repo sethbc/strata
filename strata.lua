@@ -161,7 +161,6 @@ function init()
   end
   
   -- UI setup
-  voice_list = UI.List.new(0, 0, 1, {})
   update_voice_list()
   
   -- Start LFO system
@@ -346,8 +345,7 @@ function update_voice_list()
     local freeze = frozen[i] and " [F]" or ""
     items[i] = status .. " " .. voices[i].name .. freeze
   end
-  voice_list:set_items(items)
-  voice_list.index = selected_voice
+  voice_list = UI.List.new(0, 10, selected_voice, items)
 end
 
 -- Encoders
