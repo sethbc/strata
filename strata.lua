@@ -1096,7 +1096,7 @@ function scene_sequencer_stop()
 end
 
 -- Scene disk persistence
-local scene_data_dir = norns.state.data .. "strata/"
+local scene_data_dir = _path.data .. "strata/"
 local scene_data_file = scene_data_dir .. "scenes.data"
 
 function save_scenes_to_disk()
@@ -1610,9 +1610,9 @@ function grid_key_128v(x, y, z)
       toggle_voice(y)
     elseif y == 9 then
       pattern_toggle()
-    elseif y >= 11 and y <= 16 then
+    elseif y >= 10 and y <= 16 then
       -- Voice selection for parameters
-      grid_voice_select = util.clamp(y - 10, 1, 7)
+      grid_voice_select = util.clamp(y - 9, 1, 7)
     end
   end
 end
@@ -1904,8 +1904,8 @@ function grid_redraw_128v(g)
   g:led(8, 9, pattern_playing and 15 or 4)
 
   -- Voice selection
-  for i = 1, 6 do
-    g:led(8, 10 + i, (i == grid_voice_select) and 15 or 2)
+  for i = 1, 7 do
+    g:led(8, 9 + i, (i == grid_voice_select) and 15 or 2)
   end
 end
 
