@@ -1576,6 +1576,13 @@ end
 
 -- 16x16 grid layout
 function grid_key_256(x, y, z)
+  -- Handle page navigation first (always accessible from row 8)
+  if y == 8 and x >= 13 and x <= 16 then
+    -- Page selection (always accessible)
+    grid_page = x - 12
+    return
+  end
+
   if grid_page == 3 then
     -- Scene page
     if y == 1 and x <= 8 then
@@ -1602,7 +1609,7 @@ function grid_key_256(x, y, z)
     -- Rows 1-NUM_VOICES: Pattern triggers for each voice
     toggle_pattern_step(y, x)
   elseif y == 8 then
-    -- Row 8: Pattern controls
+    -- Row 8: Pattern controls (page selection handled at top of function)
     if x <= 4 then
       -- Play/stop
       pattern_toggle()
@@ -1612,9 +1619,6 @@ function grid_key_256(x, y, z)
       if x == 6 then params:delta("tempo", -1) end
       if x == 7 then params:delta("tempo", 1) end
       if x == 8 then params:delta("tempo", 10) end
-    elseif x >= 13 and x <= 16 then
-      -- Page selection
-      grid_page = x - 12
     end
   elseif y >= 9 and y <= 12 then
     -- Rows 9-12: Parameter manipulation
@@ -1664,17 +1668,40 @@ end
 
 -- 16x8 grid layout (128 buttons horizontal)
 function grid_key_128h(x, y, z)
-  if y >= 1 and y <= 7 then
+  if grid_page == 3 then
+    -- Scene page
+    if y == 1 and x <= 8 then
+      -- Row 1: Scene recall (instant)
+      recall_scene(x, 0)
+    elseif y == 2 and x <= 8 then
+      -- Row 2: Scene recall (with transition)
+      recall_scene(x, params:get("scene_transition_time"))
+    elseif y == 3 and x <= 8 then
+      -- Row 3: Scene save
+      capture_scene(x)
+    elseif y == 5 and x == 1 then
+      -- Toggle scene sequencer
+      local enabled = params:get("scene_sequencer_enabled")
+      params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
+    elseif y == 4 and x <= 8 then
+      -- Row 4: Set sequence length
+      params:set("scene_sequence_length", x)
+    end
+  elseif y >= 1 and y <= 7 then
     -- Rows 1-7: Pattern triggers
     toggle_pattern_step(y, x)
-  elseif y == 8 then
-    -- Row 8: Multi-function
+  end
+
+  -- Row 8: Always accessible (multi-function)
+  if y == 8 then
     if x <= 4 then
       pattern_toggle()
     elseif x == 5 then
       grid_page = 1  -- Patterns
     elseif x == 6 then
       grid_page = 2  -- Parameters
+    elseif x == 7 then
+      grid_page = 3  -- Scenes
     elseif x >= 9 and x <= 15 then
       -- Voice toggle
       local voice_idx = x - 8
@@ -1803,11 +1830,17 @@ function pattern_clock_start()
       -- Trigger voices that have active steps
       for voice_idx = 1, NUM_VOICES do
         if patterns[voice_idx][pattern_position] > 0 then
-          -- Trigger voice if not already active
-          if not voices[voice_idx].active then
+          -- Retrigger voice for gate/trigger behavior
+          if voices[voice_idx].active then
+            -- Voice is already on - retrigger by toggling off then on
+            toggle_voice(voice_idx)
+            clock.sleep(0.01)  -- Brief gap for retrigger
+            toggle_voice(voice_idx)
+          else
+            -- Voice is off - turn it on
             toggle_voice(voice_idx)
           end
-          -- Could add velocity/accent control here
+          -- Could add velocity/accent control here based on pattern value
         end
       end
 
@@ -1947,19 +1980,54 @@ function grid_redraw_256(g)
 end
 
 function grid_redraw_128h(g)
-  -- Draw patterns (rows 1-NUM_VOICES)
-  for voice_idx = 1, NUM_VOICES do
-    for step = 1, PATTERN_LENGTH do
-      local brightness = patterns[voice_idx][step]
-      if pattern_playing and step == pattern_position then
-        brightness = math.max(brightness, 4)
-        if brightness > 0 then brightness = 15 end
+  if grid_page == 3 then
+    -- Scene page (simplified for 128h layout)
+    -- Row 1: Scene recall (instant)
+    for i = 1, 8 do
+      local brightness = scenes[i].populated and 8 or 2
+      if current_scene == i then brightness = 15 end
+      g:led(i, 1, brightness)
+    end
+
+    -- Row 2: Scene recall (with transition)
+    for i = 1, 8 do
+      local brightness = scenes[i].populated and 6 or 2
+      g:led(i, 2, brightness)
+    end
+
+    -- Row 3: Scene save
+    for i = 1, 8 do
+      g:led(i, 3, 4)
+    end
+
+    -- Row 5: Scene sequencer controls
+    if scene_sequencer_enabled then
+      g:led(1, 5, 15)  -- Sequencer on
+    else
+      g:led(1, 5, 4)  -- Sequencer off
+    end
+
+    -- Sequence length indicators (simplified)
+    local seq_length = params:get("scene_sequence_length")
+    for i = 1, 8 do
+      g:led(i, 4, i <= seq_length and 8 or 2)
+    end
+  else
+    -- Pattern/parameter pages
+    -- Draw patterns (rows 1-NUM_VOICES)
+    for voice_idx = 1, NUM_VOICES do
+      for step = 1, PATTERN_LENGTH do
+        local brightness = patterns[voice_idx][step]
+        if pattern_playing and step == pattern_position then
+          brightness = math.max(brightness, 4)
+          if brightness > 0 then brightness = 15 end
+        end
+        g:led(step, voice_idx, brightness)
       end
-      g:led(step, voice_idx, brightness)
     end
   end
 
-  -- Row 8: Controls
+  -- Row 8: Controls (always visible)
   if pattern_playing then
     g:led(1, 8, 15)
     g:led(2, 8, 15)
@@ -1968,9 +2036,10 @@ function grid_redraw_128h(g)
     g:led(2, 8, 4)
   end
 
-  -- Page indicators
+  -- Page indicators (3 pages now)
   g:led(5, 8, grid_page == 1 and 15 or 4)
   g:led(6, 8, grid_page == 2 and 15 or 4)
+  g:led(7, 8, grid_page == 3 and 15 or 4)
 
   -- Voice status
   for i = 1, 7 do
