@@ -1,0 +1,171 @@
+# Strata: absorb Confluence's feature set
+
+Date: 2026-11-03
+Status: approved 2026-11-03 (builder check done; calls recorded inline as "Call made after the builder check")
+Builds on: the `review-fixes` branch (must land first). Final home: `docs/superpowers/specs/2026-11-03-confluence-features-design.md`.
+
+## Intent
+
+Seth wrote two norns granular scripts in parallel: Strata (seven synthesized voices, each with its own granular processor, cross-modulation, scenes, grid/arc) and Confluence (a 16-voice sample/live-input granular engine with effects, LFOs, MIDI and a paged UI). Confluence was never played; its README promises more than its code delivers. The goal is to bring every capability Confluence promised into Strata so the Confluence repository can be deleted without losing anything.
+
+## Goals
+
+Add to Strata, fully working and documented:
+
+1. Buffer and live-input audio sources for granular processing (eight buffers, record from input, load sample files, per-voice source switching).
+2. A stereo delay and a multimode filter in the master effects chain.
+3. Selectable grain envelope shapes, and a per-voice triggered grain mode (one grain per pattern step, MIDI note or key press) alongside continuous generation.
+4. Three global shaped LFOs routable to any modulatable parameter, with a waveform display.
+5. MIDI input: notes trigger voices with velocity, note sets pitch, pitchbend; CC control via norns' native parameter mapping.
+6. A paged screen UI (MAIN, FX, LFO, BUFFER, SETUP) with arc pages that follow it.
+7. Scenes, grid, arc, test harness and documentation updated for all of the above.
+
+## Non-goals
+
+- Confluence's 16-voice polyphonic grain architecture. Strata keeps seven voices.
+- Preset export/import as files. Strata's scene persistence already covers this.
+- Buffer waveform display, MIDI learn code, MPE, modulation-matrix UI. Confluence listed these as unimplemented; norns covers CC learn natively.
+- Tempo-synced delay times. (Possible later addition; not required.)
+
+## Anti-goals
+
+- Changing the seven-voice grid layouts that were just debugged. Voice count stays `NUM_VOICES = 7` and every existing grid row keeps its meaning.
+- Making existing scene files unloadable. Scene format gets a version bump with defaults for new fields.
+- Stacking synth nodes. Source switching replaces a voice's grain synth; nothing accumulates. norns CPU headroom is tight, so the engine must never run both grain UGen paths for one voice at once.
+- Overwriting a user's parameter value with an LFO. LFOs modulate around the stored value and never write it back.
+
+## Constraints
+
+- Everything in CLAUDE.md applies: Lua/SC command sync, named constants, `params:set` as the single mutation path, the `voices` table as source of truth, descriptive names, docs kept current, grid and arc reviewed for every feature.
+- Builds on `review-fixes`: use `sync_voice_to_engine`, the `retrigger` command, the real `PitchShift` grain path, the silent "none" mod bus, the fader-style grid parameter rows, and the `test/` harness. Every new engine command gets harness coverage and passes the Lua/SC sync check.
+- Memory: eight stereo slots at 16 seconds each, stored as left/right mono buffer pairs, is about 49 MB of scsynth memory, acceptable on norns. Do not allocate 60-second buffers as Confluence did (184 MB). `GrainBuf` only reads mono buffers, which is why a slot is a pair (see §1).
+- CPU: a buffer-sourced voice runs two `GrainBuf` instances (one per channel). The pitch shifter, the expensive stage, runs once on the stereo pair. Two or three buffer-sourced voices at once is the expected comfortable load; this cannot be measured in the harness and must be listened for on hardware.
+- Screen is 128×64. Each page must render without overlap at every value.
+- No hardware during development. Verify with the harness, `sclang` class compilation against `~/src/norns/sc/core`, and the sync check. Hardware testing happens on Seth's norns after merge.
+
+## Approaches considered
+
+**A. New "Sampler" voice type as voice 8.** A dedicated synth playing a buffer or live input through the normal chain. Conceptually clean but raises the voice count to 8, which the 128h, 128v and 64 grid layouts cannot show without a voice-bank mechanism, and allows only one sampled layer unless more voices are added.
+
+**B. Source selector on every voice's grain stage (chosen).** Each of the seven voices gets a `source` parameter: its own synth, buffer 1 to 8, or live input. In buffer or input mode the voice synth is gated off and the grain processor reads the chosen source instead of the voice bus. Any voice can become a sampled layer, several at once, with the voice count and all grid layouts untouched. This is exactly Confluence's per-voice buffer switching. Cost: the voice's synthesis parameters are irrelevant while a buffer is selected, so the screen, E3, arc ring 2 and the grid fader rows show buffer parameters for that voice instead.
+
+Seth chose B.
+
+## Design
+
+### 1. Audio sources (buffers and live input)
+
+**Engine.**
+- `numBuffers = 8`, `bufferSeconds = 16`. Each slot is a **pair of mono buffers** (left and right), since `GrainBuf` cannot read multichannel buffers. Allocated in `alloc` as `sampleRate * bufferSeconds` frames each, freed in `free`. Stereo files and the stereo input keep their image; mono files are copied into both channels. (Seth chose stereo over mono after the builder check; norns has stereo input and stereo samples should stay stereo.)
+- The engine tracks a valid length per buffer (`bufferFrames[i]`, in frames), set by `loadBuffer` and `recordBuffer`. Position and scan are scaled to the valid region, not the full 16 s allocation, so a 2 s sample uses the whole position range. Both load and record zero the buffer first; recording replaces, never overdubs. A poll `bufferState` is **required**: it reports each buffer's valid seconds so Lua can show them and scenes can warn on empty buffers.
+- Four grain envelope buffers (see §3) are allocated alongside.
+- A persistent `\strataInput` synth copies `SoundIn.ar([0, 1])` to a new stereo `inputBus`, placed at the head of the voice group so grain synths can read it.
+- Two grain SynthDefs replace the single `\strataGrain`:
+  - `\strataGrain` (existing, after the review-fixes changes) reads a stereo bus given by `inBus`. For source "synth" that is the voice's `granBuses[i]`; for source "input" it is `inputBus`.
+  - `\strataGrainBuf` runs two `GrainBuf` instances with `numChannels: 1`, reading `bufnumL` and `bufnumR`, driven by the **same** trigger, position, rate and duration signals so every grain is sample-aligned across channels and the stereo image is preserved. Their outputs form the stereo pair, which is then panned with `Balance2` by the same slow `LFNoise1.kr(2).range(panSpread.neg, panSpread)` signal the voice-bus grain synth uses, so pan spread behaves identically for both sources. Other args: `bufFrames` (valid frames, set by the engine), `bufPos` (0 to 1 of the valid region), `bufRate` (0.25 to 4, times `BufRateScale`), `bufScan` (position movement in valid-region-lengths per second, bipolar, 0 = static; the position wraps within the valid region), plus the same `grainSize`, `grainDensity`, `pitchShift`, `posSpread`, `panSpread`, `envBuf`, `gate`, `grainMode`, `t_trig` and the three mod-bus/amount inputs.
+  - **Grain mode.** Both grain SynthDefs take `grainMode` (0 = continuous, 1 = triggered). Continuous fires grains from `Impulse.ar(grainDensity)` as now. Triggered fires one grain per `t_trig`, which comes from `retrigger` (pattern step, MIDI note, K3 on MAIN with the voice already on). This is Confluence's "manual triggering". Per-voice option `v{i}_grain_mode` {continuous, triggered}, default continuous, in scenes, never mutated. Mod signals apply to amplitude and to `bufRate` the same way voices apply them to amp and freq. It writes its output to `mainBus` and also to the voice's `granBuses[i]` so the voice's existing `\strataMod` analyzer keeps following the audible signal and cross-modulation sources still work.
+- Switching source: `setGrainSource(voice, source)` with signature `"ii"`, `source` 0 = synth, 1 to 8 = buffer, 9 = input. The command gates off the current grain synth (short release) and creates the right one in the same position, carrying the voice's current grain parameters. When leaving source 0 the voice synth is gated off; when returning to source 0 the voice synth is restarted with the voice's parameters. Lua drives this through `sync_voice_to_engine`, which becomes source-aware.
+- Buffer commands: `loadBuffer(index, path)` `"is"` (zeroes both buffers of the slot, opens the file with `SoundFile` to get channels and frames, reads up to 16 s with `Buffer.readChannel` into the existing buffer objects: channel 0 into left and channel 1 into right, or channel 0 into both for a mono file, so `bufnum`s never change; sets `bufferFrames[i]` and updates the poll), `recordBuffer(index, seconds, level)` `"iff"` (zeroes, records `inputBus` left and right into the pair with `RecordBuf`, `doneAction: 2`, clamped to buffer length, sets `bufferFrames[i]`, and on completion writes the scratch take, see persistence), `clearBuffer(index)` `"i"` (zeroes the pair, `bufferFrames[i] = 0`), `saveBuffer(index, path)` `"is"` (writes the valid region of the pair as a stereo 16-bit WAV to `path`; the engine interleaves the pair into a temporary 2-channel buffer for `Buffer.write`, or writes via `DiskOut` from a short synth, builder's choice).
+- **Persistence and saving.** Nothing is written to disk except by recording or by an explicit save.
+  - *Scratch take:* when a recording completes, the engine writes the slot to the fixed working file `_path.audio .. "strata/scratch/buf<n>.wav"`, overwriting the previous take for that slot. This exists only so a take survives a restart; it is not a keepsake.
+  - *Explicit save:* `buf{n}_save` trigger (PARAMS, and K2+K3 or a held-key combo on the BUFFER page, builder's choice given K2 and K3 are taken) writes a timestamped stereo WAV to `_path.audio .. "strata/<YYYYMMDD-HHMMSS>-buf<n>.wav"` via `saveBuffer`, so it appears in the file browser for loading later. Loading a sample file never copies it.
+  - *Restore on start:* on `cleanup` Lua saves, per slot, the loaded file path or the scratch take path into `~/dust/data/strata/buffers.data`; on `init` it reloads each through `loadBuffer`. The SETUP page shows how many slots were restored. (Call made after the builder check: without this every scene using a buffer source is silent after a reboot.)
+
+**Lua parameters** (per voice, in the existing voice group):
+- `v{i}_source`: option {`synth`, `buf 1` … `buf 8`, `input`}, default `synth`. Action calls `sync_voice_to_engine(i)` if the voice is active.
+- `v{i}_buf_pos` (0 to 1, lin), `v{i}_buf_rate` (0.25 to 4, exp, default 1), `v{i}_buf_scan` (-2 to 2, lin, default 0). Sent via `setGrainParam` as `bufPos`, `bufRate`, `bufScan`.
+
+**Buffer management group** `strata_buffers`:
+- For each buffer n in 1..8: `buf{n}_file` via `params:add_file` (action loads it; empty path is ignored), `buf{n}_record` trigger, `buf{n}_clear` trigger, `buf{n}_save` trigger.
+- `record_duration` (0.5 to 16 s, default 8), `record_level` (0 to 2, default 1).
+- Lua keeps a `buffers[n]` table: `name`, `loaded`, `recording`, `seconds`. Recording state is cleared by a `clock.run` timer of `record_duration`.
+
+**Behavior rules.**
+- When `v{i}_source` is not `synth`: E3, arc ring 2 and the screen's main parameter for that voice become `buf_pos`; `randomize_voice` randomizes `buf_pos`, `buf_rate`, `buf_scan` instead of synthesis params; `gentle_mutate` and the per-voice drift LFO act on the buffer params; the `source` param itself is never randomized or mutated.
+- Freeze applies to buffer params exactly as to synthesis params.
+- Pattern steps and MIDI notes retrigger buffer-sourced voices too (the accent envelope lives in both grain SynthDefs for buffer and input sources, and in the voice synth for synth sources; `retrigger` routes to whichever synth is live).
+- Scenes capture `source` and the three buffer params per voice. Buffer *contents* are not captured; a scene recalled with a buffer source plays whatever is in that buffer now. The BUFFER page shows "empty" for unloaded buffers so this is visible.
+
+**Screen BUFFER page.** This page is where a voice's source is chosen, so it works without a 256 grid. Left column: the selected voice's name and its source. Right column: the eight buffers with name or "empty", seconds from the poll, and "REC" while recording; the buffer the selected voice points at is highlighted. E2 selects the voice (shared `selected_voice`), E3 cycles that voice's `source` through synth, buf 1..8, input. K3 records into the buffer the voice currently points at (or stops early); if the source is not a buffer K3 does nothing and the hint row says so. K2 opens the file selector (`fileselect.enter(_path.audio, callback)`) for that buffer, which sets `buf{n}_file`. `record_duration` and `record_level` are on arc rings 3 and 4 of this page and in params. Bottom hint row names the keys.
+
+**Grid 256, page 4 becomes BUFFER / FX.** (Today page 4 falls through to the page-1 layout; it has no content of its own. Row 8 and row 16 keep their meanings on the new page, in line with the anti-goal.)
+- Row 1, cols 1 to 8: record into buffer n (LED 15 while recording, 8 if loaded, 2 if empty).
+- Row 2, cols 1 to 8: clear buffer n.
+- Rows 3 to 7: fader rows (same rendering as the page-2 fader rows) for filter freq, filter res, delay time, delay feedback, delay mix.
+- Row 8: transport, tempo and page selection exactly as on every other page.
+- Rows 9 to 15: one row per voice 1 to 7; col 1 = synth, cols 2 to 9 = buffer 1 to 8, col 10 = input. Pressing sets `v{i}_source`; the selected source is lit 15, others 4 (empty buffers 2). Cols 12 to 16 of these rows: nothing.
+- Row 16: voice freeze, as on pages 1 and 2.
+- 128h, 128v, 64: no buffer controls (params and screen only). Document this.
+
+### 2. Effects chain
+
+Signal flow becomes: `mainBus → \strataFilter → \strataDelay → \strataReverb → \strataMaster → out`, each a separate synth with its own intermediate stereo bus, all at the tail of `context.xg` in that order.
+
+- `\strataFilter`: `filterType` (0 LP, 1 HP, 2 BP via `Select.ar` of `RLPF`, `RHPF`, `BPF`), `freq` 20 to 20000, `res` 0 to 1 mapped to `rq` as `1 - res * 0.95`, `mix` 0 to 1 crossfading dry/filtered. Command `setFilter(freq, res, type, mix)` `"ffif"`.
+- `\strataDelay`: stereo delay using `LocalIn`/`LocalOut` feedback around `DelayC` (max 2 s), `time` 0.01 to 2 s with `.lag(0.1)` to avoid zipper noise, `feedback` 0 to 0.95, `mix` 0 to 1. Command `setDelay(time, feedback, mix)` `"fff"`.
+- `\strataReverb` fixed per review-fixes (no doubled dry path). `\strataMaster` gains `Limiter.ar(sig, 0.95)` after saturation as a safety net now that resonance and feedback exist.
+
+**Lua group** `strata_fx`: `filter_type` (option), `filter_freq` (exp), `filter_res`, `filter_mix` (default 0 = bypass), `delay_time` (exp, default 0.375), `delay_feedback` (default 0.4), `delay_mix` (default 0). The existing reverb and drift params move into this group for a single FX section. Scenes capture all; transitions interpolate the continuous ones.
+
+**Screen FX page.** A scrolling list: master density, drift, filter type/freq/res/mix, delay time/feedback/mix, reverb mix/size/damp. E2 selects a row, E3 adjusts it, K3 toggles the filter mix between 0 and its last non-zero value (bypass). Master density lives here now that E1 is page selection; it also stays on arc ring 1 of the MAIN page and in params.
+
+**Arc FX page.** Rings: filter freq, filter res, delay time, delay mix.
+
+### 3. Grain envelope shapes
+
+- Four envelope buffers built in `alloc` from `Env.sine`, `Env.perc(0.1, 0.9)`, `Env.linen(0.1, 0.8, 0.1)` and a trapezoid `Env([0,1,1,0],[0.25,0.5,0.25])`, each `.asSignal(1024)` loaded with `Buffer.loadCollection`. Grain SynthDefs take `envBuf` (default -1 = built-in Hann). `setGrainParam(voice, "envShape", n)` maps 0 = Hann, 1 to 4 = the buffers.
+- Lua per-voice option `v{i}_grain_env` {hann, sine, perc, linen, trap}, default hann. Included in scenes, in the grid fader list (as an index fader), excluded from mutation.
+
+### 4. Global LFOs
+
+Three LFOs built on norns' `lib/lfo.lua` (`require 'lfo'`), not a hand-rolled oscillator.
+
+- Each LFO `n` in 1..3 calls `lfo:add_params("lfo" .. n, "LFO " .. n, "strata_lfos")`, which gives shape (sine, tri, square, random, up, down), mode (clocked/free), period, depth, offset, phase, baseline and enable in the PARAMS menu with the library's own UI.
+- Strata adds per LFO: `lfo{n}_dest`, an option built at init from a curated destination table: `none`, master density, drift, filter freq, filter res, filter mix, delay time, delay feedback, delay mix, reverb mix, reverb size, reverb damp, then for each voice: `main` (resolved at modulation time to the voice's main synthesis parameter, or to `buf_pos` when the voice's source is a buffer), grain size, grain density, grain pitch, grain spread, `buf_pos`, `buf_rate`, `buf_scan`. Entries are `{label, resolver}`.
+- Modulation never writes the destination param. The library already applies depth and the LFO's own range, so the LFO is created with `min = -1`, `max = 1`, `baseline = 'center'`; its action receives the scaled value `v` in -1..1 and Strata sends `clamp(params:get(dest) + v * 0.5 * (spec.maxval - spec.minval))` to the engine through a new `send_param_to_engine(param_id, value)` function. That function is factored out of the existing param actions so a param's action body becomes `send_param_to_engine(id, value)`; both the params system and the LFOs then drive the engine through one path. The plain stored value is re-sent whenever the LFO is disabled, its depth reaches 0, or its destination changes (the library stops calling the action in those cases, so Strata must restore explicitly).
+- Rate range follows the library: free mode down to a 0.1 s period (10 Hz), clocked mode down to 1/4 beat. Confluence promised 20 Hz; 10 Hz is the ceiling here, and this is a documented deviation. Faster LFOs would mean hundreds of engine messages per second from Lua and belong in the engine, which is out of scope.
+- The existing per-voice random-walk `lfo_update` is renamed `drift_update` in code and docs so the two systems are not confused; its behavior is unchanged.
+- LFOs are started in `init` only if their enable param is on, stopped in `cleanup`. Scenes capture shape, period, depth, dest and enabled per LFO.
+
+**Screen LFO page.** Three stacked rows, each with the LFO number, a 64-pixel-wide waveform drawn from the shape (one cycle, from a local shape function mirroring the library's), a moving dot whose y is the last raw value received in the LFO's action and whose x advances from the LFO's period and the time since its last reset (the library's `get('phase')` is the phase offset setting, not the running position), the destination label (abbreviated) and depth. The page runs a 15 fps redraw clock only while it is shown. E2 selects an LFO, E3 adjusts its depth, K3 toggles enable, K2 cycles destination. Rows must fit in y 14 to 58.
+
+**Arc LFO page.** Rings 1 to 3: depth of LFO 1 to 3. Ring 4: period of the selected LFO.
+
+Grid: no LFO controls (space). Document.
+
+### 5. MIDI
+
+- `midi_device` param (1 to 4, default 1) connects via `midi.connect(n)`; `midi.add`/`midi.remove` callbacks reconnect. Device event handler parses with `midi.to_msg`.
+- `midi_channel_mode` option: `per voice` (channel 1 to 7 addresses voice 1 to 7; other channels ignored) or `omni to selected` (any channel addresses the selected voice).
+- Note on (velocity > 0): if the target voice's source is `synth`, set `v{i}_freq` to `musicutil.note_num_to_freq(note)` clamped to the voice's freq spec via `params:set`; if the source is a buffer, set `v{i}_buf_rate` to `2 ^ ((note - 60) / 12)` clamped; input sources take no pitch. Then if the voice is off, `toggle_voice(i)` followed by `engine.retrigger(i - 1, velocity / 127)`; else just the retrigger. The `retrigger` command grows to `"if"` and the accent envelope scales by velocity; the pattern sequencer sends `step_value / 15` so pattern brightness becomes accent velocity (a free improvement on the existing 0..15 step values). Voices keep their slow attacks when started from MIDI; that is Strata's character, and velocity lands on the accent. No fast-attack mode.
+- Note off: ignored by default. `midi_note_off` option {ignore, voice off} for people who want gated playing. In `voice off` mode a note that arrives while the voice is still releasing **re-gates the existing synths** (`voiceOn` in the engine sets `gate = 1` on nodes that still exist instead of creating new ones; the ASR envelope restarts its attack from the current level). No nodes stack.
+- Pitchbend: `bend` ratio over ±2 semitones sent as `setVoiceParam(voice, "bend", ratio)`; every voice SynthDef and `\strataGrainBuf` gain a `bend = 1` multiplier on frequency or rate. `bend` is transient and not a Lua param, not captured by scenes.
+- CC: not implemented in Strata code. README documents norns' PARAMS > MAP flow for CC mapping, and lists Confluence's suggested mappings as a starting point.
+
+**Screen SETUP page.** Shows MIDI device name and channel mode (E2 device, E3 mode), connected grid count and sizes, arc connected or not, scene file status. K3 saves scenes to disk.
+
+### 6. Paged screen UI
+
+- Pages: MAIN (the current screen, unchanged apart from the header), FX, LFO, BUFFER, SETUP. `E1` selects the page. `E2`/`E3`/`K2`/`K3` are page-specific as described above; MAIN keeps its current mappings (E2 voice select, E3 main parameter, K2 randomize, K3 start/stop/freeze).
+- Header: page name at left; the existing `[M]` and `S1`..`S8` indicators stay at top right on every page.
+- A page-specific hint row at y 62.
+- Master density is no longer on E1. It remains on MAIN's arc ring 1, on the FX page, and in params; the MAIN header keeps showing it.
+- `redraw` dispatches by page; each page has its own draw function. The UI redraw cadence stays as it is.
+
+### 7. Arc pages
+
+The arc shows the mapping of the current screen page. MAIN: density, main parameter (or `buf_pos` for buffer-sourced voices), grain size, grain density. FX and LFO as above. BUFFER: `buf_pos` and `buf_rate` of the selected voice, `record_duration`, `record_level`. SETUP: rings off. Arc button (2025 model) keeps mirroring K3 on MAIN and does nothing elsewhere.
+
+### 8. Scenes, docs, tests
+
+- `SCENE_DATA_VERSION` becomes 2. Loading a version-1 file fills new fields with defaults (source synth, grain mode continuous, env hann, FX at defaults, LFOs off) and logs a message. `validate_scene_data` checks the new fields.
+- CLAUDE.md: command table gains `setGrainSource`, `loadBuffer`, `recordBuffer`, `clearBuffer`, `setFilter`, `setDelay`, the changed `retrigger` signature and the `bend`/`envShape`/`bufPos`/`bufRate`/`bufScan` params; signal-flow diagram updated; new sections for sources, FX chain, LFOs, MIDI, pages. README: features, controls per page, grid page 4, arc pages, MIDI, buffer workflow. CHANGELOG: version 3.0.
+- Tests: harness cases for source switching (engine call sequence, no stacking), buffer commands, explicit save path formatting and persistence save/restore, grain mode, FX commands, envelope index mapping, LFO offset math and restore-on-dest-change, MIDI note/channel routing and retrigger velocity, page navigation without errors on every page and every encoder/key, scene v1 migration. sclang compilation of the engine against the norns class library. Sync check passes.
+
+## Left to the builder
+
+- Exact UGen details inside each SynthDef, lag times, accent envelope scaling by velocity, the delay's feedback topology.
+- Exact pixel layouts of the four new pages within the 128×64 constraint, abbreviations, brightness levels.
+- Buffer file loading edge cases (unsupported format, missing file, sample rate mismatch): log and leave the slot unchanged. `BufRateScale` handles rate differences at playback.
+- How `saveBuffer` interleaves the pair for writing, and the BUFFER-page gesture for the explicit save.
+- Order of implementation. Suggested: paged UI scaffold → FX chain → grain envelopes → sources/buffers → LFOs → MIDI → scenes/docs, each with tests, so the screen pages exist before the features that fill them.
