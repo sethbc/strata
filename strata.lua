@@ -264,12 +264,16 @@ for i = 1, NUM_VOICES do
 end
 
 -- Initialize scenes
-for i = 1, num_scenes do
-  scenes[i] = {
-    name = "scene " .. i,
+local function empty_scene(scene_num)
+  return {
+    name = "scene " .. scene_num,
     populated = false,
     data = {}
   }
+end
+
+for i = 1, num_scenes do
+  scenes[i] = empty_scene(i)
 end
 
 function init()
@@ -929,24 +933,44 @@ function gentle_mutate()
 end
 
 -- Scene management functions
+
+-- Global params stored in every scene, in recall order. Continuous ones are
+-- crossfaded by smooth transitions; the others switch when the fade ends.
+local SCENE_GLOBAL_PARAMS = {
+  {id = "master_density", continuous = true},
+  {id = "tempo", continuous = false},
+  {id = "mutation_enabled", continuous = false},
+  {id = "mutation_rate", continuous = false},
+  {id = "mutation_probability", continuous = false},
+  {id = "mutation_amount", continuous = false},
+  {id = "reverb_mix", continuous = true},
+  {id = "reverb_size", continuous = true},
+  {id = "reverb_damp", continuous = true},
+  {id = "drift_amount", continuous = true}
+}
+
+-- voices[i].grain keys -> param id suffixes
+local GRAIN_PARAM_IDS = {
+  size = "grain_size",
+  density = "grain_density",
+  pitch = "grain_pitch",
+  spread = "grain_spread"
+}
+
+local SCENE_TRANSITION_STEPS = 20
+
 function capture_scene(scene_num)
   if scene_num < 1 or scene_num > num_scenes then return end
 
   local scene_data = {
     voices = {},
     frozen = {},
-    patterns = {},
-    master_density = master_density,
-    tempo = params:get("tempo"),
-    mutation_enabled = params:get("mutation_enabled"),
-    mutation_rate = params:get("mutation_rate"),
-    mutation_probability = params:get("mutation_probability"),
-    mutation_amount = params:get("mutation_amount"),
-    reverb_mix = params:get("reverb_mix"),
-    reverb_size = params:get("reverb_size"),
-    reverb_damp = params:get("reverb_damp"),
-    drift_amount = params:get("drift_amount")
+    patterns = {}
   }
+
+  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+    scene_data[global.id] = params:get(global.id)
+  end
 
   -- Capture voice states
   for i = 1, #voices do
@@ -965,24 +989,15 @@ function capture_scene(scene_num)
       scene_data.voices[i].grain[key] = value
     end
     -- Copy crossmod structure (including nested slots)
-    scene_data.voices[i].crossmod = {
-      slot1 = {
-        source = voices[i].crossmod.slot1.source,
-        amp_amt = voices[i].crossmod.slot1.amp_amt,
-        freq_amt = voices[i].crossmod.slot1.freq_amt
-      },
-      slot2 = {
-        source = voices[i].crossmod.slot2.source,
-        amp_amt = voices[i].crossmod.slot2.amp_amt,
-        freq_amt = voices[i].crossmod.slot2.freq_amt
-      },
-      slot3 = {
-        source = voices[i].crossmod.slot3.source,
-        amp_amt = voices[i].crossmod.slot3.amp_amt,
-        freq_amt = voices[i].crossmod.slot3.freq_amt
-      },
-      speed = voices[i].crossmod.speed
-    }
+    scene_data.voices[i].crossmod = {speed = voices[i].crossmod.speed}
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_state = voices[i].crossmod["slot" .. slot]
+      scene_data.voices[i].crossmod["slot" .. slot] = {
+        source = slot_state.source,
+        amp_amt = slot_state.amp_amt,
+        freq_amt = slot_state.freq_amt
+      }
+    end
 
     scene_data.frozen[i] = frozen[i]
   end
@@ -1000,6 +1015,50 @@ function capture_scene(scene_num)
   print("captured scene " .. scene_num)
 end
 
+function cancel_scene_transition()
+  if scene_transition_clock then
+    clock.cancel(scene_transition_clock)
+    scene_transition_clock = nil
+  end
+  scene_transition_active = false
+end
+
+-- Snapshot {id, start, target} for every continuous param a smooth
+-- transition crossfades. Start values are read once, before the fade, so
+-- the fade moves linearly from start to target over the whole transition.
+-- Mod sources, freeze and active states switch at the end instead.
+function scene_transition_targets(scene_data)
+  local targets = {}
+  local function add_target(param_id, target_value)
+    table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value})
+  end
+
+  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+    if global.continuous then
+      add_target(global.id, scene_data[global.id])
+    end
+  end
+
+  for i = 1, NUM_VOICES do
+    local voice_data = scene_data.voices[i]
+    local prefix = "v" .. i .. "_"
+    for key, target_value in pairs(voice_data.params) do
+      add_target(prefix .. key, target_value)
+    end
+    for key, target_value in pairs(voice_data.grain) do
+      add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
+    end
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_data = voice_data.crossmod["slot" .. slot]
+      add_target(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+      add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+    end
+    add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
+  end
+
+  return targets
+end
+
 function recall_scene(scene_num, transition_time)
   if scene_num < 1 or scene_num > num_scenes then return end
   if not scenes[scene_num].populated then
@@ -1007,72 +1066,36 @@ function recall_scene(scene_num, transition_time)
     return
   end
 
-  transition_time = transition_time or 0
-  local scene_data = scenes[scene_num].data
-
   -- Validate scene data before recalling
-  if not scene_data or not scene_data.voices then
+  if not validate_scene(scenes[scene_num]) then
     print("error: scene " .. scene_num .. " has invalid data")
     return
   end
 
-  if transition_time > 0 then
-    -- Cancel any existing transition clock to prevent concurrent transitions
-    if scene_transition_clock then
-      clock.cancel(scene_transition_clock)
-      scene_transition_clock = nil
-    end
+  transition_time = transition_time or 0
 
-    -- Smooth transition with parameter interpolation
+  -- Any new recall supersedes a transition that is still running
+  cancel_scene_transition()
+
+  if transition_time > 0 then
+    local targets = scene_transition_targets(scenes[scene_num].data)
+
     scene_transition_active = true
     scene_transition_clock = clock.run(function()
-      local steps = 20
-      local step_time = transition_time / steps
+      local step_time = transition_time / SCENE_TRANSITION_STEPS
 
-      for step = 1, steps do
-        local mix = step / steps
-
-        -- Interpolate global parameters
-        params:set("master_density", util.linlin(0, 1, master_density, scene_data.master_density, mix))
-
-        -- Interpolate voice parameters
-        for i = 1, #voices do
-          if scene_data.voices[i] then
-            if scene_data.voices[i].params then
-              for key, target_val in pairs(scene_data.voices[i].params) do
-                local current_val = voices[i].params[key]
-                if current_val then
-                  local new_val = util.linlin(0, 1, current_val, target_val, mix)
-                  params:set("v" .. i .. "_" .. key, new_val)
-                end
-              end
-            end
-
-            if scene_data.voices[i].grain then
-              for key, target_val in pairs(scene_data.voices[i].grain) do
-                local current_val = voices[i].grain[key]
-                if current_val then
-                  local new_val = util.linlin(0, 1, current_val, target_val, mix)
-                  local param_name = key == "size" and "grain_size" or
-                                   key == "density" and "grain_density" or
-                                   key == "pitch" and "grain_pitch" or
-                                   key == "spread" and "grain_spread"
-                  if param_name then
-                    params:set("v" .. i .. "_" .. param_name, new_val)
-                  end
-                end
-              end
-            end
-          end
+      for step = 1, SCENE_TRANSITION_STEPS do
+        local mix = step / SCENE_TRANSITION_STEPS
+        for _, target in ipairs(targets) do
+          params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
         end
-
         clock.sleep(step_time)
       end
 
-      -- Final state: ensure exact values
-      recall_scene_instant(scene_num)
-      scene_transition_active = false
+      -- Final state: exact values plus the non-continuous params
       scene_transition_clock = nil
+      scene_transition_active = false
+      recall_scene_instant(scene_num)
     end)
   else
     -- Instant recall
@@ -1083,59 +1106,41 @@ function recall_scene(scene_num, transition_time)
   redraw()
 end
 
+-- Apply a scene immediately. The scene must have passed validate_scene.
 function recall_scene_instant(scene_num)
   local scene_data = scenes[scene_num].data
 
   -- Restore global parameters
-  params:set("master_density", scene_data.master_density)
-  params:set("tempo", scene_data.tempo)
-  params:set("mutation_enabled", scene_data.mutation_enabled)
-  params:set("mutation_rate", scene_data.mutation_rate)
-  params:set("mutation_probability", scene_data.mutation_probability)
-  params:set("mutation_amount", scene_data.mutation_amount)
-  params:set("reverb_mix", scene_data.reverb_mix)
-  params:set("reverb_size", scene_data.reverb_size)
-  params:set("reverb_damp", scene_data.reverb_damp)
-  params:set("drift_amount", scene_data.drift_amount)
+  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+    params:set(global.id, scene_data[global.id])
+  end
 
   -- Restore voice states
   for i = 1, #voices do
-    -- Restore parameters
-    for key, value in pairs(scene_data.voices[i].params) do
-      params:set("v" .. i .. "_" .. key, value)
+    local voice_data = scene_data.voices[i]
+    local prefix = "v" .. i .. "_"
+
+    for key, value in pairs(voice_data.params) do
+      params:set(prefix .. key, value)
     end
 
-    for key, value in pairs(scene_data.voices[i].grain) do
-      local param_name = key == "size" and "grain_size" or
-                       key == "density" and "grain_density" or
-                       key == "pitch" and "grain_pitch" or
-                       key == "spread" and "grain_spread"
-      if param_name then
-        params:set("v" .. i .. "_" .. param_name, value)
-      end
+    for key, value in pairs(voice_data.grain) do
+      params:set(prefix .. GRAIN_PARAM_IDS[key], value)
     end
 
     -- Restore crossmod slots
-    params:set("v" .. i .. "_mod_source_1", scene_data.voices[i].crossmod.slot1.source)
-    params:set("v" .. i .. "_mod_amp_amt_1", scene_data.voices[i].crossmod.slot1.amp_amt)
-    params:set("v" .. i .. "_mod_freq_amt_1", scene_data.voices[i].crossmod.slot1.freq_amt)
-
-    params:set("v" .. i .. "_mod_source_2", scene_data.voices[i].crossmod.slot2.source)
-    params:set("v" .. i .. "_mod_amp_amt_2", scene_data.voices[i].crossmod.slot2.amp_amt)
-    params:set("v" .. i .. "_mod_freq_amt_2", scene_data.voices[i].crossmod.slot2.freq_amt)
-
-    params:set("v" .. i .. "_mod_source_3", scene_data.voices[i].crossmod.slot3.source)
-    params:set("v" .. i .. "_mod_amp_amt_3", scene_data.voices[i].crossmod.slot3.amp_amt)
-    params:set("v" .. i .. "_mod_freq_amt_3", scene_data.voices[i].crossmod.slot3.freq_amt)
-
-    params:set("v" .. i .. "_mod_speed", scene_data.voices[i].crossmod.speed)
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_data = voice_data.crossmod["slot" .. slot]
+      params:set(prefix .. "mod_source_" .. slot, slot_data.source)
+      params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+      params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+    end
+    params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
 
     frozen[i] = scene_data.frozen[i]
 
-    -- Handle voice activation
-    if scene_data.voices[i].active and not voices[i].active then
-      toggle_voice(i)
-    elseif not scene_data.voices[i].active and voices[i].active then
+    -- Start/stop voices last: toggle_voice syncs the restored state
+    if voice_data.active ~= voices[i].active then
       toggle_voice(i)
     end
   end
@@ -1208,67 +1213,127 @@ function save_scenes_to_disk()
     util.make_dir(scene_data_dir)
   end
 
-  -- Save scenes table to disk
-  tab.save(scenes, scene_data_file)
+  -- Save scenes table to disk, tagged with the format version
+  tab.save({version = SCENE_DATA_VERSION, scenes = scenes}, scene_data_file)
   print("scenes saved to " .. scene_data_file)
 end
 
+-- Load scenes from disk. On any problem the current scenes (empty at
+-- startup) are kept and a message is printed; a bad file never stops init.
 function load_scenes_from_disk()
-  -- Check if file exists
-  if util.file_exists(scene_data_file) then
-    local loaded_scenes = tab.load(scene_data_file)
-
-    if loaded_scenes then
-      -- Validate scene data structure
-      if validate_scene_data(loaded_scenes) then
-        scenes = loaded_scenes
-        print("scenes loaded from " .. scene_data_file)
-
-        -- Update grid display if grids are connected
-        grid_redraw()
-      else
-        print("error: scene file corrupted or incompatible version")
-      end
-    else
-      print("error loading scenes file")
-    end
-  else
+  if not util.file_exists(scene_data_file) then
     print("no saved scenes file found")
+    return
   end
+
+  -- tab.load runs the file as Lua without protection
+  local ok, loaded, load_error = pcall(tab.load, scene_data_file)
+  if not ok then
+    print("error: scenes file could not be read (" .. tostring(loaded) .. "), keeping current scenes")
+    return
+  end
+  if type(loaded) ~= "table" then
+    print("error loading scenes file: " .. tostring(load_error))
+    return
+  end
+
+  local scene_table
+  if loaded.version ~= nil then
+    if loaded.version ~= SCENE_DATA_VERSION then
+      print("error: scenes file has version " .. tostring(loaded.version) ..
+        ", expected " .. SCENE_DATA_VERSION)
+      return
+    end
+    scene_table = loaded.scenes
+  else
+    -- Files written before 2.1 hold the bare scenes array (format version 1)
+    scene_table = loaded
+  end
+
+  if not validate_scene_data(scene_table) then
+    print("error: scene file corrupted or incompatible version")
+    return
+  end
+
+  -- Make sure every slot exists, filling gaps with empty scenes
+  local loaded_scenes = {}
+  for i = 1, NUM_SCENES do
+    loaded_scenes[i] = scene_table[i] or empty_scene(i)
+  end
+  scenes = loaded_scenes
+  print("scenes loaded from " .. scene_data_file)
+
+  -- Update grid display if grids are connected
+  grid_redraw()
 end
 
+local function is_number(value)
+  return type(value) == "number" and value == value  -- rejects NaN
+end
+
+local function is_integer_between(value, min, max)
+  return is_number(value) and value == math.floor(value) and value >= min and value <= max
+end
+
+-- Check that one scene slot holds everything recall_scene_instant reads
+function validate_scene(scene)
+  if type(scene) ~= "table" then return false end
+  if type(scene.populated) ~= "boolean" then return false end
+  if not scene.populated then return true end
+
+  local data = scene.data
+  if type(data) ~= "table" then return false end
+
+  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+    if not is_number(data[global.id]) then return false end
+  end
+
+  if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
+  if type(data.frozen) ~= "table" then return false end
+  if type(data.patterns) ~= "table" then return false end
+
+  for i = 1, NUM_VOICES do
+    local voice_data = data.voices[i]
+    if type(voice_data) ~= "table" then return false end
+    if type(voice_data.active) ~= "boolean" then return false end
+    if type(voice_data.params) ~= "table" then return false end
+    if type(voice_data.grain) ~= "table" then return false end
+    if type(voice_data.crossmod) ~= "table" then return false end
+
+    for key, value in pairs(voice_data.params) do
+      if voices[i].params[key] == nil or not is_number(value) then return false end
+    end
+    for key, value in pairs(voice_data.grain) do
+      if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
+    end
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_data = voice_data.crossmod["slot" .. slot]
+      if type(slot_data) ~= "table" then return false end
+      if not is_integer_between(slot_data.source, 0, NUM_VOICES) then return false end
+      if not is_number(slot_data.amp_amt) or not is_number(slot_data.freq_amt) then return false end
+    end
+    if not is_number(voice_data.crossmod.speed) then return false end
+
+    if type(data.frozen[i]) ~= "boolean" then return false end
+
+    local pattern = data.patterns[i]
+    if type(pattern) ~= "table" then return false end
+    for step = 1, PATTERN_LENGTH do
+      if not is_integer_between(pattern[step], 0, 15) then return false end
+    end
+  end
+
+  return true
+end
+
+-- Validate a whole scenes table (as loaded from disk). Missing slots are
+-- allowed; load_scenes_from_disk fills them with empty scenes.
 function validate_scene_data(scene_table)
-  -- Validate scene data structure to prevent crashes
   if type(scene_table) ~= "table" then return false end
 
   for i = 1, NUM_SCENES do
-    if scene_table[i] then
-      local scene = scene_table[i]
-
-      -- Check basic structure
-      if type(scene) ~= "table" then return false end
-      if scene.populated == nil then return false end
-
-      -- If populated, validate data structure
-      if scene.populated and scene.data then
-        local data = scene.data
-
-        -- Validate essential fields exist
-        if not data.voices or type(data.voices) ~= "table" then return false end
-        if not data.patterns or type(data.patterns) ~= "table" then return false end
-
-        -- Validate voice count
-        if #data.voices ~= NUM_VOICES then return false end
-
-        -- Validate each voice has required structure
-        for v = 1, NUM_VOICES do
-          local voice = data.voices[v]
-          if not voice or type(voice) ~= "table" then return false end
-          if not voice.params or type(voice.params) ~= "table" then return false end
-          if not voice.grain or type(voice.grain) ~= "table" then return false end
-          if not voice.crossmod or type(voice.crossmod) ~= "table" then return false end
-        end
-      end
+    if scene_table[i] ~= nil and not validate_scene(scene_table[i]) then
+      return false
     end
   end
 
