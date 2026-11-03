@@ -360,7 +360,7 @@ Engine_Strata : CroneEngine {
         synths = Dictionary.new;
         
         // Commands for voice control
-        this.addCommand(\voiceOn, "isfffff", { arg msg;
+        this.addCommand(\voiceOn, "iffffff", { arg msg;
             var voice = msg[1];
             var bus = granBuses[voice];
             var modBus = modBuses[voice];

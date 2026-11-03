@@ -60,7 +60,7 @@ The Lua script controls the engine through these commands:
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
-| `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"isfffff"` | Start a voice with initial parameters |
+| `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"iffffff"` | Start a voice with initial parameters |
 | `engine.voiceOff(voice)` | `"i"` | Stop a voice (gates off with release envelope) |
 | `engine.setVoiceParam(voice, param, value)` | `"isf"` | Update synthesis parameters dynamically |
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
