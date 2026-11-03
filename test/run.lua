@@ -1916,6 +1916,32 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
+test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  local lfo_metro = local_value("lfo_metro")
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- K2 down, then K1 opens the menu: the K2 release goes to the menu
+  key(2, 1)
+  context.menu.mode = true; lfo_metro.event()   -- a 10 Hz tick while the menu is open
+  context.menu.mode = false                       -- K1 again: back to the script
+  tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after K2 was released in the menu")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  assert_equal(context.fileselect.last, nil, "nothing opened the file selector")
+  -- a save made with K2 held, then the menu: the next K2 tap opens the selector
+  tap(3)  -- stop the recording
+  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 still saves")
+  context.menu.mode = true; lfo_metro.event(); context.menu.mode = false
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector after the menu")
+  -- ticks with the menu closed keep a held K2
+  context.fileselect.last = nil; context.clear_engine_calls()
+  key(2, 1); lfo_metro.event(); tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
+  key(2, 0); assert_equal(context.fileselect.last, nil)
+  assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
+end)
+
 test("key releases reach only the BUFFER page; other pages act once per press", function()
   local context = load_strata(); context.clock.advance()
   local _, set_selected = find_upvalue("selected_voice")

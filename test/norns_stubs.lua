@@ -908,7 +908,8 @@ function stubs.install(options)
     -- same formula as lib/musicutil.lua
     note_num_to_freq = function(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end,
   }
-  context.menu = { rebuilds = 0 }
+  -- _menu.mode is true while the norns menu (K1) owns the keys and screen
+  context.menu = { rebuilds = 0, mode = false }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
 
@@ -926,7 +927,9 @@ function stubs.install(options)
   _G.fileselect = context.fileselect
   _G.poll = context.polls
   _G._menu = context.menu
-  _G.norns = { state = {}, enc = context.encoders.api }
+  _G.norns = { state = {}, enc = context.encoders.api,
+    -- lua/core/menu.lua: norns.menu.status() returns _menu.mode
+    menu = { status = function() return context.menu.mode end } }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
   util.make_dir(_G._path.audio)
   package.loaded["ui"] = context.UI

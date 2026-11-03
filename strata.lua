@@ -1372,6 +1372,9 @@ function lfo_update()
   if next(grids) ~= nil and grid_page == 2 then
     grid_redraw()
   end
+
+  -- lfo_update is the script's 10 Hz tick: also drop keys held into the menu
+  forget_keys_held_through_menu()
 end
 
 -- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
@@ -2404,6 +2407,19 @@ function enc(n, d)
   end
   arc_redraw()
   redraw()
+end
+
+-- The norns menu (K1, or PARAMS and its file selector) takes every key
+-- while it is open, so a key released there never reaches key() and would
+-- stay "held" (on BUFFER, every later K3 would save instead of record).
+-- Called on every 10 Hz lfo_metro tick (end of lfo_update): while the menu is open, forget
+-- every held key and the BUFFER page's K2 gesture.
+function forget_keys_held_through_menu()
+  if not norns.menu.status() then return end
+  for n in pairs(key_press_page) do
+    key_press_page[n] = nil
+  end
+  buffer_saved_during_k2 = false
 end
 
 -- Keys. Presses go to the page's PAGE_KEY handler. A release goes to
