@@ -453,11 +453,21 @@ local function is_sound_file_path(path)
   return type(path) == "string" and path ~= "" and path ~= "-" and path:sub(-1) ~= "/"
 end
 
+-- Show path in the slot's buf<n>_file param without running its action.
+-- norns' file param runs the action only when the path changes, so a
+-- record or clear puts it back at its starting folder (_path.audio, which
+-- loads nothing): picking the same file again then loads it.
+function set_buffer_file_param(slot, path)
+  params:set("buf" .. slot .. "_file", path, true)
+end
+
 function load_buffer(slot, path)
   if not valid_buffer_slot(slot) or not is_sound_file_path(path) then return end
   -- loading cancels a recording in progress in the engine
   cancel_buffer_recording_timer(slot)
   engine.loadBuffer(slot - 1, path)
+  -- the BUFFER page's file selector and a restore on start load directly
+  set_buffer_file_param(slot, path)
   local buffer = buffers[slot]
   -- a scratch take restored on start keeps its take name
   buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
@@ -479,6 +489,7 @@ function record_buffer(slot)
   else
     local duration = params:get("record_duration")
     engine.recordBuffer(slot - 1, duration, params:get("record_level"))
+    set_buffer_file_param(slot, _path.audio)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
     buffer_record_clocks[slot] = clock.run(function()
@@ -495,6 +506,7 @@ function clear_buffer(slot)
   if not valid_buffer_slot(slot) then return end
   cancel_buffer_recording_timer(slot)
   engine.clearBuffer(slot - 1)
+  set_buffer_file_param(slot, _path.audio)
   local buffer = buffers[slot]
   buffer.name = "empty"
   buffer.loaded = false
@@ -2888,11 +2900,18 @@ local BUFFER_PAGE = {
   name_max_width = 31     -- the name ends before the widest seconds ("16.0s" from x 103)
 }
 
--- A buffer's name for the screen: the file name without its extension
+-- A buffer's name for the screen: the file name without its extension, cut
+-- to fit. Cached per slot until the name changes (load, take, clear), so a
+-- redraw does not measure eight names a character at a time.
 local function buffer_display_name(slot)
-  local name = buffers[slot].name:gsub("%.[^.]*$", "")
-  if name == "" then name = buffers[slot].name end
-  return fit_text(name, BUFFER_PAGE.name_max_width)
+  local buffer = buffers[slot]
+  if buffer.display_name_of ~= buffer.name then
+    local name = buffer.name:gsub("%.[^.]*$", "")
+    if name == "" then name = buffer.name end
+    buffer.display_name = fit_text(name, BUFFER_PAGE.name_max_width)
+    buffer.display_name_of = buffer.name
+  end
+  return buffer.display_name
 end
 
 function redraw_buffer()
@@ -2985,8 +3004,10 @@ local function buffer_key_release(n)
   local slot = voice_buffer_slot(selected_voice)
   if not slot then return end
   fileselect.enter(_path.audio, function(path)
+    -- loaded directly (it also shows the path in buf<n>_file): setting the
+    -- param would do nothing when it already holds this path
     if path ~= "cancel" then
-      params:set("buf" .. slot .. "_file", path)
+      load_buffer(slot, path)
     end
     redraw()
   end)

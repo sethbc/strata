@@ -2105,6 +2105,9 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(buffers[3].name, "loop.wav"); assert_equal(buffers[3].path, loaded_file)
   assert_equal(buffers[5].name, "take 5", "a restored scratch take keeps its take name")
   assert_equal(buffers[5].path, scratch_take_path(5))
+  assert_equal(params:get("buf3_file"), loaded_file, "a restored slot's file param shows its path (F2)")
+  assert_equal(params:get("buf5_file"), scratch_take_path(5), "a restored take's file param shows the take")
+  assert_equal(params:get("buf1_file"), _path.audio, "a slot with nothing restored stays at its starting folder")
   assert_equal(local_value("buffers_restored"), 2)
   show_page(5)
   assert_true(screen_has("buffers: 2 restored"), "SETUP shows the restored count")
@@ -2222,6 +2225,55 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
   assert_equal(#context.calls_named("loadBuffer"), 0, "cancel loads nothing")
   assert_equal(voice_buffer_slot(4), 6); assert_equal(voice_buffer_slot(1), nil)
   params:set("v1_source", 10); assert_equal(voice_buffer_slot(1), nil, "input has no buffer slot")
+end)
+
+test("the same file loads again after a record or clear, from the BUFFER page and PARAMS (F2)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 2)  -- voice 1 reads buffer 1
+  context.clear_engine_calls()
+  local function loads() return #context.calls_named("loadBuffer") end
+  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  assert_equal(loads(), 1, "the BUFFER page loads the picked file")
+  assert_equal(params:get("buf1_file"), "/tmp/foo.wav", "and the file param shows it")
+  clear_buffer(1)
+  assert_equal(params:get("buf1_file"), _path.audio, "clear resets the file param to its starting folder")
+  assert_equal(loads(), 1, "the reset is silent (loads nothing)")
+  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  assert_equal(loads(), 2, "the same file loads again after a clear (BUFFER page)")
+  record_buffer(1)
+  assert_equal(params:get("buf1_file"), _path.audio, "a recording resets the file param")
+  assert_equal(loads(), 2, "silently")
+  params:set("buf1_file", "/tmp/foo.wav")
+  assert_equal(loads(), 3, "the same file loads again after a recording (PARAMS)")
+  assert_true(not local_value("buffers")[1].recording, "the load ended the recording")
+  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  assert_equal(loads(), 4, "picking the loaded file again on the BUFFER page reloads it")
+  assert_equal(context.calls_named("loadBuffer")[4].args[1], 0); assert_equal(context.calls_named("loadBuffer")[4].args[2], "/tmp/foo.wav")
+end)
+
+test("the BUFFER page caches each slot's cut name (M3)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  local measured = 0
+  local text_extents = screen.text_extents
+  screen.text_extents = function(text) measured = measured + 1; return text_extents(text) end
+  -- each load redraws the page (and measures the new name)
+  for slot = 1, 8 do load_buffer(slot, "/tmp/a very long sample name number " .. slot .. ".wav") end
+  assert_true(measured > 0, "a new name is measured")
+  measured = 0
+  redraw(); redraw()
+  screen.text_extents = text_extents
+  assert_equal(measured, 0, "later draws reuse the cut names")
+  local names = {}
+  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
+  assert_true(names[14] ~= nil and #names[14] < 20, "the cached name is the cut one")
+  load_buffer(1, "/tmp/b.wav"); redraw()
+  names = {}
+  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
+  assert_equal(names[14], "b", "a new name is cut and shown")
+  clear_buffer(1); redraw()
+  names = {}
+  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
+  assert_equal(names[14], "empty", "a cleared slot shows empty")
 end)
 
 test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)", function()
