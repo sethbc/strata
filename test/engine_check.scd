@@ -96,6 +96,18 @@ var controlFeedsAUGen = { arg defName, controlName;
     }) }
 };
 
+// true when the named control is the gate (first input) of an EnvGen
+// whose doneAction (input 4, after levelScale, levelBias, timeScale) frees the synth
+var controlTriggersFreeingEnvGen = { arg defName, controlName;
+    var desc = SynthDescLib.global.at(defName);
+    var control = desc.controls.detect({ arg each; each.name == controlName });
+    control.notNil and: { desc.def.children.any({ arg ugen;
+        var gate = ugen.inputs.notNil.if({ ugen.inputs[0] });
+        ugen.isKindOf(EnvGen) and: { gate.isKindOf(OutputProxy) } and: { gate.source.isKindOf(Control) }
+            and: { (gate.source.specialIndex + gate.outputIndex) == control.index } and: { ugen.inputs[4] == 2 }
+    }) }
+};
+
 // A voice's synths as the engine tracks them: [voice synth, grain synth, mod synth]
 var voiceTrio = { arg voice;
     [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)].collect({ arg key; engine.synths[key] })
@@ -140,6 +152,7 @@ server.waitForBoot({
         var stereoPath, monoPath, longPath, textPath, info;
         var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
         var grainCount, voiceCount, grainBefore, voiceBefore;
+        var countVoiceAndGrain, maxGrainCount, maxVoiceCount, staleGrain;
 
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
@@ -182,6 +195,11 @@ server.waitForBoot({
             check.(SynthDescLib.global.at(name).def.children.any({ arg ugen;
                 ugen.isKindOf(EnvGen) and: { ugen.inputs[1].isKindOf(OutputProxy) }
             }), "% scales its accent envelope by velocity through levelScale".format(name));
+        });
+        // The engine's cut (cutSynth) triggers a freeing fade on the kill
+        // control, independent of whatever release the gate envelope is in (F4)
+        (voiceDefs ++ grainDefs).do({ arg name;
+            check.(controlTriggersFreeingEnvGen.(name, \kill), "% has a kill fade (kill triggers a freeing EnvGen)".format(name));
         });
         grainDefs.do({ arg name;
             check.(velocityOnlyScalesAccents.(name),
@@ -734,6 +752,40 @@ server.waitForBoot({
         command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "the burst leaves no extra nodes");
 
+        // The same switches spread over many control blocks (real E3 detents):
+        // a cut must also end a synth that is already in its forced release,
+        // which a second, shorter forced release (gate -1 - time) cannot (F4)
+        countVoiceAndGrain = {
+            var list = synthNames.(context.xg);
+            [list.count({ arg name; grainDefs.includes(name) }), list.count({ arg name; voiceDefs.includes(name) })]
+        };
+        # grainBefore, voiceBefore = countVoiceAndGrain.value;
+        maxGrainCount = 0; maxVoiceCount = 0;
+        [1, 2, 0, 9, 0, 3, 4, 0, 5, 6].do({ arg source;
+            command.(\setGrainSource, 4, source);
+            0.1.wait; server.sync;    // longer than switchCutTime, so this switch has been processed
+            # grainCount, voiceCount = countVoiceAndGrain.value;
+            maxGrainCount = max(maxGrainCount, grainCount);
+            maxVoiceCount = max(maxVoiceCount, voiceCount);
+        });
+        check.(maxGrainCount <= (grainBefore + 1),
+            "switches 0.1 s apart keep at most the live grain synth and one releasing (at most % grain synths, % before)".format(maxGrainCount, grainBefore));
+        check.(maxVoiceCount <= (voiceBefore + 1),
+            "switches 0.1 s apart keep at most one releasing voice synth (at most % voice synths, % before)".format(maxVoiceCount, voiceBefore));
+        command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "spaced switches leave no extra nodes");
+        [1, 2, 0, 9, 0, 3, 4, 0, 5, 6].do({ arg source; command.(\setGrainSource, 4, source); 0.02.wait });
+        0.1.wait; server.sync;
+        # grainCount, voiceCount = countVoiceAndGrain.value;
+        check.((grainCount <= (grainBefore + 1)) and: { voiceCount <= voiceBefore },
+            "switches 0.02 s apart end with the live grain synth and one releasing (% grain synths, % voice synths; % and % before)".format(
+                grainCount, voiceCount, grainBefore, voiceBefore));
+        2.5.wait; server.sync;
+        check.(engine.fadingSynths[4].isEmpty and: { engine.releasingSynths[4].isEmpty },
+            "after the release nothing a spaced burst released stays tracked");
+        command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "the spaced burst leaves no extra nodes");
+
         // voiceOn never stacks synths (M6; spec section 5 re-gate). A running
         // voice keeps its synths and takes the voiceOn values.
         before = synthNames.(context.xg).size;
@@ -780,6 +832,27 @@ server.waitForBoot({
         after = voiceTrio.(5);
         check.((synthNames.(context.xg).size == before) and: { after.every({ arg synth, index; synth.notNil and: { synth !== oldTrio[index] } }) },
             "voiceOn after the release creates a fresh trio");
+
+        // voiceOn and voiceOff in one control block (a MIDI note-on and
+        // note-off in one bundle): the trio created in that block still
+        // releases and frees, instead of waiting forever on an envelope that
+        // never started (F4)
+        command.(\voiceOff, 5); 2.5.wait; server.sync;
+        server.makeBundle(0.1, {
+            command.(\voiceOn, 5, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+            command.(\voiceOff, 5);
+        });
+        oldTrio = engine.releasingSynths[5].values.asArray;
+        0.3.wait; server.sync;
+        check.((oldTrio.size == 3) and: { synthNames.(context.xg).size == before },
+            "voiceOn and voiceOff in one bundle create a trio that is releasing");
+        2.5.wait; server.sync;
+        check.((synthNames.(context.xg).size == (before - 3)) and: { engine.releasingSynths[5].isEmpty }
+            and: { oldTrio.every({ arg synth; synth.isPlaying.not }) },
+            "a trio started and released in one control block frees after its release (% nodes, % before)".format(
+                synthNames.(context.xg).size, before));
+        command.(\voiceOn, 5, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+        check.(synthNames.(context.xg).size == before, "the voice starts again after a same-block note");
 
         // A buffer-sourced voice (a grain and a mod synth, no voice synth) re-gates too
         oldTrio = voiceTrio.(6);
@@ -832,6 +905,21 @@ server.waitForBoot({
             and: { after[2] === oldTrio[2] } and: { getControl.(after[1], \gate) == 1 }, "an input-sourced voice re-gates its grain and mod synths");
         command.(\setGrainSource, 3, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "switching back to the synth restores the trio");
+
+        // voiceOff after a voiceOn that left the previous source's grain
+        // synth releasing beside the new one: that superseded grain synth is
+        // cut, not left releasing untracked where no later switch could cut it (F4)
+        oldTrio = voiceTrio.(3);
+        command.(\voiceOff, 3);
+        command.(\setGrainSource, 3, 9);
+        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+        staleGrain = oldTrio[1];
+        check.(staleGrain.isPlaying and: { engine.synths[\grain3] !== staleGrain }, "the previous grain synth still releases beside the new one");
+        command.(\voiceOff, 3); 0.15.wait; server.sync;
+        check.(staleGrain.isPlaying.not, "voiceOff cuts a releasing grain synth that voiceOn superseded");
+        command.(\setGrainSource, 3, 0);
+        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
 
         // A re-gated synth whose release ends just as the gate arrives frees
         // anyway; the engine starts that synth again

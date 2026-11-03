@@ -125,7 +125,7 @@ Engine_Strata : CroneEngine {
             arg in, out, gate=1, speed=10;
             var sig, env, modSig;
 
-            env = EnvGen.kr(Env.asr(0.1, 1, 0.5), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(0.1, 1, 0.5), this.openedGate(gate), doneAction: 2);
             sig = In.ar(in, 2).sum;  // Sum stereo to mono
 
             // Envelope follower with smoothing
@@ -137,17 +137,19 @@ Engine_Strata : CroneEngine {
             Out.kr(out, modSig * env);
         }).add;
 
+        // Every voice and grain SynthDef gates its ASR through openedGate
+        // and multiplies killFade (the engine's cut) into it; see those methods
         SynthDef(\strataResonator, {
             arg out, gate=1, freq=100, rq=0.1, noise=0.5,
             mod1=0.1, mod2=0.15, amp=0.3, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, noiseSource, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(4, 1, 8), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(4, 1, 8), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -194,11 +196,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, mod, env, carrier, modSig, modFreqVal, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(5, 1, 10), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(5, 1, 10), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -236,11 +238,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, foldAmt, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(3, 1, 6), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(3, 1, 6), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -274,11 +276,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, modFreq, modSig, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(8, 1, 12), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(8, 1, 12), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -312,11 +314,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, modSig, modFreq, modAmp, modWidth;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(2, 1, 4), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -357,11 +359,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(0.01, 1, 2), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -424,11 +426,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1, bend=1;
+            t_trig=0, velocity=1, bend=1, kill=0;
             var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
-            env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(3, 1, 5), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent envelope fired by the retrigger command (pattern steps,
             // MIDI notes); its depth is the velocity sent with the trigger.
             // levelScale is sampled when the envelope starts, so a new
@@ -479,10 +481,10 @@ Engine_Strata : CroneEngine {
             grainSize=0.1, grainDensity=20, pitchShift=1,
             posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
             grainMode=0, t_trig=0, velocity=1, accentAmt=0,
-            mirrorOut=0, mirrorLevel=0, bend=1;
+            mirrorOut=0, mirrorLevel=0, bend=1, kill=0;
             var sig, env, input, mode, grainTrigger, spreadLevel, accent, left, right;
 
-            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent for input-sourced voices; levelScale is sampled per
             // trigger, so velocity never rescales a running tail
             accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
@@ -551,11 +553,11 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            velocity=1, mirrorOut=0;
+            velocity=1, mirrorOut=0, kill=0;
             var sig, env, accent, mod1Sig, mod2Sig, mod3Sig, modSig, rateMod, modAmp;
             var mode, grainTrigger, validFraction, scanPos, grainPos, rate, left, right, hasAudio;
 
-            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
+            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent fired by retrigger; levelScale is sampled per trigger
             accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
@@ -1063,8 +1065,9 @@ Engine_Strata : CroneEngine {
     // that reads the voice bus is placed before the releasing one and one
     // that mirrors into it after, so neither re-grains the other's mirror.
     // Whatever an earlier switch (or a voiceOff the voice was restarted
-    // from) left releasing is cut short first, so scrolling through the
-    // sources keeps at most one releasing grain synth per voice.
+    // from) left releasing is cut first (cutSynth: gone within
+    // switchCutTime), so once a switch has been processed the voice has at
+    // most one releasing grain synth and one releasing voice synth.
     replaceGrainSynth { arg voice;
         var oldGrain = synths.removeAt(this.grainKey(voice));
         var voiceSynth;
@@ -1072,9 +1075,8 @@ Engine_Strata : CroneEngine {
         this.cutFadingSynths(voice);
         synths[this.grainKey(voice)] = this.startGrainSynthBeside(voice, oldGrain);
         if (oldGrain.notNil) {
-            // A forced release (gate -1 - time): a plain gate 0 that reaches
-            // a synth created in the same control block (a fast burst of
-            // switches) finds its envelope never started, and it never frees
+            // A forced release (gate -1 - time), linear over grainRelease;
+            // the next switch cuts it with its kill fade
             oldGrain.release(grainRelease);
             fadingSynths[voice].add(oldGrain);
         };
@@ -1104,8 +1106,39 @@ Engine_Strata : CroneEngine {
             var synth = releasing.removeAt(key);
             if (synth.notNil) { fadingSynths[voice].add(synth) };
         });
-        fadingSynths[voice].do({ arg synth; if (synth.isPlaying) { synth.release(switchCutTime) } });
+        fadingSynths[voice].do({ arg synth; this.cutSynth(synth) });
         fadingSynths[voice].clear;
+    }
+
+    // End a voice or grain synth within switchCutTime through its kill
+    // fade, whatever release it is already in. Not a second forced release:
+    // EnvGen starts a forced release only when its gate crosses -1 from
+    // above, so one already in a release(grainRelease) ignores a shorter one.
+    cutSynth { arg synth;
+        if (synth.isPlaying) { synth.set(\kill, 1) };
+    }
+
+    // The gate of a synth's ASR envelope: 1 in its first control block
+    // (Impulse.kr(0) is a single impulse at the start), the gate control
+    // from then on. EnvGen starts only when its gate rises above 0, so a
+    // synth gated off in the block it was created in (voiceOn and voiceOff
+    // in one bundle) would never start its envelope and never free; this
+    // way it starts in that first block and releases from the next. Later
+    // blocks see the gate unchanged, negative values included (a max with
+    // 0 would turn a forced release into the full natural one), so
+    // releases, forced releases and re-gates are unchanged.
+    openedGate { arg gate;
+        ^Select.kr(Impulse.kr(0) > 0, [gate, 1])
+    }
+
+    // Kill fade multiplied into every voice and grain synth's output: level 1
+    // until the kill control rises above 0 (an EnvGen that has not been
+    // triggered holds its first level), then a linear switchCutTime fade to
+    // 0 that frees the synth, independent of its ASR. Kill is the fade's
+    // trigger, not a gate, so it also works when it arrives in the synth's
+    // first control block (a gate that starts at 0 never starts).
+    killFade { arg kill;
+        ^EnvGen.kr(Env([1, 0], [switchCutTime]), kill, doneAction: 2)
     }
 
     bufferStateValue { arg index;
@@ -1331,14 +1364,19 @@ Engine_Strata : CroneEngine {
         ^finished
     }
 
-    // Gate off a voice's synth trio (each frees itself after its release),
-    // so later commands to that voice are no-ops. The released synths are
-    // kept in releasingSynths until they free, for voiceOn to re-gate.
+    // Gate off a voice's synth trio (each frees itself after its release,
+    // even one created in this control block: see openedGate), so later
+    // commands to that voice are no-ops. The released synths are kept in
+    // releasingSynths until they free, for voiceOn to re-gate. One already
+    // releasing under the same key (a grain synth for the previous source
+    // that voiceOn left releasing beside the new one) is cut: it would
+    // otherwise release untracked, out of reach of the next switch's cut.
     releaseVoice { arg voice;
         if (synths[this.grainKey(voice)].notNil) { releasedGrainSource[voice] = grainSource[voice] };
         [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)].do({ arg key;
-            var synth = synths.removeAt(key);
+            var synth = synths.removeAt(key), superseded = releasingSynths[voice][key];
             if (synth.notNil) {
+                if (superseded.notNil and: { superseded !== synth }) { this.cutSynth(superseded) };
                 synth.set(\gate, 0);
                 releasingSynths[voice][key] = synth;
             };
