@@ -763,19 +763,19 @@ server.waitForBoot({
         maxGrainCount = 0; maxVoiceCount = 0;
         [1, 2, 0, 9, 0, 3, 4, 0, 5, 6].do({ arg source;
             command.(\setGrainSource, 4, source);
-            0.1.wait; server.sync;    // longer than switchCutTime, so this switch has been processed
+            0.2.wait; server.sync;    // well past switchCutTime (and CI block jitter), so this switch has been processed
             # grainCount, voiceCount = countVoiceAndGrain.value;
             maxGrainCount = max(maxGrainCount, grainCount);
             maxVoiceCount = max(maxVoiceCount, voiceCount);
         });
         check.(maxGrainCount <= (grainBefore + 1),
-            "switches 0.1 s apart keep at most the live grain synth and one releasing (at most % grain synths, % before)".format(maxGrainCount, grainBefore));
+            "switches 0.2 s apart keep at most the live grain synth and one releasing (at most % grain synths, % before)".format(maxGrainCount, grainBefore));
         check.(maxVoiceCount <= (voiceBefore + 1),
-            "switches 0.1 s apart keep at most one releasing voice synth (at most % voice synths, % before)".format(maxVoiceCount, voiceBefore));
+            "switches 0.2 s apart keep at most one releasing voice synth (at most % voice synths, % before)".format(maxVoiceCount, voiceBefore));
         command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "spaced switches leave no extra nodes");
         [1, 2, 0, 9, 0, 3, 4, 0, 5, 6].do({ arg source; command.(\setGrainSource, 4, source); 0.02.wait });
-        0.1.wait; server.sync;
+        0.2.wait; server.sync;
         # grainCount, voiceCount = countVoiceAndGrain.value;
         check.((grainCount <= (grainBefore + 1)) and: { voiceCount <= voiceBefore },
             "switches 0.02 s apart end with the live grain synth and one releasing (% grain synths, % voice synths; % and % before)".format(

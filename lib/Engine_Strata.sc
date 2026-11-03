@@ -38,7 +38,7 @@ Engine_Strata : CroneEngine {
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
     var <grainRelease = 2;        // Release time of both grain SynthDefs
-    var <switchCutTime = 0.05;    // Forced release of what an earlier source switch left releasing
+    var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var writeGenerations;         // Per output path: the newest write's number; older writes abandon
@@ -1000,7 +1000,8 @@ Engine_Strata : CroneEngine {
     // synth that no longer fits the source (it changed while the voice was
     // stopped) is left to finish: a grain synth for another source releases
     // beside the new one, and a voice synth (the source is no longer the
-    // synth) is cut to grainRelease, as replaceGrainSynth does.
+    // synth) is given a forced release (release(grainRelease)), as
+    // replaceGrainSynth does.
     gateVoice { arg voice;
         var releasing = releasingSynths[voice];
         var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
@@ -1371,12 +1372,16 @@ Engine_Strata : CroneEngine {
     // releasing under the same key (a grain synth for the previous source
     // that voiceOn left releasing beside the new one) is cut: it would
     // otherwise release untracked, out of reach of the next switch's cut.
+    // Only voice and grain synths have the kill fade; a releasing mod synth
+    // is always re-gated by voiceOn, never superseded.
     releaseVoice { arg voice;
         if (synths[this.grainKey(voice)].notNil) { releasedGrainSource[voice] = grainSource[voice] };
         [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)].do({ arg key;
             var synth = synths.removeAt(key), superseded = releasingSynths[voice][key];
             if (synth.notNil) {
-                if (superseded.notNil and: { superseded !== synth }) { this.cutSynth(superseded) };
+                if (superseded.notNil and: { superseded !== synth } and: { key != this.modKey(voice) }) {
+                    this.cutSynth(superseded)
+                };
                 synth.set(\gate, 0);
                 releasingSynths[voice][key] = synth;
             };
