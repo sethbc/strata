@@ -875,6 +875,12 @@ function lfo_update()
       lfo_writing = false
     end
   end
+
+  -- Grain pitch is shown on the parameter fader page; this runs 10x/s, so
+  -- only redraw when a grid is actually showing that page
+  if next(grids) ~= nil and grid_page == 2 then
+    grid_redraw()
+  end
 end
 
 function gentle_mutate()
@@ -927,6 +933,9 @@ function gentle_mutate()
       end
     end
   end
+
+  -- Mutated values are shown by the 256 grid's parameter faders
+  grid_redraw()
 end
 
 -- Scene management functions
@@ -1086,6 +1095,7 @@ function recall_scene(scene_num, transition_time)
         for _, target in ipairs(targets) do
           params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
         end
+        grid_redraw()  -- keep the parameter faders moving with the fade
         clock.sleep(step_time)
       end
 
@@ -1430,7 +1440,7 @@ function redraw()
   screen.text("STRATA")
 
   -- Master density (header, after the title; ends well before [M] at x=98)
-  screen.move(36, 8)
+  screen.move(40, 8)
   screen.level(4)
   screen.text("dens:" .. string.format("%.2f", master_density))
 

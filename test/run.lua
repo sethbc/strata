@@ -595,10 +595,24 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
   assert_near(params:get("v1_freq"), 1000, 1.0, "cancelled transition no longer writes")
 end)
 
--- Approximate pixel width of norns' default font (04B_03 at size 8): about
--- 5 px per glyph including spacing, which over-estimates most strings.
+-- Approximate advance of norns' default font (04B_03 at size 8): capitals
+-- about 6 px, brackets/colon/period about 4 px, everything else 5 px
+local function text_width(text)
+  local width = 0
+  for char in text:gmatch(".") do
+    if char:match("%u") then
+      width = width + 6
+    elseif char:match("[%[%]%.:]") then
+      width = width + 4
+    else
+      width = width + 5
+    end
+  end
+  return width
+end
+
 local function text_span(entry)
-  local width = #entry.text * 5
+  local width = text_width(entry.text)
   if entry.align == "right" then return entry.x - width, entry.x end
   return entry.x, entry.x + width
 end
@@ -628,6 +642,14 @@ test("screen header and status text never overlap or leave 128x64 (M7)", functio
       end
       table.insert(rows[entry.y], { left = left, right = right, text = entry.text })
     end
+    -- the density label keeps a visible gap after the title
+    local title_right, density_left
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == "STRATA" then title_right = select(2, text_span(entry)) end
+      if entry.text:find("^dens:") then density_left = entry.x end
+    end
+    assert_true(title_right and density_left and density_left - title_right >= 4,
+      "dens: starts at least 4 px after STRATA")
   end
 end)
 
@@ -654,6 +676,18 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   assert_equal(device:get_led(2, 1), 0, "step 2 not highlighted")
   assert_equal(device:get_led(1, 2), 4, "empty step under the playhead shows dim")
   pattern_toggle()
+
+  -- page 2 faders follow mutations
+  context.grid.press(1, 14, 8, 1)  -- grid page 2 (parameters)
+  context.grid.press(1, 1, 14, 1)  -- voice 1
+  params:set("v1_freq", 20)        -- changes the param without a grid redraw
+  params:set("mutation_probability", 1)
+  params:set("mutation_amount", 1)
+  math.randomseed(7)
+  gentle_mutate()
+  local freq_column = fader_position("v1_freq")
+  assert_true(freq_column > 1, "mutation moved freq off the minimum")
+  assert_equal(device:get_led(freq_column, 9), 15, "freq fader LED follows the mutation")
 
   -- grid_redraw with no grids is a no-op
   context.grid.unplug(1)

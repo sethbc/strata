@@ -28,10 +28,10 @@ Fixes every finding from a whole-app code review, plus an off-device test harnes
 - **M1** - Remaining hardcoded voice/scene/step counts replaced with `NUM_VOICES`, `NUM_SCENES`, `PATTERN_LENGTH` (Lua) and `numVoices` (engine).
 - **M2** - The Resonator's output was doubled (two summed stereo pairs); it is now one stereo pair (about 6 dB quieter than before).
 - **M3** - Reverb added the dry signal twice, so mix could never be fully wet; it now outputs FreeVerb2's own dry/wet mix (lower overall level at the default mix).
-- **M4** - Tape drift and the Sub's drift were LFO rates (0 froze the pitch at a random offset); they now set the drift depth at a fixed slow rate, 0 = no drift.
+- **M4** - Tape drift and the Sub's drift were LFO rates (0 froze the pitch at a random offset); they now set the drift depth at a fixed slow rate. Tape drift 0 = none; the Sub drift minimum stays 0.001.
 - **M5** - Reverb and master ran after norns' output stage; all engine nodes now run inside the engine group in the order voices, grain/mod, reverb, master.
 - **M6** - Engine commands ignore voices that are not running, and starting a running voice releases its old synths first.
-- **M7** - Header text overlapped (`dens:` ran into `[M]`); the layout was rearranged and `[FREEZE]` no longer runs off the screen. The grid highlights the step that just played rather than the next one.
+- **M7** - Header text overlapped (`dens:` ran into `[M]`); the layout was rearranged (`dens:` now starts at x=40, clear of the title) and `[FREEZE]` no longer runs off the screen. The grid highlights the step that just played rather than the next one.
 - **M8** - Removed dead state (`grid_dirty`, `selected_param`, `param_names`, `grid_key1_held`, unused `musicutil`, the unused `tempo` local, a duplicate local); the transition-active flag is cleared on cancel; the arc variable is now `arc_device`.
 - **M9** - Cleanup also resets the scene sequencer param and darkens grid and arc.
 - **M10** - Documentation brought in line with the code (README grid layouts, CLAUDE.md function references, engine commands).
@@ -41,6 +41,7 @@ Fixes every finding from a whole-app code review, plus an off-device test harnes
 - Voice params now default to each voice's own values (the PARAMS menu showed 100 Hz for every voice's freq, for example).
 - The `ratio` step is now 0.001 so the Ring's 1.618 default is not snapped to 1.6.
 - Under the grid playhead, empty steps are dim and active steps bright (the whole column used to be lit at full).
+- The grid's parameter faders follow mutations, the grain pitch drift and scene transitions instead of going stale.
 
 ### Testing
 
@@ -52,7 +53,8 @@ Fixes every finding from a whole-app code review, plus an off-device test harnes
 
 - Existing `scenes.data` files load unchanged and are rewritten in the versioned format on exit.
 - Overall level is lower than in 2.0 because of the Resonator (M2) and reverb (M3) fixes; raise voice `amp` or the norns output level if needed.
-- Grain pitch now transposes; scenes saved with grain pitch away from 1.0 will sound transposed rather than louder or quieter.
+- Grain pitch now transposes the whole grain-synth output (grains and position-spread path); scenes saved with grain pitch away from 1.0 will sound transposed rather than louder or quieter.
+- Scene recall now sets the clock tempo (norns' `clock_tempo`), including for scenes saved by 2.0, whose stored tempo used to have no effect. Under Link this changes the session tempo for every peer.
 
 ## Version 2.0 - 2025-01-24
 

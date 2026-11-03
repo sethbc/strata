@@ -375,8 +375,17 @@ Engine_Strata : CroneEngine {
                 envbufnum: -1
             );
 
-            // Transpose the grain stream (GrainIn has no rate input).
-            // PitchShift's window size is fixed when the synth starts.
+            // Position spread: a little of the input, smeared by a wandering delay
+            sig = sig + (DelayC.ar(
+                input,
+                0.2,
+                LFNoise1.kr(1).range(0, posSpread * 0.2)
+            ) * 0.3);
+
+            // Transpose the whole grain-synth output (GrainIn has no rate
+            // input). Shifting after the spread path is summed keeps every
+            // part transposed and time-aligned. PitchShift's window size is
+            // fixed when the synth starts.
             sig = PitchShift.ar(
                 sig,
                 windowSize: grainSize.clip(0.01, 0.5),
@@ -384,12 +393,6 @@ Engine_Strata : CroneEngine {
                 pitchDispersion: 0,
                 timeDispersion: 0
             );
-            
-            sig = sig + (DelayC.ar(
-                input,
-                0.2,
-                LFNoise1.kr(1).range(0, posSpread * 0.2)
-            ) * 0.3);
             
             Out.ar(out, sig * env * amp);
         }).add;

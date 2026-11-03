@@ -456,7 +456,7 @@ params:set("mutation_rate", 2)  -- Check every 2 seconds
 - **LFO System**: Mutations work alongside `lfo_update()`, which gives each active, unfrozen voice a subtle mean-reverting grain pitch drift: `delta = (math.random() - 0.5) * LFO_PITCH_STEP - (current - base) * LFO_PITCH_REVERSION` (step 0.004, reversion 0.01 per 100 ms tick). `base` (`grain_pitch_base[i]`) is the last grain pitch set by anything other than the LFO (user, mutation, scene), tracked in the param action via the `lfo_writing` flag. The `grain_pitch` controlspec has step 0 so these small steps are not quantized away
 - **Freeze Feature**: Frozen voices are stable - neither LFO nor mutations affect them
 - **Cross-Modulation**: Mutations can change modulation sources/amounts, creating evolving relationships
-- **UI Feedback**: `[MUT]` indicator appears at top-right when enabled
+- **UI Feedback**: `[M]` indicator appears in the header (x=98) when enabled
 
 #### Lifecycle Management
 - **Initialization**: Metro created in `init()` but not started automatically
@@ -865,11 +865,12 @@ The `update_voice_list()` function recreates the `UI.ScrollingList` on every cha
 - Freeze status ([F] suffix)
 
 The UI uses a two-column layout:
-- **Header (y=8)**: `STRATA` at x=0, `dens:1.00` at x=36, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
+- **Header (y=8)**: `STRATA` at x=0 (04B_03 capitals advance ~6 px, so it ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
 - **Left column (0-60px)**: Scrolling voice list (5 visible at a time)
 - **Right column (65-128px)**: Selected voice details (name, status, main parameter); `[FREEZE]` is right-aligned at x=127 on the status row (y=26)
 - **Divider (x=62)**: Subtle vertical line separating columns
-- `test/run.lua` checks that no two strings on a row overlap and that nothing leaves 128×64 (at ~5 px per glyph); keep it passing when adding text
+- `test/run.lua` checks that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), and that `dens:` starts at least 4 px after `STRATA`; keep it passing when adding text
+- Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `lfo_update` only when a grid shows page 2 (it runs 10x/s)
 
 The `redraw()` function handles all screen drawing and must be updated whenever new UI elements are added.
 
@@ -906,7 +907,7 @@ Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
 - `\strataGrain` - Granular processor (one per voice); `GrainIn` followed by `PitchShift` for `pitchShift`
 - `\strataReverb` - Global reverb processor; outputs `FreeVerb2` only (it already crossfades dry/wet by `mix`)
-- `\strataMaster` - Master output with drift and saturation. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount, so 0 means no drift
+- `\strataMaster` - Master output with drift and saturation. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
 
 ### Audio Bus Management
 
