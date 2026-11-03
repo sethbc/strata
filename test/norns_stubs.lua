@@ -6,7 +6,17 @@
 --   * control params quantize to controlspec.step and only fire their action
 --     when the stored value changes
 --   * number params clamp (but do not round) and fire on change
---   * clock.run resumes the coroutine immediately; sleep/sync yield
+--   * option params store a floored, clamped index; file params a path
+--     string, text params any value; triggers (and trigger binaries) fire on
+--     every set; groups count the params that follow them and cannot nest
+--   * param.t holds norns' numeric type codes (params.tOPTION etc.)
+--   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
+--     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
+--     lib/musicutil.lua
+--   * clock.run resumes the coroutine immediately; sleep/sync yield;
+--     clock.get_beat_sec follows clock_tempo
+--   * util.time stands still until a test calls context.set_time(seconds)
+--   * the screen records texts, lines and rects (for layout checks)
 --   * grid/arc device events fire both device.key and vports[port].key
 --   * tab.load runs the file chunk unprotected
 -- The engine stub validates every engine.* call against the addCommand
@@ -39,12 +49,27 @@ function stubs.parse_engine_signatures(sc_path)
   return signatures
 end
 
+-- engine polls (this.addPoll(\name, ...) in the SC engine)
+function stubs.parse_engine_polls(sc_path)
+  local file = assert(io.open(sc_path, "r"))
+  local source = file:read("*a")
+  file:close()
+  local names = {}
+  for name in source:gmatch('addPoll%(%s*\\(%w+)') do table.insert(names, name) end
+  for name in source:gmatch('addPoll%(%s*"([^"]+)"') do table.insert(names, name) end
+  return names
+end
+
 ---------------------------------------------------------------------------
 -- util
 ---------------------------------------------------------------------------
 
 local function make_util()
   local util = {}
+  -- lib/util.lua: util.time() is the wall clock in seconds. The stub's clock
+  -- stands still; tests move it with context.set_time(seconds)
+  util.stub_now = 0
+  function util.time() return util.stub_now end
   function util.clamp(n, min, max) return math.min(max, math.max(n, min)) end
   function util.linlin(slo, shi, dlo, dhi, f)
     if f <= slo then return dlo
@@ -72,6 +97,24 @@ local function make_util()
   end
   function util.make_dir(path)
     os.execute("mkdir -p '" .. path .. "'")
+  end
+  -- norns runs `ls -pL --group-directories-first`; BSD ls lacks the last flag
+  function util.scandir(directory)
+    local listing = {}
+    local pipe = io.popen('ls -pL "' .. directory .. '" 2>/dev/null')
+    for filename in pipe:read("*a"):gmatch("[^\r\n]+") do table.insert(listing, filename) end
+    pipe:close()
+    return listing
+  end
+  function util.os_capture(cmd, raw)
+    local pipe = io.popen(cmd)
+    local output = pipe:read("*a")
+    pipe:close()
+    if raw then return output end
+    output = string.gsub(output, "^%s+", "")
+    output = string.gsub(output, "%s+$", "")
+    output = string.gsub(output, "[\n\r]+", " ")
+    return output
   end
   return util
 end
@@ -124,119 +167,276 @@ end
 -- params
 ---------------------------------------------------------------------------
 
+-- norns stores numeric type codes in param.t (lua/core/paramset.lua); params:add
+-- still takes the type name as a string
+local PARAM_TYPE_CODES = {
+  separator = 0, number = 1, option = 2, control = 3, file = 4, taper = 5, trigger = 6, group = 7, text = 8,
+  binary = 9,
+}
+local tSEPARATOR, tNUMBER, tOPTION, tCONTROL = 0, 1, 2, 3
+local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = 4, 6, 7, 8, 9
+
 local function make_params(util, controlspec)
-  local ParamSet = {}
+  -- ParamSet.tSEPARATOR etc., reachable as params.tOPTION like in norns
+  local ParamSet = {
+    tSEPARATOR = 0, tNUMBER = 1, tOPTION = 2, tCONTROL = 3, tFILE = 4, tTAPER = 5, tTRIGGER = 6, tGROUP = 7,
+    tTEXT = 8, tBINARY = 9,
+  }
   ParamSet.__index = ParamSet
 
-  local paramset = setmetatable({ params = {}, lookup = {}, action_log = {} }, ParamSet)
+  -- open_group counts the params still to come in the current group, like
+  -- norns' ParamSet.group (groups cannot nest)
+  local paramset = setmetatable({ params = {}, lookup = {}, action_log = {}, open_group = 0 }, ParamSet)
+
+  local bang
 
   local function new_param(args)
-    local param = { id = args.id, name = args.name or args.id, t = args.type, action = args.action or function() end }
+    local param = { id = args.id, name = args.name or args.id, t = PARAM_TYPE_CODES[args.type],
+      action = args.action or function() end, hidden = false }
     if args.type == "control" then
       param.controlspec = args.controlspec or controlspec.new(0, 1, "lin", 0, 0)
       param.raw = param.controlspec:unmap(param.controlspec.default)
+      param.formatter = args.formatter
     elseif args.type == "number" then
       param.min = args.min or -2147483648
       param.max = args.max or 2147483647
-      param.value = args.default or 0
+      param.default = args.default or 0
+      param.value = param.default
       param.formatter = args.formatter
+      param.wrap = args.wrap and param.min ~= param.max or false
+    elseif args.type == "option" then
+      param.options = {}
+      local count = 0
+      for key, value in pairs(args.options or {}) do
+        param.options[key] = value
+        count = count + 1
+      end
+      param.count = count
+      param.default = args.default or 1
+      param.selected = param.default
     elseif args.type == "binary" then
-      param.value = args.default or 0
-      param.behavior = args.behavior
+      -- norns reads o.behavior before setting it, so the default is always 0
+      param.default = args.default or 0
+      param.value = param.default
+      param.behavior = args.behavior or "trigger"
+    elseif args.type == "file" then
+      param.path = args.path or "-"
+    elseif args.type == "text" then
+      param.text = args.text or ""
+    elseif args.type == "group" then
+      param.n = args.n or 1
     elseif args.type == "trigger" or args.type == "separator" then
-      param.value = 0
+      param.value = nil
     else
       error("stub params: unsupported param type " .. tostring(args.type))
     end
+    -- param objects expose the norns param methods (get/set/bang/string/delta)
+    param.get = function() return ParamSet.get(paramset, param.id) end
+    param.set = function(_, value, silent) return ParamSet.set(paramset, param.id, value, silent) end
+    param.bang = function() bang(param) end
+    param.string = function() return ParamSet.string(paramset, param.id) end
+    param.delta = function(_, delta) return ParamSet.delta(paramset, param.id, delta) end
+    return param
+  end
+
+  -- separators and groups may reuse their own kind's id; any other collision is an error
+  local function register(param)
+    local existing = paramset.lookup[param.id]
+    if existing then
+      if param.t == tSEPARATOR or param.t == tGROUP then
+        if existing.t ~= param.t then
+          error((param.t == tGROUP and "group" or "separator") .. " collides with param: " .. param.id)
+        end
+      else
+        error("parameter ID collision: " .. param.id)
+      end
+    end
+    table.insert(paramset.params, param)
+    paramset.lookup[param.id] = param
+    paramset.open_group = paramset.open_group - 1
     return param
   end
 
   function ParamSet:add(args)
     assert(args.id, "params:add requires an id")
-    if self.lookup[args.id] then
-      error("parameter ID collision: " .. args.id)
+    if args.type == "group" then
+      return self:add_group(args.id, args.name, args.n)
     end
-    local param = new_param(args)
-    -- param objects expose :get() for formatters, as in norns
-    param.get = function() return ParamSet.get(paramset, param.id) end
-    table.insert(self.params, param)
-    self.lookup[args.id] = param
-    return param
+    return register(new_param(args))
   end
 
   function ParamSet:add_separator(id, name)
-    local separator_id = id or "separator"
-    if self.lookup[separator_id] and self.lookup[separator_id].t ~= "separator" then
-      error("separator collides with param: " .. separator_id)
-    end
-    local param = new_param({ id = separator_id, name = name, type = "separator" })
-    table.insert(self.params, param)
-    self.lookup[separator_id] = param
+    register(new_param({ id = id or "separator", name = name, type = "separator" }))
   end
 
-  function ParamSet:add_number(id, name, min, max, default)
-    return self:add { type = "number", id = id, name = name, min = min, max = max, default = default }
+  function ParamSet:add_group(id, name, n)
+    id = id or "group"
+    local count = type(name) == "number" and name or (n or 1)
+    if self.open_group >= 1 then
+      error("stub params: paramset cannot nest GROUPs (" .. id .. " inside an open group)")
+    end
+    local group_name = type(name) ~= "number" and name or id
+    register(new_param({ id = id, name = group_name, type = "group", n = count }))
+    self.open_group = count
+  end
+
+  function ParamSet:add_number(id, name, min, max, default, formatter, wrap)
+    return self:add { type = "number", id = id, name = name, min = min, max = max, default = default,
+      formatter = formatter, wrap = wrap }
+  end
+
+  function ParamSet:add_option(id, name, options, default)
+    return self:add { type = "option", id = id, name = name, options = options, default = default }
+  end
+
+  function ParamSet:add_control(id, name, spec, formatter)
+    return self:add { type = "control", id = id, name = name, controlspec = spec, formatter = formatter }
+  end
+
+  function ParamSet:add_file(id, name, path)
+    return self:add { type = "file", id = id, name = name, path = path }
+  end
+
+  function ParamSet:add_text(id, name, text)
+    return self:add { type = "text", id = id, name = name, text = text }
+  end
+
+  function ParamSet:add_trigger(id, name)
+    return self:add { type = "trigger", id = id, name = name }
+  end
+
+  function ParamSet:add_binary(id, name, behavior, default)
+    return self:add { type = "binary", id = id, name = name, behavior = behavior, default = default }
   end
 
   function ParamSet:lookup_param(id)
-    local param = self.lookup[id]
+    local param = self.lookup[id] or (type(id) == "number" and self.params[id])
     if not param then error("invalid paramset index: " .. tostring(id)) end
     return param
   end
 
-  local function bang(param)
-    local value = ParamSet.get(paramset, param.id)
-    param.action(value)
+  function ParamSet:set_action(id, func)
+    self:lookup_param(id).action = func
+  end
+
+  function ParamSet:hide(id) self:lookup_param(id).hidden = true end
+  function ParamSet:show(id) self:lookup_param(id).hidden = false end
+  function ParamSet:visible(id) return not self:lookup_param(id).hidden end
+
+  bang = function(param)
+    if param.t == tSEPARATOR or param.t == tGROUP then return end
+    if param.t == tTRIGGER then param.action(); return end
+    if param.t == tBINARY and param.behavior == "trigger" then
+      param.action(1)
+      param.value = 0
+      return
+    end
+    param.action(ParamSet.get(paramset, param.id))
   end
 
   function ParamSet:get(id)
     local param = self:lookup_param(id)
-    if param.t == "control" then return param.controlspec:map(param.raw) end
+    if param.t == tCONTROL then return param.controlspec:map(param.raw) end
+    if param.t == tOPTION then return param.selected end
+    if param.t == tFILE then return param.path end
+    if param.t == tTEXT then return param.text end
+    if param.t == tGROUP then return param.n end
     return param.value
   end
 
+  local function require_number(id, value)
+    if type(value) ~= "number" then
+      error("params:set(" .. id .. ") with non-number value " .. tostring(value), 3)
+    end
+  end
+
+  -- each type follows its lua/core/params/*.lua set(): actions fire only on a
+  -- change, except triggers (and trigger-behaviour binaries), which always fire
   function ParamSet:set(id, value, silent)
     local param = self:lookup_param(id)
-    if type(value) ~= "number" then
-      error("params:set(" .. id .. ") with non-number value " .. tostring(value))
-    end
     local changed = false
-    if param.t == "control" then
+    if param.t == tCONTROL then
+      require_number(id, value)
       local raw = util.clamp(param.controlspec:unmap(value), 0, 1)
       if param.raw ~= raw then param.raw = raw; changed = true end
-    elseif param.t == "number" then
+    elseif param.t == tNUMBER then
+      require_number(id, value)
+      if param.wrap then
+        local range = param.max - param.min + 1
+        while value > param.max do value = value - range end
+        while value < param.min do value = value + range end
+      end
       local clamped = util.clamp(value, param.min, param.max)
       if param.value ~= clamped then param.value = clamped; changed = true end
-    elseif param.t == "binary" then
-      local clamped = util.clamp(value, 0, 1)
-      if param.value ~= clamped then param.value = clamped; changed = true end
-    elseif param.t == "trigger" then
-      changed = true
+    elseif param.t == tOPTION then
+      require_number(id, value)
+      local selected = util.clamp(math.floor(value), 1, param.count)
+      if param.selected ~= selected then param.selected = selected; changed = true end
+    elseif param.t == tBINARY then
+      if value == nil then value = 1 end
+      require_number(id, value)
+      if param.behavior == "trigger" then
+        changed = value > 0
+      else
+        local state = value > 0 and 1 or 0
+        if param.value ~= state then param.value = state; changed = true end
+      end
+    elseif param.t == tTRIGGER then
+      -- norns' Trigger:set has no silent argument
+      bang(param)
+      return
+    elseif param.t == tFILE then
+      if type(value) ~= "string" then
+        error("params:set(" .. id .. ") file param needs a path string, got " .. tostring(value), 2)
+      end
+      if param.path ~= value then param.path = value; changed = true end
+    elseif param.t == tTEXT then
+      if param.text ~= value then param.text = value; changed = true end
     end
     if changed and not silent then bang(param) end
   end
 
   function ParamSet:delta(id, delta)
     local param = self:lookup_param(id)
-    if param.t == "control" then
+    if param.t == tCONTROL then
       local raw = util.clamp(param.raw + delta * param.controlspec.quantum, 0, 1)
       if param.raw ~= raw then param.raw = raw; bang(param) end
-    elseif param.t == "number" then
+    elseif param.t == tNUMBER then
       self:set(id, param.value + delta)
-    elseif param.t == "binary" then
-      self:set(id, param.value == 1 and 0 or 1)
+    elseif param.t == tOPTION then
+      local step = delta < 0 and math.floor(delta) or math.ceil(delta)
+      self:set(id, param.selected + step)
+    elseif param.t == tBINARY then
+      if param.behavior == "momentary" then
+        self:set(id, delta)
+      elseif param.behavior == "toggle" then
+        if delta ~= 0 then self:set(id, param.value == 0 and 1 or 0) end
+      elseif delta ~= 0 then
+        bang(param)
+      end
     end
   end
 
   function ParamSet:string(id)
     local param = self:lookup_param(id)
     if param.formatter then return param.formatter(param) end
+    if param.t == tOPTION then return param.options[param.selected] end
+    if param.t == tFILE then
+      if param.path == "-" then return "-" end
+      return param.path:match("[^/]*$")
+    end
+    if param.t == tTEXT then return param.text end
+    if param.t == tTRIGGER then return "" end
+    if param.t == tGROUP then return param.name end
     return tostring(self:get(id))
   end
 
+  -- like norns: everything but triggers (and idle trigger binaries) bangs
   function ParamSet:bang()
     for _, param in ipairs(self.params) do
-      if param.t ~= "separator" and param.t ~= "trigger" then bang(param) end
+      if param.t ~= tTRIGGER and not (param.t == tBINARY and param.behavior == "trigger" and param.value == 0) then
+        bang(param)
+      end
     end
   end
 
@@ -284,6 +484,11 @@ local function make_clock()
 
   function clock.sync(beats)
     return coroutine.yield("sync", beats)
+  end
+
+  -- lua/core/clock.lua: seconds per beat at the current tempo
+  function clock.get_beat_sec()
+    return 60 / params:get("clock_tempo")
   end
 
   -- test helper: resume every pending coroutine once (one scheduler tick)
@@ -458,22 +663,96 @@ local function make_arc()
 end
 
 ---------------------------------------------------------------------------
+-- encoders (norns.enc.accel/sens, mirroring lua/core/encoders.lua)
+---------------------------------------------------------------------------
+
+local function make_encoders()
+  -- lua/core/script.lua resets every script to accel on, sensitivity 2
+  local encoders = { accel = { true, true, true }, sens = { 2, 2, 2 }, tick = { 0, 0, 0 } }
+  local api = {}
+  function api.accel(n, enabled)
+    for k = 1, 3 do
+      if n == 0 or n == k then encoders.accel[k] = enabled; encoders.tick[k] = 0 end
+    end
+  end
+  function api.sens(n, sensitivity)
+    for k = 1, 3 do
+      if n == 0 or n == k then
+        encoders.sens[k] = math.min(16, math.max(1, sensitivity)); encoders.tick[k] = 0
+      end
+    end
+  end
+  encoders.api = api
+
+  -- test helper: one hardware encoder event the way encoders.process_with_accel
+  -- handles it; `interval` is the time since the previous event on that encoder
+  function encoders.deliver(n, delta, interval)
+    if encoders.accel[n] then
+      if interval < 0.005 then delta = delta * 6
+      elseif interval < 0.01 then delta = delta * 4
+      elseif interval < 0.02 then delta = delta * 3
+      elseif interval < 0.03 then delta = delta * 2
+      end
+    end
+    encoders.tick[n] = encoders.tick[n] + delta
+    if math.abs(encoders.tick[n]) >= encoders.sens[n] then
+      local value = encoders.tick[n] / encoders.sens[n]
+      value = (value > 0) and math.floor(value) or math.ceil(value)
+      _G.enc(n, value)
+      encoders.tick[n] = math.fmod(encoders.tick[n], encoders.sens[n])
+    end
+  end
+
+  return encoders
+end
+
+---------------------------------------------------------------------------
 -- screen / UI
 ---------------------------------------------------------------------------
 
+-- Approximate advance of norns' default font (04B_03 at size 8): capitals
+-- about 6 px, brackets/colon/period about 4 px, everything else 5 px. The
+-- stub's screen.text_extents and the layout tests both use it.
+function stubs.text_width(text)
+  local width = 0
+  for char in text:gmatch(".") do
+    if char:match("%u") then
+      width = width + 6
+    elseif char:match("[%[%]%.:]") then
+      width = width + 4
+    else
+      width = width + 5
+    end
+  end
+  return width
+end
+
 local function make_screen()
-  local screen = { texts = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
-  function screen.clear() screen.texts = {} end
+  local screen = { texts = {}, lines = {}, rects = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
+  function screen.clear() screen.texts = {}; screen.lines = {}; screen.rects = {} end
   function screen.level(level) screen.current_level = level end
   function screen.move(x, y) screen.cursor_x = x; screen.cursor_y = y end
-  function screen.text(str)
-    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str), align = "left" })
+  -- each drawn string is recorded with its position, alignment and level
+  local function record_text(str, align)
+    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str),
+      align = align, level = screen.current_level })
   end
-  function screen.text_right(str)
-    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str), align = "right" })
+  function screen.text(str) record_text(str, "left") end
+  function screen.text_right(str) record_text(str, "right") end
+  -- lua/core/screen.lua: text_extents(str) returns width, height
+  function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
+  -- lines and rectangles are recorded too (from/to points, x/y/w/h), so
+  -- tests can check that drawings stay in their area
+  function screen.line(x, y)
+    table.insert(screen.lines, { x1 = screen.cursor_x, y1 = screen.cursor_y, x2 = x, y2 = y,
+      level = screen.current_level })
+    screen.cursor_x = x; screen.cursor_y = y
   end
-  function screen.line() end
+  function screen.rect(x, y, w, h)
+    table.insert(screen.rects, { x = x, y = y, w = w, h = h, level = screen.current_level })
+  end
   function screen.stroke() end
+  function screen.fill() end
   function screen.update() end
   function screen.font_size() end
   function screen.font_face() end
@@ -540,6 +819,54 @@ local function make_tab()
 end
 
 ---------------------------------------------------------------------------
+-- poll (lua/core/poll.lua)
+---------------------------------------------------------------------------
+
+-- polls CroneAudioContext registers before any engine loads
+local SYSTEM_POLLS = { "cpu_peak", "cpu_avg", "amp_in_l", "amp_in_r", "amp_out_l", "amp_out_r",
+  "pitch_in_l", "pitch_in_r" }
+
+local function make_poll(engine_polls)
+  local poll = { polls = {} }
+  local function register(name)
+    local entry = { name = name, callback = nil, time = 0.25, running = false }
+    function entry:start() self.running = true end
+    function entry:stop() self.running = false end
+    poll.polls[name] = entry
+  end
+  for _, name in ipairs(SYSTEM_POLLS) do register(name) end
+  for _, name in ipairs(engine_polls or {}) do register(name) end
+
+  -- like norns: only registered polls exist; anything else returns nil
+  function poll.set(name, callback)
+    local entry = poll.polls[name]
+    if entry then entry.callback = callback end
+    return entry
+  end
+
+  -- test helper: deliver a value the way a running poll does
+  function poll.fire(name, value)
+    local entry = poll.polls[name]
+    assert(entry, "no poll named " .. tostring(name))
+    if entry.running and entry.callback then entry.callback(value) end
+  end
+
+  return poll
+end
+
+---------------------------------------------------------------------------
+-- fileselect (lib/fileselect.lua): records the request instead of a menu
+---------------------------------------------------------------------------
+
+local function make_fileselect()
+  local fileselect = { last = nil }
+  function fileselect.enter(folder, callback, filter)
+    fileselect.last = { folder = folder, callback = callback, filter = filter }
+  end
+  return fileselect
+end
+
+---------------------------------------------------------------------------
 -- install / reset
 ---------------------------------------------------------------------------
 
@@ -588,6 +915,7 @@ function stubs.install(options)
   context.controlspec = controlspec
   context.params = make_params(util, controlspec)
   context.clock = make_clock()
+  function context.set_time(seconds) util.stub_now = seconds end
   context.metro = make_metro()
   context.grid = make_grid()
   context.arc = make_arc()
@@ -595,6 +923,19 @@ function stubs.install(options)
   context.UI = make_ui(util)
   context.tab = make_tab()
   context.engine = engine
+  context.midi = require("stub_midi")()
+  context.lfo = {}
+  context.lfo.library = require("stub_lfo")(context.lfo)
+  context.fileselect = make_fileselect()
+  context.polls = make_poll(options.engine_polls)
+  context.musicutil = {
+    -- same formula as lib/musicutil.lua
+    note_num_to_freq = function(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end,
+  }
+  -- _menu.mode is true while the norns menu (K1) owns the keys and screen
+  context.menu = { rebuilds = 0, mode = false }
+  context.encoders = make_encoders()
+  function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
 
   _G.engine = engine
   _G.util = util
@@ -606,12 +947,21 @@ function stubs.install(options)
   _G.arc = context.arc
   _G.screen = context.screen
   _G.tab = context.tab
-  _G.norns = { state = {} }
-  _G._path = { data = options.data_dir }
+  _G.midi = context.midi
+  _G.fileselect = context.fileselect
+  _G.poll = context.polls
+  _G._menu = context.menu
+  _G.norns = { state = {}, enc = context.encoders.api,
+    -- lua/core/menu.lua: norns.menu.status() returns _menu.mode
+    menu = { status = function() return context.menu.mode end } }
+  _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
+  util.make_dir(_G._path.audio)
   package.loaded["ui"] = context.UI
   package.preload["ui"] = function() return context.UI end
   package.loaded["musicutil"] = nil
-  package.preload["musicutil"] = function() error("strata.lua should not require musicutil") end
+  package.preload["musicutil"] = function() return context.musicutil end
+  package.loaded["lfo"] = nil
+  package.preload["lfo"] = function() return context.lfo.library end
 
   if options.quiet then
     _G.print = function(...)
