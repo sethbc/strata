@@ -340,7 +340,17 @@ Engine_Strata : CroneEngine {
                 in: input,
                 pan: LFNoise1.kr(2).range(panSpread.neg, panSpread),
                 envbufnum: -1
-            ) * pitchShift.lag(0.5);
+            );
+
+            // Transpose the grain stream (GrainIn has no rate input).
+            // PitchShift's window size is fixed when the synth starts.
+            sig = PitchShift.ar(
+                sig,
+                windowSize: grainSize.clip(0.01, 0.5),
+                pitchRatio: pitchShift.lag(0.5),
+                pitchDispersion: 0,
+                timeDispersion: 0
+            );
             
             sig = sig + (DelayC.ar(
                 input,

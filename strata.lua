@@ -206,6 +206,13 @@ local param_names = {}
 
 -- LFOs for parameter modulation
 local lfo_metro
+local LFO_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
+local LFO_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
+local grain_pitch_base = {}        -- last non-LFO grain pitch per voice (the walk's centre)
+local lfo_writing = false          -- true while lfo_update sets params
+for i = 1, NUM_VOICES do
+  grain_pitch_base[i] = voices[i].grain.pitch
+end
 
 -- Mutation system
 local mutation_metro
@@ -538,9 +545,13 @@ function add_voice_params(voice_idx)
     type = "control",
     id = "v" .. voice_idx .. "_grain_pitch",
     name = "grain pitch",
-    controlspec = controlspec.new(0.25, 4, "lin", 0.01, v.grain.pitch),
+    -- step 0: the LFO drift moves in steps far smaller than 0.01
+    controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
     action = function(x)
       voices[voice_idx].grain.pitch = x
+      if not lfo_writing then
+        grain_pitch_base[voice_idx] = x
+      end
       if voices[voice_idx].active then
         engine.setGrainParam(voice_idx - 1, "pitchShift", x)
       end
@@ -832,14 +843,17 @@ function update_all_grain_density()
 end
 
 function lfo_update()
-  -- Slow parameter modulation for active, non-frozen voices
-  for i = 1, #voices do
+  -- Slow grain pitch drift for active, non-frozen voices: a small random
+  -- step plus a pull back toward the last user/scene/mutation-set pitch, so
+  -- the walk stays a subtle detune instead of wandering to the rails
+  for i = 1, NUM_VOICES do
     if voices[i].active and not frozen[i] then
-      -- Add subtle modulation here if desired
-      -- For example, slowly drift grain parameters
-      local drift = (math.random() - 0.5) * 0.02
-      local current = params:get("v" .. i .. "_grain_pitch")
-      params:set("v" .. i .. "_grain_pitch", util.clamp(current + drift, 0.25, 4))
+      local current = voices[i].grain.pitch
+      local delta = (math.random() - 0.5) * LFO_PITCH_STEP
+        - (current - grain_pitch_base[i]) * LFO_PITCH_REVERSION
+      lfo_writing = true
+      params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
+      lfo_writing = false
     end
   end
 end
