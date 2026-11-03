@@ -9,6 +9,7 @@
 --   * option params store a floored, clamped index; file params a path
 --     string, text params any value; triggers (and trigger binaries) fire on
 --     every set; groups count the params that follow them and cannot nest
+--   * param.t holds norns' numeric type codes (params.tOPTION etc.)
 --   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
 --     lib/musicutil.lua
@@ -159,8 +160,21 @@ end
 -- params
 ---------------------------------------------------------------------------
 
+-- norns stores numeric type codes in param.t (lua/core/paramset.lua); params:add
+-- still takes the type name as a string
+local PARAM_TYPE_CODES = {
+  separator = 0, number = 1, option = 2, control = 3, file = 4, taper = 5, trigger = 6, group = 7, text = 8,
+  binary = 9,
+}
+local tSEPARATOR, tNUMBER, tOPTION, tCONTROL = 0, 1, 2, 3
+local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = 4, 6, 7, 8, 9
+
 local function make_params(util, controlspec)
-  local ParamSet = {}
+  -- ParamSet.tSEPARATOR etc., reachable as params.tOPTION like in norns
+  local ParamSet = {
+    tSEPARATOR = 0, tNUMBER = 1, tOPTION = 2, tCONTROL = 3, tFILE = 4, tTAPER = 5, tTRIGGER = 6, tGROUP = 7,
+    tTEXT = 8, tBINARY = 9,
+  }
   ParamSet.__index = ParamSet
 
   -- open_group counts the params still to come in the current group, like
@@ -170,8 +184,8 @@ local function make_params(util, controlspec)
   local bang
 
   local function new_param(args)
-    local param = { id = args.id, name = args.name or args.id, t = args.type, action = args.action or function() end,
-      hidden = false }
+    local param = { id = args.id, name = args.name or args.id, t = PARAM_TYPE_CODES[args.type],
+      action = args.action or function() end, hidden = false }
     if args.type == "control" then
       param.controlspec = args.controlspec or controlspec.new(0, 1, "lin", 0, 0)
       param.raw = param.controlspec:unmap(param.controlspec.default)
@@ -221,9 +235,9 @@ local function make_params(util, controlspec)
   local function register(param)
     local existing = paramset.lookup[param.id]
     if existing then
-      if param.t == "separator" or param.t == "group" then
+      if param.t == tSEPARATOR or param.t == tGROUP then
         if existing.t ~= param.t then
-          error(param.t .. " collides with param: " .. param.id)
+          error((param.t == tGROUP and "group" or "separator") .. " collides with param: " .. param.id)
         end
       else
         error("parameter ID collision: " .. param.id)
@@ -302,9 +316,9 @@ local function make_params(util, controlspec)
   function ParamSet:visible(id) return not self:lookup_param(id).hidden end
 
   bang = function(param)
-    if param.t == "separator" or param.t == "group" then return end
-    if param.t == "trigger" then param.action(); return end
-    if param.t == "binary" and param.behavior == "trigger" then
+    if param.t == tSEPARATOR or param.t == tGROUP then return end
+    if param.t == tTRIGGER then param.action(); return end
+    if param.t == tBINARY and param.behavior == "trigger" then
       param.action(1)
       param.value = 0
       return
@@ -314,11 +328,11 @@ local function make_params(util, controlspec)
 
   function ParamSet:get(id)
     local param = self:lookup_param(id)
-    if param.t == "control" then return param.controlspec:map(param.raw) end
-    if param.t == "option" then return param.selected end
-    if param.t == "file" then return param.path end
-    if param.t == "text" then return param.text end
-    if param.t == "group" then return param.n end
+    if param.t == tCONTROL then return param.controlspec:map(param.raw) end
+    if param.t == tOPTION then return param.selected end
+    if param.t == tFILE then return param.path end
+    if param.t == tTEXT then return param.text end
+    if param.t == tGROUP then return param.n end
     return param.value
   end
 
@@ -333,11 +347,11 @@ local function make_params(util, controlspec)
   function ParamSet:set(id, value, silent)
     local param = self:lookup_param(id)
     local changed = false
-    if param.t == "control" then
+    if param.t == tCONTROL then
       require_number(id, value)
       local raw = util.clamp(param.controlspec:unmap(value), 0, 1)
       if param.raw ~= raw then param.raw = raw; changed = true end
-    elseif param.t == "number" then
+    elseif param.t == tNUMBER then
       require_number(id, value)
       if param.wrap then
         local range = param.max - param.min + 1
@@ -346,11 +360,11 @@ local function make_params(util, controlspec)
       end
       local clamped = util.clamp(value, param.min, param.max)
       if param.value ~= clamped then param.value = clamped; changed = true end
-    elseif param.t == "option" then
+    elseif param.t == tOPTION then
       require_number(id, value)
       local selected = util.clamp(math.floor(value), 1, param.count)
       if param.selected ~= selected then param.selected = selected; changed = true end
-    elseif param.t == "binary" then
+    elseif param.t == tBINARY then
       if value == nil then value = 1 end
       require_number(id, value)
       if param.behavior == "trigger" then
@@ -359,16 +373,16 @@ local function make_params(util, controlspec)
         local state = value > 0 and 1 or 0
         if param.value ~= state then param.value = state; changed = true end
       end
-    elseif param.t == "trigger" then
+    elseif param.t == tTRIGGER then
       -- norns' Trigger:set has no silent argument
       bang(param)
       return
-    elseif param.t == "file" then
+    elseif param.t == tFILE then
       if type(value) ~= "string" then
         error("params:set(" .. id .. ") file param needs a path string, got " .. tostring(value), 2)
       end
       if param.path ~= value then param.path = value; changed = true end
-    elseif param.t == "text" then
+    elseif param.t == tTEXT then
       if param.text ~= value then param.text = value; changed = true end
     end
     if changed and not silent then bang(param) end
@@ -376,15 +390,15 @@ local function make_params(util, controlspec)
 
   function ParamSet:delta(id, delta)
     local param = self:lookup_param(id)
-    if param.t == "control" then
+    if param.t == tCONTROL then
       local raw = util.clamp(param.raw + delta * param.controlspec.quantum, 0, 1)
       if param.raw ~= raw then param.raw = raw; bang(param) end
-    elseif param.t == "number" then
+    elseif param.t == tNUMBER then
       self:set(id, param.value + delta)
-    elseif param.t == "option" then
+    elseif param.t == tOPTION then
       local step = delta < 0 and math.floor(delta) or math.ceil(delta)
       self:set(id, param.selected + step)
-    elseif param.t == "binary" then
+    elseif param.t == tBINARY then
       if param.behavior == "momentary" then
         self:set(id, delta)
       elseif param.behavior == "toggle" then
@@ -398,21 +412,21 @@ local function make_params(util, controlspec)
   function ParamSet:string(id)
     local param = self:lookup_param(id)
     if param.formatter then return param.formatter(param) end
-    if param.t == "option" then return param.options[param.selected] end
-    if param.t == "file" then
+    if param.t == tOPTION then return param.options[param.selected] end
+    if param.t == tFILE then
       if param.path == "-" then return "-" end
       return param.path:match("[^/]*$")
     end
-    if param.t == "text" then return param.text end
-    if param.t == "trigger" then return "" end
-    if param.t == "group" then return param.name end
+    if param.t == tTEXT then return param.text end
+    if param.t == tTRIGGER then return "" end
+    if param.t == tGROUP then return param.name end
     return tostring(self:get(id))
   end
 
   -- like norns: everything but triggers (and idle trigger binaries) bangs
   function ParamSet:bang()
     for _, param in ipairs(self.params) do
-      if param.t ~= "trigger" and not (param.t == "binary" and param.behavior == "trigger" and param.value == 0) then
+      if param.t ~= tTRIGGER and not (param.t == tBINARY and param.behavior == "trigger" and param.value == 0) then
         bang(param)
       end
     end

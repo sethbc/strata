@@ -244,7 +244,7 @@ test("grain envelope param: options, default, scenes, never mutated or randomize
   local context = load_strata(); context.clock.advance()
   for voice_idx = 1, 7 do
     local param = params:lookup_param("v" .. voice_idx .. "_grain_env")
-    assert_equal(param.t, "option", "voice " .. voice_idx .. " grain_env is an option")
+    assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_env is an option")
     assert_equal(param.count, 5, "five envelope shapes")
     assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 1, "default hann")
     assert_equal(local_value("voices")[voice_idx].grain.env, 1, "voices table holds the index")
@@ -1056,7 +1056,7 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
     if param.id == "strata_fx" then group_index = index end
   end
   assert_true(group_index, "strata_fx group exists")
-  assert_equal(params.params[group_index].t, "group")
+  assert_equal(params.params[group_index].t, params.tGROUP)
   assert_equal(params.params[group_index].n, #FX_PARAM_IDS, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
@@ -1267,6 +1267,31 @@ test("stub params support option, group, trigger, binary, file and set_action", 
   assert_equal(params:string("stub_text"), "hello")
 end)
 
+test("stub params store norns' numeric type constants in param.t", function()
+  load_strata()
+  -- lua/core/paramset.lua: ParamSet.tSEPARATOR = 0 ... tBINARY = 9
+  local expected_codes = { tSEPARATOR = 0, tNUMBER = 1, tOPTION = 2, tCONTROL = 3, tFILE = 4, tTAPER = 5,
+    tTRIGGER = 6, tGROUP = 7, tTEXT = 8, tBINARY = 9 }
+  for name, code in pairs(expected_codes) do assert_equal(params[name], code, "params." .. name) end
+  params:add_separator("stub_sep", "sep"); params:add_number("stub_num", "num", 0, 4, 1)
+  params:add_option("stub_opt", "opt", {"a", "b"}, 1)
+  params:add_control("stub_ctl", "ctl", controlspec.new(0, 1, "lin", 0, 0))
+  params:add_file("stub_file", "file", ""); params:add_trigger("stub_trig", "trig")
+  params:add_text("stub_text", "text", ""); params:add_binary("stub_bin", "bin", "toggle", 0)
+  params:add_group("stub_group", "group", 1)
+  local expected_types = { stub_sep = params.tSEPARATOR, stub_num = params.tNUMBER, stub_opt = params.tOPTION,
+    stub_ctl = params.tCONTROL, stub_file = params.tFILE, stub_trig = params.tTRIGGER, stub_text = params.tTEXT,
+    stub_bin = params.tBINARY, stub_group = params.tGROUP }
+  for param_id, code in pairs(expected_types) do
+    assert_equal(params:lookup_param(param_id).t, code, param_id .. " type code")
+  end
+end)
+
+test("strata.lua never compares a param type with a string", function()
+  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
+  assert_true(not source:find('%.t%s*[=~]=%s*"'), "param.t is numeric on norns; compare with params.tX")
+end)
+
 test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()
   local context = load_strata()
   local LFO = require("lfo")
@@ -1284,7 +1309,7 @@ test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw",
     lfo_free_stubtest = "control", lfo_reset_stubtest = "trigger", lfo_reset_target_stubtest = "option",
   }
   for param_id, param_type in pairs(expected_types) do
-    assert_equal(params:lookup_param(param_id).t, param_type, param_id .. " type")
+    assert_equal(params:lookup_param(param_id).t, params["t" .. param_type:upper()], param_id .. " type")
   end
   local depth_param = params:lookup_param("lfo_depth_stubtest")
   assert_equal(depth_param.min, 0); assert_equal(depth_param.max, 100)
