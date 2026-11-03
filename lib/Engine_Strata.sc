@@ -37,6 +37,8 @@ Engine_Strata : CroneEngine {
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
+    var writeGenerations;         // Per output path: the newest write's number; older writes abandon
+    var <>writeChunkWait = 0.001; // Pause between interleave chunks (the engine check slows it)
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -86,6 +88,7 @@ Engine_Strata : CroneEngine {
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
 
+        writeGenerations = Dictionary.new;
         grainSource = Array.fill(numVoices, 0);
         voiceControls = Array.fill(numVoices, { Dictionary.new });
         grainControls = Array.fill(numVoices, { Dictionary.new });
@@ -1121,36 +1124,55 @@ Engine_Strata : CroneEngine {
     // Write a slot's valid region to path as a stereo 16-bit WAV at the
     // content's sample rate, creating the directory. The server writes each
     // mono buffer to a temporary float file; sclang then interleaves them in
-    // chunks (yielding between chunks) and deletes the temporary files.
-    // Creates no synth nodes.
+    // chunks (yielding between chunks) into a per-write path.<n>.part file
+    // and renames it into place, so a reader never sees a half-written
+    // file. Each write to a path gets a new generation number: an older
+    // write still interleaving when a newer one starts abandons (deleting
+    // its .part), so the newest write always wins and two writes never mix.
+    // Temporary files are deleted in every case. Creates no synth nodes.
     writeSlot { arg index, path;
         var frames = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
-        var tempPaths;
+        var generation, tempPaths, partPath;
         if (frames < 1) {
             postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
             ^this
         };
+        path = path.standardizePath;
         writeCount = writeCount + 1;
+        generation = writeCount;
+        writeGenerations[path] = generation;
         tempPaths = ["L", "R"].collect({ arg side;
-            Platform.defaultTempDir +/+ "strata-buf%-%-%.wav".format(index + 1, writeCount, side)
+            Platform.defaultTempDir +/+ "strata-buf%-%-%.wav".format(index + 1, generation, side)
         });
+        partPath = path ++ "." ++ generation ++ ".part";
         buffersL[index].write(tempPaths[0], "wav", "float", frames);
         buffersR[index].write(tempPaths[1], "wav", "float", frames);
         fork({
+            var current = { writeGenerations[path] == generation };
+            var written;
             context.server.sync;
-            if (this.interleaveFiles(tempPaths, path, sampleRate)) {
-                postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
-            };
+            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current) };
             tempPaths.do({ arg tempPath; File.delete(tempPath) });
+            // no yield between this check and the rename
+            if (written and: { current.value }) {
+                if (("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0) {
+                    postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
+                } {
+                    postln("strata: cannot move " ++ partPath ++ " to " ++ path);
+                };
+                writeGenerations.removeAt(path);
+            };
+            if (File.exists(partPath)) { File.delete(partPath) };
         }, SystemClock);
     }
 
-    // Called inside a routine
-    interleaveFiles { arg sourcePaths, path, sampleRate;
+    // Called inside a routine. Returns false (and writes nothing more) as
+    // soon as keepGoing is false, i.e. a newer write to the same path began.
+    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing;
         var chunkFrames = 8192;
         var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
-        var output, left, right, interleaved;
+        var output, left, right, interleaved, finished = true;
 
         File.mkdir(path.dirname);
         output = if (sources.includes(nil).not) { SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate) };
@@ -1162,7 +1184,7 @@ Engine_Strata : CroneEngine {
 
         left = FloatArray.newClear(chunkFrames);
         right = FloatArray.newClear(chunkFrames);
-        while { sources[0].readData(left); left.size > 0 } {
+        while { finished and: { sources[0].readData(left); left.size > 0 } } {
             sources[1].readData(right);
             interleaved = FloatArray.newClear(left.size * 2);
             left.size.do({ arg frame;
@@ -1170,11 +1192,12 @@ Engine_Strata : CroneEngine {
                 interleaved[(frame * 2) + 1] = right[frame] ? 0;
             });
             output.writeData(interleaved);
-            0.001.wait;
+            writeChunkWait.wait;
+            finished = keepGoing.value;
         };
         output.close;
         sources.do({ arg source; source.close });
-        ^true
+        ^finished
     }
 
     // Gate off a voice's synth trio (each frees itself after its release)

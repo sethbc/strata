@@ -567,6 +567,39 @@ server.waitForBoot({
             check.(((data[200] - 0.5).abs < 0.001) and: { (data[201] + 0.25).abs < 0.001 },
                 "the saved file interleaves left and right");
         };
+        // Two writes to one path back to back: the newer one wins, the file is never mixed
+        command.(\loadBuffer, 7, longPath); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
+        savePath = scratchRoot +/+ "race/same.wav";
+        engine.writeChunkWait = 0.02;          // the long interleave now takes about 0.9 s
+        command.(\saveBuffer, 7, savePath);
+        0.3.wait;                              // the first interleave is under way
+        command.(\saveBuffer, 4, savePath);                              // 11025 frames, 0.5 / -0.25
+        check.(waitFor.({ File.exists(savePath) }, 5), "back-to-back writes to one path produce the file");
+        2.0.wait;
+        file = SoundFile.openRead(savePath);
+        check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == 11025 } and: { file.sampleRate == 22050 },
+            "an older write to the same path abandons: the file is the second write (got % frames)".format(file !? _.numFrames));
+        if (file.notNil) {
+            data = FloatArray.newClear(2 * 11025);
+            file.readData(data);
+            file.close;
+            check.(data.size == (2 * 11025) and: { (0..11024).every({ arg frame;
+                    ((data[frame * 2] - 0.5).abs < 0.001) and: { (data[(frame * 2) + 1] + 0.25).abs < 0.001 } }) },
+                "the surviving file holds exactly the second write's samples");
+        };
+        // the other order: a short write then a long one; the long (newer) one wins
+        command.(\saveBuffer, 4, savePath);
+        command.(\saveBuffer, 7, savePath);
+        3.0.wait;
+        engine.writeChunkWait = 0.001;
+        file = SoundFile.openRead(savePath);
+        check.(file.notNil and: { file.numFrames == (22050 * 16) }, "a newer long write replaces an older short one");
+        file !? { file.close };
+        check.(PathName(savePath.dirname).files.collect(_.fileName) == [PathName(savePath).fileName],
+            "no .part files are left beside the written file (got %)".format(PathName(savePath.dirname).files.collect(_.fileName)));
+        check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
+            "no temporary float files are left behind");
+
         command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
         check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
         check.(synthNames.(context.xg).size == before, "saving adds no nodes");
