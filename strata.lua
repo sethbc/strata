@@ -282,6 +282,13 @@ function voice_source_label(voice_idx)
   return SOURCE_OPTIONS[voices[voice_idx].source]
 end
 
+-- The buffer slot (1..NUM_BUFFERS) a buffer-sourced voice reads, or nil for
+-- the synth and input sources
+function voice_buffer_slot(voice_idx)
+  if not voice_uses_buffer(voice_idx) then return nil end
+  return voices[voice_idx].source - SOURCE_SYNTH
+end
+
 local selected_voice = 1
 local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
 local ui_page = 1  -- index into UI_PAGES
@@ -336,7 +343,7 @@ local pattern_playing = false
 local pattern_clock = nil
 
 -- Grid UI state
-local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes, 4=fx (256 only)
+local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes, 4=buffers/fx (256 only)
 local param_page = 1
 local grid_voice_select = 1
 
@@ -378,6 +385,12 @@ local function valid_buffer_slot(slot)
   return slot >= 1 and slot <= NUM_BUFFERS
 end
 
+-- Buffer state is shown on the BUFFER page and the 256 grid's page 4
+local function buffer_display_changed()
+  redraw()
+  grid_redraw()
+end
+
 local function cancel_buffer_recording_timer(slot)
   if buffer_record_clocks[slot] then
     clock.cancel(buffer_record_clocks[slot])
@@ -410,7 +423,7 @@ function load_buffer(slot, path)
   buffer.loaded = true
   buffer.recording = false
   buffer.path = path
-  redraw()
+  buffer_display_changed()
 end
 
 -- Record the live input into a slot for record_duration seconds, or, if the
@@ -431,10 +444,10 @@ function record_buffer(slot)
       clock.sleep(duration)
       buffer_record_clocks[slot] = nil
       finish_buffer_take(slot)
-      redraw()
+      buffer_display_changed()
     end)
   end
-  redraw()
+  buffer_display_changed()
 end
 
 function clear_buffer(slot)
@@ -447,7 +460,7 @@ function clear_buffer(slot)
   buffer.recording = false
   buffer.seconds = 0
   buffer.path = nil
-  redraw()
+  buffer_display_changed()
 end
 
 -- Timestamped stereo WAV in audio/strata/, so it shows in the file browser
@@ -473,7 +486,12 @@ local function buffer_state_changed(value)
   local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
   local slot = slot_index + 1
   if not valid_buffer_slot(slot) then return end
-  buffers[slot].seconds = value - slot_index * BUFFER_STATE_STRIDE
+  local seconds = value - slot_index * BUFFER_STATE_STRIDE
+  -- the periodic poll repeats unchanged values: redraw only on a change
+  if buffers[slot].seconds == seconds then return end
+  buffers[slot].seconds = seconds
+  redraw()  -- the BUFFER page shows the seconds
+  if grid_page == 4 then grid_redraw() end
 end
 
 -- Effects chain (filter -> delay -> reverb -> master). Each filter or delay
@@ -1298,13 +1316,15 @@ function randomize_voice(voice_idx)
         params:set(prefix .. key, new_val)
       end
     end
-  else
-    -- Buffer or input source: the synth is not playing, so randomize the
-    -- buffer params instead (rate 0.5-2, even in octaves; gentle scan)
+  elseif voice_uses_buffer(voice_idx) then
+    -- Buffer source: the synth is not playing, so randomize the buffer
+    -- params instead (rate 0.5-2, even in octaves; gentle scan)
     params:set(prefix .. "buf_pos", math.random())
     params:set(prefix .. "buf_rate", 2 ^ (math.random() * 2 - 1))
     params:set(prefix .. "buf_scan", math.random() - 0.5)
   end
+  -- (input source: neither synth nor buffer params do anything; only the
+  -- grain params below are randomized)
   
   -- Randomize some grain params
   params:set("v" .. voice_idx .. "_grain_size", math.random() * 0.3 + 0.05)
@@ -1335,8 +1355,8 @@ function lfo_update()
       params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
       lfo_writing = false
 
-      -- Buffer and input sources also drift their position the same way
-      if not voice_uses_synth(i) then
+      -- Buffer sources also drift their position the same way
+      if voice_uses_buffer(i) then
         local position = voices[i].grain.buf_pos
         local position_delta = (math.random() - 0.5) * LFO_BUF_POS_STEP
           - (position - buf_pos_base[i]) * LFO_BUF_POS_REVERSION
@@ -1354,7 +1374,7 @@ function lfo_update()
   end
 end
 
--- voices[i].grain keys gentle_mutate changes for buffer- and input-sourced voices
+-- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
 local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
 
 function gentle_mutate()
@@ -1387,9 +1407,10 @@ function gentle_mutate()
             end
           end
         end
-      else
-        -- Buffer and input sources mutate their buffer params instead of the
-        -- (silent) synthesis params. The source itself never mutates.
+      elseif voice_uses_buffer(i) then
+        -- Buffer sources mutate their buffer params instead of the (silent)
+        -- synthesis params. Input sources mutate only the grain params
+        -- below. The source itself never mutates.
         for _, key in ipairs(BUFFER_MUTATION_KEYS) do
           if math.random() < probability then
             local param_id = "v" .. i .. "_" .. key
@@ -1997,15 +2018,18 @@ local MAIN_PARAMS = {
   ring = {key = "ratio", label = "ratio", format = "%.2f", arc_scale = 0.01}
 }
 
--- Any voice whose source is not its synth (buffer or input) shows and
--- adjusts its buffer position instead
+-- A buffer-sourced voice shows and adjusts its buffer position instead; an
+-- input-sourced voice its grain size (its synth and buffer params do nothing)
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f", arc_scale = 0.1}
+local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s", arc_scale = 0.01}
 
 function main_param_entry(voice_idx)
   if voice_uses_synth(voice_idx) then
     return MAIN_PARAMS[voices[voice_idx].name]
+  elseif voice_uses_buffer(voice_idx) then
+    return BUFFER_MAIN_PARAM
   end
-  return BUFFER_MAIN_PARAM
+  return INPUT_MAIN_PARAM
 end
 
 function main_param_id(voice_idx)
@@ -2203,10 +2227,15 @@ end
 local function redraw_placeholder() draw_hints("") end
 local function ignore_page_input() end
 
+-- E2 on MAIN and BUFFER: step the shared selected voice
+local function select_voice_by(d)
+  selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
+  update_voice_list()
+end
+
 local function main_enc(n, d)
   if n == 2 then
-    selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
-    update_voice_list()
+    select_voice_by(d)
   elseif n == 3 then
     params:delta(main_param_id(selected_voice), d)
   end
@@ -2235,10 +2264,136 @@ local function setup_key(n)
   end
 end
 
--- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP
-local PAGE_DRAW = {redraw_main, redraw_fx, redraw_placeholder, redraw_placeholder, redraw_setup}
-local PAGE_ENC = {main_enc, fx_enc, ignore_page_input, ignore_page_input, ignore_page_input}
-local PAGE_KEY = {main_key, fx_key, ignore_page_input, ignore_page_input, setup_key}
+-- Per key: the page it was pressed on, while it is held (nil when up).
+-- key() sends a release only to the page the key went down on.
+local key_press_page = {}
+
+-- BUFFER page: the selected voice and its source on the left, the eight
+-- buffer slots on the right (slot, name or "empty", seconds or REC)
+local BUFFER_ROW_FIRST_Y = 14
+local BUFFER_ROW_SPACING = 6   -- eight rows at y 14-56, clear of the hint row at y 62
+local BUFFER_SLOT_X = 65
+local BUFFER_NAME_X = 71
+local BUFFER_NAME_MAX_WIDTH = 31  -- the name ends before the widest seconds ("16.0s" from x 103)
+
+-- Cut text, a whole UTF-8 character at a time, until it fits max_width px
+local function fit_text(text, max_width)
+  while text ~= "" and screen.text_extents(text) > max_width do
+    text = text:gsub("[^\128-\191][\128-\191]*$", "")
+  end
+  return text
+end
+
+-- A buffer's name for the screen: the file name without its extension
+local function buffer_display_name(slot)
+  local name = buffers[slot].name:gsub("%.[^.]*$", "")
+  if name == "" then name = buffers[slot].name end
+  return fit_text(name, BUFFER_NAME_MAX_WIDTH)
+end
+
+function redraw_buffer()
+  local v = voices[selected_voice]
+  local voice_slot = voice_buffer_slot(selected_voice)
+
+  -- Left column (0-60px): voice, source, recording settings
+  screen.level(15)
+  screen.move(0, 18)
+  screen.text(string.upper(v.name))
+  screen.level(10)
+  screen.move(0, 26)
+  screen.text("src: " .. voice_source_label(selected_voice))
+  screen.level(4)
+  screen.move(0, 42)
+  screen.text("dur: " .. string.format("%.1f", params:get("record_duration")) .. "s")
+  screen.move(0, 50)
+  screen.text("lvl: " .. string.format("%.2f", params:get("record_level")))
+
+  screen.level(1)
+  screen.move(62, 10)
+  screen.line(62, 56)
+  screen.stroke()
+
+  -- Right column (65-127px): one row per buffer slot. The voice's buffer is
+  -- brightest, loaded (or recording) slots mid, empty slots dim.
+  for slot = 1, NUM_BUFFERS do
+    local buffer = buffers[slot]
+    local y = BUFFER_ROW_FIRST_Y + (slot - 1) * BUFFER_ROW_SPACING
+    local level = 2
+    if slot == voice_slot then
+      level = 15
+    elseif buffer.loaded or buffer.recording then
+      level = 8
+    end
+    screen.level(level)
+    screen.move(BUFFER_SLOT_X, y)
+    screen.text(tostring(slot))
+    screen.move(BUFFER_NAME_X, y)
+    screen.text(buffer_display_name(slot))
+    screen.move(127, y)
+    screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
+  end
+
+  if voice_slot then
+    draw_hints("K2:load K3:" .. (buffers[voice_slot].recording and "stop" or "rec") .. " K2+3:save")
+  else
+    -- K2 and K3 need a buffer source; E3 picks one
+    draw_hints("K2:- K3:- E3:source")
+  end
+end
+
+local function buffer_enc(n, d)
+  if n == 2 then
+    select_voice_by(d)
+  elseif n == 3 then
+    params:delta("v" .. selected_voice .. "_source", d)
+  end
+end
+
+-- K3 while K2 is held saved the buffer: K2's release then opens nothing
+local buffer_saved_during_k2 = false
+
+-- K3 (press) records into the voice's buffer, or stops early; with K2 held
+-- it saves the buffer instead. K2 acts on release (buffer_key_release).
+-- Both do nothing when the voice's source is not a buffer.
+local function buffer_key(n)
+  if n == 2 then
+    buffer_saved_during_k2 = false
+  elseif n == 3 then
+    local slot = voice_buffer_slot(selected_voice)
+    if not slot then return end
+    if key_press_page[2] == ui_page then
+      save_buffer(slot)
+      buffer_saved_during_k2 = true
+    else
+      record_buffer(slot)
+    end
+  end
+end
+
+-- K2 released: open the file selector for the voice's buffer, unless K3
+-- saved while K2 was down
+local function buffer_key_release(n)
+  if n ~= 2 then return end
+  if buffer_saved_during_k2 then
+    buffer_saved_during_k2 = false
+    return
+  end
+  local slot = voice_buffer_slot(selected_voice)
+  if not slot then return end
+  fileselect.enter(_path.audio, function(path)
+    if path ~= "cancel" then
+      params:set("buf" .. slot .. "_file", path)
+    end
+    redraw()
+  end)
+end
+
+-- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP. PAGE_KEY gets key
+-- presses, PAGE_KEY_RELEASE releases (only BUFFER uses them).
+local PAGE_DRAW = {redraw_main, redraw_fx, redraw_placeholder, redraw_buffer, redraw_setup}
+local PAGE_ENC = {main_enc, fx_enc, ignore_page_input, buffer_enc, ignore_page_input}
+local PAGE_KEY = {main_key, fx_key, ignore_page_input, buffer_key, setup_key}
+local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_input, buffer_key_release, ignore_page_input}
 
 -- Encoders
 function enc(n, d)
@@ -2251,10 +2406,19 @@ function enc(n, d)
   redraw()
 end
 
--- Keys
+-- Keys. Presses go to the page's PAGE_KEY handler. A release goes to
+-- PAGE_KEY_RELEASE only if the key went down on the page still showing, so a
+-- key held across a page change does nothing when it comes up.
 function key(n, z)
   if z == 1 then
+    key_press_page[n] = ui_page
     PAGE_KEY[ui_page](n)
+  else
+    local press_page = key_press_page[n]
+    key_press_page[n] = nil
+    if press_page == ui_page then
+      PAGE_KEY_RELEASE[ui_page](n)
+    end
   end
   redraw()
 end
@@ -2334,12 +2498,48 @@ local function arc_fx_redraw(arc_port)
   end
 end
 
+-- BUFFER page rings: the selected voice's buffer position and rate, then
+-- the recording duration and level. Param id suffixes after "v<i>_" for
+-- the voice rings.
+local ARC_BUFFER_RINGS = {
+  {voice_key = "buf_pos", scale = 1 / 200},
+  {voice_key = "buf_rate", scale = 1 / 100},
+  {param_id = "record_duration", scale = 1 / 20},
+  {param_id = "record_level", scale = 1 / 100}
+}
+
+local function arc_buffer_ring_param(ring)
+  return ring.param_id or ("v" .. selected_voice .. "_" .. ring.voice_key)
+end
+
+-- Rings 1-2 adjust the voice's buffer params whatever its source (they are
+-- ready when it switches to a buffer)
+local function arc_buffer_delta(n, delta)
+  local ring = ARC_BUFFER_RINGS[n]
+  if ring then
+    params:delta(arc_buffer_ring_param(ring), delta * ring.scale)
+  end
+end
+
+-- Rings 1-2 are bright for a buffer-sourced voice and dim otherwise (the
+-- buffer params do nothing then); the recording rings are always lit
+local function arc_buffer_redraw(arc_port)
+  local uses_buffer = voice_uses_buffer(selected_voice)
+  for n, ring in ipairs(ARC_BUFFER_RINGS) do
+    local level = 12
+    if ring.voice_key then
+      level = uses_buffer and 15 or 4
+    end
+    arc_port:segment(n, 0, param_fraction(arc_buffer_ring_param(ring)) * math.pi * 2, level)
+  end
+end
+
 local function arc_ignore_delta() end
 local function arc_draw_nothing() end  -- rings stay off
 
--- Indexed like UI_PAGES; LFO and BUFFER rings arrive with those pages
-local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta}
-local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing}
+-- Indexed like UI_PAGES; LFO rings arrive with that page
+local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_ignore_delta, arc_buffer_delta, arc_ignore_delta}
+local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_draw_nothing, arc_buffer_redraw, arc_draw_nothing}
 
 -- Arc handlers live on the vport only (as for grids): norns fires both
 -- device.delta/key and vports[port].delta/key, so setting them on the device
@@ -2398,9 +2598,13 @@ local GRID_FADER_ROWS = 4     -- 256-grid parameter page: one fader per row 9-12
 local GRID_FADER_WIDTH = 16   -- fader columns
 local GRID_FADER_FIRST_ROW = 9
 local GRID_PARAM_PAGE_ROW = 13
--- 256-grid FX page (page 4): one fader per row 3-7
+-- 256-grid BUFFER / FX page (page 4): record (row 1) and clear (row 2)
+-- per buffer slot, one FX fader per row 3-7, one source row per voice 9-15
+local GRID_BUFFER_RECORD_ROW = 1
+local GRID_BUFFER_CLEAR_ROW = 2
 local GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}
 local GRID_FX_FIRST_ROW = 3
+local GRID_SOURCE_FIRST_ROW = 9  -- voice v's row is 8 + v; column = source option (1 synth, 2-9 buffers, 10 input)
 
 -- Pick a grid's layout by its exact size. 16x16 must be matched exactly or
 -- an 8x16 grid (rows == 16) would be treated as a 256.
@@ -2516,10 +2720,21 @@ function grid_key_256(x, y, z)
       end
     end
   elseif grid_page == 4 then
-    -- FX page: faders on rows 3-7; rows 8 and 16 work as on page 1
+    -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
+    -- sources on rows 9-15; rows 8 and 16 work as on page 1
     local fx_param_id = GRID_FX_FADER_IDS[y - GRID_FX_FIRST_ROW + 1]
-    if fx_param_id then
+    local source_voice = y - GRID_SOURCE_FIRST_ROW + 1
+    if y == GRID_BUFFER_RECORD_ROW then
+      -- record into buffer x, or stop its recording early
+      if x <= NUM_BUFFERS then record_buffer(x) end
+    elseif y == GRID_BUFFER_CLEAR_ROW then
+      if x <= NUM_BUFFERS then clear_buffer(x) end
+    elseif fx_param_id then
       set_param_from_column(fx_param_id, x)
+    elseif source_voice >= 1 and source_voice <= NUM_VOICES then
+      if x <= #SOURCE_OPTIONS then
+        params:set("v" .. source_voice .. "_source", x)
+      end
     elseif y == 8 then
       grid_key_256_transport(x)
     elseif y == 16 then
@@ -2699,24 +2914,36 @@ function randomize_pattern(voice_idx)
   end
 end
 
--- A buffer- or input-sourced voice's first faders: its buffer params and its
--- level (the other synthesis params do nothing while the synth is off)
+-- A buffer-sourced voice's first faders: its buffer params and its level
+-- (the other synthesis params do nothing while the synth is off)
 local BUFFER_FADER_KEYS = {"buf_pos", "buf_rate", "buf_scan", "amp"}
+-- The six grain params (envelope shape and grain mode are option params,
+-- shown as index faders)
+local GRAIN_FADER_KEYS = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}
+
+local function append_fader_ids(ids, prefix, keys)
+  for _, key in ipairs(keys) do
+    table.insert(ids, prefix .. key)
+  end
+end
 
 -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
--- params (param_order), or BUFFER_FADER_KEYS when its source is not the
--- synth, its six grain params (envelope shape and grain mode are option
--- params, shown as index faders), then the nine crossmod slot values
--- (source, amp mod, freq mod for each slot)
+-- params (param_order), or BUFFER_FADER_KEYS for a buffer source, then the
+-- grain params, then the nine crossmod slot values (source, amp mod, freq
+-- mod for each slot). An input source has neither synth nor buffer params
+-- that do anything: its faders start with the grain params, then its level.
 function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
-  local first_keys = voice_uses_synth(voice_idx) and voices[voice_idx].param_order or BUFFER_FADER_KEYS
-  for _, key in ipairs(first_keys) do
-    table.insert(ids, prefix .. key)
-  end
-  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}) do
-    table.insert(ids, prefix .. key)
+  if voice_uses_synth(voice_idx) then
+    append_fader_ids(ids, prefix, voices[voice_idx].param_order)
+    append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
+  elseif voice_uses_buffer(voice_idx) then
+    append_fader_ids(ids, prefix, BUFFER_FADER_KEYS)
+    append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
+  else
+    append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
+    append_fader_ids(ids, prefix, {"amp"})
   end
   for slot = 1, NUM_MOD_SLOTS do
     table.insert(ids, prefix .. "mod_source_" .. slot)
@@ -2915,10 +3142,13 @@ function grid_redraw_256(grid_device)
 
     grid_redraw_256_page_row(grid_device)
   elseif grid_page == 4 then
-    -- FX page: faders on rows 3-7, rows 8 and 16 as on page 1
+    -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
+    -- sources on rows 9-15, rows 8 and 16 as on page 1
+    grid_redraw_256_buffers(grid_device)
     for index, param_id in ipairs(GRID_FX_FADER_IDS) do
       grid_redraw_fader_row(grid_device, GRID_FX_FIRST_ROW + index - 1, param_id)
     end
+    grid_redraw_256_sources(grid_device)
     grid_redraw_256_transport(grid_device)
     grid_redraw_256_freeze(grid_device)
   else
@@ -2945,6 +3175,40 @@ function grid_redraw_256(grid_device)
     end
 
     grid_redraw_256_freeze(grid_device)
+  end
+end
+
+-- 256 page 4, rows 1-2: buffer state (15 recording, 8 loaded, 2 empty)
+-- above each slot's clear key
+function grid_redraw_256_buffers(grid_device)
+  for slot = 1, NUM_BUFFERS do
+    local buffer = buffers[slot]
+    local level = 2
+    if buffer.recording then
+      level = 15
+    elseif buffer.loaded then
+      level = 8
+    end
+    grid_device:led(slot, GRID_BUFFER_RECORD_ROW, level)
+    grid_device:led(slot, GRID_BUFFER_CLEAR_ROW, 4)
+  end
+end
+
+-- 256 page 4, rows 9-15: each voice's source (selected 15, others 4, empty
+-- buffers 2)
+function grid_redraw_256_sources(grid_device)
+  for voice_idx = 1, NUM_VOICES do
+    local y = GRID_SOURCE_FIRST_ROW + voice_idx - 1
+    for source = 1, #SOURCE_OPTIONS do
+      local level = 4
+      local slot = source - SOURCE_SYNTH
+      if source == voices[voice_idx].source then
+        level = 15
+      elseif valid_buffer_slot(slot) and not (buffers[slot].loaded or buffers[slot].recording) then
+        level = 2
+      end
+      grid_device:led(source, y, level)
+    end
   end
 end
 

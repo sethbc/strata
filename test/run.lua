@@ -536,9 +536,19 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   assert_equal(params:get("v2_mod_source_1"), 4, "mod source column 9 -> round(linlin(1,16,0,7,9))")
   press(1, 10)  -- amp mod 1 -> -2
   assert_near(params:get("v2_mod_amp_amt_1"), -2, 1e-6, "amp mod fader min")
-  press(16, 8)  -- grid page 4: rows 9-13 dark
+  press(16, 8)  -- grid page 4: rows 9-13 hold voice sources, not parameter faders
   for y = 9, 13 do
-    for x = 1, 16 do assert_equal(device:get_led(x, y), 0, "parameter rows dark on page 4") end
+    local source = params:get("v" .. (y - 8) .. "_source")
+    for x = 1, 16 do
+      local level = device:get_led(x, y)
+      if x > 10 then
+        assert_equal(level, 0, "no fader past the source columns on page 4")
+      elseif x == source then
+        assert_equal(level, 15, "source rows on page 4")
+      else
+        assert_true(level == 4 or level == 2, "source rows, not fader bars, on page 4")
+      end
+    end
   end
 end)
 
@@ -801,21 +811,7 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
   assert_near(params:get("v1_freq"), 1000, 1.0, "cancelled transition no longer writes")
 end)
 
--- Approximate advance of norns' default font (04B_03 at size 8): capitals
--- about 6 px, brackets/colon/period about 4 px, everything else 5 px
-local function text_width(text)
-  local width = 0
-  for char in text:gmatch(".") do
-    if char:match("%u") then
-      width = width + 6
-    elseif char:match("[%[%]%.:]") then
-      width = width + 4
-    else
-      width = width + 5
-    end
-  end
-  return width
-end
+local text_width = stubs.text_width
 
 local function text_span(entry)
   local width = text_width(entry.text)
@@ -1339,9 +1335,14 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
   assert_equal(device:get_led(9, 4), 0, "nothing above the value")
   local patterns = local_value("patterns")
   assert_equal(patterns[3][16], 0, "FX fader presses do not toggle pattern steps")
+  -- rows 1-2 (buffers, columns 1-8) and 9-15 (sources, columns 1-10) are
+  -- the buffer controls; the columns past them stay dark
   for x = 1, 16 do
-    for _, y in ipairs({ 1, 2, 9, 10, 11, 12, 13, 14, 15 }) do
-      assert_equal(device:get_led(x, y), 0, "row " .. y .. " dark on page 4")
+    for _, y in ipairs({ 1, 2 }) do
+      if x > 8 then assert_equal(device:get_led(x, y), 0, "row " .. y .. " column " .. x .. " dark on page 4") end
+    end
+    for y = 9, 15 do
+      if x > 10 then assert_equal(device:get_led(x, y), 0, "row " .. y .. " column " .. x .. " dark on page 4") end
     end
   end
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 play on page 4")
@@ -1518,7 +1519,7 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   assert_equal(calls[1].args[1], 0); assert_equal(calls[1].args[2], 3)
   assert_equal(main_param_id(1), "v1_buf_pos"); assert_equal(main_param_label(1), "pos")
   params:set("v1_source", 10); calls = context.calls_named("setGrainSource"); assert_equal(calls[#calls].args[2], 9)
-  assert_equal(main_param_id(1), "v1_buf_pos", "input source shows buf_pos too (spec: source not synth)")
+  assert_equal(main_param_id(1), "v1_grain_size", "input source shows grain size (controller ruling: its buffer params are dead too)")
   params:set("v1_source", 1); assert_equal(main_param_id(1), "v1_freq")
   -- a stopped voice's source is sent at once (R11) and nothing else is
   context.clear_engine_calls(); params:set("v3_source", 5)
@@ -1843,6 +1844,322 @@ test("MAIN layout holds for buffer- and input-sourced voices", function()
       assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
     end
   end
+end)
+
+---------------------------------------------------------------------------
+-- BUFFER page, arc BUFFER page, grid page 4 buffer rows
+---------------------------------------------------------------------------
+
+-- Press and release a norns key
+local function tap(n) key(n, 1); key(n, 0) end
+
+-- The drawn strings on row y, left to right
+local function texts_on_row(context, y)
+  local row = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == y then table.insert(row, entry) end
+  end
+  table.sort(row, function(a, b) return select(1, text_span(a)) < select(1, text_span(b)) end)
+  return row
+end
+
+local function hint_text(context)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == HINT_ROW_Y then return entry.text end
+  end
+end
+
+test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens the file selector", function()
+  local context = load_strata(); context.clock.advance(); enc(1, 3)
+  assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
+  enc(3, 2); assert_equal(params:get("v1_source"), 3)
+  key(3, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 1)
+  key(3, 0)
+  -- adapted (R12): K2 acts on release, so the brief's key(2, 1) is a press and release
+  tap(2); assert_true(context.fileselect.last ~= nil, "fileselect opened")
+  assert_equal(context.fileselect.last.folder, _path.audio, "file selector starts in the audio folder")
+  context.fileselect.last.callback("/tmp/b.wav"); assert_equal(params:get("buf2_file"), "/tmp/b.wav")
+  params:set("v1_source", 1); context.clear_engine_calls(); context.fileselect.last = nil
+  tap(3); tap(2)
+  assert_equal(#context.calls_named("recordBuffer"), 0, "K3 does nothing for a synth voice")
+  assert_equal(context.fileselect.last, nil, "K2 does nothing for a synth voice")
+  redraw(); for _, entry in ipairs(context.screen.texts) do local l, r = text_span(entry); assert_true(r <= 128) end
+  -- E2 selects the voice (shared with MAIN); a cancelled selection loads nothing
+  enc(2, 3); assert_equal(local_value("selected_voice"), 4)
+  params:set("v4_source", 7); tap(2); context.clear_engine_calls()
+  context.fileselect.last.callback("cancel")
+  assert_equal(#context.calls_named("loadBuffer"), 0, "cancel loads nothing")
+  assert_equal(voice_buffer_slot(4), 6); assert_equal(voice_buffer_slot(1), nil)
+  params:set("v1_source", 10); assert_equal(voice_buffer_slot(1), nil, "input has no buffer slot")
+end)
+
+test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.clear_engine_calls(); context.fileselect.last = nil
+  key(2, 1); tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "K3 with K2 held saves")
+  assert_equal(context.calls_named("saveBuffer")[1].args[1], 2, "the voice's buffer")
+  assert_equal(#context.calls_named("recordBuffer"), 0, "and does not record")
+  tap(3); assert_equal(#context.calls_named("saveBuffer"), 2, "each K3 while K2 is held saves")
+  key(2, 0); assert_equal(context.fileselect.last, nil, "K2 release after a save opens nothing")
+  -- the next plain K2 opens the selector again, and a plain K3 records
+  tap(2); assert_true(context.fileselect.last ~= nil, "K2 alone opens the selector")
+  tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 alone records")
+  tap(3); assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
+  -- a K2 held across a page change is released elsewhere: no selector, and
+  -- back on BUFFER K3 records
+  context.fileselect.last = nil; context.clear_engine_calls()
+  key(2, 1); show_page(1); key(2, 0); show_page(4)
+  assert_equal(context.fileselect.last, nil, "K2 released on another page opens nothing")
+  tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records once K2 is up")
+  assert_equal(#context.calls_named("saveBuffer"), 0)
+end)
+
+test("key releases reach only the BUFFER page; other pages act once per press", function()
+  local context = load_strata(); context.clock.advance()
+  local _, set_selected = find_upvalue("selected_voice")
+  set_selected(2)
+  show_page(1)
+  key(3, 1); assert_true(local_value("frozen")[2], "K3 press freezes on MAIN")
+  key(3, 0); assert_true(local_value("frozen")[2], "K3 release does not unfreeze")
+  show_page(2)
+  local mix = params:get("filter_mix")
+  key(3, 1); key(3, 0)
+  assert_true(params:get("filter_mix") ~= mix, "FX K3 press bypasses once, the release does not undo it")
+  show_page(5); context.clear_engine_calls()
+  local saved = 0
+  local real_save = save_scenes_to_disk
+  save_scenes_to_disk = function() saved = saved + 1 end
+  key(3, 1); key(3, 0)
+  save_scenes_to_disk = real_save
+  assert_equal(saved, 1, "SETUP K3 saves once per press")
+end)
+
+test("BUFFER page draws the voice, its source and eight buffer rows", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  local _, set_selected = find_upvalue("selected_voice")
+  set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
+  load_buffer(5, "/tmp/x.wav"); context.polls.fire("bufferState", 402.5)
+  params:set("record_duration", 2); record_buffer(7)
+  redraw()
+  local left_name, left_source
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == 18 then left_name = entry.text end
+    if entry.x == 0 and entry.y == 26 then left_source = entry.text end
+  end
+  assert_equal(left_name, "KARPLUS"); assert_equal(left_source, "src: buf 2")
+  local rows = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x >= 65 then
+      rows[entry.y] = rows[entry.y] or {}
+      table.insert(rows[entry.y], entry)
+    end
+  end
+  local row_ys = {}
+  for y in pairs(rows) do table.insert(row_ys, y) end
+  table.sort(row_ys)
+  assert_equal(#row_ys, 8, "eight buffer rows")
+  assert_true(row_ys[1] > 8 and row_ys[8] < HINT_ROW_Y - TEXT_HEIGHT + 1, "rows between header and hints")
+  local function row_text(slot)
+    local parts = {}
+    for _, entry in ipairs(texts_on_row(context, row_ys[slot])) do
+      if entry.x >= 65 then table.insert(parts, entry.text) end
+    end
+    return table.concat(parts, " ")
+  end
+  local function row_level(slot)
+    local level
+    for _, entry in ipairs(rows[row_ys[slot]]) do
+      assert_true(level == nil or level == entry.level, "one level per row")
+      level = entry.level
+    end
+    return level
+  end
+  assert_equal(row_text(1), "1 empty 0.0s"); assert_equal(row_level(1), 2, "empty buffer dim")
+  assert_equal(row_text(2), "2 drone 16.0s"); assert_equal(row_level(2), 15, "the voice's buffer bright")
+  assert_equal(row_text(5), "5 x 2.5s"); assert_equal(row_level(5), 8, "loaded buffer")
+  assert_equal(row_text(7), "7 empty REC", "REC while recording"); assert_equal(row_level(7), 8)
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save")
+  -- the voice's buffer recording: the hint says K3 stops
+  record_buffer(2); redraw()
+  assert_equal(hint_text(context), "K2:load K3:stop K2+3:save")
+  -- not a buffer: the hint says K2 and K3 do nothing
+  params:set("v6_source", 1); redraw()
+  assert_equal(hint_text(context), "K2:- K3:- E3:source")
+  params:set("v6_source", 10); redraw()
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == 26 then assert_equal(entry.text, "src: input") end
+  end
+end)
+
+test("BUFFER page layout holds for every voice, source and buffer state", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("mutation_enabled", 1); params:set("master_density", 2.0)
+  capture_scene(8); recall_scene(8, 0)
+  local _, set_selected = find_upvalue("selected_voice")
+  local long_names = { "WWWWWWWWWWWWWWWWWWWW.wav", "a_very_long_field_recording_name.aiff", "MMMM", "x",
+    "café_crème_très_longue.wav", "no_extension_but_long" }
+  local function set_buffers(state)
+    for slot = 1, 8 do
+      if state == "empty" then clear_buffer(slot)
+      elseif state == "loaded" then
+        load_buffer(slot, "/tmp/" .. long_names[(slot - 1) % #long_names + 1])
+        context.polls.fire("bufferState", (slot - 1) * 100 + 16)
+      elseif state == "recording" then
+        clear_buffer(slot); record_buffer(slot)
+      end
+    end
+  end
+  for _, state in ipairs({ "empty", "loaded", "recording" }) do
+    set_buffers(state)
+    for voice_idx = 1, 7 do
+      set_selected(voice_idx)
+      for source = 1, 10 do
+        params:set("v" .. voice_idx .. "_source", source)
+        show_page(4)
+        assert_screen_layout(context, "BUFFER, " .. state .. ", voice " .. voice_idx .. " source " .. source)
+      end
+    end
+  end
+end)
+
+test("bufferState poll redraws the screen and the grid's buffer page", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
+  load_buffer(3, "/tmp/a.wav")
+  local refreshes = device.refresh_count
+  context.screen.texts = {}
+  context.polls.fire("bufferState", 212.5)
+  local found = false
+  for _, entry in ipairs(context.screen.texts) do if entry.text == "12.5s" then found = true end end
+  assert_true(found, "poll redraws the BUFFER page with the new seconds")
+  assert_true(device.refresh_count > refreshes, "grid page 4 redrawn")
+end)
+
+test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  local device = context.arc.plug(1)
+  params:set("v1_source", 2)
+  params:set("v1_buf_pos", 0.5); params:set("v1_buf_rate", 1)
+  params:set("record_duration", 8); params:set("record_level", 1)
+  context.arc.turn(1, 1, 20); assert_near(params:get("v1_buf_pos"), 0.5 + 20 / 200 * 0.01, 1e-6, "ring 1 buf_pos")
+  context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > 1, "ring 2 buf_rate")
+  context.arc.turn(1, 3, 100); assert_true(params:get("record_duration") > 8, "ring 3 record duration")
+  context.arc.turn(1, 4, 100); assert_true(params:get("record_level") > 1, "ring 4 record level")
+  local ids = { "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }
+  for ring, param_id in ipairs(ids) do
+    assert_near(device.segments[ring].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. param_id)
+  end
+  assert_equal(device.segments[1].level, 15, "buffer voice: ring 1 bright")
+  assert_equal(device.segments[3].level, 12)
+  -- a synth voice: rings 1-2 still set its buffer params, drawn dim
+  params:set("v1_source", 1); local rate = params:get("v1_buf_rate")
+  context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > rate, "ring 2 still adjusts buf_rate")
+  assert_equal(device.segments[1].level, 4, "not buffer-sourced: ring 1 dim")
+  assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
+  assert_equal(device.segments[4].level, 12, "record rings stay lit")
+  -- the selected voice follows E2
+  enc(2, 1); context.arc.turn(1, 1, 20)
+  assert_true(params:get("v2_buf_pos") > 0, "ring 1 follows the selected voice")
+end)
+
+test("grid page 4 buffer rows record, clear and set sources with LED feedback", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
+  context.grid.press(1, 5, 1, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 4)
+  assert_equal(device:get_led(5, 1), 15)
+  context.grid.press(1, 3, 10, 1); assert_equal(params:get("v2_source"), 3); assert_equal(device:get_led(3, 10), 15)
+  context.grid.press(1, 10, 15, 1); assert_equal(params:get("v7_source"), 10)
+  context.grid.press(1, 5, 2, 1); assert_equal(context.calls_named("clearBuffer")[1].args[1], 4)
+end)
+
+test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid changes", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
+  load_buffer(2, "/tmp/a.wav")              -- loaded, not from the grid
+  params:set("record_duration", 2); params:set("buf6_record", 1)  -- recording, from params
+  params:set("v1_source", 3)                -- voice 1 on buf 2
+  for slot = 1, 8 do
+    local expected = slot == 6 and 15 or (slot == 2 and 8 or 2)
+    assert_equal(device:get_led(slot, 1), expected, "row 1 buffer " .. slot)
+    assert_equal(device:get_led(slot, 2), 4, "row 2 clear " .. slot)
+  end
+  for voice_idx = 1, 7 do
+    local y = 8 + voice_idx
+    local source = params:get("v" .. voice_idx .. "_source")
+    for x = 1, 10 do
+      local expected
+      if x == source then expected = 15
+      elseif x >= 2 and x <= 9 and x - 1 ~= 2 and x - 1 ~= 6 then expected = 2
+      else expected = 4 end
+      assert_equal(device:get_led(x, y), expected, "voice " .. voice_idx .. " source col " .. x)
+    end
+    for x = 11, 16 do assert_equal(device:get_led(x, y), 0, "cols 11-16 dark") end
+  end
+  -- the selected source wins over "empty"
+  params:set("v4_source", 9); assert_equal(device:get_led(9, 12), 15, "selected empty buffer lit 15")
+  -- the recording completes: 15 -> 8
+  context.clock.advance(); assert_equal(device:get_led(6, 1), 8, "finished take shown as loaded")
+  clear_buffer(2); assert_equal(device:get_led(2, 1), 2, "cleared buffer dim")
+  -- a second row-1 press stops early; row 8 and 16 keep their meaning
+  context.grid.press(1, 4, 1, 1); context.grid.press(1, 4, 1, 1)
+  assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
+  context.grid.press(1, 3, 16, 1); assert_true(local_value("frozen")[3], "row 16 freezes on page 4")
+  context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 transport on page 4")
+  -- the FX faders are still on rows 3-7
+  context.grid.press(1, 16, 7, 1); assert_near(params:get("delay_mix"), 1, 1e-6, "row 7 delay mix")
+  -- out-of-range columns do nothing
+  local before = deep_copy(local_value("buffers"))
+  context.clear_engine_calls()
+  context.grid.press(1, 9, 1, 1); context.grid.press(1, 12, 2, 1); context.grid.press(1, 13, 11, 1)
+  assert_equal(#context.engine_calls, 0, "columns past the buffers/sources send nothing")
+  assert_equal(params:get("v3_source"), 1)
+end)
+
+test("input-sourced voices: main param, faders, randomize, mutate and drift use grain params", function()
+  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  local device = context.arc.plug(1)
+  params:set("v1_source", 10)
+  assert_equal(main_param_id(1), "v1_grain_size"); assert_equal(main_param_label(1), "size")
+  assert_equal(fader_param_ids(1)[1], "v1_grain_size", "first grid fader")
+  for _, id in ipairs(fader_param_ids(1)) do
+    assert_true(not id:find("_buf_"), id .. ": no buffer faders for input")
+  end
+  params:set("v1_grain_size", 0.2)
+  enc(3, 2); assert_true(params:get("v1_grain_size") > 0.2, "E3 on MAIN moves grain size")
+  local size = params:get("v1_grain_size")
+  context.arc.turn(1, 2, 200); assert_true(params:get("v1_grain_size") > size, "arc ring 2 moves grain size")
+  local param_min, param_max = param_range("v1_grain_size")
+  assert_near(device.segments[2].to,
+    util.linlin(param_min, param_max, 0, 64, params:get("v1_grain_size")) / 64 * math.pi * 2, 1e-9, "ring 2 shows grain size")
+  redraw()
+  local value
+  for _, entry in ipairs(context.screen.texts) do if entry.x == 65 and entry.y == 50 then value = entry.text end end
+  assert_equal(value, string.format("%.2f s", params:get("v1_grain_size")), "MAIN shows grain size")
+  -- randomize, mutate and drift leave the synth and buffer params alone
+  local synth_before = deep_copy(local_value("voices")[1].params)
+  local buffer_before = {}
+  for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do buffer_before[key] = params:get("v1_" .. key) end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(11)
+  local grain_changed = false
+  for _ = 1, 10 do
+    local grain_before = params:get("v1_grain_size")
+    randomize_voice(1); gentle_mutate(); for _ = 1, 10 do lfo_update() end
+    if params:get("v1_grain_size") ~= grain_before then grain_changed = true end
+  end
+  assert_true(grain_changed, "grain params still randomize and mutate")
+  for key, val in pairs(synth_before) do
+    assert_equal(local_value("voices")[1].params[key], val, "input voice keeps synth " .. key)
+  end
+  for key, val in pairs(buffer_before) do
+    assert_equal(params:get("v1_" .. key), val, "input voice keeps " .. key)
+  end
+  -- buffer voices keep buf_pos
+  params:set("v1_source", 2); assert_equal(main_param_id(1), "v1_buf_pos")
+  assert_equal(fader_param_ids(1)[1], "v1_buf_pos")
 end)
 
 ---------------------------------------------------------------------------

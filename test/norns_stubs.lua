@@ -697,17 +697,37 @@ end
 -- screen / UI
 ---------------------------------------------------------------------------
 
+-- Approximate advance of norns' default font (04B_03 at size 8): capitals
+-- about 6 px, brackets/colon/period about 4 px, everything else 5 px. The
+-- stub's screen.text_extents and the layout tests both use it.
+function stubs.text_width(text)
+  local width = 0
+  for char in text:gmatch(".") do
+    if char:match("%u") then
+      width = width + 6
+    elseif char:match("[%[%]%.:]") then
+      width = width + 4
+    else
+      width = width + 5
+    end
+  end
+  return width
+end
+
 local function make_screen()
   local screen = { texts = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
   function screen.clear() screen.texts = {} end
   function screen.level(level) screen.current_level = level end
   function screen.move(x, y) screen.cursor_x = x; screen.cursor_y = y end
-  function screen.text(str)
-    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str), align = "left" })
+  -- each drawn string is recorded with its position, alignment and level
+  local function record_text(str, align)
+    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str),
+      align = align, level = screen.current_level })
   end
-  function screen.text_right(str)
-    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str), align = "right" })
-  end
+  function screen.text(str) record_text(str, "left") end
+  function screen.text_right(str) record_text(str, "right") end
+  -- lua/core/screen.lua: text_extents(str) returns width, height
+  function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
   function screen.line() end
   function screen.stroke() end
   function screen.update() end

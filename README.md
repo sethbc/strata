@@ -30,10 +30,12 @@ Each synthesis voice is fed through its own granular processor with independent 
 
 ### Audio Sources (buffers and live input)
 
-Every voice can grain something other than its own synth. Its **source** (PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
-- **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the PARAMETERS **buffers** group
+Every voice can grain something other than its own synth. Its **source** (the BUFFER screen page, grid page 4, or PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
+- **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
-- While a voice's source is not its synth (buffer or input), E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set. The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
+- While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
+- While a voice's source is the input, neither its synthesis nor its buffer parameters do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level), and K2, mutations and the drift change only the grain parameters
+- The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
 
 ### Cross-Modulation
@@ -135,8 +137,9 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
   - Pulse: Pulse width
   - Karplus: Decay time
   - Ring: Frequency ratio
-  - Any voice whose source is a buffer or the input: buffer position (`pos`)
-- **K2** - Randomize selected voice parameters (buffer parameters for a voice whose source is not its synth)
+  - Any voice whose source is a buffer: buffer position (`pos`)
+  - Any voice whose source is the input: grain size (`size`)
+- **K2** - Randomize selected voice parameters (buffer parameters for a buffer-sourced voice, only grain parameters for an input-sourced one)
 - **K3** - Start/stop voice, or freeze/unfreeze if already active (it never fires a triggered grain)
 
 `[TRIG]` on the main parameter row means the selected voice is in triggered grain mode.
@@ -149,9 +152,22 @@ A scrolling list of the effects settings, five rows at a time: master density, t
 - **E3** - Adjust the selected row's value
 - **K3** - Bypass the filter (mix to 0), or bring it back at the last mix it had above 0, however that was set (fully on if it has never been above 0). The hint row shows `K3:filter bypass` or `K3:filter on`
 
-#### LFO, BUFFER
+#### BUFFER
 
-Not built yet: these pages show only the header, and their encoders, keys and arc rings do nothing.
+Where a voice's source is chosen and its buffer is filled, so it works without a grid. The left column shows the selected voice, its source (`src: buf 2`), and the record duration and level. The right column lists the eight buffers: number, name (the file name, shortened, or `take <n>` for a recording, or `empty`) and length in seconds, or `REC` while recording. The selected voice's buffer is bright, buffers holding audio are mid, empty ones dim.
+
+- **E2** - Select voice (the same selection as MAIN)
+- **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
+- **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured
+- **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
+- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser)
+- The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
+
+Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETERS > buffers).
+
+#### LFO
+
+Not built yet: this page shows only the header, and its encoders, keys and arc rings do nothing.
 
 #### SETUP
 
@@ -168,7 +184,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 The rings control the current screen page. On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
-- **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer- or input-sourced voice)
+- **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
 - **Ring 3** - Grain size for selected voice
 - **Ring 4** - Grain density for selected voice
 
@@ -179,7 +195,16 @@ On the **FX** page:
 - **Ring 3** - Delay time
 - **Ring 4** - Delay mix
 
-On the **SETUP** page the rings are off and do nothing. The LFO and BUFFER pages have no ring mappings yet (rings off).
+On the **BUFFER** page:
+
+- **Ring 1** - Selected voice's buffer position
+- **Ring 2** - Selected voice's buffer rate
+- **Ring 3** - Record duration
+- **Ring 4** - Record level
+
+Rings 1 and 2 adjust the voice's buffer parameters whatever its source (ready for when it switches to a buffer), but are drawn dim unless the source is a buffer.
+
+On the **SETUP** page the rings are off and do nothing. The LFO page has no ring mappings yet (rings off).
 
 #### Arc Button (2025 model)
 
@@ -213,7 +238,7 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 **Row 8: Transport & Page Controls**
 - Columns 1-4: Play/stop pattern sequencer
 - Columns 5-8: Tempo adjustment (-10, -1, +1, +10 BPM; sets norns' clock tempo)
-- Columns 13-16: Page selection (1-4; page 2 = parameters, page 3 = scenes, page 4 = FX)
+- Columns 13-16: Page selection (1-4; page 2 = parameters, page 3 = scenes, page 4 = buffers / FX)
 
 **Rows 9-12: Parameter Faders** (Page 2)
 - Each row is a fader for one parameter of the voice selected in row 14
@@ -221,11 +246,11 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 - The row lights up to the current value (dim bar, bright value position)
 - The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap); the grain mode fader is continuous on columns 1-8 and triggered on columns 9-16
 - Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread, envelope and mode, then source / amp mod / freq mod for cross-modulation slots 1-3
-- For a voice whose source is a buffer or the input, the first faders are buffer position, rate, scan and level instead of the synthesis parameters
+- For a voice whose source is a buffer, the first faders are buffer position, rate, scan and level instead of the synthesis parameters; for an input-sourced voice the faders start with grain size (the grain parameters, then level)
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
-- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6; a buffer- or input-sourced voice has 5); the selected page is bright
+- Columns 1-4, 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6; a buffer-sourced voice has 5, an input-sourced one 4); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing
@@ -252,12 +277,15 @@ Scene LED feedback:
 - Empty scenes are dim (brightness 2)
 - Sequencer shows next scene position when active
 
-**FX Page (Page 4)**
+**Buffers / FX Page (Page 4)**
+- **Row 1, Columns 1-8**: Record the input into buffer 1-8 for the record duration; press again while it records to stop early. Lit 15 while recording, 8 when the buffer holds audio, 2 when empty
+- **Row 2, Columns 1-8**: Clear buffer 1-8 (lit 4)
 - **Rows 3-7**: Faders for filter frequency, filter resonance, delay time, delay feedback and delay mix. Press a column to set the value (column 1 = minimum, column 16 = maximum; frequency and delay time are exponential); the row lights up to the current value and follows changes made on the screen, arc or by a scene
 - **Row 8**: Play/stop, tempo and page selection, as on page 1
+- **Rows 9-15**: One row per voice (row 9 = voice 1 ... row 15 = voice 7) choosing its source: column 1 = synth, columns 2-9 = buffer 1-8, column 10 = input. The selected source is lit 15, the others 4, empty buffers 2. Columns 11-16 do nothing
 - **Row 16**: Freeze/unfreeze each voice, as on page 1
-- Rows 1-2 and 9-15 are unused on this page
-- The 16×8, 8×16 and 8×8 layouts have no FX page
+- The LEDs follow buffer and source changes made anywhere (screen, PARAMETERS, scenes, a recording finishing)
+- The 16×8, 8×16 and 8×8 layouts have no buffers / FX page: choose sources and manage buffers on the BUFFER screen page or in PARAMETERS
 
 #### 16×8 Grid Layout (128 buttons horizontal)
 
