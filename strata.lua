@@ -21,6 +21,7 @@ local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
+local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
 
 -- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
 -- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
@@ -398,13 +399,19 @@ local function cancel_buffer_recording_timer(slot)
   end
 end
 
+-- The engine writes each completed (or early-stopped) take here,
+-- overwriting the slot's previous take
+function scratch_take_path(slot)
+  return buffer_scratch_dir .. "buf" .. slot .. ".wav"
+end
+
 -- A take is in the slot (the recording completed or was stopped early)
 local function finish_buffer_take(slot)
   local buffer = buffers[slot]
   buffer.recording = false
   buffer.loaded = true
   buffer.name = "take " .. slot
-  buffer.path = buffer_scratch_dir .. "buf" .. slot .. ".wav"
+  buffer.path = scratch_take_path(slot)
 end
 
 -- A usable sound file path: not empty, not norns' "-" (no file chosen) and
@@ -419,7 +426,8 @@ function load_buffer(slot, path)
   cancel_buffer_recording_timer(slot)
   engine.loadBuffer(slot - 1, path)
   local buffer = buffers[slot]
-  buffer.name = path:match("[^/]*$")
+  -- a scratch take restored on start keeps its take name
+  buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
   buffer.loaded = true
   buffer.recording = false
   buffer.path = path
@@ -470,8 +478,9 @@ end
 
 function save_buffer(slot)
   if not valid_buffer_slot(slot) then return end
-  local buffer = buffers[slot]
-  if not buffer.loaded and buffer.seconds == 0 then
+  -- seconds comes from the engine's poll: a load that failed leaves
+  -- loaded set but no audio, and a recording reads 0 s until it completes
+  if buffers[slot].seconds <= 0 then
     print("buffer " .. slot .. " is empty, nothing to save")
     return
   end
@@ -851,6 +860,9 @@ function init()
 
   -- Load saved scenes from disk
   load_scenes_from_disk()
+
+  -- Reload the buffers remembered on exit (after the scenes, which may use them)
+  load_buffers_from_disk()
 
   -- Start with first two voices (delayed)
   clock.run(function()
@@ -1829,7 +1841,6 @@ end
 -- Scene disk persistence
 local scene_data_dir = _path.data .. "strata/"
 local scene_data_file = scene_data_dir .. "scenes.data"
-local scene_backup_file = scene_data_file .. ".bak"
 -- Set when a scenes file could not be loaded and could not be moved aside:
 -- cleanup() must then not overwrite it with the (empty) in-memory scenes
 local scene_autosave_blocked = false
@@ -1845,16 +1856,24 @@ function save_scenes_to_disk()
   print("scenes saved to " .. scene_data_file)
 end
 
--- A scenes file that failed to load must survive the save in cleanup():
--- move it to scenes.data.bak, or, if that fails, block the auto-save.
-local function preserve_unloadable_scene_file()
-  local moved, move_error = os.rename(scene_data_file, scene_backup_file)
+-- A data file that failed to load must survive the save in cleanup():
+-- move it to <file>.bak. Returns false if that failed, and the caller then
+-- blocks its auto-save.
+local function move_aside_unloadable_file(data_file, label)
+  local backup_file = data_file .. ".bak"
+  local moved, move_error = os.rename(data_file, backup_file)
   if moved then
-    print("unloadable scenes file kept as " .. scene_backup_file)
-  else
+    print("unloadable " .. label .. " file kept as " .. backup_file)
+    return true
+  end
+  print("could not move unloadable " .. label .. " file (" .. tostring(move_error) ..
+    "); " .. label .. " will not be auto-saved on exit")
+  return false
+end
+
+local function preserve_unloadable_scene_file()
+  if not move_aside_unloadable_file(scene_data_file, "scenes") then
     scene_autosave_blocked = true
-    print("could not move unloadable scenes file (" .. tostring(move_error) ..
-      "); scenes will not be auto-saved on exit")
   end
 end
 
@@ -1924,6 +1943,76 @@ function load_scenes_from_disk()
 
   -- Update grid display if grids are connected
   grid_redraw()
+end
+
+-- Buffer disk persistence: buffers.data remembers, per slot, the loaded file
+-- or the scratch take, so buffer-sourced voices and scenes are not silent
+-- after a restart. It holds only paths; the audio stays in its own files.
+local buffer_data_file = scene_data_dir .. "buffers.data"
+-- Set when a buffers file could not be loaded and could not be moved aside
+local buffer_autosave_blocked = false
+local buffers_restored = 0  -- slots reloaded by the last load_buffers_from_disk (SETUP page)
+
+function save_buffers_to_disk()
+  if util.file_exists(scene_data_dir) == false then
+    util.make_dir(scene_data_dir)
+  end
+  local paths = {}
+  for slot = 1, NUM_BUFFERS do
+    paths[slot] = buffers[slot].path or ""
+  end
+  tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file)
+  print("buffer paths saved to " .. buffer_data_file)
+end
+
+local function preserve_unloadable_buffer_file()
+  if not move_aside_unloadable_file(buffer_data_file, "buffers") then
+    buffer_autosave_blocked = true
+  end
+end
+
+-- Reload each remembered path that still exists through load_buffer. A
+-- missing or damaged file loads nothing and never stops init.
+function load_buffers_from_disk()
+  buffers_restored = 0
+  if not util.file_exists(buffer_data_file) then
+    print("no saved buffers file found")
+    return
+  end
+
+  -- tab.load runs the file as Lua without protection
+  local ok, loaded, load_error = pcall(tab.load, buffer_data_file)
+  if not ok then
+    print("error: buffers file could not be read (" .. tostring(loaded) .. ")")
+    preserve_unloadable_buffer_file()
+    return
+  end
+  if type(loaded) ~= "table" then
+    print("error loading buffers file: " .. tostring(load_error))
+    preserve_unloadable_buffer_file()
+    return
+  end
+  if loaded.version ~= BUFFER_DATA_VERSION or type(loaded.paths) ~= "table" then
+    print("error: buffers file has version " .. tostring(loaded.version) ..
+      " or no path list, expected version " .. BUFFER_DATA_VERSION)
+    preserve_unloadable_buffer_file()
+    return
+  end
+
+  for slot = 1, NUM_BUFFERS do
+    local path = loaded.paths[slot]
+    if is_sound_file_path(path) then
+      -- the file may have been deleted, or a take never written
+      if util.file_exists(path) then
+        load_buffer(slot, path)
+        buffers_restored = buffers_restored + 1
+      else
+        print("buffer " .. slot .. ": " .. path .. " not found, not restored")
+      end
+    end
+  end
+  buffer_autosave_blocked = false
+  print(buffers_restored .. " buffers restored from " .. buffer_data_file)
 end
 
 -- Check that one scene slot holds everything recall_scene_instant reads
@@ -2152,18 +2241,21 @@ function redraw_setup()
     if scenes[scene_num].populated then scenes_saved = scenes_saved + 1 end
   end
 
+  -- rows 6 px apart (like the BUFFER page), leaving y 54 above the hints
   screen.level(10)
   screen.move(0, 18)
   screen.text("grid: " .. grid_count .. " connected")
   screen.level(4)
-  screen.move(0, 26)
+  screen.move(0, 24)
   screen.text(table.concat(grid_sizes, " "))
   screen.level(10)
-  screen.move(0, 34)
+  screen.move(0, 30)
   screen.text("arc: " .. (arc_connected and "connected" or "none"))
-  screen.move(0, 42)
+  screen.move(0, 36)
   screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
-  screen.move(0, 50)
+  screen.move(0, 42)
+  screen.text("buffers: " .. buffers_restored .. " restored")
+  screen.move(0, 48)
   screen.text("midi: -")  -- MIDI device and channel mode arrive with MIDI input
 
   draw_hints("K3:save scenes")
@@ -3399,6 +3491,13 @@ function cleanup()
     print("scenes not auto-saved: " .. scene_data_file .. " could not be loaded")
   else
     save_scenes_to_disk()
+  end
+
+  -- Remember each buffer's file or scratch take for the next start
+  if buffer_autosave_blocked then
+    print("buffer paths not auto-saved: " .. buffer_data_file .. " could not be loaded")
+  else
+    save_buffers_to_disk()
   end
 
   -- Stop metros and clocks

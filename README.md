@@ -171,7 +171,7 @@ Not built yet: this page shows only the header, and its encoders, keys and arc r
 
 #### SETUP
 
-Shows how many grids are connected and their sizes, whether an arc is connected, and how many of the 8 scene slots hold a scene.
+Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, and how many buffers were restored when the script started (`buffers: 3 restored`).
 
 - **K3** - Save scenes to disk (same as PARAMETERS > save scenes to disk)
 
@@ -459,6 +459,14 @@ Scenes capture each voice's source and buffer position, rate and scan, but **not
   - Record: record the live input for the record duration, replacing what was there. Trigger it again while recording to stop early and keep what was captured. The finished take is also written to `~/dust/audio/strata/scratch/buf<n>.wav` (overwritten by the next take)
   - Clear: empty the buffer
   - Save: write the buffer as a stereo WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved)
+
+### Saving and restoring buffers
+
+Strata writes audio to disk only when a recording finishes and when you save a buffer:
+- **Scratch take** - Every finished (or early-stopped) recording is written to `~/dust/audio/strata/scratch/buf<n>.wav`, replacing that buffer's previous take. It exists so the take survives a restart; save the buffer to keep it
+- **Save** - The buffer's save trigger (PARAMETERS > buffers, or K2 + K3 on the BUFFER page) writes a new timestamped file, `~/dust/audio/strata/<date-time>-buf<n>.wav`, which appears in the file browser for loading later. Nothing is overwritten
+- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that has been deleted or moved is skipped (the console says so), and the SETUP page shows how many buffers were restored
+- A damaged or incompatible `buffers.data` loads nothing, is reported in the console and is moved to `buffers.data.bak` so the save on exit does not overwrite it
 
 ### FX Section (group)
 - Filter type (lowpass, highpass, bandpass)

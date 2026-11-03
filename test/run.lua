@@ -1814,6 +1814,11 @@ end)
 test("save_buffer writes a timestamped wav under audio/strata", function()
   local context = load_strata()
   load_buffer(6, "/tmp/x.wav")
+  -- the engine has not reported any audio yet: nothing to save (a failed load
+  -- leaves loaded = true, so the guard is the poll's seconds)
+  save_buffer(6)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "loaded flag alone does not save")
+  context.polls.fire("bufferState", 504)  -- slot index 5 (buffer 6) holds 4 s
   save_buffer(6)
   local call = context.calls_named("saveBuffer")[1]
   assert_equal(call.args[1], 5)
@@ -1828,6 +1833,113 @@ test("save_buffer writes a timestamped wav under audio/strata", function()
   context.clear_engine_calls(); save_buffer(1)
   assert_equal(#context.calls_named("saveBuffer"), 0, "empty slot not saved")
   params:set("buf6_save", 1); assert_equal(#context.calls_named("saveBuffer"), 1, "save trigger")
+end)
+
+test("explicit save writes a timestamped file; cleanup/init persist buffer paths", function()
+  local context = load_strata({ data_subdir = "buf" })
+  context.polls.fire("bufferState", 104)  -- buffer 2 holds 4 s (save needs the engine's seconds)
+  params:set("buf2_save", 1)
+  local call = context.calls_named("saveBuffer")[1]
+  assert_equal(call.args[1], 1); assert_true(call.args[2]:match("strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf2%.wav$"))
+  params:set("buf1_file", context.audio_dir .. "one.wav"); io.open(context.audio_dir .. "one.wav", "w"):close()
+  params:set("buf4_record", 1); context.clock.advance()
+  assert_equal(local_value("buffers")[4].path, context.audio_dir .. "strata/scratch/buf4.wav")
+  assert_equal(scratch_take_path(4), context.audio_dir .. "strata/scratch/buf4.wav")
+  cleanup()
+  local again = load_strata({ data_subdir = "buf" })
+  local loads = again.calls_named("loadBuffer")
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], context.audio_dir .. "one.wav")
+  assert_equal(#loads, 1, "scratch take not restored when its file is missing")
+end)
+
+test("buffers.data format, restored scratch takes and the SETUP count", function()
+  local context = load_strata({ data_subdir = "buf_format" })
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  show_page(5)
+  assert_true(screen_has("buffers: 0 restored"), "nothing restored without a file")
+  local loaded_file = context.audio_dir .. "loop.wav"
+  io.open(loaded_file, "w"):close()
+  load_buffer(3, loaded_file)
+  record_buffer(5); context.clock.advance()
+  -- the engine wrote the take
+  util.make_dir(context.audio_dir .. "strata/scratch/")
+  io.open(scratch_take_path(5), "w"):close()
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.version, 1, "format version")
+  for slot = 1, 8 do
+    local expected = ({ [3] = loaded_file, [5] = scratch_take_path(5) })[slot] or ""
+    assert_equal(saved.paths[slot], expected, "slot " .. slot .. " path")
+  end
+
+  context = load_strata({ data_subdir = "buf_format" })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 2, "both existing files restored")
+  assert_equal(loads[1].args[1], 2); assert_equal(loads[1].args[2], loaded_file)
+  assert_equal(loads[2].args[1], 4); assert_equal(loads[2].args[2], scratch_take_path(5))
+  local buffers = local_value("buffers")
+  assert_equal(buffers[3].name, "loop.wav"); assert_equal(buffers[3].path, loaded_file)
+  assert_equal(buffers[5].name, "take 5", "a restored scratch take keeps its take name")
+  assert_equal(buffers[5].path, scratch_take_path(5))
+  assert_equal(local_value("buffers_restored"), 2)
+  show_page(5)
+  assert_true(screen_has("buffers: 2 restored"), "SETUP shows the restored count")
+  -- a slot whose file has gone is skipped and reported, and stays empty
+  os.remove(loaded_file)
+  cleanup()
+  context = load_strata({ data_subdir = "buf_format" })
+  assert_equal(#context.calls_named("loadBuffer"), 1, "missing file not loaded")
+  assert_equal(local_value("buffers")[3].name, "empty")
+  assert_true(table.concat(context.printed, "\n"):find(loaded_file, 1, true), "missing file reported")
+  assert_equal(local_value("buffers_restored"), 1)
+end)
+
+test("a buffers file that fails to load does not stop init and survives cleanup", function()
+  local bad_files = {
+    { name = "wrong version", content = "return { version = 99, paths = {} }" },
+    { name = "raises on load", content = 'error("corrupt buffers file")' },
+    { name = "not a table", content = "return 42" },
+    { name = "paths not a table", content = 'return { version = 1, paths = "x" }' },
+  }
+  for index, bad in ipairs(bad_files) do
+    local subdir = "buf_survive_" .. index
+    local data_dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. data_dir .. "'")
+    local file = assert(io.open(data_dir .. "buffers.data", "w"))
+    file:write(bad.content)
+    file:close()
+
+    local context = load_strata({ data_subdir = subdir })  -- init's load fails
+    assert_equal(#context.calls_named("loadBuffer"), 0, bad.name .. ": nothing loaded")
+    assert_equal(local_value("buffers_restored"), 0, bad.name .. ": nothing restored")
+    local recorded = context.audio_dir .. "new.wav"
+    io.open(recorded, "w"):close()
+    load_buffer(2, recorded)  -- new work after the failed load
+    cleanup()
+    local backup = io.open(data_dir .. "buffers.data.bak", "r")
+    assert_true(backup ~= nil, bad.name .. ": original kept as buffers.data.bak")
+    assert_equal(backup:read("*a"), bad.content, bad.name .. ": backup content unchanged")
+    backup:close()
+    context = load_strata({ data_subdir = subdir })
+    assert_equal(context.calls_named("loadBuffer")[1].args[2], recorded, bad.name .. ": new work saved on exit")
+  end
+
+  -- if the file cannot be moved aside, cleanup must not overwrite it
+  local data_dir = data_root .. "buf_survive_blocked/strata/"
+  os.execute("mkdir -p '" .. data_dir .. "buffers.data.bak/occupied'")  -- rename target is a non-empty dir
+  local file = assert(io.open(data_dir .. "buffers.data", "w"))
+  file:write(bad_files[1].content)
+  file:close()
+  load_strata({ data_subdir = "buf_survive_blocked" })
+  cleanup()
+  file = assert(io.open(data_dir .. "buffers.data", "r"))
+  assert_equal(file:read("*a"), bad_files[1].content, "unmovable bad file not overwritten by cleanup")
+  file:close()
 end)
 
 test("MAIN layout holds for buffer- and input-sourced voices", function()
@@ -1896,6 +2008,7 @@ end)
 test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
   context.clear_engine_calls(); context.fileselect.last = nil
   key(2, 1); tap(3)
   assert_equal(#context.calls_named("saveBuffer"), 1, "K3 with K2 held saves")
@@ -1931,6 +2044,7 @@ test("a K2 released inside the norns menu is forgotten: K3 records again (fix ro
   assert_equal(context.fileselect.last, nil, "nothing opened the file selector")
   -- a save made with K2 held, then the menu: the next K2 tap opens the selector
   tap(3)  -- stop the recording
+  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
   key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 still saves")
   context.menu.mode = true; lfo_metro.event(); context.menu.mode = false
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector after the menu")
