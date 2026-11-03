@@ -683,9 +683,15 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   params:set("v1_freq", 20)        -- changes the param without a grid redraw
   params:set("mutation_probability", 1)
   params:set("mutation_amount", 1)
-  math.randomseed(7)
-  gentle_mutate()
-  local freq_column = fader_position("v1_freq")
+  -- gentle_mutate visits params with pairs(), so which random draw lands on
+  -- freq varies between processes; a negative draw clamps freq back to the
+  -- minimum. Mutate until it moves (each try has about an even chance).
+  local freq_column = 1
+  for _ = 1, 40 do
+    gentle_mutate()
+    freq_column = fader_position("v1_freq")
+    if freq_column > 1 then break end
+  end
   assert_true(freq_column > 1, "mutation moved freq off the minimum")
   assert_equal(device:get_led(freq_column, 9), 15, "freq fader LED follows the mutation")
 
