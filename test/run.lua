@@ -1064,6 +1064,16 @@ test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", functio
   key(3, 1); redraw(); assert_equal(hint_text(), "K3:filter on")
 end)
 
+test("FX page K3 restores the last non-zero filter mix however it was set", function()
+  load_strata(); enc(1, 1)
+  enc(2, 5)                                    -- row 6: filter mix
+  enc(3, 50); assert_near(params:get("filter_mix"), 0.5, 1e-6, "E3 sets the mix to 0.5")
+  enc(3, -50); assert_equal(params:get("filter_mix"), 0, "E3 brings it to 0")
+  key(3, 1); assert_near(params:get("filter_mix"), 0.5, 1e-6, "K3 restores the mix E3 last set")
+  params:set("filter_mix", 0.3); params:set("filter_mix", 0)  -- PARAMS menu, scene recall, ...
+  key(3, 1); assert_near(params:get("filter_mix"), 0.3, 1e-6, "K3 restores a mix set through params")
+end)
+
 test("FX page rows stay apart and inside 128x64 at every row and value", function()
   local context = load_strata()
   params:set("mutation_enabled", 1)

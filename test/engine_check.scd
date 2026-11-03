@@ -65,7 +65,7 @@ server.options.numInputBusChannels = 2;
 server.waitForBoot({
     var exitCode;
     try {
-        var oldVoice, newVoice, before, after, silentIndex, startedNames;
+        var oldVoice, newVoice, before, after, silentIndex, startedNames, masterUGens;
 
         CroneDefs.sendDefs(server);
         server.sync;
@@ -95,6 +95,12 @@ server.waitForBoot({
         check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
         check.(SynthDescLib.global.at(\strataMaster).def.children.any({ arg ugen; ugen.isKindOf(Limiter) }),
             "master has a Limiter safety stage");
+        // The limiter must feed the tanh saturator: after it, tanh * 0.5 already
+        // bounds the signal and the limiter could never act
+        masterUGens = SynthDescLib.global.at(\strataMaster).def.children;
+        check.(masterUGens.detectIndex({ arg ugen; ugen.isKindOf(Limiter) })
+            < masterUGens.detectIndex({ arg ugen; ugen.isKindOf(UnaryOpUGen) and: { ugen.operator == \tanh } }),
+            "master limits before the tanh saturation");
 
         // Silent bus (I4)
         silentIndex = engine.silentBus.index;

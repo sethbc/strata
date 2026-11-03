@@ -28,7 +28,7 @@ This project uses two languages that work together:
 ### Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Filter Bus → Delay → Delay Bus → Reverb → Reverb Bus → Master (drift/saturation/limiter) → Output
+Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Filter Bus → Delay → Delay Bus → Reverb → Reverb Bus → Master (drift/limiter/saturation) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
@@ -40,7 +40,7 @@ Each of the 7 voices follows this path:
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
 5. Filter (`strataFilter`) processes mainBus, outputs to `filterBus`; delay (`strataDelay`) processes filterBus, outputs to `delayBus`
 6. Reverb (`strataReverb`) processes delayBus, outputs to `reverbBus`
-7. Master (`strataMaster`) applies drift, saturation and a `Limiter.ar(sig, 0.95)` safety stage, outputs to norns output
+7. Master (`strataMaster`) applies drift, a `Limiter.ar(sig, 0.95)` safety stage that catches peaks before saturation, then saturation, and outputs to norns output
 
 ### Cross-Modulation System
 
@@ -878,7 +878,7 @@ The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LF
 - `PAGE_DRAW`, `PAGE_ENC` and `PAGE_KEY` are indexed like `UI_PAGES`. LFO and BUFFER are placeholders (`redraw_placeholder` draws an empty hint row, `ignore_page_input` ignores encoders/keys) until their features replace them; to fill a page, write its draw/enc/key functions and put them in the three tables (and the arc tables below)
 - The tables are script locals built after the functions they hold, so page functions must be defined above them
 - **MAIN** (`redraw_main`, `main_enc`, `main_key`): the original screen - E2 voice select, E3 main parameter, K2 randomize, K3 start/stop/freeze (`start_or_freeze_selected_voice`)
-- **FX** (`redraw_fx`, `fx_enc`, `fx_key`): a scrolling list of `FX_ROWS` (`{label, param_id, format}`; `format` is a `string.format` pattern, or nil for the param's own string): density, tape drift, filter type/freq/res/mix, delay time/fdbk/mix, reverb mix/size/damp. `FX_VISIBLE_ROWS` (5) rows at y=18-50, label at x=0 and value right-aligned at x=127, the selected row (`fx_row`) at level 15 and the others at 4; the view keeps one row above the selection. E2 selects the row, E3 is `params:delta` on its param. K3 toggles `filter_mix` between 0 and `fx_filter_last_mix` (its last non-zero value, initially 1). Hint: `K3:filter bypass` when the mix is above 0, else `K3:filter on`
+- **FX** (`redraw_fx`, `fx_enc`, `fx_key`): a scrolling list of `FX_ROWS` (`{label, param_id, format}`; `format` is a `string.format` pattern, or nil for the param's own string): density, tape drift, filter type/freq/res/mix, delay time/fdbk/mix, reverb mix/size/damp. `FX_VISIBLE_ROWS` (5) rows at y=18-50, label at x=0 and value right-aligned at x=127, the selected row (`fx_row`) at level 15 and the others at 4; the view keeps one row above the selection. E2 selects the row, E3 is `params:delta` on its param. K3 toggles `filter_mix` between 0 and `fx_filter_last_mix`, which the `filter_mix` param action records whenever the mix is set above 0 (from E3, PARAMS, scenes or K3; initially 1). Hint: `K3:filter bypass` when the mix is above 0, else `K3:filter on`
 - **SETUP** (`redraw_setup`, `setup_key`): grid count and sizes (in port order), arc connected/none, `scenes: k/8 saved`, a `midi:` line for MIDI input; K3 calls `save_scenes_to_disk()`. `grid.add`/`grid.remove`/`arc.add`/`arc.remove` call `redraw()` so SETUP stays current
 - Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page
 
@@ -940,7 +940,7 @@ Shared processing SynthDefs:
 - `\strataDelay` - Master stereo delay (`in, out, time=0.375, feedback=0.4, mix=0`): `DelayC` (max 2 s, `time.lag(0.1)`) fed by the input plus `LocalIn`, with the delayed signal times `feedback` sent back through `LocalOut`; `mix` crossfades dry to delayed
 - The filter and delay SynthDef defaults equal the Lua param defaults: the script never bangs its params, so the engine starts from these values
 - `\strataReverb` - Global reverb processor; outputs `FreeVerb2` only (it already crossfades dry/wet by `mix`)
-- `\strataMaster` - Master output with drift, saturation and `Limiter.ar(sig, 0.95)` after the tanh stage. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
+- `\strataMaster` - Master output with drift, then `Limiter.ar(sig, 0.95)` to catch filter resonance and delay feedback peaks, then the tanh saturation. The limiter must stay before the saturator: `(sig * 2).tanh * 0.5` bounds its output to ±0.5, so a limiter after it could never act (the engine check asserts the order). Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
 
 ### Audio Bus Management
 

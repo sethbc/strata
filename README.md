@@ -42,7 +42,7 @@ Voices can modulate each other for evolving, interdependent textures:
 - **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered
 - **Delay** - Stereo delay (10 ms to 2 s) with feedback, after the filter; starts dry
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
-- **Limiter** - A limiter at the end of the master chain catches peaks from filter resonance and delay feedback
+- **Limiter** - A limiter in the master stage catches peaks from filter resonance and delay feedback before the soft saturation
 - **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows
 
 ### Performance Features
@@ -134,7 +134,7 @@ A scrolling list of the effects settings, five rows at a time: master density, t
 
 - **E2** - Select a row
 - **E3** - Adjust the selected row's value
-- **K3** - Bypass the filter (mix to 0), or bring it back at its last mix (the first press turns it fully on). The hint row shows `K3:filter bypass` or `K3:filter on`
+- **K3** - Bypass the filter (mix to 0), or bring it back at the last mix it had above 0, however that was set (fully on if it has never been above 0). The hint row shows `K3:filter bypass` or `K3:filter on`
 
 #### LFO, BUFFER
 
@@ -441,12 +441,12 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output
 - Master effects chain: multimode filter, stereo delay, reverb
-- Soft saturation and a limiter on master output
+- A limiter, then soft saturation, on master output
 
 ### Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (with drift/saturation/limiter) → Output
+Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (with drift/limiter/saturation) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```

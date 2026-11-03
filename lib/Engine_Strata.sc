@@ -461,11 +461,13 @@ Engine_Strata : CroneEngine {
             driftMod = 1 + (LFNoise1.kr(0.2) * drift * 0.2);
             sig = PitchShift.ar(sig, 0.2, driftMod, 0, 0.01);
             
-            // Soft saturation, then a limiter as a safety net for filter
-            // resonance and delay feedback
-            sig = (sig * 2).tanh * 0.5;
+            // Limiter as a safety net for filter resonance and delay feedback
+            // peaks, before the saturator (tanh * 0.5 already bounds its own
+            // output, so a limiter after it could never act)
             sig = Limiter.ar(sig, 0.95);
 
+            // Soft saturation
+            sig = (sig * 2).tanh * 0.5;
 
             Out.ar(out, sig * amp);
         }).add;

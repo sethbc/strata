@@ -288,6 +288,10 @@ local function send_delay_to_engine()
   engine.setDelay(params:get("delay_time"), params:get("delay_feedback"), params:get("delay_mix"))
 end
 
+-- Last non-zero filter mix (set by the filter_mix action): FX page K3
+-- restores it after a bypass
+local fx_filter_last_mix = 1
+
 -- The filter and delay params are faders on the 256 grid's FX page
 local function fx_fader_changed()
   if grid_page == 4 then grid_redraw() end
@@ -481,7 +485,9 @@ function init()
     id = "filter_mix",
     name = "filter mix",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
-    action = function()
+    action = function(x)
+      -- FX page K3 brings back the last non-zero mix, however it was set
+      if x > 0 then fx_filter_last_mix = x end
       send_filter_to_engine()
     end
   }
@@ -1729,7 +1735,6 @@ local FX_VISIBLE_ROWS = 5      -- rows at y 18-50, clear of the hint row at y 62
 local FX_FIRST_ROW_Y = 18
 local FX_ROW_SPACING = 8
 local fx_row = 1               -- selected FX_ROWS index
-local fx_filter_last_mix = 1   -- filter mix K3 restores after a bypass
 
 function redraw_fx()
   -- Keep one row above the selection in view, like the MAIN voice list
@@ -1761,13 +1766,7 @@ end
 -- K3 on FX: bypass the filter (mix 0), or bring back its last non-zero mix
 local function fx_key(n)
   if n == 3 then
-    local mix = params:get("filter_mix")
-    if mix > 0 then
-      fx_filter_last_mix = mix
-      params:set("filter_mix", 0)
-    else
-      params:set("filter_mix", fx_filter_last_mix)
-    end
+    params:set("filter_mix", params:get("filter_mix") > 0 and 0 or fx_filter_last_mix)
   end
 end
 
