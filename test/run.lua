@@ -2592,6 +2592,68 @@ test("scenes capture and recall the LFOs; old files load with LFOs off", functio
   assert_equal(params:get("strata_lfo2_dest"), 1); assert_equal(params:string("lfo_mode_1"), "free")
 end)
 
+test("param actions under a running LFO send the modulated value (drift, edits)", function()
+  local context = load_strata(); context.clock.advance()
+  local lfos = local_value("lfos")
+  params:set("v1_source", 2)                                     -- buf 1: the drift moves buf_pos
+  params:set("v1_buf_pos", 0.4); params:set("strata_lfo1_dest", 18)  -- v1 pos
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  context.lfo.tick(lfos[1], 1.0)                                 -- scaled +0.5: +0.25 of the range
+  math.randomseed(5)
+  context.clear_engine_calls(); drift_update()
+  local sent
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "bufPos" then sent = call.args[3] end
+  end
+  assert_true(params:get("v1_buf_pos") ~= 0.4, "the drift moved the stored position")
+  assert_near(sent, params:get("v1_buf_pos") + 0.25, 1e-9, "drift sends the position with the LFO offset")
+  -- a user edit of a modulated FX param keeps the offset too
+  params:set("filter_freq", 1000); params:set("strata_lfo2_dest", 4)
+  params:set("lfo_depth_2", 20); params:set("lfo_2", 2); context.lfo.tick(lfos[2], 1.0)
+  context.clear_engine_calls(); params:set("filter_freq", 2000)
+  assert_near(context.calls_named("setFilter")[1].args[1], 2000 + 0.2 * 0.5 * 19980, 1e-6, "edit keeps the offset")
+  -- unmodulated params still send exactly their value
+  context.clear_engine_calls(); params:set("filter_res", 0.3)
+  assert_near(context.calls_named("setFilter")[1].args[2], 0.3, 1e-9)
+end)
+
+test("LFO steps run at 48 ppqn and skip sends below 1/1000 of the range; restores always send", function()
+  local context = load_strata(); context.clock.advance()
+  local lfos = local_value("lfos")
+  for n = 1, 3 do assert_equal(lfos[n]:get("ppqn"), 48, "LFO " .. n .. " ppqn") end
+  params:set("filter_mix", 0.5); params:set("strata_lfo1_dest", 6)  -- filt mix (0-1)
+  params:set("lfo_free_1", 300); params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
+  -- ten seconds of a 300 s sine at 120 BPM: 96 steps a second, from the floor
+  local steps = 10 * 96
+  context.clear_engine_calls()
+  for step = 1, steps do
+    context.lfo.tick(lfos[1], (math.sin(2 * math.pi * (0.75 + step / (300 * 96))) + 1) / 2)
+  end
+  local calls = context.calls_named("setFilter")
+  assert_true(#calls >= 5 and #calls <= 15, "a slow LFO sends rarely (" .. #calls .. " of " .. steps .. " steps)")
+  for index = 2, #calls do
+    assert_true(math.abs(calls[index].args[4] - calls[index - 1].args[4]) >= 0.001 - 1e-12, "each send moves >= 1/1000")
+  end
+  -- a step below the threshold is skipped, but turning the LFO off restores at once
+  local last_sent = calls[#calls].args[4]
+  context.clear_engine_calls()
+  -- (mix 0.5 at depth 100: the sent mix equals the raw value)
+  context.lfo.tick(lfos[1], last_sent + 0.0004)
+  assert_equal(#context.calls_named("setFilter"), 0, "tiny step skipped")
+  params:set("lfo_1", 1)
+  calls = context.calls_named("setFilter")
+  assert_equal(#calls, 1, "restore sends"); assert_near(calls[1].args[4], 0.5, 1e-9, "stored mix restored")
+  assert_true(last_sent ~= 0.5, "the restore was a change")
+  -- a restore sends even when the engine already has the stored value
+  params:set("lfo_1", 2); context.lfo.tick(lfos[1], 0.5)        -- scaled 0: value 0.5
+  context.clear_engine_calls(); params:set("lfo_depth_1", 0)
+  assert_equal(#context.calls_named("setFilter"), 1, "depth 0 restore sends")
+  -- a fast LFO sends on every step
+  params:set("lfo_depth_1", 100); context.clear_engine_calls()
+  for step = 1, 20 do context.lfo.tick(lfos[1], step % 2) end
+  assert_equal(#context.calls_named("setFilter"), 20, "large steps all sent")
+end)
+
 test("cleanup stops the LFOs and restores their destinations", function()
   local context = load_strata(); context.clock.advance()
   params:set("filter_freq", 800); params:set("strata_lfo1_dest", 4)

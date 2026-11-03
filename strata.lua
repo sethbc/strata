@@ -509,8 +509,10 @@ local function buffer_state_changed(value)
 end
 
 -- Param -> engine. A param action stores its value and calls
--- send_param_to_engine(id, value); the global LFOs call it with modulated
--- values, so both drive the engine through one path. engine_senders[id]
+-- send_param_to_engine(id, value), which adds the offsets of any global LFO
+-- modulating that param, so an edit (or the drift, a mutation, a scene fade)
+-- never sends the plain value under a running LFO. The LFOs drive the
+-- engine through the same path (send_engine_value). engine_senders[id]
 -- holds the engine call for a param (gated on the voice running where the
 -- engine needs that). engine_param_values remembers the last value sent per
 -- param, so a command that carries several params (setFilter, setDelay,
@@ -519,6 +521,8 @@ end
 -- other.
 local engine_senders = {}
 local engine_param_values = {}
+local lfo_last_dest = {}   -- per LFO: param id it modulates now (nil = none)
+local lfo_scaled = {}      -- per LFO: its last scaled value (-depth..depth) at lfo_last_dest
 
 -- The value the engine last got for a param (its stored value until sent)
 local function engine_param_value(param_id)
@@ -527,10 +531,31 @@ local function engine_param_value(param_id)
   return value
 end
 
-function send_param_to_engine(param_id, value)
+-- value plus scaled * half the range of every LFO on param_id (LFOs on one
+-- destination add up), clamped to the range; value itself when no LFO is on it
+local function with_lfo_offsets(param_id, value)
+  local offset, modulated = 0, false
+  for n = 1, NUM_LFOS do
+    if lfo_last_dest[n] == param_id then
+      offset = offset + lfo_scaled[n]
+      modulated = true
+    end
+  end
+  if not modulated then return value end
+  local minval, maxval = param_range(param_id)
+  return util.clamp(value + offset * 0.5 * (maxval - minval), minval, maxval)
+end
+
+-- Record the value as sent and run the param's engine call
+local function send_engine_value(param_id, value)
   engine_param_values[param_id] = value
   local sender = engine_senders[param_id]
   if sender then sender(value) end
+end
+
+-- A param's stored value, as modulated by the LFOs on it. Always sends.
+function send_param_to_engine(param_id, value)
+  send_engine_value(param_id, with_lfo_offsets(param_id, value))
 end
 
 -- sync_voice_values_to_engine sends a voice's stored values: forget what
@@ -591,12 +616,18 @@ engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 -- send_param_to_engine; the param itself is never written. The library
 -- stops calling the action when an LFO is turned off or its depth is 0, so
 -- Strata re-sends the stored value then, and when the destination changes.
+-- (lfo_last_dest and lfo_scaled are declared with send_param_to_engine.)
 local lfos = {}
 local selected_lfo = 1     -- LFO page and arc ring 4
-local lfo_last_dest = {}   -- per LFO: param id it modulates now (nil = none)
-local lfo_scaled = {}      -- per LFO: its last scaled value (-depth..depth) at lfo_last_dest
 local lfo_last_raw = {}    -- per LFO: last raw shape value (0..1), for the LFO page dot
 local LFO_DEFAULT_PERIOD = 4  -- seconds (free mode)
+-- Library steps per beat (its default is 96): the action, and so an engine
+-- message, runs on every step, so this bounds the message rate (96/s per LFO
+-- at 120 BPM) while a 10 Hz LFO still gets several steps per cycle
+local LFO_PPQN = 48
+-- An LFO step is not sent when the destination's engine value would move by
+-- less than this fraction of its range since the last value sent to it
+local LFO_SEND_THRESHOLD = 1 / 1000
 
 -- LFO destinations in strata_lfo<n>_dest option order: {label, resolve},
 -- where resolve returns the param id to modulate (nil for none). A voice's
@@ -643,25 +674,14 @@ function lfo_destination_id(n)
   return LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].resolve()
 end
 
--- A param's stored value plus the offsets of every LFO on it, clamped to its
--- range (LFOs on one destination add up)
-local function lfo_modulated_value(param_id)
-  local minval, maxval = param_range(param_id)
-  local offset = 0
-  for n = 1, NUM_LFOS do
-    if lfo_last_dest[n] == param_id then offset = offset + lfo_scaled[n] end
-  end
-  return util.clamp(params:get(param_id) + offset * 0.5 * (maxval - minval), minval, maxval)
-end
-
 -- LFO n stops modulating its destination: the engine gets the stored value
--- back (plus any other LFO's offset on it)
+-- back (plus any other LFO's offset on it). Always sends.
 function restore_lfo_destination(n)
   local param_id = lfo_last_dest[n]
   if not param_id then return end
   lfo_last_dest[n] = nil
   lfo_scaled[n] = nil
-  send_param_to_engine(param_id, lfo_modulated_value(param_id))
+  send_param_to_engine(param_id, params:get(param_id))
 end
 
 -- LFO n's action (the library passes scaled and raw)
@@ -674,7 +694,14 @@ function apply_lfo(n, scaled, raw)
   if not param_id then return end
   lfo_last_dest[n] = param_id
   lfo_scaled[n] = scaled
-  send_param_to_engine(param_id, lfo_modulated_value(param_id))
+  local value = with_lfo_offsets(param_id, params:get(param_id))
+  -- skip steps too small to matter (a slow LFO moves very little per step)
+  local last_sent = engine_param_values[param_id]
+  if last_sent ~= nil then
+    local minval, maxval = param_range(param_id)
+    if math.abs(value - last_sent) < (maxval - minval) * LFO_SEND_THRESHOLD then return end
+  end
+  send_engine_value(param_id, value)
 end
 
 -- LFO page dot: the library's running phase is internal (get("phase") is
@@ -749,6 +776,7 @@ function add_lfo_params()
       baseline = "center",
       action = function(scaled, raw) apply_lfo(n, scaled, raw) end
     }
+    lfos[n]:set("ppqn", LFO_PPQN)  -- before start: the sprocket is built from it
     -- the library's params lfo_<n>, lfo_shape_<n>, lfo_depth_<n> (0-100 %), ...
     lfos[n]:add_params(tostring(n), nil, "LFO " .. n)
     note_lfo_reset(n)
@@ -2603,14 +2631,17 @@ end
 -- row): "L<n>", one cycle of its shape (64 px), a dot at the estimated phase
 -- and last raw value while it runs, then its destination and state/depth
 -- right-aligned
-local LFO_ROW_FIRST_Y = 16   -- top of LFO 1's row
-local LFO_ROW_SPACING = 15
-local LFO_WAVE_HEIGHT = 10   -- shape value 1 at the row top, 0 at top + 10
-local LFO_WAVE_X = 12
-local LFO_WAVE_WIDTH = 64
-local LFO_PAGE_FPS = 15
--- the random shape holds a new value each half cycle; drawn as two steps
-local LFO_RANDOM_DISPLAY_LEVELS = {0.75, 0.3}
+-- (one table: the script's main chunk is at Lua's 200-local limit)
+local LFO_PAGE = {
+  row_first_y = 16,   -- top of LFO 1's row
+  row_spacing = 15,
+  wave_height = 10,   -- shape value 1 at the row top, 0 at top + 10
+  wave_x = 12,
+  wave_width = 64,
+  fps = 15,
+  -- the random shape holds a new value each half cycle; drawn as two steps
+  random_display_levels = {0.75, 0.3}
+}
 local lfo_page_clock = nil
 
 -- One point (0..1) of a shape at a phase, as the library's process_lfo
@@ -2627,7 +2658,7 @@ function lfo_shape_value(shape, phase)
   elseif shape == "square" then
     return phase < 0.5 and 1 or 0
   end
-  return LFO_RANDOM_DISPLAY_LEVELS[phase < 0.5 and 1 or 2]  -- random
+  return LFO_PAGE.random_display_levels[phase < 0.5 and 1 or 2]  -- random
 end
 
 local function lfo_running(n)
@@ -2636,8 +2667,8 @@ end
 
 function redraw_lfo()
   for n = 1, NUM_LFOS do
-    local top = LFO_ROW_FIRST_Y + (n - 1) * LFO_ROW_SPACING
-    local bottom = top + LFO_WAVE_HEIGHT
+    local top = LFO_PAGE.row_first_y + (n - 1) * LFO_PAGE.row_spacing
+    local bottom = top + LFO_PAGE.wave_height
     local running = lfo_running(n)
     local label_level = n == selected_lfo and 15 or 4
 
@@ -2647,19 +2678,19 @@ function redraw_lfo()
 
     local shape = params:string("lfo_shape_" .. n)
     screen.level(running and 6 or 2)
-    for px = 0, LFO_WAVE_WIDTH - 1 do
-      local y = bottom - lfo_shape_value(shape, px / (LFO_WAVE_WIDTH - 1)) * LFO_WAVE_HEIGHT
+    for px = 0, LFO_PAGE.wave_width - 1 do
+      local y = bottom - lfo_shape_value(shape, px / (LFO_PAGE.wave_width - 1)) * LFO_PAGE.wave_height
       if px == 0 then
-        screen.move(LFO_WAVE_X, y)
+        screen.move(LFO_PAGE.wave_x, y)
       else
-        screen.line(LFO_WAVE_X + px, y)
+        screen.line(LFO_PAGE.wave_x + px, y)
       end
     end
     screen.stroke()
 
     if running and lfo_last_raw[n] then
-      local x = util.round(LFO_WAVE_X + lfo_phase_estimate(n) * (LFO_WAVE_WIDTH - 1))
-      local y = util.round(bottom - lfo_last_raw[n] * LFO_WAVE_HEIGHT)
+      local x = util.round(LFO_PAGE.wave_x + lfo_phase_estimate(n) * (LFO_PAGE.wave_width - 1))
+      local y = util.round(bottom - lfo_last_raw[n] * LFO_PAGE.wave_height)
       screen.level(15)
       screen.rect(x - 1, y - 1, 3, 3)
       screen.fill()
@@ -2680,7 +2711,7 @@ local function start_lfo_page_clock()
   if lfo_page_clock then return end
   lfo_page_clock = clock.run(function()
     while true do
-      clock.sleep(1 / LFO_PAGE_FPS)
+      clock.sleep(1 / LFO_PAGE.fps)
       redraw()
     end
   end)
@@ -3042,10 +3073,12 @@ end
 
 -- LFO page rings: 1-3 the depth of LFO 1-3 (whole percents), 4 the
 -- selected LFO's period (free seconds, or the clocked rate option)
-local ARC_LFO_TICKS_PER_PERCENT = 10
-local ARC_LFO_FREE_SCALE = 1 / 10
-local ARC_LFO_TICKS_PER_RATE = 20
-local ARC_LFO_PERIOD_RING = 4
+local ARC_LFO = {
+  ticks_per_percent = 10,
+  free_scale = 1 / 10,
+  ticks_per_rate = 20,
+  period_ring = 4
+}
 local arc_lfo_ticks = {}  -- per ring: ticks not yet worth a whole step
 
 -- Whole steps in a ring's accumulated ticks; the rest is kept for later
@@ -3065,14 +3098,14 @@ end
 
 local function arc_lfo_delta(n, delta)
   if n <= NUM_LFOS then
-    local steps = arc_whole_steps(n, delta, ARC_LFO_TICKS_PER_PERCENT)
+    local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_percent)
     if steps ~= 0 then params:delta("lfo_depth_" .. n, steps) end
-  elseif n == ARC_LFO_PERIOD_RING then
+  elseif n == ARC_LFO.period_ring then
     local period_id = lfo_period_param_id(selected_lfo)
     if period_id == "lfo_free_" .. selected_lfo then
-      params:delta(period_id, delta * ARC_LFO_FREE_SCALE)
+      params:delta(period_id, delta * ARC_LFO.free_scale)
     else
-      local steps = arc_whole_steps(n, delta, ARC_LFO_TICKS_PER_RATE)
+      local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_rate)
       if steps ~= 0 then params:delta(period_id, steps) end
     end
   end
@@ -3083,7 +3116,7 @@ local function arc_lfo_redraw(arc_port)
   for n = 1, NUM_LFOS do
     arc_port:segment(n, 0, param_fraction("lfo_depth_" .. n) * math.pi * 2, lfo_running(n) and 15 or 4)
   end
-  arc_port:segment(ARC_LFO_PERIOD_RING, 0, param_fraction(lfo_period_param_id(selected_lfo)) * math.pi * 2, 12)
+  arc_port:segment(ARC_LFO.period_ring, 0, param_fraction(lfo_period_param_id(selected_lfo)) * math.pi * 2, 12)
 end
 
 local function arc_ignore_delta() end

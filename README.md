@@ -84,7 +84,7 @@ Three LFOs, built on norns' own LFO library, can each modulate one parameter:
 - **Destinations** - none, master density, tape drift, filter freq / res / mix, delay time / feedback / mix, reverb mix / size / damp, and for each voice: its main parameter (the one E3 adjusts: the synthesis parameter, or buffer position for a buffer-sourced voice, grain size for an input-sourced one), grain size, density, pitch, spread, buffer position, rate and scan
 - **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
 
-The fastest rate is 10 Hz (the library's 0.1 s free period); Confluence promised 20 Hz, which would need the LFOs in the engine instead of Lua. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
+The fastest rate is 10 Hz (the library's 0.1 s free period); Confluence promised 20 Hz, which would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
 ### Scene System & Automation
 
