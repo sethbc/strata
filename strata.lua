@@ -1863,17 +1863,15 @@ function pattern_clock_start()
       -- Trigger voices that have active steps
       for voice_idx = 1, NUM_VOICES do
         if patterns[voice_idx][pattern_position] > 0 then
-          -- Retrigger voice for gate/trigger behavior
           if voices[voice_idx].active then
-            -- Voice is already on - retrigger by toggling off then on
-            toggle_voice(voice_idx)
-            clock.sleep(0.01)  -- Brief gap for retrigger
-            toggle_voice(voice_idx)
+            -- Voice is already running: accent it in place. A step must
+            -- never create new synth nodes (toggling would stack whole
+            -- voice/grain/mod chains through their long release tails).
+            engine.retrigger(voice_idx - 1)
           else
             -- Voice is off - turn it on
             toggle_voice(voice_idx)
           end
-          -- Could add velocity/accent control here based on pattern value
         end
       end
 

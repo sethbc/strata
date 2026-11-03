@@ -46,11 +46,14 @@ Engine_Strata : CroneEngine {
             mod1=0.1, mod2=0.15, amp=0.3, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, env, noiseSource, modSig, modFreq, modAmp;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(4, 1, 8), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -60,7 +63,7 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals with clamping to prevent excessive modulation
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
             modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-            modAmp = (amp * (1 + modSig)).clip(0, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             noiseSource = PinkNoise.ar(noise) + LFNoise1.ar(100, 0.3);
 
@@ -85,11 +88,14 @@ Engine_Strata : CroneEngine {
             modFreq=0.05, amp=0.25, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, mod, env, carrier, modSig, modFreqVal, modAmp;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(5, 1, 10), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -99,7 +105,7 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals
             modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
             modFreqVal = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig);
+            modAmp = amp * (1 + modSig) * (1 + accent);
 
             modFreq = LFNoise1.kr(0.1).range(modFreq * 0.5, modFreq * 2);
             ratio = ratio + LFNoise1.kr(0.08).range(-0.1, 0.1);
@@ -118,11 +124,14 @@ Engine_Strata : CroneEngine {
             arg out, gate=1, freq=60, fold=1, mod=0.2, amp=0.3, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, env, foldAmt, modSig, modFreq, modAmp;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(3, 1, 6), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -132,7 +141,7 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals with clamping to prevent excessive modulation
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
             modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-            modAmp = (amp * (1 + modSig)).clip(0, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             foldAmt = fold * LFNoise1.kr(mod).range(0.5, 1.5);
             sig = SinOsc.ar(modFreq * [1, 1.002]);
@@ -147,11 +156,14 @@ Engine_Strata : CroneEngine {
             arg out, gate=1, freq=40, drift=0.02, amp=0.4,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, env, modFreq, modSig, modAmp;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(8, 1, 12), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -162,7 +174,7 @@ Engine_Strata : CroneEngine {
             modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
             modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
             modFreq = modFreq + LFNoise1.kr(drift).range(-2, 2);
-            modAmp = amp * (1 + modSig);
+            modAmp = amp * (1 + modSig) * (1 + accent);
 
             sig = SinOsc.ar(modFreq ! 2);
             sig = sig + (SinOsc.ar(modFreq * 0.5) * 0.3);
@@ -175,11 +187,14 @@ Engine_Strata : CroneEngine {
             res=0.3, amp=0.3, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, env, modSig, modFreq, modAmp, modWidth;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -189,7 +204,7 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals with clamping to prevent excessive modulation
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
             modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-            modAmp = (amp * (1 + modSig)).clip(0, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Modulate pulse width with LFO and cross-mod
             modWidth = width + (LFNoise1.kr(0.15).range(-0.2, 0.2)) + (modSig * 0.3);
@@ -211,11 +226,14 @@ Engine_Strata : CroneEngine {
             excite=0.3, amp=0.35, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
-            var sig, env, modSig, modFreq, modAmp, noise, pluck;
-            var mod1Sig, mod2Sig, mod3Sig;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
+            var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -225,16 +243,20 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals with clamping to prevent excessive modulation
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
             modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-            modAmp = (amp * (1 + modSig)).clip(0, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
+
+            // Excitation trigger: the free-running exciter plus retrigger
+            // commands, so a pattern step actually re-plucks the string
+            exciteTrig = Impulse.ar(excite) + T2A.ar(t_trig);
 
             // Excitation signal - burst of noise
             noise = PinkNoise.ar(1);
-            pluck = Decay.ar(Impulse.ar(excite), 0.01, noise);
+            pluck = Decay.ar(exciteTrig, 0.01, noise);
 
             // Karplus-Strong with variable decay
             sig = Pluck.ar(
                 in: pluck,
-                trig: Impulse.ar(excite),
+                trig: exciteTrig,
                 maxdelaytime: 0.1,
                 delaytime: modFreq.reciprocal,
                 decaytime: decay,
@@ -244,7 +266,7 @@ Engine_Strata : CroneEngine {
             // Slight detuning for stereo width
             sig = [sig, Pluck.ar(
                 in: pluck,
-                trig: Impulse.ar(excite),
+                trig: exciteTrig,
                 maxdelaytime: 0.1,
                 delaytime: (modFreq * 1.002).reciprocal,
                 decaytime: decay,
@@ -262,11 +284,14 @@ Engine_Strata : CroneEngine {
             brightness=0.5, amp=0.25, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
-            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0;
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            t_trig=0;
             var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
-            var mod1Sig, mod2Sig, mod3Sig;
+            var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
+            // Accent envelope fired by the retrigger command (pattern steps)
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -276,7 +301,7 @@ Engine_Strata : CroneEngine {
             // Mix modulation signals with clamping to prevent excessive modulation
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
             modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-            modAmp = (amp * (1 + modSig)).clip(0, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Slowly evolving ratio for inharmonic movement
             ratio = ratio + (LFNoise1.kr(mod).range(-0.1, 0.1));
@@ -399,6 +424,13 @@ Engine_Strata : CroneEngine {
                 \in, bus,
                 \out, modBus
             ], target: context.xg, addAction: \addAfter);
+        });
+
+        // Re-articulate a running voice without creating new nodes:
+        // fires the voice synth's accent envelope (and re-plucks Karplus)
+        this.addCommand(\retrigger, "i", { arg msg;
+            var synth = synths[("voice" ++ msg[1]).asSymbol];
+            if (synth.notNil) { synth.set(\t_trig, 1) };
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;
