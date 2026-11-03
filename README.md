@@ -616,6 +616,8 @@ Off-device checks (no norns needed):
 
 `test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands.
 
+GitHub Actions (`.github/workflows/test.yml`) runs all three on every pull request and on pushes to `main`: the Lua tests under Lua 5.3 (the version norns runs) and LuaJIT, and the engine check on Ubuntu with SuperCollider, a dummy JACK server and `monome/norns` at a pinned commit. Both jobs (`lua`, `engine`) are required to pass before a pull request can merge into `main`.
+
 ## Credits
 
 Created for experimental ambient electronic music production.
