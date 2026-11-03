@@ -31,6 +31,7 @@ local voices = {
   {
     name = "resonator",
     active = false,
+    param_order = {"freq", "rq", "noise", "mod1", "mod2", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 100,
       amp = 0.3,
@@ -56,6 +57,7 @@ local voices = {
   {
     name = "fm",
     active = false,
+    param_order = {"freq", "ratio", "index", "modFreq", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 80,
       amp = 0.25,
@@ -80,6 +82,7 @@ local voices = {
   {
     name = "folder",
     active = false,
+    param_order = {"freq", "fold", "mod", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 60,
       amp = 0.3,
@@ -103,6 +106,7 @@ local voices = {
   {
     name = "sub",
     active = false,
+    param_order = {"freq", "drift", "amp"},  -- display / grid order of params
     params = {
       freq = 40,
       amp = 0.4,
@@ -124,6 +128,7 @@ local voices = {
   {
     name = "pulse",
     active = false,
+    param_order = {"freq", "width", "cutoff", "res", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 120,
       amp = 0.3,
@@ -148,6 +153,7 @@ local voices = {
   {
     name = "karplus",
     active = false,
+    param_order = {"freq", "decay", "damping", "excite", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 200,
       amp = 0.35,
@@ -172,6 +178,7 @@ local voices = {
   {
     name = "ring",
     active = false,
+    param_order = {"freq", "ratio", "mod", "brightness", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 300,
       amp = 0.25,
@@ -496,8 +503,8 @@ function add_voice_params(voice_idx)
   local v = voices[voice_idx]
   params:add_separator("voice " .. voice_idx .. ": " .. v.name)
   
-  -- Voice params
-  for key, value in pairs(v.params) do
+  -- Voice params (in param_order so the menu order is stable)
+  for _, key in ipairs(v.param_order) do
     local spec = get_param_spec(key)
     params:add{
       type = "control",
@@ -785,6 +792,14 @@ function toggle_voice(voice_idx)
   
   update_voice_list()
   redraw()
+  grid_redraw()
+end
+
+function toggle_freeze(voice_idx)
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  frozen[voice_idx] = not frozen[voice_idx]
+  update_voice_list()
+  grid_redraw()
 end
 
 -- Push the complete Lua-side state of a voice to its freshly started engine
@@ -833,6 +848,7 @@ function randomize_voice(voice_idx)
   params:set("v" .. voice_idx .. "_grain_pitch", math.random() * 2 + 0.5)
   
   redraw()
+  grid_redraw()
 end
 
 function update_all_grain_density()
@@ -1311,8 +1327,7 @@ function key(n, z)
       if not voices[selected_voice].active then
         toggle_voice(selected_voice)
       else
-        frozen[selected_voice] = not frozen[selected_voice]
-        update_voice_list()
+        toggle_freeze(selected_voice)
       end
     end
   end
@@ -1496,8 +1511,7 @@ function arc_key(n, s)
     if not voices[selected_voice].active then
       toggle_voice(selected_voice)
     else
-      frozen[selected_voice] = not frozen[selected_voice]
-      update_voice_list()
+      toggle_freeze(selected_voice)
     end
     redraw()
   end
@@ -1563,58 +1577,85 @@ function arc_redraw()
 end
 
 -- Grid functions
+local MAX_GRID_PORTS = 4
+local GRID_FADER_ROWS = 4     -- 256-grid parameter page: one fader per row 9-12
+local GRID_FADER_WIDTH = 16   -- fader columns
+local GRID_FADER_FIRST_ROW = 9
+local GRID_PARAM_PAGE_ROW = 13
+
+-- Pick a grid's layout by its exact size. 16x16 must be matched exactly or
+-- an 8x16 grid (rows == 16) would be treated as a 256.
+local function grid_layout(grid_port)
+  local cols, rows = grid_port.cols, grid_port.rows
+  if cols == 16 and rows == 16 then
+    return "256"
+  elseif cols == 16 and rows == 8 then
+    return "128h"
+  elseif cols == 8 and rows == 16 then
+    return "128v"
+  elseif cols == 8 and rows == 8 then
+    return "64"
+  end
+  return nil
+end
+
+-- Store a grid port's vport and route its key events to grid_key. Handlers
+-- live on the vport only: norns fires both device.key and vports[port].key,
+-- so also setting them on the device would run grid_key twice per press.
+local function attach_grid(port)
+  local grid_port = grid.connect(port)
+  grids[port] = grid_port
+  grid_port.key = function(x, y, z)
+    grid_key(port, x, y, z)
+  end
+  return grid_port
+end
+
 function grid_init()
   -- Connect up to 4 grids
-  for i = 1, 4 do
-    local g = grid.connect(i)
-    if g.device then
-      grids[i] = g
-      grids[i].key = function(x, y, z)
-        grid_key(i, x, y, z)
-      end
-      print("grid " .. i .. " connected: " .. g.cols .. "x" .. g.rows)
+  for port = 1, MAX_GRID_PORTS do
+    if grid.connect(port).device then
+      local grid_port = attach_grid(port)
+      print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
     end
   end
   grid_redraw()
 end
 
-function grid.add(g)
-  local port = g.port or 1
-  grids[port] = g
-  grids[port].key = function(x, y, z)
-    grid_key(port, x, y, z)
-  end
-  print("grid " .. port .. " connected: " .. g.cols .. "x" .. g.rows)
+-- Hot-plug. norns passes the raw device here; store its port's vport (as
+-- grid_init does) rather than the device, which has no .device field.
+function grid.add(device)
+  local port = device.port
+  if not port then return end  -- device not assigned to a grid port
+  local grid_port = attach_grid(port)
+  print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
   grid_redraw()
 end
 
-function grid.remove(g)
-  local port = g.port or 1
-  grids[port] = nil
+function grid.remove(device)
+  local port = device.port
+  if not port then return end
+  if grids[port] then
+    grids[port].key = nil
+    grids[port] = nil
+  end
   print("grid " .. port .. " disconnected")
 end
 
-function grid_key(grid_id, x, y, z)
+function grid_key(port, x, y, z)
   if z == 0 then return end  -- Only respond to key presses
 
-  local g = grids[grid_id]
-  if not g then return end
+  local grid_port = grids[port]
+  if not grid_port then return end
 
-  local cols = g.cols
-  local rows = g.rows
-
-  -- Determine grid layout based on size
-  if rows >= 16 then
-    -- 16x16 grid (256 buttons) - full layout
+  local layout = grid_layout(grid_port)
+  if layout == "256" then
     grid_key_256(x, y, z)
-  elseif cols == 16 and rows == 8 then
-    -- 16x8 grid (128 buttons horizontal)
+  elseif layout == "128h" then
     grid_key_128h(x, y, z)
-  elseif cols == 8 and rows == 16 then
-    -- 8x16 grid (128 buttons vertical)
+  elseif layout == "128v" then
     grid_key_128v(x, y, z)
-  elseif cols == 8 and rows == 8 then
-    -- 8x8 grid (64 buttons)
+  elseif layout == "64" then
     grid_key_64(x, y, z)
   end
 
@@ -1668,18 +1709,21 @@ function grid_key_256(x, y, z)
       if x == 7 then params:delta("tempo", 1) end
       if x == 8 then params:delta("tempo", 10) end
     end
-  elseif y >= 9 and y <= 12 then
-    -- Rows 9-12: Parameter manipulation
+  elseif y >= GRID_FADER_FIRST_ROW and y < GRID_FADER_FIRST_ROW + GRID_FADER_ROWS then
+    -- Rows 9-12 (parameter page): one fader per row for the selected voice
     if grid_page == 2 then
-      manipulate_parameter(grid_voice_select, (y - 9) * 16 + x, z)
+      local fader_index = (param_page - 1) * GRID_FADER_ROWS + (y - GRID_FADER_FIRST_ROW + 1)
+      set_fader_param(grid_voice_select, fader_index, x)
     end
-  elseif y == 13 then
-    -- Row 13: Parameter page
-    param_page = util.clamp(x, 1, 4)
+  elseif y == GRID_PARAM_PAGE_ROW then
+    -- Row 13 (parameter page): choose which group of four faders is shown
+    if grid_page == 2 and x <= fader_page_count(grid_voice_select) then
+      param_page = x
+    end
   elseif y == 14 then
     -- Row 14: Voice selection for parameters
     if x <= 7 then
-      grid_voice_select = x
+      select_grid_voice(x)
     elseif x >= 9 and x <= 15 then
       -- Toggle voice on/off
       local voice_idx = x - 8
@@ -1703,10 +1747,7 @@ function grid_key_256(x, y, z)
     -- Row 16: Global functions
     if x <= 7 then
       -- Freeze voice
-      if x <= 7 then
-        frozen[x] = not frozen[x]
-        update_voice_list()
-      end
+      toggle_freeze(x)
     elseif x >= 9 and x <= 16 then
       -- Copy/paste patterns
       -- (Future expansion)
@@ -1758,7 +1799,7 @@ function grid_key_128h(x, y, z)
       end
     elseif x == 16 then
       -- Voice selection for parameters
-      grid_voice_select = grid_voice_select % 7 + 1
+      select_grid_voice(grid_voice_select % 7 + 1)
     end
   end
 end
@@ -1778,7 +1819,7 @@ function grid_key_128v(x, y, z)
       pattern_toggle()
     elseif y >= 10 and y <= 16 then
       -- Voice selection for parameters
-      grid_voice_select = util.clamp(y - 9, 1, 7)
+      select_grid_voice(util.clamp(y - 9, 1, 7))
     end
   end
 end
@@ -1828,33 +1869,61 @@ function randomize_pattern(voice_idx)
   end
 end
 
-function manipulate_parameter(voice_idx, param_id, z)
-  -- Map grid positions to voice parameters
-  local param_map = {
-    -- Main synthesis params
-    {id = "freq", name = "frequency"},
-    {id = "amp", name = "amplitude"},
-    {id = "pan", name = "pan"},
-    -- Voice-specific params (indices 4+)
-  }
-
-  local v = voices[voice_idx]
-  if param_id <= 3 then
-    local param_key = param_map[param_id].id
-    if v.params[param_key] then
-      -- Toggle or adjust parameter
-      local param_full_id = "v" .. voice_idx .. "_" .. param_key
-      if params:lookup_param(param_full_id) then
-        -- Simple toggle for now - could be more sophisticated
-        local current = params:get(param_full_id)
-        local spec = params:lookup_param(param_full_id).controlspec
-        if spec then
-          local new_val = util.linlin(0, 1, spec.minval, spec.maxval, math.random())
-          params:set(param_full_id, new_val)
-        end
-      end
-    end
+-- Ordered param IDs for the 256-grid fader page: the voice's synthesis
+-- params (param_order), its four grain params, then the nine crossmod slot
+-- values (source, amp mod, freq mod for each slot)
+function fader_param_ids(voice_idx)
+  local prefix = "v" .. voice_idx .. "_"
+  local ids = {}
+  for _, key in ipairs(voices[voice_idx].param_order) do
+    table.insert(ids, prefix .. key)
   end
+  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread"}) do
+    table.insert(ids, prefix .. key)
+  end
+  for slot = 1, NUM_MOD_SLOTS do
+    table.insert(ids, prefix .. "mod_source_" .. slot)
+    table.insert(ids, prefix .. "mod_amp_amt_" .. slot)
+    table.insert(ids, prefix .. "mod_freq_amt_" .. slot)
+  end
+  return ids
+end
+
+function fader_page_count(voice_idx)
+  return math.ceil(#fader_param_ids(voice_idx) / GRID_FADER_ROWS)
+end
+
+-- Range of a control param (controlspec) or number param (min/max)
+function param_range(param_id)
+  local param = params:lookup_param(param_id)
+  if param.controlspec then
+    return param.controlspec.minval, param.controlspec.maxval
+  end
+  return param.min, param.max
+end
+
+-- Grid column x (1-16) sets a fader's param linearly across its range
+function set_fader_param(voice_idx, fader_index, x)
+  local param_id = fader_param_ids(voice_idx)[fader_index]
+  if not param_id then return end
+  local minval, maxval = param_range(param_id)
+  local value = util.linlin(1, GRID_FADER_WIDTH, minval, maxval, x)
+  if not params:lookup_param(param_id).controlspec then
+    value = util.round(value)  -- number params (mod sources) are integers
+  end
+  params:set(param_id, value)
+end
+
+-- Grid column (1-16) that shows a fader param's current value
+function fader_position(param_id)
+  local minval, maxval = param_range(param_id)
+  return util.round(util.linlin(minval, maxval, 1, GRID_FADER_WIDTH, params:get(param_id)))
+end
+
+function select_grid_voice(voice_idx)
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  grid_voice_select = voice_idx
+  param_page = util.clamp(param_page, 1, fader_page_count(voice_idx))
 end
 
 function pattern_toggle()
@@ -1913,69 +1982,70 @@ function pattern_clock_stop()
 end
 
 function grid_redraw()
-  for grid_id, g in pairs(grids) do
-    if g and g.device then
-      local cols = g.cols
-      local rows = g.rows
+  if next(grids) == nil then return end  -- no grids: nothing to do
 
-      g:all(0)
+  for _, grid_port in pairs(grids) do
+    if grid_port.device then
+      local layout = grid_layout(grid_port)
 
-      if rows >= 16 then
-        grid_redraw_256(g)
-      elseif cols == 16 and rows == 8 then
-        grid_redraw_128h(g)
-      elseif cols == 8 and rows == 16 then
-        grid_redraw_128v(g)
-      elseif cols == 8 and rows == 8 then
-        grid_redraw_64(g)
+      grid_port:all(0)
+
+      if layout == "256" then
+        grid_redraw_256(grid_port)
+      elseif layout == "128h" then
+        grid_redraw_128h(grid_port)
+      elseif layout == "128v" then
+        grid_redraw_128v(grid_port)
+      elseif layout == "64" then
+        grid_redraw_64(grid_port)
       end
 
-      g:refresh()
+      grid_port:refresh()
     end
   end
 end
 
-function grid_redraw_256(g)
+function grid_redraw_256(grid_device)
   if grid_page == 3 then
     -- Scene page
     -- Row 1: Scene recall (instant)
     for i = 1, 8 do
       local brightness = scenes[i].populated and 8 or 2
       if current_scene == i then brightness = 15 end
-      g:led(i, 1, brightness)
+      grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
     for i = 1, 8 do
       local brightness = scenes[i].populated and 6 or 2
-      g:led(i, 2, brightness)
+      grid_device:led(i, 2, brightness)
     end
 
     -- Row 3: Scene save
     for i = 1, 8 do
-      g:led(i, 3, 4)
+      grid_device:led(i, 3, 4)
     end
 
     -- Row 5: Scene sequencer controls
     if scene_sequencer_enabled then
-      g:led(1, 5, 15)  -- Sequencer on
+      grid_device:led(1, 5, 15)  -- Sequencer on
       -- Show next scene in sequence
       if scene_sequencer_position >= 1 and scene_sequencer_position <= 8 then
-        g:led(scene_sequencer_position, 1, 15)
+        grid_device:led(scene_sequencer_position, 1, 15)
       end
     else
-      g:led(1, 5, 4)  -- Sequencer off
+      grid_device:led(1, 5, 4)  -- Sequencer off
     end
 
     -- Sequence length indicators
     local seq_length = params:get("scene_sequence_length")
     for i = 1, 8 do
-      g:led(i + 2, 5, i <= seq_length and 8 or 2)
+      grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
     end
 
     -- Page indicators (row 8)
     for i = 1, 4 do
-      g:led(12 + i, 8, i == grid_page and 15 or 2)
+      grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
     end
   else
     -- Patterns/parameters pages
@@ -1988,75 +2058,100 @@ function grid_redraw_256(g)
           brightness = math.max(brightness, 4)
           if brightness > 0 then brightness = 15 end
         end
-        g:led(step, voice_idx, brightness)
+        grid_device:led(step, voice_idx, brightness)
       end
     end
 
     -- Row 8: Pattern controls
     if pattern_playing then
-      g:led(1, 8, 15)
-      g:led(2, 8, 15)
+      grid_device:led(1, 8, 15)
+      grid_device:led(2, 8, 15)
     else
-      g:led(1, 8, 4)
-      g:led(2, 8, 4)
+      grid_device:led(1, 8, 4)
+      grid_device:led(2, 8, 4)
     end
 
     -- Tempo indicators
-    g:led(5, 8, 2)
-    g:led(6, 8, 2)
-    g:led(7, 8, 2)
-    g:led(8, 8, 2)
+    grid_device:led(5, 8, 2)
+    grid_device:led(6, 8, 2)
+    grid_device:led(7, 8, 2)
+    grid_device:led(8, 8, 2)
 
     -- Page indicators
     for i = 1, 4 do
-      g:led(12 + i, 8, i == grid_page and 15 or 2)
+      grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
+    end
+
+    -- Rows 9-13 (parameter page): faders and fader page selection
+    if grid_page == 2 then
+      grid_redraw_faders(grid_device)
     end
 
     -- Row 14: Voice status
     for i = 1, 7 do
-      g:led(i, 14, i == grid_voice_select and 15 or 4)
-      g:led(i + 8, 14, voices[i].active and 12 or 2)
+      grid_device:led(i, 14, i == grid_voice_select and 15 or 4)
+      grid_device:led(i + 8, 14, voices[i].active and 12 or 2)
     end
 
     -- Row 16: Freeze status
     for i = 1, 7 do
-      g:led(i, 16, frozen[i] and 12 or 2)
+      grid_device:led(i, 16, frozen[i] and 12 or 2)
     end
   end
 end
 
-function grid_redraw_128h(g)
+-- Fader rows 9-12: a bar (brightness 8) up to the current value, with the
+-- value's own column at 15. Row 13 shows the fader pages, selected at 15.
+function grid_redraw_faders(grid_device)
+  local ids = fader_param_ids(grid_voice_select)
+  for row = 1, GRID_FADER_ROWS do
+    local param_id = ids[(param_page - 1) * GRID_FADER_ROWS + row]
+    if param_id then
+      local y = GRID_FADER_FIRST_ROW + row - 1
+      local position = fader_position(param_id)
+      for x = 1, position - 1 do
+        grid_device:led(x, y, 8)
+      end
+      grid_device:led(position, y, 15)
+    end
+  end
+  for page = 1, fader_page_count(grid_voice_select) do
+    grid_device:led(page, GRID_PARAM_PAGE_ROW, page == param_page and 15 or 4)
+  end
+end
+
+function grid_redraw_128h(grid_device)
   if grid_page == 3 then
     -- Scene page (simplified for 128h layout)
     -- Row 1: Scene recall (instant)
     for i = 1, 8 do
       local brightness = scenes[i].populated and 8 or 2
       if current_scene == i then brightness = 15 end
-      g:led(i, 1, brightness)
+      grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
     for i = 1, 8 do
       local brightness = scenes[i].populated and 6 or 2
-      g:led(i, 2, brightness)
+      grid_device:led(i, 2, brightness)
     end
 
     -- Row 3: Scene save
     for i = 1, 8 do
-      g:led(i, 3, 4)
+      grid_device:led(i, 3, 4)
     end
 
     -- Row 5: Scene sequencer controls
     if scene_sequencer_enabled then
-      g:led(1, 5, 15)  -- Sequencer on
+      grid_device:led(1, 5, 15)  -- Sequencer on
     else
-      g:led(1, 5, 4)  -- Sequencer off
+      grid_device:led(1, 5, 4)  -- Sequencer off
     end
 
     -- Sequence length indicators (simplified)
     local seq_length = params:get("scene_sequence_length")
     for i = 1, 8 do
-      g:led(i, 4, i <= seq_length and 8 or 2)
+      grid_device:led(i, 4, i <= seq_length and 8 or 2)
     end
   else
     -- Pattern/parameter pages
@@ -2068,35 +2163,35 @@ function grid_redraw_128h(g)
           brightness = math.max(brightness, 4)
           if brightness > 0 then brightness = 15 end
         end
-        g:led(step, voice_idx, brightness)
+        grid_device:led(step, voice_idx, brightness)
       end
     end
   end
 
   -- Row 8: Controls (always visible)
   if pattern_playing then
-    g:led(1, 8, 15)
-    g:led(2, 8, 15)
+    grid_device:led(1, 8, 15)
+    grid_device:led(2, 8, 15)
   else
-    g:led(1, 8, 4)
-    g:led(2, 8, 4)
+    grid_device:led(1, 8, 4)
+    grid_device:led(2, 8, 4)
   end
 
   -- Page indicators (3 pages now)
-  g:led(5, 8, grid_page == 1 and 15 or 4)
-  g:led(6, 8, grid_page == 2 and 15 or 4)
-  g:led(7, 8, grid_page == 3 and 15 or 4)
+  grid_device:led(5, 8, grid_page == 1 and 15 or 4)
+  grid_device:led(6, 8, grid_page == 2 and 15 or 4)
+  grid_device:led(7, 8, grid_page == 3 and 15 or 4)
 
   -- Voice status
   for i = 1, 7 do
-    g:led(i + 8, 8, voices[i].active and 12 or 2)
+    grid_device:led(i + 8, 8, voices[i].active and 12 or 2)
   end
 
   -- Voice selection indicator
-  g:led(16, 8, 8)
+  grid_device:led(16, 8, 8)
 end
 
-function grid_redraw_128v(g)
+function grid_redraw_128v(grid_device)
   -- Draw patterns (columns 1-NUM_VOICES)
   for voice_idx = 1, NUM_VOICES do
     for step = 1, PATTERN_LENGTH do
@@ -2105,23 +2200,23 @@ function grid_redraw_128v(g)
         brightness = math.max(brightness, 4)
         if brightness > 0 then brightness = 15 end
       end
-      g:led(voice_idx, step, brightness)
+      grid_device:led(voice_idx, step, brightness)
     end
   end
 
   -- Column 8: Controls
   for i = 1, 7 do
-    g:led(8, i, voices[i].active and 12 or 4)
+    grid_device:led(8, i, voices[i].active and 12 or 4)
   end
-  g:led(8, 9, pattern_playing and 15 or 4)
+  grid_device:led(8, 9, pattern_playing and 15 or 4)
 
   -- Voice selection
   for i = 1, 7 do
-    g:led(8, 9 + i, (i == grid_voice_select) and 15 or 2)
+    grid_device:led(8, 9 + i, (i == grid_voice_select) and 15 or 2)
   end
 end
 
-function grid_redraw_64(g)
+function grid_redraw_64(grid_device)
   -- Draw patterns (rows 1-7, 8 steps only - shows first 8 steps of 16-step pattern)
   for voice_idx = 1, NUM_VOICES do
     for step = 1, 8 do
@@ -2131,14 +2226,14 @@ function grid_redraw_64(g)
         brightness = math.max(brightness, 4)
         if brightness > 0 then brightness = 15 end
       end
-      g:led(step, voice_idx, brightness)
+      grid_device:led(step, voice_idx, brightness)
     end
   end
 
   -- Row 8: Controls
-  g:led(1, 8, pattern_playing and 15 or 4)
+  grid_device:led(1, 8, pattern_playing and 15 or 4)
   for i = 1, 5 do
-    g:led(i + 2, 8, voices[i].active and 12 or 4)
+    grid_device:led(i + 2, 8, voices[i].active and 12 or 4)
   end
 end
 
