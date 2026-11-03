@@ -188,9 +188,44 @@ One row per LFO: `L1`-`L3` (the selected one bright), one cycle of its shape, a 
 
 #### SETUP
 
-Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, and how many buffers were restored when the script started (`buffers: 3 restored`).
+Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, how many buffers were restored when the script started (`buffers: 3 restored`), and the MIDI input: the port Strata listens to and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`) and the channel mode (`ch: per voice`).
 
+- **E2** - MIDI port (1-4)
+- **E3** - MIDI channel mode (per voice, or omni to the selected voice)
 - **K3** - Save scenes to disk (same as PARAMETERS > save scenes to disk)
+
+### MIDI (optional)
+
+A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page (E2) or in PARAMETERS > midi; the port numbers are the norns SYSTEM > DEVICES > MIDI slots 1-4. Devices can be plugged in and out while Strata runs.
+
+- **Channels** - In **per voice** mode (the default) MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored. In **omni to selected** mode every channel plays the voice selected with E2
+- **Notes** - A note sets the voice's pitch: its frequency for a synth voice (exact equal temperament, limited to 20 Hz-2 kHz), its buffer rate for a buffer-sourced voice (note 60 plays at rate 1, an octave up doubles it, limited to 0.25x-4x); an input-sourced voice takes no pitch. A voice that is off starts; then the note accents it at the note's velocity (Karplus plucks its string, a triggered-mode voice fires a grain). Voices keep their slow attacks: Strata is not a fast-attack synth, the velocity lands on the accent
+- **Note off** - Ignored by default, so a note starts a voice that keeps sounding. Set PARAMETERS > midi > midi note off to **voice off** for gated playing: a voice stops when its last held note is released, and a note played while it is still fading out brings it back without restarting its synths
+- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice
+- **CC** - Strata has no fixed CC mapping: map CCs to any parameter with norns' PARAMS > MAP (below)
+
+### MIDI CC mapping (norns PARAMS > MAP)
+
+Any Strata parameter can follow a MIDI CC through norns' built-in mapping:
+
+1. Open the norns menu (K1), go to PARAMETERS and choose **MAP >** (E2 to select it, K3 to enter). In EDIT or MAP, K1 + K3 switches between the two
+2. Select a parameter with E2 and press K3 to open its mapping
+3. With **learn** selected press K3 and move the knob or fader on your controller (or set the device, channel and CC by hand with E2/E3); the remaining fields set the CC and output ranges
+4. K2 leaves the mapping and saves it. norns keeps Strata's mappings in `~/dust/data/strata/strata.pmap` and loads them every time the script starts
+
+Confluence (the norns script Strata's buffers, FX, LFOs and MIDI input come from) suggested these CCs; they make a good starting point:
+
+| CC | Controller | Strata parameter |
+|----|------------|------------------|
+| 1 | Mod wheel | master density |
+| 7 | Volume | a voice's amp (for example voice 1 amp) |
+| 10 | Pan | a voice's position spread (grain spread) |
+| 74 | Brightness | filter freq |
+| 71 | Resonance | filter res |
+| 91 | Reverb | reverb mix |
+| 93 | Chorus | delay mix |
+
+Confluence mapped CC 7 to the global grain amplitude and CC 10 to position spread; Strata has neither as a single global parameter, so map them to the voices you play.
 
 ### Monome Arc (optional)
 
@@ -457,6 +492,11 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Master density
 - Tempo (40-300 BPM; sets norns' clock tempo, starts at the current clock tempo)
 
+### MIDI Section (group)
+- MIDI device: the port Strata listens to (1-4, default 1)
+- MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
+- MIDI note off: ignore (the default) or voice off
+
 ### Mutations Section
 - Mutations enabled (on/off)
 - Mutation rate (0.5-10 seconds)
@@ -551,6 +591,7 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Del
 - SuperCollider (included with norns)
 - monome arc (optional - provides tactile parameter control with LED feedback)
 - monome grid (optional - provides pattern sequencing and parameter manipulation)
+- MIDI keyboard or controller (optional - plays voices with velocity and pitchbend; CCs through norns' PARAMS > MAP)
 
 ## Development
 

@@ -1459,13 +1459,14 @@ end)
 
 test("stub midi delivers note_on, cc and pitchbend messages", function()
   local context = load_strata()
-  local vport = midi.connect(1)
+  -- port 3: Strata listens to port 1 (midi_device) and re-attaches it on midi.add
+  local vport = midi.connect(3)
   local seen = {}
   vport.event = function(data) table.insert(seen, midi.to_msg(data)) end
-  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
-  context.midi.send(1, { type = "cc", cc = 1, val = 64, ch = 1 })
-  context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })
-  context.midi.send(1, { type = "note_on", note = 61, vel = 0, ch = 2 })
+  context.midi.send(3, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  context.midi.send(3, { type = "cc", cc = 1, val = 64, ch = 1 })
+  context.midi.send(3, { type = "pitchbend", val = 8192 + 4096, ch = 1 })
+  context.midi.send(3, { type = "note_on", note = 61, vel = 0, ch = 2 })
   assert_equal(seen[1].type, "note_on"); assert_equal(seen[1].note, 60); assert_equal(seen[1].ch, 3)
   assert_equal(seen[1].vel, 100)
   assert_equal(seen[2].type, "cc"); assert_equal(seen[2].cc, 1); assert_equal(seen[2].val, 64)
@@ -1480,6 +1481,193 @@ test("stub midi delivers note_on, cc and pitchbend messages", function()
   assert_equal(midi.devices[device.id], device)
   context.midi.unplug(2)
   assert_equal(removed, device); assert_equal(midi.connect(2).device, nil)
+end)
+
+test("MIDI notes set pitch per source, start or retrigger the voice with velocity", function()
+  local context = load_strata(); context.clock.advance()
+  context.midi.send(1, { type = "note_on", note = 69, vel = 127, ch = 3 })   -- voice 3, off
+  assert_near(params:get("v3_freq"), 440, 0.01); assert_true(local_value("voices")[3].active)
+  local rt = context.calls_named("retrigger"); assert_equal(rt[#rt].args[1], 2); assert_near(rt[#rt].args[2], 1, 1e-9)
+  params:set("v1_source", 2)
+  context.midi.send(1, { type = "note_on", note = 72, vel = 64, ch = 1 })
+  assert_near(params:get("v1_buf_rate"), 2, 1e-6); rt = context.calls_named("retrigger"); assert_near(rt[#rt].args[2], 64 / 127, 1e-9)
+  params:set("v2_source", 10); context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 2 })  -- input source: no error
+  context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 9 })  -- no voice: ignored
+  params:set("v1_source", 1); params:set("midi_channel_mode", 2)        -- omni -> selected voice (1, synth again)
+  context.midi.send(1, { type = "note_on", note = 57, vel = 100, ch = 9 })
+  assert_near(params:get("v1_freq"), 220, 0.01)
+end)
+
+test("MIDI note details: start order, exact pitch, clamping, ignored channels", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = local_value("voices")
+  -- a stopped voice is started (voiceOn) before the retrigger
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 61, vel = 100, ch = 4 })
+  local names = {}
+  for _, call in ipairs(context.engine_calls) do table.insert(names, call.name) end
+  local voice_on_at, retrigger_at
+  for index, name in ipairs(names) do
+    if name == "voiceOn" then voice_on_at = voice_on_at or index end
+    if name == "retrigger" then retrigger_at = index end
+  end
+  assert_true(voice_on_at and retrigger_at and voice_on_at < retrigger_at, "voiceOn, then retrigger")
+  assert_true(voices[4].active, "note on starts voice 4")
+  -- equal temperament is not rounded to whole hertz
+  assert_near(params:get("v4_freq"), 13.75 * 2 ^ ((61 - 9) / 12), 0.01, "note 61 = 277.18 Hz")
+  -- a running voice is only retriggered (no second voiceOn)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 62, vel = 50, ch = 4 })
+  assert_equal(#context.calls_named("voiceOn"), 0, "running voice: no voiceOn")
+  assert_equal(#context.calls_named("retrigger"), 1, "running voice: one retrigger")
+  -- pitch is clamped to the voice's range
+  context.midi.send(1, { type = "note_on", note = 127, vel = 100, ch = 4 })
+  assert_near(params:get("v4_freq"), select(2, param_range("v4_freq")), 1e-9, "high notes clamp to the freq maximum")
+  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 4 })
+  assert_near(params:get("v4_freq"), (param_range("v4_freq")), 1e-9, "low notes clamp to the freq minimum")
+  params:set("v5_source", 3)
+  context.midi.send(1, { type = "note_on", note = 120, vel = 100, ch = 5 })
+  assert_near(params:get("v5_buf_rate"), 4, 1e-9, "buffer rate clamps to 4")
+  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 5 })
+  assert_near(params:get("v5_buf_rate"), 0.25, 1e-9, "buffer rate clamps to 0.25")
+  -- an input-sourced voice takes no pitch but still starts and accents
+  params:set("v6_source", 10)
+  local freq_before, rate_before = params:get("v6_freq"), params:get("v6_buf_rate")
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 90, vel = 127, ch = 6 })
+  assert_equal(params:get("v6_freq"), freq_before); assert_equal(params:get("v6_buf_rate"), rate_before)
+  assert_true(voices[6].active and #context.calls_named("retrigger") == 1, "input voice started and accented")
+  -- per voice: channels 8-16 address no voice; other message types are ignored
+  context.clear_engine_calls()
+  for channel = 8, 16 do context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = channel }) end
+  context.midi.send(1, { type = "cc", cc = 1, val = 64, ch = 1 })
+  context.midi.send(1, { type = "program_change", val = 3, ch = 1 })
+  context.midi.send(1, { type = "clock" })
+  assert_equal(#context.engine_calls, 0, "nothing reaches the engine")
+end)
+
+test("note off mode and pitchbend", function()
+  local context = load_strata(); context.clock.advance()
+  context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 }); assert_true(local_value("voices")[1].active)
+  params:set("midi_note_off", 2); context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 })
+  assert_true(not local_value("voices")[1].active)
+  context.midi.send(1, { type = "pitchbend", val = 8192 + 8191, ch = 2 })
+  local calls = context.calls_named("setVoiceParam"); local last = calls[#calls]
+  assert_equal(last.args[2], "bend"); assert_near(last.args[3], 2 ^ (2 / 12), 1e-3)
+end)
+
+test("voice off mode: the voice stops when its last held note is released", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = local_value("voices")
+  params:set("midi_note_off", 2)
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  context.midi.send(1, { type = "note_on", note = 64, vel = 100, ch = 3 })
+  context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 3 })
+  assert_true(voices[3].active, "another note is still held")
+  context.midi.send(1, { type = "note_on", note = 64, vel = 0, ch = 3 })   -- velocity 0 = note off
+  assert_true(not voices[3].active, "last note released: voice off")
+  -- a note during the release starts the voice again through voiceOn (the
+  -- engine re-gates the releasing synths)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 67, vel = 90, ch = 3 })
+  assert_true(voices[3].active); assert_equal(#context.calls_named("voiceOn"), 1)
+  -- omni: a note off reaches the voice its note on started, even if the selection moved
+  params:set("midi_channel_mode", 2)
+  context.midi.send(1, { type = "note_on", note = 48, vel = 100, ch = 1 })   -- selected voice 1
+  local _, set_selected = find_upvalue("selected_voice"); set_selected(5)
+  context.midi.send(1, { type = "note_off", note = 48, vel = 0, ch = 1 })
+  assert_true(not voices[1].active, "voice 1 stops on its note's release")
+  assert_true(not voices[5].active, "the newly selected voice is untouched")
+  -- ignore mode leaves voices running
+  params:set("midi_note_off", 1)
+  context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 1 })
+  context.midi.send(1, { type = "note_off", note = 50, vel = 0, ch = 1 })
+  assert_true(voices[5].active, "ignore: note off does nothing")
+end)
+
+test("pitchbend: range, buffer voices, stopped voices, restarts and resets", function()
+  local context = load_strata(); context.clock.advance()
+  local function last_bend(engine_voice)
+    local value
+    for _, call in ipairs(context.calls_named("setVoiceParam")) do
+      if call.args[1] == engine_voice and call.args[2] == "bend" then value = call.args[3] end
+    end
+    return value
+  end
+  context.midi.send(1, { type = "pitchbend", val = 0, ch = 1 })
+  assert_near(last_bend(0), 2 ^ (-2 / 12), 1e-9, "full down = -2 semitones")
+  context.midi.send(1, { type = "pitchbend", val = 8192, ch = 1 })
+  assert_near(last_bend(0), 1, 1e-12, "centre = 1")
+  -- a buffer-sourced voice gets the same voice-level bend (the engine passes it to strataGrainBuf)
+  params:set("v2_source", 4)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 2 })
+  assert_near(last_bend(1), 2 ^ (1 / 12), 1e-9, "buffer voice bend")
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    assert_true(call.args[2] ~= "bend", "bend is not a grain param")
+  end
+  -- bend is transient: not a param and not in scenes
+  assert_equal(params.lookup["v2_bend"], nil, "no bend param")
+  capture_scene(1)
+  assert_equal(local_value("scenes")[1].data.voices[2].params.bend, nil, "scenes do not capture bend")
+  -- a stopped voice remembers the wheel and gets it when it starts
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "pitchbend", val = 8192 - 4096, ch = 4 })
+  assert_equal(last_bend(3), nil, "stopped voice: nothing sent")
+  toggle_voice(4)
+  assert_near(last_bend(3), 2 ^ (-1 / 12), 1e-9, "starting the voice sends the held bend")
+  -- changing the channel mode re-centres every bent voice
+  context.clear_engine_calls()
+  params:set("midi_channel_mode", 2)
+  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centred"); assert_near(last_bend(3), 1, 1e-12, "voice 4 re-centred")
+  assert_equal(last_bend(0), nil, "an unbent voice gets nothing")
+end)
+
+test("MIDI device param, hot-plug and the SETUP page", function()
+  local context = load_strata(); context.clock.advance()
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  assert_equal(params:get("midi_device"), 1); assert_equal(params:get("midi_channel_mode"), 1)
+  assert_equal(params:get("midi_note_off"), 1)
+  assert_equal(params:string("midi_channel_mode"), "per voice")
+  show_page(5)
+  assert_true(screen_has("midi 1: none"), "no device on port 1")
+  assert_true(screen_has("ch: per voice"), "channel mode shown")
+  context.midi.plug(1, "keys")
+  assert_true(screen_has("midi 1: keys"), "plugging a device redraws SETUP")
+  -- E2 selects the port; events on the old port no longer reach Strata
+  enc(2, 1); assert_equal(params:get("midi_device"), 2)
+  assert_true(screen_has("midi 2: none"))
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
+  assert_equal(#context.engine_calls, 0, "port 1 is no longer listened to")
+  context.midi.send(2, { type = "note_on", note = 60, vel = 100, ch = 1 })
+  assert_true(#context.calls_named("retrigger") == 1, "port 2 is")
+  -- E3 sets the channel mode
+  enc(3, 1); assert_equal(params:get("midi_channel_mode"), 2)
+  assert_true(screen_has("ch: omni to selected"))
+  -- unplugging the selected port's device shows none at once
+  context.midi.unplug(2)
+  assert_true(screen_has("midi 2: none"), "unplugging redraws SETUP without the device")
+  -- a long device name is cut to fit the screen
+  context.midi.plug(2, "Very Long Manufacturer Name USB MIDI Interface Port 1")
+  local midi_line
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text:find("^midi 2: ") then midi_line = entry.text end
+  end
+  assert_true(midi_line and #midi_line < #"midi 2: Very Long Manufacturer Name USB MIDI Interface Port 1", "name shortened")
+  assert_screen_layout(context, "SETUP with a long MIDI device name")
+  assert_true(params:get("midi_device") <= 4 and select(2, param_range("midi_device")) == 4, "ports 1-4")
+  -- a re-plug reattaches: the vport still delivers to Strata
+  context.clear_engine_calls()
+  context.midi.send(2, { type = "note_on", note = 62, vel = 100, ch = 1 })
+  assert_equal(#context.calls_named("retrigger"), 1, "re-plugged device plays")
+  cleanup()
+  assert_equal(midi.connect(2).event, nil, "cleanup detaches the MIDI handler")
 end)
 
 test("stub fileselect, musicutil, polls and audio path", function()

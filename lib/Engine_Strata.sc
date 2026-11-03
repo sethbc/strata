@@ -31,6 +31,8 @@ Engine_Strata : CroneEngine {
     var <grainSource;
     var <voiceControls; // Per voice: voice synth controls (params, crossmod) for restarts
     var <grainControls; // Per voice: grain synth controls, carried into a replacement
+    var <releasingSynths;     // Per voice: released synths still in their release (key -> Synth), re-gated by voiceOn
+    var <releasedGrainSource; // Per voice: the source its releasing grain synth was built for
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
@@ -92,6 +94,8 @@ Engine_Strata : CroneEngine {
         grainSource = Array.fill(numVoices, 0);
         voiceControls = Array.fill(numVoices, { Dictionary.new });
         grainControls = Array.fill(numVoices, { Dictionary.new });
+        releasingSynths = Array.fill(numVoices, { Dictionary.new });
+        releasedGrainSource = Array.fill(numVoices, 0);
 
         // SynthDefs
 
@@ -136,7 +140,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, noiseSource, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -154,9 +158,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             noiseSource = PinkNoise.ar(noise) + LFNoise1.ar(100, 0.3);
@@ -186,7 +191,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, mod, env, carrier, modSig, modFreqVal, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -204,9 +209,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreqVal = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreqVal = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             modFreq = LFNoise1.kr(0.1).range(modFreq * 0.5, modFreq * 2);
@@ -227,7 +233,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, foldAmt, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -245,9 +251,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             foldAmt = fold * LFNoise1.kr(mod).range(0.5, 1.5);
@@ -264,7 +271,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, modFreq, modSig, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -282,9 +289,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             // Slow pitch drift whose depth is the drift amount (0 = none)
             modFreq = modFreq * (1 + (LFNoise1.kr(0.1) * drift));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
@@ -301,7 +309,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, modSig, modFreq, modAmp, modWidth;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -319,9 +327,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Modulate pulse width with LFO and cross-mod
@@ -345,7 +354,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -363,9 +372,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Excitation trigger: the free-running exciter plus retrigger
@@ -411,7 +421,7 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0, velocity=1;
+            t_trig=0, velocity=1, bend=1;
             var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
@@ -429,9 +439,10 @@ Engine_Strata : CroneEngine {
 
             // Mix modulation signals with clamping to prevent excessive modulation.
             // The frequency modulator is clamped to -0.9..2 so the modulated
-            // frequency stays positive (at least 0.1 * freq).
+            // frequency stays positive (at least 0.1 * freq). bend is the MIDI
+            // pitchbend ratio (1 = none, +/-2 semitones).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modFreq = freq * bend * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Slowly evolving ratio for inharmonic movement
@@ -667,16 +678,13 @@ Engine_Strata : CroneEngine {
             var voice = msg[1].asInteger;
 
             if (this.validVoice(voice)) {
-                // Starting a running voice replaces it: release the old trio
-                this.releaseVoice(voice);
-
-                // All 3 mod slots start on the silent bus (no modulation).
-                // Voice-specific params, posSpread, crossmod routing and mod
-                // speed are pushed by the Lua script (sync_voice_to_engine)
-                // right after voiceOn; the Lua voices table is the only
-                // source of their values.
+                // All 3 mod slots start on the silent bus (no modulation) and
+                // bend at 1. Voice-specific params, posSpread, crossmod
+                // routing and mod speed are pushed by the Lua script
+                // (sync_voice_to_engine) right after voiceOn; the Lua voices
+                // table is the only source of their values.
                 voiceControls[voice] = Dictionary[
-                    \freq -> msg[2], \amp -> msg[3], \pan -> msg[4],
+                    \freq -> msg[2], \amp -> msg[3], \pan -> msg[4], \bend -> 1,
                     \modBus1 -> silentBus.index, \modBus2 -> silentBus.index, \modBus3 -> silentBus.index,
                     \modAmpAmt1 -> 0, \modAmpAmt2 -> 0, \modAmpAmt3 -> 0,
                     \modFreqAmt1 -> 0, \modFreqAmt2 -> 0, \modFreqAmt3 -> 0
@@ -685,17 +693,9 @@ Engine_Strata : CroneEngine {
                     \grainSize -> msg[5], \grainDensity -> msg[6], \pitchShift -> msg[7]
                 ];
 
-                // A buffer- or input-sourced voice runs no voice synth
-                if (grainSource[voice] == 0) {
-                    synths[this.voiceKey(voice)] = this.startVoiceSynth(voice);
-                };
-                synths[this.grainKey(voice)] = this.startGrainSynth(voice, processGroup, \addToHead);
-
-                // Modulation output synth, after every grain synth
-                synths[this.modKey(voice)] = Synth(\strataMod, [
-                    \in, granBuses[voice],
-                    \out, modBuses[voice]
-                ], target: processGroup, addAction: \addToTail);
+                // Re-gates the synths the voice still has (running or
+                // releasing) and starts the missing ones; never stacks
+                this.gateVoice(voice);
             };
         });
 
@@ -706,8 +706,9 @@ Engine_Strata : CroneEngine {
         // grain when the grain synth is in triggered mode. velocity is set
         // in the same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
-            this.setSynth(this.voiceKey(msg[1]), \velocity, msg[2], \t_trig, 1);
-            this.setSynth(this.grainKey(msg[1]), \velocity, msg[2], \t_trig, 1);
+            var velocity = msg[2].clip(0, 1);
+            this.setSynth(this.voiceKey(msg[1]), \velocity, velocity, \t_trig, 1);
+            this.setSynth(this.grainKey(msg[1]), \velocity, velocity, \t_trig, 1);
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;
@@ -918,8 +919,26 @@ Engine_Strata : CroneEngine {
 
     startVoiceSynth { arg voice;
         var defName = voiceSynthDefs[voice];
-        ^Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]),
-            target: voiceGroup)
+        ^this.watchVoiceSynth(voice, this.voiceKey(voice),
+            Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]),
+                target: voiceGroup))
+    }
+
+    // Modulation output synth, after every grain synth
+    startModSynth { arg voice;
+        ^this.watchVoiceSynth(voice, this.modKey(voice), Synth(\strataMod, [
+            \in, granBuses[voice],
+            \out, modBuses[voice]
+        ], target: processGroup, addAction: \addToTail))
+    }
+
+    // The voice-level (buffer and input sources) and grain controls a grain
+    // synth for the voice's current source takes
+    grainControlPairs { arg voice;
+        var defName = this.grainDefFor(voice);
+        var pairs = this.controlPairs(defName, grainControls[voice]);
+        if (grainSource[voice] != 0) { pairs = this.controlPairs(defName, voiceControls[voice]) ++ pairs };
+        ^pairs
     }
 
     // The grain synth for the voice's current source, with its current
@@ -943,9 +962,82 @@ Engine_Strata : CroneEngine {
             args = args ++ [\bufnumL, buffersL[slot].bufnum, \bufnumR, buffersR[slot].bufnum,
                 \bufFrames, bufferFrames[slot], \bufRateScale, this.bufferRateScale(slot)];
         };
-        if (source != 0) { args = args ++ this.controlPairs(defName, voiceControls[voice]) };
-        args = args ++ this.controlPairs(defName, grainControls[voice]);
-        ^Synth(defName, args, target, addAction)
+        ^this.watchVoiceSynth(voice, this.grainKey(voice),
+            Synth(defName, args ++ this.grainControlPairs(voice), target, addAction))
+    }
+
+    // A new grain synth for the voice's source, beside one that is going
+    // away (or at the head of processGroup when there is none): one that
+    // reads the voice bus goes before it and one that mirrors into it after,
+    // so neither re-grains the other's mirror
+    startGrainSynthBeside { arg voice, otherGrain;
+        if (otherGrain.isNil) { ^this.startGrainSynth(voice, processGroup, \addToHead) };
+        ^this.startGrainSynth(voice, otherGrain, if (grainSource[voice] == 0) { \addBefore } { \addAfter })
+    }
+
+    // Start a voice: every synth it still has is re-gated instead of
+    // stacking a new one. A running voice's synths only take the voiceOn
+    // values. A released voice's synths that are still in their release
+    // get gate 1 (the ASR restarts its attack from the current level) and
+    // the values with set; the ones already freed are started. A releasing
+    // synth that no longer fits the source (it changed while the voice was
+    // stopped) is left to finish: a grain synth for another source releases
+    // beside the new one, and a voice synth (the source is no longer the
+    // synth) is cut to grainRelease, as replaceGrainSynth does.
+    gateVoice { arg voice;
+        var releasing = releasingSynths[voice];
+        var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
+        var stillReleasing = { arg key; var synth = releasing[key]; synth.notNil and: { synth.isPlaying } };
+        var oldGrain;
+
+        // Voice synth: synth source only
+        if (grainSource[voice] == 0) {
+            if (synths[voiceKey].isNil and: { stillReleasing.(voiceKey) }) { synths[voiceKey] = releasing.removeAt(voiceKey) };
+            if (synths[voiceKey].isNil) {
+                synths[voiceKey] = this.startVoiceSynth(voice);
+            } {
+                synths[voiceKey].set(\gate, 1, *this.controlPairs(voiceSynthDefs[voice], voiceControls[voice]));
+            };
+        } {
+            if (stillReleasing.(voiceKey)) { releasing[voiceKey].release(grainRelease) };
+        };
+
+        // Grain synth: re-gated only if it was built for the current source
+        if (synths[grainKey].isNil and: { stillReleasing.(grainKey) } and: { releasedGrainSource[voice] == grainSource[voice] }) {
+            synths[grainKey] = releasing.removeAt(grainKey);
+        };
+        if (synths[grainKey].isNil) {
+            oldGrain = if (stillReleasing.(grainKey)) { releasing[grainKey] };
+            synths[grainKey] = this.startGrainSynthBeside(voice, oldGrain);
+        } {
+            synths[grainKey].set(\gate, 1, *this.grainControlPairs(voice));
+        };
+
+        if (synths[modKey].isNil and: { stillReleasing.(modKey) }) { synths[modKey] = releasing.removeAt(modKey) };
+        if (synths[modKey].isNil) { synths[modKey] = this.startModSynth(voice) } { synths[modKey].set(\gate, 1) };
+    }
+
+    // Watch one of a voice's synths (key: its voiceKey, grainKey or modKey)
+    // until it frees. A released synth is then forgotten. A synth the voice
+    // is using frees only if its release ended just as voiceOn re-gated it
+    // (the gate arrived too late); it is started again so the voice is
+    // never left without it. free empties synths first, so nothing restarts
+    // when the engine is freed.
+    watchVoiceSynth { arg voice, key, synth;
+        synth.register(true);  // playing from now on, so gateVoice can re-gate it at once
+        synth.onFree({
+            if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
+            if (synths[key] === synth) {
+                synths.removeAt(key);
+                case
+                { key == this.voiceKey(voice) } {
+                    if (grainSource[voice] == 0) { synths[key] = this.startVoiceSynth(voice) };
+                }
+                { key == this.grainKey(voice) } { synths[key] = this.startGrainSynth(voice, processGroup, \addToHead) }
+                { synths[key] = this.startModSynth(voice) };
+            };
+        });
+        ^synth
     }
 
     // Swap a running voice's grain synth for one matching its source: the
@@ -957,13 +1049,8 @@ Engine_Strata : CroneEngine {
         var oldGrain = synths.removeAt(this.grainKey(voice));
         var voiceSynth;
 
-        if (oldGrain.isNil) {
-            synths[this.grainKey(voice)] = this.startGrainSynth(voice, processGroup, \addToHead);
-        } {
-            synths[this.grainKey(voice)] = this.startGrainSynth(voice, oldGrain,
-                if (grainSource[voice] == 0) { \addBefore } { \addAfter });
-            oldGrain.set(\gate, 0);
-        };
+        synths[this.grainKey(voice)] = this.startGrainSynthBeside(voice, oldGrain);
+        if (oldGrain.notNil) { oldGrain.set(\gate, 0) };
 
         if (grainSource[voice] == 0) {
             if (synths[this.voiceKey(voice)].isNil) {
@@ -1200,12 +1287,17 @@ Engine_Strata : CroneEngine {
         ^finished
     }
 
-    // Gate off a voice's synth trio (each frees itself after its release)
-    // and forget it, so later commands to that voice are no-ops
+    // Gate off a voice's synth trio (each frees itself after its release),
+    // so later commands to that voice are no-ops. The released synths are
+    // kept in releasingSynths until they free, for voiceOn to re-gate.
     releaseVoice { arg voice;
+        if (synths[this.grainKey(voice)].notNil) { releasedGrainSource[voice] = grainSource[voice] };
         [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)].do({ arg key;
             var synth = synths.removeAt(key);
-            if (synth.notNil) { synth.set(\gate, 0) };
+            if (synth.notNil) {
+                synth.set(\gate, 0);
+                releasingSynths[voice][key] = synth;
+            };
         });
     }
 
@@ -1219,6 +1311,7 @@ Engine_Strata : CroneEngine {
         // cancelled first, so no recording completes (and writes) on free
         numBuffers.do({ arg index; this.stopRecording(index) });
         synths.do({ arg synth; synth.free });
+        synths.clear;  // their onFree must not start them again
         inputSynth.free;
         // also frees voices still in their release phase
         voiceGroup.free;

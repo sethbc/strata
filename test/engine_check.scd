@@ -83,6 +83,24 @@ var velocityOnlyScalesAccents = { arg defName;
     }
 };
 
+// true when some UGen of the SynthDef reads the named control (it is not
+// declared and left unused)
+var controlFeedsAUGen = { arg defName, controlName;
+    var desc = SynthDescLib.global.at(defName);
+    var control = desc.controls.detect({ arg each; each.name == controlName });
+    control.notNil and: { desc.def.children.any({ arg ugen;
+        (ugen.inputs ? []).any({ arg input;
+            input.isKindOf(OutputProxy) and: { input.source.isKindOf(Control) }
+                and: { (input.source.specialIndex + input.outputIndex) == control.index }
+        })
+    }) }
+};
+
+// A voice's synths as the engine tracks them: [voice synth, grain synth, mod synth]
+var voiceTrio = { arg voice;
+    [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)].collect({ arg key; engine.synths[key] })
+};
+
 // bufferState poll value: slot index * 100 + valid seconds
 var decodeBufferState = { arg value; var slot = (value / 100).floor; [slot.asInteger, value - (slot * 100)] };
 var bufferStateSeen = { arg slot, seconds;
@@ -117,7 +135,7 @@ server.options.numInputBusChannels = 2;
 server.waitForBoot({
     var exitCode;
     try {
-        var oldVoice, newVoice, before, after, silentIndex, startedNames, masterUGens, envSamples;
+        var oldTrio, before, after, silentIndex, startedNames, masterUGens, envSamples;
         var oldGrain, oldVoiceSynth, grainBuf, processNames, scratchFile, savePath, file, frames, data;
         var stereoPath, monoPath, longPath, textPath, info;
 
@@ -150,6 +168,7 @@ server.waitForBoot({
             var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
             check.(controls.includes(\t_trig), "% has a t_trig control (C3)".format(name));
             check.(controls.includes(\velocity), "% has a velocity control for the accent".format(name));
+            check.(controlFeedsAUGen.(name, \bend), "% has a bend control (MIDI pitchbend) that reaches its frequency".format(name));
             // EnvGen inputs: gate, levelScale, ...; the accent's levelScale is
             // the velocity control (sampled per trigger), not the constant 1
             check.(SynthDescLib.global.at(name).def.children.any({ arg ugen;
@@ -174,6 +193,7 @@ server.waitForBoot({
             check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).includes(control),
                 "strataGrainBuf has a % control".format(control));
         });
+        check.(controlFeedsAUGen.(\strataGrainBuf, \bend), "strataGrainBuf's bend control reaches its rate");
         grainBuf = SynthDescLib.global.at(\strataGrainBuf).def.children;
         check.(grainBuf.count({ arg ugen; ugen.isKindOf(GrainBuf) }) == 2, "strataGrainBuf runs two mono GrainBufs (L/R)");
         check.(grainBuf.select({ arg ugen; ugen.isKindOf(GrainBuf) }).every({ arg ugen; ugen.numChannels == 1 }),
@@ -268,6 +288,23 @@ server.waitForBoot({
         server.sync;
         check.(getControl.(engine.synths[\voice1], \modBus2) == engine.modBuses[0].index,
             "setModSource routes a slot to the source voice's mod bus");
+
+        // Pitchbend: bend is a voice-level control (voice synth; strataGrainBuf for a buffer source)
+        command.(\setVoiceParam, 0, \bend, 1.05);
+        command.(\setVoiceParam, 6, \bend, 0.95);
+        server.sync;
+        check.(getControl.(engine.synths[\voice0], \bend).equalWithPrecision(1.05), "setVoiceParam bend reaches voice0");
+        check.(getControl.(engine.synths[\grain6], \bend).equalWithPrecision(0.95),
+            "setVoiceParam bend reaches a buffer-sourced voice's strataGrainBuf");
+        command.(\setVoiceParam, 0, \bend, 1.0);
+        command.(\setVoiceParam, 6, \bend, 1.0);
+
+        // retrigger clamps its velocity to 0-1 (MIDI sends velocity / 127)
+        command.(\retrigger, 3, 2.5); server.sync;
+        check.(getControl.(engine.synths[\voice3], \velocity) == 1, "retrigger clamps velocity above 1");
+        command.(\retrigger, 3, -0.5); server.sync;
+        check.(getControl.(engine.synths[\voice3], \velocity) == 0, "retrigger clamps velocity below 0");
+        command.(\retrigger, 3, 1.0);
         command.(\setModSource, 1, 2, -1);
         server.sync;
         check.(getControl.(engine.synths[\voice1], \modBus2) == silentIndex,
@@ -620,13 +657,94 @@ server.waitForBoot({
         command.(\setGrainSource, 1, 0);
         2.5.wait; server.sync;
 
-        // voiceOn on a running voice replaces the trio (M6)
-        oldVoice = engine.synths[\voice0];
+        // voiceOn never stacks synths (M6; spec section 5 re-gate). A running
+        // voice keeps its synths and takes the voiceOn values.
+        before = synthNames.(context.xg).size;
+        oldTrio = voiceTrio.(0);
         command.(\voiceOn, 0, 150.0, 0.2, 0.0, 0.1, 10.0, 1.0);
         server.sync;
-        newVoice = engine.synths[\voice0];
-        check.(oldVoice !== newVoice, "voiceOn on a running voice creates a new voice synth");
-        check.(getControl.(oldVoice, \gate) == 0.0, "voiceOn on a running voice gates the old one off (M6)");
+        check.(synthNames.(context.xg).size == before, "voiceOn on a running voice creates no nodes (M6)");
+        check.(voiceTrio.(0).every({ arg synth, index; synth === oldTrio[index] }), "voiceOn on a running voice keeps its synths");
+        check.((getControl.(oldTrio[0], \freq) == 150.0) and: { getControl.(oldTrio[0], \gate) == 1 },
+            "voiceOn on a running voice applies its freq with set");
+
+        // voiceOff then voiceOn within the release re-gates the same synths
+        oldTrio = voiceTrio.(2);  // Folder: 6 s voice release
+        command.(\setVoiceParam, 2, \bend, 1.1);
+        command.(\voiceOff, 2); server.sync;
+        check.(oldTrio.every({ arg synth; getControl.(synth, \gate) == 0 }), "voiceOff gates the trio off");
+        command.(\voiceOn, 2, 220.0, 0.25, 0.1, 0.2, 12.0, 1.5); server.sync;
+        check.(synthNames.(context.xg).size == before, "voiceOn during the release creates no nodes");
+        check.(voiceTrio.(2).every({ arg synth, index; synth === oldTrio[index] }), "voiceOn during the release re-gates the same synths");
+        check.(oldTrio.every({ arg synth; getControl.(synth, \gate) == 1 }), "re-gated synths are back at gate 1");
+        check.((getControl.(oldTrio[0], \freq) == 220.0) and: { getControl.(oldTrio[0], \pan).equalWithPrecision(0.1) }
+            and: { getControl.(oldTrio[1], \grainSize).equalWithPrecision(0.2) } and: { getControl.(oldTrio[1], \grainDensity) == 12.0 }
+            and: { getControl.(oldTrio[1], \pitchShift) == 1.5 }, "re-gating applies the voiceOn values with set");
+        check.(getControl.(oldTrio[0], \bend) == 1, "voiceOn resets bend to 1");
+
+        // Partway through the release the grain (2 s) and mod (0.5 s) synths
+        // have freed and the voice synth still releases: it is re-gated, the
+        // other two are started
+        command.(\voiceOff, 2); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == (before - 2), "2.5 s after voiceOff only the voice synth still releases");
+        command.(\voiceOn, 2, 220.0, 0.25, 0.1, 0.2, 12.0, 1.5); server.sync;
+        after = voiceTrio.(2);
+        check.(synthNames.(context.xg).size == before, "voiceOn late in the release brings back one trio");
+        check.((after[0] === oldTrio[0]) and: { after[1] !== oldTrio[1] } and: { after[2] !== oldTrio[2] }
+            and: { after.every({ arg synth; synth.isPlaying }) }, "the releasing voice synth is re-gated, grain and mod synths are new");
+        check.(getControl.(after[0], \gate) == 1, "the re-gated voice synth is at gate 1");
+
+        // After the whole release voiceOn creates fresh synths (Karplus: 2 s release)
+        oldTrio = voiceTrio.(5);
+        command.(\voiceOff, 5); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == (before - 3), "a released voice's synths free themselves");
+        check.(engine.releasingSynths[5].isEmpty, "freed synths are forgotten");
+        command.(\voiceOn, 5, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+        after = voiceTrio.(5);
+        check.((synthNames.(context.xg).size == before) and: { after.every({ arg synth, index; synth.notNil and: { synth !== oldTrio[index] } }) },
+            "voiceOn after the release creates a fresh trio");
+
+        // A buffer-sourced voice (a grain and a mod synth, no voice synth) re-gates too
+        oldTrio = voiceTrio.(6);
+        command.(\voiceOff, 6); server.sync;
+        command.(\voiceOn, 6, 100.0, 0.25, 0.0, 0.3, 10.0, 1.0); server.sync;
+        after = voiceTrio.(6);
+        check.((synthNames.(context.xg).size == before) and: { after[0].isNil } and: { after[1] === oldTrio[1] }
+            and: { after[2] === oldTrio[2] } and: { getControl.(after[1], \gate) == 1 }
+            and: { getControl.(after[1], \grainSize).equalWithPrecision(0.3) }, "a buffer-sourced voice re-gates its grain and mod synths");
+
+        // A source switch while the voice is releasing: voiceOn builds the new
+        // source's grain synth and re-gates the mod synth; the old voice and
+        // grain synths finish within the grain release (no orphans)
+        oldTrio = voiceTrio.(3);  // Sub: 12 s voice release
+        command.(\voiceOff, 3);
+        command.(\setGrainSource, 3, 9);  // the input; only recorded: the voice is stopped
+        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+        after = voiceTrio.(3);
+        check.(after[0].isNil and: { after[1].defName == \strataGrain } and: { after[1] !== oldTrio[1] }
+            and: { getControl.(after[1], \in) == engine.inputBus.index }
+            and: { after[2] === oldTrio[2] }, "voiceOn after a source switch in the release builds the new grain synth, re-gates the mod synth");
+        2.5.wait; server.sync;
+        check.(oldTrio[0].isPlaying.not and: { oldTrio[1].isPlaying.not } and: { synthNames.(context.xg).size == (before - 1) },
+            "the old voice and grain synths free themselves within the grain release (no orphans)");
+        // an input-sourced voice re-gates its grain and mod synths
+        oldTrio = voiceTrio.(3);
+        command.(\voiceOff, 3); server.sync;
+        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+        after = voiceTrio.(3);
+        check.((synthNames.(context.xg).size == (before - 1)) and: { after[0].isNil } and: { after[1] === oldTrio[1] }
+            and: { after[2] === oldTrio[2] } and: { getControl.(after[1], \gate) == 1 }, "an input-sourced voice re-gates its grain and mod synths");
+        command.(\setGrainSource, 3, 0); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "switching back to the synth restores the trio");
+
+        // A re-gated synth whose release ends just as the gate arrives frees
+        // anyway; the engine starts that synth again
+        oldTrio = voiceTrio.(2);
+        server.sendMsg(\n_free, oldTrio[1].nodeID);  // ends without sclang having freed it
+        0.2.wait; server.sync;
+        after = voiceTrio.(2);
+        check.(after[1].notNil and: { after[1] !== oldTrio[1] } and: { after[1].isPlaying }
+            and: { synthNames.(context.xg).size == before }, "a running voice's synth that ends unexpectedly is started again");
 
         // voiceOff twice, then commands to the stopped voice
         command.(\voiceOff, 4);

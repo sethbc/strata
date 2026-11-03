@@ -8,11 +8,16 @@
 --     K3 filter bypass/on
 -- LFO: E2 select LFO, E3 depth,
 --      K2 destination, K3 on/off
+-- SETUP: E2 MIDI port, E3 channel mode
+--
+-- MIDI: notes play voices 1-7 on
+-- channels 1-7 (or the selected voice)
 
 engine.name = "Strata"
 
 local UI = require "ui"
 local LFO = require "lfo"
+local musicutil = require "musicutil"
 
 -- Constants
 local NUM_VOICES = 7
@@ -341,6 +346,29 @@ local arc_connected = false
 -- Grid devices (support multiple grids)
 local MAX_GRID_PORTS = 4
 local grids = {}
+
+-- MIDI input: notes, velocity and pitchbend per voice (CC is norns' own
+-- PARAMS > MAP). Grouped in tables: the main chunk is near Lua's 200-local limit.
+local MIDI = {
+  max_port = 4,             -- midi_device param range (vports 1-4)
+  velocity_max = 127,       -- retrigger velocity = note velocity / 127
+  rate_root_note = 60,      -- buffer-sourced voices: this note plays at rate 1
+  bend_center = 8192,       -- 14-bit pitchbend value at rest
+  bend_semitones = 2,       -- full wheel throw either way
+  channel_mode_options = {"per voice", "omni to selected"},
+  note_off_options = {"ignore", "voice off"},
+}
+local midi_device = nil     -- the MIDI vport (midi.connect) Strata listens to
+local midi_state = {
+  bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
+  held = {},                -- per voice: set of notes held on it
+  note_voice = {},          -- per channel: note -> the voice its note on played
+  removing = nil,           -- the device being unplugged while midi.remove redraws
+}
+for i = 1, NUM_VOICES do
+  midi_state.bend[i] = 1
+  midi_state.held[i] = {}
+end
 
 -- Pattern sequencer
 local patterns = {}
@@ -1107,6 +1135,42 @@ function init()
     params:set_action("buf" .. slot .. "_save", function() save_buffer(slot) end)
   end
 
+  -- MIDI input (CC mapping is norns' own PARAMS > MAP). The group size must
+  -- match the params below exactly.
+  params:add_group("strata_midi", "midi", 3)
+
+  params:add{
+    type = "number",
+    id = "midi_device",
+    name = "midi device",
+    min = 1,
+    max = MIDI.max_port,
+    default = 1,
+    action = function(x)
+      attach_midi(x)
+      reset_midi_input()  -- the old port's note offs and bend returns will not arrive
+    end
+  }
+
+  params:add{
+    type = "option",
+    id = "midi_channel_mode",
+    name = "midi channels",
+    options = MIDI.channel_mode_options,
+    default = 1,
+    action = function()
+      reset_midi_input()  -- held notes and bends now belong to other voices
+    end
+  }
+
+  params:add{
+    type = "option",
+    id = "midi_note_off",
+    name = "midi note off",
+    options = MIDI.note_off_options,
+    default = 1
+  }
+
   -- Add params for each voice
   for i = 1, NUM_VOICES do
     add_voice_params(i)
@@ -1144,6 +1208,9 @@ function init()
 
   -- Connect grids
   grid_init()
+
+  -- Listen for MIDI
+  midi_init()
 
   -- Load saved scenes from disk
   load_scenes_from_disk()
@@ -1514,7 +1581,7 @@ end
 
 function get_param_spec(param_name)
   local specs = {
-    freq = controlspec.new(20, 2000, "exp", 1, 100, "Hz"),
+    freq = controlspec.new(20, 2000, "exp", 0, 100, "Hz"),  -- step 0: MIDI notes keep exact pitch
     amp = controlspec.new(0, 1, "lin", 0.01, 0.3),
     pan = controlspec.new(-1, 1, "lin", 0.01, 0),
     rq = controlspec.new(0.01, 1, "lin", 0.01, 0.1),
@@ -1613,6 +1680,8 @@ function sync_voice_values_to_engine(voice_idx)
   end
 
   engine.setModSpeed(engine_voice, voice.crossmod.speed)
+  -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
+  engine.setVoiceParam(engine_voice, "bend", midi_state.bend[voice_idx])
 end
 
 function randomize_voice(voice_idx)
@@ -2534,6 +2603,14 @@ function redraw_main()
   draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
 end
 
+-- Cut text, a whole UTF-8 character at a time, until it fits max_width px
+local function fit_text(text, max_width)
+  while text ~= "" and screen.text_extents(text) > max_width do
+    text = text:gsub("[^\128-\191][\128-\191]*$", "")
+  end
+  return text
+end
+
 function redraw_setup()
   -- Connected grids (count, then sizes in port order)
   local grid_count = 0
@@ -2565,10 +2642,15 @@ function redraw_setup()
   screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
   screen.move(0, 42)
   screen.text("buffers: " .. buffers_restored .. " restored")
+  -- the selected MIDI port and its device (cut to the screen width), then the channel mode
+  local midi_prefix = "midi " .. params:get("midi_device") .. ": "
   screen.move(0, 48)
-  screen.text("midi: -")  -- MIDI device and channel mode arrive with MIDI input
+  screen.text(midi_prefix .. fit_text(midi_device_name(), 127 - screen.text_extents(midi_prefix)))
+  screen.level(4)
+  screen.move(0, 54)
+  screen.text("ch: " .. params:string("midi_channel_mode"))
 
-  draw_hints("K3:save scenes")
+  draw_hints("E2:port E3:ch K3:save")
 end
 
 -- FX page: a scrolling list of the effects params. E2 selects a row, E3
@@ -2780,6 +2862,16 @@ local function setup_key(n)
   end
 end
 
+-- SETUP E2: MIDI port, E3: channel mode (a global: the main chunk is near
+-- Lua's local limit)
+function setup_enc(n, d)
+  if n == 2 then
+    params:delta("midi_device", d)
+  elseif n == 3 then
+    params:delta("midi_channel_mode", d)
+  end
+end
+
 -- Per key: the page it was pressed on, while it is held (nil when up).
 -- key() sends a release only to the page the key went down on.
 local key_press_page = {}
@@ -2791,14 +2883,6 @@ local BUFFER_ROW_SPACING = 6   -- eight rows at y 14-56, clear of the hint row a
 local BUFFER_SLOT_X = 65
 local BUFFER_NAME_X = 71
 local BUFFER_NAME_MAX_WIDTH = 31  -- the name ends before the widest seconds ("16.0s" from x 103)
-
--- Cut text, a whole UTF-8 character at a time, until it fits max_width px
-local function fit_text(text, max_width)
-  while text ~= "" and screen.text_extents(text) > max_width do
-    text = text:gsub("[^\128-\191][\128-\191]*$", "")
-  end
-  return text
-end
 
 -- A buffer's name for the screen: the file name without its extension
 local function buffer_display_name(slot)
@@ -2907,7 +2991,7 @@ end
 -- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP. PAGE_KEY gets key
 -- presses, PAGE_KEY_RELEASE releases (only BUFFER uses them).
 local PAGE_DRAW = {redraw_main, redraw_fx, redraw_lfo, redraw_buffer, redraw_setup}
-local PAGE_ENC = {main_enc, fx_enc, lfo_enc, buffer_enc, ignore_page_input}
+local PAGE_ENC = {main_enc, fx_enc, lfo_enc, buffer_enc, setup_enc}
 local PAGE_KEY = {main_key, fx_key, lfo_key, buffer_key, setup_key}
 local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_input, buffer_key_release, ignore_page_input}
 
@@ -3176,6 +3260,128 @@ function arc_redraw()
   arc_device:all(0)
   ARC_PAGE_REDRAW[ui_page](arc_device)
   arc_device:refresh()
+end
+
+-- MIDI input. Notes, velocity and pitchbend address a voice by channel
+-- (per voice: channel n plays voice n) or always the selected voice (omni).
+-- CC is not handled here: norns' PARAMS > MAP maps CCs to any param.
+
+-- Listen to MIDI vport `port`. The handler lives on the vport only (as for
+-- grids and arc): norns fires both device.event and vports[port].event, so
+-- setting it on the device as well would play every note twice.
+function attach_midi(port)
+  if midi_device then midi_device.event = nil end
+  midi_device = midi.connect(port)
+  midi_device.event = midi_event
+end
+
+function midi_init()
+  attach_midi(params:get("midi_device"))
+end
+
+-- Hot-plug. norns assigns the device to its vport before calling midi.add,
+-- and clears the vport only after midi.remove returns.
+function midi.add(device)
+  attach_midi(params:get("midi_device"))
+  redraw()  -- SETUP shows the device
+  print("midi connected: " .. tostring(device.name))
+end
+
+function midi.remove(device)
+  if device.port == params:get("midi_device") then reset_midi_input() end
+  midi_state.removing = device
+  redraw()  -- SETUP shows the port as empty
+  midi_state.removing = nil
+  print("midi disconnected: " .. tostring(device.name))
+end
+
+-- The name of the device on the selected port, or "none"
+function midi_device_name()
+  local device = midi_device and midi_device.device
+  if device == nil or device == midi_state.removing then return "none" end
+  return midi_device.name
+end
+
+-- Forget held notes and re-centre every bent voice: called when the port or
+-- channel mode changes or the device goes away, since the note offs and
+-- bend returns for them will not arrive
+function reset_midi_input()
+  for i = 1, NUM_VOICES do
+    midi_state.held[i] = {}
+    if midi_state.bend[i] ~= 1 then
+      midi_state.bend[i] = 1
+      if voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
+    end
+  end
+  midi_state.note_voice = {}
+end
+
+-- The voice a MIDI channel addresses, or nil
+function midi_target_voice(channel)
+  if params:get("midi_channel_mode") == 2 then return selected_voice end
+  if channel and channel >= 1 and channel <= NUM_VOICES then return channel end
+  return nil
+end
+
+function midi_event(data)
+  local msg = midi.to_msg(data)
+  if msg.type == "note_on" and msg.vel > 0 then
+    local voice_idx = midi_target_voice(msg.ch)
+    if voice_idx then
+      midi_state.note_voice[msg.ch] = midi_state.note_voice[msg.ch] or {}
+      midi_state.note_voice[msg.ch][msg.note] = voice_idx
+      midi_state.held[voice_idx][msg.note] = true
+      midi_note_on(voice_idx, msg.note, msg.vel)
+    end
+  elseif msg.type == "note_on" or msg.type == "note_off" then
+    -- the voice this note's note on played (in omni mode the selection may
+    -- have moved since), or the channel's voice for a note it never saw
+    local channel_notes = midi_state.note_voice[msg.ch]
+    local voice_idx = (channel_notes and channel_notes[msg.note]) or midi_target_voice(msg.ch)
+    if channel_notes then channel_notes[msg.note] = nil end
+    if voice_idx then
+      midi_state.held[voice_idx][msg.note] = nil
+      midi_note_off_for(voice_idx)
+    end
+  elseif msg.type == "pitchbend" then
+    local voice_idx = midi_target_voice(msg.ch)
+    if voice_idx then midi_pitchbend(voice_idx, msg.val) end
+  end
+end
+
+-- A note sets the voice's pitch (synth: freq; buffer: rate, note 60 = 1;
+-- input: no pitch), starts the voice if it is off, then accents it at the
+-- note's velocity. Voices keep their slow attacks; the velocity lands on the
+-- accent.
+function midi_note_on(voice_idx, note, velocity)
+  local prefix = "v" .. voice_idx .. "_"
+  if voice_uses_synth(voice_idx) then
+    local min_freq, max_freq = param_range(prefix .. "freq")
+    params:set(prefix .. "freq", util.clamp(musicutil.note_num_to_freq(note), min_freq, max_freq))
+  elseif voice_uses_buffer(voice_idx) then
+    local min_rate, max_rate = param_range(prefix .. "buf_rate")
+    params:set(prefix .. "buf_rate", util.clamp(2 ^ ((note - MIDI.rate_root_note) / 12), min_rate, max_rate))
+  end
+  if not voices[voice_idx].active then toggle_voice(voice_idx) end
+  engine.retrigger(voice_idx - 1, velocity / MIDI.velocity_max)
+end
+
+-- In "voice off" mode a voice stops when no note is held on it any more. A
+-- note during its release starts it again (the engine re-gates the
+-- releasing synths).
+function midi_note_off_for(voice_idx)
+  if params:get("midi_note_off") ~= 2 or not voices[voice_idx].active then return end
+  if next(midi_state.held[voice_idx]) ~= nil then return end
+  toggle_voice(voice_idx)
+end
+
+-- Pitchbend over +/-2 semitones as a frequency (or buffer rate) ratio. The
+-- engine applies it to the voice synth and to strataGrainBuf; a stopped
+-- voice gets it when it starts (sync_voice_values_to_engine).
+function midi_pitchbend(voice_idx, value)
+  local ratio = 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12)
+  midi_state.bend[voice_idx] = ratio
+  if voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
 end
 
 -- Grid functions
@@ -4011,6 +4217,9 @@ function cleanup()
   for slot = 1, NUM_BUFFERS do
     cancel_buffer_recording_timer(slot)
   end
+
+  -- Stop listening to MIDI before the voices go off
+  if midi_device then midi_device.event = nil end
 
   -- Turn off all voices
   for i = 1, NUM_VOICES do
