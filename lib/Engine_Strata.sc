@@ -381,7 +381,10 @@ Engine_Strata : CroneEngine {
                 \modFreqAmt1, 0,
                 \modFreqAmt2, 0,
                 \modFreqAmt3, 0
-            ] ++ this.getVoiceParams(voice, msg), target: context.xg);
+            ], target: context.xg);
+            // Voice-specific params, posSpread, crossmod routing and mod speed
+            // are pushed by the Lua script (sync_voice_to_engine) right after
+            // voiceOn; the Lua voices table is the only source of their values.
 
             synths[("grain" ++ voice).asSymbol] = Synth(\strataGrain, [
                 \in, bus,
@@ -480,18 +483,6 @@ Engine_Strata : CroneEngine {
             \in, reverbBus,
             \out, context.out_b
         ], target: context.og, addAction: \addAfter);
-    }
-    
-    getVoiceParams { arg voice, msg;
-        // Helper to get voice-specific parameters
-        ^case
-            { voice == 0 } { [\rq, 0.1, \noise, 0.5, \mod1, 0.1, \mod2, 0.15] }
-            { voice == 1 } { [\ratio, 1.5, \index, 2, \modFreq, 0.05] }
-            { voice == 2 } { [\fold, 1, \mod, 0.2] }
-            { voice == 3 } { [\drift, 0.02] }
-            { voice == 4 } { [\width, 0.5, \cutoff, 2000, \res, 0.3] }
-            { voice == 5 } { [\decay, 4, \damping, 0.5, \excite, 0.3] }
-            { voice == 6 } { [\ratio, 1.618, \mod, 0.2, \brightness, 0.5] };
     }
     
     free {

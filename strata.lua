@@ -17,6 +17,14 @@ local NUM_VOICES = 7
 local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 1  -- For future compatibility
+local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
+
+-- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
+-- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
+local function engine_mod_source(source)
+  if source == 0 then return -1 end
+  return source - 1
+end
 
 -- State
 local voices = {
@@ -573,8 +581,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       voices[voice_idx].crossmod.slot1.source = x
       if voices[voice_idx].active then
-        local sc_source = x == 0 and -1 or (x - 1)
-        engine.setModSource(voice_idx - 1, 1, sc_source)
+        engine.setModSource(voice_idx - 1, 1, engine_mod_source(x))
       end
     end
   }
@@ -623,8 +630,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       voices[voice_idx].crossmod.slot2.source = x
       if voices[voice_idx].active then
-        local sc_source = x == 0 and -1 or (x - 1)
-        engine.setModSource(voice_idx - 1, 2, sc_source)
+        engine.setModSource(voice_idx - 1, 2, engine_mod_source(x))
       end
     end
   }
@@ -673,8 +679,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       voices[voice_idx].crossmod.slot3.source = x
       if voices[voice_idx].active then
-        local sc_source = x == 0 and -1 or (x - 1)
-        engine.setModSource(voice_idx - 1, 3, sc_source)
+        engine.setModSource(voice_idx - 1, 3, engine_mod_source(x))
       end
     end
   }
@@ -762,11 +767,39 @@ function toggle_voice(voice_idx)
       v.grain.density * master_density,
       v.grain.pitch
     )
+    sync_voice_to_engine(voice_idx)
     v.active = true
   end
   
   update_voice_list()
   redraw()
+end
+
+-- Push the complete Lua-side state of a voice to its freshly started engine
+-- synths. voiceOn only carries the initial freq/amp/pan and grain values, and
+-- param actions only reach the engine while a voice is active, so without this
+-- edits made while a voice was off (and scene recalls) would be lost.
+function sync_voice_to_engine(voice_idx)
+  local voice = voices[voice_idx]
+  local engine_voice = voice_idx - 1
+
+  for key, value in pairs(voice.params) do
+    engine.setVoiceParam(engine_voice, key, value)
+  end
+
+  engine.setGrainParam(engine_voice, "grainSize", voice.grain.size)
+  engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * master_density)
+  engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
+  engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
+
+  for slot = 1, NUM_MOD_SLOTS do
+    local slot_state = voice.crossmod["slot" .. slot]
+    engine.setModSource(engine_voice, slot, engine_mod_source(slot_state.source))
+    engine.setModAmpAmt(engine_voice, slot, slot_state.amp_amt)
+    engine.setModFreqAmt(engine_voice, slot, slot_state.freq_amt)
+  end
+
+  engine.setModSpeed(engine_voice, voice.crossmod.speed)
 end
 
 function randomize_voice(voice_idx)
