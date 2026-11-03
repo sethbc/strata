@@ -14,6 +14,7 @@ local real_print = print
 local SC_PATH = repo_root .. "/lib/Engine_Strata.sc"
 local LUA_PATH = repo_root .. "/strata.lua"
 local signatures = stubs.parse_engine_signatures(SC_PATH)
+local engine_polls = stubs.parse_engine_polls(SC_PATH)
 
 local data_root = os.tmpname()
 os.remove(data_root)
@@ -49,8 +50,9 @@ end
 local function load_strata(options)
   options = options or {}
   local data_dir = data_root .. (options.data_subdir or tostring(math.random(1, 1e9))) .. "/"
-  local context = stubs.install { signatures = signatures, data_dir = data_dir, quiet = true }
+  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, data_dir = data_dir, quiet = true }
   context.data_dir = data_dir
+  context.audio_dir = data_dir .. "audio/"
   if options.before_load then options.before_load(context) end
   local chunk = assert(loadfile(LUA_PATH))
   chunk()
@@ -749,6 +751,134 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   local voices_off = #context.calls_named("voiceOff")
   assert_true(voices_off >= 1, "running voices turned off")
   assert_true(util.file_exists(context.data_dir .. "strata/scenes.data"), "scenes saved on cleanup")
+end)
+
+---------------------------------------------------------------------------
+-- harness: stubs for the norns APIs used by later features
+---------------------------------------------------------------------------
+
+test("stub params support option, group, trigger, binary, file and set_action", function()
+  load_strata()
+  params:add_option("stub_opt", "opt", {"a", "b", "c"}, 2)
+  assert_equal(params:get("stub_opt"), 2); assert_equal(params:string("stub_opt"), "b")
+  assert_equal(params:lookup_param("stub_opt").count, 3)
+  local fired
+  params:set_action("stub_opt", function(v) fired = v end)
+  params:set("stub_opt", 3); assert_equal(fired, 3)
+  fired = nil
+  params:set("stub_opt", 9); assert_equal(fired, nil, "option clamps to its count, unchanged value is silent")
+  params:set("stub_opt", 1.7); assert_equal(params:get("stub_opt"), 1, "option index is floored")
+  params:add_file("stub_file", "file", ""); params:set("stub_file", "/tmp/x.wav")
+  assert_equal(params:get("stub_file"), "/tmp/x.wav")
+  assert_equal(params:string("stub_file"), "x.wav", "file params display the file name")
+  params:add_trigger("stub_trig", "trig"); params:add_binary("stub_bin", "bin", "toggle", 0)
+  local triggered = 0
+  params:set_action("stub_trig", function() triggered = triggered + 1 end)
+  params:set("stub_trig", 1); params:set("stub_trig", 1)
+  assert_equal(triggered, 2, "triggers fire on every set")
+  params:set("stub_bin", 5); assert_equal(params:get("stub_bin"), 1, "toggle binary stores 0/1")
+  params:add_group("stub_group", "group", 2); params:hide("stub_opt"); params:show("stub_opt")
+  assert_true(params:visible("stub_opt"), "shown param is visible")
+  params:hide("stub_file"); assert_true(not params:visible("stub_file"), "hidden param is not visible")
+  params:add_text("stub_text", "text", ""); params:set("stub_text", "hello")
+  assert_equal(params:string("stub_text"), "hello")
+end)
+
+test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()
+  local context = load_strata()
+  local LFO = require("lfo")
+  local got
+  local instance = LFO:add{ shape = "sine", min = -1, max = 1, depth = 0.5, mode = "free", period = 1,
+    baseline = "center", action = function(scaled, raw) got = { scaled, raw } end }
+  instance:add_params("stubtest", nil, "stub")
+  -- the library's params, types and ranges (lua/lib/lfo.lua add_params)
+  assert_equal(params:lookup_param("lfo_group_stubtest").n, 15, "group holds the library's 15 params")
+  local expected_types = {
+    lfo_stubtest = "option", lfo_shape_stubtest = "option", lfo_depth_stubtest = "number",
+    lfo_phase_stubtest = "number", lfo_offset_stubtest = "number", lfo_scaled_stubtest = "text",
+    lfo_raw_stubtest = "text", lfo_min_stubtest = "control", lfo_max_stubtest = "control",
+    lfo_baseline_stubtest = "option", lfo_mode_stubtest = "option", lfo_clocked_stubtest = "option",
+    lfo_free_stubtest = "control", lfo_reset_stubtest = "trigger", lfo_reset_target_stubtest = "option",
+  }
+  for param_id, param_type in pairs(expected_types) do
+    assert_equal(params:lookup_param(param_id).t, param_type, param_id .. " type")
+  end
+  local depth_param = params:lookup_param("lfo_depth_stubtest")
+  assert_equal(depth_param.min, 0); assert_equal(depth_param.max, 100)
+  assert_equal(params:get("lfo_depth_stubtest"), 50, "depth is a percentage")
+  assert_equal(params:lookup_param("lfo_shape_stubtest").count, 6)
+  assert_equal(params:string("lfo_mode_stubtest"), "free")
+  assert_equal(params:string("lfo_baseline_stubtest"), "from center")
+  local free_spec = params:lookup_param("lfo_free_stubtest").controlspec
+  assert_equal(free_spec.minval, 0.1); assert_equal(free_spec.maxval, 300)
+  assert_near(params:get("lfo_free_stubtest"), 1, 1e-9, "free period")
+  assert_equal(params:string("lfo_stubtest"), "off")
+  assert_equal(instance:get("enabled"), 0)
+
+  context.lfo.tick(instance, 1.0)
+  assert_equal(got, nil, "disabled LFO never fires")
+  params:set("lfo_stubtest", 2)
+  assert_equal(instance:get("enabled"), 1, "state on enables the LFO")
+  context.lfo.tick(instance, 1.0); assert_near(got[1], 0.5, 1e-9); assert_near(got[2], 1.0, 1e-9)
+  context.lfo.tick(instance, 0.0); assert_near(got[1], -0.5, 1e-9, "center baseline is symmetric")
+  assert_equal(params:get("lfo_scaled_stubtest"), -0.5, "scaled value is shown in the text param")
+  params:set("lfo_depth_stubtest", 25)
+  context.lfo.tick(instance, 1.0); assert_near(got[1], 0.25, 1e-9, "depth 25% scales to +-0.25")
+  params:set("lfo_depth_stubtest", 0); got = nil
+  context.lfo.tick(instance, 1.0); assert_equal(got, nil, "depth 0 never fires")
+  params:set("lfo_depth_stubtest", 50); params:set("lfo_stubtest", 1); got = nil
+  context.lfo.tick(instance, 1.0); assert_equal(got, nil, "state off stops the LFO")
+  assert_equal(instance:get("enabled"), 0)
+end)
+
+test("stub midi delivers note_on, cc and pitchbend messages", function()
+  local context = load_strata()
+  local vport = midi.connect(1)
+  local seen = {}
+  vport.event = function(data) table.insert(seen, midi.to_msg(data)) end
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  context.midi.send(1, { type = "cc", cc = 1, val = 64, ch = 1 })
+  context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })
+  context.midi.send(1, { type = "note_on", note = 61, vel = 0, ch = 2 })
+  assert_equal(seen[1].type, "note_on"); assert_equal(seen[1].note, 60); assert_equal(seen[1].ch, 3)
+  assert_equal(seen[1].vel, 100)
+  assert_equal(seen[2].type, "cc"); assert_equal(seen[2].cc, 1); assert_equal(seen[2].val, 64)
+  assert_equal(seen[3].type, "pitchbend"); assert_equal(seen[3].val, 8192 + 4096)
+  assert_equal(seen[4].type, "note_off", "velocity 0 note_on is a note_off, as in norns")
+  assert_true(vport.device ~= nil and vport.name ~= "none", "sending plugs a device into the port")
+  local added, removed
+  midi.add = function(device) added = device end
+  midi.remove = function(device) removed = device end
+  local device = context.midi.plug(2, "keys")
+  assert_equal(added, device); assert_equal(midi.connect(2).name, "keys")
+  assert_equal(midi.devices[device.id], device)
+  context.midi.unplug(2)
+  assert_equal(removed, device); assert_equal(midi.connect(2).device, nil)
+end)
+
+test("stub fileselect, musicutil, polls and audio path", function()
+  local context = load_strata()
+  local picked
+  fileselect.enter(_path.audio, function(path) picked = path end, "audio")
+  assert_equal(fileselect.last.folder, _path.audio); assert_equal(fileselect.last.filter, "audio")
+  fileselect.last.callback("/x.wav"); assert_equal(picked, "/x.wav")
+  assert_equal(_path.audio, context.audio_dir)
+  assert_true(util.file_exists(_path.audio), "audio dir exists")
+  local file = assert(io.open(_path.audio .. "a.wav", "w")); file:write("x"); file:close()
+  local listing = util.scandir(_path.audio)
+  assert_equal(#listing, 1); assert_equal(listing[1], "a.wav")
+  assert_equal(util.os_capture("echo '  hi  '"), "hi")
+  local musicutil = require("musicutil")
+  assert_near(musicutil.note_num_to_freq(69), 440, 1e-9); assert_near(musicutil.note_num_to_freq(57), 220, 1e-9)
+  local values = {}
+  local amp_poll = poll.set("amp_in_l", function(value) table.insert(values, value) end)
+  assert_true(amp_poll ~= nil, "system polls exist")
+  assert_equal(poll.set("no_such_poll", function() end), nil, "unknown polls return nil, as in norns")
+  amp_poll:start()
+  context.polls.fire("amp_in_l", 0.25)
+  amp_poll:stop()
+  context.polls.fire("amp_in_l", 0.5)
+  assert_equal(#values, 1, "stopped polls do not fire"); assert_equal(values[1], 0.25)
 end)
 
 ---------------------------------------------------------------------------
