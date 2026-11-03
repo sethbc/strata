@@ -219,7 +219,7 @@ server.waitForBoot({
         // sources and nothing is doubled (F1)
         grainInUGens = SynthDescLib.global.at(\strataGrain).def.children;
         check.(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) }) == 2
-            and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.numChannels == 1 }) },
+            and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.channels.size == 1 }) },
             "strataGrain runs two mono GrainIns (L/R; got %)".format(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) })));
         check.(grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
             "strataGrain pitch-shifts the stereo pair once (two mono PitchShifts; got %)".format(
