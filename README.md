@@ -101,9 +101,18 @@ After installation with either method, restart norns or run `;restart` in maiden
 
 ## Controls
 
-### Encoders
+### Screen Pages
 
-- **E1** - Master density (affects grain density globally)
+The screen has five pages: **MAIN**, **FX**, **LFO**, **BUFFER** and **SETUP**.
+
+- **E1** - Select the page (turn left toward MAIN, right toward SETUP)
+
+Every page shows the page name, master density (`dens:`), the `[M]` mutation indicator and the `S1`-`S8` scene indicator at the top, and the page's key hints on the bottom row. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see below).
+
+Master density is no longer on an encoder: adjust it with arc ring 1 on the MAIN page or in the PARAMETERS menu.
+
+#### MAIN
+
 - **E2** - Select voice (1-7)
 - **E3** - Adjust selected voice's main parameter
   - Resonator: Frequency
@@ -113,11 +122,18 @@ After installation with either method, restart norns or run `;restart` in maiden
   - Pulse: Pulse width
   - Karplus: Decay time
   - Ring: Frequency ratio
-
-### Keys
-
 - **K2** - Randomize selected voice parameters
 - **K3** - Start/stop voice, or freeze/unfreeze if already active
+
+#### FX, LFO, BUFFER
+
+Not built yet: these pages show only the header, and their encoders, keys and arc rings do nothing.
+
+#### SETUP
+
+Shows how many grids are connected and their sizes, whether an arc is connected, and how many of the 8 scene slots hold a scene.
+
+- **K3** - Save scenes to disk (same as PARAMETERS > save scenes to disk)
 
 ### Monome Arc (optional)
 
@@ -125,14 +141,18 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 #### Arc Encoders
 
+The rings control the current screen page. On the **MAIN** page:
+
 - **Ring 1** - Master density (0.1 to 2.0)
 - **Ring 2** - Selected voice's main parameter (follows E3 mapping)
 - **Ring 3** - Grain size for selected voice
 - **Ring 4** - Grain density for selected voice
 
+On the **SETUP** page the rings are off and do nothing. The FX, LFO and BUFFER pages have no ring mappings yet (rings off).
+
 #### Arc Button (2025 model)
 
-- **Button** - Same as K3 (start/stop voice, or freeze/unfreeze if already active)
+- **Button** - On the MAIN page, same as K3 (start/stop voice, or freeze/unfreeze if already active); does nothing on the other pages
 
 #### LED Feedback
 
@@ -263,14 +283,14 @@ Scene LED feedback:
 1. The script starts with the Resonator and FM voices active
 2. Use E2 to select different voices
 3. Press K3 to activate/deactivate voices
-4. Experiment with E1 to change the overall texture density
+4. Experiment with master density (arc ring 1 on the MAIN page, or PARAMETERS) to change the overall texture
 
 ### Creating Evolving Textures
 
 - Start with 2-3 voices active
 - Use K2 to randomize individual voices until you find interesting combinations
 - Freeze voices you like with K3
-- Adjust master density with E1 to create movement
+- Adjust master density (arc ring 1 or PARAMETERS) to create movement
 - Add reverb via the PARAMETERS menu for more space
 
 ### Exploring Cross-Modulation

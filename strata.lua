@@ -1,11 +1,9 @@
 -- strata.lua
 -- ambient granular layers
 --
--- E1: master density
--- E2: select voice/param
--- E3: adjust value
--- K2: randomize voice
--- K3: freeze/unfreeze
+-- E1: page (MAIN FX LFO BUFFER SETUP)
+-- MAIN: E2 select voice, E3 main param,
+--       K2 randomize, K3 start/freeze
 
 engine.name = "Strata"
 
@@ -17,6 +15,7 @@ local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 1  -- For future compatibility
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
+local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 
 -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
 -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
@@ -202,6 +201,8 @@ local voices = {
 }
 
 local selected_voice = 1
+local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
+local ui_page = 1  -- index into UI_PAGES
 local master_density = 1.0
 local frozen = {}
 for i = 1, NUM_VOICES do
@@ -238,6 +239,7 @@ local arc_device = nil
 local arc_connected = false
 
 -- Grid devices (support multiple grids)
+local MAX_GRID_PORTS = 4
 local grids = {}
 
 -- Pattern sequencer
@@ -1378,72 +1380,70 @@ function update_voice_list()
     items[i] = status .. " " .. voices[i].name .. freeze
   end
   voice_list = UI.ScrollingList.new(0, 10, 1, items)
-  voice_list.num_visible = 5
+  voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
   voice_list.num_above_selected = 1
   voice_list.active = true
   voice_list.index = selected_voice
 end
 
--- Encoders
-function enc(n, d)
-  if n == 1 then
-    params:delta("master_density", d)
-  elseif n == 2 then
-    selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
-    update_voice_list()
-  elseif n == 3 then
-    -- Adjust selected voice's main parameter
-    local v = voices[selected_voice]
-    if v.name == "resonator" then
-      params:delta("v" .. selected_voice .. "_freq", d)
-    elseif v.name == "fm" then
-      params:delta("v" .. selected_voice .. "_index", d)
-    elseif v.name == "folder" then
-      params:delta("v" .. selected_voice .. "_fold", d)
-    elseif v.name == "sub" then
-      params:delta("v" .. selected_voice .. "_drift", d)
-    elseif v.name == "pulse" then
-      params:delta("v" .. selected_voice .. "_width", d)
-    elseif v.name == "karplus" then
-      params:delta("v" .. selected_voice .. "_decay", d)
-    elseif v.name == "ring" then
-      params:delta("v" .. selected_voice .. "_ratio", d)
-    end
-  end
-  arc_redraw()
-  redraw()
+-- The synthesis param E3 and arc ring 2 adjust on MAIN, per voice type:
+-- params key, screen value format, and arc delta scale
+local MAIN_PARAMS = {
+  resonator = {key = "freq", format = "%.0f Hz", arc_scale = 1},
+  fm = {key = "index", format = "%.1f", arc_scale = 0.1},
+  folder = {key = "fold", format = "%.1f", arc_scale = 0.1},
+  sub = {key = "drift", format = "%.3f", arc_scale = 0.01},
+  pulse = {key = "width", format = "%.2f", arc_scale = 0.01},
+  karplus = {key = "decay", format = "%.1f s", arc_scale = 0.1},
+  ring = {key = "ratio", format = "%.2f", arc_scale = 0.01}
+}
+
+function main_param_id(voice_idx)
+  return "v" .. voice_idx .. "_" .. MAIN_PARAMS[voices[voice_idx].name].key
 end
 
--- Keys
-function key(n, z)
-  if z == 1 then
-    if n == 2 then
-      randomize_voice(selected_voice)
-    elseif n == 3 then
-      if not voices[selected_voice].active then
-        toggle_voice(selected_voice)
-      else
-        toggle_freeze(selected_voice)
-      end
-    end
-  end
-  redraw()
+function main_param_label(voice_idx)
+  return MAIN_PARAMS[voices[voice_idx].name].key
 end
 
--- Redraw
-function redraw()
-  screen.clear()
+-- Screen pages. E1 selects the page; E2, E3, K2 and K3 go to the page's
+-- handlers in PAGE_ENC / PAGE_KEY, and redraw() draws the shared header,
+-- then the page's PAGE_DRAW function, which ends with its hint row.
 
-  -- Title
+local HINT_ROW_Y = 62
+
+function draw_header()
   screen.level(15)
   screen.move(0, 8)
-  screen.text("STRATA")
+  screen.text(UI_PAGES[ui_page])
 
-  -- Master density (header, after the title; ends well before [M] at x=98)
+  -- Master density (after the page title; "BUFFER" ends near x=36)
   screen.move(40, 8)
   screen.level(4)
   screen.text("dens:" .. string.format("%.2f", master_density))
 
+  -- Mutation indicator (between density and scene)
+  if params:get("mutation_enabled") == 1 then
+    screen.move(98, 8)
+    screen.level(6)
+    screen.text("[M]")
+  end
+
+  -- Scene indicator (right-aligned to the screen edge)
+  if current_scene > 0 then
+    screen.move(127, 8)
+    screen.level(scene_sequencer_enabled and 10 or 6)
+    screen.text_right("S" .. current_scene)
+  end
+end
+
+function draw_hints(text)
+  screen.level(4)
+  screen.move(0, HINT_ROW_Y)
+  screen.text(text)
+end
+
+function redraw_main()
   -- Voice list (left column, 0-60px)
   voice_list:redraw()
 
@@ -1470,20 +1470,6 @@ function redraw()
     screen.text_right("[FREEZE]")
   end
 
-  -- Mutation indicator (header, between density and scene)
-  if params:get("mutation_enabled") == 1 then
-    screen.move(98, 8)
-    screen.level(6)
-    screen.text("[M]")
-  end
-
-  -- Scene indicator (right-aligned to the screen edge)
-  if current_scene > 0 then
-    screen.move(127, 8)
-    screen.level(scene_sequencer_enabled and 10 or 6)
-    screen.text_right("S" .. current_scene)
-  end
-
   -- Modulation sources display
   local mod_sources = {}
   if v.crossmod.slot1.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot1.source) end
@@ -1499,45 +1485,166 @@ function redraw()
   -- Main parameter
   screen.level(frozen[selected_voice] and 3 or 10)
   screen.move(65, 42)
-  if v.name == "resonator" then
-    screen.text("freq")
-    screen.move(65, 50)
-    screen.text(string.format("%.0f Hz", v.params.freq))
-  elseif v.name == "fm" then
-    screen.text("index")
-    screen.move(65, 50)
-    screen.text(string.format("%.1f", v.params.index))
-  elseif v.name == "folder" then
-    screen.text("fold")
-    screen.move(65, 50)
-    screen.text(string.format("%.1f", v.params.fold))
-  elseif v.name == "sub" then
-    screen.text("drift")
-    screen.move(65, 50)
-    screen.text(string.format("%.3f", v.params.drift))
-  elseif v.name == "pulse" then
-    screen.text("width")
-    screen.move(65, 50)
-    screen.text(string.format("%.2f", v.params.width))
-  elseif v.name == "karplus" then
-    screen.text("decay")
-    screen.move(65, 50)
-    screen.text(string.format("%.1f s", v.params.decay))
-  elseif v.name == "ring" then
-    screen.text("ratio")
-    screen.move(65, 50)
-    screen.text(string.format("%.2f", v.params.ratio))
+  screen.text(main_param_label(selected_voice))
+  screen.move(65, 50)
+  screen.text(string.format(MAIN_PARAMS[v.name].format, params:get(main_param_id(selected_voice))))
+
+  draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
+end
+
+function redraw_setup()
+  -- Connected grids (count, then sizes in port order)
+  local grid_count = 0
+  local grid_sizes = {}
+  for port = 1, MAX_GRID_PORTS do
+    local grid_port = grids[port]
+    if grid_port and grid_port.device then
+      grid_count = grid_count + 1
+      table.insert(grid_sizes, grid_port.cols .. "x" .. grid_port.rows)
+    end
   end
 
-  -- Key hints (bottom)
-  screen.move(0, 64)
-  screen.level(4)
-  screen.text("K2:rand K3:" .. (v.active and "freeze" or "start"))
+  local scenes_saved = 0
+  for scene_num = 1, NUM_SCENES do
+    if scenes[scene_num].populated then scenes_saved = scenes_saved + 1 end
+  end
 
+  screen.level(10)
+  screen.move(0, 18)
+  screen.text("grid: " .. grid_count .. " connected")
+  screen.level(4)
+  screen.move(0, 26)
+  screen.text(table.concat(grid_sizes, " "))
+  screen.level(10)
+  screen.move(0, 34)
+  screen.text("arc: " .. (arc_connected and "connected" or "none"))
+  screen.move(0, 42)
+  screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
+  screen.move(0, 50)
+  screen.text("midi: -")  -- MIDI device and channel mode arrive with MIDI input
+
+  draw_hints("K3:save scenes")
+end
+
+-- Pages whose controls are not built yet: draw an empty hint row and ignore
+-- encoders and keys
+local function redraw_placeholder() draw_hints("") end
+local function ignore_page_input() end
+
+local function main_enc(n, d)
+  if n == 2 then
+    selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
+    update_voice_list()
+  elseif n == 3 then
+    params:delta(main_param_id(selected_voice), d)
+  end
+end
+
+-- K3 on MAIN (and the arc button): start the selected voice, or freeze it
+local function start_or_freeze_selected_voice()
+  if not voices[selected_voice].active then
+    toggle_voice(selected_voice)
+  else
+    toggle_freeze(selected_voice)
+  end
+end
+
+local function main_key(n)
+  if n == 2 then
+    randomize_voice(selected_voice)
+  elseif n == 3 then
+    start_or_freeze_selected_voice()
+  end
+end
+
+local function setup_key(n)
+  if n == 3 then
+    save_scenes_to_disk()
+  end
+end
+
+-- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP
+local PAGE_DRAW = {redraw_main, redraw_placeholder, redraw_placeholder, redraw_placeholder, redraw_setup}
+local PAGE_ENC = {main_enc, ignore_page_input, ignore_page_input, ignore_page_input, ignore_page_input}
+local PAGE_KEY = {main_key, ignore_page_input, ignore_page_input, ignore_page_input, setup_key}
+
+-- Encoders
+function enc(n, d)
+  if n == 1 then
+    ui_page = util.clamp(ui_page + d, 1, NUM_UI_PAGES)
+  else
+    PAGE_ENC[ui_page](n, d)
+  end
+  arc_redraw()
+  redraw()
+end
+
+-- Keys
+function key(n, z)
+  if z == 1 then
+    PAGE_KEY[ui_page](n)
+  end
+  redraw()
+end
+
+-- Redraw
+function redraw()
+  screen.clear()
+  draw_header()
+  PAGE_DRAW[ui_page]()
   screen.update()
 end
 
 -- Arc functions
+
+-- Arc pages follow the screen page: ARC_PAGE_DELTA[ui_page] handles ring
+-- turns and ARC_PAGE_REDRAW[ui_page] draws the rings between arc_redraw's
+-- clear and refresh.
+
+local function arc_main_delta(n, delta)
+  if n == 1 then
+    -- Ring 1: Master density
+    params:delta("master_density", delta / 20)
+  elseif n == 2 then
+    -- Ring 2: Selected voice's main parameter
+    local scale = MAIN_PARAMS[voices[selected_voice].name].arc_scale
+    params:delta(main_param_id(selected_voice), delta * scale)
+  elseif n == 3 then
+    -- Ring 3: Grain size
+    params:delta("v" .. selected_voice .. "_grain_size", delta / 100)
+  elseif n == 4 then
+    -- Ring 4: Grain density
+    params:delta("v" .. selected_voice .. "_grain_density", delta / 10)
+  end
+end
+
+local function arc_main_redraw(arc_port)
+  -- Ring 1: Master density (0.1 to 2.0)
+  local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
+  arc_port:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
+
+  -- Ring 2: Selected voice's main parameter, across its controlspec range
+  local v = voices[selected_voice]
+  local param_id = main_param_id(selected_voice)
+  local param_min, param_max = param_range(param_id)
+  local param_pos = util.linlin(param_min, param_max, 0, 64, params:get(param_id))
+  arc_port:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
+
+  -- Ring 3: Grain size (0.01 to 0.5)
+  local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
+  arc_port:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
+
+  -- Ring 4: Grain density (1 to 100)
+  local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
+  arc_port:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
+end
+
+local function arc_ignore_delta() end
+local function arc_draw_nothing() end  -- rings stay off
+
+-- Indexed like UI_PAGES; FX, LFO and BUFFER rings arrive with those pages
+local ARC_PAGE_DELTA = {arc_main_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta}
+local ARC_PAGE_REDRAW = {arc_main_redraw, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing}
 
 -- Arc handlers live on the vport only (as for grids): norns fires both
 -- device.delta/key and vports[port].delta/key, so setting them on the device
@@ -1559,55 +1666,26 @@ end
 function arc.add(device)
   attach_arc(device.port or 1)
   arc_redraw()
+  redraw()  -- SETUP shows the arc state
   print("arc connected")
 end
 
 function arc.remove(device)
   arc_connected = false
+  redraw()
   print("arc disconnected")
 end
 
 function arc_delta(n, delta)
-  if n == 1 then
-    -- Encoder 1: Master density
-    params:delta("master_density", delta / 20)
-  elseif n == 2 then
-    -- Encoder 2: Selected voice's main parameter
-    local v = voices[selected_voice]
-    if v.name == "resonator" then
-      params:delta("v" .. selected_voice .. "_freq", delta)
-    elseif v.name == "fm" then
-      params:delta("v" .. selected_voice .. "_index", delta / 10)
-    elseif v.name == "folder" then
-      params:delta("v" .. selected_voice .. "_fold", delta / 10)
-    elseif v.name == "sub" then
-      params:delta("v" .. selected_voice .. "_drift", delta / 100)
-    elseif v.name == "pulse" then
-      params:delta("v" .. selected_voice .. "_width", delta / 100)
-    elseif v.name == "karplus" then
-      params:delta("v" .. selected_voice .. "_decay", delta / 10)
-    elseif v.name == "ring" then
-      params:delta("v" .. selected_voice .. "_ratio", delta / 100)
-    end
-  elseif n == 3 then
-    -- Encoder 3: Grain size
-    params:delta("v" .. selected_voice .. "_grain_size", delta / 100)
-  elseif n == 4 then
-    -- Encoder 4: Grain density
-    params:delta("v" .. selected_voice .. "_grain_density", delta / 10)
-  end
+  ARC_PAGE_DELTA[ui_page](n, delta)
   arc_redraw()
   redraw()
 end
 
 function arc_key(n, s)
-  -- Button press (2025 arc) - same as K3
-  if s == 1 then
-    if not voices[selected_voice].active then
-      toggle_voice(selected_voice)
-    else
-      toggle_freeze(selected_voice)
-    end
+  -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
+  if s == 1 and UI_PAGES[ui_page] == "MAIN" then
+    start_or_freeze_selected_voice()
     redraw()
   end
 end
@@ -1616,63 +1694,11 @@ function arc_redraw()
   if arc_device == nil or arc_device.device == nil then return end
 
   arc_device:all(0)
-
-  -- Ring 1: Master density (0.1 to 2.0)
-  local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
-  arc_device:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
-
-  -- Ring 2: Selected voice's main parameter
-  local v = voices[selected_voice]
-  local param_val = 0
-  local param_min = 0
-  local param_max = 1
-
-  if v.name == "resonator" then
-    param_val = v.params.freq
-    param_min = 20
-    param_max = 2000
-  elseif v.name == "fm" then
-    param_val = v.params.index
-    param_min = 0
-    param_max = 10
-  elseif v.name == "folder" then
-    param_val = v.params.fold
-    param_min = 0.1
-    param_max = 5
-  elseif v.name == "sub" then
-    param_val = v.params.drift
-    param_min = 0.001
-    param_max = 0.1
-  elseif v.name == "pulse" then
-    param_val = v.params.width
-    param_min = 0.05
-    param_max = 0.95
-  elseif v.name == "karplus" then
-    param_val = v.params.decay
-    param_min = 0.5
-    param_max = 10
-  elseif v.name == "ring" then
-    param_val = v.params.ratio
-    param_min = 0.5
-    param_max = 8
-  end
-
-  local param_pos = util.linlin(param_min, param_max, 0, 64, param_val)
-  arc_device:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
-
-  -- Ring 3: Grain size (0.01 to 0.5)
-  local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
-  arc_device:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
-
-  -- Ring 4: Grain density (1 to 100)
-  local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
-  arc_device:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
-
+  ARC_PAGE_REDRAW[ui_page](arc_device)
   arc_device:refresh()
 end
 
 -- Grid functions
-local MAX_GRID_PORTS = 4
 local GRID_FADER_ROWS = 4     -- 256-grid parameter page: one fader per row 9-12
 local GRID_FADER_WIDTH = 16   -- fader columns
 local GRID_FADER_FIRST_ROW = 9
@@ -1725,6 +1751,7 @@ function grid.add(device)
   local grid_port = attach_grid(port)
   print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
   grid_redraw()
+  redraw()  -- SETUP lists the connected grids
 end
 
 function grid.remove(device)
@@ -1734,6 +1761,7 @@ function grid.remove(device)
     grids[port].key = nil
     grids[port] = nil
   end
+  redraw()
   print("grid " .. port .. " disconnected")
 end
 

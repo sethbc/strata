@@ -149,6 +149,7 @@ local NUM_SCENES = 8        -- Total number of scene slots
 local PATTERN_LENGTH = 16   -- Steps per pattern
 local SCENE_DATA_VERSION = 1  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3     -- Cross-modulation slots per voice
+local NUM_UI_PAGES = 5      -- Screen pages (MAIN, FX, LFO, BUFFER, SETUP), selected with E1
 ```
 The engine mirrors `NUM_VOICES` as `numVoices` in [lib/Engine_Strata.sc](lib/Engine_Strata.sc). Remaining bare numbers in grid code are grid coordinates and LED levels, not counts.
 
@@ -188,17 +189,17 @@ When making significant changes to the codebase, ensure both documentation files
 1. **Screen Constraints**:
    - Total resolution: 128×64 pixels
    - Use column layouts to maximize information density without overlapping
-   - Current layout: Left column (0-60px) for voice list, Right column (65-128px) for parameters
-   - Reserve bottom row (y=64) for key hints
+   - Current layout (MAIN page): Left column (0-60px) for voice list, Right column (65-128px) for parameters
+   - Reserve the hint row (y=62, drawn by `draw_hints()`) on every page for key hints
 
 2. **Scrolling Lists**:
    - Use `UI.ScrollingList` for lists that exceed visible space
-   - Set `num_visible` appropriately (currently 5 for 7 voices)
+   - Set `num_visible` appropriately (currently 4 for 7 voices: `UI.ScrollingList` draws row i at `y + 5 + (i - 1) * 11`, so from y=10 a fifth row at y=59 would collide with the hint row)
    - Set `num_above_selected` for context (currently 1)
    - Always set `active = true` and update `index` when selection changes
 
 3. **Information Hierarchy**:
-   - Title/app name at top (y=8)
+   - Page title at top (y=8, `draw_header()`)
    - Critical global params in header (master density)
    - Selected item details in dedicated column
    - Helper text at bottom (key functions)
@@ -209,11 +210,11 @@ When making significant changes to the codebase, ensure both documentation files
    - Add new parameters to the right column display
    - Consider abbreviating labels if space is tight (e.g., "dens" instead of "density")
    - Use appropriate units (Hz, s, %, etc.)
-   - Update the parameter value display in the `redraw()` function
+   - Update the parameter value display in the page's draw function (`redraw_main()`, ...)
 
 2. **Add New Voices**:
-   - Voice list automatically scrolls with more than 5 voices
-   - Add parameter display case in `redraw()` function
+   - Voice list automatically scrolls with more than 4 voices
+   - Add the voice type to `MAIN_PARAMS` (E3, MAIN display and arc ring 2 follow)
    - Update `get_param_spec()` with controlspec for new parameters
    - Consider whether right column layout needs adjustment
 
@@ -305,8 +306,8 @@ Before completing any modification task, verify:
 
 2. **Arc Integration**:
    - Consider if new voice parameters should be accessible via arc rings
-   - Update `arc_delta()` to handle new voice-specific parameters
-   - Update `arc_redraw()` to display new parameter ranges correctly
+   - Add the voice type to `MAIN_PARAMS` (drives E3, the MAIN screen and arc ring 2 through `main_param_id`)
+   - Update the page's arc functions (`arc_main_delta`/`arc_main_redraw`, ...) for any other voice-specific mapping
    - Ensure parameter min/max values match between arc feedback and param specs
 
 #### When adding new parameters, you MUST review:
@@ -346,8 +347,8 @@ Before completing any modification task, verify:
    - Voice selection range checks throughout grid code
 
 2. **Arc Voice Selection**:
-   - Update voice-specific parameter mapping in `arc_delta()`
-   - Ensure `arc_redraw()` handles all voice types correctly
+   - Update voice-specific parameter mapping in `arc_main_delta()` / `MAIN_PARAMS`
+   - Ensure `arc_main_redraw()` handles all voice types correctly
    - Update voice selection via norns E2 to work with arc feedback
 
 #### Hardware Integration Checklist
@@ -832,17 +833,20 @@ Strata supports the monome arc controller for tactile parameter control. The imp
 - `arc.remove(device)` - Global callback when arc disconnects
 - Graceful degradation: `arc_redraw()` returns unless `arc_device` has a connected device
 
+#### Arc Pages
+The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDRAW` are indexed like `UI_PAGES`: `arc_delta` calls `ARC_PAGE_DELTA[ui_page](ring, delta)`, and `arc_redraw` clears the rings, calls `ARC_PAGE_REDRAW[ui_page](arc_device)` and refreshes. MAIN uses `arc_main_delta`/`arc_main_redraw`; SETUP has no rings (`arc_ignore_delta`/`arc_draw_nothing`), and FX, LFO and BUFFER use the same no-ops until their features add ring mappings. `enc(1, ...)` calls `arc_redraw()`, so changing page redraws the rings.
+
 #### Input Handling
-- `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4
+- `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4 through the page's handler. MAIN:
   - Ring 1: Master density
-  - Ring 2: Selected voice's main parameter (voice-specific)
+  - Ring 2: Selected voice's main parameter (`main_param_id`, delta scaled by the `MAIN_PARAMS` entry's `arc_scale`)
   - Ring 3: Grain size for selected voice
   - Ring 4: Grain density for selected voice
 - `arc_key(n, s)` - Handle button press (2025 arc models)
-  - Mirrors K3 functionality (toggle/freeze voice)
+  - On MAIN mirrors K3 (`start_or_freeze_selected_voice`); does nothing on other pages
 
 #### LED Feedback
-- `arc_redraw()` - Update all ring LEDs to reflect current parameter values
+- `arc_redraw()` - Update all ring LEDs to reflect current parameter values (the current page's rings)
 - Called after parameter changes (from encoders or arc)
 - Uses `util.linlin()` to map parameter ranges to 0-64 LED positions
 - Brightness levels indicate voice state:
@@ -860,20 +864,38 @@ Strata supports the monome arc controller for tactile parameter control. The imp
 
 ### UI Updates
 
+#### Screen pages
+
+The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`; `ui_page` is the index of the shown page.
+- `enc(1, d)` selects the page (`ui_page = util.clamp(ui_page + d, 1, NUM_UI_PAGES)`); E1 does nothing else. `enc(2|3, d)` calls `PAGE_ENC[ui_page](n, d)` and `key(n, 1)` calls `PAGE_KEY[ui_page](n)`
+- `redraw()` is `screen.clear(); draw_header(); PAGE_DRAW[ui_page](); screen.update()`. Each page's draw function ends with `draw_hints(text)` (level 4, x=0, y=62)
+- `PAGE_DRAW`, `PAGE_ENC` and `PAGE_KEY` are indexed like `UI_PAGES`. FX, LFO and BUFFER are placeholders (`redraw_placeholder` draws an empty hint row, `ignore_page_input` ignores encoders/keys) until their features replace them; to fill a page, write its draw/enc/key functions and put them in the three tables (and the arc tables below)
+- The tables are script locals built after the functions they hold, so page functions must be defined above them
+- **MAIN** (`redraw_main`, `main_enc`, `main_key`): the original screen - E2 voice select, E3 main parameter, K2 randomize, K3 start/stop/freeze (`start_or_freeze_selected_voice`)
+- **SETUP** (`redraw_setup`, `setup_key`): grid count and sizes (in port order), arc connected/none, `scenes: k/8 saved`, a `midi:` line for MIDI input; K3 calls `save_scenes_to_disk()`. `grid.add`/`grid.remove`/`arc.add`/`arc.remove` call `redraw()` so SETUP stays current
+- Master density left E1. It is on MAIN's arc ring 1, in params, and in the header on every page
+
+#### Main parameter
+
+`main_param_id(voice_idx)` returns the param E3 and arc ring 2 adjust on MAIN (`v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring) and `main_param_label(voice_idx)` its screen label. Both read the `MAIN_PARAMS` table (per voice type: params key, screen value format, arc delta scale). Use them instead of `if v.name ==` chains; arc ring 2 is drawn across `param_range(main_param_id(...))`
+
+#### MAIN layout
+
 The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. The list shows:
 - Active status (● for on, ○ for off)
 - Voice name
 - Freeze status ([F] suffix)
 
-The UI uses a two-column layout:
-- **Header (y=8)**: `STRATA` at x=0 (04B_03 capitals advance ~6 px, so it ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
-- **Left column (0-60px)**: Scrolling voice list (5 visible at a time)
-- **Right column (65-128px)**: Selected voice details (name, status, main parameter); `[FREEZE]` is right-aligned at x=127 on the status row (y=26)
+MAIN uses a two-column layout:
+- **Header (y=8, `draw_header()`, identical on every page)**: page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
+- **Left column (0-60px)**: Scrolling voice list (4 visible at a time, rows y=15-48)
+- **Right column (65-128px)**: Selected voice details (name, status, main parameter at y=42/50); `[FREEZE]` is right-aligned at x=127 on the status row (y=26)
 - **Divider (x=62)**: Subtle vertical line separating columns
-- `test/run.lua` checks that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), and that `dens:` starts at least 4 px after `STRATA`; keep it passing when adding text
+- **Hint row (y=62)**: `K2:rand K3:freeze|start`
+- `test/run.lua` checks, on every page and for every selected voice, that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), that `dens:` starts at least 4 px after the page title, that a hint row is drawn at y=62, and that the voice list's last row ends above the hint row; keep it passing when adding text
 - Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `lfo_update` only when a grid shows page 2 (it runs 10x/s)
 
-The `redraw()` function handles all screen drawing and must be updated whenever new UI elements are added.
+When adding UI elements, update the page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()` itself.
 
 ## SuperCollider Architecture
 

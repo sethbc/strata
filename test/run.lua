@@ -619,40 +619,202 @@ local function text_span(entry)
   return entry.x, entry.x + width
 end
 
-test("screen header and status text never overlap or leave 128x64 (M7)", function()
+local PAGE_TITLES = { "MAIN", "FX", "LFO", "BUFFER", "SETUP" }
+local HINT_ROW_Y = 62
+local TEXT_HEIGHT = 6   -- 04B_03 glyph height plus one row of spacing
+
+local function show_page(page)
+  enc(1, page - local_value("ui_page"))
+  redraw()
+end
+
+-- Check the drawn screen: everything inside 128x64, no two strings overlap on
+-- a row, the page title at 0,8 with dens: at least 4 px after it, and a hint
+-- row at y 62.
+local function assert_screen_layout(context, where)
+  local rows = {}
+  for _, entry in ipairs(context.screen.texts) do
+    local left, right = text_span(entry)
+    assert_true(left >= 0 and right <= 128 and entry.y <= 64,
+      string.format("'%s' at %d,%d leaves the screen (%s)", entry.text, entry.x, entry.y, where))
+    rows[entry.y] = rows[entry.y] or {}
+    for _, other in ipairs(rows[entry.y]) do
+      assert_true(right <= other.left or left >= other.right,
+        string.format("'%s' overlaps '%s' on row %d (%s)", entry.text, other.text, entry.y, where))
+    end
+    table.insert(rows[entry.y], { left = left, right = right, text = entry.text })
+  end
+  local title = PAGE_TITLES[local_value("ui_page")]
+  local title_right, density_left, hint_found
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text == title and entry.x == 0 and entry.y == 8 then title_right = select(2, text_span(entry)) end
+    if entry.text:find("^dens:") then density_left = entry.x end
+    if entry.x == 0 and entry.y == HINT_ROW_Y then hint_found = true end
+  end
+  assert_true(title_right, "page title " .. title .. " drawn at 0,8 (" .. where .. ")")
+  assert_true(density_left and density_left - title_right >= 4,
+    "dens: starts at least 4 px after " .. title .. " (" .. where .. ")")
+  assert_true(hint_found, "hint row at y " .. HINT_ROW_Y .. " (" .. where .. ")")
+end
+
+test("every page's header, hints and text stay apart and inside 128x64 (M7)", function()
   local context = load_strata()
   params:set("mutation_enabled", 1)
   params:set("master_density", 2.0)
   capture_scene(8)
   recall_scene(8, 0)
+  -- the widest SETUP page: four grids of every size and an arc
+  context.grid.plug(1, 16, 16)
+  context.grid.plug(2, 16, 8)
+  context.grid.plug(3, 8, 16)
+  context.grid.plug(4, 8, 8)
+  context.arc.plug(1)
   local voices = local_value("voices")
+  local _, set_selected = find_upvalue("selected_voice")
   for voice_idx = 1, 7 do
-    local _, set_selected = find_upvalue("selected_voice")
     set_selected(voice_idx)
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
     if not local_value("frozen")[voice_idx] then toggle_freeze(voice_idx) end
-    redraw()
-    local rows = {}
-    for _, entry in ipairs(context.screen.texts) do
-      local left, right = text_span(entry)
-      assert_true(left >= 0 and right <= 128 and entry.y <= 64,
-        string.format("'%s' at %d,%d leaves the screen", entry.text, entry.x, entry.y))
-      rows[entry.y] = rows[entry.y] or {}
-      for _, other in ipairs(rows[entry.y]) do
-        assert_true(right <= other.left or left >= other.right,
-          string.format("'%s' overlaps '%s' on row %d", entry.text, other.text, entry.y))
-      end
-      table.insert(rows[entry.y], { left = left, right = right, text = entry.text })
+    for page = 1, #PAGE_TITLES do
+      show_page(page)
+      assert_screen_layout(context, PAGE_TITLES[page] .. ", voice " .. voice_idx)
     end
-    -- the density label keeps a visible gap after the title
-    local title_right, density_left
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == "STRATA" then title_right = select(2, text_span(entry)) end
-      if entry.text:find("^dens:") then density_left = entry.x end
-    end
-    assert_true(title_right and density_left and density_left - title_right >= 4,
-      "dens: starts at least 4 px after STRATA")
   end
+  -- UI.ScrollingList draws row i at y + 5 + (i - 1) * 11; its last row must
+  -- end above the hint row (the stub list draws nothing, so check geometry)
+  local voice_list = local_value("voice_list")
+  local last_row_y = voice_list.y + 5 + (voice_list.num_visible - 1) * 11
+  assert_true(last_row_y <= HINT_ROW_Y - TEXT_HEIGHT,
+    "voice list's last row (y " .. last_row_y .. ") clears the hint row")
+end)
+
+test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
+  local context = load_strata(); context.clock.advance()
+  assert_equal(local_value("ui_page"), 1)
+  local density = params:get("master_density")
+  enc(1, 1); assert_equal(local_value("ui_page"), 2)
+  assert_equal(params:get("master_density"), density, "E1 no longer changes density")
+  enc(1, 10); assert_equal(local_value("ui_page"), 5)
+  enc(1, -10); assert_equal(local_value("ui_page"), 1)
+  enc(2, 1); assert_equal(local_value("selected_voice"), 2)
+  local before = params:get(main_param_id(2)); enc(3, 1)
+  assert_true(params:get(main_param_id(2)) ~= before, "E3 moves the main param on MAIN")
+  key(3, 1); assert_true(local_value("frozen")[2], "K3 freezes a running voice on MAIN")
+end)
+
+test("every page draws within 128x64 with a header and hint row", function()
+  local context = load_strata(); context.clock.advance()
+  for page = 1, 5 do
+    enc(1, page - local_value("ui_page")); redraw()
+    local texts = context.screen.texts
+    assert_equal(texts[1].text, ({"MAIN","FX","LFO","BUFFER","SETUP"})[page], "page title")
+    for _, entry in ipairs(texts) do
+      local left, right = text_span(entry)
+      assert_true(left >= 0 and right <= 128 and entry.y <= 64, "text inside screen on page " .. page)
+    end
+  end
+end)
+
+test("arc rings follow the page; MAIN mapping unchanged", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.arc.plug(1)
+  context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
+  enc(1, 4); arc_redraw()
+  assert_equal(next(device.segments), nil, "SETUP page draws no rings")
+end)
+
+test("main_param_id and main_param_label name each voice's E3 and arc ring 2 param", function()
+  local context = load_strata()
+  local device = context.arc.plug(1)
+  local expected = { resonator = "freq", fm = "index", folder = "fold", sub = "drift",
+    pulse = "width", karplus = "decay", ring = "ratio" }
+  local voices = local_value("voices")
+  local _, set_selected = find_upvalue("selected_voice")
+  for voice_idx = 1, 7 do
+    local key_name = expected[voices[voice_idx].name]
+    local param_id = "v" .. voice_idx .. "_" .. key_name
+    assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
+    assert_equal(main_param_label(voice_idx), key_name, "main param label of voice " .. voice_idx)
+    -- arc ring 2 adjusts it and shows it across its controlspec range
+    set_selected(voice_idx)
+    local min_value, max_value = param_range(param_id)
+    params:set(param_id, min_value)
+    context.arc.turn(1, 2, 100)  -- enough for one step of sub's fine-scaled drift
+    local value = params:get(param_id)
+    assert_true(value > min_value, "arc ring 2 raises " .. param_id)
+    local expected_end = util.linlin(min_value, max_value, 0, 64, value) / 64 * math.pi * 2
+    assert_near(device.segments[2].to, expected_end, 1e-9, "ring 2 shows " .. param_id)
+    -- MAIN shows the label and value in the right column
+    redraw()
+    local label_found = false
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.x == 65 and entry.y == 42 and entry.text == key_name then label_found = true end
+    end
+    assert_true(label_found, "MAIN shows the " .. key_name .. " label")
+  end
+end)
+
+test("every encoder, key and arc control is safe on every page; arc button only acts on MAIN", function()
+  local context = load_strata(); context.clock.advance()
+  context.arc.plug(1)
+  context.grid.plug(1, 16, 16)
+  for page = 1, #PAGE_TITLES do
+    show_page(page)
+    for _, n in ipairs({ 2, 3 }) do
+      enc(n, 1); enc(n, -1)
+      assert_equal(local_value("ui_page"), page, "E" .. n .. " stays on " .. PAGE_TITLES[page])
+    end
+    for n = 1, 3 do key(n, 1); key(n, 0) end
+    for ring = 1, 4 do context.arc.turn(1, ring, 5); context.arc.turn(1, ring, -5) end
+    arc_redraw()
+    if page ~= 1 then
+      local frozen = deep_copy(local_value("frozen"))
+      local active = {}
+      for voice_idx, voice in ipairs(local_value("voices")) do active[voice_idx] = voice.active end
+      context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+      for voice_idx, voice in ipairs(local_value("voices")) do
+        assert_equal(voice.active, active[voice_idx], "arc button leaves voices alone on " .. PAGE_TITLES[page])
+        assert_equal(local_value("frozen")[voice_idx], frozen[voice_idx], "arc button leaves freeze alone on " .. PAGE_TITLES[page])
+      end
+    end
+  end
+  -- SETUP: arc rings do nothing
+  show_page(5)
+  local density = params:get("master_density")
+  context.arc.turn(1, 1, 40)
+  assert_equal(params:get("master_density"), density, "arc ring 1 does not change density on SETUP")
+end)
+
+test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function()
+  local context = load_strata()
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  show_page(5)
+  assert_true(screen_has("grid: 0 connected"), "no grids")
+  assert_true(screen_has("arc: none"), "no arc")
+  assert_true(screen_has("scenes: 0/8 saved"), "no scenes")
+  context.grid.plug(1, 16, 16)
+  context.grid.plug(3, 8, 8)
+  context.arc.plug(1)
+  capture_scene(3)
+  redraw()
+  assert_true(screen_has("grid: 2 connected"), "two grids")
+  assert_true(screen_has("16x16 8x8"), "grid sizes in port order")
+  assert_true(screen_has("arc: connected"), "arc connected")
+  assert_true(screen_has("scenes: 1/8 saved"), "one scene")
+  context.arc.unplug(1)
+  context.grid.unplug(3)
+  assert_true(screen_has("arc: none"), "unplugging the arc redraws SETUP")
+  assert_true(screen_has("grid: 1 connected"), "unplugging a grid redraws SETUP")
+
+  local scene_file = context.data_dir .. "strata/scenes.data"
+  assert_true(not util.file_exists(scene_file), "no scenes file yet")
+  key(3, 1)
+  assert_true(util.file_exists(scene_file), "K3 on SETUP saves scenes")
 end)
 
 test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", function()
