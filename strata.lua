@@ -241,7 +241,6 @@ local pattern_length = PATTERN_LENGTH
 local pattern_position = 1
 local pattern_playing = false
 local pattern_clock = nil
-local tempo = 120
 
 -- Grid UI state
 local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes
@@ -292,15 +291,17 @@ function init()
     end
   }
 
+  -- Sequencer tempo: drives norns' global clock (clock_tempo), which the
+  -- pattern clock follows via clock.sync so external clock sources still work
   params:add{
     type = "number",
     id = "tempo",
     name = "tempo",
     min = 40,
     max = 300,
-    default = 120,
+    default = util.clamp(util.round(params:get("clock_tempo")), 40, 300),
     action = function(x)
-      tempo = x
+      params:set("clock_tempo", x)
     end
   }
 
@@ -919,7 +920,7 @@ function capture_scene(scene_num)
     frozen = {},
     patterns = {},
     master_density = master_density,
-    tempo = tempo,
+    tempo = params:get("tempo"),
     mutation_enabled = params:get("mutation_enabled"),
     mutation_rate = params:get("mutation_rate"),
     mutation_probability = params:get("mutation_probability"),
