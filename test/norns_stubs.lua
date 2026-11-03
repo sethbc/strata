@@ -13,7 +13,10 @@
 --   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
 --     lib/musicutil.lua
---   * clock.run resumes the coroutine immediately; sleep/sync yield
+--   * clock.run resumes the coroutine immediately; sleep/sync yield;
+--     clock.get_beat_sec follows clock_tempo
+--   * util.time stands still until a test calls context.set_time(seconds)
+--   * the screen records texts, lines and rects (for layout checks)
 --   * grid/arc device events fire both device.key and vports[port].key
 --   * tab.load runs the file chunk unprotected
 -- The engine stub validates every engine.* call against the addCommand
@@ -63,6 +66,10 @@ end
 
 local function make_util()
   local util = {}
+  -- lib/util.lua: util.time() is the wall clock in seconds. The stub's clock
+  -- stands still; tests move it with context.set_time(seconds)
+  util.stub_now = 0
+  function util.time() return util.stub_now end
   function util.clamp(n, min, max) return math.min(max, math.max(n, min)) end
   function util.linlin(slo, shi, dlo, dhi, f)
     if f <= slo then return dlo
@@ -193,7 +200,8 @@ local function make_params(util, controlspec)
     elseif args.type == "number" then
       param.min = args.min or -2147483648
       param.max = args.max or 2147483647
-      param.value = args.default or 0
+      param.default = args.default or 0
+      param.value = param.default
       param.formatter = args.formatter
       param.wrap = args.wrap and param.min ~= param.max or false
     elseif args.type == "option" then
@@ -478,6 +486,11 @@ local function make_clock()
     return coroutine.yield("sync", beats)
   end
 
+  -- lua/core/clock.lua: seconds per beat at the current tempo
+  function clock.get_beat_sec()
+    return 60 / params:get("clock_tempo")
+  end
+
   -- test helper: resume every pending coroutine once (one scheduler tick)
   function clock.advance()
     local ids = {}
@@ -715,8 +728,8 @@ function stubs.text_width(text)
 end
 
 local function make_screen()
-  local screen = { texts = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
-  function screen.clear() screen.texts = {} end
+  local screen = { texts = {}, lines = {}, rects = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
+  function screen.clear() screen.texts = {}; screen.lines = {}; screen.rects = {} end
   function screen.level(level) screen.current_level = level end
   function screen.move(x, y) screen.cursor_x = x; screen.cursor_y = y end
   -- each drawn string is recorded with its position, alignment and level
@@ -728,8 +741,18 @@ local function make_screen()
   function screen.text_right(str) record_text(str, "right") end
   -- lua/core/screen.lua: text_extents(str) returns width, height
   function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
-  function screen.line() end
+  -- lines and rectangles are recorded too (from/to points, x/y/w/h), so
+  -- tests can check that drawings stay in their area
+  function screen.line(x, y)
+    table.insert(screen.lines, { x1 = screen.cursor_x, y1 = screen.cursor_y, x2 = x, y2 = y,
+      level = screen.current_level })
+    screen.cursor_x = x; screen.cursor_y = y
+  end
+  function screen.rect(x, y, w, h)
+    table.insert(screen.rects, { x = x, y = y, w = w, h = h, level = screen.current_level })
+  end
   function screen.stroke() end
+  function screen.fill() end
   function screen.update() end
   function screen.font_size() end
   function screen.font_face() end
@@ -892,6 +915,7 @@ function stubs.install(options)
   context.controlspec = controlspec
   context.params = make_params(util, controlspec)
   context.clock = make_clock()
+  function context.set_time(seconds) util.stub_now = seconds end
   context.metro = make_metro()
   context.grid = make_grid()
   context.arc = make_arc()

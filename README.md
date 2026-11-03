@@ -61,7 +61,7 @@ Voices can modulate each other for evolving, interdependent textures:
 
 - **Randomization** - Generate new parameter sets for each voice
 - **Freeze** - Lock a voice's parameters while others continue to evolve
-- **Auto-modulation** - A slow LFO adds subtle grain pitch movement to active voices that are not frozen; it always drifts back toward the pitch you set
+- **Drift** - A slow random walk adds subtle grain pitch movement to active voices that are not frozen; it always drifts back toward the pitch you set
 
 ### Probability-Based Mutations
 
@@ -73,7 +73,18 @@ Strata includes an optional mutation system for creating organic, evolving textu
 - **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance
 - **Visual Feedback** - `[M]` indicator appears on screen when mutations are enabled
 
-The mutation system works alongside the existing LFO system, creating multiple layers of organic movement. Combine with the freeze feature to let some voices evolve while others remain stable.
+The mutation system works alongside the per-voice drift and the global LFOs, creating multiple layers of organic movement. Combine with the freeze feature to let some voices evolve while others remain stable.
+
+### Global LFOs
+
+Three LFOs, built on norns' own LFO library, can each modulate one parameter:
+- **Shapes** - sine, tri, square, random, up, down
+- **Rate** - free (a period from 0.1 s to 300 s) or clocked to the norns clock (the library's rates from 1/16 bar, a quarter beat, to 1024 bars)
+- **Depth** - 0-100 %; at 100 % the LFO swings half the destination's range either side of its value
+- **Destinations** - none, master density, tape drift, filter freq / res / mix, delay time / feedback / mix, reverb mix / size / damp, and for each voice: its main parameter (the one E3 adjusts: the synthesis parameter, or buffer position for a buffer-sourced voice, grain size for an input-sourced one), grain size, density, pitch, spread, buffer position, rate and scan
+- **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
+
+The fastest rate is 10 Hz (the library's 0.1 s free period); Confluence promised 20 Hz, which would need the LFOs in the engine instead of Lua. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
 ### Scene System & Automation
 
@@ -82,7 +93,7 @@ Strata includes a comprehensive scene system for longer-form composition and aut
 - **Disk Persistence** - Scenes automatically save to disk and load on startup
 - **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
 - **Scene Sequencer** - Automatically progress through scenes for hands-free composition
-- **Complete State Capture** - Scenes store voice parameters and sources, patterns, freeze states, and global settings (not the audio in the sample buffers)
+- **Complete State Capture** - Scenes store voice parameters and sources, patterns, freeze states, and global settings, including each LFO's state, shape, rate, depth and destination (not the audio in the sample buffers)
 - **Grid Integration** - Dedicated scene page on grid for performance control
 - **Visual Feedback** - `S1`-`S8` indicator shows current scene on screen
 
@@ -167,7 +178,13 @@ Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETE
 
 #### LFO
 
-Not built yet: this page shows only the header, and its encoders, keys and arc rings do nothing.
+One row per LFO: `L1`-`L3` (the selected one bright), one cycle of its shape, a dot that follows the LFO while it runs, its destination (`filt freq`, `v2 main`, ...) and `on`/`off` with its depth.
+
+- **E2** - Select an LFO
+- **E3** - Adjust the selected LFO's depth (1 % steps)
+- **K2** - Next destination (wraps from the last voice's scan back to none)
+- **K3** - Turn the selected LFO on or off
+- Shape, rate, mode, phase and the other LFO settings are in PARAMETERS > LFO 1-3
 
 #### SETUP
 
@@ -204,7 +221,12 @@ On the **BUFFER** page:
 
 Rings 1 and 2 adjust the voice's buffer parameters whatever its source (ready for when it switches to a buffer), but are drawn dim unless the source is a buffer.
 
-On the **SETUP** page the rings are off and do nothing. The LFO page has no ring mappings yet (rings off).
+On the **LFO** page:
+
+- **Rings 1-3** - Depth of LFO 1-3 (10 ticks per percent; bright while the LFO runs)
+- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked
+
+On the **SETUP** page the rings are off and do nothing.
 
 #### Arc Button (2025 model)
 
@@ -219,6 +241,8 @@ On the **SETUP** page the rings are off and do nothing. The LFO page has no ring
 ### Monome Grid (optional)
 
 Strata includes comprehensive grid integration for pattern sequencing and parameter manipulation. Supports multiple grids simultaneously and adapts layout based on grid size.
+
+The grid has no LFO controls (no layout has room for them); the LFOs live on the screen's LFO page, the arc's LFO page and in PARAMETERS.
 
 #### Supported Grid Sizes
 
@@ -478,6 +502,10 @@ Strata writes audio to disk only when a recording finishes and when you save a b
 - Delay mix (0 = dry, the default, to 1)
 - Reverb mix, size and damping
 - Tape drift amount (depth of the drift; 0 = none)
+
+### LFOs
+- **lfo destinations** (group) - LFO 1-3 dest (none by default)
+- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0 %), phase, offset, scaled and raw value (read-only), min/max (keep -1 and 1: Strata's depth math assumes them), baseline (from center), mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
 
 ### Per-Voice Sections
 Each voice includes:

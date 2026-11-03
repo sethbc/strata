@@ -2303,6 +2303,306 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
 end)
 
 ---------------------------------------------------------------------------
+-- global LFOs, LFO page
+---------------------------------------------------------------------------
+
+-- lfo_depth_<n> is the library's percentage (0-100)
+test("LFO modulates around the stored value without writing it, and restores on disable", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("filter_freq", 1000); params:set("strata_lfo1_dest", 4)   -- filt freq
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  context.clear_engine_calls(); context.lfo.tick(local_value("lfos")[1], 1.0)   -- scaled = +0.5
+  local call = context.calls_named("setFilter")[1]
+  assert_near(call.args[1], 1000 + 0.5 * 0.5 * (20000 - 20), 1e-6)
+  assert_near(params:get("filter_freq"), 1000, 1e-9, "param value untouched")
+  context.clear_engine_calls(); params:set("lfo_1", 1)
+  assert_near(context.calls_named("setFilter")[1].args[1], 1000, 1e-6, "disable restores the stored value")
+end)
+
+test("main destination follows a voice's source and restores the old param", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("strata_lfo2_dest", 13)   -- v1 main
+  params:set("lfo_depth_2", 100); params:set("lfo_2", 2)
+  context.lfo.tick(local_value("lfos")[2], 0.5)
+  assert_equal(local_value("lfo_last_dest")[2], "v1_freq")
+  params:set("v1_source", 2); context.clear_engine_calls(); context.lfo.tick(local_value("lfos")[2], 0.5)
+  local voice_calls = context.calls_named("setVoiceParam")
+  assert_equal(voice_calls[1].args[2], "freq"); assert_near(voice_calls[1].args[3], params:get("v1_freq"), 1e-9)
+  assert_equal(local_value("lfo_last_dest")[2], "v1_buf_pos")
+end)
+
+test("LFO page draws three rows inside the screen and cleanup stops LFOs", function()
+  local context = load_strata(); context.clock.advance(); enc(1, 2); redraw()
+  for _, entry in ipairs(context.screen.texts) do local l, r = text_span(entry); assert_true(l >= 0 and r <= 128 and entry.y <= 64) end
+  params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1)
+end)
+
+test("LFO restores the stored value when its depth reaches 0 or its destination changes", function()
+  local context = load_strata(); context.clock.advance()
+  local lfos = local_value("lfos")
+  params:set("delay_mix", 0.2); params:set("strata_lfo1_dest", 9)   -- dly mix
+  params:set("lfo_depth_1", 40); params:set("lfo_1", 2)
+  context.clear_engine_calls(); context.lfo.tick(lfos[1], 1.0)     -- scaled +0.4
+  assert_near(context.calls_named("setDelay")[1].args[3], 0.2 + 0.4 * 0.5, 1e-9, "modulated mix")
+  context.clear_engine_calls(); params:set("lfo_depth_1", 0)
+  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "depth 0 restores")
+  context.clear_engine_calls(); context.lfo.tick(lfos[1], 1.0)
+  assert_equal(#context.engine_calls, 0, "a depth-0 LFO sends nothing")
+  params:set("lfo_depth_1", 40); context.clear_engine_calls()
+  context.lfo.tick(lfos[1], 0.0)                                    -- scaled -0.4: clamped at 0
+  assert_near(context.calls_named("setDelay")[1].args[3], 0, 1e-9, "modulated value clamps to the range")
+  context.clear_engine_calls(); params:set("strata_lfo1_dest", 10)  -- rev mix
+  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "destination change restores the old one")
+  context.clear_engine_calls(); context.lfo.tick(lfos[1], 1.0)
+  assert_equal(#context.calls_named("setDelay"), 0, "old destination left alone")
+  assert_near(context.calls_named("setReverb")[1].args[1], util.clamp(params:get("reverb_mix") + 0.2, 0, 1), 1e-9,
+    "new destination modulated")
+  context.clear_engine_calls(); params:set("strata_lfo1_dest", 1)   -- none
+  context.lfo.tick(lfos[1], 1.0)
+  assert_near(context.calls_named("setReverb")[1].args[1], params:get("reverb_mix"), 1e-9, "none restores")
+  assert_equal(#context.calls_named("setReverb"), 1, "and then sends nothing")
+end)
+
+test("LFOs on params of one command, or on one param, do not undo each other", function()
+  local context = load_strata(); context.clock.advance()
+  local lfos = local_value("lfos")
+  params:set("filter_freq", 1000); params:set("filter_res", 0.5)
+  params:set("strata_lfo1_dest", 4); params:set("strata_lfo2_dest", 5)   -- filt freq, filt res
+  for n = 1, 2 do params:set("lfo_depth_" .. n, 20); params:set("lfo_" .. n, 2) end
+  context.lfo.tick(lfos[1], 1.0); context.clear_engine_calls(); context.lfo.tick(lfos[2], 1.0)
+  local call = context.calls_named("setFilter")[1]
+  assert_near(call.args[1], 1000 + 0.2 * 0.5 * 19980, 1e-6, "LFO 2 keeps LFO 1's filter freq")
+  assert_near(call.args[2], 0.5 + 0.2 * 0.5, 1e-6, "and adds its res")
+  -- a user change to res is sent with the modulated freq
+  context.clear_engine_calls(); params:set("filter_res", 0.3)
+  assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.2 * 0.5 * 19980, 1e-6, "freq stays modulated")
+  -- two LFOs on one destination add up; disabling one leaves the other's offset
+  params:set("strata_lfo2_dest", 4)
+  context.lfo.tick(lfos[1], 1.0); context.clear_engine_calls(); context.lfo.tick(lfos[2], 1.0)
+  assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.4 * 0.5 * 19980, 1e-6, "offsets add")
+  context.clear_engine_calls(); params:set("lfo_2", 1)
+  assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.2 * 0.5 * 19980, 1e-6, "LFO 1 still applies")
+  -- master density modulation reaches every running voice's grain density
+  params:set("strata_lfo1_dest", 2); params:set("master_density", 1)
+  context.clear_engine_calls(); context.lfo.tick(lfos[1], 1.0)       -- +0.2 * 0.5 * 1.9
+  local voices = local_value("voices")
+  for _, density_call in ipairs(context.calls_named("setGrainParam")) do
+    local voice_idx = density_call.args[1] + 1
+    assert_true(voices[voice_idx].active, "only running voices")
+    assert_near(density_call.args[3], voices[voice_idx].grain.density * (1 + 0.19), 1e-6, "modulated density")
+  end
+  assert_true(#context.calls_named("setGrainParam") >= 1, "a running voice got its density")
+  assert_near(params:get("master_density"), 1, 1e-9, "master density param untouched")
+end)
+
+test("LFO params: library groups, a destination group, labels and resolvers", function()
+  load_strata()
+  local destinations = local_value("LFO_DESTINATIONS")
+  assert_equal(#destinations, 12 + 7 * 8, "12 globals, 8 per voice")
+  local expected_ids = { [1] = nil, [2] = "master_density", [3] = "drift_amount", [4] = "filter_freq",
+    [5] = "filter_res", [6] = "filter_mix", [7] = "delay_time", [8] = "delay_feedback", [9] = "delay_mix",
+    [10] = "reverb_mix", [11] = "reverb_size", [12] = "reverb_damp", [13] = "v1_freq", [14] = "v1_grain_size",
+    [15] = "v1_grain_density", [16] = "v1_grain_pitch", [17] = "v1_grain_spread", [18] = "v1_buf_pos",
+    [19] = "v1_buf_rate", [20] = "v1_buf_scan", [21] = "v2_index", [68] = "v7_buf_scan" }
+  for index = 1, #destinations do
+    local resolved = destinations[index].resolve()
+    if expected_ids[index] or index == 1 then
+      assert_equal(resolved, expected_ids[index], "destination " .. index)
+    end
+    if resolved then assert_true(params:lookup_param(resolved).controlspec, resolved .. " is a control param") end
+    assert_true(stubs.text_width(destinations[index].label) <= 49, destinations[index].label .. " fits its column")
+  end
+  assert_equal(destinations[13].label, "v1 main")
+  local group = params:lookup_param("strata_lfos")
+  assert_equal(group.t, params.tGROUP); assert_equal(group.n, 3, "destination group holds the three dests")
+  for n = 1, 3 do
+    local dest = params:lookup_param("strata_lfo" .. n .. "_dest")
+    assert_equal(dest.count, #destinations); assert_equal(params:get("strata_lfo" .. n .. "_dest"), 1, "none")
+    assert_equal(params:lookup_param("lfo_group_" .. n).n, 15, "the library's own group")
+    assert_equal(params:string("lfo_" .. n), "off", "LFOs start off")
+    assert_equal(params:get("lfo_depth_" .. n), 0)
+    assert_equal(params:string("lfo_mode_" .. n), "free")
+    assert_near(params:get("lfo_free_" .. n), 4, 1e-9, "4 s period")
+    assert_equal(params:string("lfo_baseline_" .. n), "from center")
+    local lfo = local_value("lfos")[n]
+    assert_equal(lfo:get("min"), -1); assert_equal(lfo:get("max"), 1)
+  end
+end)
+
+test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destination", function()
+  local context = load_strata(); context.clock.advance()
+  show_page(3)
+  enc(2, 1); assert_equal(local_value("selected_lfo"), 2)
+  enc(2, 5); assert_equal(local_value("selected_lfo"), 3, "clamped to 3 LFOs")
+  enc(2, -1)
+  enc(3, 7); assert_equal(params:get("lfo_depth_2"), 7, "E3 steps depth by percent")
+  key(3, 1); key(3, 0); assert_equal(params:string("lfo_2"), "on")
+  key(3, 1); key(3, 0); assert_equal(params:string("lfo_2"), "off")
+  key(2, 1); key(2, 0); assert_equal(params:get("strata_lfo2_dest"), 2)
+  params:set("strata_lfo2_dest", #local_value("LFO_DESTINATIONS"))
+  key(2, 1); key(2, 0); assert_equal(params:get("strata_lfo2_dest"), 1, "K2 wraps to none")
+  -- MAIN is untouched by LFO page input
+  assert_equal(local_value("selected_voice"), 1)
+end)
+
+test("LFO page clock runs only while the page is shown", function()
+  local context = load_strata(); context.clock.advance()
+  local baseline = context.clock.pending_count()
+  show_page(3)
+  assert_equal(context.clock.pending_count(), baseline + 1, "page clock started")
+  local sleeps = context.clock.sleep_log
+  assert_near(sleeps[#sleeps].amount, 1 / 15, 1e-9, "15 fps")
+  local redraws = 0
+  local real_redraw = redraw
+  redraw = function() redraws = redraws + 1; real_redraw() end
+  context.clock.advance()
+  redraw = real_redraw
+  assert_equal(redraws, 1, "each frame redraws")
+  show_page(3); assert_equal(context.clock.pending_count(), baseline + 1, "no second clock")
+  show_page(4); assert_equal(context.clock.pending_count(), baseline, "leaving the page cancels it")
+  show_page(2); show_page(3); show_page(1); assert_equal(context.clock.pending_count(), baseline)
+  show_page(3); cleanup()
+  assert_equal(context.clock.pending_count(), 0, "cleanup cancels it")
+end)
+
+-- The LFO page's waveform, dot and labels for LFO n
+local function lfo_row_drawing(context, n)
+  local top = 16 + (n - 1) * 15
+  local row = { lines = {}, rects = {}, texts = {} }
+  for _, line in ipairs(context.screen.lines) do
+    if line.y1 >= top and line.y1 <= top + 10 then table.insert(row.lines, line) end
+  end
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.y >= top - 1 and rect.y <= top + 10 then table.insert(row.rects, rect) end
+  end
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y > top and entry.y <= top + 11 then table.insert(row.texts, entry.text) end
+  end
+  return row
+end
+
+test("LFO page rows: waveform, dot from the last raw value and elapsed period, labels", function()
+  local context = load_strata(); context.clock.advance()
+  local lfos = local_value("lfos")
+  context.set_time(100)
+  params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  context.lfo.tick(lfos[1], 0.25)
+  show_page(3)
+  -- every drawn shape stays inside its row, rows inside y 14-58
+  for _, line in ipairs(context.screen.lines) do
+    assert_true(line.y1 >= 14 and line.y2 <= 58 and line.y2 >= 14 and line.y1 <= 58, "line inside y 14-58")
+    assert_true(line.x1 >= 12 and line.x2 <= 75, "waveform inside x 12-75")
+  end
+  local row = lfo_row_drawing(context, 1)
+  assert_true(#row.lines >= 63, "64 px waveform ")
+  assert_equal(#row.rects, 1, "one dot for a running LFO")
+  -- reset to the floor (phase 0.75) at t 100, so at t 100 the dot is at 0.75
+  local dot = row.rects[1]
+  assert_near(dot.x + 1, 12 + 0.75 * 63, 0.51, "dot x from the phase since the reset")
+  assert_near(dot.y + 1, 16 + 10 - 0.25 * 10, 0.51, "dot y from the last raw value")
+  assert_true(table.concat(row.texts, " "):find("filt freq"), "destination label")
+  assert_true(table.concat(row.texts, " "):find("on 50%%"), "state and depth")
+  -- one second later at a 4 s period: a quarter cycle further, wrapped to 0
+  context.set_time(101); redraw()
+  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12, 0.51, "dot advanced and wrapped")
+  -- a period change keeps the phase (like the library), then advances at the new rate
+  params:set("lfo_free_1", 2)
+  context.set_time(101.5); redraw()
+  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.25 * 63, 0.51, "advances at the new period")
+  -- the phase offset shifts the dot, the reset trigger restarts it
+  params:set("lfo_phase_1", 50); redraw()
+  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.75 * 63, 0.51, "phase offset")
+  params:set("lfo_phase_1", 0); params:set("lfo_reset_1", 1); redraw()
+  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.75 * 63, 0.51, "reset to the floor")
+  -- stopped LFOs draw no dot
+  assert_equal(#lfo_row_drawing(context, 2).rects, 0, "no dot for a stopped LFO")
+  assert_true(table.concat(lfo_row_drawing(context, 2).texts, " "):find("off 0%%"), "stopped LFO shows off")
+  -- every shape and every destination label keeps the page apart and inside the screen
+  for shape = 1, 6 do
+    for n = 1, 3 do params:set("lfo_shape_" .. n, shape) end
+    for _, dest in ipairs({ 1, 3, 12, 17, 68 }) do
+      params:set("strata_lfo2_dest", dest); params:set("lfo_depth_2", 100); redraw()
+      assert_screen_layout(context, "LFO shape " .. shape .. ", dest " .. dest)
+      for _, line in ipairs(context.screen.lines) do
+        assert_true(line.y1 >= 14 and line.y2 <= 58 and line.y2 >= 14 and line.y1 <= 58, "shape " .. shape .. " inside rows")
+      end
+    end
+  end
+end)
+
+test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.arc.plug(1)
+  show_page(3)
+  context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
+  context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
+  context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
+  assert_near(device.segments[1].to, 0.1 * math.pi * 2, 1e-9, "ring 1 shows depth")
+  enc(2, 1)   -- LFO 2
+  local period = params:get("lfo_free_2")
+  context.arc.turn(1, 4, 100); assert_true(params:get("lfo_free_2") > period, "ring 4: free period")
+  assert_equal(params:get("lfo_free_1"), 4, "only the selected LFO")
+  assert_near(device.segments[4].to, param_fraction("lfo_free_2") * math.pi * 2, 1e-9, "ring 4 shows the period")
+  params:set("lfo_mode_2", 1)   -- clocked
+  local rate = params:get("lfo_clocked_2")
+  context.arc.turn(1, 4, -40); assert_equal(params:get("lfo_clocked_2"), rate - 2, "ring 4: clocked rate, 20 ticks a step")
+  assert_near(device.segments[4].to, param_fraction("lfo_clocked_2") * math.pi * 2, 1e-9)
+end)
+
+test("scenes capture and recall the LFOs; old files load with LFOs off", function()
+  local context = load_strata({ data_subdir = "lfo_scenes" }); context.clock.advance()
+  params:set("lfo_shape_1", 2); params:set("lfo_mode_1", 1); params:set("lfo_clocked_1", 5)
+  params:set("lfo_free_2", 9); params:set("lfo_depth_2", 60); params:set("strata_lfo2_dest", 14)
+  params:set("lfo_2", 2)
+  capture_scene(1)
+  local data = local_value("scenes")[1].data
+  assert_equal(data.lfo_shape_1, 2); assert_equal(data.lfo_mode_1, 1); assert_equal(data.lfo_clocked_1, 5)
+  assert_near(data.lfo_free_2, 9, 1e-9); assert_equal(data.lfo_depth_2, 60)
+  assert_equal(data.strata_lfo2_dest, 14); assert_equal(data.lfo_2, 2)
+  params:set("lfo_2", 1); params:set("lfo_depth_2", 0); params:set("strata_lfo2_dest", 1); params:set("lfo_shape_1", 1)
+  recall_scene(1, 0)
+  assert_equal(params:string("lfo_2"), "on"); assert_equal(params:get("lfo_depth_2"), 60)
+  assert_equal(params:get("strata_lfo2_dest"), 14); assert_equal(params:string("lfo_shape_1"), "tri")
+  assert_equal(local_value("lfos")[2]:get("enabled"), 1, "recalled LFO runs")
+  -- smooth transitions fade depth and free period, switch the rest at the end
+  local continuous = {}
+  for _, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do continuous[global.id] = global.continuous end
+  for n = 1, 3 do
+    assert_equal(continuous["lfo_depth_" .. n], true); assert_equal(continuous["lfo_free_" .. n], true)
+    for _, id in ipairs({ "lfo_" .. n, "lfo_shape_" .. n, "lfo_mode_" .. n, "lfo_clocked_" .. n, "strata_lfo" .. n .. "_dest" }) do
+      assert_equal(continuous[id], false, id .. " switches")
+    end
+  end
+  -- invalid option values are rejected
+  local bad = deep_copy(local_value("scenes")[1]); bad.data.strata_lfo2_dest = 0.5
+  assert_true(not validate_scene(bad), "fractional destination rejected")
+  bad.data.strata_lfo2_dest = #local_value("LFO_DESTINATIONS") + 1
+  assert_true(not validate_scene(bad), "out-of-range destination rejected")
+  -- a scene saved before the LFOs existed recalls them as off with defaults
+  local old = deep_copy(local_value("scenes")[1])
+  for key in pairs(old.data) do
+    if key:find("^lfo_") or key:find("^strata_lfo") then old.data[key] = nil end
+  end
+  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+  tab.save({ version = 2, scenes = { old } }, context.data_dir .. "strata/scenes.data")
+  load_scenes_from_disk()
+  assert_true(local_value("scenes")[1].populated, "pre-LFO scene file loads")
+  recall_scene(1, 0)
+  assert_equal(params:string("lfo_2"), "off"); assert_equal(params:get("lfo_depth_2"), 0)
+  assert_equal(params:get("strata_lfo2_dest"), 1); assert_equal(params:string("lfo_mode_1"), "free")
+end)
+
+test("cleanup stops the LFOs and restores their destinations", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("filter_freq", 800); params:set("strata_lfo1_dest", 4)
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  context.lfo.tick(local_value("lfos")[1], 1.0)
+  context.clear_engine_calls(); cleanup()
+  assert_equal(params:get("lfo_1"), 1); assert_equal(local_value("lfos")[1]:get("enabled"), 0)
+  assert_near(context.calls_named("setFilter")[1].args[1], 800, 1e-6, "destination restored")
+end)
+
+---------------------------------------------------------------------------
 -- runner
 ---------------------------------------------------------------------------
 

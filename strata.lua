@@ -6,10 +6,13 @@
 --       K2 randomize, K3 start/freeze
 -- FX: E2 select row, E3 adjust,
 --     K3 filter bypass/on
+-- LFO: E2 select LFO, E3 depth,
+--      K2 destination, K3 on/off
 
 engine.name = "Strata"
 
 local UI = require "ui"
+local LFO = require "lfo"
 
 -- Constants
 local NUM_VOICES = 7
@@ -22,6 +25,7 @@ local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
 local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
+local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
 
 -- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
 -- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
@@ -580,6 +584,192 @@ engine_senders.reverb_size = send_reverb_to_engine
 engine_senders.reverb_damp = send_reverb_to_engine
 engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 
+-- Global LFOs, built on norns' lib/lfo.lua. Each LFO runs from -1 to 1
+-- around a centre baseline, so the library applies depth and its action
+-- gets a scaled value in -depth..depth. apply_lfo sends the destination's
+-- stored value plus scaled * half its range to the engine through
+-- send_param_to_engine; the param itself is never written. The library
+-- stops calling the action when an LFO is turned off or its depth is 0, so
+-- Strata re-sends the stored value then, and when the destination changes.
+local lfos = {}
+local selected_lfo = 1     -- LFO page and arc ring 4
+local lfo_last_dest = {}   -- per LFO: param id it modulates now (nil = none)
+local lfo_scaled = {}      -- per LFO: its last scaled value (-depth..depth) at lfo_last_dest
+local lfo_last_raw = {}    -- per LFO: last raw shape value (0..1), for the LFO page dot
+local LFO_DEFAULT_PERIOD = 4  -- seconds (free mode)
+
+-- LFO destinations in strata_lfo<n>_dest option order: {label, resolve},
+-- where resolve returns the param id to modulate (nil for none). A voice's
+-- "main" resolves on every LFO step, so it follows the voice's source.
+local function fixed_destination(label, param_id)
+  return {label = label, resolve = function() return param_id end}
+end
+
+local LFO_DESTINATIONS = {
+  {label = "none", resolve = function() return nil end},
+  fixed_destination("density", "master_density"),
+  fixed_destination("drift", "drift_amount"),
+  fixed_destination("filt freq", "filter_freq"),
+  fixed_destination("filt res", "filter_res"),
+  fixed_destination("filt mix", "filter_mix"),
+  fixed_destination("dly time", "delay_time"),
+  fixed_destination("dly fdbk", "delay_feedback"),
+  fixed_destination("dly mix", "delay_mix"),
+  fixed_destination("rev mix", "reverb_mix"),
+  fixed_destination("rev size", "reverb_size"),
+  fixed_destination("rev damp", "reverb_damp")
+}
+
+-- per voice, after "v<i> main": {label suffix, param id suffix}
+local VOICE_LFO_DESTINATIONS = {
+  {"size", "grain_size"}, {"dens", "grain_density"}, {"pitch", "grain_pitch"}, {"spread", "grain_spread"},
+  {"pos", "buf_pos"}, {"rate", "buf_rate"}, {"scan", "buf_scan"}
+}
+
+for i = 1, NUM_VOICES do
+  table.insert(LFO_DESTINATIONS, {label = "v" .. i .. " main", resolve = function() return main_param_id(i) end})
+  for _, entry in ipairs(VOICE_LFO_DESTINATIONS) do
+    table.insert(LFO_DESTINATIONS, fixed_destination("v" .. i .. " " .. entry[1], "v" .. i .. "_" .. entry[2]))
+  end
+end
+
+local LFO_DESTINATION_LABELS = {}
+for index, destination in ipairs(LFO_DESTINATIONS) do
+  LFO_DESTINATION_LABELS[index] = destination.label
+end
+
+-- The param id LFO n modulates now, or nil
+function lfo_destination_id(n)
+  return LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].resolve()
+end
+
+-- A param's stored value plus the offsets of every LFO on it, clamped to its
+-- range (LFOs on one destination add up)
+local function lfo_modulated_value(param_id)
+  local minval, maxval = param_range(param_id)
+  local offset = 0
+  for n = 1, NUM_LFOS do
+    if lfo_last_dest[n] == param_id then offset = offset + lfo_scaled[n] end
+  end
+  return util.clamp(params:get(param_id) + offset * 0.5 * (maxval - minval), minval, maxval)
+end
+
+-- LFO n stops modulating its destination: the engine gets the stored value
+-- back (plus any other LFO's offset on it)
+function restore_lfo_destination(n)
+  local param_id = lfo_last_dest[n]
+  if not param_id then return end
+  lfo_last_dest[n] = nil
+  lfo_scaled[n] = nil
+  send_param_to_engine(param_id, lfo_modulated_value(param_id))
+end
+
+-- LFO n's action (the library passes scaled and raw)
+function apply_lfo(n, scaled, raw)
+  lfo_last_raw[n] = raw
+  local param_id = lfo_destination_id(n)
+  -- a "main" destination re-resolves to another param when the voice's
+  -- source changes: give the old one back first
+  if param_id ~= lfo_last_dest[n] then restore_lfo_destination(n) end
+  if not param_id then return end
+  lfo_last_dest[n] = param_id
+  lfo_scaled[n] = scaled
+  send_param_to_engine(param_id, lfo_modulated_value(param_id))
+end
+
+-- LFO page dot: the library's running phase is internal (get("phase") is
+-- the phase offset setting), so Strata estimates it from the time since the
+-- LFO's last reset and its period. lfo_phase_base[n] is the phase (before the
+-- offset) at time lfo_phase_time[n]; a period change rebases it so the dot
+-- keeps its place, as the library keeps its phase.
+local lfo_phase_base = {}
+local lfo_phase_time = {}
+-- the phase LFO:reset_phase restarts the cycle at, per reset target
+local LFO_RESET_PHASES = {floor = 0.75, ceiling = 0.25, ["mid: rising"] = 0, ["mid: falling"] = 0.5}
+
+local function lfo_period_seconds(n)
+  local period = lfos[n]:get("period")
+  if lfos[n]:get("mode") == "clocked" then
+    return period * clock.get_beat_sec()  -- clocked periods are in beats
+  end
+  return period
+end
+
+local function lfo_running_phase(n)
+  return (lfo_phase_base[n] + (util.time() - lfo_phase_time[n]) / lfo_period_seconds(n)) % 1
+end
+
+local function rebase_lfo_phase(n)
+  lfo_phase_base[n] = lfo_running_phase(n)
+  lfo_phase_time[n] = util.time()
+end
+
+local function note_lfo_reset(n)
+  lfo_phase_base[n] = LFO_RESET_PHASES[lfos[n]:get("reset_target")] or 0
+  lfo_phase_time[n] = util.time()
+end
+
+-- Estimated position (0..1) in LFO n's cycle, phase offset included
+function lfo_phase_estimate(n)
+  return (lfo_running_phase(n) + lfos[n]:get("phase")) % 1
+end
+
+-- Run Strata's code before and/or after a library param's own action
+local function wrap_param_action(param_id, before, after)
+  local library_action = params:lookup_param(param_id).action
+  params:set_action(param_id, function(x)
+    if before then before(x) end
+    library_action(x)
+    if after then after(x) end
+  end)
+end
+
+-- PARAMS layout: norns groups cannot nest, and the library builds its own
+-- group per LFO, so the three destinations get a group of their own
+-- (strata_lfos) ahead of the library's groups lfo_group_1..3 ("LFO 1".."LFO 3")
+function add_lfo_params()
+  params:add_group("strata_lfos", "lfo destinations", NUM_LFOS)
+  for n = 1, NUM_LFOS do
+    params:add{
+      type = "option",
+      id = "strata_lfo" .. n .. "_dest",
+      name = "LFO " .. n .. " dest",
+      options = LFO_DESTINATION_LABELS,
+      default = 1,
+      action = function()
+        restore_lfo_destination(n)
+        redraw()
+      end
+    }
+  end
+
+  for n = 1, NUM_LFOS do
+    lfos[n] = LFO:add{
+      shape = "sine", min = -1, max = 1, depth = 0, mode = "free", period = LFO_DEFAULT_PERIOD,
+      baseline = "center",
+      action = function(scaled, raw) apply_lfo(n, scaled, raw) end
+    }
+    -- the library's params lfo_<n>, lfo_shape_<n>, lfo_depth_<n> (0-100 %), ...
+    lfos[n]:add_params(tostring(n), nil, "LFO " .. n)
+    note_lfo_reset(n)
+    wrap_param_action("lfo_" .. n, nil, function(state)
+      if state == 1 then
+        restore_lfo_destination(n)
+        lfo_last_raw[n] = nil
+      else
+        note_lfo_reset(n)  -- LFO:start resets the phase
+      end
+    end)
+    wrap_param_action("lfo_depth_" .. n, nil, function(depth)
+      if depth == 0 then restore_lfo_destination(n) end
+    end)
+    wrap_param_action("lfo_reset_" .. n, nil, function() note_lfo_reset(n) end)
+    for _, prefix in ipairs({"lfo_mode_", "lfo_clocked_", "lfo_free_"}) do
+      wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end)
+    end
+  end
+end
+
 -- Last non-zero filter mix (set by the filter_mix action): FX page K3
 -- restores it after a bypass
 local fx_filter_last_mix = 1
@@ -856,6 +1046,9 @@ function init()
       send_param_to_engine("drift_amount", x)
     end
   }
+
+  -- Global LFOs (their destinations, then the library's own groups)
+  add_lfo_params()
 
   -- Sample buffers: recording settings, then file/record/clear/save per
   -- slot. The group size must match the params below exactly.
@@ -1563,6 +1756,19 @@ local SCENE_GLOBAL_PARAMS = {
   {id = "drift_amount", continuous = true, default = 0.01}
 }
 
+-- Per LFO: the library's shape, mode, clocked rate, free period and depth
+-- (percent), Strata's destination, then the state, so an LFO starts with its
+-- settings in place. Depth and free period crossfade.
+for n = 1, NUM_LFOS do
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, default = LFO_DEFAULT_PERIOD})
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, default = 0})
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
+  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
+end
+
 -- Per-voice scene fields added after format 1, filled by migrate_scene in
 -- scenes that lack them: {path = keys inside data.voices[i], default = value}.
 -- A field is only filled when its parent table exists (a scene missing the
@@ -2099,6 +2305,9 @@ function validate_scene(scene)
 
   for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
     if not is_number(data[global.id]) then return false end
+    -- option params (filter type, LFO shape, destination, ...) hold an index
+    local param = params:lookup_param(global.id)
+    if param.options and not is_integer_between(data[global.id], 1, param.count) then return false end
   end
 
   if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
@@ -2390,9 +2599,117 @@ local function fx_key(n)
   end
 end
 
--- Pages whose controls are not built yet: draw an empty hint row and ignore
--- encoders and keys
-local function redraw_placeholder() draw_hints("") end
+-- LFO page: one row per LFO at y 16-57 (clear of the header and the hint
+-- row): "L<n>", one cycle of its shape (64 px), a dot at the estimated phase
+-- and last raw value while it runs, then its destination and state/depth
+-- right-aligned
+local LFO_ROW_FIRST_Y = 16   -- top of LFO 1's row
+local LFO_ROW_SPACING = 15
+local LFO_WAVE_HEIGHT = 10   -- shape value 1 at the row top, 0 at top + 10
+local LFO_WAVE_X = 12
+local LFO_WAVE_WIDTH = 64
+local LFO_PAGE_FPS = 15
+-- the random shape holds a new value each half cycle; drawn as two steps
+local LFO_RANDOM_DISPLAY_LEVELS = {0.75, 0.3}
+local lfo_page_clock = nil
+
+-- One point (0..1) of a shape at a phase, as the library's process_lfo
+-- computes its raw value
+function lfo_shape_value(shape, phase)
+  if shape == "sine" then
+    return (math.sin(2 * math.pi * phase) + 1) / 2
+  elseif shape == "tri" then
+    return phase < 0.5 and phase / 0.5 or 1 - (phase - 0.5) / 0.5
+  elseif shape == "up" then
+    return phase
+  elseif shape == "down" then
+    return 1 - phase
+  elseif shape == "square" then
+    return phase < 0.5 and 1 or 0
+  end
+  return LFO_RANDOM_DISPLAY_LEVELS[phase < 0.5 and 1 or 2]  -- random
+end
+
+local function lfo_running(n)
+  return params:get("lfo_" .. n) == 2
+end
+
+function redraw_lfo()
+  for n = 1, NUM_LFOS do
+    local top = LFO_ROW_FIRST_Y + (n - 1) * LFO_ROW_SPACING
+    local bottom = top + LFO_WAVE_HEIGHT
+    local running = lfo_running(n)
+    local label_level = n == selected_lfo and 15 or 4
+
+    screen.level(label_level)
+    screen.move(0, top + 7)
+    screen.text("L" .. n)
+
+    local shape = params:string("lfo_shape_" .. n)
+    screen.level(running and 6 or 2)
+    for px = 0, LFO_WAVE_WIDTH - 1 do
+      local y = bottom - lfo_shape_value(shape, px / (LFO_WAVE_WIDTH - 1)) * LFO_WAVE_HEIGHT
+      if px == 0 then
+        screen.move(LFO_WAVE_X, y)
+      else
+        screen.line(LFO_WAVE_X + px, y)
+      end
+    end
+    screen.stroke()
+
+    if running and lfo_last_raw[n] then
+      local x = util.round(LFO_WAVE_X + lfo_phase_estimate(n) * (LFO_WAVE_WIDTH - 1))
+      local y = util.round(bottom - lfo_last_raw[n] * LFO_WAVE_HEIGHT)
+      screen.level(15)
+      screen.rect(x - 1, y - 1, 3, 3)
+      screen.fill()
+    end
+
+    screen.level(label_level)
+    screen.move(127, top + 5)
+    screen.text_right(LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label)
+    screen.move(127, top + 11)
+    screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get("lfo_depth_" .. n)))
+  end
+
+  draw_hints("E3:depth K2:dest K3:" .. (lfo_running(selected_lfo) and "off" or "on"))
+end
+
+-- The LFO page redraws at 15 fps while it is shown, so the dots move
+local function start_lfo_page_clock()
+  if lfo_page_clock then return end
+  lfo_page_clock = clock.run(function()
+    while true do
+      clock.sleep(1 / LFO_PAGE_FPS)
+      redraw()
+    end
+  end)
+end
+
+local function stop_lfo_page_clock()
+  if lfo_page_clock then
+    clock.cancel(lfo_page_clock)
+    lfo_page_clock = nil
+  end
+end
+
+local function lfo_enc(n, d)
+  if n == 2 then
+    selected_lfo = util.clamp(selected_lfo + d, 1, NUM_LFOS)
+  elseif n == 3 then
+    params:delta("lfo_depth_" .. selected_lfo, d)  -- percent steps
+  end
+end
+
+local function lfo_key(n)
+  if n == 2 then
+    local dest_id = "strata_lfo" .. selected_lfo .. "_dest"
+    params:set(dest_id, params:get(dest_id) % #LFO_DESTINATIONS + 1)
+  elseif n == 3 then
+    params:set("lfo_" .. selected_lfo, lfo_running(selected_lfo) and 1 or 2)
+  end
+end
+
 local function ignore_page_input() end
 
 -- E2 on MAIN and BUFFER: step the shared selected voice
@@ -2558,15 +2875,23 @@ end
 
 -- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP. PAGE_KEY gets key
 -- presses, PAGE_KEY_RELEASE releases (only BUFFER uses them).
-local PAGE_DRAW = {redraw_main, redraw_fx, redraw_placeholder, redraw_buffer, redraw_setup}
-local PAGE_ENC = {main_enc, fx_enc, ignore_page_input, buffer_enc, ignore_page_input}
-local PAGE_KEY = {main_key, fx_key, ignore_page_input, buffer_key, setup_key}
+local PAGE_DRAW = {redraw_main, redraw_fx, redraw_lfo, redraw_buffer, redraw_setup}
+local PAGE_ENC = {main_enc, fx_enc, lfo_enc, buffer_enc, ignore_page_input}
+local PAGE_KEY = {main_key, fx_key, lfo_key, buffer_key, setup_key}
 local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_input, buffer_key_release, ignore_page_input}
+
+-- Show another page; the LFO page's redraw clock runs only while it is shown
+local function set_ui_page(page)
+  if page == ui_page then return end
+  if UI_PAGES[ui_page] == "LFO" then stop_lfo_page_clock() end
+  ui_page = page
+  if UI_PAGES[ui_page] == "LFO" then start_lfo_page_clock() end
+end
 
 -- Encoders
 function enc(n, d)
   if n == 1 then
-    ui_page = util.clamp(ui_page + d, 1, NUM_UI_PAGES)
+    set_ui_page(util.clamp(ui_page + d, 1, NUM_UI_PAGES))
   else
     PAGE_ENC[ui_page](n, d)
   end
@@ -2715,12 +3040,58 @@ local function arc_buffer_redraw(arc_port)
   end
 end
 
+-- LFO page rings: 1-3 the depth of LFO 1-3 (whole percents), 4 the
+-- selected LFO's period (free seconds, or the clocked rate option)
+local ARC_LFO_TICKS_PER_PERCENT = 10
+local ARC_LFO_FREE_SCALE = 1 / 10
+local ARC_LFO_TICKS_PER_RATE = 20
+local ARC_LFO_PERIOD_RING = 4
+local arc_lfo_ticks = {}  -- per ring: ticks not yet worth a whole step
+
+-- Whole steps in a ring's accumulated ticks; the rest is kept for later
+local function arc_whole_steps(ring, delta, ticks_per_step)
+  local ticks = (arc_lfo_ticks[ring] or 0) + delta
+  local steps = ticks >= 0 and math.floor(ticks / ticks_per_step) or -math.floor(-ticks / ticks_per_step)
+  arc_lfo_ticks[ring] = ticks - steps * ticks_per_step
+  return steps
+end
+
+local function lfo_period_param_id(n)
+  if params:string("lfo_mode_" .. n) == "clocked" then
+    return "lfo_clocked_" .. n
+  end
+  return "lfo_free_" .. n
+end
+
+local function arc_lfo_delta(n, delta)
+  if n <= NUM_LFOS then
+    local steps = arc_whole_steps(n, delta, ARC_LFO_TICKS_PER_PERCENT)
+    if steps ~= 0 then params:delta("lfo_depth_" .. n, steps) end
+  elseif n == ARC_LFO_PERIOD_RING then
+    local period_id = lfo_period_param_id(selected_lfo)
+    if period_id == "lfo_free_" .. selected_lfo then
+      params:delta(period_id, delta * ARC_LFO_FREE_SCALE)
+    else
+      local steps = arc_whole_steps(n, delta, ARC_LFO_TICKS_PER_RATE)
+      if steps ~= 0 then params:delta(period_id, steps) end
+    end
+  end
+end
+
+-- Depth rings are bright while their LFO runs
+local function arc_lfo_redraw(arc_port)
+  for n = 1, NUM_LFOS do
+    arc_port:segment(n, 0, param_fraction("lfo_depth_" .. n) * math.pi * 2, lfo_running(n) and 15 or 4)
+  end
+  arc_port:segment(ARC_LFO_PERIOD_RING, 0, param_fraction(lfo_period_param_id(selected_lfo)) * math.pi * 2, 12)
+end
+
 local function arc_ignore_delta() end
 local function arc_draw_nothing() end  -- rings stay off
 
--- Indexed like UI_PAGES; LFO rings arrive with that page
-local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_ignore_delta, arc_buffer_delta, arc_ignore_delta}
-local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_draw_nothing, arc_buffer_redraw, arc_draw_nothing}
+-- Indexed like UI_PAGES
+local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_lfo_delta, arc_buffer_delta, arc_ignore_delta}
+local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_lfo_redraw, arc_buffer_redraw, arc_draw_nothing}
 
 -- Arc handlers live on the vport only (as for grids): norns fires both
 -- device.delta/key and vports[port].delta/key, so setting them on the device
@@ -3591,6 +3962,15 @@ function cleanup()
 
   -- Cancel any active transition clock
   cancel_scene_transition()
+
+  -- Stop the LFOs (through their state params, like the library's menu) and
+  -- give their destinations back their stored values
+  stop_lfo_page_clock()
+  for n = 1, NUM_LFOS do
+    lfos[n]:stop()
+    params:set("lfo_" .. n, 1)
+    restore_lfo_destination(n)
+  end
 
   -- Stop the buffer poll and recording timers (the engine finishes or
   -- frees any recording itself)
