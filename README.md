@@ -175,7 +175,7 @@ Where a voice's source is chosen and its buffer is filled, so it works without a
 
 - **E2** - Select voice (the same selection as MAIN)
 - **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
-- **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured
+- **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done
 - **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
 - **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser)
 - The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
@@ -513,7 +513,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 ### LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
-- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min/max and baseline (keep -1, 1 and "from center": Strata's depth math assumes them), mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min/max (keep -1 and 1) and baseline (keep "from center"): Strata's depth math assumes all three. With min -1, max 1 and a centre baseline an LFO swings up to half the destination's range either side of the value you set; "from min" makes it swing only below that value (down to half the range at 100 %), "from max" only above it, and other min/max values change the swing size, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
 
 ### Buffers (group)
 - Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
@@ -579,7 +579,7 @@ Each voice includes:
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
-- Per-voice granular processors: `GrainIn` followed by `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice
+- Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (position spread)
 - Eight stereo buffers (each a pair of 16 s mono buffers, about 49 MB in all) and a live stereo input bus
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses

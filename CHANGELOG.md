@@ -26,6 +26,13 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 - `voiceOn` never stacks synths: a voice's synths still running or still releasing are re-gated.
 - The `freq` controlspec step is 0, so MIDI notes keep exact equal-tempered pitch.
 - Grid 256 fader pages: 5 for Folder and Sub, 6 for the other voices, 5 for a buffer-sourced voice and 4 for an input-sourced one (grain envelope and mode added).
+- Whole-branch review fixes:
+  - `\strataGrain` (synth- and input-sourced voices) runs one mono `GrainIn` per input channel panned with `Balance2`, like `\strataGrainBuf`. Its stereo `GrainIn` on a stereo input had expanded into two, each panning its own channel, which `Out` folded back to one channel apiece: pan spread did nothing (it only wobbled the level), the position-spread path was added twice, and every voice ran four `PitchShift`s. **Synth- and input-sourced voices are about 3-6 dB quieter than before this fix**; no makeup gain was added, so compare levels across sources on hardware.
+  - A voice playing a buffer that is being recorded is silent until the take completes, instead of looping the take's first grain 20 times a second (`\strataGrainBuf` is muted while its slot reads 0 frames).
+  - Scrolling a running voice's source no longer piles up grain synths: each switch cuts (0.05 s) whatever an earlier switch left releasing, so a voice has at most one releasing grain synth. Replaced synths get a forced release, which also frees a synth gated off in the control block it was created in.
+  - A buffer-sourced voice re-gated during its release picks up a buffer that was loaded, recorded or cleared meanwhile; `voiceOn` keeps the voice's grain mode, envelope and buffer position, so a triggered-mode voice no longer fires one stray continuous grain when it starts.
+  - Picking the same file again (after recording into or clearing the buffer) loads it, from the BUFFER page and from PARAMETERS; restored buffers show their file in PARAMETERS.
+  - The BUFFER page caches each buffer's shortened name; `strata.lua`'s grid, BUFFER-page and FX-page constants are grouped into tables (main-chunk locals 198 → 183 of Lua's 200).
 - Documentation: MAIN K3 and the arc button were described as "start/stop"; they start a stopped voice and otherwise freeze/unfreeze it (stop voices from the grid, a scene or a MIDI note off). CLAUDE.md no longer claims mutations change cross-modulation.
 
 ### Deviations from the design
@@ -44,7 +51,8 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 
 ### Check on Hardware
 
-- CPU with several buffer-sourced voices (two `GrainBuf`s and a `PitchShift` each), on top of every voice's `\strataGrain` `PitchShift` (its stereo input expands to two `GrainIn`s and four `PitchShift` channels)
+- CPU with several buffer-sourced voices (two `GrainBuf`s and a stereo `PitchShift` each), on top of every voice's `\strataGrain` (two `GrainIn`s and a stereo `PitchShift`)
+- Levels across sources: synth- and input-sourced voices are 3-6 dB quieter than before the `\strataGrain` fix; compare a synth, a buffer and an input voice at the same `amp`
 - Arc ring speeds: FX filter freq sweeps in under half a turn, res and mix take about ten turns; BUFFER position takes about twenty
 - Save and scratch-take interleave time for a full 16 s buffer on the CM3 (8192-frame chunks, 1 ms apart)
 - MIDI with a real device: hot-plug, long device names on SETUP, pitchbend, voice-off mode with fast repeated notes
@@ -53,8 +61,8 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 
 ### Testing
 
-- `lua test/run.lua` / `luajit test/run.lua` grew to 95 tests: stubs for option/file/text params, `lib/lfo.lua`, MIDI, fileselect, polls, encoders and screen levels; tests for every feature above. A docs test checks that CLAUDE.md's command table lists exactly the engine's commands with their signatures, and that no doc mentions a command the engine no longer has.
-- `test/run_engine_check.sh` drives every new command (sources, buffers, stopRecord, overlapping writes, filter, delay, re-gating) against a local scsynth.
+- `lua test/run.lua` / `luajit test/run.lua` grew to 97 tests: stubs for option/file/text params, `lib/lfo.lua`, MIDI, fileselect, polls, encoders and screen levels; tests for every feature above. A docs test checks that CLAUDE.md's command table lists exactly the engine's commands with their signatures, and that no doc mentions a command the engine no longer has.
+- `test/run_engine_check.sh` drives every new command (sources, buffers, stopRecord, overlapping writes, filter, delay, re-gating) against a local scsynth, including a burst of source switches, the grain synths' structure, and a test tone recorded into a buffer a voice is playing (silent until the take completes).
 
 ### Upgrade Notes
 
