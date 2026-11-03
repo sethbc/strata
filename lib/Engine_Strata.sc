@@ -8,6 +8,7 @@ Engine_Strata : CroneEngine {
     var <mainBus;
     var <reverbBus;
     var <modBuses;  // Control buses for cross-modulation
+    var <silentBus; // Always-zero control bus used for "no modulation source"
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -21,6 +22,12 @@ Engine_Strata : CroneEngine {
 
         // Control buses for cross-modulation (one per voice)
         modBuses = Array.fill(7, { Bus.control(context.server, 1) });
+
+        // "No modulation source" must read a bus that is always zero. Control
+        // bus 0 is not safe: CroneAudioContext allocates the input amplitude
+        // follower (amp_in_b) there before any engine loads.
+        silentBus = Bus.control(context.server, 1);
+        silentBus.set(0);
         
         // SynthDefs
 
@@ -60,9 +67,11 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals with clamping to prevent excessive modulation
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             noiseSource = PinkNoise.ar(noise) + LFNoise1.ar(100, 0.3);
@@ -102,10 +111,12 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreqVal = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
-            modAmp = amp * (1 + modSig) * (1 + accent);
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreqVal = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             modFreq = LFNoise1.kr(0.1).range(modFreq * 0.5, modFreq * 2);
             ratio = ratio + LFNoise1.kr(0.08).range(-0.1, 0.1);
@@ -138,9 +149,11 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals with clamping to prevent excessive modulation
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             foldAmt = fold * LFNoise1.kr(mod).range(0.5, 1.5);
@@ -170,11 +183,13 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals
-            modSig = (mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3);
-            modFreq = freq * (1 + (mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3));
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modFreq = modFreq + LFNoise1.kr(drift).range(-2, 2);
-            modAmp = amp * (1 + modSig) * (1 + accent);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             sig = SinOsc.ar(modFreq ! 2);
             sig = sig + (SinOsc.ar(modFreq * 0.5) * 0.3);
@@ -201,9 +216,11 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals with clamping to prevent excessive modulation
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Modulate pulse width with LFO and cross-mod
@@ -240,9 +257,11 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals with clamping to prevent excessive modulation
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Excitation trigger: the free-running exciter plus retrigger
@@ -298,9 +317,11 @@ Engine_Strata : CroneEngine {
             mod2Sig = In.kr(modBus2, 1);
             mod3Sig = In.kr(modBus3, 1);
 
-            // Mix modulation signals with clamping to prevent excessive modulation
+            // Mix modulation signals with clamping to prevent excessive modulation.
+            // The frequency modulator is clamped to -0.9..2 so the modulated
+            // frequency stays positive (at least 0.1 * freq).
             modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
+            modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Slowly evolving ratio for inharmonic movement
@@ -406,10 +427,10 @@ Engine_Strata : CroneEngine {
                 \freq, msg[2],
                 \amp, msg[3],
                 \pan, msg[4],
-                // Initialize all 3 mod bus slots to 0 (no modulation)
-                \modBus1, 0,
-                \modBus2, 0,
-                \modBus3, 0,
+                // Initialize all 3 mod bus slots to the silent bus (no modulation)
+                \modBus1, silentBus.index,
+                \modBus2, silentBus.index,
+                \modBus3, silentBus.index,
                 \modAmpAmt1, 0,
                 \modAmpAmt2, 0,
                 \modAmpAmt3, 0,
@@ -487,7 +508,7 @@ Engine_Strata : CroneEngine {
             if (sourceVoice >= 0) {
                 sourceBus = modBuses[sourceVoice];
             } {
-                sourceBus = 0;  // Will output silence/zero
+                sourceBus = silentBus.index;
             };
 
             synths[("voice" ++ voice).asSymbol].set(busParam, sourceBus);
@@ -531,6 +552,7 @@ Engine_Strata : CroneEngine {
         synths.do({ arg synth; synth.free });
         granBuses.do({ arg bus; bus.free });
         modBuses.do({ arg bus; bus.free });
+        silentBus.free;
         mainBus.free;
         reverbBus.free;
     }
