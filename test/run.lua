@@ -153,6 +153,37 @@ test("Lua engine calls and SC addCommand signatures are in sync (T3)", function(
   assert_equal(calls[2].arg_count, 0, "empty call")
 end)
 
+test("CLAUDE.md command table lists exactly the engine's commands", function()
+  local file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
+  -- table rows: | `engine.<name>(<args>)` | `"<signature>"` | purpose |
+  local rows = {}
+  for line in doc:gmatch("[^\n]+") do
+    local name, args, signature = line:match('^| `engine%.(%w+)%((.-)%)` | `"(%a*)"` |')
+    if name then
+      assert_true(rows[name] == nil, "CLAUDE.md documents engine." .. name .. " twice")
+      local arg_count = 0
+      if args:match("%S") then arg_count = select(2, args:gsub(",", ",")) + 1 end
+      rows[name] = { signature = signature, arg_count = arg_count }
+    end
+  end
+  for name, signature in pairs(signatures) do
+    local row = rows[name]
+    assert_true(row ~= nil, "CLAUDE.md command table documents engine." .. name)
+    assert_equal(row.signature, signature, "CLAUDE.md signature of engine." .. name)
+    assert_equal(row.arg_count, #signature, "CLAUDE.md argument count of engine." .. name)
+  end
+  for name in pairs(rows) do
+    assert_true(signatures[name] ~= nil, "CLAUDE.md command table lists engine." .. name .. ", which the engine does not have")
+  end
+  -- no engine command mentioned anywhere in CLAUDE.md or README.md is gone
+  for _, doc_name in ipairs({"CLAUDE.md", "README.md"}) do
+    file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
+    for name in text:gmatch("engine%.(%w+)%(") do
+      assert_true(signatures[name] ~= nil, doc_name .. " mentions engine." .. name .. ", which the engine does not have")
+    end
+  end
+end)
+
 test("every voice param has a menu param, ordered by param_order", function()
   load_strata()
   local voices = local_value("voices")

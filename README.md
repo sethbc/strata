@@ -4,7 +4,9 @@ An ambient granular soundscape generator for monome norns.
 
 ## Overview
 
-Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
+Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
+
+Version 3.0 brings in the Confluence script's feature set (buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, a paged screen); see [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -20,13 +22,13 @@ Strata creates evolving ambient textures by combining seven unique synthesis voi
 
 ### Granular Processing
 
-Each synthesis voice is fed through its own granular processor with independent control over:
+Each voice has its own granular processor (reading the voice's synth, a buffer or the input; see Audio Sources) with independent control over:
 - Grain size (texture density)
 - Grain density (grains per second)
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
-- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
+- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. Grain density does nothing in triggered mode, and neither does position spread unless the voice's source is a buffer (there it still jitters each grain's position). The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
 ### Audio Sources (buffers and live input)
 
@@ -47,7 +49,7 @@ Voices can modulate each other for evolving, interdependent textures:
 - Adjustable modulation depth per source for subtle or dramatic effects
 - Creates complex, organic, evolving relationships between layers
 
-### Global Controls
+### Global Controls and Effects
 
 - **Master Density** - Controls grain density across all voices simultaneously
 - **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none)
@@ -85,6 +87,10 @@ Three LFOs, built on norns' own LFO library, can each modulate one parameter:
 - **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
 
 The fastest rate is 10 Hz (the library's 0.1 s free period); Confluence promised 20 Hz, which would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
+
+### MIDI Input
+
+A MIDI keyboard or sequencer plays the voices: one channel per voice (or every channel to the selected voice), the note sets the voice's pitch, the velocity sets its accent, and pitchbend bends it by up to 2 semitones. Any parameter can follow a MIDI CC through norns' own PARAMS > MAP. See MIDI under Controls.
 
 ### Scene System & Automation
 
@@ -151,7 +157,7 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
   - Any voice whose source is a buffer: buffer position (`pos`)
   - Any voice whose source is the input: grain size (`size`)
 - **K2** - Randomize selected voice parameters (buffer parameters for a buffer-sourced voice, only grain parameters for an input-sourced one)
-- **K3** - Start/stop voice, or freeze/unfreeze if already active (it never fires a triggered grain)
+- **K3** - Start the selected voice if it is off; if it is running, freeze/unfreeze it (it never stops a voice and never fires a triggered grain: stop voices from the grid, a scene or a MIDI note off)
 
 `[TRIG]` on the main parameter row means the selected voice is in triggered grain mode.
 
@@ -265,13 +271,15 @@ On the **SETUP** page the rings are off and do nothing.
 
 #### Arc Button (2025 model)
 
-- **Button** - On the MAIN page, same as K3 (start/stop voice, or freeze/unfreeze if already active); does nothing on the other pages
+- **Button** - On the MAIN page, same as K3 (start the voice if it is off, otherwise freeze/unfreeze it); does nothing on the other pages
 
 #### LED Feedback
 
-- Bright rings (level 15/12) indicate active voices
-- Dim rings (level 4/3) indicate inactive voices
-- Ring position shows current parameter value (FX rings at level 12; frequency and delay time follow their exponential curve)
+- Ring position shows the current parameter value
+- MAIN: bright rings (level 15/12) for a running voice, dim (4/3) for a stopped one
+- FX: level 12; frequency and delay time follow their exponential curve
+- BUFFER: rings 1-2 bright (15) for a buffer-sourced voice, dim (4) otherwise; rings 3-4 at 12
+- LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 
 ### Monome Grid (optional)
 
@@ -410,7 +418,7 @@ Scene LED feedback:
 
 1. The script starts with the Resonator and FM voices active
 2. Use E2 to select different voices
-3. Press K3 to activate/deactivate voices
+3. Press K3 to start a voice (pressing it again freezes the running voice)
 4. Experiment with master density (arc ring 1 on the MAIN page, or PARAMETERS) to change the overall texture
 
 ### Creating Evolving Textures
@@ -486,53 +494,13 @@ Scene LED feedback:
 
 ## Parameters
 
-All voice parameters and granular settings are available in the PARAMETERS menu for detailed control and automation. Each voice has its own section with synthesis parameters and granular processing controls.
+Everything is in the PARAMETERS menu. The menu shows the master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **buffers** and **midi** groups, then one section per voice. Grouped by topic:
 
-### Master Section
+### Master
 - Master density
 - Tempo (40-300 BPM; sets norns' clock tempo, starts at the current clock tempo)
 
-### MIDI Section (group)
-- MIDI device: the port Strata listens to (1-4, default 1)
-- MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
-- MIDI note off: ignore (the default) or voice off
-
-### Mutations Section
-- Mutations enabled (on/off)
-- Mutation rate (0.5-10 seconds)
-- Mutation probability (0-1, chance per parameter)
-- Mutation amount (0-1, size of changes)
-
-### Scenes Section
-- Scene sequencer (on/off)
-- Scene transition time (0-30 seconds)
-- Scene duration (4-120 seconds)
-- Scene sequence length (1-8 scenes)
-- Save scenes to disk (manual trigger)
-- Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to `scenes.data.bak` so it is not overwritten when the script exits)
-- Scene files from earlier versions of Strata still load: settings they do not contain (such as the filter and delay) start at their defaults, and the console prints `migrated scenes file from version 1`. The file is saved in the new format when the script exits
-
-Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
-
-Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade.
-
-### Buffers Section (group)
-- Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
-- For each buffer 1-8:
-  - File: load a sound file (up to 16 s; stereo files keep both channels, mono files fill both). Loading never copies the file
-  - Record: record the live input for the record duration, replacing what was there. Trigger it again while recording to stop early and keep what was captured. The finished take is also written to `~/dust/audio/strata/scratch/buf<n>.wav` (overwritten by the next take)
-  - Clear: empty the buffer
-  - Save: write the buffer as a stereo WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved)
-
-### Saving and restoring buffers
-
-Strata writes audio to disk only when a recording finishes and when you save a buffer:
-- **Scratch take** - Every finished (or early-stopped) recording is written to `~/dust/audio/strata/scratch/buf<n>.wav`, replacing that buffer's previous take. It exists so the take survives a restart; save the buffer to keep it
-- **Save** - The buffer's save trigger (PARAMETERS > buffers, or K2 + K3 on the BUFFER page) writes a new timestamped file, `~/dust/audio/strata/<date-time>-buf<n>.wav`, which appears in the file browser for loading later. Nothing is overwritten
-- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that has been deleted or moved is skipped (the console says so), and the SETUP page shows how many buffers were restored
-- A damaged or incompatible `buffers.data` loads nothing, is reported in the console and is moved to `buffers.data.bak` so the save on exit does not overwrite it
-
-### FX Section (group)
+### FX (group)
 - Filter type (lowpass, highpass, bandpass)
 - Filter freq (20-20000 Hz, default 5000)
 - Filter res (0-1, default 0.5)
@@ -545,7 +513,47 @@ Strata writes audio to disk only when a recording finishes and when you save a b
 
 ### LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
-- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0 %), phase, offset, scaled and raw value (read-only), min/max (keep -1 and 1: Strata's depth math assumes them), baseline (from center), mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min/max and baseline (keep -1, 1 and "from center": Strata's depth math assumes them), mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+
+### Buffers (group)
+- Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
+- For each buffer 1-8:
+  - File: load a sound file (up to 16 s; stereo files keep both channels, mono files fill both). Loading never copies the file
+  - Record: record the live input for the record duration, replacing what was there. Trigger it again while recording to stop early and keep what was captured. The finished take is also written to `~/dust/audio/strata/scratch/buf<n>.wav` (overwritten by the next take)
+  - Clear: empty the buffer
+  - Save: write the buffer as a stereo WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved)
+
+#### Saving and restoring buffers
+
+Strata writes audio to disk only when a recording finishes and when you save a buffer:
+- **Scratch take** - Every finished (or early-stopped) recording is written to `~/dust/audio/strata/scratch/buf<n>.wav`, replacing that buffer's previous take. It exists so the take survives a restart; save the buffer to keep it
+- **Save** - The buffer's save trigger (PARAMETERS > buffers, or K2 + K3 on the BUFFER page) writes a new timestamped file, `~/dust/audio/strata/<date-time>-buf<n>.wav`, which appears in the file browser for loading later. Nothing is overwritten
+- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that has been deleted or moved is skipped (the console says so), and the SETUP page shows how many buffers were restored
+- A damaged or incompatible `buffers.data` loads nothing, is reported in the console and is moved to `buffers.data.bak` so the save on exit does not overwrite it
+
+### MIDI (group)
+- MIDI device: the port Strata listens to (1-4, default 1)
+- MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
+- MIDI note off: ignore (the default) or voice off
+
+### Mutations
+- Mutations enabled (on/off)
+- Mutation rate (0.5-10 seconds)
+- Mutation probability (0-1, chance per parameter)
+- Mutation amount (0-1, size of changes)
+
+### Scenes
+- Scene sequencer (on/off)
+- Scene transition time (0-30 seconds)
+- Scene duration (4-120 seconds)
+- Scene sequence length (1-8 scenes)
+- Save scenes to disk (manual trigger)
+- Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to `scenes.data.bak` so it is not overwritten when the script exits)
+- Scene files from earlier versions of Strata still load: settings they do not contain (filter, delay, grain envelope and mode, sources and buffer settings, LFOs) start at their defaults (LFOs off, every voice on its synth), and the console prints `migrated scenes file from version 1`. The file is saved in the new format when the script exits
+
+Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
+
+Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade. LFO depths and free periods crossfade too; the other LFO settings switch at the end.
 
 ### Per-Voice Sections
 Each voice includes:
@@ -571,18 +579,24 @@ Each voice includes:
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
-- Per-voice granular processors using `GrainIn` followed by `PitchShift`
+- Per-voice granular processors: `GrainIn` followed by `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice
+- Eight stereo buffers (each a pair of 16 s mono buffers, about 49 MB in all) and a live stereo input bus
+- Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
-- Each voice generates a modulation signal from its output
+- Each voice generates a modulation signal from its output (buffer- and input-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
 - Master effects chain: multimode filter, stereo delay, reverb
 - A limiter, then soft saturation, on master output
+- The LFOs and MIDI run in the Lua script and reach the engine as parameter changes
 
 ### Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (with drift/limiter/saturation) → Output
+Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (drift, limiter, saturation) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
+
+Buffer source:  Buffer (L/R) → Buffer Granular Processor → Main Bus (and the Voice Bus, for the Mod Synth)
+Input source:   Audio input → Input Bus → Granular Processor → Main Bus (and the Voice Bus, for the Mod Synth)
 ```
 
 ## Requirements
@@ -599,6 +613,8 @@ Off-device checks (no norns needed):
 - `lua test/run.lua` (or `luajit test/run.lua`) - behaviour tests against norns stubs
 - `lua test/sync_check.lua` - checks Lua `engine.*` calls against the engine's commands
 - `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider)
+
+`test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands.
 
 ## Credits
 
