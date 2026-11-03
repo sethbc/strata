@@ -506,6 +506,7 @@ function add_voice_params(voice_idx)
   -- Voice params (in param_order so the menu order is stable)
   for _, key in ipairs(v.param_order) do
     local spec = get_param_spec(key)
+    spec.default = v.params[key]  -- the voices table holds each voice's defaults
     params:add{
       type = "control",
       id = "v" .. voice_idx .. "_" .. key,
