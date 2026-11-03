@@ -772,23 +772,24 @@ function get_param_spec(param_name)
 end
 
 function toggle_voice(voice_idx)
-  local v = voices[voice_idx]
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  local voice = voices[voice_idx]
   
-  if v.active then
+  if voice.active then
     engine.voiceOff(voice_idx - 1)
-    v.active = false
+    voice.active = false
   else
     engine.voiceOn(
       voice_idx - 1,
-      v.params.freq,
-      v.params.amp,
-      v.params.pan or 0,
-      v.grain.size,
-      v.grain.density * master_density,
-      v.grain.pitch
+      voice.params.freq,
+      voice.params.amp,
+      voice.params.pan or 0,
+      voice.grain.size,
+      voice.grain.density * master_density,
+      voice.grain.pitch
     )
     sync_voice_to_engine(voice_idx)
-    v.active = true
+    voice.active = true
   end
   
   update_voice_list()
@@ -833,10 +834,10 @@ end
 function randomize_voice(voice_idx)
   if frozen[voice_idx] then return end
   
-  local v = voices[voice_idx]
+  local voice = voices[voice_idx]
   
   -- Randomize synth params
-  for key, _ in pairs(v.params) do
+  for key, _ in pairs(voice.params) do
     if key ~= "amp" then -- Don't randomize amplitude
       local spec = get_param_spec(key)
       local new_val = math.random() * (spec.maxval - spec.minval) + spec.minval
