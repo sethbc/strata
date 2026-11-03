@@ -31,6 +31,9 @@ This project uses two languages that work together:
 Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Filter Bus → Delay → Delay Bus → Reverb → Reverb Bus → Master (drift/limiter/saturation) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
+
+Buffer source:  Buffer pair (L/R) → strataGrainBuf → Main Bus (and mirrored to the Voice Bus → Mod Synth)
+Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main Bus (and mirrored to the Voice Bus → Mod Synth)
 ```
 
 Each of the 7 voices follows this path:
@@ -74,6 +77,13 @@ The Lua script controls the engine through these commands:
 | `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Set amplitude modulation amount for given slot (-2 to 2) |
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Set frequency modulation amount for given slot (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Set modulation LFO speed (0.1 to 50) |
+| `engine.setGrainSource(voice, source)` | `"ii"` | Choose a voice's audio source: 0 = its synth, 1-8 = buffer slot, 9 = live input. A running voice gets its grain synth replaced (never stacked); a stopped voice only records it. Same source = no-op; out-of-range sources are ignored |
+| `engine.loadBuffer(slot, path)` | `"is"` | Read up to 16 s of a sound file into slot 0-7 (stereo: L/R; mono: both). Missing/unreadable files leave the slot unchanged |
+| `engine.recordBuffer(slot, seconds, level)` | `"iff"` | Record the live input × level into slot 0-7, replacing it (seconds clamped to 16 s). On completion writes the scratch take `buf<n>.wav` |
+| `engine.clearBuffer(slot)` | `"i"` | Zero slot 0-7 (cancels a recording in progress) |
+| `engine.saveBuffer(slot, path)` | `"is"` | Write the slot's valid region to `path` as a stereo 16-bit WAV (creates the directory) |
+
+**Poll `bufferState`** (engine → Lua): each slot's valid seconds. matron's `/poll/value` handler is typed `"if"` (one float) and its data-blob polls are broken (`w_handle_poll_data` writes every byte to index 1), so a string or table cannot reach Lua: every message carries **one** slot as `slot_index * 100 + seconds` (`bufferStateStride = 100`; seconds ≤ 16, rounded to 0.01). Decode in Lua with `slot = math.floor(value / 100)` (0-based, so Lua slot `slot + 1`) and `seconds = value - slot * 100`. The poll is periodic (0.25 s) and cycles through the eight slots; every change (load, record start and completion, clear) is also sent immediately via `bufferStatePoll.update`. A slot reads 0 s while it records and its length once the recording completes.
 
 **Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`). Mod sources are converted by `engine_mod_source()` (Lua 0=none / 1-7 → SC -1=none / 0-6).
 
@@ -81,7 +91,7 @@ The Lua script controls the engine through these commands:
 
 **Silent bus**: An unrouted mod slot must read a bus that is always zero. Control bus 0 is not safe on norns (CroneAudioContext allocates the input amplitude follower `amp_in_b` there before any engine loads), so the engine allocates `silentBus` in `alloc`, sets it to 0, uses its index for `sourceVoice = -1` and as the `voiceOn` default for `modBus1..3`, and frees it in `free`.
 
-**Retrigger**: Pattern steps never create synth nodes. For a running voice the pattern clock calls `engine.retrigger(voice - 1, level / MAX_STEP_LEVEL)` (step level 1-15, so a step's brightness is its velocity). The engine sets `velocity` and `t_trig` in one message on the voice synth and sets `t_trig` on the grain synth. Every voice SynthDef has a plain `velocity=1` control and an accent envelope `EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity)` applied as `modAmp * (1 + accent)` inside the amplitude clamp. `levelScale` is sampled when the envelope (re)starts, so a new velocity never rescales a running accent tail; never multiply a running signal by `velocity`. Karplus also feeds `T2A.ar(t_trig) * velocity` (a single-sample impulse, so only that trigger's excitation is scaled) into its exciter and `Pluck` trig inputs so it re-plucks as hard as the velocity. In `\strataGrain` the trigger only matters in triggered grain mode (one grain per trigger). The grain synth has no `velocity`: `GrainIn` has no per-grain amplitude, so scaling its output would change grains still playing; velocity reaches triggered grains through the voice accent. Grain-side velocity for buffer/input sources must be per trigger (an accent-style `EnvGen` with `levelScale`), never a bare multiplier. A step on a stopped voice starts it with `toggle_voice`. K3 on MAIN keeps its start/freeze meaning: triggered grains fire from pattern steps and MIDI notes only (a deliberate deviation from the spec's "K3 on MAIN with the voice already on").
+**Retrigger**: Pattern steps never create synth nodes. For a running voice the pattern clock calls `engine.retrigger(voice - 1, level / MAX_STEP_LEVEL)` (step level 1-15, so a step's brightness is its velocity). The engine sets `velocity` and `t_trig` in one message on the voice synth and on the grain synth. Every voice SynthDef has a plain `velocity=1` control and an accent envelope `EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity)` applied as `modAmp * (1 + accent)` inside the amplitude clamp. `levelScale` is sampled when the envelope (re)starts, so a new velocity never rescales a running accent tail; never multiply a running signal by `velocity`. Karplus also feeds `T2A.ar(t_trig) * velocity` (a single-sample impulse, so only that trigger's excitation is scaled) into its exciter and `Pluck` trig inputs so it re-plucks as hard as the velocity. In `\strataGrain` the trigger only matters in triggered grain mode (one grain per trigger). For buffer and input sources there is no voice synth, so the accent lives in the grain synth: `\strataGrainBuf` and `\strataGrain` have the same `EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity)` accent. `\strataGrain` applies it only with `accentAmt = 1` (input source); for the synth source the engine sets `accentAmt = 0` so voices are not double-accented and velocity reaches triggered grains through the voice accent. Grain-side velocity is always per trigger (`levelScale`), never a bare multiplier on the output (`GrainIn`/`GrainBuf` grains still playing would jump); the engine check asserts `velocity` feeds only `EnvGen` `levelScale` inputs in both grain SynthDefs. A step on a stopped voice starts it with `toggle_voice`. K3 on MAIN keeps its start/freeze meaning: triggered grains fire from pattern steps and MIDI notes only (a deliberate deviation from the spec's "K3 on MAIN with the voice already on").
 
 **Current Voice Parameters** (as of latest sync):
 - **Resonator**: freq, rq, noise, mod1, mod2, amp, pan
@@ -92,7 +102,7 @@ The Lua script controls the engine through these commands:
 - **Karplus**: freq, decay, damping, excite, amp, pan
 - **Ring**: freq, ratio, mod, brightness, amp, pan
 
-**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape, grainMode
+**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape, grainMode (the engine also takes `bufPos`, `bufRate` and `bufScan` for `\strataGrainBuf`; they are not Lua params yet)
 - `envShape` (Lua option `v<i>_grain_env`, `GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}`, default hann; `voices[i].grain.env` holds the option index 1-5) is sent as index − 1. The engine's `envBufnumFor(index)` turns it into the grain synth's `envBuf`: 0 = `-1` (GrainIn's built-in Hann), 1-4 = `envBuffers[index - 1].bufnum`; any other index is ignored. `envBuffers` are four 1024-frame `Buffer.loadCollection`s of `Env.sine`, `Env.perc(0.1, 0.9)`, `Env.linen(0.1, 0.8, 0.1)` and the trapezoid `Env([0, 1, 1, 0], [0.25, 0.5, 0.25])`
 - `grainMode` (Lua option `v<i>_grain_mode`, `GRAIN_MODE_OPTIONS = {"continuous", "triggered"}`, default continuous; `voices[i].grain.mode` holds the option index 1-2) is sent as index − 1. `\strataGrain` picks its `GrainIn` trigger with `Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)])` (`mode = grainMode.round.clip(0, 1)`): continuous fires `grainDensity` grains per second, triggered fires one grain per `retrigger` (its level follows the voice accent, not a grain-side velocity) and mutes the position-spread path so only the triggered grains sound. MAIN shows `[TRIG]` for a voice in triggered mode
 - `DISCRETE_GRAIN_KEYS` (`{ env = #GRAIN_ENV_OPTIONS, mode = #GRAIN_MODE_OPTIONS }`) maps the grain keys that hold an option index to their option count: `scene_transition_targets` skips them (they switch when the fade ends), mutation and randomize never touch them, and `validate_scene` requires integers from 1 to the count
@@ -104,6 +114,22 @@ The Lua script controls the engine through these commands:
   - **amp_amt**: Amplitude modulation depth (-2 to 2, bipolar)
   - **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
 - **speed**: Modulation signal LFO speed (0.1 to 50 Hz, shared across all slots)
+
+### Audio Sources (buffers and live input)
+
+Every voice's grain stage has a source (`grainSource[voice]`): 0 = its own synth (the voice synth writes `granBuses[i]`, `\strataGrain` reads it), 1-8 = buffer slot, 9 = live input. The engine side:
+
+- **Buffer slots**: `numBuffers = 8` slots (mirrors Lua `NUM_BUFFERS`), each a pair of mono buffers `buffersL[i]`/`buffersR[i]` (GrainBuf reads mono buffers only) of `sampleRate * bufferSeconds` frames (`bufferSeconds = 16`, mirrors `BUFFER_SECONDS`). Memory: 8 × 2 × 16 s × 48 kHz × 4 bytes ≈ 49 MB of scsynth memory. Never allocate longer buffers. `bufferFrames[i]` is the valid length (0 = empty); `bufferSampleRates[i]` the content's sample rate. bufnums never change: loads read into the existing buffers
+- **`\strataGrainBuf`**: two `GrainBuf.ar(1, ...)` (left, right) sharing one trigger, position, rate and duration, so grains stay sample-aligned and the stereo image is kept; `Balance2` with `LFNoise1.kr(2).range(panSpread.neg, panSpread)`, then one `PitchShift` stage on the pair. `bufPos` (0-1) and the scan are fractions of the valid region (`bufFrames / BufFrames`), so a 2 s sample uses the whole range; `bufScan` moves the position in **valid-region lengths per second** (spec §1; bipolar, wraps); grain position jitter ± `posSpread * 0.5`. Rate = `bufRate * bend * bufRateScale * (1 + rateMod)` where `bufRateScale` = content rate / server rate, tracked by the engine (`b_alloc`/`b_zero` keep a loaded file's rate on the server buffer and norns' scsynth predates `b_setSampleRate`, so `BufRateScale.kr` would be wrong after recording into a slot that held a file). Crossmod applies to amplitude and rate like voices (`rateMod` clamped -0.9..2), the accent is per trigger, and `grainMode` works as in `\strataGrain`
+- **Live input**: the persistent `\strataInput` synth (`SoundIn.ar([0, 1])` → stereo `inputBus`) at the head of `voiceGroup`. Input-sourced voices run `\strataGrain` with `in = inputBus`
+- **Mirror to the voice bus**: with no voice synth, a buffer- or input-sourced voice's `granBuses[i]` would be silent and its `\strataMod` (and every voice it modulates) would go dead. So `\strataGrainBuf` always writes its output to `mirrorOut` (= `granBuses[i]`) as well as `mainBus`, and `\strataGrain` does when `mirrorLevel = 1` (input source). In synth mode `mirrorLevel = 0`: that grain synth reads `granBuses[i]`, so mirroring would feed back. Grain synths are added at the head of `processGroup` and mod synths at its tail, so the mirror reaches `\strataMod` in the same block
+- **Voice-level controls follow the source**: `voiceControls[voice]` keeps every `setVoiceParam` and crossmod value (reset by `voiceOn` to its freq/amp/pan and silent routing) and `grainControls[voice]` every `setGrainParam` (reset by `voiceOn` to its size/density/pitch; `envShape` stored as `envBuf`). When the source is not the synth, `setVoiceControl` also sends the controls the grain SynthDef has: `amp` (the voice's level), `bend` and the crossmod routing/amounts for `\strataGrainBuf`, `amp` for the input `\strataGrain`. The synth-source `\strataGrain` keeps `amp = 1` (the voice synth applies the level)
+
+**Replace, never stack.** `setGrainSource` on a running voice calls `replaceGrainSynth`: the new grain synth is created with the voice's current `grainControls` (and voice-level controls) and the old one is gated off (2 s `grainRelease`) in the same call, so one voice never runs two grain paths beyond that release. Leaving the synth source releases the voice synth with `release(grainRelease)` (a forced release: its sound only reached the output through the old grain synth, so it does not run its own up-to-12 s release silently); returning to the synth source starts a new voice synth from `voiceControls`. A replacement that reads the voice bus (synth source) is placed `\addBefore` the releasing grain synth and one that mirrors into it `\addAfter`, so neither re-grains the other's mirror. `voiceOn` for a voice whose source is not 0 builds `\strataGrainBuf` (or the input `\strataGrain`) directly and no voice synth. `setGrainSource` with the current source does nothing (Lua sends it on every voice start).
+
+**Buffer commands** (`loadSlot`, `recordSlot`, `clearSlot`, `writeSlot` in the engine): load zeroes the pair, opens the file with `SoundFile` (frames, channels, rate; anything unreadable is logged and the slot left unchanged) and `readChannel`s at most 16 s (at the file's rate) into the existing buffers. Record zeroes the pair and, after a `server.sync` (so the zeroing never lands on the take), starts a `\strataRecord` synth (two `RecordBuf`s of `In.ar(inputBus, 2) * level`, `loop: 0`, plus a `Line` with `doneAction: 2` for the duration) right after `inputSynth`, unless the recording was cancelled meanwhile (`recordSynths[i]` is the token; do not use a zero completion message: it cannot be cancelled before the node exists). The slot reads 0 frames until the recording completes (`onFree`), then gets its frames and the take is written to `scratchDir +/+ "buf<n>.wav"`. A new record, load or clear on the slot cancels a recording in progress or pending (`stopRecording`), which writes nothing. There is no "stop early" command yet. `writeSlot(index, path)` (scratch takes and `saveBuffer`) has the server write each mono buffer's valid frames to a temporary float file, then sclang interleaves them in 8192-frame chunks (yielding between chunks) into a stereo 16-bit WAV at the content's rate and deletes the temporaries; it creates no synth nodes. Every change updates `bufferFrames`, the grain synths reading the slot (`bufFrames`, `bufRateScale`) and the `bufferState` poll.
+
+**Scratch directory**: `scratchDir` (engine variable, settable) defaults to `Platform.userHomeDir +/+ "dust/audio/strata/scratch/"`, which equals Lua's `_path.audio .. "strata/scratch/"` on norns; it is created on demand before writing. `test/engine_check.scd` points it at a temporary directory so the check never writes into `~/dust`.
 
 ## Development & Testing
 
@@ -939,7 +965,10 @@ This prevents the theoretical 4× amplitude spike that could occur with 3 source
 
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
-- `\strataGrain` - Granular processor (one per voice); `GrainIn` (envelope `envBuf`, default -1 = built-in Hann; trigger chosen by `grainMode`: `Impulse.ar(grainDensity)` or `T2A.ar(t_trig)`) followed by `PitchShift` for `pitchShift`
+- `\strataGrain` - Granular processor for a stereo bus (one per synth- or input-sourced voice); `GrainIn` (envelope `envBuf`, default -1 = built-in Hann; trigger chosen by `grainMode`: `Impulse.ar(grainDensity)` or `T2A.ar(t_trig)`) followed by `PitchShift` for `pitchShift`. Input-source extras: `accentAmt` (grain-side accent), `mirrorOut`/`mirrorLevel` (copy to the voice bus); `bend` is unused here
+- `\strataGrainBuf` - Granular processor for a buffer slot (one per buffer-sourced voice); see Audio Sources
+- `\strataInput` - Persistent live input: `SoundIn.ar([0, 1])` to `inputBus`
+- `\strataRecord` - One recording into a slot's buffer pair; frees itself when done
 - `\strataFilter` - Master multimode filter (`in, out, freq=5000, res=0.5, filterType=0, mix=0`): `Select.ar` of `RLPF`/`RHPF`/`BPF` at rq `1 - res * 0.95`, `mix` crossfades dry to filtered (0 = bypass)
 - `\strataDelay` - Master stereo delay (`in, out, time=0.375, feedback=0.4, mix=0`): `DelayC` (max 2 s, `time.lag(0.1)`) fed by the input plus `LocalIn`, with the delayed signal times `feedback` sent back through `LocalOut`; `mix` crossfades dry to delayed
 - The filter and delay SynthDef defaults equal the Lua param defaults: the script never bangs its params, so the engine starts from these values
@@ -957,22 +986,25 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - 1 stereo `delayBus` (delay output, reverb input)
 - 1 stereo `reverbBus` (reverb output, master input)
 - 4 `envBuffers` (grain envelope shapes, 1024 frames each; see `envShape`)
+- 1 stereo `inputBus` (live input from `\strataInput`)
+- `numBuffers` (8) slot pairs `buffersL`/`buffersR`, mono, 16 s each (≈ 49 MB total; see Audio Sources)
 
-Buses, buffers and groups are freed in `free` to prevent resource leaks.
+Buses, buffers, the input synth and groups are freed in `free` to prevent resource leaks (recordings in progress are cancelled first so nothing is written on free).
 
 ### Node Ordering
 
 Everything runs inside the engine group `context.xg`, so norns' output group (`og`) and its meters come after the engine:
 ```
-context.xg: voiceGroup (voice synths) -> processGroup (grain + mod synths) -> strataFilter -> strataDelay -> strataReverb -> strataMaster
+context.xg: voiceGroup (strataInput, voice synths, strataRecord) -> processGroup (grain synths, then mod synths) -> strataFilter -> strataDelay -> strataReverb -> strataMaster
 ```
-`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and filter, delay, reverb and master are added in that order with `\addToTail` on `context.xg`.
+`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and filter, delay, reverb and master are added in that order with `\addToTail` on `context.xg`. `inputSynth` is added at the head of `voiceGroup` and record synths right after it; grain synths go to the head of `processGroup` (or next to the grain synth they replace) and mod synths to its tail, so every grain synth runs before every mod synth.
 
 ### Synth Lifecycle
 
 Synths use `gate` with ASR envelopes:
 - Starting: `Synth.new(...)` with `gate=1`. `voiceOn` on a voice that is already running first releases its old trio (`releaseVoice`)
-- Stopping: `releaseVoice` sets `\gate, 0` (release phase) and removes the trio from `synths`
+- Stopping: `releaseVoice` sets `\gate, 0` (release phase) and removes the trio from `synths` (a buffer- or input-sourced voice has only a grain and a mod synth)
+- Switching source: `replaceGrainSynth` (see Audio Sources)
 - `doneAction: 2` frees the synth after release
 - Per-voice commands go through `setSynth(key, ...)`, which ignores voices that are not running, and voice indices are range-checked with `validVoice`
 

@@ -14,8 +14,28 @@ Engine_Strata : CroneEngine {
     var <modBuses;  // Control buses for cross-modulation
     var <silentBus; // Always-zero control bus used for "no modulation source"
     var <envBuffers; // Grain envelope shapes 1-4 (envShape 0 is GrainIn's built-in Hann)
-    var <voiceGroup;   // Voice synths (head of context.xg)
-    var <processGroup; // Grain and mod synths (after voiceGroup)
+    var <voiceGroup;   // Input synth and voice synths (head of context.xg)
+    var <processGroup; // Grain synths, then mod synths (after voiceGroup)
+
+    // Audio sources: grainSource[voice] is 0 = the voice's synth,
+    // 1..numBuffers = buffer slot, numBuffers + 1 = live input
+    var <numBuffers = 8;      // Must match NUM_BUFFERS in strata.lua
+    var <bufferSeconds = 16;  // Must match BUFFER_SECONDS in strata.lua
+    var <buffersL, <buffersR; // One mono buffer per channel per slot (GrainBuf reads mono only)
+    var <bufferFrames;        // Valid (loaded or recorded) frames per slot; 0 = empty
+    var <bufferSampleRates;   // Sample rate of each slot's content (valid seconds = frames / rate)
+    var <recordSynths;        // Running strataRecord synth per slot, or nil
+    var <inputBus;            // Stereo live input, written by inputSynth
+    var <inputSynth;
+    var <grainSource;
+    var <voiceControls; // Per voice: voice synth controls (params, crossmod) for restarts
+    var <grainControls; // Per voice: grain synth controls, carried into a replacement
+    var <bufferStatePoll;
+    var bufferStateCursor = 0;
+    var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
+    var <grainRelease = 2;        // Release time of both grain SynthDefs
+    var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
+    var writeCount = 0;
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -52,8 +72,39 @@ Engine_Strata : CroneEngine {
             Env.linen(0.1, 0.8, 0.1),
             Env([0, 1, 1, 0], [0.25, 0.5, 0.25])  // trapezoid
         ].collect({ arg env; Buffer.loadCollection(context.server, env.asSignal(1024)) });
-        
+
+        // Buffer slots: a left/right pair of mono buffers each, 16 s at the
+        // server rate (8 slots x 2 x 16 s x 48 kHz x 4 bytes = about 49 MB)
+        buffersL = Array.fill(numBuffers, { Buffer.alloc(context.server, context.server.sampleRate * bufferSeconds, 1) });
+        buffersR = Array.fill(numBuffers, { Buffer.alloc(context.server, context.server.sampleRate * bufferSeconds, 1) });
+        bufferFrames = Array.fill(numBuffers, 0);
+        bufferSampleRates = Array.fill(numBuffers, { context.server.sampleRate });
+        recordSynths = Array.newClear(numBuffers);
+        inputBus = Bus.audio(context.server, 2);
+        // Equals Lua's _path.audio .. "strata/scratch/" on norns
+        scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
+
+        grainSource = Array.fill(numVoices, 0);
+        voiceControls = Array.fill(numVoices, { Dictionary.new });
+        grainControls = Array.fill(numVoices, { Dictionary.new });
+
         // SynthDefs
+
+        // Live input copied to inputBus for input-sourced grain synths and recording
+        SynthDef(\strataInput, {
+            arg out;
+            Out.ar(out, SoundIn.ar([0, 1]));
+        }).add;
+
+        // Records the stereo input into a slot's buffer pair from frame 0
+        // (replacing, never overdubbing) and frees itself after duration
+        SynthDef(\strataRecord, {
+            arg in, bufnumL, bufnumR, level=1, duration=1;
+            var sig = In.ar(in, 2) * level;
+            RecordBuf.ar(sig[0], bufnumL, loop: 0, doneAction: 2);
+            RecordBuf.ar(sig[1], bufnumR, loop: 0);
+            Line.kr(0, 0, duration, doneAction: 2);
+        }).add;
 
         // Modulation output synth - outputs envelope follower signal for cross-mod
         SynthDef(\strataMod, {
@@ -396,23 +447,32 @@ Engine_Strata : CroneEngine {
             Out.ar(out, sig * env * modAmp);
         }).add;
 
-        // Granular processor
+        // Granular processor for a stereo bus: the voice's own bus (synth
+        // source) or inputBus (input source). For the input source the engine
+        // sets accentAmt 1 (there is no voice synth to carry the accent) and
+        // mirrorLevel 1 (copies the output to the voice bus for strataMod);
+        // for the synth source both are 0, since the voice synth already
+        // accents and this synth reads the voice bus. bend is unused here.
         SynthDef(\strataGrain, {
             arg in, out, gate=1,
-            grainSize=0.1, grainDensity=20, pitchShift=1, 
+            grainSize=0.1, grainDensity=20, pitchShift=1,
             posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
-            grainMode=0, t_trig=0;
-            var sig, env, input, mode, grainTrigger, spreadLevel;
-            
-            env = EnvGen.kr(Env.asr(0.1, 1, 2), gate, doneAction: 2);
+            grainMode=0, t_trig=0, velocity=1, accentAmt=0,
+            mirrorOut=0, mirrorLevel=0, bend=1;
+            var sig, env, input, mode, grainTrigger, spreadLevel, accent;
+
+            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
+            // Accent for input-sourced voices; levelScale is sampled per
+            // trigger, so velocity never rescales a running tail
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
             input = In.ar(in, 2);
 
             // grainMode 0 = continuous (grainDensity grains per second),
             // 1 = triggered: one grain per t_trig (retrigger: pattern steps,
-            // MIDI notes). Velocity reaches triggered grains through the
-            // voice synth's accent; GrainIn has no per-grain amplitude, so
-            // the grain synth never scales its output by velocity. Triggered
-            // mode mutes the position-spread path so only the grains sound.
+            // MIDI notes). Synth-sourced velocity reaches triggered grains
+            // through the voice synth's accent; GrainIn has no per-grain
+            // amplitude. Triggered mode mutes the position-spread path so
+            // only the grains sound.
             mode = grainMode.round.clip(0, 1);
             grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
             spreadLevel = Select.kr(mode, [1, 0]);
@@ -444,10 +504,73 @@ Engine_Strata : CroneEngine {
                 pitchDispersion: 0,
                 timeDispersion: 0
             );
-            
-            Out.ar(out, sig * env * amp);
+
+            sig = sig * env * (amp * (1 + (accent * accentAmt))).clip(0, 2);
+            Out.ar(out, sig);
+            Out.ar(mirrorOut, sig * mirrorLevel);
         }).add;
-        
+
+        // Granular processor for a buffer slot: two mono GrainBufs (left and
+        // right buffers) share one trigger, position, rate and duration, so
+        // every grain is sample-aligned across the pair. bufPos (0-1) and the
+        // scan are fractions of the valid region (bufFrames), so a short
+        // sample uses the whole position range; bufScan moves the position
+        // in valid-region lengths per second and wraps. Crossmod applies to
+        // amplitude and rate as voice synths apply it to amp and freq.
+        // bufRateScale is the content's sample rate over the server's (what
+        // BufRateScale.kr would report), tracked by the engine: b_alloc keeps
+        // a loaded file's rate, and norns' scsynth has no b_setSampleRate. The
+        // output also goes to mirrorOut (the voice's bus) so the voice's
+        // strataMod keeps following what is heard.
+        SynthDef(\strataGrainBuf, {
+            arg out, gate=1, bufnumL=0, bufnumR=0, bufFrames=1, bufRateScale=1, bufPos=0, bufRate=1, bufScan=0,
+            grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
+            envBuf = -1, grainMode=0, t_trig=0, amp=1, bend=1,
+            modBus1=0, modBus2=0, modBus3=0,
+            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+            modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+            velocity=1, mirrorOut=0;
+            var sig, env, accent, mod1Sig, mod2Sig, mod3Sig, modSig, rateMod, modAmp;
+            var mode, grainTrigger, validFraction, scanPos, grainPos, rate, left, right;
+
+            env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
+            // Accent fired by retrigger; levelScale is sampled per trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
+
+            mod1Sig = In.kr(modBus1, 1);
+            mod2Sig = In.kr(modBus2, 1);
+            mod3Sig = In.kr(modBus3, 1);
+            modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
+            // Clamped like voice frequency modulation so the rate stays positive
+            rateMod = ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2);
+            modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
+
+            mode = grainMode.round.clip(0, 1);
+            grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
+
+            validFraction = (bufFrames / BufFrames.kr(bufnumL)).clip(0, 1);
+            scanPos = (bufPos + Phasor.ar(0, bufScan * SampleDur.ir, 0, 1)) % 1;
+            grainPos = (scanPos + TRand.ar(posSpread * -0.5, posSpread * 0.5, grainTrigger)).wrap(0, 1) * validFraction;
+            rate = bufRate * bend * bufRateScale * (1 + rateMod);
+
+            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf);
+            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf);
+            sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
+
+            // Same transposition stage as strataGrain, once for the pair
+            sig = PitchShift.ar(
+                sig,
+                windowSize: grainSize.clip(0.01, 0.5),
+                pitchRatio: pitchShift.lag(0.5),
+                pitchDispersion: 0,
+                timeDispersion: 0
+            );
+
+            sig = sig * env * modAmp;
+            Out.ar(out, sig);
+            Out.ar(mirrorOut, sig);
+        }).add;
+
         // Multimode filter: 0 lowpass, 1 highpass, 2 bandpass. res 0..1 maps
         // to rq 1..0.05; mix crossfades dry (0, the default bypass) to filtered.
         SynthDef(\strataFilter, {
@@ -522,68 +645,62 @@ Engine_Strata : CroneEngine {
         synths = Dictionary.new;
 
         // Node order inside the engine group (context.xg):
-        // voiceGroup -> processGroup (grain + mod) -> filter -> delay
+        // voiceGroup (input, voices, recorders) -> processGroup (grain
+        // synths at the head, mod synths at the tail, so a mirrored grain
+        // output reaches strataMod in the same block) -> filter -> delay
         // -> reverb -> master.
         // Keeping everything inside xg leaves norns' output group (og) and
         // its output metering after the engine.
         voiceGroup = Group.head(context.xg);
         processGroup = Group.after(voiceGroup);
+        inputSynth = Synth(\strataInput, [\out, inputBus], voiceGroup, \addToHead);
 
         // Commands for voice control
         this.addCommand(\voiceOn, "iffffff", { arg msg;
             var voice = msg[1].asInteger;
-            var bus, modBus;
 
             if (this.validVoice(voice)) {
                 // Starting a running voice replaces it: release the old trio
                 this.releaseVoice(voice);
 
-                bus = granBuses[voice];
-                modBus = modBuses[voice];
+                // All 3 mod slots start on the silent bus (no modulation).
+                // Voice-specific params, posSpread, crossmod routing and mod
+                // speed are pushed by the Lua script (sync_voice_to_engine)
+                // right after voiceOn; the Lua voices table is the only
+                // source of their values.
+                voiceControls[voice] = Dictionary[
+                    \freq -> msg[2], \amp -> msg[3], \pan -> msg[4],
+                    \modBus1 -> silentBus.index, \modBus2 -> silentBus.index, \modBus3 -> silentBus.index,
+                    \modAmpAmt1 -> 0, \modAmpAmt2 -> 0, \modAmpAmt3 -> 0,
+                    \modFreqAmt1 -> 0, \modFreqAmt2 -> 0, \modFreqAmt3 -> 0
+                ];
+                grainControls[voice] = Dictionary[
+                    \grainSize -> msg[5], \grainDensity -> msg[6], \pitchShift -> msg[7]
+                ];
 
-                synths[this.voiceKey(voice)] = Synth(voiceSynthDefs[voice], [
-                    \out, bus,
-                    \freq, msg[2],
-                    \amp, msg[3],
-                    \pan, msg[4],
-                    // Initialize all 3 mod bus slots to the silent bus (no modulation)
-                    \modBus1, silentBus.index,
-                    \modBus2, silentBus.index,
-                    \modBus3, silentBus.index,
-                    \modAmpAmt1, 0,
-                    \modAmpAmt2, 0,
-                    \modAmpAmt3, 0,
-                    \modFreqAmt1, 0,
-                    \modFreqAmt2, 0,
-                    \modFreqAmt3, 0
-                ], target: voiceGroup);
-                // Voice-specific params, posSpread, crossmod routing and mod speed
-                // are pushed by the Lua script (sync_voice_to_engine) right after
-                // voiceOn; the Lua voices table is the only source of their values.
+                // A buffer- or input-sourced voice runs no voice synth
+                if (grainSource[voice] == 0) {
+                    synths[this.voiceKey(voice)] = this.startVoiceSynth(voice);
+                };
+                synths[this.grainKey(voice)] = this.startGrainSynth(voice, processGroup, \addToHead);
 
-                synths[this.grainKey(voice)] = Synth(\strataGrain, [
-                    \in, bus,
-                    \out, mainBus,
-                    \grainSize, msg[5],
-                    \grainDensity, msg[6],
-                    \pitchShift, msg[7]
-                ], target: processGroup);
-
-                // Create modulation output synth
+                // Modulation output synth, after every grain synth
                 synths[this.modKey(voice)] = Synth(\strataMod, [
-                    \in, bus,
-                    \out, modBus
-                ], target: processGroup);
+                    \in, granBuses[voice],
+                    \out, modBuses[voice]
+                ], target: processGroup, addAction: \addToTail);
             };
         });
 
         // Re-articulate a running voice without creating new nodes: fires
-        // the voice synth's accent envelope at the given velocity (0-1; and
-        // re-plucks Karplus), and one grain when the grain synth is in
-        // triggered mode. velocity is set in the same message as t_trig.
+        // the accent envelope at the given velocity (0-1) on whichever synth
+        // carries it (the voice synth for the synth source, re-plucking
+        // Karplus; the grain synth for buffer and input sources), and one
+        // grain when the grain synth is in triggered mode. velocity is set
+        // in the same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
             this.setSynth(this.voiceKey(msg[1]), \velocity, msg[2], \t_trig, 1);
-            this.setSynth(this.grainKey(msg[1]), \t_trig, 1);
+            this.setSynth(this.grainKey(msg[1]), \velocity, msg[2], \t_trig, 1);
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;
@@ -591,19 +708,68 @@ Engine_Strata : CroneEngine {
         });
 
         this.addCommand(\setVoiceParam, "isf", { arg msg;
-            this.setSynth(this.voiceKey(msg[1]), msg[2], msg[3]);
+            this.setVoiceControl(msg[1], msg[2].asSymbol, msg[3]);
         });
 
         // envShape is an index (0 = Hann, 1-4 = envBuffers) that the engine
-        // turns into the grain synth's envBuf; other params pass straight through
+        // turns into the grain synth's envBuf; other params pass straight
+        // through. Every value is kept so a replacement grain synth (source
+        // switch) starts with it.
         this.addCommand(\setGrainParam, "isf", { arg msg;
-            var bufnum;
-            if (msg[2].asSymbol == \envShape) {
-                bufnum = this.envBufnumFor(msg[3].round.asInteger);
-                if (bufnum.notNil) { this.setSynth(this.grainKey(msg[1]), \envBuf, bufnum) };
-            } {
-                this.setSynth(this.grainKey(msg[1]), msg[2], msg[3]);
+            var voice = msg[1], param = msg[2].asSymbol, value = msg[3], bufnum;
+            if (this.validVoice(voice)) {
+                if (param == \envShape) {
+                    bufnum = this.envBufnumFor(value.round.asInteger);
+                    if (bufnum.notNil) {
+                        grainControls[voice][\envBuf] = bufnum;
+                        this.setSynth(this.grainKey(voice), \envBuf, bufnum);
+                    };
+                } {
+                    grainControls[voice][param] = value;
+                    this.setSynth(this.grainKey(voice), param, value);
+                };
             };
+        });
+
+        // source: 0 = the voice's synth, 1-8 = buffer slot, 9 = live input.
+        // A stopped voice only records it (voiceOn builds the right synths);
+        // a running voice gets its grain synth replaced, never stacked.
+        this.addCommand(\setGrainSource, "ii", { arg msg;
+            var voice = msg[1], source = msg[2];
+            if (this.validVoice(voice) and: { this.validSource(source) }
+                and: { source != grainSource[voice] }) {
+                grainSource[voice] = source;
+                if (this.voiceRunning(voice)) { this.replaceGrainSynth(voice) };
+            };
+        });
+
+        // msg: slot index (0-7), sound file path
+        this.addCommand(\loadBuffer, "is", { arg msg;
+            this.loadSlot(msg[1], msg[2].asString);
+        });
+
+        // msg: slot index, seconds, input level
+        this.addCommand(\recordBuffer, "iff", { arg msg;
+            this.recordSlot(msg[1], msg[2], msg[3]);
+        });
+
+        this.addCommand(\clearBuffer, "i", { arg msg;
+            this.clearSlot(msg[1]);
+        });
+
+        // msg: slot index, path of the stereo 16-bit WAV to write
+        this.addCommand(\saveBuffer, "is", { arg msg;
+            if (this.validBuffer(msg[1])) { this.writeSlot(msg[1], msg[2].asString) };
+        });
+
+        // Valid seconds per slot. matron only accepts single-float value
+        // polls (/poll/value is typed "if"), so each message carries one
+        // slot: slot index * bufferStateStride + seconds. The periodic poll
+        // cycles through the slots; every change is also sent at once.
+        bufferStatePoll = this.addPoll(\bufferState, {
+            var value = this.bufferStateValue(bufferStateCursor);
+            bufferStateCursor = (bufferStateCursor + 1) % numBuffers;
+            value
         });
 
         this.addCommand(\setMasterDrift, "f", { arg msg;
@@ -639,17 +805,17 @@ Engine_Strata : CroneEngine {
                 sourceBus = silentBus.index;
             };
 
-            this.setSynth(this.voiceKey(voice), ("modBus" ++ slot).asSymbol, sourceBus);
+            this.setVoiceControl(voice, ("modBus" ++ slot).asSymbol, sourceBus);
         });
 
         this.addCommand(\setModAmpAmt, "iif", { arg msg;
             // msg: voice, slot (1-3), amount
-            this.setSynth(this.voiceKey(msg[1]), ("modAmpAmt" ++ msg[2]).asSymbol, msg[3]);
+            this.setVoiceControl(msg[1], ("modAmpAmt" ++ msg[2]).asSymbol, msg[3]);
         });
 
         this.addCommand(\setModFreqAmt, "iif", { arg msg;
             // msg: voice, slot (1-3), amount
-            this.setSynth(this.voiceKey(msg[1]), ("modFreqAmt" ++ msg[2]).asSymbol, msg[3]);
+            this.setVoiceControl(msg[1], ("modFreqAmt" ++ msg[2]).asSymbol, msg[3]);
         });
 
         this.addCommand(\setModSpeed, "if", { arg msg;
@@ -695,6 +861,287 @@ Engine_Strata : CroneEngine {
         ^voice.isInteger and: { (voice >= 0) and: { voice < numVoices } }
     }
 
+    validBuffer { arg index;
+        ^index.isInteger and: { (index >= 0) and: { index < numBuffers } }
+    }
+
+    inputSource { ^numBuffers + 1 }
+
+    validSource { arg source;
+        ^source.isInteger and: { (source >= 0) and: { source <= this.inputSource } }
+    }
+
+    voiceRunning { arg voice;
+        ^synths[this.voiceKey(voice)].notNil or: { synths[this.grainKey(voice)].notNil }
+    }
+
+    grainDefFor { arg voice;
+        ^if (grainSource[voice].inclusivelyBetween(1, numBuffers)) { \strataGrainBuf } { \strataGrain }
+    }
+
+    // Key/value pairs from a Dictionary for the controls a SynthDef has
+    controlPairs { arg defName, controls;
+        var names = SynthDescLib.global.at(defName).controlNames.collect(_.asSymbol);
+        var pairs = List.new;
+        controls.keysValuesDo({ arg key, value;
+            if (names.includes(key)) { pairs.add(key).add(value) };
+        });
+        ^pairs.asArray
+    }
+
+    // A voice-level control (synthesis param, crossmod routing or amount):
+    // kept for restarts, sent to the voice synth, and to the grain synth
+    // when that has the control (strataGrainBuf takes crossmod, amp and
+    // bend; the input strataGrain takes amp) while the voice is not on its
+    // synth source
+    setVoiceControl { arg voice, control, value;
+        if (this.validVoice(voice)) {
+            voiceControls[voice][control] = value;
+            this.setSynth(this.voiceKey(voice), control, value);
+            if (grainSource[voice] != 0) {
+                this.setSynth(this.grainKey(voice), *this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]));
+            };
+        };
+    }
+
+    startVoiceSynth { arg voice;
+        var defName = voiceSynthDefs[voice];
+        ^Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]),
+            target: voiceGroup)
+    }
+
+    // The grain synth for the voice's current source, with its current
+    // grain controls. Buffer and input sources also take the voice-level
+    // controls the grain SynthDef has (level, crossmod, bend).
+    startGrainSynth { arg voice, target, addAction;
+        var source = grainSource[voice];
+        var defName = this.grainDefFor(voice);
+        var args = [\out, mainBus, \mirrorOut, granBuses[voice]];
+        var slot;
+
+        case
+        { source == 0 } {
+            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0];
+        }
+        { source == this.inputSource } {
+            args = args ++ [\in, inputBus, \mirrorLevel, 1, \accentAmt, 1];
+        }
+        {
+            slot = source - 1;
+            args = args ++ [\bufnumL, buffersL[slot].bufnum, \bufnumR, buffersR[slot].bufnum,
+                \bufFrames, bufferFrames[slot], \bufRateScale, this.bufferRateScale(slot)];
+        };
+        if (source != 0) { args = args ++ this.controlPairs(defName, voiceControls[voice]) };
+        args = args ++ this.controlPairs(defName, grainControls[voice]);
+        ^Synth(defName, args, target, addAction)
+    }
+
+    // Swap a running voice's grain synth for one matching its source: the
+    // old one is gated off (grainRelease) as the new one starts, so one
+    // voice never runs two grain paths beyond that release. A grain synth
+    // that reads the voice bus is placed before the releasing one and one
+    // that mirrors into it after, so neither re-grains the other's mirror.
+    replaceGrainSynth { arg voice;
+        var oldGrain = synths.removeAt(this.grainKey(voice));
+        var voiceSynth;
+
+        if (oldGrain.isNil) {
+            synths[this.grainKey(voice)] = this.startGrainSynth(voice, processGroup, \addToHead);
+        } {
+            synths[this.grainKey(voice)] = this.startGrainSynth(voice, oldGrain,
+                if (grainSource[voice] == 0) { \addBefore } { \addAfter });
+            oldGrain.set(\gate, 0);
+        };
+
+        if (grainSource[voice] == 0) {
+            if (synths[this.voiceKey(voice)].isNil) {
+                synths[this.voiceKey(voice)] = this.startVoiceSynth(voice);
+            };
+        } {
+            // Its sound only reaches the output through the old grain synth,
+            // so it releases with it instead of over its own (up to 12 s) release
+            voiceSynth = synths.removeAt(this.voiceKey(voice));
+            if (voiceSynth.notNil) { voiceSynth.release(grainRelease) };
+        };
+    }
+
+    bufferStateValue { arg index;
+        ^(index * bufferStateStride) + (bufferFrames[index] / bufferSampleRates[index]).round(0.01)
+    }
+
+    bufferRateScale { arg index;
+        ^bufferSampleRates[index] / context.server.sampleRate
+    }
+
+    // A slot's valid length or rate changed: tell the grain synths reading it and Lua
+    bufferChanged { arg index;
+        numVoices.do({ arg voice;
+            if (grainSource[voice] == (index + 1)) {
+                this.setSynth(this.grainKey(voice), \bufFrames, bufferFrames[index],
+                    \bufRateScale, this.bufferRateScale(index));
+            };
+        });
+        bufferStatePoll.update(this.bufferStateValue(index));
+    }
+
+    // Cancel a recording in progress, or one still waiting for its zeroed
+    // buffers (it then never starts); its onFree sees it was cancelled
+    stopRecording { arg index;
+        var synth = recordSynths[index];
+        recordSynths[index] = nil;
+        if (synth.notNil and: { synth.isPlaying }) { synth.free };
+    }
+
+    // Read up to bufferSeconds of a sound file into a slot (channel 0 to the
+    // left buffer, channel 1, or 0 again for a mono file, to the right).
+    // Missing or unreadable files leave the slot unchanged. The file's
+    // sample rate becomes the slot's bufRateScale, so it plays at pitch.
+    loadSlot { arg index, path;
+        var file, frames, rightChannel, sampleRate;
+        if (this.validBuffer(index).not) { ^this };
+        file = SoundFile.openRead(path.standardizePath);
+        if (file.isNil) {
+            postln("strata: cannot read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " unchanged");
+            ^this
+        };
+        sampleRate = file.sampleRate;
+        frames = [file.numFrames, (sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
+        rightChannel = if (file.numChannels > 1) { 1 } { 0 };
+        file.close;
+        if (frames < 1) {
+            postln("strata: sound file " ++ path ++ " is empty; buffer " ++ (index + 1) ++ " unchanged");
+            ^this
+        };
+
+        this.stopRecording(index);
+        buffersL[index].zero;
+        buffersR[index].zero;
+        buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
+        buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);
+        bufferFrames[index] = frames;
+        bufferSampleRates[index] = sampleRate;
+        this.bufferChanged(index);
+    }
+
+    // Record the stereo input into a slot, replacing it: the pair is
+    // zeroed and the record synth starts after a sync, so zeroing never
+    // lands on the new take, and only if nothing cancelled it meanwhile (a
+    // completion message could not be cancelled before the node exists).
+    // The slot reads as empty until the recording completes, then the take
+    // is written to scratchDir so it survives a restart.
+    recordSlot { arg index, seconds, level;
+        var frames, synth;
+        if (this.validBuffer(index).not) { ^this };
+        frames = (seconds * context.server.sampleRate).round.asInteger.clip(0, buffersL[index].numFrames);
+        if (frames < 1) { ^this };
+
+        this.stopRecording(index);
+        bufferFrames[index] = 0;
+        bufferSampleRates[index] = context.server.sampleRate;
+        this.bufferChanged(index);
+        buffersL[index].zero;
+        buffersR[index].zero;
+
+        synth = Synth.basicNew(\strataRecord, context.server);
+        recordSynths[index] = synth;
+        fork({
+            context.server.sync;
+            if (recordSynths[index] === synth) {
+                // Marked playing from the moment it is sent (not when /n_go
+                // arrives), so stopRecording frees it from here on
+                synth.register(true);
+                synth.onFree({
+                    if (recordSynths[index] === synth) {
+                        recordSynths[index] = nil;
+                        bufferFrames[index] = frames;
+                        this.bufferChanged(index);
+                        this.writeSlot(index, this.scratchPath(index));
+                    };
+                });
+                context.server.listSendMsg(synth.newMsg(inputSynth, [
+                    \in, inputBus,
+                    \bufnumL, buffersL[index].bufnum,
+                    \bufnumR, buffersR[index].bufnum,
+                    \level, level,
+                    \duration, frames / context.server.sampleRate
+                ], \addAfter));
+            };
+        }, SystemClock);
+    }
+
+    clearSlot { arg index;
+        if (this.validBuffer(index).not) { ^this };
+        this.stopRecording(index);
+        buffersL[index].zero;
+        buffersR[index].zero;
+        bufferFrames[index] = 0;
+        bufferSampleRates[index] = context.server.sampleRate;
+        this.bufferChanged(index);
+    }
+
+    scratchPath { arg index;
+        ^scratchDir +/+ ("buf" ++ (index + 1) ++ ".wav")
+    }
+
+    // Write a slot's valid region to path as a stereo 16-bit WAV at the
+    // content's sample rate, creating the directory. The server writes each
+    // mono buffer to a temporary float file; sclang then interleaves them in
+    // chunks (yielding between chunks) and deletes the temporary files.
+    // Creates no synth nodes.
+    writeSlot { arg index, path;
+        var frames = bufferFrames[index];
+        var sampleRate = bufferSampleRates[index];
+        var tempPaths;
+        if (frames < 1) {
+            postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
+            ^this
+        };
+        writeCount = writeCount + 1;
+        tempPaths = ["L", "R"].collect({ arg side;
+            Platform.defaultTempDir +/+ "strata-buf%-%-%.wav".format(index + 1, writeCount, side)
+        });
+        buffersL[index].write(tempPaths[0], "wav", "float", frames);
+        buffersR[index].write(tempPaths[1], "wav", "float", frames);
+        fork({
+            context.server.sync;
+            if (this.interleaveFiles(tempPaths, path, sampleRate)) {
+                postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
+            };
+            tempPaths.do({ arg tempPath; File.delete(tempPath) });
+        }, SystemClock);
+    }
+
+    // Called inside a routine
+    interleaveFiles { arg sourcePaths, path, sampleRate;
+        var chunkFrames = 8192;
+        var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
+        var output, left, right, interleaved;
+
+        File.mkdir(path.dirname);
+        output = if (sources.includes(nil).not) { SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate) };
+        if (output.isNil) {
+            postln("strata: cannot write " ++ path);
+            sources.do({ arg source; if (source.notNil) { source.close } });
+            ^false
+        };
+
+        left = FloatArray.newClear(chunkFrames);
+        right = FloatArray.newClear(chunkFrames);
+        while { sources[0].readData(left); left.size > 0 } {
+            sources[1].readData(right);
+            interleaved = FloatArray.newClear(left.size * 2);
+            left.size.do({ arg frame;
+                interleaved[frame * 2] = left[frame];
+                interleaved[(frame * 2) + 1] = right[frame] ? 0;
+            });
+            output.writeData(interleaved);
+            0.001.wait;
+        };
+        output.close;
+        sources.do({ arg source; source.close });
+        ^true
+    }
+
     // Gate off a voice's synth trio (each frees itself after its release)
     // and forget it, so later commands to that voice are no-ops
     releaseVoice { arg voice;
@@ -711,7 +1158,10 @@ Engine_Strata : CroneEngine {
     }
 
     free {
+        // cancelled first, so no recording completes (and writes) on free
+        numBuffers.do({ arg index; this.stopRecording(index) });
         synths.do({ arg synth; synth.free });
+        inputSynth.free;
         // also frees voices still in their release phase
         voiceGroup.free;
         processGroup.free;
@@ -719,6 +1169,9 @@ Engine_Strata : CroneEngine {
         modBuses.do({ arg bus; bus.free });
         silentBus.free;
         envBuffers.do({ arg buffer; buffer.free });
+        buffersL.do({ arg buffer; buffer.free });
+        buffersR.do({ arg buffer; buffer.free });
+        inputBus.free;
         mainBus.free;
         filterBus.free;
         delayBus.free;
