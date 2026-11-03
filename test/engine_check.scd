@@ -138,8 +138,16 @@ server.waitForBoot({
         var oldTrio, before, after, silentIndex, startedNames, masterUGens, envSamples;
         var oldGrain, oldVoiceSynth, grainBuf, processNames, scratchFile, savePath, file, frames, data;
         var stereoPath, monoPath, longPath, textPath, info;
+        var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
+        var grainCount, voiceCount, grainBefore, voiceBefore;
 
         CroneDefs.sendDefs(server);
+        // Check-only helpers: a test tone (written into the input bus) and a
+        // peak meter on a stereo bus (reset with t_reset, read from a control bus)
+        SynthDef(\strataCheckTone, { arg out; Out.ar(out, SinOsc.ar(440, 0, 0.5) ! 2) }).add;
+        SynthDef(\strataCheckPeak, { arg in, out, t_reset = 0;
+            Out.kr(out, A2K.kr(Peak.ar(In.ar(in, 2).abs.sum, t_reset)));
+        }).add;
         server.sync;
         context = CroneAudioContext.new(server);
         context.out_b = Bus.audio(server, 2);  // keep the check silent
@@ -206,6 +214,20 @@ server.waitForBoot({
             "strataGrainBuf has a bufRateScale control (content rate / server rate)");
         check.(grainBuf.any({ arg ugen; ugen.isKindOf(Select) }) and: { grainBuf.any({ arg ugen; ugen.isKindOf(T2A) }) },
             "strataGrainBuf selects between Impulse and T2A(t_trig) grain triggers");
+        // strataGrain mirrors strataGrainBuf: one mono GrainIn per input
+        // channel panned as a pair, so pan spread works for synth and input
+        // sources and nothing is doubled (F1)
+        grainInUGens = SynthDescLib.global.at(\strataGrain).def.children;
+        check.(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) }) == 2
+            and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.numChannels == 1 }) },
+            "strataGrain runs two mono GrainIns (L/R; got %)".format(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) })));
+        check.(grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
+            "strataGrain pitch-shifts the stereo pair once (two mono PitchShifts; got %)".format(
+                grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) })));
+        check.(grainInUGens.any({ arg ugen; ugen.isKindOf(Balance2) }), "strataGrain pans with Balance2");
+        check.(grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2],
+            "strataGrain has one stereo Out to mainBus and one to the mirror (got %)".format(
+                grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 })));
         check.(SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(Select) })
             and: { SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(T2A) }) },
             "strataGrain selects between Impulse and T2A(t_trig) grain triggers");
@@ -423,7 +445,7 @@ server.waitForBoot({
         check.(synthNames.(context.xg).count({ arg n; n == \strataGrainBuf }) == 2, "one GrainBuf synth per buffer voice (voices 1 and 7)");
         check.(engine.synths[\voice0].isNil, "voice synth released in buffer mode");
         check.(getControl.(oldVoiceSynth, \gate) < 0, "the voice synth gets a short forced release");
-        check.(getControl.(oldGrain, \gate) == 0, "the old grain synth is gated off");
+        check.(getControl.(oldGrain, \gate) < 0, "the old grain synth gets a forced release (grainRelease)");
         grainBuf = engine.synths[\grain0];
         check.(grainBuf.defName == \strataGrainBuf, "voice 1 now runs strataGrainBuf");
         check.(getControl.(grainBuf, \bufnumL) == engine.buffersL[2].bufnum, "source 3 reads slot 3 (index 2)");
@@ -455,7 +477,7 @@ server.waitForBoot({
         check.(getControl.(grainBuf, \bufRate) == 0.5, "setGrainParam bufRate reaches strataGrainBuf");
         command.(\setGrainSource, 0, 9); server.sync;
         check.(synthNames.(context.xg).count({ arg n; n == \strataGrainBuf }) == 2, "input source uses strataGrain (old GrainBuf only releasing)");
-        check.(getControl.(grainBuf, \gate) == 0, "switching away gates the GrainBuf synth off");
+        check.(getControl.(grainBuf, \gate) < 0, "switching away releases the GrainBuf synth (forced release)");
         check.(engine.synths[\grain0].defName == \strataGrain
             and: { getControl.(engine.synths[\grain0], \in) == engine.inputBus.index }, "input source: strataGrain reads inputBus");
         check.(getControl.(engine.synths[\grain0], \mirrorLevel) == 1
@@ -657,6 +679,61 @@ server.waitForBoot({
         command.(\setGrainSource, 1, 0);
         2.5.wait; server.sync;
 
+        // A voice reading a slot that is being recorded stays silent until
+        // the take completes, instead of looping the take's first grain (F3).
+        // A test tone in the input bus is recorded; a peak meter on voice 1's
+        // bus hears the strataGrainBuf mirror.
+        command.(\setGrainSource, 1, 3);           // slot 3 (index 2), empty
+        2.5.wait; server.sync;                     // the voice synth's release is over
+        peakBus = Bus.control(server, 1);
+        tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
+        probe = Synth(\strataCheckPeak, [\in, engine.granBuses[1], \out, peakBus], engine.processGroup, \addToTail);
+        readPeak = {
+            var condition = Condition(false), value;
+            probe.set(\t_reset, 1);
+            0.3.wait;
+            peakBus.get({ arg result; value = result; condition.test = true; condition.signal });
+            condition.wait;
+            value
+        };
+        command.(\recordBuffer, 2, 1.0, 1.0); 0.3.wait; server.sync;
+        duringPeak = readPeak.value;               // 0.3-0.6 s into the 1 s take
+        check.(engine.recordSynths[2].notNil and: { getControl.(engine.synths[\grain1], \bufFrames) == 0 },
+            "the slot is still recording (bufFrames 0)");
+        check.(duringPeak < 0.001, "a voice reading a slot being recorded is silent (peak %)".format(duringPeak));
+        0.8.wait; server.sync;
+        check.(engine.recordSynths[2].isNil and: { engine.bufferFrames[2] > 0 }, "the take has completed");
+        afterPeak = readPeak.value;
+        check.(afterPeak > 0.01, "after the take completes the voice plays it (peak %)".format(afterPeak));
+        tone.free; probe.free; peakBus.free;
+        command.(\clearBuffer, 2);
+        command.(\setGrainSource, 1, 0);
+        2.5.wait; server.sync;
+
+        // A burst of source switches (E3 scrolling) keeps at most one
+        // releasing grain synth per voice: each switch cuts the one an
+        // earlier switch left releasing, and the voice synths it released (F4)
+        before = synthNames.(context.xg).size;
+        names = synthNames.(context.xg);
+        grainBefore = names.count({ arg name; grainDefs.includes(name) });
+        voiceBefore = names.count({ arg name; voiceDefs.includes(name) });
+        [1, 2, 0, 9, 0, 3, 4, 0, 5, 6].do({ arg source; command.(\setGrainSource, 4, source) });
+        0.3.wait; server.sync;
+        names = synthNames.(context.xg);
+        grainCount = names.count({ arg name; grainDefs.includes(name) });
+        voiceCount = names.count({ arg name; voiceDefs.includes(name) });
+        check.(grainCount == (grainBefore + 1),
+            "10 source switches leave the live grain synth and one releasing (% grain synths, % before)".format(grainCount, grainBefore));
+        check.(voiceCount == (voiceBefore - 1),
+            "the voice synths the burst started and released are cut too (% voice synths, % before)".format(voiceCount, voiceBefore));
+        2.5.wait; server.sync;
+        names = synthNames.(context.xg);
+        check.(names.count({ arg name; grainDefs.includes(name) }) == grainBefore
+            and: { engine.fadingSynths[4].isEmpty } and: { engine.releasingSynths[4].isEmpty },
+            "after the release no grain synth is left over and nothing stays tracked (% grain synths, fading %, releasing %)".format(names.count({ arg name; grainDefs.includes(name) }), engine.fadingSynths[4], engine.releasingSynths[4]));
+        command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "the burst leaves no extra nodes");
+
         // voiceOn never stacks synths (M6; spec section 5 re-gate). A running
         // voice keeps its synths and takes the voiceOn values.
         before = synthNames.(context.xg).size;
@@ -712,15 +789,34 @@ server.waitForBoot({
         check.((synthNames.(context.xg).size == before) and: { after[0].isNil } and: { after[1] === oldTrio[1] }
             and: { after[2] === oldTrio[2] } and: { getControl.(after[1], \gate) == 1 }
             and: { getControl.(after[1], \grainSize).equalWithPrecision(0.3) }, "a buffer-sourced voice re-gates its grain and mod synths");
+        // The slot changes while the voice releases: the re-gated grain synth
+        // takes its new length and rate (M1). Slot 4 holds a 0.1 s take at the server rate.
+        command.(\voiceOff, 6); server.sync;
+        command.(\loadBuffer, 3, stereoPath); 0.3.wait; server.sync;    // 11025 frames at 22050 Hz
+        command.(\voiceOn, 6, 100.0, 0.25, 0.0, 0.3, 10.0, 1.0); server.sync;
+        after = voiceTrio.(6);
+        check.((after[1] === oldTrio[1]) and: { getControl.(after[1], \bufFrames) == 11025 }
+            and: { getControl.(after[1], \bufRateScale).equalWithPrecision(22050 / server.sampleRate) },
+            "a re-gated buffer grain synth takes a slot change made during its release (bufFrames %)".format(
+                getControl.(after[1], \bufFrames)));
 
         // A source switch while the voice is releasing: voiceOn builds the new
         // source's grain synth and re-gates the mod synth; the old voice and
         // grain synths finish within the grain release (no orphans)
         oldTrio = voiceTrio.(3);  // Sub: 12 s voice release
+        command.(\setGrainParam, 3, \grainMode, 1);
+        command.(\setGrainParam, 3, \envShape, 2);
         command.(\voiceOff, 3);
         command.(\setGrainSource, 3, 9);  // the input; only recorded: the voice is stopped
         command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
         after = voiceTrio.(3);
+        // voiceOn merges its values into the voice's grain controls, so a new
+        // grain synth starts in the voice's grain mode (no stray continuous grains; M2)
+        check.((getControl.(after[1], \grainMode) == 1) and: { getControl.(after[1], \envBuf) == engine.envBuffers[1].bufnum }
+            and: { getControl.(after[1], \grainSize).equalWithPrecision(0.1) },
+            "a grain synth built by voiceOn keeps the voice's grain mode and envelope, with voiceOn's size");
+        command.(\setGrainParam, 3, \grainMode, 0);
+        command.(\setGrainParam, 3, \envShape, 0);
         check.(after[0].isNil and: { after[1].defName == \strataGrain } and: { after[1] !== oldTrio[1] }
             and: { getControl.(after[1], \in) == engine.inputBus.index }
             and: { after[2] === oldTrio[2] }, "voiceOn after a source switch in the release builds the new grain synth, re-gates the mod synth");

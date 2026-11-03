@@ -33,10 +33,12 @@ Engine_Strata : CroneEngine {
     var <grainControls; // Per voice: grain synth controls, carried into a replacement
     var <releasingSynths;     // Per voice: released synths still in their release (key -> Synth), re-gated by voiceOn
     var <releasedGrainSource; // Per voice: the source its releasing grain synth was built for
+    var <fadingSynths;        // Per voice: grain and voice synths a source switch gated off, still releasing
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
     var <grainRelease = 2;        // Release time of both grain SynthDefs
+    var <switchCutTime = 0.05;    // Forced release of what an earlier source switch left releasing
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var writeGenerations;         // Per output path: the newest write's number; older writes abandon
@@ -96,6 +98,7 @@ Engine_Strata : CroneEngine {
         grainControls = Array.fill(numVoices, { Dictionary.new });
         releasingSynths = Array.fill(numVoices, { Dictionary.new });
         releasedGrainSource = Array.fill(numVoices, 0);
+        fadingSynths = Array.fill(numVoices, { IdentitySet.new });
 
         // SynthDefs
 
@@ -477,7 +480,7 @@ Engine_Strata : CroneEngine {
             posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
             grainMode=0, t_trig=0, velocity=1, accentAmt=0,
             mirrorOut=0, mirrorLevel=0, bend=1;
-            var sig, env, input, mode, grainTrigger, spreadLevel, accent;
+            var sig, env, input, mode, grainTrigger, spreadLevel, accent, left, right;
 
             env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
             // Accent for input-sourced voices; levelScale is sampled per
@@ -495,14 +498,15 @@ Engine_Strata : CroneEngine {
             grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
             spreadLevel = Select.kr(mode, [1, 0]);
 
-            sig = GrainIn.ar(
-                numChannels: 2,
-                trigger: grainTrigger,
-                dur: grainSize,
-                in: input,
-                pan: LFNoise1.kr(2).range(panSpread.neg, panSpread),
-                envbufnum: envBuf
-            );
+            // One mono GrainIn per input channel on a shared trigger, panned
+            // as a pair like strataGrainBuf. (A stereo GrainIn on a stereo
+            // input expands into two, each panning its own channel, which
+            // Out then folds back to one channel apiece: pan spread did
+            // nothing and the output path was doubled.) The voice's own pan
+            // is already in the voice synth's output.
+            left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf);
+            right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf);
+            sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
             // Position spread: a little of the input, smeared by a wandering delay
             sig = sig + (DelayC.ar(
@@ -549,7 +553,7 @@ Engine_Strata : CroneEngine {
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             velocity=1, mirrorOut=0;
             var sig, env, accent, mod1Sig, mod2Sig, mod3Sig, modSig, rateMod, modAmp;
-            var mode, grainTrigger, validFraction, scanPos, grainPos, rate, left, right;
+            var mode, grainTrigger, validFraction, scanPos, grainPos, rate, left, right, hasAudio;
 
             env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), gate, doneAction: 2);
             // Accent fired by retrigger; levelScale is sampled per trigger
@@ -584,7 +588,11 @@ Engine_Strata : CroneEngine {
                 timeDispersion: 0
             );
 
-            sig = sig * env * modAmp;
+            // Silent while the slot is empty or being recorded (bufFrames 0):
+            // every grain would read position 0 and loop the take's first grain
+            hasAudio = (bufFrames > 0).lag(0.05);
+
+            sig = sig * env * modAmp * hasAudio;
             Out.ar(out, sig);
             Out.ar(mirrorOut, sig);
         }).add;
@@ -689,9 +697,12 @@ Engine_Strata : CroneEngine {
                     \modAmpAmt1 -> 0, \modAmpAmt2 -> 0, \modAmpAmt3 -> 0,
                     \modFreqAmt1 -> 0, \modFreqAmt2 -> 0, \modFreqAmt3 -> 0
                 ];
-                grainControls[voice] = Dictionary[
+                // Merged into the grain controls the voice already has, so a
+                // grain synth voiceOn builds starts in the voice's grain mode,
+                // envelope and buffer position (Lua re-sends them right after)
+                grainControls[voice].putAll(Dictionary[
                     \grainSize -> msg[5], \grainDensity -> msg[6], \pitchShift -> msg[7]
-                ];
+                ]);
 
                 // Re-gates the synths the voice still has (running or
                 // releasing) and starts the missing ones; never stacks
@@ -948,7 +959,6 @@ Engine_Strata : CroneEngine {
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
         var args = [\out, mainBus, \mirrorOut, granBuses[voice]];
-        var slot;
 
         case
         { source == 0 } {
@@ -957,13 +967,18 @@ Engine_Strata : CroneEngine {
         { source == this.inputSource } {
             args = args ++ [\in, inputBus, \mirrorLevel, 1, \accentAmt, 1];
         }
-        {
-            slot = source - 1;
-            args = args ++ [\bufnumL, buffersL[slot].bufnum, \bufnumR, buffersR[slot].bufnum,
-                \bufFrames, bufferFrames[slot], \bufRateScale, this.bufferRateScale(slot)];
-        };
+        { args = args ++ this.bufferSlotPairs(voice) };
         ^this.watchVoiceSynth(voice, this.grainKey(voice),
             Synth(defName, args ++ this.grainControlPairs(voice), target, addAction))
+    }
+
+    // A buffer-sourced voice's slot as strataGrainBuf controls (bufnums,
+    // valid length, rate scale); empty for the synth and input sources
+    bufferSlotPairs { arg voice;
+        var slot = grainSource[voice] - 1;
+        if (grainSource[voice].inclusivelyBetween(1, numBuffers).not) { ^[] };
+        ^[\bufnumL, buffersL[slot].bufnum, \bufnumR, buffersR[slot].bufnum,
+            \bufFrames, bufferFrames[slot], \bufRateScale, this.bufferRateScale(slot)]
     }
 
     // A new grain synth for the voice's source, beside one that is going
@@ -1010,7 +1025,8 @@ Engine_Strata : CroneEngine {
             oldGrain = if (stillReleasing.(grainKey)) { releasing[grainKey] };
             synths[grainKey] = this.startGrainSynthBeside(voice, oldGrain);
         } {
-            synths[grainKey].set(\gate, 1, *this.grainControlPairs(voice));
+            // with the slot as it is now: bufferChanged only reaches running grain synths
+            synths[grainKey].set(\gate, 1, *(this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice)));
         };
 
         if (synths[modKey].isNil and: { stillReleasing.(modKey) }) { synths[modKey] = releasing.removeAt(modKey) };
@@ -1027,6 +1043,7 @@ Engine_Strata : CroneEngine {
         synth.register(true);  // playing from now on, so gateVoice can re-gate it at once
         synth.onFree({
             if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
+            fadingSynths[voice].remove(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case
@@ -1041,16 +1058,26 @@ Engine_Strata : CroneEngine {
     }
 
     // Swap a running voice's grain synth for one matching its source: the
-    // old one is gated off (grainRelease) as the new one starts, so one
+    // old one is released (grainRelease) as the new one starts, so one
     // voice never runs two grain paths beyond that release. A grain synth
     // that reads the voice bus is placed before the releasing one and one
     // that mirrors into it after, so neither re-grains the other's mirror.
+    // Whatever an earlier switch (or a voiceOff the voice was restarted
+    // from) left releasing is cut short first, so scrolling through the
+    // sources keeps at most one releasing grain synth per voice.
     replaceGrainSynth { arg voice;
         var oldGrain = synths.removeAt(this.grainKey(voice));
         var voiceSynth;
 
+        this.cutFadingSynths(voice);
         synths[this.grainKey(voice)] = this.startGrainSynthBeside(voice, oldGrain);
-        if (oldGrain.notNil) { oldGrain.set(\gate, 0) };
+        if (oldGrain.notNil) {
+            // A forced release (gate -1 - time): a plain gate 0 that reaches
+            // a synth created in the same control block (a fast burst of
+            // switches) finds its envelope never started, and it never frees
+            oldGrain.release(grainRelease);
+            fadingSynths[voice].add(oldGrain);
+        };
 
         if (grainSource[voice] == 0) {
             if (synths[this.voiceKey(voice)].isNil) {
@@ -1060,8 +1087,25 @@ Engine_Strata : CroneEngine {
             // Its sound only reaches the output through the old grain synth,
             // so it releases with it instead of over its own (up to 12 s) release
             voiceSynth = synths.removeAt(this.voiceKey(voice));
-            if (voiceSynth.notNil) { voiceSynth.release(grainRelease) };
+            if (voiceSynth.notNil) {
+                voiceSynth.release(grainRelease);
+                fadingSynths[voice].add(voiceSynth);
+            };
         };
+    }
+
+    // Cut (switchCutTime) the voice's grain and voice synths that are still
+    // releasing and no longer used: those a source switch gated off, and
+    // those voiceOff released that voiceOn did not re-gate (built for
+    // another source). The running voice's synths are never among them.
+    cutFadingSynths { arg voice;
+        var releasing = releasingSynths[voice];
+        [this.voiceKey(voice), this.grainKey(voice)].do({ arg key;
+            var synth = releasing.removeAt(key);
+            if (synth.notNil) { fadingSynths[voice].add(synth) };
+        });
+        fadingSynths[voice].do({ arg synth; if (synth.isPlaying) { synth.release(switchCutTime) } });
+        fadingSynths[voice].clear;
     }
 
     bufferStateValue { arg index;
