@@ -842,6 +842,29 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
   assert_near(params:get("v1_freq"), 1000, 1.0, "cancelled transition no longer writes")
 end)
 
+test("a smooth scene transition holds filter_type until the fade ends", function()
+  local context = load_strata()
+  -- the filter freq fades, so setFilter goes out on every step
+  params:set("filter_type", 3); params:set("filter_freq", 8000)
+  capture_scene(1)
+  params:set("filter_type", 1); params:set("filter_freq", 200)
+  local function last_filter_type()
+    local calls = context.calls_named("setFilter")
+    return calls[#calls].args[3]
+  end
+
+  recall_scene(1, 20)  -- 20 steps; the first runs immediately, the switch after the last
+  for step = 1, 20 do
+    assert_equal(params:get("filter_type"), 1, "filter_type at step " .. step)
+    assert_equal(last_filter_type(), 0, "engine filter type at step " .. step)
+    context.clock.advance()
+  end
+  assert_equal(local_value("scene_transition_active"), false, "transition finished")
+  assert_equal(params:get("filter_type"), 3, "filter_type lands on the target")
+  assert_equal(last_filter_type(), 2, "engine filter type lands on the target")
+  assert_near(params:get("filter_freq"), 8000, 1.0, "the filter freq faded to its target")
+end)
+
 local text_width = stubs.text_width
 
 local function text_span(entry)
@@ -969,7 +992,17 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   local context = load_strata(); context.clock.advance()
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
-  enc(1, 4); arc_redraw()
+  -- rings drawn (with at least one segment) on each page: SETUP none
+  local expected_rings = { 4, 4, 4, 4, 0 }
+  for page = 1, #PAGE_TITLES do
+    show_page(page); arc_redraw()
+    local drawn = 0
+    for ring in pairs(device.segments) do
+      assert_true(ring >= 1 and ring <= 4, "ring " .. tostring(ring) .. " exists (" .. PAGE_TITLES[page] .. ")")
+      drawn = drawn + 1
+    end
+    assert_equal(drawn, expected_rings[page], PAGE_TITLES[page] .. " rings drawn")
+  end
   assert_equal(next(device.segments), nil, "SETUP page draws no rings")
 end)
 
@@ -1436,9 +1469,64 @@ test("stub params store norns' numeric type constants in param.t", function()
   end
 end)
 
+test("stub param type codes come from one table; an unknown type is an error", function()
+  load_strata()
+  local codes = stubs.PARAM_TYPE_CODES
+  assert_true(type(codes) == "table", "the stub exports PARAM_TYPE_CODES")
+  local count = 0
+  for name, code in pairs(codes) do
+    assert_equal(params["t" .. name:upper()], code, "params.t" .. name:upper() .. " from PARAM_TYPE_CODES")
+    count = count + 1
+  end
+  local constants = 0
+  for key in pairs(getmetatable(params)) do
+    if type(key) == "string" and key:match("^t%u+$") then
+      assert_true(codes[key:sub(2):lower()] ~= nil, "params." .. key .. " is in PARAM_TYPE_CODES")
+      constants = constants + 1
+    end
+  end
+  assert_equal(constants, count, "one params.tX constant per PARAM_TYPE_CODES entry")
+  -- the codes are written down once: no literal tX = <n> outside the table
+  local file = assert(io.open(test_dir .. "/norns_stubs.lua", "r")); local source = file:read("*a"); file:close()
+  assert_true(not source:find("t%u+%s*=%s*%d"), "no type code assigned outside PARAM_TYPE_CODES")
+  for _, bad_type in ipairs({ "bogus", "taper" }) do
+    local ok, message = pcall(function() params:add { id = "stub_" .. bad_type, type = bad_type } end)
+    assert_true(not ok, "params:add with type " .. bad_type .. " raises an error")
+    assert_true(tostring(message):find(bad_type, 1, true), "the error names the type " .. bad_type)
+    assert_equal(params.lookup["stub_" .. bad_type], nil, "nothing registered for type " .. bad_type)
+  end
+  assert_true(not pcall(function() params:add { id = "stub_untyped" } end), "params:add without a type raises an error")
+end)
+
+-- The first place source compares a param type (x.t) with a string literal,
+-- either way round and with either quote, or nil
+local function param_type_string_comparison(source)
+  local patterns = {
+    "[%w_%]%)]%.t%s*[=~]=%s*[\"']",            -- p.t == "option"
+    "[\"']%s*[=~]=%s*[%w_%.:%(%)%[%]]-%.t%f[^%w_]", -- "option" == p.t
+  }
+  for _, pattern in ipairs(patterns) do
+    local start, finish = source:find(pattern)
+    if start then return source:sub(start, finish) end
+  end
+  return nil
+end
+
 test("strata.lua never compares a param type with a string", function()
+  -- the check catches both quotes and both orders, and nothing else
+  local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',
+    'if "option" == p.t then', "if 'control' ~= params:lookup_param(id).t then", 'x = ("trigger" == p.t)' }
+  for _, line in ipairs(caught) do
+    assert_true(param_type_string_comparison(line), "caught: " .. line)
+  end
+  local allowed = { "if p.t == params.tOPTION then", 'if p.text == "option" then', 'if "option" == p.text then',
+    'if p.type == "option" then', 'local s = "a.t == b"', "if params.tOPTION == p.t then" }
+  for _, line in ipairs(allowed) do
+    assert_equal(param_type_string_comparison(line), nil, "allowed: " .. line)
+  end
   local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
-  assert_true(not source:find('%.t%s*[=~]=%s*"'), "param.t is numeric on norns; compare with params.tX")
+  local found = param_type_string_comparison(source)
+  assert_equal(found, nil, "param.t is numeric on norns; compare with params.tX")
 end)
 
 test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()
@@ -1614,6 +1702,55 @@ test("voice off mode: the voice stops when its last held note is released", func
   context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 1 })
   context.midi.send(1, { type = "note_off", note = 50, vel = 0, ch = 1 })
   assert_true(voices[5].active, "ignore: note off does nothing")
+end)
+
+test("a MIDI-held voice stopped another way: its note off changes nothing and leaves nothing held", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = local_value("voices")
+  local midi_state = local_value("midi_state")
+  context.grid.plug(1, 16, 16)
+  params:set("midi_note_off", 2)
+  for voice_idx = 1, 7 do
+    if voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  capture_scene(1)   -- every voice off
+  local function assert_nothing_held(voice_idx, channel, note, where)
+    assert_equal(next(midi_state.held[voice_idx]), nil, where .. ": no note held on voice " .. voice_idx)
+    local channel_notes = midi_state.note_voice[channel]
+    assert_equal(channel_notes and channel_notes[note], nil, where .. ": note " .. note .. " not mapped")
+  end
+  -- K3 (and the arc button) never stop a running voice: on a held voice K3
+  -- freezes it, and the note off then stops it as voice off mode says
+  local _, set_selected = find_upvalue("selected_voice"); set_selected(2)
+  show_page(1)
+  context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
+  key(3, 1); key(3, 0)
+  assert_true(voices[2].active and local_value("frozen")[2], "K3 freezes the held voice, it does not stop it")
+  context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
+  assert_true(not voices[2].active, "K3: the note off stops the frozen voice")
+  assert_nothing_held(2, 2, 62, "K3")
+  toggle_freeze(2)
+  local stoppers = {
+    { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 8 + 4, 14, 1) end },
+    { name = "scene recall", voice = 6, stop = function() recall_scene(1, 0) end },
+  }
+  for _, stopper in ipairs(stoppers) do
+    local voice_idx = stopper.voice
+    context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = voice_idx })
+    assert_true(voices[voice_idx].active, stopper.name .. ": the note started the voice")
+    assert_true(midi_state.held[voice_idx][60], stopper.name .. ": note 60 held")
+    stopper.stop()
+    assert_true(not voices[voice_idx].active, stopper.name .. ": the voice stopped")
+    context.clear_engine_calls()
+    local frozen = deep_copy(local_value("frozen"))
+    context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = voice_idx })
+    assert_equal(#context.engine_calls, 0, stopper.name .. ": the note off sends nothing")
+    for other = 1, 7 do
+      assert_true(not voices[other].active, stopper.name .. ": voice " .. other .. " still off")
+      assert_equal(local_value("frozen")[other], frozen[other], stopper.name .. ": voice " .. other .. " freeze unchanged")
+    end
+    assert_nothing_held(voice_idx, voice_idx, 60, stopper.name)
+  end
 end)
 
 test("pitchbend: range, buffer voices, stopped voices, restarts and resets", function()
@@ -2121,6 +2258,28 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(local_value("buffers_restored"), 1)
 end)
 
+test("a buffer cleared before exit is saved empty and not restored", function()
+  local context = load_strata({ data_subdir = "buf_cleared" })
+  local kept_file, cleared_file = context.audio_dir .. "kept.wav", context.audio_dir .. "cleared.wav"
+  io.open(kept_file, "w"):close(); io.open(cleared_file, "w"):close()
+  load_buffer(2, kept_file); load_buffer(6, cleared_file)
+  cleanup()
+  context = load_strata({ data_subdir = "buf_cleared" })
+  assert_equal(#context.calls_named("loadBuffer"), 2, "both files restored")
+  clear_buffer(6)
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[6], "", "the cleared slot is saved as an empty path")
+  assert_equal(saved.paths[2], kept_file, "the other slot keeps its file")
+  context = load_strata({ data_subdir = "buf_cleared" })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "only the kept slot is restored")
+  assert_equal(loads[1].args[1], 1); assert_equal(loads[1].args[2], kept_file)
+  local buffers = local_value("buffers")
+  assert_equal(buffers[6].name, "empty", "the cleared slot starts empty")
+  assert_equal(buffers[6].path, nil, "the cleared slot has no path")
+end)
+
 test("a buffers file that fails to load does not stop init and survives cleanup", function()
   local bad_files = {
     { name = "wrong version", content = "return { version = 99, paths = {} }" },
@@ -2449,6 +2608,23 @@ test("bufferState poll redraws the screen and the grid's buffer page", function(
   assert_true(device.refresh_count > refreshes, "grid page 4 redrawn")
 end)
 
+test("bufferState poll ignores NaN, infinities and out-of-range slots", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  local buffers = local_value("buffers")
+  context.polls.fire("bufferState", 304)   -- slot 4 holds 4 s
+  local before = deep_copy(buffers)
+  for _, value in ipairs({ 0 / 0, math.huge, -math.huge, -1, 800 }) do
+    local ok, message = pcall(context.polls.fire, "bufferState", value)
+    assert_true(ok, "poll value " .. tostring(value) .. " raises no error: " .. tostring(message))
+    for slot = 1, 8 do
+      assert_equal(buffers[slot].seconds, before[slot].seconds, "poll value " .. tostring(value) .. ", slot " .. slot .. " seconds")
+    end
+    assert_equal(rawget(buffers, 0), nil, "no slot 0 after " .. tostring(value))
+    assert_equal(rawget(buffers, 9), nil, "no slot 9 after " .. tostring(value))
+  end
+  redraw(); assert_screen_layout(context, "BUFFER page after bad poll values")
+end)
+
 test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   local device = context.arc.plug(1)
@@ -2472,8 +2648,11 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
   assert_equal(device.segments[4].level, 12, "record rings stay lit")
   -- the selected voice follows E2
-  enc(2, 1); context.arc.turn(1, 1, 20)
-  assert_true(params:get("v2_buf_pos") > 0, "ring 1 follows the selected voice")
+  enc(2, 1)
+  local position = params:get("v2_buf_pos"); local voice1_position = params:get("v1_buf_pos")
+  context.arc.turn(1, 1, 20)
+  assert_true(params:get("v2_buf_pos") > position, "ring 1 follows the selected voice")
+  assert_equal(params:get("v1_buf_pos"), voice1_position, "the previous voice's buf_pos is left alone")
 end)
 
 test("grid page 4 buffer rows record, clear and set sources with LED feedback", function()
@@ -2522,7 +2701,6 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   -- the FX faders are still on rows 3-7
   context.grid.press(1, 16, 7, 1); assert_near(params:get("delay_mix"), 1, 1e-6, "row 7 delay mix")
   -- out-of-range columns do nothing
-  local before = deep_copy(local_value("buffers"))
   context.clear_engine_calls()
   context.grid.press(1, 9, 1, 1); context.grid.press(1, 12, 2, 1); context.grid.press(1, 13, 11, 1)
   assert_equal(#context.engine_calls, 0, "columns past the buffers/sources send nothing")
@@ -2600,12 +2778,6 @@ test("main destination follows a voice's source and restores the old param", fun
   local voice_calls = context.calls_named("setVoiceParam")
   assert_equal(voice_calls[1].args[2], "freq"); assert_near(voice_calls[1].args[3], params:get("v1_freq"), 1e-9)
   assert_equal(local_value("lfo_last_dest")[2], "v1_buf_pos")
-end)
-
-test("LFO page draws three rows inside the screen and cleanup stops LFOs", function()
-  local context = load_strata(); context.clock.advance(); enc(1, 2); redraw()
-  for _, entry in ipairs(context.screen.texts) do local l, r = text_span(entry); assert_true(l >= 0 and r <= 128 and entry.y <= 64) end
-  params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1)
 end)
 
 test("LFO restores the stored value when its depth reaches 0 or its destination changes", function()
@@ -2752,13 +2924,23 @@ local function lfo_row_drawing(context, n)
   return row
 end
 
-test("LFO page rows: waveform, dot from the last raw value and elapsed period, labels", function()
+test("LFO page rows: waveform, dot from the last raw value and elapsed period, labels; cleanup stops LFOs", function()
   local context = load_strata(); context.clock.advance()
   local lfos = local_value("lfos")
   context.set_time(100)
   params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
   context.lfo.tick(lfos[1], 0.25)
   show_page(3)
+  -- three rows, each labelled, and every string inside the screen
+  for n = 1, 3 do
+    local row = lfo_row_drawing(context, n)
+    assert_true(table.concat(row.texts, " "):find("L" .. n, 1, true), "row " .. n .. " labelled L" .. n)
+    assert_true(#row.lines >= 63, "row " .. n .. " draws its waveform")
+  end
+  for _, entry in ipairs(context.screen.texts) do
+    local left, right = text_span(entry)
+    assert_true(left >= 0 and right <= 128 and entry.y <= 64, "'" .. entry.text .. "' inside the screen")
+  end
   -- every drawn shape stays inside its row, rows inside y 14-58
   for _, line in ipairs(context.screen.lines) do
     assert_true(line.y1 >= 14 and line.y2 <= 58 and line.y2 >= 14 and line.y1 <= 58, "line inside y 14-58")
@@ -2799,6 +2981,8 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
       end
     end
   end
+  -- cleanup turns a running LFO off
+  params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1, "cleanup stops LFO 3")
 end)
 
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
