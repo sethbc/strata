@@ -1,0 +1,65 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lua:
+    name: lua
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
+      - name: Install Lua 5.3 and LuaJIT
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.3 luajit
+
+      - name: Behaviour tests (Lua 5.3)
+        run: lua5.3 test/run.lua
+
+      - name: Behaviour tests (LuaJIT)
+        run: luajit test/run.lua
+
+      - name: Lua / engine command sync check
+        run: lua5.3 test/sync_check.lua
+
+  engine:
+    name: engine
+    runs-on: ubuntu-24.04
+    env:
+      # the norns commit the engine is compiled against (sc/core classes)
+      NORNS_REF: 227aa044
+      NORNS_DIR: ${{ github.workspace }}/norns
+      QT_QPA_PLATFORM: offscreen
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out norns
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/monome/norns.git "$NORNS_DIR"
+          git -C "$NORNS_DIR" checkout "$NORNS_REF"
+
+      - name: Install SuperCollider and JACK
+        run: |
+          echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
+          sudo apt-get update
+          sudo apt-get install -y jackd2 supercollider-language supercollider-server
+
+      # scsynth talks to JACK; a dummy driver needs no sound card
+      - name: Start JACK (dummy driver)
+        run: |
+          jackd --no-realtime -d dummy -r 48000 -p 1024 > "$RUNNER_TEMP/jackd.log" 2>&1 &
+          for i in $(seq 1 20); do jack_lsp > /dev/null 2>&1 && exit 0; sleep 0.5; done
+          cat "$RUNNER_TEMP/jackd.log"; exit 1
+
+      - name: Engine check
+        run: SCLANG="$(command -v sclang)" timeout 600 test/run_engine_check.sh "$NORNS_DIR"
