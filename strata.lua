@@ -9,7 +9,6 @@
 
 engine.name = "Strata"
 
-local MusicUtil = require "musicutil"
 local UI = require "ui"
 
 -- Constants
@@ -203,13 +202,11 @@ local voices = {
 }
 
 local selected_voice = 1
-local selected_param = 1
 local master_density = 1.0
 local frozen = {false, false, false, false, false, false, false}
 
 -- UI
 local voice_list
-local param_names = {}
 
 -- LFOs for parameter modulation
 local lfo_metro
@@ -234,13 +231,12 @@ local scene_sequencer_clock = nil
 local scene_transition_active = false
 local scene_transition_clock = nil  -- Track transition clock for cancellation
 
--- Arc device
-local a = nil
+-- Arc device (the arc vport from arc.connect)
+local arc_device = nil
 local arc_connected = false
 
 -- Grid devices (support multiple grids)
 local grids = {}
-local grid_dirty = true
 
 -- Pattern sequencer
 local patterns = {}
@@ -253,7 +249,6 @@ local pattern_clock = nil
 local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes
 local param_page = 1
 local grid_voice_select = 1
-local grid_key1_held = false  -- Track K1 hold for scene save
 
 -- Initialize patterns for each voice
 for i = 1, NUM_VOICES do
@@ -758,7 +753,7 @@ function get_param_spec(param_name)
     noise = controlspec.new(0, 1, "lin", 0.01, 0.5),
     mod1 = controlspec.new(0.01, 1, "lin", 0.01, 0.1),
     mod2 = controlspec.new(0.01, 1, "lin", 0.01, 0.15),
-    ratio = controlspec.new(0.5, 8, "lin", 0.1, 1.5),
+    ratio = controlspec.new(0.5, 8, "lin", 0.001, 1.5),  -- fine step: Ring defaults to 1.618
     index = controlspec.new(0, 10, "lin", 0.1, 2),
     modFreq = controlspec.new(0.01, 1, "lin", 0.01, 0.05),
     fold = controlspec.new(0.1, 5, "lin", 0.1, 1),
@@ -1409,8 +1404,8 @@ function redraw()
   screen.move(0, 8)
   screen.text("STRATA")
 
-  -- Master density (top right)
-  screen.move(70, 8)
+  -- Master density (header, after the title; ends well before [M] at x=98)
+  screen.move(36, 8)
   screen.level(4)
   screen.text("dens:" .. string.format("%.2f", master_density))
 
@@ -1435,27 +1430,26 @@ function redraw()
   local status = v.active and "ON" or "OFF"
   screen.text(status)
   if frozen[selected_voice] then
-    screen.move(90, 26)
+    screen.move(127, 26)
     screen.level(8)
-    screen.text("[FREEZE]")
+    screen.text_right("[FREEZE]")
   end
 
-  -- Mutation indicator (top right, after freeze status)
+  -- Mutation indicator (header, between density and scene)
   if params:get("mutation_enabled") == 1 then
-    screen.move(105, 8)
+    screen.move(98, 8)
     screen.level(6)
     screen.text("[M]")
   end
 
-  -- Scene indicator
+  -- Scene indicator (right-aligned to the screen edge)
   if current_scene > 0 then
-    screen.move(115, 8)
+    screen.move(127, 8)
     screen.level(scene_sequencer_enabled and 10 or 6)
-    screen.text("S" .. current_scene)
+    screen.text_right("S" .. current_scene)
   end
 
   -- Modulation sources display
-  local v = voices[selected_voice]
   local mod_sources = {}
   if v.crossmod.slot1.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot1.source) end
   if v.crossmod.slot2.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot2.source) end
@@ -1509,32 +1503,32 @@ function redraw()
 end
 
 -- Arc functions
+
+-- Arc handlers live on the vport only (as for grids): norns fires both
+-- device.delta/key and vports[port].delta/key, so setting them on the device
+-- as well would run every turn twice.
+local function attach_arc(port)
+  arc_device = arc.connect(port)
+  arc_device.delta = arc_delta
+  arc_device.key = arc_key
+  arc_connected = arc_device.device ~= nil
+end
+
 function arc_init()
-  a = arc.connect()
-  if a and a.device then
-    a.delta = arc_delta
-    a.key = arc_key
-    arc_connected = true
+  attach_arc(1)
+  if arc_connected then
     arc_redraw()
   end
 end
 
 function arc.add(device)
-  -- Prevent duplicate initialization
-  if arc_connected and a and a.device then
-    return
-  end
-  arc_connected = true
-  a = device
-  a.delta = arc_delta
-  a.key = arc_key
+  attach_arc(device.port or 1)
   arc_redraw()
   print("arc connected")
 end
 
-function arc.remove()
+function arc.remove(device)
   arc_connected = false
-  a = nil
   print("arc disconnected")
 end
 
@@ -1584,13 +1578,13 @@ function arc_key(n, s)
 end
 
 function arc_redraw()
-  if a == nil then return end
+  if arc_device == nil or arc_device.device == nil then return end
 
-  a:all(0)
+  arc_device:all(0)
 
   -- Ring 1: Master density (0.1 to 2.0)
   local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
-  a:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
+  arc_device:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
 
   -- Ring 2: Selected voice's main parameter
   local v = voices[selected_voice]
@@ -1629,17 +1623,17 @@ function arc_redraw()
   end
 
   local param_pos = util.linlin(param_min, param_max, 0, 64, param_val)
-  a:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
+  arc_device:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
 
   -- Ring 3: Grain size (0.01 to 0.5)
   local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
-  a:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
+  arc_device:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
 
   -- Ring 4: Grain density (1 to 100)
   local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
-  a:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
+  arc_device:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
 
-  a:refresh()
+  arc_device:refresh()
 end
 
 -- Grid functions
@@ -2025,11 +2019,9 @@ function pattern_clock_start()
         end
       end
 
-      -- Advance pattern position
-      pattern_position = pattern_position % pattern_length + 1
-
-      grid_dirty = true
+      -- Show the step that just played, then advance
       grid_redraw()
+      pattern_position = pattern_position % pattern_length + 1
 
       -- Wait for next step based on tempo
       clock.sync(1/4)  -- 16th notes
@@ -2043,7 +2035,6 @@ function pattern_clock_stop()
     clock.cancel(pattern_clock)
     pattern_clock = nil
   end
-  grid_dirty = true
   grid_redraw()
 end
 
@@ -2318,18 +2309,28 @@ function cleanup()
   end
 
   pattern_clock_stop()
+
+  -- Stop the scene sequencer through its param so param and state agree
+  params:set("scene_sequencer_enabled", 0)
   scene_sequencer_stop()
 
   -- Cancel any active transition clock
-  if scene_transition_clock then
-    clock.cancel(scene_transition_clock)
-    scene_transition_clock = nil
-  end
+  cancel_scene_transition()
 
   -- Turn off all voices
   for i = 1, NUM_VOICES do
     if voices[i].active then
       engine.voiceOff(i - 1)
     end
+  end
+
+  -- Leave connected controllers dark
+  for _, grid_port in pairs(grids) do
+    grid_port:all(0)
+    grid_port:refresh()
+  end
+  if arc_device then
+    arc_device:all(0)
+    arc_device:refresh()
   end
 end
