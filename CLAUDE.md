@@ -619,7 +619,7 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 #### Disk Persistence
 - **Storage Location**: `~/dust/data/strata/scenes.data`
 - **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}`. A file with a different version is rejected; pre-2.1 files (a bare scenes array) load as version 1
-- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, wrong version, invalid data) it prints a message and keeps the current scenes (empty at startup); missing slots in a valid file are filled with empty scenes
+- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, wrong version, invalid data) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
 - **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
 - **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
 - **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
@@ -819,7 +819,7 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - Voices auto-activate when pattern step triggers them
 - Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
 - Grid pages allow switching between pattern sequencing and parameter control
-- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which sets `util.linlin(1, 16, min, max, x)` via `params:set` (number params rounded). Voices have 4-5 fader pages
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which sets `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources); `fader_position()` is the inverse (`spec:unmap(value) * 15 + 1`). All through `params:set`. Voices have 4-5 fader pages
 
 ### Arc Integration (Optional)
 

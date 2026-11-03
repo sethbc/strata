@@ -166,7 +166,7 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 
 **Rows 9-12: Parameter Faders** (Page 2)
 - Each row is a fader for one parameter of the voice selected in row 14
-- Press a column to set the value: column 1 = minimum, column 16 = maximum
+- Press a column to set the value: column 1 = minimum, column 16 = maximum, following each parameter's curve (frequency and cutoff faders are exponential, so low frequencies get as many columns as high ones)
 - The row lights up to the current value (dim bar, bright value position)
 - Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch and spread, then source / amp mod / freq mod for cross-modulation slots 1-3
 
@@ -357,7 +357,7 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Scene duration (4-120 seconds)
 - Scene sequence length (1-8 scenes)
 - Save scenes to disk (manual trigger)
-- Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console and the current scenes are kept)
+- Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to `scenes.data.bak` so it is not overwritten when the script exits)
 
 ### Reverb Section
 - Mix

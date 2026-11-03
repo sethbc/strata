@@ -307,6 +307,18 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   assert_equal(device:get_led(9, 11), 0, "nothing above the value")
   assert_equal(device:get_led(16, 9), 15, "freq at max")
   assert_equal(device:get_led(1, 13), 15, "row 13 shows page 1 selected")
+
+  -- exponential params follow their warp: freq (20-2000 Hz exp)
+  press(1, 14)  -- select voice 1 (resonator)
+  press(8, 9)   -- freq fader, column 8
+  assert_near(params:get("v1_freq"), 20 * (2000 / 20) ^ (7 / 15), 1.0, "column 8 on an exp fader")
+  assert_equal(device:get_led(8, 9), 15, "exp fader shows its value at column 8")
+  press(4, 14)  -- select voice 4 (sub), freq 40 Hz
+  assert_near(params:get("v4_freq"), 40, 1e-9, "sub freq default")
+  local sub_column = fader_position("v4_freq")
+  assert_true(sub_column > 1, "40 Hz shows above column 1 (got " .. sub_column .. ")")
+  assert_equal(device:get_led(sub_column, 9), 15, "sub freq LED at its column")
+  press(2, 14)  -- back to voice 2 (fm)
   assert_equal(device:get_led(5, 13), 4, "row 13 shows page 5 available")
   assert_equal(device:get_led(6, 13), 0, "no page 6")
 
@@ -492,6 +504,60 @@ test("scene files: round trip, version check, missing slots, erroring file", fun
   for slot = 3, 8 do assert_true(scenes[slot] and scenes[slot].populated == false, "filled slot " .. slot) end
   recall_scene(2, 0)
   grid_redraw()
+end)
+
+test("a scenes file that fails to load survives cleanup (fix round 1)", function()
+  local bad_files = {
+    { name = "wrong version", content = "return { version = 99, scenes = {} }" },
+    { name = "raises on load", content = 'error("corrupt scenes file")' },
+  }
+  -- a versioned file with one bad slot (validate_scene_data rejects it whole)
+  local context = load_strata({ data_subdir = "survive_source" })
+  capture_scene(1)
+  capture_scene(2)
+  local scenes = deep_copy(local_value("scenes"))
+  scenes[2].data.frozen = nil
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  local bad_slot_path = context.data_dir .. "bad_slot.data"
+  context.tab.save({ version = 1, scenes = scenes }, bad_slot_path)
+  local bad_slot_file = assert(io.open(bad_slot_path, "r"))
+  table.insert(bad_files, { name = "one bad slot", content = bad_slot_file:read("*a") })
+  bad_slot_file:close()
+
+  for index, bad in ipairs(bad_files) do
+    local subdir = "survive_" .. index
+    local data_dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. data_dir .. "'")
+    local file = assert(io.open(data_dir .. "scenes.data", "w"))
+    file:write(bad.content)
+    file:close()
+
+    context = load_strata({ data_subdir = subdir })  -- init's load fails
+    for slot = 1, 8 do
+      assert_true(local_value("scenes")[slot].populated == false, bad.name .. ": scenes empty after failed load")
+    end
+    capture_scene(3)  -- new work after the failed load
+    cleanup()
+    local backup = io.open(data_dir .. "scenes.data.bak", "r")
+    assert_true(backup ~= nil, bad.name .. ": original kept as scenes.data.bak")
+    assert_equal(backup:read("*a"), bad.content, bad.name .. ": backup content unchanged")
+    backup:close()
+    -- the new save is a valid file again
+    context = load_strata({ data_subdir = subdir })
+    assert_true(local_value("scenes")[3].populated, bad.name .. ": new work saved on exit")
+  end
+
+  -- if the file cannot be moved aside, cleanup must not overwrite it
+  local data_dir = data_root .. "survive_blocked/strata/"
+  os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak/occupied'")  -- rename target is a non-empty dir
+  local file = assert(io.open(data_dir .. "scenes.data", "w"))
+  file:write(bad_files[1].content)
+  file:close()
+  load_strata({ data_subdir = "survive_blocked" })
+  cleanup()
+  file = assert(io.open(data_dir .. "scenes.data", "r"))
+  assert_equal(file:read("*a"), bad_files[1].content, "unmovable bad file not overwritten by cleanup")
+  file:close()
 end)
 
 test("scene transitions crossfade linearly from snapshotted start values (I6)", function()

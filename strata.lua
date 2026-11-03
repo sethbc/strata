@@ -1203,6 +1203,10 @@ end
 -- Scene disk persistence
 local scene_data_dir = _path.data .. "strata/"
 local scene_data_file = scene_data_dir .. "scenes.data"
+local scene_backup_file = scene_data_file .. ".bak"
+-- Set when a scenes file could not be loaded and could not be moved aside:
+-- cleanup() must then not overwrite it with the (empty) in-memory scenes
+local scene_autosave_blocked = false
 
 function save_scenes_to_disk()
   -- Ensure data directory exists
@@ -1215,8 +1219,22 @@ function save_scenes_to_disk()
   print("scenes saved to " .. scene_data_file)
 end
 
+-- A scenes file that failed to load must survive the save in cleanup():
+-- move it to scenes.data.bak, or, if that fails, block the auto-save.
+local function preserve_unloadable_scene_file()
+  local moved, move_error = os.rename(scene_data_file, scene_backup_file)
+  if moved then
+    print("unloadable scenes file kept as " .. scene_backup_file)
+  else
+    scene_autosave_blocked = true
+    print("could not move unloadable scenes file (" .. tostring(move_error) ..
+      "); scenes will not be auto-saved on exit")
+  end
+end
+
 -- Load scenes from disk. On any problem the current scenes (empty at
--- startup) are kept and a message is printed; a bad file never stops init.
+-- startup) are kept, a message is printed and the file is preserved; a bad
+-- file never stops init.
 function load_scenes_from_disk()
   if not util.file_exists(scene_data_file) then
     print("no saved scenes file found")
@@ -1227,10 +1245,12 @@ function load_scenes_from_disk()
   local ok, loaded, load_error = pcall(tab.load, scene_data_file)
   if not ok then
     print("error: scenes file could not be read (" .. tostring(loaded) .. "), keeping current scenes")
+    preserve_unloadable_scene_file()
     return
   end
   if type(loaded) ~= "table" then
     print("error loading scenes file: " .. tostring(load_error))
+    preserve_unloadable_scene_file()
     return
   end
 
@@ -1239,6 +1259,7 @@ function load_scenes_from_disk()
     if loaded.version ~= SCENE_DATA_VERSION then
       print("error: scenes file has version " .. tostring(loaded.version) ..
         ", expected " .. SCENE_DATA_VERSION)
+      preserve_unloadable_scene_file()
       return
     end
     scene_table = loaded.scenes
@@ -1249,6 +1270,7 @@ function load_scenes_from_disk()
 
   if not validate_scene_data(scene_table) then
     print("error: scene file corrupted or incompatible version")
+    preserve_unloadable_scene_file()
     return
   end
 
@@ -1258,6 +1280,7 @@ function load_scenes_from_disk()
     loaded_scenes[i] = scene_table[i] or empty_scene(i)
   end
   scenes = loaded_scenes
+  scene_autosave_blocked = false
   print("scenes loaded from " .. scene_data_file)
 
   -- Update grid display if grids are connected
@@ -1955,20 +1978,29 @@ function param_range(param_id)
   return param.min, param.max
 end
 
--- Grid column x (1-16) sets a fader's param linearly across its range
+-- Grid column x (1-16) sets a fader's param across its range. Control params
+-- follow their controlspec warp (exp for freq, cutoff, mod speed); number
+-- params (mod sources) map linearly to integers.
 function set_fader_param(voice_idx, fader_index, x)
   local param_id = fader_param_ids(voice_idx)[fader_index]
   if not param_id then return end
-  local minval, maxval = param_range(param_id)
-  local value = util.linlin(1, GRID_FADER_WIDTH, minval, maxval, x)
-  if not params:lookup_param(param_id).controlspec then
-    value = util.round(value)  -- number params (mod sources) are integers
+  local spec = params:lookup_param(param_id).controlspec
+  local value
+  if spec then
+    value = spec:map((x - 1) / (GRID_FADER_WIDTH - 1))
+  else
+    local minval, maxval = param_range(param_id)
+    value = util.round(util.linlin(1, GRID_FADER_WIDTH, minval, maxval, x))
   end
   params:set(param_id, value)
 end
 
 -- Grid column (1-16) that shows a fader param's current value
 function fader_position(param_id)
+  local spec = params:lookup_param(param_id).controlspec
+  if spec then
+    return util.round(spec:unmap(params:get(param_id)) * (GRID_FADER_WIDTH - 1) + 1)
+  end
   local minval, maxval = param_range(param_id)
   return util.round(util.linlin(minval, maxval, 1, GRID_FADER_WIDTH, params:get(param_id)))
 end
@@ -2282,8 +2314,13 @@ function grid_redraw_64(grid_device)
 end
 
 function cleanup()
-  -- Save scenes to disk before exiting
-  save_scenes_to_disk()
+  -- Save scenes to disk before exiting, unless that would overwrite a scenes
+  -- file that failed to load and could not be moved aside
+  if scene_autosave_blocked then
+    print("scenes not auto-saved: " .. scene_data_file .. " could not be loaded")
+  else
+    save_scenes_to_disk()
+  end
 
   -- Stop metros and clocks
   if lfo_metro then lfo_metro:stop() end
