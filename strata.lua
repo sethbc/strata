@@ -203,7 +203,10 @@ local voices = {
 
 local selected_voice = 1
 local master_density = 1.0
-local frozen = {false, false, false, false, false, false, false}
+local frozen = {}
+for i = 1, NUM_VOICES do
+  frozen[i] = false
+end
 
 -- UI
 local voice_list
@@ -223,7 +226,6 @@ local mutation_metro
 
 -- Scene system
 local scenes = {}
-local num_scenes = NUM_SCENES
 local current_scene = 0  -- 0 = no scene loaded
 local scene_sequencer_position = 1
 local scene_sequencer_enabled = false
@@ -240,7 +242,6 @@ local grids = {}
 
 -- Pattern sequencer
 local patterns = {}
-local pattern_length = PATTERN_LENGTH
 local pattern_position = 1
 local pattern_playing = false
 local pattern_clock = nil
@@ -267,7 +268,7 @@ local function empty_scene(scene_num)
   }
 end
 
-for i = 1, num_scenes do
+for i = 1, NUM_SCENES do
   scenes[i] = empty_scene(i)
 end
 
@@ -402,7 +403,7 @@ function init()
     id = "scene_sequence_length",
     name = "sequence length",
     min = 1,
-    max = 8,
+    max = NUM_SCENES,
     default = 4,
     action = function(x)
       -- How many scenes to cycle through
@@ -460,7 +461,7 @@ function init()
   }
   
   -- Add params for each voice
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     add_voice_params(i)
   end
   
@@ -588,7 +589,7 @@ function add_voice_params(voice_idx)
     id = "v" .. voice_idx .. "_mod_source_1",
     name = "mod source 1",
     min = 0,
-    max = 7,
+    max = NUM_VOICES,
     default = v.crossmod.slot1.source,
     formatter = function(param)
       if param:get() == 0 then
@@ -637,7 +638,7 @@ function add_voice_params(voice_idx)
     id = "v" .. voice_idx .. "_mod_source_2",
     name = "mod source 2",
     min = 0,
-    max = 7,
+    max = NUM_VOICES,
     default = v.crossmod.slot2.source,
     formatter = function(param)
       if param:get() == 0 then
@@ -686,7 +687,7 @@ function add_voice_params(voice_idx)
     id = "v" .. voice_idx .. "_mod_source_3",
     name = "mod source 3",
     min = 0,
-    max = 7,
+    max = NUM_VOICES,
     default = v.crossmod.slot3.source,
     formatter = function(param)
       if param:get() == 0 then
@@ -852,7 +853,7 @@ function randomize_voice(voice_idx)
 end
 
 function update_all_grain_density()
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     if voices[i].active then
       engine.setGrainParam(i - 1, "grainDensity", voices[i].grain.density * master_density)
     end
@@ -880,7 +881,7 @@ function gentle_mutate()
   local probability = params:get("mutation_probability")
   local amount = params:get("mutation_amount")
 
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     -- Only mutate active, non-frozen voices
     if voices[i].active and not frozen[i] then
       local v = voices[i]
@@ -955,7 +956,7 @@ local GRAIN_PARAM_IDS = {
 local SCENE_TRANSITION_STEPS = 20
 
 function capture_scene(scene_num)
-  if scene_num < 1 or scene_num > num_scenes then return end
+  if scene_num < 1 or scene_num > NUM_SCENES then return end
 
   local scene_data = {
     voices = {},
@@ -968,7 +969,7 @@ function capture_scene(scene_num)
   end
 
   -- Capture voice states
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     scene_data.voices[i] = {
       active = voices[i].active,
       params = {},
@@ -1055,7 +1056,7 @@ function scene_transition_targets(scene_data)
 end
 
 function recall_scene(scene_num, transition_time)
-  if scene_num < 1 or scene_num > num_scenes then return end
+  if scene_num < 1 or scene_num > NUM_SCENES then return end
   if not scenes[scene_num].populated then
     print("scene " .. scene_num .. " is empty")
     return
@@ -1111,7 +1112,7 @@ function recall_scene_instant(scene_num)
   end
 
   -- Restore voice states
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     local voice_data = scene_data.voices[i]
     local prefix = "v" .. i .. "_"
 
@@ -1337,7 +1338,7 @@ end
 
 function update_voice_list()
   local items = {}
-  for i = 1, #voices do
+  for i = 1, NUM_VOICES do
     local status = voices[i].active and "●" or "○"
     local freeze = frozen[i] and " [F]" or ""
     items[i] = status .. " " .. voices[i].name .. freeze
@@ -1354,7 +1355,7 @@ function enc(n, d)
   if n == 1 then
     params:delta("master_density", d)
   elseif n == 2 then
-    selected_voice = util.clamp(selected_voice + d, 1, #voices)
+    selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
     update_voice_list()
   elseif n == 3 then
     -- Adjust selected voice's main parameter
@@ -1734,13 +1735,13 @@ function grid_key_256(x, y, z)
 
   if grid_page == 3 then
     -- Scene page
-    if y == 1 and x <= 8 then
+    if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
       recall_scene(x, 0)
-    elseif y == 2 and x <= 8 then
+    elseif y == 2 and x <= NUM_SCENES then
       -- Row 2: Scene recall (with transition)
       recall_scene(x, params:get("scene_transition_time"))
-    elseif y == 3 and x <= 8 then
+    elseif y == 3 and x <= NUM_SCENES then
       -- Row 3: Scene save
       capture_scene(x)
     elseif y == 5 then
@@ -1749,7 +1750,7 @@ function grid_key_256(x, y, z)
         -- Toggle sequencer
         local enabled = params:get("scene_sequencer_enabled")
         params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
-      elseif x >= 3 and x <= 10 then
+      elseif x >= 3 and x <= 2 + NUM_SCENES then
         -- Set sequence length
         params:set("scene_sequence_length", x - 2)
       end
@@ -1781,31 +1782,25 @@ function grid_key_256(x, y, z)
       param_page = x
     end
   elseif y == 14 then
-    -- Row 14: Voice selection for parameters
-    if x <= 7 then
+    -- Row 14: Voice selection for parameters (columns 1-7), voice
+    -- on/off (columns 9-15)
+    if x <= NUM_VOICES then
       select_grid_voice(x)
-    elseif x >= 9 and x <= 15 then
-      -- Toggle voice on/off
-      local voice_idx = x - 8
-      if voice_idx <= 7 then
-        toggle_voice(voice_idx)
-      end
+    elseif x >= 9 and x <= 8 + NUM_VOICES then
+      toggle_voice(x - 8)
     end
   elseif y == 15 then
     -- Row 15: Pattern operations
-    if x <= 7 then
+    if x <= NUM_VOICES then
       -- Clear pattern for voice
       clear_pattern(x)
-    elseif x >= 9 and x <= 15 then
+    elseif x >= 9 and x <= 8 + NUM_VOICES then
       -- Randomize pattern for voice
-      local voice_idx = x - 8
-      if voice_idx <= 7 then
-        randomize_pattern(voice_idx)
-      end
+      randomize_pattern(x - 8)
     end
   elseif y == 16 then
     -- Row 16: Global functions
-    if x <= 7 then
+    if x <= NUM_VOICES then
       -- Freeze voice
       toggle_freeze(x)
     elseif x >= 9 and x <= 16 then
@@ -1819,24 +1814,24 @@ end
 function grid_key_128h(x, y, z)
   if grid_page == 3 then
     -- Scene page
-    if y == 1 and x <= 8 then
+    if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
       recall_scene(x, 0)
-    elseif y == 2 and x <= 8 then
+    elseif y == 2 and x <= NUM_SCENES then
       -- Row 2: Scene recall (with transition)
       recall_scene(x, params:get("scene_transition_time"))
-    elseif y == 3 and x <= 8 then
+    elseif y == 3 and x <= NUM_SCENES then
       -- Row 3: Scene save
       capture_scene(x)
     elseif y == 5 and x == 1 then
       -- Toggle scene sequencer
       local enabled = params:get("scene_sequencer_enabled")
       params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
-    elseif y == 4 and x <= 8 then
+    elseif y == 4 and x <= NUM_SCENES then
       -- Row 4: Set sequence length
       params:set("scene_sequence_length", x)
     end
-  elseif y >= 1 and y <= 7 then
+  elseif y >= 1 and y <= NUM_VOICES then
     -- Rows 1-7: Pattern triggers
     toggle_pattern_step(y, x)
   end
@@ -1851,43 +1846,40 @@ function grid_key_128h(x, y, z)
       grid_page = 2  -- Parameters
     elseif x == 7 then
       grid_page = 3  -- Scenes
-    elseif x >= 9 and x <= 15 then
+    elseif x >= 9 and x <= 8 + NUM_VOICES then
       -- Voice toggle
-      local voice_idx = x - 8
-      if voice_idx <= 7 then
-        toggle_voice(voice_idx)
-      end
+      toggle_voice(x - 8)
     elseif x == 16 then
       -- Voice selection for parameters
-      select_grid_voice(grid_voice_select % 7 + 1)
+      select_grid_voice(grid_voice_select % NUM_VOICES + 1)
     end
   end
 end
 
 -- 8x16 grid layout (128 buttons vertical)
 function grid_key_128v(x, y, z)
-  if x >= 1 and x <= 7 then
+  if x >= 1 and x <= NUM_VOICES then
     -- Columns 1-7: Pattern triggers
-    if y <= 16 then
+    if y <= PATTERN_LENGTH then
       toggle_pattern_step(x, y)
     end
   elseif x == 8 then
     -- Column 8: Controls
-    if y >= 1 and y <= 7 then
+    if y >= 1 and y <= NUM_VOICES then
       toggle_voice(y)
     elseif y == 9 then
       pattern_toggle()
-    elseif y >= 10 and y <= 16 then
+    elseif y >= 10 and y <= 9 + NUM_VOICES then
       -- Voice selection for parameters
-      select_grid_voice(util.clamp(y - 9, 1, 7))
+      select_grid_voice(y - 9)
     end
   end
 end
 
 -- 8x8 grid layout (64 buttons)
 function grid_key_64(x, y, z)
-  if y >= 1 and y <= 7 then
-    -- Rows 1-7: Pattern triggers (8 steps)
+  if y >= 1 and y <= NUM_VOICES then
+    -- Rows 1-7: Pattern triggers (only steps 1-8 fit on this grid)
     toggle_pattern_step(y, x)
   elseif y == 8 then
     -- Row 8: Controls
@@ -2021,7 +2013,7 @@ function pattern_clock_start()
 
       -- Show the step that just played, then advance
       grid_redraw()
-      pattern_position = pattern_position % pattern_length + 1
+      pattern_position = pattern_position % PATTERN_LENGTH + 1
 
       -- Wait for next step based on tempo
       clock.sync(1/4)  -- 16th notes
@@ -2066,20 +2058,20 @@ function grid_redraw_256(grid_device)
   if grid_page == 3 then
     -- Scene page
     -- Row 1: Scene recall (instant)
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       local brightness = scenes[i].populated and 8 or 2
       if current_scene == i then brightness = 15 end
       grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       local brightness = scenes[i].populated and 6 or 2
       grid_device:led(i, 2, brightness)
     end
 
     -- Row 3: Scene save
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       grid_device:led(i, 3, 4)
     end
 
@@ -2087,7 +2079,7 @@ function grid_redraw_256(grid_device)
     if scene_sequencer_enabled then
       grid_device:led(1, 5, 15)  -- Sequencer on
       -- Show next scene in sequence
-      if scene_sequencer_position >= 1 and scene_sequencer_position <= 8 then
+      if scene_sequencer_position >= 1 and scene_sequencer_position <= NUM_SCENES then
         grid_device:led(scene_sequencer_position, 1, 15)
       end
     else
@@ -2096,7 +2088,7 @@ function grid_redraw_256(grid_device)
 
     -- Sequence length indicators
     local seq_length = params:get("scene_sequence_length")
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
     end
 
@@ -2145,13 +2137,13 @@ function grid_redraw_256(grid_device)
     end
 
     -- Row 14: Voice status
-    for i = 1, 7 do
+    for i = 1, NUM_VOICES do
       grid_device:led(i, 14, i == grid_voice_select and 15 or 4)
       grid_device:led(i + 8, 14, voices[i].active and 12 or 2)
     end
 
     -- Row 16: Freeze status
-    for i = 1, 7 do
+    for i = 1, NUM_VOICES do
       grid_device:led(i, 16, frozen[i] and 12 or 2)
     end
   end
@@ -2181,20 +2173,20 @@ function grid_redraw_128h(grid_device)
   if grid_page == 3 then
     -- Scene page (simplified for 128h layout)
     -- Row 1: Scene recall (instant)
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       local brightness = scenes[i].populated and 8 or 2
       if current_scene == i then brightness = 15 end
       grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       local brightness = scenes[i].populated and 6 or 2
       grid_device:led(i, 2, brightness)
     end
 
     -- Row 3: Scene save
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       grid_device:led(i, 3, 4)
     end
 
@@ -2207,7 +2199,7 @@ function grid_redraw_128h(grid_device)
 
     -- Sequence length indicators (simplified)
     local seq_length = params:get("scene_sequence_length")
-    for i = 1, 8 do
+    for i = 1, NUM_SCENES do
       grid_device:led(i, 4, i <= seq_length and 8 or 2)
     end
   else
@@ -2240,7 +2232,7 @@ function grid_redraw_128h(grid_device)
   grid_device:led(7, 8, grid_page == 3 and 15 or 4)
 
   -- Voice status
-  for i = 1, 7 do
+  for i = 1, NUM_VOICES do
     grid_device:led(i + 8, 8, voices[i].active and 12 or 2)
   end
 
@@ -2262,21 +2254,23 @@ function grid_redraw_128v(grid_device)
   end
 
   -- Column 8: Controls
-  for i = 1, 7 do
+  for i = 1, NUM_VOICES do
     grid_device:led(8, i, voices[i].active and 12 or 4)
   end
   grid_device:led(8, 9, pattern_playing and 15 or 4)
 
   -- Voice selection
-  for i = 1, 7 do
+  for i = 1, NUM_VOICES do
     grid_device:led(8, 9 + i, (i == grid_voice_select) and 15 or 2)
   end
 end
 
 function grid_redraw_64(grid_device)
-  -- Draw patterns (rows 1-7, 8 steps only - shows first 8 steps of 16-step pattern)
+  -- Draw patterns (rows 1-7). Only the first 8 steps of each 16-step
+  -- pattern fit; the sequencer still plays all PATTERN_LENGTH steps.
+  local visible_steps = math.min(PATTERN_LENGTH, grid_device.cols)
   for voice_idx = 1, NUM_VOICES do
-    for step = 1, 8 do
+    for step = 1, visible_steps do
       local brightness = patterns[voice_idx][step]
       -- Only highlight if pattern position is within visible range (1-8)
       if pattern_playing and pattern_position == step then
