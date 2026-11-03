@@ -25,6 +25,7 @@ Each synthesis voice is fed through its own granular processor with independent 
 - Grain density (grains per second)
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
+- Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
 
 ### Cross-Modulation
 
@@ -206,11 +207,12 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 - Each row is a fader for one parameter of the voice selected in row 14
 - Press a column to set the value: column 1 = minimum, column 16 = maximum, following each parameter's curve (frequency and cutoff faders are exponential, so low frequencies get as many columns as high ones)
 - The row lights up to the current value (dim bar, bright value position)
-- Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch and spread, then source / amp mod / freq mod for cross-modulation slots 1-3
+- The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap)
+- Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread and envelope, then source / amp mod / freq mod for cross-modulation slots 1-3
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
-- Columns 1-4 or 1-5 select the page, depending on how many parameters the voice has (Sub has 4 pages, the other voices 5); the selected page is bright
+- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Resonator has 6 pages, the other voices 5); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing
@@ -424,6 +426,7 @@ Each voice includes:
 - Grain density
 - Grain pitch shift (transposition ratio)
 - Position spread
+- Grain envelope (hann, sine, perc, linen, trap; default hann)
 - Cross-modulation controls:
   - Modulation source (which voice modulates this one)
   - Amplitude modulation amount

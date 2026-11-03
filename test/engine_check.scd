@@ -65,7 +65,7 @@ server.options.numInputBusChannels = 2;
 server.waitForBoot({
     var exitCode;
     try {
-        var oldVoice, newVoice, before, after, silentIndex, startedNames, masterUGens;
+        var oldVoice, newVoice, before, after, silentIndex, startedNames, masterUGens, envSamples;
 
         CroneDefs.sendDefs(server);
         server.sync;
@@ -142,6 +142,37 @@ server.waitForBoot({
         server.sync;
         check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "setGrainParam pitchShift reaches the grain synth");
 
+        // Grain envelope shapes: envShape 0 = built-in Hann (-1), 1-4 = envBuffers
+        check.(engine.envBuffers.size == 4, "four grain envelope buffers");
+        check.(engine.envBuffers.every({ arg buffer; buffer.numFrames == 1024 }),
+            "envelope buffers hold 1024 frames");
+        envSamples = { var condition = Condition(false), values;
+            engine.envBuffers[3].loadToFloatArray(action: { arg array;
+                values = array; condition.test = true; condition.signal });
+            condition.wait;
+            values
+        }.value;
+        check.((envSamples[0].abs < 0.01) and: { (envSamples[512] - 1).abs < 0.01 },
+            "trapezoid envelope buffer is loaded on the server (0 at the start, 1 in the middle)");
+        check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "grain synths start with the Hann envelope");
+        command.(\setGrainParam, 0, \envShape, 2);
+        server.sync;
+        check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[1].bufnum,
+            "envShape 2 selects the second envelope buffer");
+        command.(\setGrainParam, 0, \envShape, 4);
+        server.sync;
+        check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[3].bufnum,
+            "envShape 4 selects the last envelope buffer");
+        command.(\setGrainParam, 0, \envShape, 0);
+        server.sync;
+        check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "envShape 0 returns to the Hann envelope");
+        command.(\setGrainParam, 0, \envShape, 1);
+        command.(\setGrainParam, 0, \envShape, 9);
+        command.(\setGrainParam, 0, \envShape, -1);
+        server.sync;
+        check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[0].bufnum,
+            "an out-of-range envShape is ignored");
+
         // Node ordering inside context.xg (M5)
         names = synthNames.(context.xg);
         voiceNames = names.select({ arg name; voiceDefs.includes(name) });
@@ -212,6 +243,7 @@ server.waitForBoot({
         engine.free;
         server.sync;
         check.(synthNames.(context.xg).size == 0, "free removes every engine node");
+        check.(engine.envBuffers.every({ arg buffer; buffer.bufnum.isNil }), "free frees the envelope buffers");
     } { arg error;
         error.reportError;
         failures = failures + 1;

@@ -13,6 +13,7 @@ Engine_Strata : CroneEngine {
     var <reverbBus;
     var <modBuses;  // Control buses for cross-modulation
     var <silentBus; // Always-zero control bus used for "no modulation source"
+    var <envBuffers; // Grain envelope shapes 1-4 (envShape 0 is GrainIn's built-in Hann)
     var <voiceGroup;   // Voice synths (head of context.xg)
     var <processGroup; // Grain and mod synths (after voiceGroup)
 
@@ -42,6 +43,15 @@ Engine_Strata : CroneEngine {
         // follower (amp_in_b) there before any engine loads.
         silentBus = Bus.control(context.server, 1);
         silentBus.set(0);
+
+        // Grain envelope shapes selected by setGrainParam(voice, \envShape, n):
+        // 0 = GrainIn's built-in Hann (envbufnum -1), 1-4 = these buffers
+        envBuffers = [
+            Env.sine,
+            Env.perc(0.1, 0.9),
+            Env.linen(0.1, 0.8, 0.1),
+            Env([0, 1, 1, 0], [0.25, 0.5, 0.25])  // trapezoid
+        ].collect({ arg env; Buffer.loadCollection(context.server, env.asSignal(1024)) });
         
         // SynthDefs
 
@@ -366,7 +376,7 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataGrain, {
             arg in, out, gate=1,
             grainSize=0.1, grainDensity=20, pitchShift=1, 
-            posSpread=0.5, panSpread=0.5, amp=1;
+            posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1;
             var sig, env, input;
             
             env = EnvGen.kr(Env.asr(0.1, 1, 2), gate, doneAction: 2);
@@ -378,7 +388,7 @@ Engine_Strata : CroneEngine {
                 dur: grainSize,
                 in: input,
                 pan: LFNoise1.kr(2).range(panSpread.neg, panSpread),
-                envbufnum: -1
+                envbufnum: envBuf
             );
 
             // Position spread: a little of the input, smeared by a wandering delay
@@ -546,8 +556,16 @@ Engine_Strata : CroneEngine {
             this.setSynth(this.voiceKey(msg[1]), msg[2], msg[3]);
         });
 
+        // envShape is an index (0 = Hann, 1-4 = envBuffers) that the engine
+        // turns into the grain synth's envBuf; other params pass straight through
         this.addCommand(\setGrainParam, "isf", { arg msg;
-            this.setSynth(this.grainKey(msg[1]), msg[2], msg[3]);
+            var bufnum;
+            if (msg[2].asSymbol == \envShape) {
+                bufnum = this.envBufnumFor(msg[3].round.asInteger);
+                if (bufnum.notNil) { this.setSynth(this.grainKey(msg[1]), \envBuf, bufnum) };
+            } {
+                this.setSynth(this.grainKey(msg[1]), msg[2], msg[3]);
+            };
         });
 
         this.addCommand(\setMasterDrift, "f", { arg msg;
@@ -627,6 +645,14 @@ Engine_Strata : CroneEngine {
     grainKey { arg voice; ^("grain" ++ voice).asSymbol }
     modKey { arg voice; ^("mod" ++ voice).asSymbol }
 
+    // GrainIn envbufnum for an envShape index: 0 = built-in Hann (-1),
+    // 1-4 = envBuffers; nil for anything else
+    envBufnumFor { arg index;
+        if (index == 0) { ^-1 };
+        if ((index >= 1) and: { index <= envBuffers.size }) { ^envBuffers[index - 1].bufnum };
+        ^nil
+    }
+
     validVoice { arg voice;
         ^voice.isInteger and: { (voice >= 0) and: { voice < numVoices } }
     }
@@ -654,6 +680,7 @@ Engine_Strata : CroneEngine {
         granBuses.do({ arg bus; bus.free });
         modBuses.do({ arg bus; bus.free });
         silentBus.free;
+        envBuffers.do({ arg buffer; buffer.free });
         mainBus.free;
         filterBus.free;
         delayBus.free;

@@ -117,6 +117,7 @@ local function scramble_state(seed)
     randomize_voice(voice_idx)
     params:set("v" .. voice_idx .. "_grain_spread", math.random())
     params:set("v" .. voice_idx .. "_grain_density", math.random(1, 100))
+    params:set("v" .. voice_idx .. "_grain_env", math.random(1, 5))
     for slot = 1, 3 do
       params:set("v" .. voice_idx .. "_mod_source_" .. slot, math.random(0, 7))
       params:set("v" .. voice_idx .. "_mod_amp_amt_" .. slot, math.random() * 4 - 2)
@@ -208,6 +209,7 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
     assert_near(sent.grain.grainDensity, voice.grain.density * 1.5, 1e-9, "voice " .. voice_idx .. " grainDensity")
     assert_equal(sent.grain.pitchShift, voice.grain.pitch, "voice " .. voice_idx .. " pitchShift")
     assert_equal(sent.grain.posSpread, voice.grain.spread, "voice " .. voice_idx .. " posSpread")
+    assert_equal(sent.grain.envShape, voice.grain.env - 1, "voice " .. voice_idx .. " envShape")
     for slot = 1, 3 do
       local slot_state = voice.crossmod["slot" .. slot]
       local expected_source = slot_state.source == 0 and -1 or slot_state.source - 1
@@ -216,6 +218,78 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
       assert_equal(sent.freq_amt[slot], slot_state.freq_amt, "voice " .. voice_idx .. " slot " .. slot .. " freq")
     end
     assert_equal(sent.speed, voice.crossmod.speed, "voice " .. voice_idx .. " mod speed")
+  end
+end)
+
+test("grain envelope option reaches the engine and is synced on start", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v1_grain_env", 3)
+  local calls = context.calls_named("setGrainParam"); local last = calls[#calls]
+  assert_equal(last.args[2], "envShape"); assert_equal(last.args[3], 2)
+  toggle_voice(3); params:set("v3_grain_env", 5); toggle_voice(3)       -- on, edit, off
+  context.clear_engine_calls(); toggle_voice(3)                          -- on again: synced
+  local sent = engine_state_for_voice(context.engine_calls, 2)
+  assert_equal(sent.grain.envShape, 4)
+  capture_scene(1); params:set("v1_grain_env", 1)
+  recall_scene(1, 2); context.clock.advance()
+  assert_equal(params:get("v1_grain_env"), 1, "transition does not interpolate env")
+  recall_scene(1, 0); assert_equal(params:get("v1_grain_env"), 3)
+  -- an option param floors fractional values, so check the fade list directly
+  for _, target in ipairs(scene_transition_targets(local_value("scenes")[1].data)) do
+    assert_true(not target.id:find("_grain_env$"), target.id .. " is not crossfaded")
+  end
+end)
+
+test("grain envelope param: options, default, scenes, never mutated or randomized", function()
+  local context = load_strata(); context.clock.advance()
+  for voice_idx = 1, 7 do
+    local param = params:lookup_param("v" .. voice_idx .. "_grain_env")
+    assert_equal(param.t, "option", "voice " .. voice_idx .. " grain_env is an option")
+    assert_equal(param.count, 5, "five envelope shapes")
+    assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 1, "default hann")
+    assert_equal(local_value("voices")[voice_idx].grain.env, 1, "voices table holds the index")
+  end
+  local names = {}
+  for index = 1, 5 do params:set("v1_grain_env", index); names[index] = params:string("v1_grain_env") end
+  assert_equal(table.concat(names, ","), "hann,sine,perc,linen,trap")
+  -- every per-voice scene default equals its param default
+  local found_env = false
+  for _, field in ipairs(local_value("VOICE_SCENE_DEFAULTS")) do
+    if field.path[1] == "grain" and field.path[2] == "env" then found_env = true end
+    if field.path[1] == "grain" then
+      local suffix = local_value("GRAIN_PARAM_IDS")[field.path[2]]
+      for voice_idx = 1, 7 do
+        local param = params:lookup_param("v" .. voice_idx .. "_" .. suffix)
+        local param_default = param.controlspec and param.controlspec.default or param.default
+        assert_equal(field.default, param_default, "voice " .. voice_idx .. " " .. suffix .. " scene default")
+      end
+    end
+  end
+  assert_true(found_env, "grain.env has a scene default")
+  -- scenes written before grain envelopes migrate to hann
+  params:set("v2_grain_env", 4)
+  capture_scene(3)
+  local scene = local_value("scenes")[3]
+  for voice_idx = 1, 7 do scene.data.voices[voice_idx].grain.env = nil end
+  migrate_scene(scene, 2)
+  assert_equal(scene.data.voices[2].grain.env, 1, "missing env migrates to hann")
+  assert_true(validate_scene(scene), "migrated scene validates")
+  scene.data.voices[2].grain.env = 2.5
+  assert_true(not validate_scene(scene), "a fractional envelope index is rejected")
+  scene.data.voices[2].grain.env = 0
+  assert_true(not validate_scene(scene), "envelope index 0 is rejected")
+  scene.data.voices[2].grain.env = 1
+  -- mutation and randomize leave the envelope alone
+  for voice_idx = 1, 7 do
+    if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
+    params:set("v" .. voice_idx .. "_grain_env", 4)
+  end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(5)
+  for _ = 1, 50 do gentle_mutate() end
+  for voice_idx = 1, 7 do randomize_voice(voice_idx) end
+  for voice_idx = 1, 7 do
+    assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 4, "voice " .. voice_idx .. " envelope unchanged")
   end
 end)
 
@@ -294,8 +368,11 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   press(2, 14)  -- select voice 2 (fm)
   local ids = fader_param_ids(2)
   assert_equal(ids[1], "v2_freq", "first fader is freq")
-  assert_equal(#ids, 6 + 4 + 9, "fm has 19 faders")
+  assert_equal(#ids, 6 + 5 + 9, "fm has 20 faders")
   assert_equal(fader_page_count(2), 5, "fm has 5 fader pages")
+  assert_equal(ids[11], "v2_grain_env", "grain envelope follows the other grain faders")
+  assert_equal(fader_page_count(1), 6, "resonator has 6 fader pages")
+  assert_equal(fader_page_count(4), 5, "sub has 5 fader pages")
 
   press(16, 9)  -- page 1 row 1 full right -> freq max
   assert_near(params:get("v2_freq"), 2000, 1, "column 16 sets max")
@@ -324,13 +401,24 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   assert_equal(device:get_led(5, 13), 4, "row 13 shows page 5 available")
   assert_equal(device:get_led(6, 13), 0, "no page 6")
 
-  press(3, 13)  -- page 3: faders 9-12 = grain_pitch, grain_spread, source 1, amp mod 1
+  press(3, 13)  -- page 3: faders 9-12 = grain_pitch, grain_spread, grain_env, source 1
   assert_equal(device:get_led(3, 13), 15, "page 3 selected")
-  press(16, 11)  -- mod source 1 -> 7 (number param, rounded)
-  assert_equal(params:get("v2_mod_source_1"), 7, "mod source fader rounds to an integer")
+  -- grain envelope is an option param: an index fader over its 5 options
+  press(16, 11)
+  assert_equal(params:get("v2_grain_env"), 5, "envelope fader column 16 -> last option")
+  assert_equal(device:get_led(16, 11), 15, "envelope fader shows the last option at column 16")
+  press(1, 11)
+  assert_equal(params:get("v2_grain_env"), 1, "envelope fader column 1 -> first option")
   press(9, 11)
+  assert_equal(params:get("v2_grain_env"), 3, "envelope column 9 -> round(linlin(1,16,1,5,9))")
+  assert_equal(fader_position("v2_grain_env"), 9, "option 3 of 5 shows at the middle column")
+  assert_equal(device:get_led(9, 11), 15, "envelope fader LED at its option")
+  press(16, 12)  -- mod source 1 -> 7 (number param, rounded)
+  assert_equal(params:get("v2_mod_source_1"), 7, "mod source fader rounds to an integer")
+  press(9, 12)
   assert_equal(params:get("v2_mod_source_1"), 4, "mod source column 9 -> round(linlin(1,16,0,7,9))")
-  press(1, 12)  -- amp mod 1 -> -2
+  press(4, 13)  -- page 4: first fader is amp mod 1
+  press(1, 9)   -- amp mod 1 -> -2
   assert_near(params:get("v2_mod_amp_amt_1"), -2, 1e-6, "amp mod fader min")
   press(16, 8)  -- grid page 4: rows 9-13 dark
   for y = 9, 13 do

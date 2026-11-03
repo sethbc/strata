@@ -19,6 +19,11 @@ local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 
+-- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
+-- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
+-- engine's envelope buffers
+local GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}
+
 -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
 -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
 local function engine_mod_source(source)
@@ -45,7 +50,8 @@ local voices = {
       size = 0.1,
       density = 20,
       pitch = 1,
-      spread = 0.5
+      spread = 0.5,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
@@ -70,7 +76,8 @@ local voices = {
       size = 0.15,
       density = 15,
       pitch = 1,
-      spread = 0.3
+      spread = 0.3,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -94,7 +101,8 @@ local voices = {
       size = 0.08,
       density = 25,
       pitch = 1,
-      spread = 0.4
+      spread = 0.4,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -116,7 +124,8 @@ local voices = {
       size = 0.2,
       density = 10,
       pitch = 1,
-      spread = 0.2
+      spread = 0.2,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -141,7 +150,8 @@ local voices = {
       size = 0.12,
       density = 18,
       pitch = 1,
-      spread = 0.35
+      spread = 0.35,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -166,7 +176,8 @@ local voices = {
       size = 0.08,
       density = 22,
       pitch = 1,
-      spread = 0.25
+      spread = 0.25,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -191,7 +202,8 @@ local voices = {
       size = 0.1,
       density = 20,
       pitch = 1,
-      spread = 0.4
+      spread = 0.4,
+      env = 1  -- GRAIN_ENV_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -689,6 +701,20 @@ function add_voice_params(voice_idx)
     end
   }
 
+  params:add{
+    type = "option",
+    id = "v" .. voice_idx .. "_grain_env",
+    name = "grain envelope",
+    options = GRAIN_ENV_OPTIONS,
+    default = v.grain.env,
+    action = function(x)
+      voices[voice_idx].grain.env = x
+      if voices[voice_idx].active then
+        engine.setGrainParam(voice_idx - 1, "envShape", x - 1)
+      end
+    end
+  }
+
   -- Cross-modulation params (3 slots)
   params:add_separator("voice " .. voice_idx .. " cross-modulation")
 
@@ -929,6 +955,7 @@ function sync_voice_to_engine(voice_idx)
   engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * master_density)
   engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
   engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
+  engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
 
   for slot = 1, NUM_MOD_SLOTS do
     local slot_state = voice.crossmod["slot" .. slot]
@@ -1022,7 +1049,8 @@ function gentle_mutate()
         end
       end
 
-      -- Occasionally mutate granular parameters (lower probability)
+      -- Occasionally mutate granular parameters (lower probability). The
+      -- discrete ones (DISCRETE_GRAIN_KEYS: the envelope shape) never mutate.
       if math.random() < probability * 0.5 then
         local grain_size = v.grain.size
         local size_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.2
@@ -1077,9 +1105,11 @@ local SCENE_GLOBAL_PARAMS = {
 -- Per-voice scene fields added after format 1, filled by migrate_scene in
 -- scenes that lack them: {path = keys inside data.voices[i], default = value}.
 -- A field is only filled when its parent table exists (a scene missing the
--- parent is left for validate_scene to reject). Later formats add entries
--- such as {path = {"grain", "env"}, default = ...}.
-local VOICE_SCENE_DEFAULTS = {}
+-- parent is left for validate_scene to reject). Each default must equal the
+-- param's default.
+local VOICE_SCENE_DEFAULTS = {
+  {path = {"grain", "env"}, default = 1}  -- hann
+}
 
 -- Top-level scene blocks added after format 1 (such as LFO or MIDI
 -- settings): {key = field of scene data, default = value}
@@ -1090,7 +1120,15 @@ local GRAIN_PARAM_IDS = {
   size = "grain_size",
   density = "grain_density",
   pitch = "grain_pitch",
-  spread = "grain_spread"
+  spread = "grain_spread",
+  env = "grain_env"
+}
+
+-- voices[i].grain keys holding an option index rather than a continuous
+-- value: smooth transitions switch them at the end instead of crossfading,
+-- mutation never touches them, and scenes must store positive integers
+local DISCRETE_GRAIN_KEYS = {
+  env = true
 }
 
 local SCENE_TRANSITION_STEPS = 20
@@ -1217,7 +1255,8 @@ end
 -- Snapshot {id, start, target} for every continuous param a smooth
 -- transition crossfades. Start values are read once, before the fade, so
 -- the fade moves linearly from start to target over the whole transition.
--- Mod sources, freeze and active states switch at the end instead.
+-- Mod sources, discrete grain params (envelope shape), freeze and active
+-- states switch at the end instead.
 function scene_transition_targets(scene_data)
   local targets = {}
   local function add_target(param_id, target_value)
@@ -1237,7 +1276,9 @@ function scene_transition_targets(scene_data)
       add_target(prefix .. key, target_value)
     end
     for key, target_value in pairs(voice_data.grain) do
-      add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
+      if not DISCRETE_GRAIN_KEYS[key] then
+        add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
+      end
     end
     for slot = 1, NUM_MOD_SLOTS do
       local slot_data = voice_data.crossmod["slot" .. slot]
@@ -1525,6 +1566,7 @@ function validate_scene(scene)
     end
     for key, value in pairs(voice_data.grain) do
       if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
+      if DISCRETE_GRAIN_KEYS[key] and not is_integer_between(value, 1, math.huge) then return false end
     end
     for slot = 1, NUM_MOD_SLOTS do
       local slot_data = voice_data.crossmod["slot" .. slot]
@@ -2272,15 +2314,16 @@ function randomize_pattern(voice_idx)
 end
 
 -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
--- params (param_order), its four grain params, then the nine crossmod slot
--- values (source, amp mod, freq mod for each slot)
+-- params (param_order), its five grain params (the envelope shape is an
+-- option param, shown as an index fader), then the nine crossmod slot values
+-- (source, amp mod, freq mod for each slot)
 function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
   for _, key in ipairs(voices[voice_idx].param_order) do
     table.insert(ids, prefix .. key)
   end
-  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread"}) do
+  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env"}) do
     table.insert(ids, prefix .. key)
   end
   for slot = 1, NUM_MOD_SLOTS do
@@ -2295,18 +2338,22 @@ function fader_page_count(voice_idx)
   return math.ceil(#fader_param_ids(voice_idx) / GRID_FADER_ROWS)
 end
 
--- Range of a control param (controlspec) or number param (min/max)
+-- Range of a control param (controlspec), option param (option indices
+-- 1..count) or number param (min/max)
 function param_range(param_id)
   local param = params:lookup_param(param_id)
   if param.controlspec then
     return param.controlspec.minval, param.controlspec.maxval
+  end
+  if param.options then  -- option param (norns' param.t is a number, so test the field)
+    return 1, param.count
   end
   return param.min, param.max
 end
 
 -- A param's current value as a fraction (0-1) of its range. Control params
 -- follow their controlspec warp (exp for freq, cutoff, mod speed); number
--- params (mod sources) are linear.
+-- params (mod sources) and option params (grain envelope) are linear.
 function param_fraction(param_id)
   local spec = params:lookup_param(param_id).controlspec
   if spec then
@@ -2317,7 +2364,8 @@ function param_fraction(param_id)
 end
 
 -- Grid column x (1-16) sets a param across its range. Control params follow
--- their controlspec warp; number params (mod sources) map linearly to integers.
+-- their controlspec warp; number params (mod sources) and option params
+-- (grain envelope, as an option index) map linearly to integers.
 function set_param_from_column(param_id, x)
   local spec = params:lookup_param(param_id).controlspec
   local value
