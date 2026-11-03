@@ -2656,32 +2656,34 @@ end
 -- FX page: a scrolling list of the effects params. E2 selects a row, E3
 -- adjusts it; format is a string.format pattern, or nil to show the param's
 -- own string (the filter type's name).
-local FX_ROWS = {
-  {label = "density", param_id = "master_density", format = "%.2f"},
-  {label = "tape drift", param_id = "drift_amount", format = "%.3f"},
-  {label = "filter type", param_id = "filter_type"},
-  {label = "filter freq", param_id = "filter_freq", format = "%.0f Hz"},
-  {label = "filter res", param_id = "filter_res", format = "%.2f"},
-  {label = "filter mix", param_id = "filter_mix", format = "%.2f"},
-  {label = "delay time", param_id = "delay_time", format = "%.3f s"},
-  {label = "delay fdbk", param_id = "delay_feedback", format = "%.2f"},
-  {label = "delay mix", param_id = "delay_mix", format = "%.2f"},
-  {label = "reverb mix", param_id = "reverb_mix", format = "%.2f"},
-  {label = "reverb size", param_id = "reverb_size", format = "%.2f"},
-  {label = "reverb damp", param_id = "reverb_damp", format = "%.2f"}
+local FX_PAGE = {
+  rows = {
+    {label = "density", param_id = "master_density", format = "%.2f"},
+    {label = "tape drift", param_id = "drift_amount", format = "%.3f"},
+    {label = "filter type", param_id = "filter_type"},
+    {label = "filter freq", param_id = "filter_freq", format = "%.0f Hz"},
+    {label = "filter res", param_id = "filter_res", format = "%.2f"},
+    {label = "filter mix", param_id = "filter_mix", format = "%.2f"},
+    {label = "delay time", param_id = "delay_time", format = "%.3f s"},
+    {label = "delay fdbk", param_id = "delay_feedback", format = "%.2f"},
+    {label = "delay mix", param_id = "delay_mix", format = "%.2f"},
+    {label = "reverb mix", param_id = "reverb_mix", format = "%.2f"},
+    {label = "reverb size", param_id = "reverb_size", format = "%.2f"},
+    {label = "reverb damp", param_id = "reverb_damp", format = "%.2f"}
+  },
+  visible_rows = 5,       -- rows at y 18-50, clear of the hint row at y 62
+  first_row_y = 18,
+  row_spacing = 8
 }
-local FX_VISIBLE_ROWS = 5      -- rows at y 18-50, clear of the hint row at y 62
-local FX_FIRST_ROW_Y = 18
-local FX_ROW_SPACING = 8
-local fx_row = 1               -- selected FX_ROWS index
+local fx_row = 1               -- selected FX_PAGE.rows index
 
 function redraw_fx()
   -- Keep one row above the selection in view, like the MAIN voice list
-  local first_visible = util.clamp(fx_row - 1, 1, #FX_ROWS - FX_VISIBLE_ROWS + 1)
-  for offset = 0, FX_VISIBLE_ROWS - 1 do
+  local first_visible = util.clamp(fx_row - 1, 1, #FX_PAGE.rows - FX_PAGE.visible_rows + 1)
+  for offset = 0, FX_PAGE.visible_rows - 1 do
     local row_index = first_visible + offset
-    local row = FX_ROWS[row_index]
-    local y = FX_FIRST_ROW_Y + offset * FX_ROW_SPACING
+    local row = FX_PAGE.rows[row_index]
+    local y = FX_PAGE.first_row_y + offset * FX_PAGE.row_spacing
     local value = row.format and string.format(row.format, params:get(row.param_id))
       or params:string(row.param_id)
     screen.level(row_index == fx_row and 15 or 4)
@@ -2696,9 +2698,9 @@ end
 
 local function fx_enc(n, d)
   if n == 2 then
-    fx_row = util.clamp(fx_row + d, 1, #FX_ROWS)
+    fx_row = util.clamp(fx_row + d, 1, #FX_PAGE.rows)
   elseif n == 3 then
-    params:delta(FX_ROWS[fx_row].param_id, d)
+    params:delta(FX_PAGE.rows[fx_row].param_id, d)
   end
 end
 
@@ -2878,17 +2880,19 @@ local key_press_page = {}
 
 -- BUFFER page: the selected voice and its source on the left, the eight
 -- buffer slots on the right (slot, name or "empty", seconds or REC)
-local BUFFER_ROW_FIRST_Y = 14
-local BUFFER_ROW_SPACING = 6   -- eight rows at y 14-56, clear of the hint row at y 62
-local BUFFER_SLOT_X = 65
-local BUFFER_NAME_X = 71
-local BUFFER_NAME_MAX_WIDTH = 31  -- the name ends before the widest seconds ("16.0s" from x 103)
+local BUFFER_PAGE = {
+  row_first_y = 14,
+  row_spacing = 6,        -- eight rows at y 14-56, clear of the hint row at y 62
+  slot_x = 65,
+  name_x = 71,
+  name_max_width = 31     -- the name ends before the widest seconds ("16.0s" from x 103)
+}
 
 -- A buffer's name for the screen: the file name without its extension
 local function buffer_display_name(slot)
   local name = buffers[slot].name:gsub("%.[^.]*$", "")
   if name == "" then name = buffers[slot].name end
-  return fit_text(name, BUFFER_NAME_MAX_WIDTH)
+  return fit_text(name, BUFFER_PAGE.name_max_width)
 end
 
 function redraw_buffer()
@@ -2917,7 +2921,7 @@ function redraw_buffer()
   -- brightest, loaded (or recording) slots mid, empty slots dim.
   for slot = 1, NUM_BUFFERS do
     local buffer = buffers[slot]
-    local y = BUFFER_ROW_FIRST_Y + (slot - 1) * BUFFER_ROW_SPACING
+    local y = BUFFER_PAGE.row_first_y + (slot - 1) * BUFFER_PAGE.row_spacing
     local level = 2
     if slot == voice_slot then
       level = 15
@@ -2925,9 +2929,9 @@ function redraw_buffer()
       level = 8
     end
     screen.level(level)
-    screen.move(BUFFER_SLOT_X, y)
+    screen.move(BUFFER_PAGE.slot_x, y)
     screen.text(tostring(slot))
-    screen.move(BUFFER_NAME_X, y)
+    screen.move(BUFFER_PAGE.name_x, y)
     screen.text(buffer_display_name(slot))
     screen.move(127, y)
     screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
@@ -3385,17 +3389,19 @@ function midi_pitchbend(voice_idx, value)
 end
 
 -- Grid functions
-local GRID_FADER_ROWS = 4     -- 256-grid parameter page: one fader per row 9-12
-local GRID_FADER_WIDTH = 16   -- fader columns
-local GRID_FADER_FIRST_ROW = 9
-local GRID_PARAM_PAGE_ROW = 13
--- 256-grid BUFFER / FX page (page 4): record (row 1) and clear (row 2)
--- per buffer slot, one FX fader per row 3-7, one source row per voice 9-15
-local GRID_BUFFER_RECORD_ROW = 1
-local GRID_BUFFER_CLEAR_ROW = 2
-local GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}
-local GRID_FX_FIRST_ROW = 3
-local GRID_SOURCE_FIRST_ROW = 9  -- voice v's row is 8 + v; column = source option (1 synth, 2-9 buffers, 10 input)
+local GRID_LAYOUT = {
+  fader_rows = 4,         -- 256-grid parameter page: one fader per row 9-12
+  fader_width = 16,       -- fader columns
+  fader_first_row = 9,
+  param_page_row = 13,
+  -- 256-grid BUFFER / FX page (page 4): record (row 1) and clear (row 2)
+  -- per buffer slot, one FX fader per row 3-7, one source row per voice 9-15
+  buffer_record_row = 1,
+  buffer_clear_row = 2,
+  fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"},
+  fx_first_row = 3,
+  source_first_row = 9    -- voice v's row is 8 + v; column = source option (1 synth, 2-9 buffers, 10 input)
+}
 
 -- Pick a grid's layout by its exact size. 16x16 must be matched exactly or
 -- an 8x16 grid (rows == 16) would be treated as a 256.
@@ -3513,12 +3519,12 @@ function grid_key_256(x, y, z)
   elseif grid_page == 4 then
     -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
     -- sources on rows 9-15; rows 8 and 16 work as on page 1
-    local fx_param_id = GRID_FX_FADER_IDS[y - GRID_FX_FIRST_ROW + 1]
-    local source_voice = y - GRID_SOURCE_FIRST_ROW + 1
-    if y == GRID_BUFFER_RECORD_ROW then
+    local fx_param_id = GRID_LAYOUT.fx_fader_ids[y - GRID_LAYOUT.fx_first_row + 1]
+    local source_voice = y - GRID_LAYOUT.source_first_row + 1
+    if y == GRID_LAYOUT.buffer_record_row then
       -- record into buffer x, or stop its recording early
       if x <= NUM_BUFFERS then record_buffer(x) end
-    elseif y == GRID_BUFFER_CLEAR_ROW then
+    elseif y == GRID_LAYOUT.buffer_clear_row then
       if x <= NUM_BUFFERS then clear_buffer(x) end
     elseif fx_param_id then
       set_param_from_column(fx_param_id, x)
@@ -3536,13 +3542,13 @@ function grid_key_256(x, y, z)
     toggle_pattern_step(y, x)
   elseif y == 8 then
     grid_key_256_transport(x)
-  elseif y >= GRID_FADER_FIRST_ROW and y < GRID_FADER_FIRST_ROW + GRID_FADER_ROWS then
+  elseif y >= GRID_LAYOUT.fader_first_row and y < GRID_LAYOUT.fader_first_row + GRID_LAYOUT.fader_rows then
     -- Rows 9-12 (parameter page): one fader per row for the selected voice
     if grid_page == 2 then
-      local fader_index = (param_page - 1) * GRID_FADER_ROWS + (y - GRID_FADER_FIRST_ROW + 1)
+      local fader_index = (param_page - 1) * GRID_LAYOUT.fader_rows + (y - GRID_LAYOUT.fader_first_row + 1)
       set_fader_param(grid_voice_select, fader_index, x)
     end
-  elseif y == GRID_PARAM_PAGE_ROW then
+  elseif y == GRID_LAYOUT.param_page_row then
     -- Row 13 (parameter page): choose which group of four faders is shown
     if grid_page == 2 and x <= fader_page_count(grid_voice_select) then
       param_page = x
@@ -3745,7 +3751,7 @@ function fader_param_ids(voice_idx)
 end
 
 function fader_page_count(voice_idx)
-  return math.ceil(#fader_param_ids(voice_idx) / GRID_FADER_ROWS)
+  return math.ceil(#fader_param_ids(voice_idx) / GRID_LAYOUT.fader_rows)
 end
 
 -- Range of a control param (controlspec), option param (option indices
@@ -3780,10 +3786,10 @@ function set_param_from_column(param_id, x)
   local spec = params:lookup_param(param_id).controlspec
   local value
   if spec then
-    value = spec:map((x - 1) / (GRID_FADER_WIDTH - 1))
+    value = spec:map((x - 1) / (GRID_LAYOUT.fader_width - 1))
   else
     local minval, maxval = param_range(param_id)
-    value = util.round(util.linlin(1, GRID_FADER_WIDTH, minval, maxval, x))
+    value = util.round(util.linlin(1, GRID_LAYOUT.fader_width, minval, maxval, x))
   end
   params:set(param_id, value)
 end
@@ -3797,7 +3803,7 @@ end
 
 -- Grid column (1-16) that shows a fader param's current value
 function fader_position(param_id)
-  return util.round(param_fraction(param_id) * (GRID_FADER_WIDTH - 1) + 1)
+  return util.round(param_fraction(param_id) * (GRID_LAYOUT.fader_width - 1) + 1)
 end
 
 function select_grid_voice(voice_idx)
@@ -3936,8 +3942,8 @@ function grid_redraw_256(grid_device)
     -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
     -- sources on rows 9-15, rows 8 and 16 as on page 1
     grid_redraw_256_buffers(grid_device)
-    for index, param_id in ipairs(GRID_FX_FADER_IDS) do
-      grid_redraw_fader_row(grid_device, GRID_FX_FIRST_ROW + index - 1, param_id)
+    for index, param_id in ipairs(GRID_LAYOUT.fx_fader_ids) do
+      grid_redraw_fader_row(grid_device, GRID_LAYOUT.fx_first_row + index - 1, param_id)
     end
     grid_redraw_256_sources(grid_device)
     grid_redraw_256_transport(grid_device)
@@ -3980,8 +3986,8 @@ function grid_redraw_256_buffers(grid_device)
     elseif buffer.loaded then
       level = 8
     end
-    grid_device:led(slot, GRID_BUFFER_RECORD_ROW, level)
-    grid_device:led(slot, GRID_BUFFER_CLEAR_ROW, 4)
+    grid_device:led(slot, GRID_LAYOUT.buffer_record_row, level)
+    grid_device:led(slot, GRID_LAYOUT.buffer_clear_row, 4)
   end
 end
 
@@ -3989,7 +3995,7 @@ end
 -- buffers 2)
 function grid_redraw_256_sources(grid_device)
   for voice_idx = 1, NUM_VOICES do
-    local y = GRID_SOURCE_FIRST_ROW + voice_idx - 1
+    local y = GRID_LAYOUT.source_first_row + voice_idx - 1
     for source = 1, #SOURCE_OPTIONS do
       local level = 4
       local slot = source - SOURCE_SYNTH
@@ -4050,14 +4056,14 @@ end
 -- fader pages, selected at 15.
 function grid_redraw_faders(grid_device)
   local ids = fader_param_ids(grid_voice_select)
-  for row = 1, GRID_FADER_ROWS do
-    local param_id = ids[(param_page - 1) * GRID_FADER_ROWS + row]
+  for row = 1, GRID_LAYOUT.fader_rows do
+    local param_id = ids[(param_page - 1) * GRID_LAYOUT.fader_rows + row]
     if param_id then
-      grid_redraw_fader_row(grid_device, GRID_FADER_FIRST_ROW + row - 1, param_id)
+      grid_redraw_fader_row(grid_device, GRID_LAYOUT.fader_first_row + row - 1, param_id)
     end
   end
   for page = 1, fader_page_count(grid_voice_select) do
-    grid_device:led(page, GRID_PARAM_PAGE_ROW, page == param_page and 15 or 4)
+    grid_device:led(page, GRID_LAYOUT.param_page_row, page == param_page and 15 or 4)
   end
 end
 

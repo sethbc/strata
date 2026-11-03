@@ -1311,7 +1311,7 @@ test("FX page rows stay apart and inside 128x64 at every row and value", functio
   params:set("mutation_enabled", 1)
   capture_scene(8); recall_scene(8, 0)
   show_page(2)
-  local rows = local_value("FX_ROWS")
+  local rows = local_value("FX_PAGE").rows
   assert_equal(#rows, 12, "density, drift, 4 filter, 3 delay, 3 reverb rows")
   local function screen_has(text)
     for _, entry in ipairs(context.screen.texts) do
