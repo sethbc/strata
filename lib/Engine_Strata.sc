@@ -84,8 +84,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(4, 1, 8), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -132,8 +134,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(5, 1, 10), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -171,8 +175,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(3, 1, 6), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -206,8 +212,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(8, 1, 12), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -241,8 +249,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -283,8 +293,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -299,8 +311,10 @@ Engine_Strata : CroneEngine {
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Excitation trigger: the free-running exciter plus retrigger
-            // commands, so a pattern step actually re-plucks the string (as
-            // hard as its velocity)
+            // commands, so a pattern step actually re-plucks the string as
+            // hard as its velocity. T2A is a single-sample impulse, so the
+            // velocity only scales that trigger's excitation, never a
+            // running signal.
             exciteTrig = Impulse.ar(excite) + (T2A.ar(t_trig) * velocity);
 
             // Excitation signal - burst of noise
@@ -345,8 +359,10 @@ Engine_Strata : CroneEngine {
 
             env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
             // Accent envelope fired by the retrigger command (pattern steps,
-            // MIDI notes); its depth is the velocity sent with the trigger
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
+            // MIDI notes); its depth is the velocity sent with the trigger.
+            // levelScale is sampled when the envelope starts, so a new
+            // velocity never rescales a running accent tail.
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -385,19 +401,20 @@ Engine_Strata : CroneEngine {
             arg in, out, gate=1,
             grainSize=0.1, grainDensity=20, pitchShift=1, 
             posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
-            grainMode=0, t_trig=0, velocity=1;
-            var sig, env, input, mode, grainTrigger, grainLevel, spreadLevel;
+            grainMode=0, t_trig=0;
+            var sig, env, input, mode, grainTrigger, spreadLevel;
             
             env = EnvGen.kr(Env.asr(0.1, 1, 2), gate, doneAction: 2);
             input = In.ar(in, 2);
 
             // grainMode 0 = continuous (grainDensity grains per second),
             // 1 = triggered: one grain per t_trig (retrigger: pattern steps,
-            // MIDI notes), at the velocity sent with it. Triggered mode mutes
-            // the position-spread path so only the triggered grains sound.
+            // MIDI notes). Velocity reaches triggered grains through the
+            // voice synth's accent; GrainIn has no per-grain amplitude, so
+            // the grain synth never scales its output by velocity. Triggered
+            // mode mutes the position-spread path so only the grains sound.
             mode = grainMode.round.clip(0, 1);
             grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
-            grainLevel = Select.kr(mode, [1, velocity]);
             spreadLevel = Select.kr(mode, [1, 0]);
 
             sig = GrainIn.ar(
@@ -407,7 +424,7 @@ Engine_Strata : CroneEngine {
                 in: input,
                 pan: LFNoise1.kr(2).range(panSpread.neg, panSpread),
                 envbufnum: envBuf
-            ) * grainLevel;
+            );
 
             // Position spread: a little of the input, smeared by a wandering delay
             sig = sig + (DelayC.ar(
@@ -566,7 +583,7 @@ Engine_Strata : CroneEngine {
         // triggered mode. velocity is set in the same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
             this.setSynth(this.voiceKey(msg[1]), \velocity, msg[2], \t_trig, 1);
-            this.setSynth(this.grainKey(msg[1]), \velocity, msg[2], \t_trig, 1);
+            this.setSynth(this.grainKey(msg[1]), \t_trig, 1);
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;

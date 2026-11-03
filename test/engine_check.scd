@@ -87,8 +87,15 @@ server.waitForBoot({
             var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
             check.(controls.includes(\t_trig), "% has a t_trig control (C3)".format(name));
             check.(controls.includes(\velocity), "% has a velocity control for the accent".format(name));
+            // EnvGen inputs: gate, levelScale, ...; the accent's levelScale is
+            // the velocity control (sampled per trigger), not the constant 1
+            check.(SynthDescLib.global.at(name).def.children.any({ arg ugen;
+                ugen.isKindOf(EnvGen) and: { ugen.inputs[1].isKindOf(OutputProxy) }
+            }), "% scales its accent envelope by velocity through levelScale".format(name));
         });
-        [\grainMode, \t_trig, \velocity].do({ arg control;
+        check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(\velocity).not,
+            "strataGrain does not scale grains by a bare velocity control");
+        [\grainMode, \t_trig].do({ arg control;
             check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(control),
                 "strataGrain has a % control".format(control));
         });
@@ -157,12 +164,11 @@ server.waitForBoot({
         check.(getControl.(engine.synths[\grain0], \grainMode) == 1, "setGrainParam grainMode reaches the grain synth");
         command.(\setGrainParam, 0, \grainMode, 0);
 
-        // retrigger carries velocity to the voice synth (accent depth) and the grain synth
+        // retrigger carries velocity to the voice synth (accent depth)
         before = synthNames.(context.xg).size;
         command.(\retrigger, 0, 0.5);
         server.sync;
         check.(getControl.(engine.synths[\voice0], \velocity) == 0.5, "retrigger sets velocity on the voice synth");
-        check.(getControl.(engine.synths[\grain0], \velocity) == 0.5, "retrigger sets velocity on the grain synth");
         check.(synthNames.(context.xg).size == before, "a velocity retrigger creates no nodes");
 
         // Grain envelope shapes: envShape 0 = built-in Hann (-1), 1-4 = envBuffers

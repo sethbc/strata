@@ -26,7 +26,7 @@ Each synthesis voice is fed through its own granular processor with independent 
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
-- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger, as loud as the trigger's velocity; nothing sounds between triggers). In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
+- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
 ### Cross-Modulation
 
@@ -298,7 +298,7 @@ Scene LED feedback:
 - **Tempo control** - 40-300 BPM (adjustable via grid or PARAMS)
 - **Pattern operations** - clear, randomize per voice
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
-- **Step level is velocity** - a step's brightness (1-15) sets how strong its accent (and triggered grain) is: level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15
+- **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15
 
 #### Multi-Grid Support
 
