@@ -738,6 +738,7 @@ server.waitForBoot({
         engine.synths[\grain0].set(\out, triggeredBus.index);
         probe = Synth(\strataCheckPeak, [\in, triggeredBus, \out, peakBus], engine.processGroup, \addToTail);
         server.sync;
+        0.1.wait;                                  // let the grains reach the private bus
         continuousPeak = readPeak.value;
         check.(continuousPeak > 0.01, "a running synth voice's continuous grains sound (peak %)".format(continuousPeak));
         command.(\setGrainParam, 0, \grainMode, 1);
@@ -757,6 +758,7 @@ server.waitForBoot({
         check.(triggeredPeak > 0.01, "a retrigger fires a grain in triggered mode (peak %)".format(triggeredPeak));
         command.(\setGrainParam, 0, \grainMode, 0);
         engine.synths[\grain0].set(\out, engine.mainBus.index);
+        server.sync;
         probe.free; peakBus.free; triggeredBus.free;
         server.sync;
 

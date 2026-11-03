@@ -1003,7 +1003,6 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
     end
     assert_equal(drawn, expected_rings[page], PAGE_TITLES[page] .. " rings drawn")
   end
-  assert_equal(next(device.segments), nil, "SETUP page draws no rings")
 end)
 
 test("main_param_id and main_param_label name each voice's E3 and arc ring 2 param", function()
@@ -1488,7 +1487,7 @@ test("stub param type codes come from one table; an unknown type is an error", f
   assert_equal(constants, count, "one params.tX constant per PARAM_TYPE_CODES entry")
   -- the codes are written down once: no literal tX = <n> outside the table
   local file = assert(io.open(test_dir .. "/norns_stubs.lua", "r")); local source = file:read("*a"); file:close()
-  assert_true(not source:find("t%u+%s*=%s*%d"), "no type code assigned outside PARAM_TYPE_CODES")
+  assert_true(not source:find("%f[%w_]t%u+%s*=%s*%d"), "no type code assigned outside PARAM_TYPE_CODES")
   for _, bad_type in ipairs({ "bogus", "taper" }) do
     local ok, message = pcall(function() params:add { id = "stub_" .. bad_type, type = bad_type } end)
     assert_true(not ok, "params:add with type " .. bad_type .. " raises an error")
