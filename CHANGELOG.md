@@ -1,5 +1,59 @@
 # Strata Changelog
 
+## Version 2.1 - 2026-11-03
+
+Fixes every finding from a whole-app code review, plus an off-device test harness.
+
+### Critical Fixes
+
+- **C1 - Voices started at the wrong pitch.** `voiceOn` was declared `"isfffff"`, typing `freq` as a string; matron stringified it and scsynth ignored it, so `freq` was never set when a voice started. The signature is now `"iffffff"`.
+- **C2 - Starting a voice dropped most of its state.** `voiceOn` sent only freq/amp/pan and three grain values and the engine filled everything else from its own defaults, so edits made while a voice was off, `posSpread`, all cross-modulation routing and amounts, and mod speed were lost, and recalled scenes came up with the wrong timbre and no routing. New `sync_voice_to_engine()` pushes the complete Lua state right after `voiceOn`; the engine's `getVoiceParams` defaults were removed.
+- **C3 - The pattern sequencer stacked synth chains.** Each step on a running voice toggled it off and on, leaving the old voice/grain/mod synths running through releases of up to 12 s; dense patterns piled up ~90 chains per voice. New engine command `retrigger(voice)` fires an accent envelope (`t_trig`) on the running voice (Karplus re-plucks); steps never create nodes.
+- **C4 - "Grain pitch" was a volume control, and it wandered.** The grain output was multiplied by `pitchShift`, and the LFO random-walked it to its limits (up to +/-12 dB). Grain pitch now uses `PitchShift.ar`, and the LFO drift is much smaller (+/-0.002 per tick) and pulls back toward the pitch you last set.
+
+### Important Fixes
+
+- **I1 - Tempo did nothing.** The tempo param and grid tempo buttons now set norns' `clock_tempo` (the sequencer still syncs to the norns clock, so external clocks work); the param starts at the current clock tempo.
+- **I2 - The 8x16 grid layout was unreachable.** Layout detection matched `rows >= 16` before checking 8x16; sizes are now matched exactly.
+- **I3 - Grid hot-plug was broken.** A replugged grid was never redrawn and every press ran twice. `grid.add` now stores the port's vport like `grid_init`; `grid.remove` clears the handler. (The arc had the same problem and got the same fix.)
+- **I4 - "No modulation source" followed the input jack.** Unrouted mod slots read control bus 0, which on norns is the input amplitude follower. The engine now allocates an always-zero silent bus for them.
+- **I5 - Modulation could push frequencies to zero or below, and FM/Sub were unclamped.** The frequency modulator is clamped to -0.9..2 in every voice, and FM and Sub gained the same amplitude clamping as the other voices.
+- **I6 - Scene transitions finished early.** A 20 s crossfade was ~97% done after 10 s. Start values are now snapshotted once and faded linearly; only continuous parameters fade, the rest switch at the end. Any recall cancels a running transition.
+- **I7 - Scene validation missed fields recall depends on, and a bad scene file could crash init.** Validation now covers every field recall reads (globals, freeze flags, all pattern steps, crossmod slots); the file is loaded under `pcall`, missing slots are filled, and the file records a format version (`{version = 1, scenes = ...}`; older files still load).
+- **I8 - The 16x16 grid parameter page was a stub.** Rows 9-12 are now faders over the selected voice's parameters (synthesis, grain, cross-modulation) and row 13 selects the fader page (4-5 pages per voice).
+- **I9 - Grid LEDs went stale.** Starting/stopping voices, freezing from K3/arc/grid and randomizing now refresh the grid.
+
+### Minor Fixes
+
+- **M1** - Remaining hardcoded voice/scene/step counts replaced with `NUM_VOICES`, `NUM_SCENES`, `PATTERN_LENGTH` (Lua) and `numVoices` (engine).
+- **M2** - The Resonator's output was doubled (two summed stereo pairs); it is now one stereo pair (about 6 dB quieter than before).
+- **M3** - Reverb added the dry signal twice, so mix could never be fully wet; it now outputs FreeVerb2's own dry/wet mix (lower overall level at the default mix).
+- **M4** - Tape drift and the Sub's drift were LFO rates (0 froze the pitch at a random offset); they now set the drift depth at a fixed slow rate, 0 = no drift.
+- **M5** - Reverb and master ran after norns' output stage; all engine nodes now run inside the engine group in the order voices, grain/mod, reverb, master.
+- **M6** - Engine commands ignore voices that are not running, and starting a running voice releases its old synths first.
+- **M7** - Header text overlapped (`dens:` ran into `[M]`); the layout was rearranged and `[FREEZE]` no longer runs off the screen. The grid highlights the step that just played rather than the next one.
+- **M8** - Removed dead state (`grid_dirty`, `selected_param`, `param_names`, `grid_key1_held`, unused `musicutil`, the unused `tempo` local, a duplicate local); the transition-active flag is cleared on cancel; the arc variable is now `arc_device`.
+- **M9** - Cleanup also resets the scene sequencer param and darkens grid and arc.
+- **M10** - Documentation brought in line with the code (README grid layouts, CLAUDE.md function references, engine commands).
+
+### Other Fixes
+
+- Voice params now default to each voice's own values (the PARAMS menu showed 100 Hz for every voice's freq, for example).
+- The `ratio` step is now 0.001 so the Ring's 1.618 default is not snapped to 1.6.
+- Under the grid playhead, empty steps are dim and active steps bright (the whole column used to be lit at full).
+
+### Testing
+
+- `lua test/run.lua` / `luajit test/run.lua` - behaviour tests against norns stubs; every `engine.*` call is checked against the engine's command signatures.
+- `lua test/sync_check.lua` - static Lua/engine command sync check.
+- `test/run_engine_check.sh` - compiles the engine against the real norns classes and exercises every command on a local scsynth.
+
+### Upgrade Notes
+
+- Existing `scenes.data` files load unchanged and are rewritten in the versioned format on exit.
+- Overall level is lower than in 2.0 because of the Resonator (M2) and reverb (M3) fixes; raise voice `amp` or the norns output level if needed.
+- Grain pitch now transposes; scenes saved with grain pitch away from 1.0 will sound transposed rather than louder or quieter.
+
 ## Version 2.0 - 2025-01-24
 
 ### Critical Bug Fixes

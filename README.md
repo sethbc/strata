@@ -23,7 +23,7 @@ Strata creates evolving ambient textures by combining seven unique synthesis voi
 Each synthesis voice is fed through its own granular processor with independent control over:
 - Grain size (texture density)
 - Grain density (grains per second)
-- Pitch shifting (transposition)
+- Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 
 ### Cross-Modulation
@@ -38,14 +38,15 @@ Voices can modulate each other for evolving, interdependent textures:
 ### Global Controls
 
 - **Master Density** - Controls grain density across all voices simultaneously
-- **Tape Drift** - Adds subtle pitch drift to the entire mix for analog warmth
-- **Reverb** - Adjustable mix, size, and damping
+- **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none)
+- **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
+- **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows
 
 ### Performance Features
 
 - **Randomization** - Generate new parameter sets for each voice
 - **Freeze** - Lock a voice's parameters while others continue to evolve
-- **Auto-modulation** - Slow LFOs add subtle movement to frozen voices
+- **Auto-modulation** - A slow LFO adds subtle grain pitch movement to active voices that are not frozen; it always drifts back toward the pitch you set
 
 ### Probability-Based Mutations
 
@@ -160,16 +161,18 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 
 **Row 8: Transport & Page Controls**
 - Columns 1-4: Play/stop pattern sequencer
-- Columns 5-8: Tempo adjustment (-10, -1, +1, +10 BPM)
-- Columns 13-16: Page selection (1-4)
+- Columns 5-8: Tempo adjustment (-10, -1, +1, +10 BPM; sets norns' clock tempo)
+- Columns 13-16: Page selection (1-4; page 2 = parameters, page 3 = scenes)
 
-**Rows 9-12: Parameter Manipulation** (Page 2)
-- 64 virtual control positions for parameter adjustment
-- Press to randomize parameter values
-- Layout depends on selected parameter page
+**Rows 9-12: Parameter Faders** (Page 2)
+- Each row is a fader for one parameter of the voice selected in row 14
+- Press a column to set the value: column 1 = minimum, column 16 = maximum
+- The row lights up to the current value (dim bar, bright value position)
+- Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch and spread, then source / amp mod / freq mod for cross-modulation slots 1-3
 
-**Row 13: Parameter Page Selection**
-- Select which parameter set to control (1-4)
+**Row 13: Fader Page Selection** (Page 2)
+- Each fader page shows the next four parameters (rows 9-12)
+- Columns 1-4 or 1-5 select the page, depending on how many parameters the voice has (Sub has 4 pages, the other voices 5); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing
@@ -205,8 +208,16 @@ Scene LED feedback:
 - Columns 1-4: Play/stop
 - Column 5: Patterns page
 - Column 6: Parameters page
+- Column 7: Scenes page
 - Columns 9-15: Voice toggle on/off
 - Column 16: Cycle voice selection
+
+**Scenes page (row 8, column 7)**
+- Row 1: Scene recall (instant), scenes 1-8
+- Row 2: Scene recall (with transition)
+- Row 3: Scene save
+- Row 4: Set scene sequence length (1-8)
+- Row 5, Column 1: Toggle scene sequencer
 
 #### 8×16 Grid Layout (128 buttons vertical)
 
@@ -216,12 +227,13 @@ Scene LED feedback:
 **Column 8: Controls**
 - Rows 1-7: Toggle voices on/off
 - Row 9: Play/stop sequencer
-- Rows 11-16: Voice selection for parameters
+- Rows 10-16: Voice selection for parameters (row 10 = voice 1 ... row 16 = voice 7)
 
 #### 8×8 Grid Layout (64 buttons)
 
 **Rows 1-7: Pattern Sequencer**
-- 8 steps per voice (reduced from 16)
+- Only steps 1-8 of each pattern are shown and editable here
+- Patterns are still 16 steps long: steps 9-16 (set on a larger grid or by randomize/scene recall) keep playing, but are not visible on this grid
 
 **Row 8: Essential Controls**
 - Column 1: Play/stop
@@ -229,13 +241,13 @@ Scene LED feedback:
 
 #### Pattern Sequencer Features
 
-- **16-step patterns** per voice (8 steps on 64-button grid)
+- **16-step patterns** per voice (only steps 1-8 are visible on a 64-button grid)
 - **Per-voice patterns** - each voice has independent pattern
 - **Real-time recording** - toggle steps while playing
-- **Visual feedback** - current step highlighted bright
+- **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty)
 - **Tempo control** - 40-300 BPM (adjustable via grid or PARAMS)
 - **Pattern operations** - clear, randomize per voice
-- **Automatic voice triggering** - voices activate when pattern step plays
+- **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it
 
 #### Multi-Grid Support
 
@@ -330,8 +342,8 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 
 ### Master Section
 - Master density
-- Tape drift amount
-- Tempo
+- Tape drift amount (depth of the drift; 0 = none)
+- Tempo (40-300 BPM; sets norns' clock tempo, starts at the current clock tempo)
 
 ### Mutations Section
 - Mutations enabled (on/off)
@@ -345,7 +357,7 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Scene duration (4-120 seconds)
 - Scene sequence length (1-8 scenes)
 - Save scenes to disk (manual trigger)
-- Load scenes from disk (manual trigger)
+- Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console and the current scenes are kept)
 
 ### Reverb Section
 - Mix
@@ -357,7 +369,7 @@ Each voice includes:
 - Synthesis parameters (varies by voice type)
 - Grain size
 - Grain density
-- Grain pitch shift
+- Grain pitch shift (transposition ratio)
 - Position spread
 - Cross-modulation controls:
   - Modulation source (which voice modulates this one)
@@ -372,7 +384,7 @@ Each voice includes:
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
-- Per-voice granular processors using `GrainIn`
+- Per-voice granular processors using `GrainIn` followed by `PitchShift`
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output
 - Global reverb and master effects chain
@@ -392,6 +404,13 @@ Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Mas
 - SuperCollider (included with norns)
 - monome arc (optional - provides tactile parameter control with LED feedback)
 - monome grid (optional - provides pattern sequencing and parameter manipulation)
+
+## Development
+
+Off-device checks (no norns needed):
+- `lua test/run.lua` (or `luajit test/run.lua`) - behaviour tests against norns stubs
+- `lua test/sync_check.lua` - checks Lua `engine.*` calls against the engine's commands
+- `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider)
 
 ## Credits
 
