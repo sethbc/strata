@@ -429,27 +429,27 @@ test("MAIN shows [TRIG] for a voice in triggered grain mode", function()
   assert_equal(entry.y, 42, "on the main parameter label row")
 end)
 
-test("grain pitch LFO drifts subtly around the user-set pitch (C4)", function()
+test("grain pitch drift wanders subtly around the user-set pitch (C4)", function()
   local context = load_strata()
-  local lfo_metro = context.metro.all[1]
-  assert_true(lfo_metro.running and lfo_metro.event == lfo_update, "lfo metro running")
+  local drift_metro = context.metro.all[1]
+  assert_true(drift_metro.running and drift_metro.event == drift_update, "drift metro running")
   params:set("v1_grain_pitch", 1.5)
   math.randomseed(3)
   local max_offset = 0
   for _ = 1, 20000 do
-    lfo_metro.event()
+    drift_metro.event()
     max_offset = math.max(max_offset, math.abs(params:get("v1_grain_pitch") - 1.5))
   end
   assert_true(max_offset > 0.001, "pitch actually drifts (" .. max_offset .. ")")
   assert_true(max_offset < 0.06, "drift stays within a few percent (" .. max_offset .. ")")
   -- a new user value becomes the new centre
   params:set("v1_grain_pitch", 0.5)
-  for _ = 1, 2000 do lfo_metro.event() end
+  for _ = 1, 2000 do drift_metro.event() end
   assert_near(params:get("v1_grain_pitch"), 0.5, 0.06, "walk re-centres on the new value")
   -- frozen voices do not drift
   toggle_freeze(1)
   local frozen_pitch = params:get("v1_grain_pitch")
-  for _ = 1, 100 do lfo_metro.event() end
+  for _ = 1, 100 do drift_metro.event() end
   assert_equal(params:get("v1_grain_pitch"), frozen_pitch, "frozen voice pitch unchanged")
 end)
 
@@ -1639,7 +1639,7 @@ test("randomize and mutate touch buffer params, never source", function()
   -- freeze covers buffer params
   params:set("v1_source", 5); toggle_freeze(1)
   local frozen_state = deep_copy(local_value("voices")[1].grain)
-  randomize_voice(1); gentle_mutate(); for _ = 1, 10 do lfo_update() end
+  randomize_voice(1); gentle_mutate(); for _ = 1, 10 do drift_update() end
   for key, value in pairs(frozen_state) do
     assert_equal(local_value("voices")[1].grain[key], value, "frozen buffer voice keeps " .. key)
   end
@@ -1653,18 +1653,18 @@ test("buffer position drifts subtly and reverts to the user-set position", funct
   math.randomseed(3)
   local max_offset = 0
   for _ = 1, 3000 do
-    lfo_update()
+    drift_update()
     max_offset = math.max(max_offset, math.abs(params:get("v1_buf_pos") - 0.4))
   end
   assert_true(max_offset > 0, "buf_pos drifts")
   assert_true(max_offset < 0.05, "drift stays subtle (max " .. max_offset .. ")")
   assert_equal(params:get("v1_freq"), synth_freq, "drift leaves synth params alone")
   params:set("v1_buf_pos", 0.8)
-  for _ = 1, 3000 do lfo_update() end
+  for _ = 1, 3000 do drift_update() end
   assert_true(math.abs(params:get("v1_buf_pos") - 0.8) < 0.05, "a new user position becomes the centre")
   -- a synth-sourced voice's position does not drift
   params:set("v1_source", 1); local pos = params:get("v1_buf_pos")
-  for _ = 1, 100 do lfo_update() end
+  for _ = 1, 100 do drift_update() end
   assert_equal(params:get("v1_buf_pos"), pos, "synth source: no position drift")
 end)
 
@@ -2032,11 +2032,11 @@ end)
 test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
-  local lfo_metro = local_value("lfo_metro")
+  local drift_metro = local_value("drift_metro")
   context.clear_engine_calls(); context.fileselect.last = nil
   -- K2 down, then K1 opens the menu: the K2 release goes to the menu
   key(2, 1)
-  context.menu.mode = true; lfo_metro.event()   -- a 10 Hz tick while the menu is open
+  context.menu.mode = true; drift_metro.event()   -- a 10 Hz tick while the menu is open
   context.menu.mode = false                       -- K1 again: back to the script
   tap(3)
   assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after K2 was released in the menu")
@@ -2046,11 +2046,11 @@ test("a K2 released inside the norns menu is forgotten: K3 records again (fix ro
   tap(3)  -- stop the recording
   context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
   key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 still saves")
-  context.menu.mode = true; lfo_metro.event(); context.menu.mode = false
+  context.menu.mode = true; drift_metro.event(); context.menu.mode = false
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector after the menu")
   -- ticks with the menu closed keep a held K2
   context.fileselect.last = nil; context.clear_engine_calls()
-  key(2, 1); lfo_metro.event(); tap(3)
+  key(2, 1); drift_metro.event(); tap(3)
   assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
   key(2, 0); assert_equal(context.fileselect.last, nil)
   assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
@@ -2287,7 +2287,7 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   local grain_changed = false
   for _ = 1, 10 do
     local grain_before = params:get("v1_grain_size")
-    randomize_voice(1); gentle_mutate(); for _ = 1, 10 do lfo_update() end
+    randomize_voice(1); gentle_mutate(); for _ = 1, 10 do drift_update() end
     if params:get("v1_grain_size") ~= grain_before then grain_changed = true end
   end
   assert_true(grain_changed, "grain params still randomize and mutate")

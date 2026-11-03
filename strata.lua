@@ -303,15 +303,16 @@ end
 -- UI
 local voice_list
 
--- LFOs for parameter modulation
-local lfo_metro
-local LFO_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
-local LFO_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
-local grain_pitch_base = {}        -- last non-LFO grain pitch per voice (the walk's centre)
-local LFO_BUF_POS_STEP = 0.002     -- width of each random buffer position step (+/-0.001 per tick)
-local LFO_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base position removed per tick
-local buf_pos_base = {}            -- last non-LFO buffer position per voice
-local lfo_writing = false          -- true while lfo_update sets params
+-- Per-voice drift (drift_update on the 10 Hz drift_metro): a slow random
+-- walk of grain pitch and buffer position. Not the global LFOs (lfos).
+local drift_metro
+local DRIFT_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
+local DRIFT_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
+local grain_pitch_base = {}          -- last non-drift grain pitch per voice (the walk's centre)
+local DRIFT_BUF_POS_STEP = 0.002     -- width of each random buffer position step (+/-0.001 per tick)
+local DRIFT_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base position removed per tick
+local buf_pos_base = {}              -- last non-drift buffer position per voice
+local drift_writing = false          -- true while drift_update sets params
 for i = 1, NUM_VOICES do
   grain_pitch_base[i] = voices[i].grain.pitch
   buf_pos_base[i] = voices[i].grain.buf_pos
@@ -503,16 +504,81 @@ local function buffer_state_changed(value)
   if grid_page == 4 then grid_redraw() end
 end
 
--- Effects chain (filter -> delay -> reverb -> master). Each filter or delay
--- param sends its whole command, so the engine always gets the current
--- values of the others.
+-- Param -> engine. A param action stores its value and calls
+-- send_param_to_engine(id, value); the global LFOs call it with modulated
+-- values, so both drive the engine through one path. engine_senders[id]
+-- holds the engine call for a param (gated on the voice running where the
+-- engine needs that). engine_param_values remembers the last value sent per
+-- param, so a command that carries several params (setFilter, setDelay,
+-- setReverb, grain density x master density) sends the others as the engine
+-- has them: an LFO on filter res and one on filter freq do not undo each
+-- other.
+local engine_senders = {}
+local engine_param_values = {}
+
+-- The value the engine last got for a param (its stored value until sent)
+local function engine_param_value(param_id)
+  local value = engine_param_values[param_id]
+  if value == nil then return params:get(param_id) end
+  return value
+end
+
+function send_param_to_engine(param_id, value)
+  engine_param_values[param_id] = value
+  local sender = engine_senders[param_id]
+  if sender then sender(value) end
+end
+
+-- sync_voice_values_to_engine sends a voice's stored values: forget what
+-- was sent for its params before
+local function forget_sent_voice_values(voice_idx)
+  local prefix = "v" .. voice_idx .. "_"
+  for param_id in pairs(engine_param_values) do
+    if param_id:sub(1, #prefix) == prefix then
+      engine_param_values[param_id] = nil
+    end
+  end
+end
+
+-- Effects chain (filter -> delay -> reverb -> master). Each filter, delay or
+-- reverb param sends its whole command, with the values the engine has for
+-- the others.
 local function send_filter_to_engine()
-  engine.setFilter(params:get("filter_freq"), params:get("filter_res"), params:get("filter_type") - 1, params:get("filter_mix"))
+  engine.setFilter(engine_param_value("filter_freq"), engine_param_value("filter_res"),
+    engine_param_value("filter_type") - 1, engine_param_value("filter_mix"))
 end
 
 local function send_delay_to_engine()
-  engine.setDelay(params:get("delay_time"), params:get("delay_feedback"), params:get("delay_mix"))
+  engine.setDelay(engine_param_value("delay_time"), engine_param_value("delay_feedback"),
+    engine_param_value("delay_mix"))
 end
+
+local function send_reverb_to_engine()
+  engine.setReverb(engine_param_value("reverb_mix"), engine_param_value("reverb_size"),
+    engine_param_value("reverb_damp"))
+end
+
+-- Master density scales every running voice's grain density
+local function send_master_density_to_engine(density)
+  for i = 1, NUM_VOICES do
+    if voices[i].active then
+      engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)
+    end
+  end
+end
+
+engine_senders.master_density = send_master_density_to_engine
+engine_senders.filter_type = send_filter_to_engine
+engine_senders.filter_freq = send_filter_to_engine
+engine_senders.filter_res = send_filter_to_engine
+engine_senders.filter_mix = send_filter_to_engine
+engine_senders.delay_time = send_delay_to_engine
+engine_senders.delay_feedback = send_delay_to_engine
+engine_senders.delay_mix = send_delay_to_engine
+engine_senders.reverb_mix = send_reverb_to_engine
+engine_senders.reverb_size = send_reverb_to_engine
+engine_senders.reverb_damp = send_reverb_to_engine
+engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 
 -- Last non-zero filter mix (set by the filter_mix action): FX page K3
 -- restores it after a bypass
@@ -535,7 +601,7 @@ function init()
     controlspec = controlspec.new(0.1, 2.0, "lin", 0.01, 1.0),
     action = function(x)
       master_density = x
-      update_all_grain_density()
+      send_param_to_engine("master_density", x)
     end
   }
   
@@ -679,8 +745,8 @@ function init()
     name = "filter type",
     options = {"lowpass", "highpass", "bandpass"},
     default = 1,
-    action = function()
-      send_filter_to_engine()
+    action = function(x)
+      send_param_to_engine("filter_type", x)
     end
   }
 
@@ -689,8 +755,8 @@ function init()
     id = "filter_freq",
     name = "filter freq",
     controlspec = controlspec.new(20, 20000, "exp", 0, 5000, "Hz"),
-    action = function()
-      send_filter_to_engine()
+    action = function(x)
+      send_param_to_engine("filter_freq", x)
       fx_fader_changed()
     end
   }
@@ -700,8 +766,8 @@ function init()
     id = "filter_res",
     name = "filter res",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
-    action = function()
-      send_filter_to_engine()
+    action = function(x)
+      send_param_to_engine("filter_res", x)
       fx_fader_changed()
     end
   }
@@ -714,7 +780,7 @@ function init()
     action = function(x)
       -- FX page K3 brings back the last non-zero mix, however it was set
       if x > 0 then fx_filter_last_mix = x end
-      send_filter_to_engine()
+      send_param_to_engine("filter_mix", x)
     end
   }
 
@@ -723,8 +789,8 @@ function init()
     id = "delay_time",
     name = "delay time",
     controlspec = controlspec.new(0.01, 2, "exp", 0.001, 0.375, "s"),
-    action = function()
-      send_delay_to_engine()
+    action = function(x)
+      send_param_to_engine("delay_time", x)
       fx_fader_changed()
     end
   }
@@ -734,8 +800,8 @@ function init()
     id = "delay_feedback",
     name = "delay feedback",
     controlspec = controlspec.new(0, 0.95, "lin", 0.01, 0.4),
-    action = function()
-      send_delay_to_engine()
+    action = function(x)
+      send_param_to_engine("delay_feedback", x)
       fx_fader_changed()
     end
   }
@@ -745,8 +811,8 @@ function init()
     id = "delay_mix",
     name = "delay mix",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
-    action = function()
-      send_delay_to_engine()
+    action = function(x)
+      send_param_to_engine("delay_mix", x)
       fx_fader_changed()
     end
   }
@@ -757,7 +823,7 @@ function init()
     name = "reverb mix",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
     action = function(x)
-      engine.setReverb(x, params:get("reverb_size"), params:get("reverb_damp"))
+      send_param_to_engine("reverb_mix", x)
     end
   }
 
@@ -767,7 +833,7 @@ function init()
     name = "reverb size",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.8),
     action = function(x)
-      engine.setReverb(params:get("reverb_mix"), x, params:get("reverb_damp"))
+      send_param_to_engine("reverb_size", x)
     end
   }
 
@@ -777,7 +843,7 @@ function init()
     name = "reverb damping",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
     action = function(x)
-      engine.setReverb(params:get("reverb_mix"), params:get("reverb_size"), x)
+      send_param_to_engine("reverb_damp", x)
     end
   }
 
@@ -787,7 +853,7 @@ function init()
     name = "tape drift",
     controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
     action = function(x)
-      engine.setMasterDrift(x)
+      send_param_to_engine("drift_amount", x)
     end
   }
 
@@ -832,11 +898,11 @@ function init()
   norns.enc.accel(1, false)
   norns.enc.sens(1, E1_TICKS_PER_PAGE)
   
-  -- Start LFO system
-  lfo_metro = metro.init()
-  lfo_metro.time = 0.1
-  lfo_metro.event = lfo_update
-  lfo_metro:start()
+  -- Start the per-voice drift
+  drift_metro = metro.init()
+  drift_metro.time = 0.1
+  drift_metro.event = drift_update
+  drift_metro:start()
 
   -- Initialize mutation system
   mutation_metro = metro.init()
@@ -876,24 +942,35 @@ end
 
 function add_voice_params(voice_idx)
   local v = voices[voice_idx]
+  local prefix = "v" .. voice_idx .. "_"
+  local engine_voice = voice_idx - 1
+
+  -- A voice param's engine call runs only while the voice is running
+  -- (sync_voice_to_engine sends everything when it starts)
+  local function add_voice_sender(param_id, send)
+    engine_senders[param_id] = function(value)
+      if voices[voice_idx].active then send(value) end
+    end
+  end
+
   params:add_separator("voice " .. voice_idx .. ": " .. v.name)
   
   -- Voice params (in param_order so the menu order is stable)
   for _, key in ipairs(v.param_order) do
     local spec = get_param_spec(key)
     spec.default = v.params[key]  -- the voices table holds each voice's defaults
+    local param_id = prefix .. key
     params:add{
       type = "control",
-      id = "v" .. voice_idx .. "_" .. key,
+      id = param_id,
       name = key,
       controlspec = spec,
       action = function(x)
         voices[voice_idx].params[key] = x
-        if voices[voice_idx].active then
-          engine.setVoiceParam(voice_idx - 1, key, x)
-        end
+        send_param_to_engine(param_id, x)
       end
     }
+    add_voice_sender(param_id, function(value) engine.setVoiceParam(engine_voice, key, value) end)
   end
   
   -- Grain params
@@ -926,18 +1003,19 @@ function add_voice_params(voice_idx)
     type = "control",
     id = "v" .. voice_idx .. "_buf_pos",
     name = "buffer position",
-    -- step 0: the LFO drift moves in steps far smaller than 0.01
+    -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
     action = function(x)
       voices[voice_idx].grain.buf_pos = x
-      if not lfo_writing then
+      if not drift_writing then
         buf_pos_base[voice_idx] = x
       end
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "bufPos", x)
-      end
+      send_param_to_engine(prefix .. "buf_pos", x)
     end
   }
+  add_voice_sender(prefix .. "buf_pos", function(value)
+    engine.setGrainParam(engine_voice, "bufPos", value)
+  end)
 
   params:add{
     type = "control",
@@ -946,11 +1024,12 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
     action = function(x)
       voices[voice_idx].grain.buf_rate = x
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "bufRate", x)
-      end
+      send_param_to_engine(prefix .. "buf_rate", x)
     end
   }
+  add_voice_sender(prefix .. "buf_rate", function(value)
+    engine.setGrainParam(engine_voice, "bufRate", value)
+  end)
 
   params:add{
     type = "control",
@@ -959,11 +1038,12 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
     action = function(x)
       voices[voice_idx].grain.buf_scan = x
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "bufScan", x)
-      end
+      send_param_to_engine(prefix .. "buf_scan", x)
     end
   }
+  add_voice_sender(prefix .. "buf_scan", function(value)
+    engine.setGrainParam(engine_voice, "bufScan", value)
+  end)
   
   params:add{
     type = "control",
@@ -972,11 +1052,12 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
     action = function(x)
       voices[voice_idx].grain.size = x
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "grainSize", x)
-      end
+      send_param_to_engine(prefix .. "grain_size", x)
     end
   }
+  add_voice_sender(prefix .. "grain_size", function(value)
+    engine.setGrainParam(engine_voice, "grainSize", value)
+  end)
   
   params:add{
     type = "control",
@@ -985,28 +1066,30 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density),
     action = function(x)
       voices[voice_idx].grain.density = x
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "grainDensity", x * master_density)
-      end
+      send_param_to_engine(prefix .. "grain_density", x)
     end
   }
+  add_voice_sender(prefix .. "grain_density", function(value)
+    engine.setGrainParam(engine_voice, "grainDensity", value * engine_param_value("master_density"))
+  end)
   
   params:add{
     type = "control",
     id = "v" .. voice_idx .. "_grain_pitch",
     name = "grain pitch",
-    -- step 0: the LFO drift moves in steps far smaller than 0.01
+    -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
     action = function(x)
       voices[voice_idx].grain.pitch = x
-      if not lfo_writing then
+      if not drift_writing then
         grain_pitch_base[voice_idx] = x
       end
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "pitchShift", x)
-      end
+      send_param_to_engine(prefix .. "grain_pitch", x)
     end
   }
+  add_voice_sender(prefix .. "grain_pitch", function(value)
+    engine.setGrainParam(engine_voice, "pitchShift", value)
+  end)
   
   params:add{
     type = "control",
@@ -1015,11 +1098,12 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
     action = function(x)
       voices[voice_idx].grain.spread = x
-      if voices[voice_idx].active then
-        engine.setGrainParam(voice_idx - 1, "posSpread", x)
-      end
+      send_param_to_engine(prefix .. "grain_spread", x)
     end
   }
+  add_voice_sender(prefix .. "grain_spread", function(value)
+    engine.setGrainParam(engine_voice, "posSpread", value)
+  end)
 
   params:add{
     type = "option",
@@ -1082,11 +1166,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot1.amp_amt = x
-      if voices[voice_idx].active then
-        engine.setModAmpAmt(voice_idx - 1, 1, x)
-      end
+      send_param_to_engine(prefix .. "mod_amp_amt_1", x)
     end
   }
+  add_voice_sender(prefix .. "mod_amp_amt_1", function(value) engine.setModAmpAmt(engine_voice, 1, value) end)
 
   params:add{
     type = "control",
@@ -1095,11 +1178,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot1.freq_amt = x
-      if voices[voice_idx].active then
-        engine.setModFreqAmt(voice_idx - 1, 1, x)
-      end
+      send_param_to_engine(prefix .. "mod_freq_amt_1", x)
     end
   }
+  add_voice_sender(prefix .. "mod_freq_amt_1", function(value) engine.setModFreqAmt(engine_voice, 1, value) end)
 
   -- Slot 2
   params:add{
@@ -1131,11 +1213,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot2.amp_amt = x
-      if voices[voice_idx].active then
-        engine.setModAmpAmt(voice_idx - 1, 2, x)
-      end
+      send_param_to_engine(prefix .. "mod_amp_amt_2", x)
     end
   }
+  add_voice_sender(prefix .. "mod_amp_amt_2", function(value) engine.setModAmpAmt(engine_voice, 2, value) end)
 
   params:add{
     type = "control",
@@ -1144,11 +1225,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot2.freq_amt = x
-      if voices[voice_idx].active then
-        engine.setModFreqAmt(voice_idx - 1, 2, x)
-      end
+      send_param_to_engine(prefix .. "mod_freq_amt_2", x)
     end
   }
+  add_voice_sender(prefix .. "mod_freq_amt_2", function(value) engine.setModFreqAmt(engine_voice, 2, value) end)
 
   -- Slot 3
   params:add{
@@ -1180,11 +1260,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot3.amp_amt = x
-      if voices[voice_idx].active then
-        engine.setModAmpAmt(voice_idx - 1, 3, x)
-      end
+      send_param_to_engine(prefix .. "mod_amp_amt_3", x)
     end
   }
+  add_voice_sender(prefix .. "mod_amp_amt_3", function(value) engine.setModAmpAmt(engine_voice, 3, value) end)
 
   params:add{
     type = "control",
@@ -1193,11 +1272,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
     action = function(x)
       voices[voice_idx].crossmod.slot3.freq_amt = x
-      if voices[voice_idx].active then
-        engine.setModFreqAmt(voice_idx - 1, 3, x)
-      end
+      send_param_to_engine(prefix .. "mod_freq_amt_3", x)
     end
   }
+  add_voice_sender(prefix .. "mod_freq_amt_3", function(value) engine.setModFreqAmt(engine_voice, 3, value) end)
 
   -- Global mod speed (shared across all slots)
   params:add{
@@ -1207,11 +1285,10 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
     action = function(x)
       voices[voice_idx].crossmod.speed = x
-      if voices[voice_idx].active then
-        engine.setModSpeed(voice_idx - 1, x)
-      end
+      send_param_to_engine(prefix .. "mod_speed", x)
     end
   }
+  add_voice_sender(prefix .. "mod_speed", function(value) engine.setModSpeed(engine_voice, value) end)
 end
 
 function get_param_spec(param_name)
@@ -1288,13 +1365,17 @@ end
 function sync_voice_values_to_engine(voice_idx)
   local voice = voices[voice_idx]
   local engine_voice = voice_idx - 1
+  local engine_master_density = engine_param_value("master_density")
+  -- the engine now gets this voice's stored values (LFOs re-apply theirs
+  -- on their next step)
+  forget_sent_voice_values(voice_idx)
 
   for key, value in pairs(voice.params) do
     engine.setVoiceParam(engine_voice, key, value)
   end
 
   engine.setGrainParam(engine_voice, "grainSize", voice.grain.size)
-  engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * master_density)
+  engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * engine_master_density)
   engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
   engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
   engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
@@ -1346,35 +1427,27 @@ function randomize_voice(voice_idx)
   grid_redraw()
 end
 
-function update_all_grain_density()
-  for i = 1, NUM_VOICES do
-    if voices[i].active then
-      engine.setGrainParam(i - 1, "grainDensity", voices[i].grain.density * master_density)
-    end
-  end
-end
-
-function lfo_update()
+function drift_update()
   -- Slow grain pitch drift for active, non-frozen voices: a small random
   -- step plus a pull back toward the last user/scene/mutation-set pitch, so
   -- the walk stays a subtle detune instead of wandering to the rails
   for i = 1, NUM_VOICES do
     if voices[i].active and not frozen[i] then
       local current = voices[i].grain.pitch
-      local delta = (math.random() - 0.5) * LFO_PITCH_STEP
-        - (current - grain_pitch_base[i]) * LFO_PITCH_REVERSION
-      lfo_writing = true
+      local delta = (math.random() - 0.5) * DRIFT_PITCH_STEP
+        - (current - grain_pitch_base[i]) * DRIFT_PITCH_REVERSION
+      drift_writing = true
       params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
-      lfo_writing = false
+      drift_writing = false
 
       -- Buffer sources also drift their position the same way
       if voice_uses_buffer(i) then
         local position = voices[i].grain.buf_pos
-        local position_delta = (math.random() - 0.5) * LFO_BUF_POS_STEP
-          - (position - buf_pos_base[i]) * LFO_BUF_POS_REVERSION
-        lfo_writing = true
+        local position_delta = (math.random() - 0.5) * DRIFT_BUF_POS_STEP
+          - (position - buf_pos_base[i]) * DRIFT_BUF_POS_REVERSION
+        drift_writing = true
         params:set("v" .. i .. "_buf_pos", util.clamp(position + position_delta, 0, 1))
-        lfo_writing = false
+        drift_writing = false
       end
     end
   end
@@ -1385,7 +1458,7 @@ function lfo_update()
     grid_redraw()
   end
 
-  -- lfo_update is the script's 10 Hz tick: also drop keys held into the menu
+  -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
   forget_keys_held_through_menu()
 end
 
@@ -2504,7 +2577,7 @@ end
 -- The norns menu (K1, or PARAMS and its file selector) takes every key
 -- while it is open, so a key released there never reaches key() and would
 -- stay "held" (on BUFFER, every later K3 would save instead of record).
--- Called on every 10 Hz lfo_metro tick (end of lfo_update): while the menu is open, forget
+-- Called on every 10 Hz drift_metro tick (end of drift_update): while the menu is open, forget
 -- every held key and the BUFFER page's K2 gesture.
 function forget_keys_held_through_menu()
   if not norns.menu.status() then return end
@@ -3501,7 +3574,7 @@ function cleanup()
   end
 
   -- Stop metros and clocks
-  if lfo_metro then lfo_metro:stop() end
+  if drift_metro then drift_metro:stop() end
 
   -- Sync mutation metro state with param
   if mutation_metro then
