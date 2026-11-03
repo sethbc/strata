@@ -63,9 +63,9 @@ The Lua script controls the engine through these commands:
 |-------------|--------------|---------|
 | `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"iffffff"` | Start a voice with initial parameters |
 | `engine.voiceOff(voice)` | `"i"` | Stop a voice (gates off with release envelope) |
-| `engine.retrigger(voice)` | `"i"` | Accent a running voice in place (fires its `t_trig` accent envelope; Karplus re-plucks). Creates no nodes; used by pattern steps |
+| `engine.retrigger(voice, velocity)` | `"if"` | Accent a running voice in place at `velocity` (0-1): fires the voice synth's `t_trig` accent envelope scaled by velocity (Karplus re-plucks), and one grain when the voice is in triggered grain mode. Creates no nodes; used by pattern steps (velocity = step level / 15) and MIDI notes |
 | `engine.setVoiceParam(voice, param, value)` | `"isf"` | Update synthesis parameters dynamically |
-| `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically (`envShape` is an index the engine maps to an envelope buffer) |
+| `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically (`envShape` is an index the engine maps to an envelope buffer; `grainMode` 0 = continuous, 1 = triggered) |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
 | `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Update the master filter: freq 20-20000 Hz, res 0-1 (rq = `1 - res * 0.95`), type 0 lowpass / 1 highpass / 2 bandpass (Lua `filter_type` option index - 1), mix 0 (bypass) to 1 |
@@ -77,11 +77,11 @@ The Lua script controls the engine through these commands:
 
 **Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`). Mod sources are converted by `engine_mod_source()` (Lua 0=none / 1-7 → SC -1=none / 0-6).
 
-**Starting a voice (`toggle_voice` → `sync_voice_to_engine`)**: `voiceOn` only carries the initial freq/amp/pan and grain size/density/pitch, and param actions only reach the engine while a voice is active. So `toggle_voice` calls `sync_voice_to_engine(voice_idx)` right after `engine.voiceOn`, which sends every `voices[i].params` entry (`setVoiceParam`), all five grain params (`setGrainParam`, density × `master_density`, `envShape` = option index − 1), every crossmod slot (`setModSource`/`setModAmpAmt`/`setModFreqAmt`) and `setModSpeed`. The engine holds no per-voice defaults of its own (there is no `getVoiceParams`); the Lua `voices` table is the only source of values.
+**Starting a voice (`toggle_voice` → `sync_voice_to_engine`)**: `voiceOn` only carries the initial freq/amp/pan and grain size/density/pitch, and param actions only reach the engine while a voice is active. So `toggle_voice` calls `sync_voice_to_engine(voice_idx)` right after `engine.voiceOn`, which sends every `voices[i].params` entry (`setVoiceParam`), all six grain params (`setGrainParam`, density × `master_density`, `envShape` and `grainMode` = option index − 1), every crossmod slot (`setModSource`/`setModAmpAmt`/`setModFreqAmt`) and `setModSpeed`. The engine holds no per-voice defaults of its own (there is no `getVoiceParams`); the Lua `voices` table is the only source of values.
 
 **Silent bus**: An unrouted mod slot must read a bus that is always zero. Control bus 0 is not safe on norns (CroneAudioContext allocates the input amplitude follower `amp_in_b` there before any engine loads), so the engine allocates `silentBus` in `alloc`, sets it to 0, uses its index for `sourceVoice = -1` and as the `voiceOn` default for `modBus1..3`, and frees it in `free`.
 
-**Retrigger**: Pattern steps never create synth nodes. For a running voice the pattern clock calls `engine.retrigger(voice - 1)`, which sets the voice synth's `t_trig` control: every voice SynthDef has an accent envelope `EnvGen.kr(Env.perc(0.005, 0.4), t_trig)` applied as `modAmp * (1 + accent)` inside the amplitude clamp, and Karplus also feeds the trigger into its exciter and `Pluck` trig inputs so it re-plucks. A step on a stopped voice starts it with `toggle_voice`.
+**Retrigger**: Pattern steps never create synth nodes. For a running voice the pattern clock calls `engine.retrigger(voice - 1, level / MAX_STEP_LEVEL)` (step level 1-15, so a step's brightness is its velocity). The engine sets `velocity` and `t_trig` in one message on both the voice synth and the grain synth. Every voice SynthDef has a plain `velocity=1` control and an accent envelope `EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity` applied as `modAmp * (1 + accent)` inside the amplitude clamp; Karplus also feeds `T2A.ar(t_trig) * velocity` into its exciter and `Pluck` trig inputs so it re-plucks as hard as the velocity. In `\strataGrain` the trigger only matters in triggered grain mode (one grain per trigger, at the velocity). A step on a stopped voice starts it with `toggle_voice`. K3 on MAIN keeps its start/freeze meaning: triggered grains fire from pattern steps and MIDI notes only (a deliberate deviation from the spec's "K3 on MAIN with the voice already on").
 
 **Current Voice Parameters** (as of latest sync):
 - **Resonator**: freq, rq, noise, mod1, mod2, amp, pan
@@ -92,9 +92,10 @@ The Lua script controls the engine through these commands:
 - **Karplus**: freq, decay, damping, excite, amp, pan
 - **Ring**: freq, ratio, mod, brightness, amp, pan
 
-**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape
+**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape, grainMode
 - `envShape` (Lua option `v<i>_grain_env`, `GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}`, default hann; `voices[i].grain.env` holds the option index 1-5) is sent as index − 1. The engine's `envBufnumFor(index)` turns it into the grain synth's `envBuf`: 0 = `-1` (GrainIn's built-in Hann), 1-4 = `envBuffers[index - 1].bufnum`; any other index is ignored. `envBuffers` are four 1024-frame `Buffer.loadCollection`s of `Env.sine`, `Env.perc(0.1, 0.9)`, `Env.linen(0.1, 0.8, 0.1)` and the trapezoid `Env([0, 1, 1, 0], [0.25, 0.5, 0.25])`
-- `DISCRETE_GRAIN_KEYS` (`{ env = true }`) lists the grain keys that hold an option index: `scene_transition_targets` skips them (they switch when the fade ends), mutation never touches them, and `validate_scene` requires positive integers
+- `grainMode` (Lua option `v<i>_grain_mode`, `GRAIN_MODE_OPTIONS = {"continuous", "triggered"}`, default continuous; `voices[i].grain.mode` holds the option index 1-2) is sent as index − 1. `\strataGrain` picks its `GrainIn` trigger with `Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)])` (`mode = grainMode.round.clip(0, 1)`): continuous fires `grainDensity` grains per second, triggered fires one grain per `retrigger`, scaled by its `velocity`, and mutes the position-spread path so only the triggered grains sound. MAIN shows `[TRIG]` for a voice in triggered mode
+- `DISCRETE_GRAIN_KEYS` (`{ env = #GRAIN_ENV_OPTIONS, mode = #GRAIN_MODE_OPTIONS }`) maps the grain keys that hold an option index to their option count: `scene_transition_targets` skips them (they switch when the fade ends), mutation and randomize never touch them, and `validate_scene` requires integers from 1 to the count
 - `pitchShift` (Lua `grain_pitch`, 0.25-4) is a real transposition: the grain output runs through `PitchShift.ar` (window = `grainSize` clipped to 0.01-0.5, fixed when the synth starts; ratio = `pitchShift.lag(0.5)`). It is not a gain.
 
 **Cross-Modulation Parameters** (per voice, 3 slots per voice):
@@ -115,7 +116,7 @@ The Lua script controls the engine through these commands:
 ### Testing Changes
 
 **Off-device tests** (run from the repo root before committing):
-- `lua test/run.lua` and `luajit test/run.lua` - loads `strata.lua` into norns stubs (`test/norns_stubs.lua`) and runs the behaviour tests; exits non-zero on failure. The engine stub rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures, and the run includes the static sync check.
+- `lua test/run.lua` and `luajit test/run.lua` - loads `strata.lua` into norns stubs (`test/norns_stubs.lua`) and runs the behaviour tests; exits non-zero on failure. The engine stub rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures, and the run includes the static sync check. Like norns, the param stub stores numeric type codes in `param.t` (`params.tOPTION` etc.); never compare `param.t` with a string (a test enforces this for `strata.lua`).
 - `lua test/sync_check.lua` - static check that every `engine.<name>(...)` call in `strata.lua` has a matching `addCommand` with the same number of arguments, and that every command is used.
 - `test/run_engine_check.sh [path/to/norns]` - compiles `lib/Engine_Strata.sc` against the real norns `sc/core` classes (default `~/src/norns`, or `$NORNS_DIR`), boots a local scsynth with its output on a private bus (silent) and runs `test/engine_check.scd`, which drives every engine command. Needs SuperCollider (`$SCLANG` overrides the sclang path).
 - `test/StrataTestNoBoot.sc.in` is deliberately not a `.sc` file: norns compiles every `.sc` under `~/dust`, and that test class disables Crone's boot.
@@ -155,6 +156,7 @@ local PATTERN_LENGTH = 16   -- Steps per pattern
 local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3     -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5      -- Screen pages (MAIN, FX, LFO, BUFFER, SETUP), selected with E1
+local MAX_STEP_LEVEL = 15   -- Pattern step levels 0 (off) to 15; level / 15 = retrigger velocity
 ```
 The engine mirrors `NUM_VOICES` as `numVoices` in [lib/Engine_Strata.sc](lib/Engine_Strata.sc). Remaining bare numbers in grid code are grid coordinates and LED levels, not counts.
 
@@ -283,7 +285,7 @@ Before completing any feature addition, verify:
 3. **Granular Parameters** - If you modify grain processing:
    - Update `\strataGrain` SynthDef arguments
    - Update `engine.setGrainParam()` calls
-   - Verify parameter names match (e.g., `grainSize`, `grainDensity`, `pitchShift`, `posSpread`, `envShape`)
+   - Verify parameter names match (e.g., `grainSize`, `grainDensity`, `pitchShift`, `posSpread`, `envShape`, `grainMode`)
 
 #### Synchronization Checklist
 
@@ -318,7 +320,7 @@ Before completing any modification task, verify:
 #### When adding new parameters, you MUST review:
 
 1. **Grid Parameter Manipulation**:
-   - Grid fader page: `fader_param_ids()` lists the selected voice's `param_order`, five grain params (the envelope shape is an option param shown as an index fader) and the nine crossmod slot values; new params added to `param_order` appear automatically. Pages hold 4 faders each, so a voice has `fader_page_count()` = 5-6 pages today (Resonator 6)
+   - Grid fader page: `fader_param_ids()` lists the selected voice's `param_order`, six grain params (envelope shape and grain mode are option params shown as index faders) and the nine crossmod slot values; new params added to `param_order` appear automatically. Pages hold 4 faders each, so a voice has `fader_page_count()` = 5-6 pages today (Folder and Sub 5, the others 6)
    - Faders are set by `set_fader_param()` and drawn by `grid_redraw_faders()`
    - Consider adding dedicated grid controls for critical new parameters
    - Update grid documentation in README.md
@@ -380,7 +382,7 @@ Each voice has a table structure containing:
 - `active` - Boolean state
 - `param_order` - Ordered list of the `params` keys (PARAMS menu order and grid fader order; amp/pan last)
 - `params` - Synthesis parameters (voice-specific); their values are also the param defaults
-- `grain` - Granular processing parameters (size, density, pitch, spread, env = grain envelope option index)
+- `grain` - Granular processing parameters (size, density, pitch, spread, env = grain envelope option index, mode = grain mode option index)
 - `crossmod` - `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`
 
 The `voices` table is the single source of truth. Engine state mirrors this: param actions forward changes while a voice is active, and `sync_voice_to_engine` pushes everything when a voice starts.
@@ -438,7 +440,7 @@ end
 ```
 
 **Key Design Decisions**:
-- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement; neither is the grain envelope shape (`DISCRETE_GRAIN_KEYS`)
+- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement; neither are the grain envelope shape and grain mode (`DISCRETE_GRAIN_KEYS`)
 - **Frozen Voice Exemption**: Frozen voices are excluded from mutations
 - **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
 - **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
@@ -565,7 +567,7 @@ Scene controls on **Page 3** (16×16 grid):
 **Smooth Transitions**:
 - `scene_transition_targets(scene_data)` snapshots `{id, start, target}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift)
 - 20 interpolation steps regardless of transition time; step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole transition time (never re-read the current value inside the loop: that makes the fade front-loaded)
-- Mod sources, grain envelope shapes (`DISCRETE_GRAIN_KEYS`), freeze and active states, tempo, filter type and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
+- Mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), freeze and active states, tempo, filter type and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
 - Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `scene_transition_active`
 
 **Voice Activation Handling**:
@@ -798,7 +800,7 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - **Pattern Storage**: `patterns[voice_idx][step]` - NUM_VOICES × PATTERN_LENGTH steps, values 0-15 (the 64 grid shows and edits only steps 1-8, but patterns still play all 16)
 - **Playback Clock**: `pattern_clock` - Uses `clock.run()` and `clock.sync(1/4)` for tempo-synced 16th notes against norns' global clock. The script's `tempo` param (40-300, initialised from `clock_tempo`) sets `clock_tempo` in its action; grid tempo buttons adjust `tempo`. External clock sources still work because the sequencer only syncs
 - **Position Tracking**: `pattern_position` - Current step (1-16), wraps around. Each tick triggers the step, redraws the grid (so the highlight shows the step that just played), then advances
-- **Triggering**: an active voice gets `engine.retrigger(voice - 1)` (accent in place, no new nodes); a stopped voice is started with `toggle_voice`. Never retrigger by toggling a voice off and on
+- **Triggering**: an active voice gets `engine.retrigger(voice - 1, level / MAX_STEP_LEVEL)` (accent in place at the step's level as velocity, one grain in triggered grain mode, no new nodes); a stopped voice is started with `toggle_voice`. Never retrigger by toggling a voice off and on
 - **Pattern Operations**:
   - `toggle_pattern_step(voice, step)` - Toggle step on/off
   - `clear_pattern(voice)` - Reset all steps to 0
@@ -827,7 +829,7 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - Voices auto-activate when pattern step triggers them
 - Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
 - Grid pages allow switching between pattern sequencing and parameter control
-- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread/envelope, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources) and option params (grain envelope, `param_range` gives `1, count`; it tests `param.options` because norns' `param.t` is a number); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number or option param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 5-6 fader pages
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread/envelope/mode, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources) and option params (grain envelope and mode, `param_range` gives `1, count`; it tests `param.options` because norns' `param.t` is a number); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number or option param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 5-6 fader pages
 - **FX page (256, page 4)**: `GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders on rows 3-7 (`set_param_from_column`/`grid_redraw_fader_row`). Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_freeze`/`grid_redraw_256_freeze`); rows 1-2 and 9-15 are dark and do nothing. `grid_key_256` has an explicit `grid_page == 4` branch so page 4 never falls through to the pattern page. The filter/delay param actions call `fx_fader_changed()`, which redraws the grid while page 4 is shown, so the faders follow the screen, arc and scene recalls. Smaller grids have no FX page
 
 ### Arc Integration (Optional)
@@ -898,7 +900,7 @@ The `update_voice_list()` function recreates the `UI.ScrollingList` on every cha
 MAIN uses a two-column layout:
 - **Header (y=8, `draw_header()`, identical on every page)**: page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
 - **Left column (0-60px)**: Scrolling voice list (4 visible at a time, rows y=15-48)
-- **Right column (65-128px)**: Selected voice details (name, status, main parameter at y=42/50); `[FREEZE]` is right-aligned at x=127 on the status row (y=26)
+- **Right column (65-128px)**: Selected voice details (name, status, main parameter at y=42/50); `[FREEZE]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42)
 - **Divider (x=62)**: Subtle vertical line separating columns
 - **Hint row (y=62)**: `K2:rand K3:freeze|start`
 - `test/run.lua` checks, on every page and for every selected voice, that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), that `dens:` starts at least 4 px after the page title, that a hint row is drawn at y=62, and that the voice list's last row ends above the hint row; keep it passing when adding text
@@ -919,7 +921,7 @@ Each voice type has its own SynthDef with unique parameters:
 - `\strataKarplus` - Karplus-Strong plucked string physical model
 - `\strataRing` - Ring modulation between two oscillators
 
-All voice SynthDefs take a `t_trig` control driving an accent envelope (see Retrigger above), and include multi-source cross-modulation inputs (3 slots):
+All voice SynthDefs take `t_trig` and `velocity` controls driving an accent envelope (see Retrigger above), and include multi-source cross-modulation inputs (3 slots):
 - `modBus1`, `modBus2`, `modBus3` - Control buses to read modulation signals from (one per slot)
 - `modAmpAmt1`, `modAmpAmt2`, `modAmpAmt3` - Amplitude modulation depths (-2 to 2)
 - `modFreqAmt1`, `modFreqAmt2`, `modFreqAmt3` - Frequency modulation depths (-2 to 2)
@@ -937,7 +939,7 @@ This prevents the theoretical 4× amplitude spike that could occur with 3 source
 
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
-- `\strataGrain` - Granular processor (one per voice); `GrainIn` (envelope `envBuf`, default -1 = built-in Hann) followed by `PitchShift` for `pitchShift`
+- `\strataGrain` - Granular processor (one per voice); `GrainIn` (envelope `envBuf`, default -1 = built-in Hann; trigger chosen by `grainMode`, `t_trig` and `velocity` for triggered mode) followed by `PitchShift` for `pitchShift`
 - `\strataFilter` - Master multimode filter (`in, out, freq=5000, res=0.5, filterType=0, mix=0`): `Select.ar` of `RLPF`/`RHPF`/`BPF` at rq `1 - res * 0.95`, `mix` crossfades dry to filtered (0 = bypass)
 - `\strataDelay` - Master stereo delay (`in, out, time=0.375, feedback=0.4, mix=0`): `DelayC` (max 2 s, `time.lag(0.1)`) fed by the input plus `LocalIn`, with the delayed signal times `feedback` sent back through `LocalOut`; `mix` crossfades dry to delayed
 - The filter and delay SynthDef defaults equal the Lua param defaults: the script never bangs its params, so the engine starts from these values

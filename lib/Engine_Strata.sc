@@ -78,13 +78,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, noiseSource, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(4, 1, 8), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -125,13 +126,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, mod, env, carrier, modSig, modFreqVal, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(5, 1, 10), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -163,13 +165,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, foldAmt, modSig, modFreq, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(3, 1, 6), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -197,13 +200,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, modFreq, modSig, modAmp;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(8, 1, 12), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -231,13 +235,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, modSig, modFreq, modAmp, modWidth;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(2, 1, 4), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -272,13 +277,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(0.01, 1, 2), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -293,8 +299,9 @@ Engine_Strata : CroneEngine {
             modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 
             // Excitation trigger: the free-running exciter plus retrigger
-            // commands, so a pattern step actually re-plucks the string
-            exciteTrig = Impulse.ar(excite) + T2A.ar(t_trig);
+            // commands, so a pattern step actually re-plucks the string (as
+            // hard as its velocity)
+            exciteTrig = Impulse.ar(excite) + (T2A.ar(t_trig) * velocity);
 
             // Excitation signal - burst of noise
             noise = PinkNoise.ar(1);
@@ -332,13 +339,14 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            t_trig=0;
+            t_trig=0, velocity=1;
             var sig, env, modSig, modFreq, modAmp, car, modulator, ring;
             var mod1Sig, mod2Sig, mod3Sig, accent;
 
             env = EnvGen.kr(Env.asr(3, 1, 5), gate, doneAction: 2);
-            // Accent envelope fired by the retrigger command (pattern steps)
-            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig);
+            // Accent envelope fired by the retrigger command (pattern steps,
+            // MIDI notes); its depth is the velocity sent with the trigger
+            accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig) * velocity;
 
             // Read and mix modulation signals from 3 sources
             mod1Sig = In.kr(modBus1, 1);
@@ -376,27 +384,37 @@ Engine_Strata : CroneEngine {
         SynthDef(\strataGrain, {
             arg in, out, gate=1,
             grainSize=0.1, grainDensity=20, pitchShift=1, 
-            posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1;
-            var sig, env, input;
+            posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
+            grainMode=0, t_trig=0, velocity=1;
+            var sig, env, input, mode, grainTrigger, grainLevel, spreadLevel;
             
             env = EnvGen.kr(Env.asr(0.1, 1, 2), gate, doneAction: 2);
             input = In.ar(in, 2);
-            
+
+            // grainMode 0 = continuous (grainDensity grains per second),
+            // 1 = triggered: one grain per t_trig (retrigger: pattern steps,
+            // MIDI notes), at the velocity sent with it. Triggered mode mutes
+            // the position-spread path so only the triggered grains sound.
+            mode = grainMode.round.clip(0, 1);
+            grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
+            grainLevel = Select.kr(mode, [1, velocity]);
+            spreadLevel = Select.kr(mode, [1, 0]);
+
             sig = GrainIn.ar(
                 numChannels: 2,
-                trigger: Impulse.ar(grainDensity),
+                trigger: grainTrigger,
                 dur: grainSize,
                 in: input,
                 pan: LFNoise1.kr(2).range(panSpread.neg, panSpread),
                 envbufnum: envBuf
-            );
+            ) * grainLevel;
 
             // Position spread: a little of the input, smeared by a wandering delay
             sig = sig + (DelayC.ar(
                 input,
                 0.2,
                 LFNoise1.kr(1).range(0, posSpread * 0.2)
-            ) * 0.3);
+            ) * 0.3 * spreadLevel);
 
             // Transpose the whole grain-synth output (GrainIn has no rate
             // input). Shifting after the spread path is summed keeps every
@@ -542,10 +560,13 @@ Engine_Strata : CroneEngine {
             };
         });
 
-        // Re-articulate a running voice without creating new nodes:
-        // fires the voice synth's accent envelope (and re-plucks Karplus)
-        this.addCommand(\retrigger, "i", { arg msg;
-            this.setSynth(this.voiceKey(msg[1]), \t_trig, 1);
+        // Re-articulate a running voice without creating new nodes: fires
+        // the voice synth's accent envelope at the given velocity (0-1; and
+        // re-plucks Karplus), and one grain when the grain synth is in
+        // triggered mode. velocity is set in the same message as t_trig.
+        this.addCommand(\retrigger, "if", { arg msg;
+            this.setSynth(this.voiceKey(msg[1]), \velocity, msg[2], \t_trig, 1);
+            this.setSynth(this.grainKey(msg[1]), \velocity, msg[2], \t_trig, 1);
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;

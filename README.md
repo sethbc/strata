@@ -26,6 +26,7 @@ Each synthesis voice is fed through its own granular processor with independent 
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
+- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger, as loud as the trigger's velocity; nothing sounds between triggers). In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
 ### Cross-Modulation
 
@@ -127,7 +128,9 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
   - Karplus: Decay time
   - Ring: Frequency ratio
 - **K2** - Randomize selected voice parameters
-- **K3** - Start/stop voice, or freeze/unfreeze if already active
+- **K3** - Start/stop voice, or freeze/unfreeze if already active (it never fires a triggered grain)
+
+`[TRIG]` on the main parameter row means the selected voice is in triggered grain mode.
 
 #### FX
 
@@ -207,12 +210,12 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 - Each row is a fader for one parameter of the voice selected in row 14
 - Press a column to set the value: column 1 = minimum, column 16 = maximum, following each parameter's curve (frequency and cutoff faders are exponential, so low frequencies get as many columns as high ones)
 - The row lights up to the current value (dim bar, bright value position)
-- The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap)
-- Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread and envelope, then source / amp mod / freq mod for cross-modulation slots 1-3
+- The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap); the grain mode fader is continuous on columns 1-8 and triggered on columns 9-16
+- Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread, envelope and mode, then source / amp mod / freq mod for cross-modulation slots 1-3
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
-- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Resonator has 6 pages, the other voices 5); the selected page is bright
+- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing
@@ -294,7 +297,8 @@ Scene LED feedback:
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty)
 - **Tempo control** - 40-300 BPM (adjustable via grid or PARAMS)
 - **Pattern operations** - clear, randomize per voice
-- **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it
+- **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
+- **Step level is velocity** - a step's brightness (1-15) sets how strong its accent (and triggered grain) is: level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15
 
 #### Multi-Grid Support
 
@@ -427,6 +431,7 @@ Each voice includes:
 - Grain pitch shift (transposition ratio)
 - Position spread
 - Grain envelope (hann, sine, perc, linen, trap; default hann)
+- Grain mode (continuous or triggered; default continuous)
 - Cross-modulation controls:
   - Modulation source (which voice modulates this one)
   - Amplitude modulation amount

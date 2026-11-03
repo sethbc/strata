@@ -18,11 +18,17 @@ local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
+local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 
 -- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
 -- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
 -- engine's envelope buffers
 local GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}
+
+-- Grain modes (v<i>_grain_mode option order), sent as grainMode n - 1:
+-- 0 = continuous (grain density grains per second), 1 = triggered (one grain
+-- per retrigger: pattern steps and MIDI notes)
+local GRAIN_MODE_OPTIONS = {"continuous", "triggered"}
 
 -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
 -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
@@ -51,7 +57,8 @@ local voices = {
       density = 20,
       pitch = 1,
       spread = 0.5,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
@@ -77,7 +84,8 @@ local voices = {
       density = 15,
       pitch = 1,
       spread = 0.3,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -102,7 +110,8 @@ local voices = {
       density = 25,
       pitch = 1,
       spread = 0.4,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -125,7 +134,8 @@ local voices = {
       density = 10,
       pitch = 1,
       spread = 0.2,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -151,7 +161,8 @@ local voices = {
       density = 18,
       pitch = 1,
       spread = 0.35,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -177,7 +188,8 @@ local voices = {
       density = 22,
       pitch = 1,
       spread = 0.25,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -203,7 +215,8 @@ local voices = {
       density = 20,
       pitch = 1,
       spread = 0.4,
-      env = 1  -- GRAIN_ENV_OPTIONS index
+      env = 1,  -- GRAIN_ENV_OPTIONS index
+      mode = 1  -- GRAIN_MODE_OPTIONS index
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -715,6 +728,20 @@ function add_voice_params(voice_idx)
     end
   }
 
+  params:add{
+    type = "option",
+    id = "v" .. voice_idx .. "_grain_mode",
+    name = "grain mode",
+    options = GRAIN_MODE_OPTIONS,
+    default = v.grain.mode,
+    action = function(x)
+      voices[voice_idx].grain.mode = x
+      if voices[voice_idx].active then
+        engine.setGrainParam(voice_idx - 1, "grainMode", x - 1)
+      end
+    end
+  }
+
   -- Cross-modulation params (3 slots)
   params:add_separator("voice " .. voice_idx .. " cross-modulation")
 
@@ -956,6 +983,7 @@ function sync_voice_to_engine(voice_idx)
   engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
   engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
   engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
+  engine.setGrainParam(engine_voice, "grainMode", voice.grain.mode - 1)
 
   for slot = 1, NUM_MOD_SLOTS do
     local slot_state = voice.crossmod["slot" .. slot]
@@ -1050,7 +1078,7 @@ function gentle_mutate()
       end
 
       -- Occasionally mutate granular parameters (lower probability). The
-      -- discrete ones (DISCRETE_GRAIN_KEYS: the envelope shape) never mutate.
+      -- discrete ones (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
       if math.random() < probability * 0.5 then
         local grain_size = v.grain.size
         local size_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.2
@@ -1108,7 +1136,8 @@ local SCENE_GLOBAL_PARAMS = {
 -- parent is left for validate_scene to reject). Each default must equal the
 -- param's default.
 local VOICE_SCENE_DEFAULTS = {
-  {path = {"grain", "env"}, default = 1}  -- hann
+  {path = {"grain", "env"}, default = 1},  -- hann
+  {path = {"grain", "mode"}, default = 1}  -- continuous
 }
 
 -- Top-level scene blocks added after format 1 (such as LFO or MIDI
@@ -1121,14 +1150,17 @@ local GRAIN_PARAM_IDS = {
   density = "grain_density",
   pitch = "grain_pitch",
   spread = "grain_spread",
-  env = "grain_env"
+  env = "grain_env",
+  mode = "grain_mode"
 }
 
 -- voices[i].grain keys holding an option index rather than a continuous
--- value: smooth transitions switch them at the end instead of crossfading,
--- mutation never touches them, and scenes must store positive integers
+-- value, mapped to their option count: smooth transitions switch them at the
+-- end instead of crossfading, mutation never touches them, and scenes must
+-- store integers from 1 to the option count
 local DISCRETE_GRAIN_KEYS = {
-  env = true
+  env = #GRAIN_ENV_OPTIONS,
+  mode = #GRAIN_MODE_OPTIONS
 }
 
 local SCENE_TRANSITION_STEPS = 20
@@ -1566,7 +1598,9 @@ function validate_scene(scene)
     end
     for key, value in pairs(voice_data.grain) do
       if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
-      if DISCRETE_GRAIN_KEYS[key] and not is_integer_between(value, 1, math.huge) then return false end
+      if DISCRETE_GRAIN_KEYS[key] and not is_integer_between(value, 1, DISCRETE_GRAIN_KEYS[key]) then
+        return false
+      end
     end
     for slot = 1, NUM_MOD_SLOTS do
       local slot_data = voice_data.crossmod["slot" .. slot]
@@ -1581,7 +1615,7 @@ function validate_scene(scene)
     local pattern = data.patterns[i]
     if type(pattern) ~= "table" then return false end
     for step = 1, PATTERN_LENGTH do
-      if not is_integer_between(pattern[step], 0, 15) then return false end
+      if not is_integer_between(pattern[step], 0, MAX_STEP_LEVEL) then return false end
     end
   end
 
@@ -1716,6 +1750,12 @@ function redraw_main()
   screen.level(frozen[selected_voice] and 3 or 10)
   screen.move(65, 42)
   screen.text(main_param_label(selected_voice))
+  if GRAIN_MODE_OPTIONS[v.grain.mode] == "triggered" then
+    screen.move(127, 42)
+    screen.level(8)
+    screen.text_right("[TRIG]")
+    screen.level(frozen[selected_voice] and 3 or 10)
+  end
   screen.move(65, 50)
   screen.text(string.format(MAIN_PARAMS[v.name].format, params:get(main_param_id(selected_voice))))
 
@@ -2314,16 +2354,16 @@ function randomize_pattern(voice_idx)
 end
 
 -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
--- params (param_order), its five grain params (the envelope shape is an
--- option param, shown as an index fader), then the nine crossmod slot values
--- (source, amp mod, freq mod for each slot)
+-- params (param_order), its six grain params (envelope shape and grain mode
+-- are option params, shown as index faders), then the nine crossmod slot
+-- values (source, amp mod, freq mod for each slot)
 function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
   for _, key in ipairs(voices[voice_idx].param_order) do
     table.insert(ids, prefix .. key)
   end
-  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env"}) do
+  for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}) do
     table.insert(ids, prefix .. key)
   end
   for slot = 1, NUM_MOD_SLOTS do
@@ -2418,10 +2458,11 @@ function pattern_clock_start()
       for voice_idx = 1, NUM_VOICES do
         if patterns[voice_idx][pattern_position] > 0 then
           if voices[voice_idx].active then
-            -- Voice is already running: accent it in place. A step must
-            -- never create new synth nodes (toggling would stack whole
-            -- voice/grain/mod chains through their long release tails).
-            engine.retrigger(voice_idx - 1)
+            -- Voice is already running: accent it in place, at the step's
+            -- level (1-15) as velocity. A step must never create new synth
+            -- nodes (toggling would stack whole voice/grain/mod chains
+            -- through their long release tails).
+            engine.retrigger(voice_idx - 1, patterns[voice_idx][pattern_position] / MAX_STEP_LEVEL)
           else
             -- Voice is off - turn it on
             toggle_voice(voice_idx)

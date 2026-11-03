@@ -86,11 +86,19 @@ server.waitForBoot({
         voiceDefs.do({ arg name;
             var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
             check.(controls.includes(\t_trig), "% has a t_trig control (C3)".format(name));
+            check.(controls.includes(\velocity), "% has a velocity control for the accent".format(name));
         });
+        [\grainMode, \t_trig, \velocity].do({ arg control;
+            check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(control),
+                "strataGrain has a % control".format(control));
+        });
+        check.(SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(Select) })
+            and: { SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(T2A) }) },
+            "strataGrain selects between Impulse and T2A(t_trig) grain triggers");
 
         // Command signatures
         check.(formatOf.(\voiceOn) == "iffffff", "voiceOn signature is iffffff (C1)");
-        check.(formatOf.(\retrigger) == "i", "retrigger command exists with signature i (C3)");
+        check.(formatOf.(\retrigger) == "if", "retrigger signature is if (voice, velocity)");
         check.(formatOf.(\setFilter) == "ffif", "setFilter signature is ffif");
         check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
         check.(SynthDescLib.global.at(\strataMaster).def.children.any({ arg ugen; ugen.isKindOf(Limiter) }),
@@ -115,7 +123,7 @@ server.waitForBoot({
         command.(\setModAmpAmt, 2, 1, 0.5);
         command.(\setModFreqAmt, 2, 1, 0.5);
         command.(\setModSpeed, 2, 5.0);
-        command.(\retrigger, 2);
+        command.(\retrigger, 2, 1.0);
         check.(true, "commands on a never-started voice do not throw (M6)");
 
         // Start every voice
@@ -141,6 +149,21 @@ server.waitForBoot({
         command.(\setGrainParam, 0, \posSpread, 0.7);
         server.sync;
         check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "setGrainParam pitchShift reaches the grain synth");
+
+        // Grain mode: 0 = continuous (Impulse), 1 = triggered (one grain per t_trig)
+        check.(getControl.(engine.synths[\grain0], \grainMode) == 0, "grain synths start continuous");
+        command.(\setGrainParam, 0, \grainMode, 1);
+        server.sync;
+        check.(getControl.(engine.synths[\grain0], \grainMode) == 1, "setGrainParam grainMode reaches the grain synth");
+        command.(\setGrainParam, 0, \grainMode, 0);
+
+        // retrigger carries velocity to the voice synth (accent depth) and the grain synth
+        before = synthNames.(context.xg).size;
+        command.(\retrigger, 0, 0.5);
+        server.sync;
+        check.(getControl.(engine.synths[\voice0], \velocity) == 0.5, "retrigger sets velocity on the voice synth");
+        check.(getControl.(engine.synths[\grain0], \velocity) == 0.5, "retrigger sets velocity on the grain synth");
+        check.(synthNames.(context.xg).size == before, "a velocity retrigger creates no nodes");
 
         // Grain envelope shapes: envShape 0 = built-in Hann (-1), 1-4 = envBuffers
         check.(engine.envBuffers.size == 4, "four grain envelope buffers");
@@ -215,7 +238,7 @@ server.waitForBoot({
 
         // retrigger never creates nodes (C3)
         before = synthNames.(context.xg).size;
-        50.do({ arg count; command.(\retrigger, count % 7) });
+        50.do({ arg count; command.(\retrigger, count % 7, 1.0) });
         server.sync;
         after = synthNames.(context.xg).size;
         check.(before == after, "50 retriggers create no nodes (% before, % after)".format(before, after));
@@ -232,7 +255,7 @@ server.waitForBoot({
         command.(\voiceOff, 4);
         command.(\voiceOff, 4);
         command.(\setVoiceParam, 4, \width, 0.3);
-        command.(\retrigger, 4);
+        command.(\retrigger, 4, 0.5);
         command.(\setModSpeed, 4, 2.0);
         check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synths");
 
