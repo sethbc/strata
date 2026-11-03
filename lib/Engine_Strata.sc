@@ -25,6 +25,7 @@ Engine_Strata : CroneEngine {
     var <bufferFrames;        // Valid (loaded or recorded) frames per slot; 0 = empty
     var <bufferSampleRates;   // Sample rate of each slot's content (valid seconds = frames / rate)
     var <recordSynths;        // Running strataRecord synth per slot, or nil
+    var <recordFrameBuses;    // Per slot: frames recorded so far, written by strataRecord
     var <inputBus;            // Stereo live input, written by inputSynth
     var <inputSynth;
     var <grainSource;
@@ -80,6 +81,7 @@ Engine_Strata : CroneEngine {
         bufferFrames = Array.fill(numBuffers, 0);
         bufferSampleRates = Array.fill(numBuffers, { context.server.sampleRate });
         recordSynths = Array.newClear(numBuffers);
+        recordFrameBuses = Array.fill(numBuffers, { Bus.control(context.server, 1) });
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -97,12 +99,14 @@ Engine_Strata : CroneEngine {
         }).add;
 
         // Records the stereo input into a slot's buffer pair from frame 0
-        // (replacing, never overdubbing) and frees itself after duration
+        // (replacing, never overdubbing) and frees itself after duration.
+        // framesOut holds the frames recorded so far, read by stopRecord.
         SynthDef(\strataRecord, {
-            arg in, bufnumL, bufnumR, level=1, duration=1;
+            arg in, bufnumL, bufnumR, level=1, duration=1, framesOut;
             var sig = In.ar(in, 2) * level;
             RecordBuf.ar(sig[0], bufnumL, loop: 0, doneAction: 2);
             RecordBuf.ar(sig[1], bufnumR, loop: 0);
+            Out.kr(framesOut, Sweep.kr(0, SampleRate.ir));
             Line.kr(0, 0, duration, doneAction: 2);
         }).add;
 
@@ -757,6 +761,11 @@ Engine_Strata : CroneEngine {
             this.clearSlot(msg[1]);
         });
 
+        // End a recording early, keeping what was captured
+        this.addCommand(\stopRecord, "i", { arg msg;
+            this.stopRecordSlot(msg[1]);
+        });
+
         // msg: slot index, path of the stereo 16-bit WAV to write
         this.addCommand(\saveBuffer, "is", { arg msg;
             if (this.validBuffer(msg[1])) { this.writeSlot(msg[1], msg[2].asString) };
@@ -1058,15 +1067,41 @@ Engine_Strata : CroneEngine {
                         this.writeSlot(index, this.scratchPath(index));
                     };
                 });
+                recordFrameBuses[index].set(0);
                 context.server.listSendMsg(synth.newMsg(inputSynth, [
                     \in, inputBus,
                     \bufnumL, buffersL[index].bufnum,
                     \bufnumR, buffersR[index].bufnum,
                     \level, level,
-                    \duration, frames / context.server.sampleRate
+                    \duration, frames / context.server.sampleRate,
+                    \framesOut, recordFrameBuses[index].index
                 ], \addAfter));
             };
         }, SystemClock);
+    }
+
+    // Stop a recording now and keep it: the slot's valid length becomes the
+    // frames the record synth reported (its frames bus keeps the last value
+    // after the free, and /c_get is answered after the /n_free), then the
+    // scratch take is written as for a completed recording. A recording
+    // still waiting for its zeroed buffers captured nothing and is simply
+    // cancelled; an idle slot is left alone.
+    stopRecordSlot { arg index;
+        var synth, started;
+        if (this.validBuffer(index).not) { ^this };
+        synth = recordSynths[index];
+        if (synth.isNil) { ^this };
+        started = synth.isPlaying;  // read first: Node.free clears it
+        this.stopRecording(index);
+        if (started.not) { ^this };
+        recordFrameBuses[index].get({ arg recorded;
+            // only if nothing restarted, loaded or cleared the slot meanwhile
+            if (recordSynths[index].isNil and: { bufferFrames[index] == 0 }) {
+                bufferFrames[index] = recorded.round.asInteger.clip(0, buffersL[index].numFrames);
+                this.bufferChanged(index);
+                this.writeSlot(index, this.scratchPath(index));
+            };
+        });
     }
 
     clearSlot { arg index;
@@ -1172,6 +1207,7 @@ Engine_Strata : CroneEngine {
         buffersL.do({ arg buffer; buffer.free });
         buffersR.do({ arg buffer; buffer.free });
         inputBus.free;
+        recordFrameBuses.do({ arg bus; bus.free });
         mainBus.free;
         filterBus.free;
         delayBus.free;

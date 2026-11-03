@@ -197,7 +197,8 @@ server.waitForBoot({
         check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
         check.(formatOf.(\setGrainSource) == "ii", "setGrainSource ii");
         check.(formatOf.(\loadBuffer) == "is" and: { formatOf.(\recordBuffer) == "iff" }
-            and: { formatOf.(\clearBuffer) == "i" } and: { formatOf.(\saveBuffer) == "is" }, "buffer command signatures");
+            and: { formatOf.(\clearBuffer) == "i" } and: { formatOf.(\saveBuffer) == "is" }
+            and: { formatOf.(\stopRecord) == "i" }, "buffer command signatures");
 
         // Buffer slots and the live input
         check.(engine.numBuffers == 8 and: { engine.bufferSeconds == 16 }, "numBuffers 8, bufferSeconds 16");
@@ -490,6 +491,35 @@ server.waitForBoot({
         check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.bufferFrames[3] == 0 }
             and: { engine.recordSynths[3].isNil }, "a recording cancelled before it starts never runs");
         check.(File.exists(engine.scratchDir +/+ "buf4.wav").not, "a cancelled recording writes no scratch take");
+
+        // stopRecord ends a recording early, keeping what was captured
+        File.delete(engine.scratchDir +/+ "buf4.wav");
+        before = synthNames.(context.xg).size;
+        command.(\stopRecord, 3); 0.1.wait; server.sync;
+        check.(synthNames.(context.xg).size == before and: { engine.bufferFrames[3] == 0 }
+            and: { File.exists(engine.scratchDir +/+ "buf4.wav").not }, "stopRecord on an idle slot is a no-op");
+        command.(\recordBuffer, 3, 1.0, 1.0); 0.05.wait; server.sync;
+        check.(synthNames.(context.xg).includes(\strataRecord), "a 1 s recording is running before stopRecord");
+        0.15.wait;
+        command.(\stopRecord, 3); 0.3.wait; server.sync;
+        check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.recordSynths[3].isNil },
+            "stopRecord stops the record synth");
+        check.(synthNames.(context.xg).size == before, "stopRecord leaves no lasting nodes");
+        frames = engine.bufferFrames[3];
+        check.((frames > (0.1 * server.sampleRate)) and: { frames < (0.4 * server.sampleRate) },
+            "stopRecord sets the valid length to what was recorded (~0.2 s; got % s)".format(frames / server.sampleRate));
+        check.(getControl.(engine.synths[\grain6], \bufFrames) == frames, "stopRecord reaches a voice reading the slot");
+        check.(waitFor.({ bufferStateSeen.(3, (frames / server.sampleRate).round(0.01)) }), "stopRecord updates the poll");
+        scratchFile = engine.scratchDir +/+ "buf4.wav";
+        check.(waitFor.({ File.exists(scratchFile) }), "stopRecord writes the scratch take");
+        1.0.wait;
+        file = SoundFile.openRead(scratchFile);
+        check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames },
+            "the early-stopped scratch take holds the recorded frames");
+        file !? { file.close };
+        command.(\stopRecord, 3); 0.2.wait; server.sync;
+        check.(engine.bufferFrames[3] == frames, "a second stopRecord is a no-op");
+        command.(\clearBuffer, 3); server.sync;
 
         // loadBuffer: stereo, mono, too long, missing, unreadable
         stereoPath = scratchRoot +/+ "stereo.wav";
