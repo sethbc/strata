@@ -60,18 +60,25 @@ The Lua script controls the engine through these commands:
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
-| `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"isfffff"` | Start a voice with initial parameters |
+| `engine.voiceOn(voice, freq, amp, pan, grainSize, grainDensity, pitchShift)` | `"iffffff"` | Start a voice with initial parameters |
 | `engine.voiceOff(voice)` | `"i"` | Stop a voice (gates off with release envelope) |
+| `engine.retrigger(voice)` | `"i"` | Accent a running voice in place (fires its `t_trig` accent envelope; Karplus re-plucks). Creates no nodes; used by pattern steps |
 | `engine.setVoiceParam(voice, param, value)` | `"isf"` | Update synthesis parameters dynamically |
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
-| `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Set which voice modulates this voice at given slot (slot=1-3, sourceVoice: -1=none, 0-6=voice index) |
+| `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Set which voice modulates this voice at given slot (slot=1-3, sourceVoice: -1=none, 0-6=voice index). "None" routes the slot to the engine's always-zero `silentBus` |
 | `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Set amplitude modulation amount for given slot (-2 to 2) |
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Set frequency modulation amount for given slot (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Set modulation LFO speed (0.1 to 50) |
 
-**Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`).
+**Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`). Mod sources are converted by `engine_mod_source()` (Lua 0=none / 1-7 → SC -1=none / 0-6).
+
+**Starting a voice (`toggle_voice` → `sync_voice_to_engine`)**: `voiceOn` only carries the initial freq/amp/pan and grain size/density/pitch, and param actions only reach the engine while a voice is active. So `toggle_voice` calls `sync_voice_to_engine(voice_idx)` right after `engine.voiceOn`, which sends every `voices[i].params` entry (`setVoiceParam`), all four grain params (`setGrainParam`, density × `master_density`), every crossmod slot (`setModSource`/`setModAmpAmt`/`setModFreqAmt`) and `setModSpeed`. The engine holds no per-voice defaults of its own (there is no `getVoiceParams`); the Lua `voices` table is the only source of values.
+
+**Silent bus**: An unrouted mod slot must read a bus that is always zero. Control bus 0 is not safe on norns (CroneAudioContext allocates the input amplitude follower `amp_in_b` there before any engine loads), so the engine allocates `silentBus` in `alloc`, sets it to 0, uses its index for `sourceVoice = -1` and as the `voiceOn` default for `modBus1..3`, and frees it in `free`.
+
+**Retrigger**: Pattern steps never create synth nodes. For a running voice the pattern clock calls `engine.retrigger(voice - 1)`, which sets the voice synth's `t_trig` control: every voice SynthDef has an accent envelope `EnvGen.kr(Env.perc(0.005, 0.4), t_trig)` applied as `modAmp * (1 + accent)` inside the amplitude clamp, and Karplus also feeds the trigger into its exciter and `Pluck` trig inputs so it re-plucks. A step on a stopped voice starts it with `toggle_voice`.
 
 **Current Voice Parameters** (as of latest sync):
 - **Resonator**: freq, rq, noise, mod1, mod2, amp, pan
@@ -83,6 +90,7 @@ The Lua script controls the engine through these commands:
 - **Ring**: freq, ratio, mod, brightness, amp, pan
 
 **Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread
+- `pitchShift` (Lua `grain_pitch`, 0.25-4) is a real transposition: the grain output runs through `PitchShift.ar` (window = `grainSize` clipped to 0.01-0.5, fixed when the synth starts; ratio = `pitchShift.lag(0.5)`). It is not a gain.
 
 **Cross-Modulation Parameters** (per voice, 3 slots per voice):
 - **Slot 1, 2, 3** - Each slot has:
@@ -101,7 +109,14 @@ The Lua script controls the engine through these commands:
 
 ### Testing Changes
 
-Since this runs on norns hardware (or norns shield/fates):
+**Off-device tests** (run from the repo root before committing):
+- `lua test/run.lua` and `luajit test/run.lua` - loads `strata.lua` into norns stubs (`test/norns_stubs.lua`) and runs the behaviour tests; exits non-zero on failure. The engine stub rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures, and the run includes the static sync check.
+- `lua test/sync_check.lua` - static check that every `engine.<name>(...)` call in `strata.lua` has a matching `addCommand` with the same number of arguments, and that every command is used.
+- `test/run_engine_check.sh [path/to/norns]` - compiles `lib/Engine_Strata.sc` against the real norns `sc/core` classes (default `~/src/norns`, or `$NORNS_DIR`), boots a local scsynth with its output on a private bus (silent) and runs `test/engine_check.scd`, which drives every engine command. Needs SuperCollider (`$SCLANG` overrides the sclang path).
+- `test/StrataTestNoBoot.sc.in` is deliberately not a `.sc` file: norns compiles every `.sc` under `~/dust`, and that test class disables Crone's boot.
+- Add a test to `test/run.lua` for every behaviour change; script locals are reached through `find_upvalue()`/`local_value()`.
+
+**On hardware** - since this runs on norns hardware (or norns shield/fates):
 - Use maiden (norns web IDE at `http://norns.local/maiden`) to edit files and view console output
 - The maiden REPL is useful for testing Lua code
 - SuperCollider changes require script restart
@@ -126,13 +141,15 @@ Since this runs on norns hardware (or norns shield/fates):
 
 ### Always use named constants for magic numbers (v2.0+)
 
-**CRITICAL**: The codebase uses named constants defined at the top of [strata.lua](strata.lua:15-19):
+**CRITICAL**: The codebase uses named constants defined at the top of [strata.lua](strata.lua) (the "Constants" block):
 ```lua
 local NUM_VOICES = 7        -- Total number of synthesis voices
 local NUM_SCENES = 8        -- Total number of scene slots
 local PATTERN_LENGTH = 16   -- Steps per pattern
-local SCENE_DATA_VERSION = 1  -- Scene file format version
+local SCENE_DATA_VERSION = 1  -- Scene file format version (written into scenes.data)
+local NUM_MOD_SLOTS = 3     -- Cross-modulation slots per voice
 ```
+The engine mirrors `NUM_VOICES` as `numVoices` in [lib/Engine_Strata.sc](lib/Engine_Strata.sc). Remaining bare numbers in grid code are grid coordinates and LED levels, not counts.
 
 **Always use these constants** instead of hardcoded numbers:
 - Use `NUM_VOICES` in voice loops: `for i = 1, NUM_VOICES do`
@@ -240,8 +257,8 @@ Before completing any feature addition, verify:
    - Ensure `engine.setVoiceParam()` calls use the correct parameter names
 
 3. **Voice-Specific Parameters** - If you change voice parameters:
-   - Update `getVoiceParams()` helper in SC
-   - Update default values in Lua `voices` table
+   - Update default values in Lua `voices` table (the engine has no per-voice defaults to update; `sync_voice_to_engine` sends the Lua values)
+   - Update the voice's `param_order` list (menu order and grid fader order)
    - Verify parameter names match between SC SynthDef args and Lua param IDs
 
 #### When modifying the Lua script, you MUST update:
@@ -294,8 +311,8 @@ Before completing any modification task, verify:
 #### When adding new parameters, you MUST review:
 
 1. **Grid Parameter Manipulation**:
-   - Map new parameters to grid button positions in `manipulate_parameter()`
-   - Update parameter page system if needed (currently 4 pages)
+   - Grid fader page: `fader_param_ids()` lists the selected voice's `param_order`, four grain params and the nine crossmod slot values; new params added to `param_order` appear automatically. Pages hold 4 faders each, so a voice has `fader_page_count()` = 4-5 pages today
+   - Faders are set by `set_fader_param()` and drawn by `grid_redraw_faders()`
    - Consider adding dedicated grid controls for critical new parameters
    - Update grid documentation in README.md
 
@@ -354,10 +371,12 @@ Before completing any feature addition or architectural change, verify:
 Each voice has a table structure containing:
 - `name` - Voice type identifier
 - `active` - Boolean state
-- `params` - Synthesis parameters (voice-specific)
+- `param_order` - Ordered list of the `params` keys (PARAMS menu order and grid fader order; amp/pan last)
+- `params` - Synthesis parameters (voice-specific); their values are also the param defaults
 - `grain` - Granular processing parameters (size, density, pitch, spread)
+- `crossmod` - `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`
 
-The `voices` table is the single source of truth. Engine state mirrors this.
+The `voices` table is the single source of truth. Engine state mirrors this: param actions forward changes while a voice is active, and `sync_voice_to_engine` pushes everything when a voice starts.
 
 ### Parameter System
 
@@ -382,7 +401,7 @@ Strata includes a mutation system that applies gentle, probabilistic changes to 
 
 #### Implementation Details
 
-**Mutation Function** ([strata.lua:616-666](strata.lua#L616-L666)):
+**Mutation Function** (`gentle_mutate()` in strata.lua):
 ```lua
 function gentle_mutate()
   local probability = params:get("mutation_probability")
@@ -434,10 +453,10 @@ params:set("mutation_rate", 2)  -- Check every 2 seconds
 - **Dramatic Shift**: probability=0.25, amount=0.4, rate=1s
 
 **Integration with Existing Systems**:
-- **LFO System**: Mutations work alongside `lfo_update()` which adds continuous drift
+- **LFO System**: Mutations work alongside `lfo_update()`, which gives each active, unfrozen voice a subtle mean-reverting grain pitch drift: `delta = (math.random() - 0.5) * LFO_PITCH_STEP - (current - base) * LFO_PITCH_REVERSION` (step 0.004, reversion 0.01 per 100 ms tick). `base` (`grain_pitch_base[i]`) is the last grain pitch set by anything other than the LFO (user, mutation, scene), tracked in the param action via the `lfo_writing` flag. The `grain_pitch` controlspec has step 0 so these small steps are not quantized away
 - **Freeze Feature**: Frozen voices are stable - neither LFO nor mutations affect them
 - **Cross-Modulation**: Mutations can change modulation sources/amounts, creating evolving relationships
-- **UI Feedback**: `[MUT]` indicator appears at top-right when enabled
+- **UI Feedback**: `[M]` indicator appears in the header (x=98) when enabled
 
 #### Lifecycle Management
 - **Initialization**: Metro created in `init()` but not started automatically
@@ -460,7 +479,7 @@ Strata includes a comprehensive scene system for creating longer-form compositio
 
 #### Core Functions
 
-**Scene Capture** ([strata.lua:737-790](strata.lua#L737-L790)):
+**Scene Capture** (`capture_scene()` in strata.lua):
 ```lua
 function capture_scene(scene_num)
   -- Captures complete current state:
@@ -473,18 +492,19 @@ function capture_scene(scene_num)
 end
 ```
 
-**Scene Recall** ([strata.lua:792-850](strata.lua#L792-L850)):
+**Scene Recall** (`recall_scene()` in strata.lua):
 ```lua
 function recall_scene(scene_num, transition_time)
-  -- Instant recall (transition_time = 0)
+  -- Validates the slot (validate_scene) and cancels any running transition
+  -- Instant recall (transition_time = 0) -> recall_scene_instant()
   -- OR smooth transition (transition_time > 0)
-  --   - 20 interpolation steps
-  --   - Crossfades all parameters
-  --   - Uses util.linlin() for smooth curves
+  --   - start values snapshotted once by scene_transition_targets()
+  --   - SCENE_TRANSITION_STEPS (20) steps of util.linlin(0, 1, start, target, step / steps)
+  --   - only continuous params fade; the rest switch at the end
 end
 ```
 
-**Scene Sequencer** ([strata.lua:915-952](strata.lua#L915-L952)):
+**Scene Sequencer** (`scene_sequencer_start()` in strata.lua):
 ```lua
 function scene_sequencer_start()
   scene_sequencer_clock = clock.run(function()
@@ -536,10 +556,10 @@ Scene controls on **Page 3** (16×16 grid):
 - Patterns are copied step-by-step to avoid reference issues
 
 **Smooth Transitions**:
-- 20 interpolation steps regardless of transition time
-- Each step calculates `mix = step / steps` (0 to 1)
-- Uses `util.linlin(0, 1, current_val, target_val, mix)` for smooth curves
-- Final step ensures exact target values via `recall_scene_instant()`
+- `scene_transition_targets(scene_data)` snapshots `{id, start, target}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, reverb, drift)
+- 20 interpolation steps regardless of transition time; step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole transition time (never re-read the current value inside the loop: that makes the fade front-loaded)
+- Mod sources, freeze and active states, tempo and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
+- Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `scene_transition_active`
 
 **Voice Activation Handling**:
 - Checks if voice state needs to change (on→off or off→on)
@@ -594,11 +614,12 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 - **Initialization**: Scenes array initialized in global scope, empty by default
 - **Scene Sequencer Control**: Started/stopped via param action
 - **Cleanup**: `scene_sequencer_stop()` called in `cleanup()` to prevent orphaned clocks
-- **Transition State**: `scene_transition_active` flag prevents concurrent transitions
+- **Transition State**: `scene_transition_clock` / `scene_transition_active` track the running transition; `cancel_scene_transition()` clears both
 
 #### Disk Persistence
 - **Storage Location**: `~/dust/data/strata/scenes.data`
-- **File Format**: Lua table serialization using norns `tab` library
+- **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}`. A file with a different version is rejected; pre-2.1 files (a bare scenes array) load as version 1
+- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, wrong version, invalid data) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
 - **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
 - **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
 - **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
@@ -609,33 +630,20 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 
 **IMPORTANT**: Always validate scene data before using it to prevent crashes from corrupted files.
 
-The `validate_scene_data()` function ([strata.lua:1144-1180](strata.lua#L1144-L1180)) performs comprehensive checks:
+`validate_scene(scene)` checks one slot and `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). A populated scene must contain everything `recall_scene_instant()` reads:
 ```lua
-function validate_scene_data(scene_table)
-  -- Type checking
-  if type(scene_table) ~= "table" then return false end
-
-  -- Structure validation
-  for i = 1, NUM_SCENES do
-    if scene_table[i] and scene_table[i].populated then
-      -- Verify required fields exist
-      if not data.voices or not data.patterns then return false end
-
-      -- Verify voice count matches
-      if #data.voices ~= NUM_VOICES then return false end
-
-      -- Verify each voice has complete structure
-      -- (params, grain, crossmod tables)
-    end
-  end
-
-  return true
-end
+-- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, reverb_*, drift_amount)
+-- data.voices: NUM_VOICES tables, each with
+--   active (boolean), params (only known keys, numbers), grain (size/density/pitch/spread numbers),
+--   crossmod.slot1..3 {source = integer 0..NUM_VOICES, amp_amt, freq_amt numbers}, crossmod.speed number
+-- data.frozen: NUM_VOICES booleans
+-- data.patterns: NUM_VOICES x PATTERN_LENGTH integers 0..15
 ```
+When adding a field to `capture_scene()`, add it to `validate_scene()` (and to `SCENE_GLOBAL_PARAMS` for a global param), or recall will not restore it.
 
 **When to validate**:
-- Always before loading scenes from disk
-- Before recalling scenes (check scene_data.voices exists)
+- Always before loading scenes from disk (`load_scenes_from_disk`)
+- Before recalling scenes (`recall_scene` calls `validate_scene`)
 - After receiving scene data from external sources
 
 **Error handling patterns**:
@@ -673,7 +681,7 @@ end
 **Scene bounds checking**:
 ```lua
 function recall_scene(scene_num, transition_time)
-  if scene_num < 1 or scene_num > num_scenes then return end
+  if scene_num < 1 or scene_num > NUM_SCENES then return end
   if not scenes[scene_num].populated then
     print("scene " .. scene_num .. " is empty")
     return
@@ -693,7 +701,7 @@ end
 
 **IMPORTANT**: Always clean up metros, clocks, and other resources to prevent leaks.
 
-The `cleanup()` function ([strata.lua:2025-2054](strata.lua#L2025-L2054)) demonstrates proper cleanup:
+The `cleanup()` function demonstrates proper cleanup:
 ```lua
 function cleanup()
   -- Save state before cleanup
@@ -708,15 +716,13 @@ function cleanup()
     params:set("mutation_enabled", 0)  -- Keep param in sync
   end
 
-  -- Stop pattern and scene clocks
+  -- Stop pattern and scene clocks (scene sequencer via its param, like mutations)
   pattern_clock_stop()
+  params:set("scene_sequencer_enabled", 0)
   scene_sequencer_stop()
 
   -- Cancel transition clocks to prevent orphaned coroutines
-  if scene_transition_clock then
-    clock.cancel(scene_transition_clock)
-    scene_transition_clock = nil
-  end
+  cancel_scene_transition()
 
   -- Turn off all voices
   for i = 1, NUM_VOICES do
@@ -724,6 +730,10 @@ function cleanup()
       engine.voiceOff(i - 1)
     end
   end
+
+  -- Leave connected grids and arc dark
+  for _, grid_port in pairs(grids) do grid_port:all(0); grid_port:refresh() end
+  if arc_device then arc_device:all(0); arc_device:refresh() end
 end
 ```
 
@@ -763,22 +773,24 @@ end)
 Strata supports monome grid controllers for pattern sequencing and parameter manipulation. The implementation handles multiple grid sizes and multiple simultaneous grids.
 
 #### Device Lifecycle
-- `grid_init()` - Connect to up to 4 grid devices at startup
-- `grid.add(g)` - Global callback when grid connects (hot-plug support)
-- `grid.remove(g)` - Global callback when grid disconnects
-- `grids` table - Stores all connected grids indexed by port (1-4)
+- `grid_init()` - Connect to up to 4 grid ports at startup
+- `grid.add(device)` - Global callback when grid connects (hot-plug support)
+- `grid.remove(device)` - Global callback when grid disconnects; clears the vport's `key` handler and the `grids` slot
+- `grids` table - Stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`
+- Never store the raw device passed to `grid.add`, and never set `key` on it: devices have no `.device` field (so `grid_redraw` would skip them) and norns fires both `device.key` and `vports[port].key`, so handlers on both run every press twice. The arc uses the same vport-only pattern (`attach_arc`)
 
 #### Grid Size Detection & Adaptive Layouts
-The implementation automatically detects grid dimensions via `g.cols` and `g.rows` and routes to appropriate layout:
+`grid_layout(grid_port)` matches the exact `cols`/`rows` (16x16 is tested as `cols == 16 and rows == 16`; a `rows >= 16` test would also catch 8x16) and routes to the appropriate layout:
 - **16×16 (256 buttons)**: `grid_key_256()` and `grid_redraw_256()` - Full-featured layout
 - **16×8 (128 horizontal)**: `grid_key_128h()` and `grid_redraw_128h()` - Horizontal layout
 - **8×16 (128 vertical)**: `grid_key_128v()` and `grid_redraw_128v()` - Vertical layout
 - **8×8 (64 buttons)**: `grid_key_64()` and `grid_redraw_64()` - Compact layout
 
 #### Pattern Sequencer Implementation
-- **Pattern Storage**: `patterns[voice_idx][step]` - 7 voices × 16 steps, values 0-15
-- **Playback Clock**: `pattern_clock` - Uses `clock.run()` and `clock.sync(1/4)` for tempo-synced 16th notes
-- **Position Tracking**: `pattern_position` - Current step (1-16), wraps around
+- **Pattern Storage**: `patterns[voice_idx][step]` - NUM_VOICES × PATTERN_LENGTH steps, values 0-15 (the 64 grid shows and edits only steps 1-8, but patterns still play all 16)
+- **Playback Clock**: `pattern_clock` - Uses `clock.run()` and `clock.sync(1/4)` for tempo-synced 16th notes against norns' global clock. The script's `tempo` param (40-300, initialised from `clock_tempo`) sets `clock_tempo` in its action; grid tempo buttons adjust `tempo`. External clock sources still work because the sequencer only syncs
+- **Position Tracking**: `pattern_position` - Current step (1-16), wraps around. Each tick triggers the step, redraws the grid (so the highlight shows the step that just played), then advances
+- **Triggering**: an active voice gets `engine.retrigger(voice - 1)` (accent in place, no new nodes); a stopped voice is started with `toggle_voice`. Never retrigger by toggling a voice off and on
 - **Pattern Operations**:
   - `toggle_pattern_step(voice, step)` - Toggle step on/off
   - `clear_pattern(voice)` - Reset all steps to 0
@@ -792,29 +804,32 @@ The implementation automatically detects grid dimensions via `g.cols` and `g.row
 
 #### LED Feedback Patterns
 - **Active steps**: Brightness 15 (full)
-- **Current playback position**: Minimum brightness 4, or 15 if step is active
+- **Current playback position**: 15 if the step is active, 4 if empty (`step_brightness()`)
 - **Voice active status**: Brightness 12
 - **Voice inactive status**: Brightness 2-4
 - **Page indicators**: 15 for selected, 2 for unselected
-- Always call `g:refresh()` after updating LEDs
+- **256 parameter page faders (rows 9-12)**: bar at 8 up to the value, the value's column at 15; row 13: fader pages, selected 15, available 4
+- Always call `grid_port:refresh()` after updating LEDs
+- Any state shown on the grid must call `grid_redraw()` when it changes, wherever it changes (`toggle_voice`, `toggle_freeze`, `randomize_voice`, scene recall, ...). `grid_redraw()` returns immediately when no grid is connected, so calling it is cheap
 
 #### Key Implementation Details
 - Grid key handler checks `z == 0` to ignore key releases (only respond to presses)
-- Use `g:all(0)` to clear all LEDs before redrawing
+- Use `grid_port:all(0)` to clear all LEDs before redrawing
 - Pattern clock uses `clock.sync()` for tempo-accurate timing
 - Voices auto-activate when pattern step triggers them
 - Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
 - Grid pages allow switching between pattern sequencing and parameter control
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which sets `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources); `fader_position()` is the inverse (`spec:unmap(value) * 15 + 1`). All through `params:set`. Voices have 4-5 fader pages
 
 ### Arc Integration (Optional)
 
 Strata supports the monome arc controller for tactile parameter control. The implementation follows these patterns:
 
 #### Device Lifecycle
-- `arc_init()` - Connect to arc device and set up callbacks
-- `arc.add()` - Global callback when arc connects
-- `arc.remove()` - Global callback when arc disconnects
-- Graceful degradation: All arc functions check if `a == nil` before proceeding
+- `arc_init()` - Connect to the arc vport (`arc_device = arc.connect(1)`) and set up callbacks via `attach_arc()`
+- `arc.add(device)` - Global callback when arc connects; re-attaches the vport for `device.port` (handlers live on the vport only, as for grids)
+- `arc.remove(device)` - Global callback when arc disconnects
+- Graceful degradation: `arc_redraw()` returns unless `arc_device` has a connected device
 
 #### Input Handling
 - `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4
@@ -834,7 +849,7 @@ Strata supports the monome arc controller for tactile parameter control. The imp
   - 12 = active voice secondary parameters
   - 4 = inactive voice primary parameter
   - 3 = inactive voice secondary parameters
-- Uses `a:segment(ring, from, to, level)` for smooth arc visualizations
+- Uses `arc_device:segment(ring, from, to, level)` for smooth arc visualizations
 
 #### Key Implementation Details
 - Arc encoders use scaled deltas (e.g., `delta / 20`, `delta / 100`) for fine control
@@ -850,9 +865,12 @@ The `update_voice_list()` function recreates the `UI.ScrollingList` on every cha
 - Freeze status ([F] suffix)
 
 The UI uses a two-column layout:
+- **Header (y=8)**: `STRATA` at x=0 (04B_03 capitals advance ~6 px, so it ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
 - **Left column (0-60px)**: Scrolling voice list (5 visible at a time)
-- **Right column (65-128px)**: Selected voice details (name, status, main parameter)
+- **Right column (65-128px)**: Selected voice details (name, status, main parameter); `[FREEZE]` is right-aligned at x=127 on the status row (y=26)
 - **Divider (x=62)**: Subtle vertical line separating columns
+- `test/run.lua` checks that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), and that `dens:` starts at least 4 px after `STRATA`; keep it passing when adding text
+- Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `lfo_update` only when a grid shows page 2 (it runs 10x/s)
 
 The `redraw()` function handles all screen drawing and must be updated whenever new UI elements are added.
 
@@ -869,46 +887,70 @@ Each voice type has its own SynthDef with unique parameters:
 - `\strataKarplus` - Karplus-Strong plucked string physical model
 - `\strataRing` - Ring modulation between two oscillators
 
-All voice SynthDefs now include multi-source cross-modulation inputs (3 slots):
+All voice SynthDefs take a `t_trig` control driving an accent envelope (see Retrigger above), and include multi-source cross-modulation inputs (3 slots):
 - `modBus1`, `modBus2`, `modBus3` - Control buses to read modulation signals from (one per slot)
 - `modAmpAmt1`, `modAmpAmt2`, `modAmpAmt3` - Amplitude modulation depths (-2 to 2)
 - `modFreqAmt1`, `modFreqAmt2`, `modFreqAmt3` - Frequency modulation depths (-2 to 2)
 - The 3 modulation signals are mixed together (weighted sum) before application
 
-**Modulation Signal Clamping (v2.0+)**:
-To prevent excessive amplitude spikes when multiple modulation sources are active, all SynthDefs now include clamping:
+**Modulation Signal Clamping (v2.0+, frequency floor in v2.1)**:
+To prevent excessive amplitude spikes when multiple modulation sources are active, every voice SynthDef (including FM and Sub) clamps:
 ```supercollider
 // Mix modulation signals with clamping to prevent excessive modulation
 modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-2, 2));
-modAmp = (amp * (1 + modSig)).clip(0, 2);
+modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
+modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
 ```
-This prevents the theoretical 4× amplitude spike that could occur with 3 sources all at maximum positive modulation.
+This prevents the theoretical 4× amplitude spike that could occur with 3 sources all at maximum positive modulation. The frequency modulator is clamped to -0.9 (not -2) so the modulated frequency never reaches zero or goes negative (Karplus uses `modFreq.reciprocal` as a delay time, Resonator uses it as a filter cutoff).
 
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
-- `\strataGrain` - Granular processor (one per voice)
-- `\strataReverb` - Global reverb processor
-- `\strataMaster` - Master output with drift and saturation
+- `\strataGrain` - Granular processor (one per voice); `GrainIn` followed by `PitchShift` for `pitchShift`
+- `\strataReverb` - Global reverb processor; outputs `FreeVerb2` only (it already crossfades dry/wet by `mix`)
+- `\strataMaster` - Master output with drift and saturation. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
 
 ### Audio Bus Management
 
-Buses are allocated in `alloc`:
-- 7 stereo `granBuses` (one per voice, for audio)
-- 7 mono `modBuses` (one per voice, for control signals)
+Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VOICES` in Lua; use it for every per-voice `Array.fill`):
+- `numVoices` stereo `granBuses` (one per voice, for audio)
+- `numVoices` mono `modBuses` (one per voice, for control signals)
+- 1 mono `silentBus` (always 0; "no modulation source")
 - 1 stereo `mainBus` (granular outputs mix here)
 - 1 stereo `reverbBus` (reverb output)
 
-Buses are freed in `free` to prevent resource leaks.
+Buses and groups are freed in `free` to prevent resource leaks.
+
+### Node Ordering
+
+Everything runs inside the engine group `context.xg`, so norns' output group (`og`) and its meters come after the engine:
+```
+context.xg: voiceGroup (voice synths) -> processGroup (grain + mod synths) -> strataReverb -> strataMaster
+```
+`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and reverb then master are added with `\addToTail` on `context.xg`.
 
 ### Synth Lifecycle
 
 Synths use `gate` with ASR envelopes:
-- Starting: `Synth.new(...)` with `gate=1`
-- Stopping: `synth.set(\gate, 0)` triggers release phase
+- Starting: `Synth.new(...)` with `gate=1`. `voiceOn` on a voice that is already running first releases its old trio (`releaseVoice`)
+- Stopping: `releaseVoice` sets `\gate, 0` (release phase) and removes the trio from `synths`
 - `doneAction: 2` frees the synth after release
+- Per-voice commands go through `setSynth(key, ...)`, which ignores voices that are not running, and voice indices are range-checked with `validVoice`
 
 ## Version History
+
+### Version 2.1 (2026-11-03)
+
+Whole-app review fix release. Highlights:
+- `voiceOn` signature `"iffffff"` (freq was typed as a string and dropped); voices start with their full Lua state (`sync_voice_to_engine`)
+- Pattern steps accent running voices with the new `retrigger` command instead of stacking synth chains
+- Grain pitch is real pitch shifting; its LFO drift is subtle and mean-reverting
+- Tempo param drives `clock_tempo`; 128v layout reachable; grid hot-plug fixed; 256 parameter page implemented as faders; grid LEDs stay current
+- Silent bus for unrouted mod slots; frequency modulation clamped above zero; FM/Sub clamped
+- Linear scene transitions; thorough scene validation; versioned, crash-safe scene file loading
+- Engine nodes ordered inside `context.xg`; resonator and reverb no longer double their output; drift amounts mean depth
+- Off-device test harness (`test/`)
+
+See [CHANGELOG.md](CHANGELOG.md) for complete details.
 
 ### Version 2.0 (2025-01-24)
 

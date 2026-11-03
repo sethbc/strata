@@ -1,0 +1,13 @@
+// Test-only helper class for test/run_engine_check.sh, which copies it into a
+// temporary class directory as StrataTestNoBoot.sc. It is stored as .sc.in on
+// purpose: norns compiles every .sc file under ~/dust, and this class must
+// never load on a real norns.
+//
+// It stops Crone from booting its own server and running jack_connect at
+// sclang startup, so the engine check can set up a CroneAudioContext itself.
+StrataTestNoBoot {
+    *initClass {
+        Class.initClassTree(Crone);
+        Crone.bootOnInit = false;
+    }
+}
