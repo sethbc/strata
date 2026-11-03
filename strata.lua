@@ -3168,6 +3168,7 @@ end
 -- quantum, so the sweep follows the warp (exp params sweep evenly) and the
 -- step only quantizes the value read back. (A global: the main chunk is near
 -- Lua's local limit.)
+-- Control params only: it reads the param's controlspec.
 function arc_sweep_param(param_id, delta)
   local quantum = params:lookup_param(param_id).controlspec.quantum
   params:delta(param_id, delta / (UI_PAGES.ARC_TICKS_PER_SWEEP * quantum))
@@ -3195,10 +3196,9 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
 
   -- Ring 2: Selected voice's main parameter, across its controlspec range
+  -- following the warp (as the sweep does: exp freq's midpoint at half a turn)
   local v = voices[selected_voice]
-  local param_id = main_param_id(selected_voice)
-  local param_min, param_max = param_range(param_id)
-  local param_pos = util.linlin(param_min, param_max, 0, 64, params:get(param_id))
+  local param_pos = param_fraction(main_param_id(selected_voice)) * 64
   arc_port:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
 
   -- Ring 3: Grain size (0.01 to 0.5)

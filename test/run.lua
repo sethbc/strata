@@ -1026,15 +1026,15 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     local param_id = "v" .. voice_idx .. "_" .. key_name
     assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
     assert_equal(main_param_label(voice_idx), key_name, "main param label of voice " .. voice_idx)
-    -- arc ring 2 adjusts it and shows it across its controlspec range
+    -- arc ring 2 adjusts it and shows it across its controlspec range,
+    -- following the warp (param_fraction, as the FX and BUFFER rings)
     set_selected(voice_idx)
     local min_value, max_value = param_range(param_id)
     params:set(param_id, min_value)
     context.arc.turn(1, 2, 100)  -- enough for one step of sub's fine-scaled drift
     local value = params:get(param_id)
     assert_true(value > min_value, "arc ring 2 raises " .. param_id)
-    local expected_end = util.linlin(min_value, max_value, 0, 64, value) / 64 * math.pi * 2
-    assert_near(device.segments[2].to, expected_end, 1e-9, "ring 2 shows " .. param_id)
+    assert_near(device.segments[2].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring 2 shows " .. param_id)
     -- MAIN shows the label and value in the right column
     redraw()
     local label_found = false
@@ -1043,6 +1043,13 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     end
     assert_true(label_found, "MAIN shows the " .. key_name .. " label")
   end
+  -- an exp main param: the resonator's freq at the sweep's midpoint (200 Hz
+  -- on 20-2000) is drawn at half a turn, not at its linear 9 %
+  set_selected(1)
+  params:set("v1_freq", 20)
+  for _ = 1, 256 do context.arc.turn(1, 2, 1) end
+  assert_near(params:get("v1_freq"), 200, 1e-6, "256 ticks reach the exp midpoint")
+  assert_near(device.segments[2].to, math.pi, 1e-6, "ring 2 draws the exp midpoint at half a turn")
 end)
 
 test("every encoder, key and arc control is safe on every page; arc button only acts on MAIN", function()
