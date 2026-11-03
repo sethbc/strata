@@ -28,7 +28,7 @@ includePaths:
     - $repo_root/lib
     - $work_dir/classes
 excludePaths: []
-postInlineWarnings: true
+postInlineWarnings: false  # norns' own Crone.sc triggers inline warnings
 YAML
 
 output="$work_dir/output.txt"
