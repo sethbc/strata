@@ -28,6 +28,14 @@ Each synthesis voice is fed through its own granular processor with independent 
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
 - Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
+### Audio Sources (buffers and live input)
+
+Every voice can grain something other than its own synth. Its **source** (PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
+- **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the PARAMETERS **buffers** group
+- **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
+- While a voice's source is not its synth (buffer or input), E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set. The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
+- Several voices can read the same buffer, and any voice can be switched back to its synth at any time
+
 ### Cross-Modulation
 
 Voices can modulate each other for evolving, interdependent textures:
@@ -72,7 +80,7 @@ Strata includes a comprehensive scene system for longer-form composition and aut
 - **Disk Persistence** - Scenes automatically save to disk and load on startup
 - **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
 - **Scene Sequencer** - Automatically progress through scenes for hands-free composition
-- **Complete State Capture** - Scenes store voice parameters, patterns, freeze states, and global settings
+- **Complete State Capture** - Scenes store voice parameters and sources, patterns, freeze states, and global settings (not the audio in the sample buffers)
 - **Grid Integration** - Dedicated scene page on grid for performance control
 - **Visual Feedback** - `S1`-`S8` indicator shows current scene on screen
 
@@ -127,7 +135,8 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
   - Pulse: Pulse width
   - Karplus: Decay time
   - Ring: Frequency ratio
-- **K2** - Randomize selected voice parameters
+  - Any voice whose source is a buffer or the input: buffer position (`pos`)
+- **K2** - Randomize selected voice parameters (buffer parameters for a voice whose source is not its synth)
 - **K3** - Start/stop voice, or freeze/unfreeze if already active (it never fires a triggered grain)
 
 `[TRIG]` on the main parameter row means the selected voice is in triggered grain mode.
@@ -159,7 +168,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 The rings control the current screen page. On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
-- **Ring 2** - Selected voice's main parameter (follows E3 mapping)
+- **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer- or input-sourced voice)
 - **Ring 3** - Grain size for selected voice
 - **Ring 4** - Grain density for selected voice
 
@@ -212,10 +221,11 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 - The row lights up to the current value (dim bar, bright value position)
 - The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap); the grain mode fader is continuous on columns 1-8 and triggered on columns 9-16
 - Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread, envelope and mode, then source / amp mod / freq mod for cross-modulation slots 1-3
+- For a voice whose source is a buffer or the input, the first faders are buffer position, rate, scan and level instead of the synthesis parameters
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
-- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6); the selected page is bright
+- Columns 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6; a buffer- or input-sourced voice has 5); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing
@@ -412,6 +422,16 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 
 Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
 
+Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade.
+
+### Buffers Section (group)
+- Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
+- For each buffer 1-8:
+  - File: load a sound file (up to 16 s; stereo files keep both channels, mono files fill both). Loading never copies the file
+  - Record: record the live input for the record duration, replacing what was there. Trigger it again while recording to stop early and keep what was captured. The finished take is also written to `~/dust/audio/strata/scratch/buf<n>.wav` (overwritten by the next take)
+  - Clear: empty the buffer
+  - Save: write the buffer as a stereo WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved)
+
 ### FX Section (group)
 - Filter type (lowpass, highpass, bandpass)
 - Filter freq (20-20000 Hz, default 5000)
@@ -426,6 +446,8 @@ Scenes capture the FX settings too; smooth transitions crossfade every FX value 
 ### Per-Voice Sections
 Each voice includes:
 - Synthesis parameters (varies by voice type)
+- Source (synth, buf 1-8, input; default synth)
+- Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0)
 - Grain size
 - Grain density
 - Grain pitch shift (transposition ratio)

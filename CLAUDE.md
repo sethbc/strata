@@ -84,11 +84,11 @@ The Lua script controls the engine through these commands:
 | `engine.stopRecord(slot)` | `"i"` | End slot 0-7's recording early, keeping what was captured: the valid length becomes the frames actually recorded, the scratch take is written and the poll updated, as for a completed recording. No-op if the slot is not recording |
 | `engine.saveBuffer(slot, path)` | `"is"` | Write the slot's valid region to `path` as a stereo 16-bit WAV (creates the directory) |
 
-**Poll `bufferState`** (engine → Lua): each slot's valid seconds. matron's `/poll/value` handler is typed `"if"` (one float) and its data-blob polls are broken (`w_handle_poll_data` writes every byte to index 1), so a string or table cannot reach Lua: every message carries **one** slot as `slot_index * 100 + seconds` (`bufferStateStride = 100`; seconds ≤ 16, rounded to 0.01). Decode in Lua with `slot = math.floor(value / 100)` (0-based, so Lua slot `slot + 1`) and `seconds = value - slot * 100`. The poll is periodic (0.25 s) and cycles through the eight slots; every change (load, record start, completion and early stop, clear) is also sent immediately via `bufferStatePoll.update`. A slot reads 0 s while it records and its length once the recording completes.
+**Poll `bufferState`** (engine → Lua): each slot's valid seconds. matron's `/poll/value` handler is typed `"if"` (one float) and its data-blob polls are broken (`w_handle_poll_data` writes every byte to index 1), so a string or table cannot reach Lua: every message carries **one** slot as `slot_index * 100 + seconds` (`bufferStateStride = 100`; seconds ≤ 16, rounded to 0.01). Decode in Lua with `slot = math.floor(value / 100)` (0-based, so Lua slot `slot + 1`) and `seconds = value - slot * 100`. The poll is periodic (0.25 s) and cycles through the eight slots; every change (load, record start, completion and early stop, clear) is also sent immediately via `bufferStatePoll.update`. A slot reads 0 s while it records and its length once the recording completes. Lua: `init` calls `poll.set("bufferState", buffer_state_changed)` and starts it (it prints a message if the poll is missing); `buffer_state_changed` decodes the value with `BUFFER_STATE_STRIDE` (100) into `buffers[slot].seconds` and ignores slots outside 1..`NUM_BUFFERS`; `cleanup` stops it.
 
 **Index Conversion**: Voice indices are 0-indexed in SuperCollider but 1-indexed in Lua. Always subtract 1 when calling engine commands from Lua (e.g., `engine.voiceOn(voice_idx - 1, ...)`). Mod sources are converted by `engine_mod_source()` (Lua 0=none / 1-7 → SC -1=none / 0-6).
 
-**Starting a voice (`toggle_voice` → `sync_voice_to_engine`)**: `voiceOn` only carries the initial freq/amp/pan and grain size/density/pitch, and param actions only reach the engine while a voice is active. So `toggle_voice` calls `sync_voice_to_engine(voice_idx)` right after `engine.voiceOn`, which sends every `voices[i].params` entry (`setVoiceParam`), all six grain params (`setGrainParam`, density × `master_density`, `envShape` and `grainMode` = option index − 1), every crossmod slot (`setModSource`/`setModAmpAmt`/`setModFreqAmt`) and `setModSpeed`. The engine holds no per-voice defaults of its own (there is no `getVoiceParams`); the Lua `voices` table is the only source of values.
+**Starting a voice (`toggle_voice` → `sync_voice_to_engine`)**: `voiceOn` only carries the initial freq/amp/pan and grain size/density/pitch, and param actions only reach the engine while a voice is active. So `toggle_voice` calls `sync_voice_to_engine(voice_idx)` right after `engine.voiceOn`, which sends `setGrainSource(voice, source - 1)` **first**, then (`sync_voice_values_to_engine`) every `voices[i].params` entry (`setVoiceParam`), all nine grain params (`setGrainParam`: size, density × `master_density`, pitch, spread, `envShape` and `grainMode` = option index − 1, `bufPos`, `bufRate`, `bufScan`), every crossmod slot (`setModSource`/`setModAmpAmt`/`setModFreqAmt`) and `setModSpeed`. The engine holds no per-voice defaults of its own (there is no `getVoiceParams`); the Lua `voices` table is the only source of values. The `v<i>_source` param action is the one voice param that also reaches a stopped voice: it always sends `setGrainSource` (the engine only records it, so the next `voiceOn` builds the right synths), then, for a running voice, `sync_voice_values_to_engine`. `setGrainSource` after `voiceOn` in `sync_voice_to_engine` is then a no-op in the engine.
 
 **Silent bus**: An unrouted mod slot must read a bus that is always zero. Control bus 0 is not safe on norns (CroneAudioContext allocates the input amplitude follower `amp_in_b` there before any engine loads), so the engine allocates `silentBus` in `alloc`, sets it to 0, uses its index for `sourceVoice = -1` and as the `voiceOn` default for `modBus1..3`, and frees it in `free`.
 
@@ -103,7 +103,7 @@ The Lua script controls the engine through these commands:
 - **Karplus**: freq, decay, damping, excite, amp, pan
 - **Ring**: freq, ratio, mod, brightness, amp, pan
 
-**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape, grainMode (the engine also takes `bufPos`, `bufRate` and `bufScan` for `\strataGrainBuf`; they are not Lua params yet)
+**Current Granular Parameters**: grainSize, grainDensity, pitchShift, posSpread, envShape, grainMode, bufPos, bufRate, bufScan (the last three only matter to `\strataGrainBuf`, i.e. buffer sources; Lua `v<i>_buf_pos` 0-1 lin step 0, `v<i>_buf_rate` 0.25-4 exp, `v<i>_buf_scan` -2..2 lin, in `voices[i].grain.buf_pos|buf_rate|buf_scan`)
 - `envShape` (Lua option `v<i>_grain_env`, `GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}`, default hann; `voices[i].grain.env` holds the option index 1-5) is sent as index − 1. The engine's `envBufnumFor(index)` turns it into the grain synth's `envBuf`: 0 = `-1` (GrainIn's built-in Hann), 1-4 = `envBuffers[index - 1].bufnum`; any other index is ignored. `envBuffers` are four 1024-frame `Buffer.loadCollection`s of `Env.sine`, `Env.perc(0.1, 0.9)`, `Env.linen(0.1, 0.8, 0.1)` and the trapezoid `Env([0, 1, 1, 0], [0.25, 0.5, 0.25])`
 - `grainMode` (Lua option `v<i>_grain_mode`, `GRAIN_MODE_OPTIONS = {"continuous", "triggered"}`, default continuous; `voices[i].grain.mode` holds the option index 1-2) is sent as index − 1. `\strataGrain` picks its `GrainIn` trigger with `Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)])` (`mode = grainMode.round.clip(0, 1)`): continuous fires `grainDensity` grains per second, triggered fires one grain per `retrigger` (its level follows the voice accent, not a grain-side velocity) and mutes the position-spread path so only the triggered grains sound. MAIN shows `[TRIG]` for a voice in triggered mode
 - `DISCRETE_GRAIN_KEYS` (`{ env = #GRAIN_ENV_OPTIONS, mode = #GRAIN_MODE_OPTIONS }`) maps the grain keys that hold an option index to their option count: `scene_transition_targets` skips them (they switch when the fade ends), mutation and randomize never touch them, and `validate_scene` requires integers from 1 to the count
@@ -131,6 +131,13 @@ Every voice's grain stage has a source (`grainSource[voice]`): 0 = its own synth
 **Buffer commands** (`loadSlot`, `recordSlot`, `clearSlot`, `writeSlot` in the engine): load zeroes the pair, opens the file with `SoundFile` (frames, channels, rate; anything unreadable is logged and the slot left unchanged) and `readChannel`s at most 16 s (at the file's rate) into the existing buffers. Record zeroes the pair and, after a `server.sync` (so the zeroing never lands on the take), starts a `\strataRecord` synth (two `RecordBuf`s of `In.ar(inputBus, 2) * level`, `loop: 0`, plus a `Line` with `doneAction: 2` for the duration) right after `inputSynth`, unless the recording was cancelled meanwhile (`recordSynths[i]` is the token; do not use a zero completion message: it cannot be cancelled before the node exists). The slot reads 0 frames until the recording completes (`onFree`), then gets its frames and the take is written to `scratchDir +/+ "buf<n>.wav"`. A new record, load or clear on the slot cancels a recording in progress or pending (`stopRecording`), which writes nothing. `stopRecord` (`stopRecordSlot`) instead keeps the take: the record synth writes its frame count (`Sweep.kr(0, SampleRate.ir)`) to the slot's `recordFrameBuses[i]`; the engine frees the synth, reads that bus (`/c_get` is answered after the `/n_free`, and the bus keeps its last value), sets `bufferFrames[i]` to it and writes the scratch take. Read `isPlaying` before freeing (`Node.free` clears it). A recording still waiting for its zeroed buffers has captured nothing and is just cancelled. `writeSlot(index, path)` (scratch takes and `saveBuffer`) has the server write each mono buffer's valid frames to a temporary float file, then sclang interleaves them in 8192-frame chunks (yielding `writeChunkWait`, 1 ms, between chunks) into a stereo 16-bit WAV at the content's rate and deletes the temporaries; it creates no synth nodes. Writes to the same path can overlap (a full 16 s take is still being written when the next, shorter take completes), so each write gets a generation number in `writeGenerations[path]`, interleaves into its own `path.<generation>.part` file, and renames it into place (`mv -f`, atomic on one filesystem; sclang has no `File.rename`) only if it is still the newest write for that path. An older write checks after every chunk, abandons as soon as a newer one starts, and deletes its `.part`. The newest write always wins, two writes never mix, and a reader never sees a half-written file. Never open the final path directly for writing: `SoundFile.openWrite` truncates it, and libsndfile rewrites the header on `close`. The engine check sets `writeChunkWait` to 0.02 s so the overlap is certain. Every change updates `bufferFrames`, the grain synths reading the slot (`bufFrames`, `bufRateScale`) and the `bufferState` poll.
 
 **Scratch directory**: `scratchDir` (engine variable, settable) defaults to `Platform.userHomeDir +/+ "dust/audio/strata/scratch/"`, which equals Lua's `_path.audio .. "strata/scratch/"` on norns; it is created on demand before writing. `test/engine_check.scd` points it at a temporary directory so the check never writes into `~/dust`.
+
+**Lua side** (strata.lua):
+- **Per-voice source**: option `v<i>_source` over `SOURCE_OPTIONS = {"synth", "buf 1", ..., "buf 8", "input"}` (built from `NUM_BUFFERS`), default synth, held in `voices[i].source`. The action always sends `setGrainSource(i - 1, x - 1)`, then for a running voice `sync_voice_values_to_engine`, clamps the grid `param_page` and redraws. `voice_uses_synth(i)` (source 1), `voice_uses_buffer(i)` (sources 2-9; input is not a buffer) and `voice_source_label(i)` (the option name) are the helpers. The source params sit at the top of each voice's granular section with `v<i>_buf_pos`, `v<i>_buf_rate`, `v<i>_buf_scan`
+- **Behaviour rules (spec §1)**: whenever the source is not the synth (any buffer *or* input): E3, arc ring 2 and MAIN's main parameter are `buf_pos` (label `pos`, through `main_param_entry`), the 256 grid's first faders are `BUFFER_FADER_KEYS`, `randomize_voice` sets `buf_pos` (0-1), `buf_rate` (0.5-2, `2 ^ (r * 2 - 1)`) and `buf_scan` (-0.5..0.5) plus grain size/pitch instead of synthesis params, `gentle_mutate` mutates the buffer params instead of synthesis params, and `lfo_update` drifts `buf_pos` as well as grain pitch. `source` is never randomized or mutated; freeze covers the buffer params. (For the input source the buffer params do nothing in the engine; they are used anyway because the spec ties the rules to "not synth".)
+- **Buffers table**: `buffers[slot]` = `{name, loaded, recording, seconds, path}` per slot (`name = "empty"` until something is loaded or recorded). `load_buffer(slot, path)` sends `loadBuffer` and sets `name` (the file name), `loaded`, `path`; it ignores `""`, norns' `"-"` (no file chosen) and directory paths. `record_buffer(slot)` sends `recordBuffer(slot - 1, record_duration, record_level)`, sets `recording` and starts a `clock.run` timer of `record_duration` (`buffer_record_clocks[slot]`) that ends it with `name = "take <n>"`, `loaded = true` and `path` = the scratch take `_path.audio .. "strata/scratch/buf<n>.wav"`; called while the slot records, it sends `stopRecord` and ends the take the same way at once. `clear_buffer(slot)` sends `clearBuffer` and resets the slot. Load, clear and stop cancel the slot's timer (the engine cancels its recording). `save_buffer(slot)` does `util.make_dir(buffer_audio_dir)` and `saveBuffer(slot - 1, buffer_save_path(slot))` (`_path.audio .. "strata/<YYYYMMDD-HHMMSS>-buf<n>.wav"`) and prints the path; a slot with nothing in it (not loaded, 0 s) is not saved. `seconds` comes only from the poll. All four check the slot (1..`NUM_BUFFERS`); `cleanup` cancels the timers and stops the poll
+- **Buffer params**: group `strata_buffers` (size `2 + NUM_BUFFERS * 4`): `record_duration` (0.5-`BUFFER_SECONDS` s, default 8), `record_level` (0-2, default 1), then per slot `buf<n>_file` (`params:add_file`, starting folder `_path.audio`; action `load_buffer`), `buf<n>_record`, `buf<n>_clear`, `buf<n>_save` triggers
+- **Scenes** capture `voices[i].source` and the three buffer params (through `GRAIN_PARAM_IDS`), never buffer contents: a recalled scene plays whatever is in the slot now. `source` switches at the end of a smooth transition (it is not in `params`/`grain`, so `scene_transition_targets` skips it); the buffer params crossfade. `VOICE_SCENE_DEFAULTS` gives older scenes `source = 1` and the buffer params' defaults; `validate_scene` requires `source` to be an integer 1..`#SOURCE_OPTIONS`
 
 ## Development & Testing
 
@@ -184,8 +191,10 @@ local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.
 local NUM_MOD_SLOTS = 3     -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5      -- Screen pages (MAIN, FX, LFO, BUFFER, SETUP), selected with E1
 local MAX_STEP_LEVEL = 15   -- Pattern step levels 0 (off) to 15; level / 15 = retrigger velocity
+local NUM_BUFFERS = 8       -- Sample buffer slots
+local BUFFER_SECONDS = 16   -- Length of each buffer slot (record_duration maximum)
 ```
-The engine mirrors `NUM_VOICES` as `numVoices` in [lib/Engine_Strata.sc](lib/Engine_Strata.sc). Remaining bare numbers in grid code are grid coordinates and LED levels, not counts.
+The engine mirrors `NUM_VOICES` as `numVoices`, `NUM_BUFFERS` as `numBuffers` and `BUFFER_SECONDS` as `bufferSeconds` in [lib/Engine_Strata.sc](lib/Engine_Strata.sc). Remaining bare numbers in grid code are grid coordinates and LED levels, not counts.
 
 **Always use these constants** instead of hardcoded numbers:
 - Use `NUM_VOICES` in voice loops: `for i = 1, NUM_VOICES do`
@@ -347,7 +356,7 @@ Before completing any modification task, verify:
 #### When adding new parameters, you MUST review:
 
 1. **Grid Parameter Manipulation**:
-   - Grid fader page: `fader_param_ids()` lists the selected voice's `param_order`, six grain params (envelope shape and grain mode are option params shown as index faders) and the nine crossmod slot values; new params added to `param_order` appear automatically. Pages hold 4 faders each, so a voice has `fader_page_count()` = 5-6 pages today (Folder and Sub 5, the others 6)
+   - Grid fader page: `fader_param_ids()` lists the selected voice's `param_order` (or `BUFFER_FADER_KEYS` = buf_pos, buf_rate, buf_scan, amp when its source is not the synth), six grain params (envelope shape and grain mode are option params shown as index faders) and the nine crossmod slot values; new params added to `param_order` appear automatically. Pages hold 4 faders each, so a voice has `fader_page_count()` = 5-6 pages today (Folder and Sub 5, the others 6; any buffer- or input-sourced voice 5)
    - Faders are set by `set_fader_param()` and drawn by `grid_redraw_faders()`
    - Consider adding dedicated grid controls for critical new parameters
    - Update grid documentation in README.md
@@ -407,9 +416,10 @@ Before completing any feature addition or architectural change, verify:
 Each voice has a table structure containing:
 - `name` - Voice type identifier
 - `active` - Boolean state
+- `source` - Grain source, a `SOURCE_OPTIONS` index: 1 = synth, 2..`NUM_BUFFERS` + 1 = buffer 1-8, `NUM_BUFFERS` + 2 = input (`SOURCE_SYNTH`, `SOURCE_INPUT`)
 - `param_order` - Ordered list of the `params` keys (PARAMS menu order and grid fader order; amp/pan last)
 - `params` - Synthesis parameters (voice-specific); their values are also the param defaults
-- `grain` - Granular processing parameters (size, density, pitch, spread, env = grain envelope option index, mode = grain mode option index)
+- `grain` - Granular processing parameters (size, density, pitch, spread, env = grain envelope option index, mode = grain mode option index, buf_pos, buf_rate, buf_scan)
 - `crossmod` - `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`
 
 The `voices` table is the single source of truth. Engine state mirrors this: param actions forward changes while a voice is active, and `sync_voice_to_engine` pushes everything when a voice starts.
@@ -467,7 +477,8 @@ end
 ```
 
 **Key Design Decisions**:
-- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement; neither are the grain envelope shape and grain mode (`DISCRETE_GRAIN_KEYS`)
+- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement; neither are the grain envelope shape and grain mode (`DISCRETE_GRAIN_KEYS`) nor the voice's `source`
+- **Buffer and input sources**: a voice whose source is not its synth mutates `BUFFER_MUTATION_KEYS` (`buf_pos`, `buf_rate`, `buf_scan`, each with `probability`, delta = gaussian × `amount` in the controlspec's normalized range, so the exp `buf_rate` moves evenly) instead of its synthesis params; grain size/pitch/spread mutate as for every voice
 - **Frozen Voice Exemption**: Frozen voices are excluded from mutations
 - **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
 - **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
@@ -489,8 +500,8 @@ params:set("mutation_rate", 2)  -- Check every 2 seconds
 - **Dramatic Shift**: probability=0.25, amount=0.4, rate=1s
 
 **Integration with Existing Systems**:
-- **LFO System**: Mutations work alongside `lfo_update()`, which gives each active, unfrozen voice a subtle mean-reverting grain pitch drift: `delta = (math.random() - 0.5) * LFO_PITCH_STEP - (current - base) * LFO_PITCH_REVERSION` (step 0.004, reversion 0.01 per 100 ms tick). `base` (`grain_pitch_base[i]`) is the last grain pitch set by anything other than the LFO (user, mutation, scene), tracked in the param action via the `lfo_writing` flag. The `grain_pitch` controlspec has step 0 so these small steps are not quantized away
-- **Freeze Feature**: Frozen voices are stable - neither LFO nor mutations affect them
+- **LFO System**: Mutations work alongside `lfo_update()`, which gives each active, unfrozen voice a subtle mean-reverting grain pitch drift: `delta = (math.random() - 0.5) * LFO_PITCH_STEP - (current - base) * LFO_PITCH_REVERSION` (step 0.004, reversion 0.01 per 100 ms tick). `base` (`grain_pitch_base[i]`) is the last grain pitch set by anything other than the LFO (user, mutation, scene), tracked in the param action via the `lfo_writing` flag. The `grain_pitch` controlspec has step 0 so these small steps are not quantized away. Voices whose source is not the synth also drift `buf_pos` the same way (`LFO_BUF_POS_STEP` 0.002, `LFO_BUF_POS_REVERSION` 0.01, centre `buf_pos_base[i]`, `buf_pos` step 0)
+- **Freeze Feature**: Frozen voices are stable - neither LFO nor mutations affect them (buffer params included; `randomize_voice` also returns for a frozen voice)
 - **Cross-Modulation**: Mutations can change modulation sources/amounts, creating evolving relationships
 - **UI Feedback**: `[M]` indicator appears in the header (x=98) when enabled
 
@@ -506,7 +517,7 @@ Strata includes a comprehensive scene system for creating longer-form compositio
 #### Architecture
 - **Scene Storage**: `scenes` table - 8 scene slots (numbered 1-8)
 - **Scene Data**: Complete instrument state including:
-  - All voice parameters (synthesis, granular, cross-modulation)
+  - All voice parameters (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents)
   - Voice active states and freeze states
   - Pattern data (all 7 voices × 16 steps)
   - Global parameters (master density, tempo, filter, delay, reverb, drift, mutations)
@@ -671,7 +682,8 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 ```lua
 -- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*, drift_amount)
 -- data.voices: NUM_VOICES tables, each with
---   active (boolean), params (only known keys, numbers), grain (size/density/pitch/spread numbers, env a positive integer),
+--   active (boolean), source (integer 1..#SOURCE_OPTIONS), params (only known keys, numbers),
+--   grain (only GRAIN_PARAM_IDS keys, numbers; env/mode integers 1..option count),
 --   crossmod.slot1..3 {source = integer 0..NUM_VOICES, amp_amt, freq_amt numbers}, crossmod.speed number
 -- data.frozen: NUM_VOICES booleans
 -- data.patterns: NUM_VOICES x PATTERN_LENGTH integers 0..15
@@ -856,7 +868,7 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - Voices auto-activate when pattern step triggers them
 - Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
 - Grid pages allow switching between pattern sequencing and parameter control
-- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread/envelope/mode, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources) and option params (grain envelope and mode, `param_range` gives `1, count`; it tests `param.options` because norns' `param.t` is a number); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number or option param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 5-6 fader pages
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last; `BUFFER_FADER_KEYS` buf_pos/buf_rate/buf_scan/amp instead when the voice's source is not its synth, and the source action clamps `param_page` to the new count), grain size/density/pitch/spread/envelope/mode, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources) and option params (grain envelope and mode, `param_range` gives `1, count`; it tests `param.options` because norns' `param.t` is a number); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number or option param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 5-6 fader pages
 - **FX page (256, page 4)**: `GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders on rows 3-7 (`set_param_from_column`/`grid_redraw_fader_row`). Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_freeze`/`grid_redraw_256_freeze`); rows 1-2 and 9-15 are dark and do nothing. `grid_key_256` has an explicit `grid_page == 4` branch so page 4 never falls through to the pattern page. The filter/delay param actions call `fx_fader_changed()`, which redraws the grid while page 4 is shown, so the faders follow the screen, arc and scene recalls. Smaller grids have no FX page
 
 ### Arc Integration (Optional)
@@ -875,7 +887,7 @@ The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDR
 #### Input Handling
 - `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4 through the page's handler. MAIN:
   - Ring 1: Master density
-  - Ring 2: Selected voice's main parameter (`main_param_id`, delta scaled by the `MAIN_PARAMS` entry's `arc_scale`)
+  - Ring 2: Selected voice's main parameter (`main_param_id`, delta scaled by `main_param_entry(...).arc_scale`; `buf_pos` for a voice whose source is not its synth)
   - Ring 3: Grain size for selected voice
   - Ring 4: Grain density for selected voice
 - FX (`ARC_FX_RINGS`, `{param_id, scale}` per ring): ring 1 `filter_freq` (delta/4), ring 2 `filter_res` (delta/100), ring 3 `delay_time` (delta/200), ring 4 `delay_mix` (delta/100). Each ring is drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp
@@ -915,7 +927,7 @@ The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LF
 
 #### Main parameter
 
-`main_param_id(voice_idx)` returns the param E3 and arc ring 2 adjust on MAIN (`v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring) and `main_param_label(voice_idx)` its screen label. Both read the `MAIN_PARAMS` table (per voice type: params key, screen value format, arc delta scale). Use them instead of `if v.name ==` chains; arc ring 2 is drawn across `param_range(main_param_id(...))`
+`main_param_id(voice_idx)` returns the param E3 and arc ring 2 adjust on MAIN (`v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring) and `main_param_label(voice_idx)` its screen label. Both read `main_param_entry(voice_idx)`: the `MAIN_PARAMS` entry for the voice type (param id suffix, screen label, value format, arc delta scale), or `BUFFER_MAIN_PARAM` (`buf_pos`, label `pos`, `%.2f`) whenever the voice's source is not its synth (buffer or input; spec §1). Use them instead of `if v.name ==` chains; arc ring 2 is drawn across `param_range(main_param_id(...))`
 
 #### MAIN layout
 

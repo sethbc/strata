@@ -19,6 +19,8 @@ local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
+local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
+local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
 
 -- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
 -- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
@@ -29,6 +31,17 @@ local GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}
 -- 0 = continuous (grain density grains per second), 1 = triggered (one grain
 -- per retrigger: pattern steps and MIDI notes)
 local GRAIN_MODE_OPTIONS = {"continuous", "triggered"}
+
+-- Grain sources (v<i>_source option order): the voice's own synth, buffer
+-- slots 1..NUM_BUFFERS, then the live input. Option n is sent to the engine
+-- as setGrainSource n - 1 (0 = synth, 1-8 = buffer slot, 9 = input).
+local SOURCE_SYNTH = 1
+local SOURCE_INPUT = NUM_BUFFERS + 2
+local SOURCE_OPTIONS = {"synth"}
+for slot = 1, NUM_BUFFERS do
+  SOURCE_OPTIONS[slot + 1] = "buf " .. slot
+end
+SOURCE_OPTIONS[SOURCE_INPUT] = "input"
 
 -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
 -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
@@ -42,6 +55,7 @@ local voices = {
   {
     name = "resonator",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "rq", "noise", "mod1", "mod2", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 100,
@@ -58,7 +72,10 @@ local voices = {
       pitch = 1,
       spread = 0.5,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
@@ -70,6 +87,7 @@ local voices = {
   {
     name = "fm",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "ratio", "index", "modFreq", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 80,
@@ -85,7 +103,10 @@ local voices = {
       pitch = 1,
       spread = 0.3,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -97,6 +118,7 @@ local voices = {
   {
     name = "folder",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "fold", "mod", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 60,
@@ -111,7 +133,10 @@ local voices = {
       pitch = 1,
       spread = 0.4,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -123,6 +148,7 @@ local voices = {
   {
     name = "sub",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "drift", "amp"},  -- display / grid order of params
     params = {
       freq = 40,
@@ -135,7 +161,10 @@ local voices = {
       pitch = 1,
       spread = 0.2,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -147,6 +176,7 @@ local voices = {
   {
     name = "pulse",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "width", "cutoff", "res", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 120,
@@ -162,7 +192,10 @@ local voices = {
       pitch = 1,
       spread = 0.35,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -174,6 +207,7 @@ local voices = {
   {
     name = "karplus",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "decay", "damping", "excite", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 200,
@@ -189,7 +223,10 @@ local voices = {
       pitch = 1,
       spread = 0.25,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -201,6 +238,7 @@ local voices = {
   {
     name = "ring",
     active = false,
+    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
     param_order = {"freq", "ratio", "mod", "brightness", "amp", "pan"},  -- display / grid order of params
     params = {
       freq = 300,
@@ -216,7 +254,10 @@ local voices = {
       pitch = 1,
       spread = 0.4,
       env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1  -- GRAIN_MODE_OPTIONS index
+      mode = 1,  -- GRAIN_MODE_OPTIONS index
+      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+      buf_rate = 1,
+      buf_scan = 0
     },
     crossmod = {
       slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
@@ -226,6 +267,20 @@ local voices = {
     }
   }
 }
+
+-- A voice's grain source: its synth, a buffer slot, or the live input
+function voice_uses_synth(voice_idx)
+  return voices[voice_idx].source == SOURCE_SYNTH
+end
+
+function voice_uses_buffer(voice_idx)
+  local source = voices[voice_idx].source
+  return source > SOURCE_SYNTH and source < SOURCE_INPUT
+end
+
+function voice_source_label(voice_idx)
+  return SOURCE_OPTIONS[voices[voice_idx].source]
+end
 
 local selected_voice = 1
 local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
@@ -245,9 +300,13 @@ local lfo_metro
 local LFO_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
 local LFO_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
 local grain_pitch_base = {}        -- last non-LFO grain pitch per voice (the walk's centre)
+local LFO_BUF_POS_STEP = 0.002     -- width of each random buffer position step (+/-0.001 per tick)
+local LFO_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base position removed per tick
+local buf_pos_base = {}            -- last non-LFO buffer position per voice
 local lfo_writing = false          -- true while lfo_update sets params
 for i = 1, NUM_VOICES do
   grain_pitch_base[i] = voices[i].grain.pitch
+  buf_pos_base[i] = voices[i].grain.buf_pos
 end
 
 -- Mutation system
@@ -300,6 +359,121 @@ end
 
 for i = 1, NUM_SCENES do
   scenes[i] = empty_scene(i)
+end
+
+-- Sample buffers. The engine holds the audio; Lua tracks what each slot
+-- holds for the screen and scenes. path is the loaded file, or the scratch
+-- take the engine writes when a recording completes (or stops early).
+local buffers = {}
+for slot = 1, NUM_BUFFERS do
+  buffers[slot] = {name = "empty", loaded = false, recording = false, seconds = 0, path = nil}
+end
+local buffer_record_clocks = {}  -- per slot: clock that ends the recording state
+local buffer_state_poll = nil
+local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
+local buffer_audio_dir = _path.audio .. "strata/"
+local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
+
+local function valid_buffer_slot(slot)
+  return slot >= 1 and slot <= NUM_BUFFERS
+end
+
+local function cancel_buffer_recording_timer(slot)
+  if buffer_record_clocks[slot] then
+    clock.cancel(buffer_record_clocks[slot])
+    buffer_record_clocks[slot] = nil
+  end
+end
+
+-- A take is in the slot (the recording completed or was stopped early)
+local function finish_buffer_take(slot)
+  local buffer = buffers[slot]
+  buffer.recording = false
+  buffer.loaded = true
+  buffer.name = "take " .. slot
+  buffer.path = buffer_scratch_dir .. "buf" .. slot .. ".wav"
+end
+
+-- A usable sound file path: not empty, not norns' "-" (no file chosen) and
+-- not a directory (the file param's starting folder)
+local function is_sound_file_path(path)
+  return type(path) == "string" and path ~= "" and path ~= "-" and path:sub(-1) ~= "/"
+end
+
+function load_buffer(slot, path)
+  if not valid_buffer_slot(slot) or not is_sound_file_path(path) then return end
+  -- loading cancels a recording in progress in the engine
+  cancel_buffer_recording_timer(slot)
+  engine.loadBuffer(slot - 1, path)
+  local buffer = buffers[slot]
+  buffer.name = path:match("[^/]*$")
+  buffer.loaded = true
+  buffer.recording = false
+  buffer.path = path
+  redraw()
+end
+
+-- Record the live input into a slot for record_duration seconds, or, if the
+-- slot is already recording, stop early and keep what was captured
+function record_buffer(slot)
+  if not valid_buffer_slot(slot) then return end
+  local buffer = buffers[slot]
+  cancel_buffer_recording_timer(slot)
+  if buffer.recording then
+    engine.stopRecord(slot - 1)
+    finish_buffer_take(slot)
+  else
+    local duration = params:get("record_duration")
+    engine.recordBuffer(slot - 1, duration, params:get("record_level"))
+    buffer.recording = true
+    buffer.seconds = 0  -- the engine reports 0 s until the take completes
+    buffer_record_clocks[slot] = clock.run(function()
+      clock.sleep(duration)
+      buffer_record_clocks[slot] = nil
+      finish_buffer_take(slot)
+      redraw()
+    end)
+  end
+  redraw()
+end
+
+function clear_buffer(slot)
+  if not valid_buffer_slot(slot) then return end
+  cancel_buffer_recording_timer(slot)
+  engine.clearBuffer(slot - 1)
+  local buffer = buffers[slot]
+  buffer.name = "empty"
+  buffer.loaded = false
+  buffer.recording = false
+  buffer.seconds = 0
+  buffer.path = nil
+  redraw()
+end
+
+-- Timestamped stereo WAV in audio/strata/, so it shows in the file browser
+function buffer_save_path(slot)
+  return buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. ".wav"
+end
+
+function save_buffer(slot)
+  if not valid_buffer_slot(slot) then return end
+  local buffer = buffers[slot]
+  if not buffer.loaded and buffer.seconds == 0 then
+    print("buffer " .. slot .. " is empty, nothing to save")
+    return
+  end
+  util.make_dir(buffer_audio_dir)
+  local path = buffer_save_path(slot)
+  engine.saveBuffer(slot - 1, path)
+  print("buffer " .. slot .. " saved to " .. path)
+end
+
+-- bufferState poll: one slot per message, slot index * 100 + seconds
+local function buffer_state_changed(value)
+  local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
+  local slot = slot_index + 1
+  if not valid_buffer_slot(slot) then return end
+  buffers[slot].seconds = value - slot_index * BUFFER_STATE_STRIDE
 end
 
 -- Effects chain (filter -> delay -> reverb -> master). Each filter or delay
@@ -590,6 +764,35 @@ function init()
     end
   }
 
+  -- Sample buffers: recording settings, then file/record/clear/save per
+  -- slot. The group size must match the params below exactly.
+  params:add_group("strata_buffers", "buffers", 2 + NUM_BUFFERS * 4)
+
+  params:add{
+    type = "control",
+    id = "record_duration",
+    name = "record duration",
+    controlspec = controlspec.new(0.5, BUFFER_SECONDS, "lin", 0.5, 8, "s")
+  }
+
+  params:add{
+    type = "control",
+    id = "record_level",
+    name = "record level",
+    controlspec = controlspec.new(0, 2, "lin", 0.01, 1)
+  }
+
+  for slot = 1, NUM_BUFFERS do
+    params:add_file("buf" .. slot .. "_file", "buffer " .. slot .. " file", _path.audio)
+    params:set_action("buf" .. slot .. "_file", function(path) load_buffer(slot, path) end)
+    params:add_trigger("buf" .. slot .. "_record", "buffer " .. slot .. " record")
+    params:set_action("buf" .. slot .. "_record", function() record_buffer(slot) end)
+    params:add_trigger("buf" .. slot .. "_clear", "buffer " .. slot .. " clear")
+    params:set_action("buf" .. slot .. "_clear", function() clear_buffer(slot) end)
+    params:add_trigger("buf" .. slot .. "_save", "buffer " .. slot .. " save")
+    params:set_action("buf" .. slot .. "_save", function() save_buffer(slot) end)
+  end
+
   -- Add params for each voice
   for i = 1, NUM_VOICES do
     add_voice_params(i)
@@ -613,6 +816,14 @@ function init()
   mutation_metro.time = params:get("mutation_rate")
   mutation_metro.event = gentle_mutate
   -- Don't start automatically - controlled by mutation_enabled param
+
+  -- Valid seconds per buffer slot, from the engine
+  buffer_state_poll = poll.set("bufferState", buffer_state_changed)
+  if buffer_state_poll then
+    buffer_state_poll:start()
+  else
+    print("bufferState poll not found")
+  end
 
   -- Connect arc
   arc_init()
@@ -657,6 +868,72 @@ function add_voice_params(voice_idx)
   
   -- Grain params
   params:add_separator("voice " .. voice_idx .. " granular")
+
+  -- Source: always sent, so the engine knows it before the voice starts
+  -- (a stopped voice only records it; voiceOn then builds the right synths)
+  params:add{
+    type = "option",
+    id = "v" .. voice_idx .. "_source",
+    name = "source",
+    options = SOURCE_OPTIONS,
+    default = v.source,
+    action = function(x)
+      voices[voice_idx].source = x
+      engine.setGrainSource(voice_idx - 1, x - 1)
+      if voices[voice_idx].active then
+        sync_voice_values_to_engine(voice_idx)
+      end
+      -- the grid fader list follows the source (buffer or synth params)
+      if grid_voice_select == voice_idx then
+        param_page = util.clamp(param_page, 1, fader_page_count(voice_idx))
+      end
+      redraw()
+      grid_redraw()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_buf_pos",
+    name = "buffer position",
+    -- step 0: the LFO drift moves in steps far smaller than 0.01
+    controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
+    action = function(x)
+      voices[voice_idx].grain.buf_pos = x
+      if not lfo_writing then
+        buf_pos_base[voice_idx] = x
+      end
+      if voices[voice_idx].active then
+        engine.setGrainParam(voice_idx - 1, "bufPos", x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_buf_rate",
+    name = "buffer rate",
+    controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
+    action = function(x)
+      voices[voice_idx].grain.buf_rate = x
+      if voices[voice_idx].active then
+        engine.setGrainParam(voice_idx - 1, "bufRate", x)
+      end
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "v" .. voice_idx .. "_buf_scan",
+    name = "buffer scan",
+    controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
+    action = function(x)
+      voices[voice_idx].grain.buf_scan = x
+      if voices[voice_idx].active then
+        engine.setGrainParam(voice_idx - 1, "bufScan", x)
+      end
+    end
+  }
   
   params:add{
     type = "control",
@@ -969,8 +1246,16 @@ end
 -- Push the complete Lua-side state of a voice to its freshly started engine
 -- synths. voiceOn only carries the initial freq/amp/pan and grain values, and
 -- param actions only reach the engine while a voice is active, so without this
--- edits made while a voice was off (and scene recalls) would be lost.
+-- edits made while a voice was off (and scene recalls) would be lost. The
+-- source goes first (the engine ignores it when unchanged).
 function sync_voice_to_engine(voice_idx)
+  engine.setGrainSource(voice_idx - 1, voices[voice_idx].source - 1)
+  sync_voice_values_to_engine(voice_idx)
+end
+
+-- Everything sync_voice_to_engine sends after the source: synthesis, grain
+-- (including the buffer params) and crossmod values
+function sync_voice_values_to_engine(voice_idx)
   local voice = voices[voice_idx]
   local engine_voice = voice_idx - 1
 
@@ -984,6 +1269,9 @@ function sync_voice_to_engine(voice_idx)
   engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
   engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
   engine.setGrainParam(engine_voice, "grainMode", voice.grain.mode - 1)
+  engine.setGrainParam(engine_voice, "bufPos", voice.grain.buf_pos)
+  engine.setGrainParam(engine_voice, "bufRate", voice.grain.buf_rate)
+  engine.setGrainParam(engine_voice, "bufScan", voice.grain.buf_scan)
 
   for slot = 1, NUM_MOD_SLOTS do
     local slot_state = voice.crossmod["slot" .. slot]
@@ -999,14 +1287,23 @@ function randomize_voice(voice_idx)
   if frozen[voice_idx] then return end
   
   local voice = voices[voice_idx]
-  
-  -- Randomize synth params
-  for key, _ in pairs(voice.params) do
-    if key ~= "amp" then -- Don't randomize amplitude
-      local spec = get_param_spec(key)
-      local new_val = math.random() * (spec.maxval - spec.minval) + spec.minval
-      params:set("v" .. voice_idx .. "_" .. key, new_val)
+  local prefix = "v" .. voice_idx .. "_"
+
+  if voice_uses_synth(voice_idx) then
+    -- Randomize synth params
+    for key, _ in pairs(voice.params) do
+      if key ~= "amp" then -- Don't randomize amplitude
+        local spec = get_param_spec(key)
+        local new_val = math.random() * (spec.maxval - spec.minval) + spec.minval
+        params:set(prefix .. key, new_val)
+      end
     end
+  else
+    -- Buffer or input source: the synth is not playing, so randomize the
+    -- buffer params instead (rate 0.5-2, even in octaves; gentle scan)
+    params:set(prefix .. "buf_pos", math.random())
+    params:set(prefix .. "buf_rate", 2 ^ (math.random() * 2 - 1))
+    params:set(prefix .. "buf_scan", math.random() - 0.5)
   end
   
   -- Randomize some grain params
@@ -1037,6 +1334,16 @@ function lfo_update()
       lfo_writing = true
       params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
       lfo_writing = false
+
+      -- Buffer and input sources also drift their position the same way
+      if not voice_uses_synth(i) then
+        local position = voices[i].grain.buf_pos
+        local position_delta = (math.random() - 0.5) * LFO_BUF_POS_STEP
+          - (position - buf_pos_base[i]) * LFO_BUF_POS_REVERSION
+        lfo_writing = true
+        params:set("v" .. i .. "_buf_pos", util.clamp(position + position_delta, 0, 1))
+        lfo_writing = false
+      end
     end
   end
 
@@ -1046,6 +1353,9 @@ function lfo_update()
     grid_redraw()
   end
 end
+
+-- voices[i].grain keys gentle_mutate changes for buffer- and input-sourced voices
+local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
 
 function gentle_mutate()
   -- Probability-based parameter mutations
@@ -1057,22 +1367,36 @@ function gentle_mutate()
     if voices[i].active and not frozen[i] then
       local v = voices[i]
 
-      -- Iterate through synthesis parameters
-      for key, current_val in pairs(v.params) do
-        -- Skip amplitude and pan to preserve stability
-        if key ~= "amp" and key ~= "pan" then
-          -- Check if this parameter should mutate
+      if voice_uses_synth(i) then
+        -- Iterate through synthesis parameters
+        for key, current_val in pairs(v.params) do
+          -- Skip amplitude and pan to preserve stability
+          if key ~= "amp" and key ~= "pan" then
+            -- Check if this parameter should mutate
+            if math.random() < probability then
+              local spec = get_param_spec(key)
+              local range = spec.maxval - spec.minval
+
+              -- Generate mutation delta based on amount
+              -- Using gaussian-like distribution by averaging random values
+              local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
+
+              -- Apply mutation with clamping
+              local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
+              params:set("v" .. i .. "_" .. key, new_val)
+            end
+          end
+        end
+      else
+        -- Buffer and input sources mutate their buffer params instead of the
+        -- (silent) synthesis params. The source itself never mutates.
+        for _, key in ipairs(BUFFER_MUTATION_KEYS) do
           if math.random() < probability then
-            local spec = get_param_spec(key)
-            local range = spec.maxval - spec.minval
-
-            -- Generate mutation delta based on amount
-            -- Using gaussian-like distribution by averaging random values
-            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
-
-            -- Apply mutation with clamping
-            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
-            params:set("v" .. i .. "_" .. key, new_val)
+            local param_id = "v" .. i .. "_" .. key
+            local spec = params:lookup_param(param_id).controlspec
+            -- delta across the normalized range, so exp buf_rate moves evenly
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
+            params:set(param_id, spec:map(util.clamp(spec:unmap(v.grain[key]) + delta, 0, 1)))
           end
         end
       end
@@ -1137,7 +1461,11 @@ local SCENE_GLOBAL_PARAMS = {
 -- param's default.
 local VOICE_SCENE_DEFAULTS = {
   {path = {"grain", "env"}, default = 1},  -- hann
-  {path = {"grain", "mode"}, default = 1}  -- continuous
+  {path = {"grain", "mode"}, default = 1},  -- continuous
+  {path = {"source"}, default = SOURCE_SYNTH},
+  {path = {"grain", "buf_pos"}, default = 0},
+  {path = {"grain", "buf_rate"}, default = 1},
+  {path = {"grain", "buf_scan"}, default = 0}
 }
 
 -- Top-level scene blocks added after format 1 (such as LFO or MIDI
@@ -1151,7 +1479,10 @@ local GRAIN_PARAM_IDS = {
   pitch = "grain_pitch",
   spread = "grain_spread",
   env = "grain_env",
-  mode = "grain_mode"
+  mode = "grain_mode",
+  buf_pos = "buf_pos",
+  buf_rate = "buf_rate",
+  buf_scan = "buf_scan"
 }
 
 -- voices[i].grain keys holding an option index rather than a continuous
@@ -1237,6 +1568,7 @@ function capture_scene(scene_num)
   for i = 1, NUM_VOICES do
     scene_data.voices[i] = {
       active = voices[i].active,
+      source = voices[i].source,  -- the buffer's contents are not captured
       params = {},
       grain = {},
       crossmod = {}
@@ -1287,8 +1619,8 @@ end
 -- Snapshot {id, start, target} for every continuous param a smooth
 -- transition crossfades. Start values are read once, before the fade, so
 -- the fade moves linearly from start to target over the whole transition.
--- Mod sources, discrete grain params (envelope shape), freeze and active
--- states switch at the end instead.
+-- Grain sources, mod sources, discrete grain params (envelope shape, grain
+-- mode), freeze and active states switch at the end instead.
 function scene_transition_targets(scene_data)
   local targets = {}
   local function add_target(param_id, target_value)
@@ -1384,6 +1716,8 @@ function recall_scene_instant(scene_num)
   for i = 1, NUM_VOICES do
     local voice_data = scene_data.voices[i]
     local prefix = "v" .. i .. "_"
+
+    params:set(prefix .. "source", voice_data.source)
 
     for key, value in pairs(voice_data.params) do
       params:set(prefix .. key, value)
@@ -1589,6 +1923,7 @@ function validate_scene(scene)
     local voice_data = data.voices[i]
     if type(voice_data) ~= "table" then return false end
     if type(voice_data.active) ~= "boolean" then return false end
+    if not is_integer_between(voice_data.source, 1, #SOURCE_OPTIONS) then return false end
     if type(voice_data.params) ~= "table" then return false end
     if type(voice_data.grain) ~= "table" then return false end
     if type(voice_data.crossmod) ~= "table" then return false end
@@ -1651,23 +1986,34 @@ function update_voice_list()
 end
 
 -- The synthesis param E3 and arc ring 2 adjust on MAIN, per voice type:
--- params key, screen value format, and arc delta scale
+-- param id suffix, screen label, screen value format, and arc delta scale
 local MAIN_PARAMS = {
-  resonator = {key = "freq", format = "%.0f Hz", arc_scale = 1},
-  fm = {key = "index", format = "%.1f", arc_scale = 0.1},
-  folder = {key = "fold", format = "%.1f", arc_scale = 0.1},
-  sub = {key = "drift", format = "%.3f", arc_scale = 0.01},
-  pulse = {key = "width", format = "%.2f", arc_scale = 0.01},
-  karplus = {key = "decay", format = "%.1f s", arc_scale = 0.1},
-  ring = {key = "ratio", format = "%.2f", arc_scale = 0.01}
+  resonator = {key = "freq", label = "freq", format = "%.0f Hz", arc_scale = 1},
+  fm = {key = "index", label = "index", format = "%.1f", arc_scale = 0.1},
+  folder = {key = "fold", label = "fold", format = "%.1f", arc_scale = 0.1},
+  sub = {key = "drift", label = "drift", format = "%.3f", arc_scale = 0.01},
+  pulse = {key = "width", label = "width", format = "%.2f", arc_scale = 0.01},
+  karplus = {key = "decay", label = "decay", format = "%.1f s", arc_scale = 0.1},
+  ring = {key = "ratio", label = "ratio", format = "%.2f", arc_scale = 0.01}
 }
 
+-- Any voice whose source is not its synth (buffer or input) shows and
+-- adjusts its buffer position instead
+local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f", arc_scale = 0.1}
+
+function main_param_entry(voice_idx)
+  if voice_uses_synth(voice_idx) then
+    return MAIN_PARAMS[voices[voice_idx].name]
+  end
+  return BUFFER_MAIN_PARAM
+end
+
 function main_param_id(voice_idx)
-  return "v" .. voice_idx .. "_" .. MAIN_PARAMS[voices[voice_idx].name].key
+  return "v" .. voice_idx .. "_" .. main_param_entry(voice_idx).key
 end
 
 function main_param_label(voice_idx)
-  return MAIN_PARAMS[voices[voice_idx].name].key
+  return main_param_entry(voice_idx).label
 end
 
 -- Screen pages. E1 selects the page; E2, E3, K2 and K3 go to the page's
@@ -1757,7 +2103,7 @@ function redraw_main()
     screen.level(frozen[selected_voice] and 3 or 10)
   end
   screen.move(65, 50)
-  screen.text(string.format(MAIN_PARAMS[v.name].format, params:get(main_param_id(selected_voice))))
+  screen.text(string.format(main_param_entry(selected_voice).format, params:get(main_param_id(selected_voice))))
 
   draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
 end
@@ -1933,7 +2279,7 @@ local function arc_main_delta(n, delta)
     params:delta("master_density", delta / 20)
   elseif n == 2 then
     -- Ring 2: Selected voice's main parameter
-    local scale = MAIN_PARAMS[voices[selected_voice].name].arc_scale
+    local scale = main_param_entry(selected_voice).arc_scale
     params:delta(main_param_id(selected_voice), delta * scale)
   elseif n == 3 then
     -- Ring 3: Grain size
@@ -2353,14 +2699,20 @@ function randomize_pattern(voice_idx)
   end
 end
 
+-- A buffer- or input-sourced voice's first faders: its buffer params and its
+-- level (the other synthesis params do nothing while the synth is off)
+local BUFFER_FADER_KEYS = {"buf_pos", "buf_rate", "buf_scan", "amp"}
+
 -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
--- params (param_order), its six grain params (envelope shape and grain mode
--- are option params, shown as index faders), then the nine crossmod slot
--- values (source, amp mod, freq mod for each slot)
+-- params (param_order), or BUFFER_FADER_KEYS when its source is not the
+-- synth, its six grain params (envelope shape and grain mode are option
+-- params, shown as index faders), then the nine crossmod slot values
+-- (source, amp mod, freq mod for each slot)
 function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
-  for _, key in ipairs(voices[voice_idx].param_order) do
+  local first_keys = voice_uses_synth(voice_idx) and voices[voice_idx].param_order or BUFFER_FADER_KEYS
+  for _, key in ipairs(first_keys) do
     table.insert(ids, prefix .. key)
   end
   for _, key in ipairs({"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}) do
@@ -2787,6 +3139,13 @@ function cleanup()
 
   -- Cancel any active transition clock
   cancel_scene_transition()
+
+  -- Stop the buffer poll and recording timers (the engine finishes or
+  -- frees any recording itself)
+  if buffer_state_poll then buffer_state_poll:stop() end
+  for slot = 1, NUM_BUFFERS do
+    cancel_buffer_recording_timer(slot)
+  end
 
   -- Turn off all voices
   for i = 1, NUM_VOICES do

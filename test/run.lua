@@ -107,6 +107,7 @@ local function assert_voice_matches(voice_idx, voice, captured)
     assert_near(live.freq_amt, saved.freq_amt, 0.011, prefix .. "slot " .. slot .. " freq")
   end
   assert_near(voice.crossmod.speed, captured.crossmod.speed, 0.11, prefix .. "mod speed")
+  assert_equal(voice.source, captured.source, prefix .. "source")
   assert_equal(voice.active, captured.active, prefix .. "active")
 end
 
@@ -114,7 +115,12 @@ end
 local function scramble_state(seed)
   math.randomseed(seed)
   for voice_idx = 1, 7 do
+    -- source first: randomize_voice then picks buffer or synth params
+    params:set("v" .. voice_idx .. "_source", math.random(1, 10))
     randomize_voice(voice_idx)
+    params:set("v" .. voice_idx .. "_buf_pos", math.random())
+    params:set("v" .. voice_idx .. "_buf_rate", 0.25 + math.random() * 3.75)
+    params:set("v" .. voice_idx .. "_buf_scan", math.random() * 4 - 2)
     params:set("v" .. voice_idx .. "_grain_spread", math.random())
     params:set("v" .. voice_idx .. "_grain_density", math.random(1, 100))
     params:set("v" .. voice_idx .. "_grain_env", math.random(1, 5))
@@ -191,10 +197,13 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
   for voice_idx = 1, 7 do
     if voices[voice_idx].active then toggle_voice(voice_idx) end
   end
-  scramble_state(42)
   params:set("master_density", 1.5)
   context.clear_engine_calls()
-  assert_equal(#context.engine_calls, 0, "edits to stopped voices are not sent")
+  scramble_state(42)
+  for _, call in ipairs(context.engine_calls) do
+    -- the source is always sent (the engine only records it for a stopped voice)
+    assert_equal(call.name, "setGrainSource", "edits to stopped voices are not sent")
+  end
 
   for voice_idx = 1, 7 do
     context.clear_engine_calls()
@@ -212,6 +221,13 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
     assert_equal(sent.grain.posSpread, voice.grain.spread, "voice " .. voice_idx .. " posSpread")
     assert_equal(sent.grain.envShape, voice.grain.env - 1, "voice " .. voice_idx .. " envShape")
     assert_equal(sent.grain.grainMode, voice.grain.mode - 1, "voice " .. voice_idx .. " grainMode")
+    assert_equal(sent.grain.bufPos, voice.grain.buf_pos, "voice " .. voice_idx .. " bufPos")
+    assert_equal(sent.grain.bufRate, voice.grain.buf_rate, "voice " .. voice_idx .. " bufRate")
+    assert_equal(sent.grain.bufScan, voice.grain.buf_scan, "voice " .. voice_idx .. " bufScan")
+    -- the source goes first after voiceOn, before any other voice state
+    assert_equal(context.engine_calls[1].name, "voiceOn", "voice " .. voice_idx .. " voiceOn first")
+    assert_equal(context.engine_calls[2].name, "setGrainSource", "voice " .. voice_idx .. " source synced first")
+    assert_equal(context.engine_calls[2].args[2], voice.source - 1, "voice " .. voice_idx .. " source")
     for slot = 1, 3 do
       local slot_state = voice.crossmod["slot" .. slot]
       local expected_source = slot_state.source == 0 and -1 or slot_state.source - 1
@@ -1488,6 +1504,345 @@ test("stub fileselect, musicutil, polls and audio path", function()
   amp_poll:stop()
   context.polls.fire("amp_in_l", 0.5)
   assert_equal(#values, 1, "stopped polls do not fire"); assert_equal(values[1], 0.25)
+end)
+
+---------------------------------------------------------------------------
+-- audio sources and buffers
+---------------------------------------------------------------------------
+
+test("source switching syncs through setGrainSource and swaps the main param", function()
+  local context = load_strata(); context.clock.advance()
+  context.clear_engine_calls(); params:set("v1_source", 4)      -- buf 3
+  local calls = context.calls_named("setGrainSource")
+  assert_equal(#calls, 1, "one setGrainSource per switch")
+  assert_equal(calls[1].args[1], 0); assert_equal(calls[1].args[2], 3)
+  assert_equal(main_param_id(1), "v1_buf_pos"); assert_equal(main_param_label(1), "pos")
+  params:set("v1_source", 10); calls = context.calls_named("setGrainSource"); assert_equal(calls[#calls].args[2], 9)
+  assert_equal(main_param_id(1), "v1_buf_pos", "input source shows buf_pos too (spec: source not synth)")
+  params:set("v1_source", 1); assert_equal(main_param_id(1), "v1_freq")
+  -- a stopped voice's source is sent at once (R11) and nothing else is
+  context.clear_engine_calls(); params:set("v3_source", 5)
+  assert_equal(#context.engine_calls, 1, "stopped voice: only the source is sent")
+  assert_equal(context.engine_calls[1].name, "setGrainSource")
+  assert_equal(context.engine_calls[1].args[1], 2); assert_equal(context.engine_calls[1].args[2], 4)
+  toggle_voice(3); params:set("v3_source", 2); toggle_voice(3)          -- on, edit, off
+  context.clear_engine_calls(); toggle_voice(3)                          -- on again: synced
+  local sent = engine_state_for_voice(context.engine_calls, 2)
+  assert_equal(context.calls_named("setGrainSource")[1].args[2], 1, "started voice sends its source")
+  assert_equal(sent.grain.bufPos, 0); assert_equal(sent.grain.bufRate, 1); assert_equal(sent.grain.bufScan, 0)
+  -- a running voice's switch resends the rest of its state after the source
+  context.clear_engine_calls(); params:set("v3_source", 10)
+  assert_equal(context.engine_calls[1].name, "setGrainSource")
+  assert_equal(#context.calls_named("setGrainSource"), 1, "no second setGrainSource")
+  assert_true(#context.calls_named("setVoiceParam") > 0, "running voice: voice state resent")
+  assert_equal(engine_state_for_voice(context.engine_calls, 2).grain.bufPos, 0, "grain state resent")
+  assert_equal(#context.calls_named("voiceOn"), 0, "switching creates no voice")
+end)
+
+test("source and buffer params: options, defaults, voices table, labels", function()
+  load_strata()
+  local voices = local_value("voices")
+  local names = {}
+  for index = 1, 10 do params:set("v1_source", index); names[index] = params:string("v1_source") end
+  assert_equal(table.concat(names, ","), "synth,buf 1,buf 2,buf 3,buf 4,buf 5,buf 6,buf 7,buf 8,input")
+  params:set("v1_source", 1)
+  local expected = { buf_pos = 0, buf_rate = 1, buf_scan = 0 }
+  for voice_idx = 1, 7 do
+    local prefix = "v" .. voice_idx .. "_"
+    local source = params:lookup_param(prefix .. "source")
+    assert_equal(source.t, params.tOPTION, "source is an option")
+    assert_equal(source.count, 10, "synth, eight buffers, input")
+    assert_equal(params:get(prefix .. "source"), 1, "default synth")
+    assert_equal(voices[voice_idx].source, 1, "voices table holds the source index")
+    for key, default in pairs(expected) do
+      assert_near(params:get(prefix .. key), default, 1e-9, prefix .. key .. " default")
+      assert_near(voices[voice_idx].grain[key], default, 1e-9, "voices[" .. voice_idx .. "].grain." .. key)
+      assert_equal(local_value("GRAIN_PARAM_IDS")[key], key, key .. " in GRAIN_PARAM_IDS")
+    end
+  end
+  assert_equal(param_range("v1_buf_pos"), 0); assert_equal(select(2, param_range("v1_buf_pos")), 1)
+  assert_equal(param_range("v1_buf_rate"), 0.25); assert_equal(select(2, param_range("v1_buf_rate")), 4)
+  assert_equal(param_range("v1_buf_scan"), -2); assert_equal(select(2, param_range("v1_buf_scan")), 2)
+  assert_equal(params:lookup_param("v1_buf_rate").controlspec.warp_name, "exp", "buf rate is exponential")
+  params:set("v2_buf_rate", 2); assert_near(voices[2].grain.buf_rate, 2, 1e-9)
+  params:set("v2_buf_scan", -1); assert_near(voices[2].grain.buf_scan, -1, 1e-9)
+  params:set("v2_buf_pos", 0.123); assert_near(voices[2].grain.buf_pos, 0.123, 1e-9, "buf_pos is not quantized")
+  assert_true(not voice_uses_buffer(2), "synth source is not a buffer")
+  assert_equal(voice_source_label(2), "synth")
+  params:set("v2_source", 9); assert_true(voice_uses_buffer(2)); assert_equal(voice_source_label(2), "buf 8")
+  params:set("v2_source", 10); assert_true(not voice_uses_buffer(2), "input is not a buffer")
+  assert_equal(voice_source_label(2), "input")
+  -- every per-voice scene default equals its param default
+  local found = {}
+  for _, field in ipairs(local_value("VOICE_SCENE_DEFAULTS")) do
+    local suffix = field.path[1] == "grain" and local_value("GRAIN_PARAM_IDS")[field.path[2]] or field.path[1]
+    found[suffix] = true
+    local param = params:lookup_param("v1_" .. suffix)
+    local param_default = param.controlspec and param.controlspec.default or param.default
+    assert_equal(field.default, param_default, suffix .. " scene default")
+  end
+  for _, suffix in ipairs({ "source", "buf_pos", "buf_rate", "buf_scan" }) do
+    assert_true(found[suffix], suffix .. " has a scene default")
+  end
+end)
+
+test("buffer-sourced voices: E3, arc ring 2 and MAIN use buf_pos", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.arc.plug(1)
+  params:set("v1_source", 3)
+  params:set("v1_buf_pos", 0.5)
+  local freq = params:get("v1_freq")
+  enc(3, 2)
+  assert_near(params:get("v1_buf_pos"), 0.52, 1e-6, "E3 moves buf_pos")
+  assert_equal(params:get("v1_freq"), freq, "E3 leaves the synth freq alone")
+  context.arc.turn(1, 2, 10)
+  assert_true(params:get("v1_buf_pos") > 0.52, "arc ring 2 moves buf_pos")
+  assert_equal(params:get("v1_freq"), freq, "arc ring 2 leaves the synth freq alone")
+  assert_near(device.segments[2].to, params:get("v1_buf_pos") * math.pi * 2, 1e-9, "ring 2 shows buf_pos")
+  redraw()
+  local label, value
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 65 and entry.y == 42 then label = entry.text end
+    if entry.x == 65 and entry.y == 50 then value = entry.text end
+  end
+  assert_equal(label, "pos", "MAIN label")
+  assert_equal(value, string.format("%.2f", params:get("v1_buf_pos")), "MAIN value")
+end)
+
+test("randomize and mutate touch buffer params, never source", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v1_source", 2); local freq = params:get("v1_freq")
+  local synth_before = deep_copy(local_value("voices")[1].params)
+  math.randomseed(7); randomize_voice(1)
+  assert_equal(params:get("v1_freq"), freq, "synth params untouched for a buffer voice")
+  assert_true(params:get("v1_buf_rate") ~= 1 or params:get("v1_buf_pos") ~= 0, "buffer params randomized")
+  for _ = 1, 20 do
+    randomize_voice(1)
+    assert_true(params:get("v1_buf_rate") >= 0.5 - 1e-9 and params:get("v1_buf_rate") <= 2 + 1e-9, "rate 0.5-2")
+    assert_true(math.abs(params:get("v1_buf_scan")) <= 0.5 + 1e-9, "scan -0.5..0.5")
+  end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  local pos_before = params:get("v1_buf_pos")
+  gentle_mutate()
+  assert_equal(params:get("v1_source"), 2)
+  assert_true(params:get("v1_buf_pos") ~= pos_before, "mutation moves buf_pos")
+  for key, value in pairs(synth_before) do
+    assert_equal(local_value("voices")[1].params[key], value, "mutation leaves synth " .. key .. " alone")
+  end
+  -- synth-sourced voices keep mutating synth params, never the source
+  params:set("v1_source", 1); local mutated = false
+  for _ = 1, 5 do gentle_mutate(); if params:get("v1_freq") ~= freq then mutated = true end end
+  assert_true(mutated, "synth source mutates synth params again")
+  for _ = 1, 20 do randomize_voice(1); gentle_mutate() end
+  assert_equal(params:get("v1_source"), 1, "source never randomized or mutated")
+  -- freeze covers buffer params
+  params:set("v1_source", 5); toggle_freeze(1)
+  local frozen_state = deep_copy(local_value("voices")[1].grain)
+  randomize_voice(1); gentle_mutate(); for _ = 1, 10 do lfo_update() end
+  for key, value in pairs(frozen_state) do
+    assert_equal(local_value("voices")[1].grain[key], value, "frozen buffer voice keeps " .. key)
+  end
+end)
+
+test("buffer position drifts subtly and reverts to the user-set position", function()
+  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  assert_true(local_value("voices")[1].active, "voice 1 on")
+  params:set("v1_source", 2); params:set("v1_buf_pos", 0.4)
+  local synth_freq = params:get("v1_freq")
+  math.randomseed(3)
+  local max_offset = 0
+  for _ = 1, 3000 do
+    lfo_update()
+    max_offset = math.max(max_offset, math.abs(params:get("v1_buf_pos") - 0.4))
+  end
+  assert_true(max_offset > 0, "buf_pos drifts")
+  assert_true(max_offset < 0.05, "drift stays subtle (max " .. max_offset .. ")")
+  assert_equal(params:get("v1_freq"), synth_freq, "drift leaves synth params alone")
+  params:set("v1_buf_pos", 0.8)
+  for _ = 1, 3000 do lfo_update() end
+  assert_true(math.abs(params:get("v1_buf_pos") - 0.8) < 0.05, "a new user position becomes the centre")
+  -- a synth-sourced voice's position does not drift
+  params:set("v1_source", 1); local pos = params:get("v1_buf_pos")
+  for _ = 1, 100 do lfo_update() end
+  assert_equal(params:get("v1_buf_pos"), pos, "synth source: no position drift")
+end)
+
+test("transition skips discrete voice fields; scenes keep source and buffer params", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v2_source", 3); params:set("v2_buf_pos", 0.7); capture_scene(1)
+  assert_equal(local_value("scenes")[1].data.voices[2].source, 3, "source captured")
+  params:set("v2_source", 1); params:set("v2_buf_pos", 0.1)
+  recall_scene(1, 4); context.clock.advance()
+  assert_equal(params:get("v2_source"), 1, "source only changes at the end of a transition")
+  assert_true(params:get("v2_buf_pos") > 0.1, "buf_pos interpolates")
+  for _, target in ipairs(scene_transition_targets(local_value("scenes")[1].data)) do
+    assert_true(not target.id:find("_source$"), target.id .. " is not crossfaded")
+  end
+  for _ = 1, 25 do context.clock.advance() end
+  assert_equal(params:get("v2_source"), 3); assert_near(params:get("v2_buf_pos"), 0.7, 1e-6)
+  -- validation and migration of the source field
+  local scene = deep_copy(local_value("scenes")[1])
+  assert_true(validate_scene(scene), "captured scene validates")
+  for _, bad in ipairs({ 0, 11, 2.5, "buf 1" }) do
+    scene.data.voices[2].source = bad
+    assert_true(not validate_scene(scene), "source " .. tostring(bad) .. " rejected")
+  end
+  for voice_idx = 1, 7 do
+    scene.data.voices[voice_idx].source = nil
+    for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do scene.data.voices[voice_idx].grain[key] = nil end
+  end
+  migrate_scene(scene, 1)
+  assert_equal(scene.data.voices[2].source, 1, "missing source migrates to synth")
+  assert_equal(scene.data.voices[2].grain.buf_rate, 1, "missing buf_rate migrates to 1")
+  assert_equal(scene.data.voices[2].grain.buf_pos, 0, "missing buf_pos migrates to 0")
+  assert_true(validate_scene(scene), "migrated scene validates")
+end)
+
+test("buffer faders replace synth faders for a buffer-sourced voice", function()
+  local context = load_strata()
+  local device = context.grid.plug(1, 16, 16)
+  local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
+  press(14, 8); press(1, 14)            -- grid page 2, voice 1 (resonator: 6 fader pages)
+  press(6, 13); assert_equal(local_value("param_page"), 6)
+  params:set("v1_source", 2)
+  local ids = fader_param_ids(1)
+  assert_equal(ids[1], "v1_buf_pos"); assert_equal(ids[2], "v1_buf_rate")
+  assert_equal(ids[3], "v1_buf_scan"); assert_equal(ids[4], "v1_amp")
+  assert_equal(ids[5], "v1_grain_size", "grain faders follow")
+  assert_equal(#ids, 4 + 6 + 9); assert_equal(fader_page_count(1), 5)
+  assert_equal(local_value("param_page"), 5, "fader page clamped when the source shrinks the list")
+  press(1, 13); press(16, 10)           -- page 1, row 2 = buf_rate max
+  assert_near(params:get("v1_buf_rate"), 4, 1e-6, "buf_rate fader")
+  assert_equal(device:get_led(16, 10), 15)
+  params:set("v1_source", 1)
+  assert_equal(fader_param_ids(1)[1], "v1_freq", "synth faders return")
+end)
+
+test("buffer group params: exact group, triggers and defaults", function()
+  load_strata()
+  local expected = { "record_duration", "record_level" }
+  for slot = 1, 8 do
+    for _, suffix in ipairs({ "file", "record", "clear", "save" }) do
+      table.insert(expected, "buf" .. slot .. "_" .. suffix)
+    end
+  end
+  local group_index
+  for index, param in ipairs(params.params) do
+    if param.id == "strata_buffers" then group_index = index end
+  end
+  assert_true(group_index, "strata_buffers group exists")
+  assert_equal(params.params[group_index].n, #expected, "group size")
+  for offset, param_id in ipairs(expected) do
+    assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
+  end
+  assert_near(params:get("record_duration"), 8, 1e-9); assert_near(params:get("record_level"), 1, 1e-9)
+  assert_equal(param_range("record_duration"), 0.5); assert_equal(select(2, param_range("record_duration")), 16)
+  assert_equal(select(2, param_range("record_level")), 2)
+  assert_equal(params:lookup_param("buf1_file").t, params.tFILE)
+  assert_equal(params:lookup_param("buf1_record").t, params.tTRIGGER)
+  local buffers = local_value("buffers")
+  assert_equal(#buffers, 8)
+  for slot = 1, 8 do
+    assert_equal(buffers[slot].name, "empty"); assert_equal(buffers[slot].loaded, false)
+    assert_equal(buffers[slot].recording, false); assert_equal(buffers[slot].seconds, 0)
+    assert_equal(buffers[slot].path, nil)
+  end
+end)
+
+test("buffer triggers call the engine and track recording state", function()
+  local context = load_strata()
+  params:set("record_duration", 2); params:set("buf3_record", 1)
+  local call = context.calls_named("recordBuffer")[1]
+  assert_equal(call.args[1], 2); assert_near(call.args[2], 2, 1e-9); assert_near(call.args[3], 1, 1e-9)
+  assert_true(local_value("buffers")[3].recording)
+  context.clock.advance(); assert_true(not local_value("buffers")[3].recording)
+  assert_equal(local_value("buffers")[3].name, "take 3"); assert_true(local_value("buffers")[3].loaded)
+  assert_equal(local_value("buffers")[3].path, _path.audio .. "strata/scratch/buf3.wav", "scratch take path")
+  params:set("buf3_file", "/tmp/a.wav"); assert_equal(context.calls_named("loadBuffer")[1].args[2], "/tmp/a.wav")
+  assert_equal(context.calls_named("loadBuffer")[1].args[1], 2)
+  assert_equal(local_value("buffers")[3].name, "a.wav"); assert_equal(local_value("buffers")[3].path, "/tmp/a.wav")
+  params:set("buf3_clear", 1); assert_equal(context.calls_named("clearBuffer")[1].args[1], 2)
+  assert_equal(local_value("buffers")[3].name, "empty"); assert_true(not local_value("buffers")[3].loaded)
+  context.polls.fire("bufferState", 201.5); assert_near(local_value("buffers")[3].seconds, 1.5, 1e-9)
+  context.polls.fire("bufferState", 716); assert_near(local_value("buffers")[8].seconds, 16, 1e-9)
+  context.polls.fire("bufferState", 0); assert_near(local_value("buffers")[1].seconds, 0, 1e-9)
+  context.polls.fire("bufferState", 950); context.polls.fire("bufferState", -1)  -- out of range: ignored
+  -- an empty path or norns' "-" (no file chosen) loads nothing
+  context.clear_engine_calls()
+  params:set("buf4_file", ""); params:set("buf4_file", "-"); params:set("buf4_file", _path.audio)
+  assert_equal(#context.calls_named("loadBuffer"), 0, "no load without a file")
+end)
+
+test("recording again stops early; clear and load cancel the timer", function()
+  local context = load_strata(); context.clock.advance()   -- finish init's start-up coroutine
+  local buffers = local_value("buffers")
+  params:set("record_duration", 4)
+  record_buffer(2); assert_true(buffers[2].recording)
+  context.clear_engine_calls()
+  record_buffer(2)
+  assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
+  assert_equal(context.calls_named("stopRecord")[1].args[1], 1)
+  assert_equal(#context.calls_named("recordBuffer"), 0, "and does not start a new one")
+  assert_true(not buffers[2].recording); assert_true(buffers[2].loaded); assert_equal(buffers[2].name, "take 2")
+  local pending = context.clock.pending_count()
+  record_buffer(2); assert_equal(context.clock.pending_count(), pending + 1, "new recording timer")
+  clear_buffer(2)
+  assert_true(not buffers[2].recording, "clear ends the recording state")
+  assert_equal(context.clock.pending_count(), pending, "clear cancels the timer")
+  record_buffer(2); load_buffer(2, "/tmp/b.wav")
+  assert_true(not buffers[2].recording, "load ends the recording state")
+  assert_equal(context.clock.pending_count(), pending, "load cancels the timer")
+  -- out-of-range slots are ignored
+  context.clear_engine_calls()
+  record_buffer(0); record_buffer(9); clear_buffer(9); load_buffer(0, "/tmp/c.wav"); save_buffer(9)
+  assert_equal(#context.engine_calls, 0, "invalid slots send nothing")
+  -- cleanup stops the poll and any recording timer
+  record_buffer(5)
+  cleanup()
+  assert_equal(context.clock.pending_count(), 0, "no recording timer left")
+  assert_true(not context.polls.polls.bufferState.running, "bufferState poll stopped")
+end)
+
+test("bufferState poll is found and started in init", function()
+  local context = load_strata()
+  local entry = context.polls.polls.bufferState
+  assert_true(entry ~= nil, "the engine registers bufferState")
+  assert_true(entry.running, "poll started"); assert_true(entry.callback ~= nil, "callback set")
+end)
+
+test("save_buffer writes a timestamped wav under audio/strata", function()
+  local context = load_strata()
+  load_buffer(6, "/tmp/x.wav")
+  save_buffer(6)
+  local call = context.calls_named("saveBuffer")[1]
+  assert_equal(call.args[1], 5)
+  local dir = _path.audio .. "strata/"
+  assert_equal(call.args[2]:sub(1, #dir), dir, "saved under " .. dir)
+  assert_true(call.args[2]:sub(#dir + 1):match("^%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf6%.wav$"),
+    "timestamped name: " .. call.args[2])
+  assert_equal(buffer_save_path(6):sub(1, #dir), dir)
+  assert_true(util.file_exists(dir), "directory created")
+  assert_true(table.concat(context.printed, "\n"):find(call.args[2], 1, true), "path printed")
+  -- an empty slot has nothing to save
+  context.clear_engine_calls(); save_buffer(1)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "empty slot not saved")
+  params:set("buf6_save", 1); assert_equal(#context.calls_named("saveBuffer"), 1, "save trigger")
+end)
+
+test("MAIN layout holds for buffer- and input-sourced voices", function()
+  local context = load_strata(); context.clock.advance()
+  local _, set_selected = find_upvalue("selected_voice")
+  for _, source in ipairs({ 9, 10 }) do
+    for voice_idx = 1, 7 do
+      set_selected(voice_idx)
+      params:set("v" .. voice_idx .. "_source", source)
+      params:set("v" .. voice_idx .. "_buf_pos", 1)
+      params:set("v" .. voice_idx .. "_grain_mode", 2)
+      if not local_value("frozen")[voice_idx] then toggle_freeze(voice_idx) end
+      show_page(1)
+      assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
+    end
+  end
 end)
 
 ---------------------------------------------------------------------------
