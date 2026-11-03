@@ -28,7 +28,7 @@ This project uses two languages that work together:
 ### Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb Bus → Master (drift/saturation) → Output
+Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Filter Bus → Delay → Delay Bus → Reverb → Reverb Bus → Master (drift/saturation/limiter) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
@@ -38,8 +38,9 @@ Each of the 7 voices follows this path:
 2. Granular processor (`strataGrain`) reads from voice bus, outputs to shared `mainBus`
 3. Modulation synth (`strataMod`) analyzes voice bus output and generates control signal to `modBuses[i]`
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
-5. Reverb (`strataReverb`) processes mainBus, outputs to `reverbBus`
-6. Master (`strataMaster`) applies drift and saturation, outputs to norns output
+5. Filter (`strataFilter`) processes mainBus, outputs to `filterBus`; delay (`strataDelay`) processes filterBus, outputs to `delayBus`
+6. Reverb (`strataReverb`) processes delayBus, outputs to `reverbBus`
+7. Master (`strataMaster`) applies drift, saturation and a `Limiter.ar(sig, 0.95)` safety stage, outputs to norns output
 
 ### Cross-Modulation System
 
@@ -67,6 +68,8 @@ The Lua script controls the engine through these commands:
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Update granular parameters dynamically |
 | `engine.setMasterDrift(amount)` | `"f"` | Control global tape drift effect |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Update reverb (mix, size, damping) |
+| `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Update the master filter: freq 20-20000 Hz, res 0-1 (rq = `1 - res * 0.95`), type 0 lowpass / 1 highpass / 2 bandpass (Lua `filter_type` option index - 1), mix 0 (bypass) to 1 |
+| `engine.setDelay(time, feedback, mix)` | `"fff"` | Update the master delay: time 0.01-2 s (lagged 0.1 s), feedback 0-0.95, mix 0 (dry) to 1 |
 | `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Set which voice modulates this voice at given slot (slot=1-3, sourceVoice: -1=none, 0-6=voice index). "None" routes the slot to the engine's always-zero `silentBus` |
 | `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Set amplitude modulation amount for given slot (-2 to 2) |
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Set frequency modulation amount for given slot (-2 to 2) |
@@ -135,7 +138,7 @@ The Lua script controls the engine through these commands:
 
 **Parameter naming**: Avoid parameter ID collisions:
 - norns has built-in params like "reverb"
-- Use prefixed names like "strata_reverb" for separators
+- Use prefixed names like "strata_fx" for separators and groups
 - Each param needs a unique ID
 
 ## Code Style Guidelines
@@ -147,7 +150,7 @@ The Lua script controls the engine through these commands:
 local NUM_VOICES = 7        -- Total number of synthesis voices
 local NUM_SCENES = 8        -- Total number of scene slots
 local PATTERN_LENGTH = 16   -- Steps per pattern
-local SCENE_DATA_VERSION = 1  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3     -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5      -- Screen pages (MAIN, FX, LFO, BUFFER, SETUP), selected with E1
 ```
@@ -386,7 +389,7 @@ Use norns params for all adjustable values:
 1. Define in `init()` with `params:add{}`
 2. Include `action` function to update engine
 3. Reference params with `params:get("id")` or `params:set("id", value)`
-4. Group related params with `params:add_separator()`
+4. Group related params with `params:add_separator()`, or `params:add_group(id, name, n)` for a collapsible section (`strata_fx`). `n` must equal the number of params that follow it exactly: norns groups cannot nest, and the test stub errors on a group opened inside another
 
 ### Probability-Based Mutation System
 
@@ -475,7 +478,7 @@ Strata includes a comprehensive scene system for creating longer-form compositio
   - All voice parameters (synthesis, granular, cross-modulation)
   - Voice active states and freeze states
   - Pattern data (all 7 voices × 16 steps)
-  - Global parameters (master density, tempo, reverb, drift, mutations)
+  - Global parameters (master density, tempo, filter, delay, reverb, drift, mutations)
 - **Scene Sequencer**: Automatic scene progression with configurable timing
 - **Transition Modes**: Instant recall or smooth crossfade between scenes
 
@@ -558,9 +561,9 @@ Scene controls on **Page 3** (16×16 grid):
 - Patterns are copied step-by-step to avoid reference issues
 
 **Smooth Transitions**:
-- `scene_transition_targets(scene_data)` snapshots `{id, start, target}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, reverb, drift)
+- `scene_transition_targets(scene_data)` snapshots `{id, start, target}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift)
 - 20 interpolation steps regardless of transition time; step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole transition time (never re-read the current value inside the loop: that makes the fade front-loaded)
-- Mod sources, freeze and active states, tempo and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
+- Mod sources, freeze and active states, tempo, filter type and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
 - Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `scene_transition_active`
 
 **Voice Activation Handling**:
@@ -620,8 +623,9 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 
 #### Disk Persistence
 - **Storage Location**: `~/dust/data/strata/scenes.data`
-- **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}`. A file with a different version is rejected; pre-2.1 files (a bare scenes array) load as version 1
-- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, wrong version, invalid data) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
+- **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 2). Version 1 files (`{version = 1, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version 1`; the next save writes version 2. Any other version is rejected
+- **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`. It fills only what is missing, so it runs for every version: each global from its `SCENE_GLOBAL_PARAMS` entry's `default` (the param default), top-level blocks from `SCENE_BLOCK_DEFAULTS` (`{key, default}`), and per-voice fields from `VOICE_SCENE_DEFAULTS` (`{path = keys inside data.voices[i], default}`; filled only when the parent table exists). Malformed scenes are left for validation to reject. When a later feature adds a scene field, add its default to one of these tables (both extension tables are empty in format 2.0)
+- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, unknown version, invalid data after migration) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
 - **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
 - **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
 - **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
@@ -634,14 +638,14 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 
 `validate_scene(scene)` checks one slot and `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). A populated scene must contain everything `recall_scene_instant()` reads:
 ```lua
--- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, reverb_*, drift_amount)
+-- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*, drift_amount)
 -- data.voices: NUM_VOICES tables, each with
 --   active (boolean), params (only known keys, numbers), grain (size/density/pitch/spread numbers),
 --   crossmod.slot1..3 {source = integer 0..NUM_VOICES, amp_amt, freq_amt numbers}, crossmod.speed number
 -- data.frozen: NUM_VOICES booleans
 -- data.patterns: NUM_VOICES x PATTERN_LENGTH integers 0..15
 ```
-When adding a field to `capture_scene()`, add it to `validate_scene()` (and to `SCENE_GLOBAL_PARAMS` for a global param), or recall will not restore it.
+When adding a field to `capture_scene()`, add it to `validate_scene()` (and to `SCENE_GLOBAL_PARAMS`, with its `default`, for a global param), or recall will not restore it, and give it a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`) so older files still load.
 
 **When to validate**:
 - Always before loading scenes from disk (`load_scenes_from_disk`)
@@ -810,7 +814,7 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - **Voice active status**: Brightness 12
 - **Voice inactive status**: Brightness 2-4
 - **Page indicators**: 15 for selected, 2 for unselected
-- **256 parameter page faders (rows 9-12)**: bar at 8 up to the value, the value's column at 15; row 13: fader pages, selected 15, available 4
+- **256 parameter page faders (rows 9-12) and FX faders (page 4, rows 3-7)**: bar at 8 up to the value, the value's column at 15; row 13 (page 2): fader pages, selected 15, available 4
 - Always call `grid_port:refresh()` after updating LEDs
 - Any state shown on the grid must call `grid_redraw()` when it changes, wherever it changes (`toggle_voice`, `toggle_freeze`, `randomize_voice`, scene recall, ...). `grid_redraw()` returns immediately when no grid is connected, so calling it is cheap
 
@@ -821,7 +825,8 @@ Strata supports monome grid controllers for pattern sequencing and parameter man
 - Voices auto-activate when pattern step triggers them
 - Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
 - Grid pages allow switching between pattern sequencing and parameter control
-- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which sets `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources); `fader_position()` is the inverse (`spec:unmap(value) * 15 + 1`). All through `params:set`. Voices have 4-5 fader pages
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last), grain size/density/pitch/spread, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12; pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 4-5 fader pages
+- **FX page (256, page 4)**: `GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders on rows 3-7 (`set_param_from_column`/`grid_redraw_fader_row`). Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_freeze`/`grid_redraw_256_freeze`); rows 1-2 and 9-15 are dark and do nothing. `grid_key_256` has an explicit `grid_page == 4` branch so page 4 never falls through to the pattern page. The filter/delay param actions call `fx_fader_changed()`, which redraws the grid while page 4 is shown, so the faders follow the screen, arc and scene recalls. Smaller grids have no FX page
 
 ### Arc Integration (Optional)
 
@@ -834,7 +839,7 @@ Strata supports the monome arc controller for tactile parameter control. The imp
 - Graceful degradation: `arc_redraw()` returns unless `arc_device` has a connected device
 
 #### Arc Pages
-The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDRAW` are indexed like `UI_PAGES`: `arc_delta` calls `ARC_PAGE_DELTA[ui_page](ring, delta)`, and `arc_redraw` clears the rings, calls `ARC_PAGE_REDRAW[ui_page](arc_device)` and refreshes. MAIN uses `arc_main_delta`/`arc_main_redraw`; SETUP has no rings (`arc_ignore_delta`/`arc_draw_nothing`), and FX, LFO and BUFFER use the same no-ops until their features add ring mappings. `enc(1, ...)` calls `arc_redraw()`, so changing page redraws the rings.
+The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDRAW` are indexed like `UI_PAGES`: `arc_delta` calls `ARC_PAGE_DELTA[ui_page](ring, delta)`, and `arc_redraw` clears the rings, calls `ARC_PAGE_REDRAW[ui_page](arc_device)` and refreshes. MAIN uses `arc_main_delta`/`arc_main_redraw`, FX `arc_fx_delta`/`arc_fx_redraw`; SETUP has no rings (`arc_ignore_delta`/`arc_draw_nothing`), and LFO and BUFFER use the same no-ops until their features add ring mappings. `enc(1, ...)` calls `arc_redraw()`, so changing page redraws the rings.
 
 #### Input Handling
 - `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4 through the page's handler. MAIN:
@@ -842,6 +847,7 @@ The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDR
   - Ring 2: Selected voice's main parameter (`main_param_id`, delta scaled by the `MAIN_PARAMS` entry's `arc_scale`)
   - Ring 3: Grain size for selected voice
   - Ring 4: Grain density for selected voice
+- FX (`ARC_FX_RINGS`, `{param_id, scale}` per ring): ring 1 `filter_freq` (delta/4), ring 2 `filter_res` (delta/100), ring 3 `delay_time` (delta/200), ring 4 `delay_mix` (delta/100). Each ring is drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp
 - `arc_key(n, s)` - Handle button press (2025 arc models)
   - On MAIN mirrors K3 (`start_or_freeze_selected_voice`); does nothing on other pages
 
@@ -869,11 +875,12 @@ The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDR
 The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`; `ui_page` is the index of the shown page.
 - `enc(1, d)` selects the page (`ui_page = util.clamp(ui_page + d, 1, NUM_UI_PAGES)`); E1 does nothing else. `init` turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP (norns resets these on every script load, so cleanup restores nothing). `enc(2|3, d)` calls `PAGE_ENC[ui_page](n, d)` and `key(n, 1)` calls `PAGE_KEY[ui_page](n)`
 - `redraw()` is `screen.clear(); draw_header(); PAGE_DRAW[ui_page](); screen.update()`. Each page's draw function ends with `draw_hints(text)` (level 4, x=0, y=62)
-- `PAGE_DRAW`, `PAGE_ENC` and `PAGE_KEY` are indexed like `UI_PAGES`. FX, LFO and BUFFER are placeholders (`redraw_placeholder` draws an empty hint row, `ignore_page_input` ignores encoders/keys) until their features replace them; to fill a page, write its draw/enc/key functions and put them in the three tables (and the arc tables below)
+- `PAGE_DRAW`, `PAGE_ENC` and `PAGE_KEY` are indexed like `UI_PAGES`. LFO and BUFFER are placeholders (`redraw_placeholder` draws an empty hint row, `ignore_page_input` ignores encoders/keys) until their features replace them; to fill a page, write its draw/enc/key functions and put them in the three tables (and the arc tables below)
 - The tables are script locals built after the functions they hold, so page functions must be defined above them
 - **MAIN** (`redraw_main`, `main_enc`, `main_key`): the original screen - E2 voice select, E3 main parameter, K2 randomize, K3 start/stop/freeze (`start_or_freeze_selected_voice`)
+- **FX** (`redraw_fx`, `fx_enc`, `fx_key`): a scrolling list of `FX_ROWS` (`{label, param_id, format}`; `format` is a `string.format` pattern, or nil for the param's own string): density, tape drift, filter type/freq/res/mix, delay time/fdbk/mix, reverb mix/size/damp. `FX_VISIBLE_ROWS` (5) rows at y=18-50, label at x=0 and value right-aligned at x=127, the selected row (`fx_row`) at level 15 and the others at 4; the view keeps one row above the selection. E2 selects the row, E3 is `params:delta` on its param. K3 toggles `filter_mix` between 0 and `fx_filter_last_mix` (its last non-zero value, initially 1). Hint: `K3:filter bypass` when the mix is above 0, else `K3:filter on`
 - **SETUP** (`redraw_setup`, `setup_key`): grid count and sizes (in port order), arc connected/none, `scenes: k/8 saved`, a `midi:` line for MIDI input; K3 calls `save_scenes_to_disk()`. `grid.add`/`grid.remove`/`arc.add`/`arc.remove` call `redraw()` so SETUP stays current
-- Master density left E1. It is on MAIN's arc ring 1, in params, and in the header on every page
+- Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page
 
 #### Main parameter
 
@@ -929,8 +936,11 @@ This prevents the theoretical 4× amplitude spike that could occur with 3 source
 Shared processing SynthDefs:
 - `\strataMod` - Envelope follower + LFO for generating modulation signals
 - `\strataGrain` - Granular processor (one per voice); `GrainIn` followed by `PitchShift` for `pitchShift`
+- `\strataFilter` - Master multimode filter (`in, out, freq=5000, res=0.5, filterType=0, mix=0`): `Select.ar` of `RLPF`/`RHPF`/`BPF` at rq `1 - res * 0.95`, `mix` crossfades dry to filtered (0 = bypass)
+- `\strataDelay` - Master stereo delay (`in, out, time=0.375, feedback=0.4, mix=0`): `DelayC` (max 2 s, `time.lag(0.1)`) fed by the input plus `LocalIn`, with the delayed signal times `feedback` sent back through `LocalOut`; `mix` crossfades dry to delayed
+- The filter and delay SynthDef defaults equal the Lua param defaults: the script never bangs its params, so the engine starts from these values
 - `\strataReverb` - Global reverb processor; outputs `FreeVerb2` only (it already crossfades dry/wet by `mix`)
-- `\strataMaster` - Master output with drift and saturation. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
+- `\strataMaster` - Master output with drift, saturation and `Limiter.ar(sig, 0.95)` after the tanh stage. Drift (master and Sub) is an LFO at a fixed slow rate scaled by the drift amount: tape drift 0 = none; the Sub drift param's minimum stays 0.001
 
 ### Audio Bus Management
 
@@ -938,8 +948,10 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - `numVoices` stereo `granBuses` (one per voice, for audio)
 - `numVoices` mono `modBuses` (one per voice, for control signals)
 - 1 mono `silentBus` (always 0; "no modulation source")
-- 1 stereo `mainBus` (granular outputs mix here)
-- 1 stereo `reverbBus` (reverb output)
+- 1 stereo `mainBus` (granular outputs mix here; filter input)
+- 1 stereo `filterBus` (filter output, delay input)
+- 1 stereo `delayBus` (delay output, reverb input)
+- 1 stereo `reverbBus` (reverb output, master input)
 
 Buses and groups are freed in `free` to prevent resource leaks.
 
@@ -947,9 +959,9 @@ Buses and groups are freed in `free` to prevent resource leaks.
 
 Everything runs inside the engine group `context.xg`, so norns' output group (`og`) and its meters come after the engine:
 ```
-context.xg: voiceGroup (voice synths) -> processGroup (grain + mod synths) -> strataReverb -> strataMaster
+context.xg: voiceGroup (voice synths) -> processGroup (grain + mod synths) -> strataFilter -> strataDelay -> strataReverb -> strataMaster
 ```
-`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and reverb then master are added with `\addToTail` on `context.xg`.
+`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and filter, delay, reverb and master are added in that order with `\addToTail` on `context.xg`.
 
 ### Synth Lifecycle
 

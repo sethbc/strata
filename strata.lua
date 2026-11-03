@@ -4,6 +4,8 @@
 -- E1: page (MAIN FX LFO BUFFER SETUP)
 -- MAIN: E2 select voice, E3 main param,
 --       K2 randomize, K3 start/freeze
+-- FX: E2 select row, E3 adjust,
+--     K3 filter bypass/on
 
 engine.name = "Strata"
 
@@ -13,7 +15,7 @@ local UI = require "ui"
 local NUM_VOICES = 7
 local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 1  -- For future compatibility
+local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 
@@ -250,7 +252,7 @@ local pattern_playing = false
 local pattern_clock = nil
 
 -- Grid UI state
-local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes
+local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes, 4=fx (256 only)
 local param_page = 1
 local grid_voice_select = 1
 
@@ -275,6 +277,22 @@ for i = 1, NUM_SCENES do
   scenes[i] = empty_scene(i)
 end
 
+-- Effects chain (filter -> delay -> reverb -> master). Each filter or delay
+-- param sends its whole command, so the engine always gets the current
+-- values of the others.
+local function send_filter_to_engine()
+  engine.setFilter(params:get("filter_freq"), params:get("filter_res"), params:get("filter_type") - 1, params:get("filter_mix"))
+end
+
+local function send_delay_to_engine()
+  engine.setDelay(params:get("delay_time"), params:get("delay_feedback"), params:get("delay_mix"))
+end
+
+-- The filter and delay params are faders on the 256 grid's FX page
+local function fx_fader_changed()
+  if grid_page == 4 then grid_redraw() end
+end
+
 function init()
   -- Set up params
   params:add_separator("strata")
@@ -291,16 +309,6 @@ function init()
     end
   }
   
-  params:add{
-    type = "control",
-    id = "drift_amount",
-    name = "tape drift",
-    controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
-    action = function(x)
-      engine.setMasterDrift(x)
-    end
-  }
-
   -- Sequencer tempo: drives norns' global clock (clock_tempo), which the
   -- pattern clock follows via clock.sync so external clock sources still work
   params:add{
@@ -431,38 +439,126 @@ function init()
     end
   }
 
-  -- Reverb
-  params:add_separator("strata_reverb")
+  -- Effects chain: filter, delay, reverb and tape drift in one group. The
+  -- group size must match the params below exactly.
+  params:add_group("strata_fx", "fx", 11)
+
+  params:add{
+    type = "option",
+    id = "filter_type",
+    name = "filter type",
+    options = {"lowpass", "highpass", "bandpass"},
+    default = 1,
+    action = function()
+      send_filter_to_engine()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "filter_freq",
+    name = "filter freq",
+    controlspec = controlspec.new(20, 20000, "exp", 0, 5000, "Hz"),
+    action = function()
+      send_filter_to_engine()
+      fx_fader_changed()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "filter_res",
+    name = "filter res",
+    controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
+    action = function()
+      send_filter_to_engine()
+      fx_fader_changed()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "filter_mix",
+    name = "filter mix",
+    controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
+    action = function()
+      send_filter_to_engine()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "delay_time",
+    name = "delay time",
+    controlspec = controlspec.new(0.01, 2, "exp", 0.001, 0.375, "s"),
+    action = function()
+      send_delay_to_engine()
+      fx_fader_changed()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "delay_feedback",
+    name = "delay feedback",
+    controlspec = controlspec.new(0, 0.95, "lin", 0.01, 0.4),
+    action = function()
+      send_delay_to_engine()
+      fx_fader_changed()
+    end
+  }
+
+  params:add{
+    type = "control",
+    id = "delay_mix",
+    name = "delay mix",
+    controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
+    action = function()
+      send_delay_to_engine()
+      fx_fader_changed()
+    end
+  }
+
   params:add{
     type = "control",
     id = "reverb_mix",
-    name = "mix",
+    name = "reverb mix",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
     action = function(x)
       engine.setReverb(x, params:get("reverb_size"), params:get("reverb_damp"))
     end
   }
-  
+
   params:add{
     type = "control",
     id = "reverb_size",
-    name = "size",
+    name = "reverb size",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.8),
     action = function(x)
       engine.setReverb(params:get("reverb_mix"), x, params:get("reverb_damp"))
     end
   }
-  
+
   params:add{
     type = "control",
     id = "reverb_damp",
-    name = "damping",
+    name = "reverb damping",
     controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
     action = function(x)
       engine.setReverb(params:get("reverb_mix"), params:get("reverb_size"), x)
     end
   }
-  
+
+  params:add{
+    type = "control",
+    id = "drift_amount",
+    name = "tape drift",
+    controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
+    action = function(x)
+      engine.setMasterDrift(x)
+    end
+  }
+
   -- Add params for each voice
   for i = 1, NUM_VOICES do
     add_voice_params(i)
@@ -949,18 +1045,39 @@ end
 
 -- Global params stored in every scene, in recall order. Continuous ones are
 -- crossfaded by smooth transitions; the others switch when the fade ends.
+-- default is the param's default, which migrate_scene gives scenes written
+-- before the param existed (tempo's param default follows clock_tempo; every
+-- scene file has always stored tempo).
 local SCENE_GLOBAL_PARAMS = {
-  {id = "master_density", continuous = true},
-  {id = "tempo", continuous = false},
-  {id = "mutation_enabled", continuous = false},
-  {id = "mutation_rate", continuous = false},
-  {id = "mutation_probability", continuous = false},
-  {id = "mutation_amount", continuous = false},
-  {id = "reverb_mix", continuous = true},
-  {id = "reverb_size", continuous = true},
-  {id = "reverb_damp", continuous = true},
-  {id = "drift_amount", continuous = true}
+  {id = "master_density", continuous = true, default = 1.0},
+  {id = "tempo", continuous = false, default = 120},
+  {id = "mutation_enabled", continuous = false, default = 0},
+  {id = "mutation_rate", continuous = false, default = 2},
+  {id = "mutation_probability", continuous = false, default = 0.15},
+  {id = "mutation_amount", continuous = false, default = 0.25},
+  {id = "filter_type", continuous = false, default = 1},
+  {id = "filter_freq", continuous = true, default = 5000},
+  {id = "filter_res", continuous = true, default = 0.5},
+  {id = "filter_mix", continuous = true, default = 0},
+  {id = "delay_time", continuous = true, default = 0.375},
+  {id = "delay_feedback", continuous = true, default = 0.4},
+  {id = "delay_mix", continuous = true, default = 0},
+  {id = "reverb_mix", continuous = true, default = 0.3},
+  {id = "reverb_size", continuous = true, default = 0.8},
+  {id = "reverb_damp", continuous = true, default = 0.5},
+  {id = "drift_amount", continuous = true, default = 0.01}
 }
+
+-- Per-voice scene fields added after format 1, filled by migrate_scene in
+-- scenes that lack them: {path = keys inside data.voices[i], default = value}.
+-- A field is only filled when its parent table exists (a scene missing the
+-- parent is left for validate_scene to reject). Later formats add entries
+-- such as {path = {"grain", "env"}, default = ...}.
+local VOICE_SCENE_DEFAULTS = {}
+
+-- Top-level scene blocks added after format 1 (such as LFO or MIDI
+-- settings): {key = field of scene data, default = value}
+local SCENE_BLOCK_DEFAULTS = {}
 
 -- voices[i].grain keys -> param id suffixes
 local GRAIN_PARAM_IDS = {
@@ -971,6 +1088,61 @@ local GRAIN_PARAM_IDS = {
 }
 
 local SCENE_TRANSITION_STEPS = 20
+
+local function is_number(value)
+  return type(value) == "number" and value == value  -- rejects NaN
+end
+
+local function is_integer_between(value, min, max)
+  return is_number(value) and value == math.floor(value) and value >= min and value <= max
+end
+
+-- Copy a scene default so filled scenes never share tables
+local function copy_scene_default(value)
+  if type(value) ~= "table" then return value end
+  local copy = {}
+  for key, inner in pairs(value) do copy[key] = copy_scene_default(inner) end
+  return copy
+end
+
+-- Set target[path] to default unless it is already present
+local function fill_scene_default(target, path, default)
+  for depth = 1, #path - 1 do
+    target = target[path[depth]]
+    if type(target) ~= "table" then return end
+  end
+  if target[path[#path]] == nil then
+    target[path[#path]] = copy_scene_default(default)
+  end
+end
+
+-- Bring a loaded scene up to the current format by filling every field it
+-- lacks with its default: globals (SCENE_GLOBAL_PARAMS), top-level blocks
+-- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
+-- Filling only adds what is missing, so it runs for every file version;
+-- from_version is there for changes that must convert a particular format.
+-- Malformed scenes are left alone for validate_scene to reject.
+function migrate_scene(scene, from_version)
+  if type(scene) ~= "table" or scene.populated ~= true or type(scene.data) ~= "table" then return end
+  local data = scene.data
+
+  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+    fill_scene_default(data, {global.id}, global.default)
+  end
+
+  for _, block in ipairs(SCENE_BLOCK_DEFAULTS) do
+    fill_scene_default(data, {block.key}, block.default)
+  end
+
+  if type(data.voices) ~= "table" then return end
+  for i = 1, NUM_VOICES do
+    if type(data.voices[i]) == "table" then
+      for _, field in ipairs(VOICE_SCENE_DEFAULTS) do
+        fill_scene_default(data.voices[i], field.path, field.default)
+      end
+    end
+  end
+end
 
 function capture_scene(scene_num)
   if scene_num < 1 or scene_num > NUM_SCENES then return end
@@ -1271,18 +1443,28 @@ function load_scenes_from_disk()
     return
   end
 
-  local scene_table
+  local scene_table, file_version
   if loaded.version ~= nil then
-    if loaded.version ~= SCENE_DATA_VERSION then
+    -- Version 1 files are migrated; newer (or invalid) versions are rejected
+    if not is_integer_between(loaded.version, 1, SCENE_DATA_VERSION) then
       print("error: scenes file has version " .. tostring(loaded.version) ..
-        ", expected " .. SCENE_DATA_VERSION)
+        ", expected 1 to " .. SCENE_DATA_VERSION)
       preserve_unloadable_scene_file()
       return
     end
+    file_version = loaded.version
     scene_table = loaded.scenes
   else
     -- Files written before 2.1 hold the bare scenes array (format version 1)
+    file_version = 1
     scene_table = loaded
+  end
+
+  -- Fill fields added since the file's format, then validate the result
+  if type(scene_table) == "table" then
+    for i = 1, NUM_SCENES do
+      migrate_scene(scene_table[i], file_version)
+    end
   end
 
   if not validate_scene_data(scene_table) then
@@ -1298,18 +1480,13 @@ function load_scenes_from_disk()
   end
   scenes = loaded_scenes
   scene_autosave_blocked = false
+  if file_version < SCENE_DATA_VERSION then
+    print("migrated scenes file from version " .. file_version)
+  end
   print("scenes loaded from " .. scene_data_file)
 
   -- Update grid display if grids are connected
   grid_redraw()
-end
-
-local function is_number(value)
-  return type(value) == "number" and value == value  -- rejects NaN
-end
-
-local function is_integer_between(value, min, max)
-  return is_number(value) and value == math.floor(value) and value >= min and value <= max
 end
 
 -- Check that one scene slot holds everything recall_scene_instant reads
@@ -1531,6 +1708,69 @@ function redraw_setup()
   draw_hints("K3:save scenes")
 end
 
+-- FX page: a scrolling list of the effects params. E2 selects a row, E3
+-- adjusts it; format is a string.format pattern, or nil to show the param's
+-- own string (the filter type's name).
+local FX_ROWS = {
+  {label = "density", param_id = "master_density", format = "%.2f"},
+  {label = "tape drift", param_id = "drift_amount", format = "%.3f"},
+  {label = "filter type", param_id = "filter_type"},
+  {label = "filter freq", param_id = "filter_freq", format = "%.0f Hz"},
+  {label = "filter res", param_id = "filter_res", format = "%.2f"},
+  {label = "filter mix", param_id = "filter_mix", format = "%.2f"},
+  {label = "delay time", param_id = "delay_time", format = "%.3f s"},
+  {label = "delay fdbk", param_id = "delay_feedback", format = "%.2f"},
+  {label = "delay mix", param_id = "delay_mix", format = "%.2f"},
+  {label = "reverb mix", param_id = "reverb_mix", format = "%.2f"},
+  {label = "reverb size", param_id = "reverb_size", format = "%.2f"},
+  {label = "reverb damp", param_id = "reverb_damp", format = "%.2f"}
+}
+local FX_VISIBLE_ROWS = 5      -- rows at y 18-50, clear of the hint row at y 62
+local FX_FIRST_ROW_Y = 18
+local FX_ROW_SPACING = 8
+local fx_row = 1               -- selected FX_ROWS index
+local fx_filter_last_mix = 1   -- filter mix K3 restores after a bypass
+
+function redraw_fx()
+  -- Keep one row above the selection in view, like the MAIN voice list
+  local first_visible = util.clamp(fx_row - 1, 1, #FX_ROWS - FX_VISIBLE_ROWS + 1)
+  for offset = 0, FX_VISIBLE_ROWS - 1 do
+    local row_index = first_visible + offset
+    local row = FX_ROWS[row_index]
+    local y = FX_FIRST_ROW_Y + offset * FX_ROW_SPACING
+    local value = row.format and string.format(row.format, params:get(row.param_id))
+      or params:string(row.param_id)
+    screen.level(row_index == fx_row and 15 or 4)
+    screen.move(0, y)
+    screen.text(row.label)
+    screen.move(127, y)
+    screen.text_right(value)
+  end
+
+  draw_hints("K3:filter " .. (params:get("filter_mix") > 0 and "bypass" or "on"))
+end
+
+local function fx_enc(n, d)
+  if n == 2 then
+    fx_row = util.clamp(fx_row + d, 1, #FX_ROWS)
+  elseif n == 3 then
+    params:delta(FX_ROWS[fx_row].param_id, d)
+  end
+end
+
+-- K3 on FX: bypass the filter (mix 0), or bring back its last non-zero mix
+local function fx_key(n)
+  if n == 3 then
+    local mix = params:get("filter_mix")
+    if mix > 0 then
+      fx_filter_last_mix = mix
+      params:set("filter_mix", 0)
+    else
+      params:set("filter_mix", fx_filter_last_mix)
+    end
+  end
+end
+
 -- Pages whose controls are not built yet: draw an empty hint row and ignore
 -- encoders and keys
 local function redraw_placeholder() draw_hints("") end
@@ -1569,9 +1809,9 @@ local function setup_key(n)
 end
 
 -- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP
-local PAGE_DRAW = {redraw_main, redraw_placeholder, redraw_placeholder, redraw_placeholder, redraw_setup}
-local PAGE_ENC = {main_enc, ignore_page_input, ignore_page_input, ignore_page_input, ignore_page_input}
-local PAGE_KEY = {main_key, ignore_page_input, ignore_page_input, ignore_page_input, setup_key}
+local PAGE_DRAW = {redraw_main, redraw_fx, redraw_placeholder, redraw_placeholder, redraw_setup}
+local PAGE_ENC = {main_enc, fx_enc, ignore_page_input, ignore_page_input, ignore_page_input}
+local PAGE_KEY = {main_key, fx_key, ignore_page_input, ignore_page_input, setup_key}
 
 -- Encoders
 function enc(n, d)
@@ -1644,12 +1884,35 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
 end
 
+-- FX page rings: the param each ring adjusts and its delta scale
+local ARC_FX_RINGS = {
+  {param_id = "filter_freq", scale = 1 / 4},
+  {param_id = "filter_res", scale = 1 / 100},
+  {param_id = "delay_time", scale = 1 / 200},
+  {param_id = "delay_mix", scale = 1 / 100}
+}
+
+local function arc_fx_delta(n, delta)
+  local ring = ARC_FX_RINGS[n]
+  if ring then
+    params:delta(ring.param_id, delta * ring.scale)
+  end
+end
+
+-- Each ring shows its param across its controlspec (following the warp,
+-- so exp params such as filter freq and delay time sweep evenly)
+local function arc_fx_redraw(arc_port)
+  for n, ring in ipairs(ARC_FX_RINGS) do
+    arc_port:segment(n, 0, param_fraction(ring.param_id) * math.pi * 2, 12)
+  end
+end
+
 local function arc_ignore_delta() end
 local function arc_draw_nothing() end  -- rings stay off
 
--- Indexed like UI_PAGES; FX, LFO and BUFFER rings arrive with those pages
-local ARC_PAGE_DELTA = {arc_main_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta}
-local ARC_PAGE_REDRAW = {arc_main_redraw, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing}
+-- Indexed like UI_PAGES; LFO and BUFFER rings arrive with those pages
+local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_ignore_delta, arc_ignore_delta, arc_ignore_delta}
+local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_draw_nothing, arc_draw_nothing, arc_draw_nothing}
 
 -- Arc handlers live on the vport only (as for grids): norns fires both
 -- device.delta/key and vports[port].delta/key, so setting them on the device
@@ -1708,6 +1971,9 @@ local GRID_FADER_ROWS = 4     -- 256-grid parameter page: one fader per row 9-12
 local GRID_FADER_WIDTH = 16   -- fader columns
 local GRID_FADER_FIRST_ROW = 9
 local GRID_PARAM_PAGE_ROW = 13
+-- 256-grid FX page (page 4): one fader per row 3-7
+local GRID_FX_FADER_IDS = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}
+local GRID_FX_FIRST_ROW = 3
 
 -- Pick a grid's layout by its exact size. 16x16 must be matched exactly or
 -- an 8x16 grid (rows == 16) would be treated as a 256.
@@ -1822,21 +2088,21 @@ function grid_key_256(x, y, z)
         params:set("scene_sequence_length", x - 2)
       end
     end
+  elseif grid_page == 4 then
+    -- FX page: faders on rows 3-7; rows 8 and 16 work as on page 1
+    local fx_param_id = GRID_FX_FADER_IDS[y - GRID_FX_FIRST_ROW + 1]
+    if fx_param_id then
+      set_param_from_column(fx_param_id, x)
+    elseif y == 8 then
+      grid_key_256_transport(x)
+    elseif y == 16 then
+      grid_key_256_freeze(x)
+    end
   elseif y >= 1 and y <= NUM_VOICES then
     -- Rows 1-NUM_VOICES: Pattern triggers for each voice
     toggle_pattern_step(y, x)
   elseif y == 8 then
-    -- Row 8: Pattern controls (page selection handled at top of function)
-    if x <= 4 then
-      -- Play/stop
-      pattern_toggle()
-    elseif x >= 5 and x <= 8 then
-      -- Tempo controls
-      if x == 5 then params:delta("tempo", -10) end
-      if x == 6 then params:delta("tempo", -1) end
-      if x == 7 then params:delta("tempo", 1) end
-      if x == 8 then params:delta("tempo", 10) end
-    end
+    grid_key_256_transport(x)
   elseif y >= GRID_FADER_FIRST_ROW and y < GRID_FADER_FIRST_ROW + GRID_FADER_ROWS then
     -- Rows 9-12 (parameter page): one fader per row for the selected voice
     if grid_page == 2 then
@@ -1866,14 +2132,32 @@ function grid_key_256(x, y, z)
       randomize_pattern(x - 8)
     end
   elseif y == 16 then
-    -- Row 16: Global functions
-    if x <= NUM_VOICES then
-      -- Freeze voice
-      toggle_freeze(x)
-    elseif x >= 9 and x <= 16 then
-      -- Copy/paste patterns
-      -- (Future expansion)
-    end
+    grid_key_256_freeze(x)
+  end
+end
+
+-- 256 row 8: pattern controls (page selection is handled by grid_key_256)
+function grid_key_256_transport(x)
+  if x <= 4 then
+    -- Play/stop
+    pattern_toggle()
+  elseif x >= 5 and x <= 8 then
+    -- Tempo controls
+    if x == 5 then params:delta("tempo", -10) end
+    if x == 6 then params:delta("tempo", -1) end
+    if x == 7 then params:delta("tempo", 1) end
+    if x == 8 then params:delta("tempo", 10) end
+  end
+end
+
+-- 256 row 16: global functions
+function grid_key_256_freeze(x)
+  if x <= NUM_VOICES then
+    -- Freeze voice
+    toggle_freeze(x)
+  elseif x >= 9 and x <= 16 then
+    -- Copy/paste patterns
+    -- (Future expansion)
   end
 end
 
@@ -2021,12 +2305,21 @@ function param_range(param_id)
   return param.min, param.max
 end
 
--- Grid column x (1-16) sets a fader's param across its range. Control params
+-- A param's current value as a fraction (0-1) of its range. Control params
 -- follow their controlspec warp (exp for freq, cutoff, mod speed); number
--- params (mod sources) map linearly to integers.
-function set_fader_param(voice_idx, fader_index, x)
-  local param_id = fader_param_ids(voice_idx)[fader_index]
-  if not param_id then return end
+-- params (mod sources) are linear.
+function param_fraction(param_id)
+  local spec = params:lookup_param(param_id).controlspec
+  if spec then
+    return spec:unmap(params:get(param_id))
+  end
+  local minval, maxval = param_range(param_id)
+  return util.linlin(minval, maxval, 0, 1, params:get(param_id))
+end
+
+-- Grid column x (1-16) sets a param across its range. Control params follow
+-- their controlspec warp; number params (mod sources) map linearly to integers.
+function set_param_from_column(param_id, x)
   local spec = params:lookup_param(param_id).controlspec
   local value
   if spec then
@@ -2038,14 +2331,16 @@ function set_fader_param(voice_idx, fader_index, x)
   params:set(param_id, value)
 end
 
+-- Column x on one of the parameter page's faders
+function set_fader_param(voice_idx, fader_index, x)
+  local param_id = fader_param_ids(voice_idx)[fader_index]
+  if not param_id then return end
+  set_param_from_column(param_id, x)
+end
+
 -- Grid column (1-16) that shows a fader param's current value
 function fader_position(param_id)
-  local spec = params:lookup_param(param_id).controlspec
-  if spec then
-    return util.round(spec:unmap(params:get(param_id)) * (GRID_FADER_WIDTH - 1) + 1)
-  end
-  local minval, maxval = param_range(param_id)
-  return util.round(util.linlin(minval, maxval, 1, GRID_FADER_WIDTH, params:get(param_id)))
+  return util.round(param_fraction(param_id) * (GRID_FADER_WIDTH - 1) + 1)
 end
 
 function select_grid_voice(voice_idx)
@@ -2178,10 +2473,14 @@ function grid_redraw_256(grid_device)
       grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
     end
 
-    -- Page indicators (row 8)
-    for i = 1, 4 do
-      grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
+    grid_redraw_256_page_row(grid_device)
+  elseif grid_page == 4 then
+    -- FX page: faders on rows 3-7, rows 8 and 16 as on page 1
+    for index, param_id in ipairs(GRID_FX_FADER_IDS) do
+      grid_redraw_fader_row(grid_device, GRID_FX_FIRST_ROW + index - 1, param_id)
     end
+    grid_redraw_256_transport(grid_device)
+    grid_redraw_256_freeze(grid_device)
   else
     -- Patterns/parameters pages
     -- Draw patterns (rows 1-NUM_VOICES)
@@ -2192,25 +2491,7 @@ function grid_redraw_256(grid_device)
       end
     end
 
-    -- Row 8: Pattern controls
-    if pattern_playing then
-      grid_device:led(1, 8, 15)
-      grid_device:led(2, 8, 15)
-    else
-      grid_device:led(1, 8, 4)
-      grid_device:led(2, 8, 4)
-    end
-
-    -- Tempo indicators
-    grid_device:led(5, 8, 2)
-    grid_device:led(6, 8, 2)
-    grid_device:led(7, 8, 2)
-    grid_device:led(8, 8, 2)
-
-    -- Page indicators
-    for i = 1, 4 do
-      grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
-    end
+    grid_redraw_256_transport(grid_device)
 
     -- Rows 9-13 (parameter page): faders and fader page selection
     if grid_page == 2 then
@@ -2223,26 +2504,61 @@ function grid_redraw_256(grid_device)
       grid_device:led(i + 8, 14, voices[i].active and 12 or 2)
     end
 
-    -- Row 16: Freeze status
-    for i = 1, NUM_VOICES do
-      grid_device:led(i, 16, frozen[i] and 12 or 2)
-    end
+    grid_redraw_256_freeze(grid_device)
   end
 end
 
--- Fader rows 9-12: a bar (brightness 8) up to the current value, with the
--- value's own column at 15. Row 13 shows the fader pages, selected at 15.
+-- 256 row 8, columns 13-16: page indicators
+function grid_redraw_256_page_row(grid_device)
+  for i = 1, 4 do
+    grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
+  end
+end
+
+-- 256 row 8: pattern controls, tempo and page indicators
+function grid_redraw_256_transport(grid_device)
+  if pattern_playing then
+    grid_device:led(1, 8, 15)
+    grid_device:led(2, 8, 15)
+  else
+    grid_device:led(1, 8, 4)
+    grid_device:led(2, 8, 4)
+  end
+
+  -- Tempo indicators
+  grid_device:led(5, 8, 2)
+  grid_device:led(6, 8, 2)
+  grid_device:led(7, 8, 2)
+  grid_device:led(8, 8, 2)
+
+  grid_redraw_256_page_row(grid_device)
+end
+
+-- 256 row 16: freeze status
+function grid_redraw_256_freeze(grid_device)
+  for i = 1, NUM_VOICES do
+    grid_device:led(i, 16, frozen[i] and 12 or 2)
+  end
+end
+
+-- One fader on row y: a bar (brightness 8) up to the param's current value,
+-- with the value's own column at 15
+function grid_redraw_fader_row(grid_device, y, param_id)
+  local position = fader_position(param_id)
+  for x = 1, position - 1 do
+    grid_device:led(x, y, 8)
+  end
+  grid_device:led(position, y, 15)
+end
+
+-- Fader rows 9-12 for the selected voice's fader page. Row 13 shows the
+-- fader pages, selected at 15.
 function grid_redraw_faders(grid_device)
   local ids = fader_param_ids(grid_voice_select)
   for row = 1, GRID_FADER_ROWS do
     local param_id = ids[(param_page - 1) * GRID_FADER_ROWS + row]
     if param_id then
-      local y = GRID_FADER_FIRST_ROW + row - 1
-      local position = fader_position(param_id)
-      for x = 1, position - 1 do
-        grid_device:led(x, y, 8)
-      end
-      grid_device:led(position, y, 15)
+      grid_redraw_fader_row(grid_device, GRID_FADER_FIRST_ROW + row - 1, param_id)
     end
   end
   for page = 1, fader_page_count(grid_voice_select) do

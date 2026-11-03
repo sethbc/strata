@@ -9,7 +9,8 @@ var failures = 0;
 var context, engine, done, tree, names, voiceNames, grainIndices, firstGrain;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
-var allDefs = voiceDefs ++ [\strataMod, \strataGrain, \strataReverb, \strataMaster];
+var allDefs = voiceDefs ++ [\strataMod, \strataGrain, \strataFilter, \strataDelay, \strataReverb, \strataMaster];
+var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 
 var check = { arg condition, message;
     if (condition == true) {
@@ -90,6 +91,10 @@ server.waitForBoot({
         // Command signatures
         check.(formatOf.(\voiceOn) == "iffffff", "voiceOn signature is iffffff (C1)");
         check.(formatOf.(\retrigger) == "i", "retrigger command exists with signature i (C3)");
+        check.(formatOf.(\setFilter) == "ffif", "setFilter signature is ffif");
+        check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
+        check.(SynthDescLib.global.at(\strataMaster).def.children.any({ arg ugen; ugen.isKindOf(Limiter) }),
+            "master has a Limiter safety stage");
 
         // Silent bus (I4)
         silentIndex = engine.silentBus.index;
@@ -136,10 +141,39 @@ server.waitForBoot({
         voiceNames = names.select({ arg name; voiceDefs.includes(name) });
         grainIndices = names.collect({ arg name, index; if (name == \strataGrain or: { name == \strataMod }) { index } }).reject(_.isNil);
         firstGrain = grainIndices.minItem;
-        check.(names.size == ((7 * 3) + 2), "xg holds 7 voice trios plus reverb and master (got %)".format(names.size));
+        check.(names.size == ((7 * 3) + 4), "xg holds 7 voice trios plus filter, delay, reverb and master (got %)".format(names.size));
         check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");
-        check.(grainIndices.maxItem < names.indexOf(\strataReverb), "grain/mod synths run before reverb");
+        check.(grainIndices.maxItem < names.indexOf(\strataFilter), "grain/mod synths run before the effects chain");
+        check.(names.copyRange(names.size - 4, names.size - 1).asArray == chainDefs,
+            "xg ends filter -> delay -> reverb -> master (got %)".format(names.copyRange(names.size - 4, names.size - 1)));
         check.(names.last == \strataMaster, "master runs last inside xg (M5)");
+
+        // Effects chain bus routing: mainBus -> filter -> delay -> reverb -> master
+        check.(getControl.(engine.synths[\filter], \in) == engine.mainBus.index, "filter reads mainBus");
+        check.(getControl.(engine.synths[\filter], \out) == engine.filterBus.index, "filter writes filterBus");
+        check.(getControl.(engine.synths[\delay], \in) == engine.filterBus.index, "delay reads filterBus");
+        check.(getControl.(engine.synths[\delay], \out) == engine.delayBus.index, "delay writes delayBus");
+        check.(getControl.(engine.synths[\reverb], \in) == engine.delayBus.index, "reverb reads delayBus");
+        check.(getControl.(engine.synths[\reverb], \out) == engine.reverbBus.index, "reverb writes reverbBus");
+        check.(getControl.(engine.synths[\master], \in) == engine.reverbBus.index, "master reads reverbBus");
+
+        // Effects defaults match the Lua param defaults (Lua never bangs its params)
+        check.(getControl.(engine.synths[\filter], \freq) == 5000.0, "filter freq default 5000");
+        check.(getControl.(engine.synths[\filter], \mix) == 0.0, "filter starts bypassed");
+        check.(getControl.(engine.synths[\delay], \time) == 0.375, "delay time default 0.375");
+        check.(getControl.(engine.synths[\delay], \mix) == 0.0, "delay starts dry");
+
+        command.(\setFilter, 800.0, 0.2, 1, 1.0);
+        server.sync;
+        check.(getControl.(engine.synths[\filter], \filterType) == 1, "setFilter sets filterType");
+        check.(getControl.(engine.synths[\filter], \freq) == 800.0, "setFilter sets freq");
+        check.(getControl.(engine.synths[\filter], \res).equalWithPrecision(0.2), "setFilter sets res");
+        check.(getControl.(engine.synths[\filter], \mix) == 1.0, "setFilter sets mix");
+        command.(\setDelay, 0.25, 0.5, 0.5);
+        server.sync;
+        check.(getControl.(engine.synths[\delay], \time) == 0.25, "setDelay sets time");
+        check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feedback");
+        check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 
         // retrigger never creates nodes (C3)

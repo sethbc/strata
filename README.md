@@ -39,7 +39,10 @@ Voices can modulate each other for evolving, interdependent textures:
 
 - **Master Density** - Controls grain density across all voices simultaneously
 - **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none)
+- **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered
+- **Delay** - Stereo delay (10 ms to 2 s) with feedback, after the filter; starts dry
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
+- **Limiter** - A limiter at the end of the master chain catches peaks from filter resonance and delay feedback
 - **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows
 
 ### Performance Features
@@ -109,7 +112,7 @@ The screen has five pages: **MAIN**, **FX**, **LFO**, **BUFFER** and **SETUP**.
 
 Every page shows the page name, master density (`dens:`), the `[M]` mutation indicator and the `S1`-`S8` scene indicator at the top, and the page's key hints on the bottom row. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see below).
 
-Master density is no longer on an encoder: adjust it with arc ring 1 on the MAIN page or in the PARAMETERS menu.
+Master density is no longer on E1: adjust it on the first row of the FX page, with arc ring 1 on the MAIN page, or in the PARAMETERS menu.
 
 #### MAIN
 
@@ -125,7 +128,15 @@ Master density is no longer on an encoder: adjust it with arc ring 1 on the MAIN
 - **K2** - Randomize selected voice parameters
 - **K3** - Start/stop voice, or freeze/unfreeze if already active
 
-#### FX, LFO, BUFFER
+#### FX
+
+A scrolling list of the effects settings, five rows at a time: master density, tape drift, filter type / freq / res / mix, delay time / feedback (`fdbk`) / mix, reverb mix / size / damp. The selected row is bright.
+
+- **E2** - Select a row
+- **E3** - Adjust the selected row's value
+- **K3** - Bypass the filter (mix to 0), or bring it back at its last mix (the first press turns it fully on). The hint row shows `K3:filter bypass` or `K3:filter on`
+
+#### LFO, BUFFER
 
 Not built yet: these pages show only the header, and their encoders, keys and arc rings do nothing.
 
@@ -148,7 +159,14 @@ The rings control the current screen page. On the **MAIN** page:
 - **Ring 3** - Grain size for selected voice
 - **Ring 4** - Grain density for selected voice
 
-On the **SETUP** page the rings are off and do nothing. The FX, LFO and BUFFER pages have no ring mappings yet (rings off).
+On the **FX** page:
+
+- **Ring 1** - Filter frequency
+- **Ring 2** - Filter resonance
+- **Ring 3** - Delay time
+- **Ring 4** - Delay mix
+
+On the **SETUP** page the rings are off and do nothing. The LFO and BUFFER pages have no ring mappings yet (rings off).
 
 #### Arc Button (2025 model)
 
@@ -158,7 +176,7 @@ On the **SETUP** page the rings are off and do nothing. The FX, LFO and BUFFER p
 
 - Bright rings (level 15/12) indicate active voices
 - Dim rings (level 4/3) indicate inactive voices
-- Ring position shows current parameter value
+- Ring position shows current parameter value (FX rings at level 12; frequency and delay time follow their exponential curve)
 
 ### Monome Grid (optional)
 
@@ -182,7 +200,7 @@ Strata includes comprehensive grid integration for pattern sequencing and parame
 **Row 8: Transport & Page Controls**
 - Columns 1-4: Play/stop pattern sequencer
 - Columns 5-8: Tempo adjustment (-10, -1, +1, +10 BPM; sets norns' clock tempo)
-- Columns 13-16: Page selection (1-4; page 2 = parameters, page 3 = scenes)
+- Columns 13-16: Page selection (1-4; page 2 = parameters, page 3 = scenes, page 4 = FX)
 
 **Rows 9-12: Parameter Faders** (Page 2)
 - Each row is a fader for one parameter of the voice selected in row 14
@@ -218,6 +236,13 @@ Scene LED feedback:
 - Current scene is bright (brightness 15)
 - Empty scenes are dim (brightness 2)
 - Sequencer shows next scene position when active
+
+**FX Page (Page 4)**
+- **Rows 3-7**: Faders for filter frequency, filter resonance, delay time, delay feedback and delay mix. Press a column to set the value (column 1 = minimum, column 16 = maximum; frequency and delay time are exponential); the row lights up to the current value and follows changes made on the screen, arc or by a scene
+- **Row 8**: Play/stop, tempo and page selection, as on page 1
+- **Row 16**: Freeze/unfreeze each voice, as on page 1
+- Rows 1-2 and 9-15 are unused on this page
+- The 16×8, 8×16 and 8×8 layouts have no FX page
 
 #### 16×8 Grid Layout (128 buttons horizontal)
 
@@ -291,7 +316,7 @@ Scene LED feedback:
 - Use K2 to randomize individual voices until you find interesting combinations
 - Freeze voices you like with K3
 - Adjust master density (arc ring 1 or PARAMETERS) to create movement
-- Add reverb via the PARAMETERS menu for more space
+- Add reverb or delay on the FX page for more space
 
 ### Exploring Cross-Modulation
 
@@ -362,7 +387,6 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 
 ### Master Section
 - Master density
-- Tape drift amount (depth of the drift; 0 = none)
 - Tempo (40-300 BPM; sets norns' clock tempo, starts at the current clock tempo)
 
 ### Mutations Section
@@ -378,11 +402,20 @@ All voice parameters and granular settings are available in the PARAMETERS menu 
 - Scene sequence length (1-8 scenes)
 - Save scenes to disk (manual trigger)
 - Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to `scenes.data.bak` so it is not overwritten when the script exits)
+- Scene files from earlier versions of Strata still load: settings they do not contain (such as the filter and delay) start at their defaults, and the console prints `migrated scenes file from version 1`. The file is saved in the new format when the script exits
 
-### Reverb Section
-- Mix
-- Size
-- Damping
+Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
+
+### FX Section (group)
+- Filter type (lowpass, highpass, bandpass)
+- Filter freq (20-20000 Hz, default 5000)
+- Filter res (0-1, default 0.5)
+- Filter mix (0 = bypass, the default, to 1)
+- Delay time (0.01-2 s, default 0.375)
+- Delay feedback (0-0.95, default 0.4)
+- Delay mix (0 = dry, the default, to 1)
+- Reverb mix, size and damping
+- Tape drift amount (depth of the drift; 0 = none)
 
 ### Per-Voice Sections
 Each voice includes:
@@ -407,13 +440,13 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Per-voice granular processors using `GrainIn` followed by `PitchShift`
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output
-- Global reverb and master effects chain
-- Soft saturation on master output
+- Master effects chain: multimode filter, stereo delay, reverb
+- Soft saturation and a limiter on master output
 
 ### Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Reverb → Master (with drift/saturation) → Output
+Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (with drift/saturation/limiter) → Output
                   ↓
               Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```

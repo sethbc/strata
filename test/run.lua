@@ -934,6 +934,211 @@ test("cleanup stops everything and darkens controllers (M9)", function()
 end)
 
 ---------------------------------------------------------------------------
+-- effects chain, FX page, scene format 2
+---------------------------------------------------------------------------
+
+local FX_PARAM_IDS = { "filter_type", "filter_freq", "filter_res", "filter_mix",
+  "delay_time", "delay_feedback", "delay_mix", "reverb_mix", "reverb_size", "reverb_damp", "drift_amount" }
+
+test("fx params drive setFilter/setDelay and live in scenes", function()
+  local context = load_strata(); context.clear_engine_calls()
+  params:set("filter_type", 3); params:set("filter_freq", 1200); params:set("filter_mix", 1)
+  local call = context.calls_named("setFilter"); call = call[#call]
+  assert_near(call.args[1], 1200, 1); assert_equal(call.args[3], 2); assert_equal(call.args[4], 1)
+  params:set("delay_time", 0.5); params:set("delay_feedback", 0.6); params:set("delay_mix", 0.3)
+  call = context.calls_named("setDelay"); call = call[#call]
+  assert_near(call.args[1], 0.5, 1e-6); assert_near(call.args[2], 0.6, 1e-6); assert_near(call.args[3], 0.3, 1e-6)
+  capture_scene(1); params:set("filter_freq", 300); params:set("delay_mix", 0)
+  recall_scene(1, 0)
+  assert_near(params:get("filter_freq"), 1200, 1); assert_near(params:get("delay_mix"), 0.3, 1e-6)
+end)
+
+test("fx params: defaults, one exactly sized strata_fx group, scene defaults match", function()
+  load_strata()
+  local expected_defaults = { filter_type = 1, filter_freq = 5000, filter_res = 0.5, filter_mix = 0,
+    delay_time = 0.375, delay_feedback = 0.4, delay_mix = 0 }
+  for param_id, default in pairs(expected_defaults) do
+    assert_near(params:get(param_id), default, 1e-9, param_id .. " default")
+  end
+  assert_equal(params:lookup_param("filter_type").count, 3, "lowpass, highpass, bandpass")
+  assert_equal(params:string("filter_type"), "lowpass")
+  -- the group holds exactly the FX params, in order
+  local group_index
+  for index, param in ipairs(params.params) do
+    if param.id == "strata_fx" then group_index = index end
+  end
+  assert_true(group_index, "strata_fx group exists")
+  assert_equal(params.params[group_index].t, "group")
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS, "group size")
+  for offset, param_id in ipairs(FX_PARAM_IDS) do
+    assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
+  end
+  assert_true(not params.lookup["strata_reverb"], "the reverb separator is replaced by the group")
+  -- every scene global carries its param's default (tempo follows clock_tempo)
+  local in_scene = {}
+  for _, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do
+    in_scene[global.id] = global
+    assert_true(type(global.default) == "number", global.id .. " has a default")
+    if global.id ~= "tempo" then
+      local param = params:lookup_param(global.id)
+      local param_default = param.controlspec and param.controlspec.default or param.default
+      assert_near(global.default, param_default, 1e-9, global.id .. " scene default")
+    end
+  end
+  for _, param_id in ipairs(FX_PARAM_IDS) do
+    assert_true(in_scene[param_id], param_id .. " is a scene global")
+    assert_equal(in_scene[param_id].continuous, param_id ~= "filter_type", param_id .. " continuity")
+  end
+end)
+
+test("v1 scene file migrates to v2 with fx defaults", function()
+  local context = load_strata({ data_subdir = "v1" })
+  capture_scene(2)
+  local scenes = local_value("scenes")
+  for _, param_id in ipairs(FX_PARAM_IDS) do
+    if param_id:find("^filter_") or param_id:find("^delay_") then
+      scenes[2].data[param_id] = nil   -- as a v1 file lacks them
+    end
+  end
+  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+  tab.save(scenes, context.data_dir .. "strata/scenes.data")  -- v1 wrote the bare array
+  params:set("filter_freq", 300); params:set("delay_mix", 0.5)
+  load_scenes_from_disk()
+  assert_true(local_value("scenes")[2].populated)
+  recall_scene(2, 0)                                           -- must not error on nil
+  assert_near(params:get("filter_freq"), 5000, 1); assert_equal(params:get("delay_mix"), 0)
+  assert_true(table.concat(context.printed, "\n"):find("migrated scenes file from version 1"),
+    "migration message printed")
+  -- a versioned version-1 file migrates too, and the next save writes version 2
+  tab.save({ version = 1, scenes = scenes }, context.data_dir .. "strata/scenes.data")
+  context = load_strata({ data_subdir = "v1" })
+  assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
+  save_scenes_to_disk()
+  local saved = dofile(context.data_dir .. "strata/scenes.data")
+  assert_equal(saved.version, 2, "scenes are saved as version 2")
+  assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
+end)
+
+test("migrate_scene fills table-driven voice defaults and tolerates malformed data", function()
+  load_strata()
+  capture_scene(1)
+  local scene = deep_copy(local_value("scenes")[1])
+  local voice_defaults = local_value("VOICE_SCENE_DEFAULTS")
+  -- later formats add per-voice fields through VOICE_SCENE_DEFAULTS
+  table.insert(voice_defaults, { path = { "test_block", "field" }, default = 7 })
+  table.insert(voice_defaults, { path = { "grain", "test_field" }, default = 3 })
+  migrate_scene(scene, 1)
+  table.remove(voice_defaults); table.remove(voice_defaults)
+  for voice_idx = 1, 7 do
+    assert_equal(scene.data.voices[voice_idx].grain.test_field, 3, "nested voice default filled")
+    assert_equal(scene.data.voices[voice_idx].test_block, nil, "missing parent tables are not invented")
+  end
+  scene.data.reverb_mix = nil
+  migrate_scene(scene, 1)
+  assert_near(scene.data.reverb_mix, 0.3, 1e-9, "missing global filled from its default")
+  scene.data.reverb_mix = 0.9
+  migrate_scene(scene, 1)
+  assert_near(scene.data.reverb_mix, 0.9, 1e-9, "present values are kept")
+  -- malformed scenes are left for validate_scene to reject
+  for _, bad in ipairs({ "x", {}, { populated = true }, { populated = true, data = { voices = "v" } },
+      { populated = true, data = { voices = { "a", 3 } } }, { populated = false } }) do
+    migrate_scene(bad, 1)
+  end
+end)
+
+test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", function()
+  local context = load_strata(); enc(1, 1)
+  params:set("filter_mix", 0.8); key(3, 1); assert_equal(params:get("filter_mix"), 0)
+  key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6)
+  enc(2, 3); local before = params:get("filter_freq"); enc(3, 2)
+  assert_true(params:get("filter_freq") > before, "row 4 is filter freq")
+  -- K3 from a bypassed default turns the filter fully on
+  context = load_strata(); enc(1, 1)
+  key(3, 1); assert_equal(params:get("filter_mix"), 1, "first K3 turns the filter on")
+  local function hint_text()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.y == 62 then return entry.text end
+    end
+  end
+  redraw(); assert_equal(hint_text(), "K3:filter bypass")
+  key(3, 1); redraw(); assert_equal(hint_text(), "K3:filter on")
+end)
+
+test("FX page rows stay apart and inside 128x64 at every row and value", function()
+  local context = load_strata()
+  params:set("mutation_enabled", 1)
+  capture_scene(8); recall_scene(8, 0)
+  show_page(2)
+  local rows = local_value("FX_ROWS")
+  assert_equal(#rows, 12, "density, drift, 4 filter, 3 delay, 3 reverb rows")
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  for _, extreme in ipairs({ "max", "min" }) do
+    for _, row in ipairs(rows) do
+      local min_value, max_value = param_range(row.param_id)
+      if row.param_id == "filter_type" then min_value, max_value = 2, 3 end  -- highpass, bandpass
+      params:set(row.param_id, extreme == "max" and max_value or min_value)
+    end
+    enc(2, -100)
+    for row = 1, #rows do
+      assert_equal(local_value("fx_row"), row, "E2 steps one row")
+      redraw()
+      assert_screen_layout(context, "FX row " .. row .. ", " .. extreme)
+      assert_true(screen_has(rows[row].label), "selected row " .. rows[row].label .. " is visible")
+      enc(2, 1)
+    end
+    assert_equal(local_value("fx_row"), #rows, "E2 stops at the last row")
+  end
+end)
+
+test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", function()
+  local context = load_strata()
+  local device = context.arc.plug(1)
+  show_page(2)
+  local density = params:get("master_density")
+  for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
+    local before = params:get(param_id)
+    context.arc.turn(1, ring, 100)
+    assert_true(params:get(param_id) > before, "ring " .. ring .. " raises " .. param_id)
+    local spec = params:lookup_param(param_id).controlspec
+    assert_near(device.segments[ring].to, spec:unmap(params:get(param_id)) * math.pi * 2, 1e-9,
+      "ring " .. ring .. " shows " .. param_id)
+  end
+  assert_equal(params:get("master_density"), density, "density is not on the FX rings")
+end)
+
+test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.grid.plug(1, 16, 16)
+  context.grid.press(1, 16, 8, 1)              -- page 4
+  context.grid.press(1, 16, 3, 1); assert_near(params:get("filter_freq"), 20000, 1)
+  context.grid.press(1, 1, 7, 1); assert_equal(params:get("delay_mix"), 0)
+  assert_equal(device:get_led(16, 3), 15, "filter freq fader at max")
+  context.grid.press(1, 8, 4, 1)               -- filter res, column 8
+  assert_near(params:get("filter_res"), 7 / 15, 0.01, "column 8 sets the proportional value")
+  assert_equal(device:get_led(7, 4), 8, "bar below the value")
+  assert_equal(device:get_led(9, 4), 0, "nothing above the value")
+  local patterns = local_value("patterns")
+  assert_equal(patterns[3][16], 0, "FX fader presses do not toggle pattern steps")
+  for x = 1, 16 do
+    for _, y in ipairs({ 1, 2, 9, 10, 11, 12, 13, 14, 15 }) do
+      assert_equal(device:get_led(x, y), 0, "row " .. y .. " dark on page 4")
+    end
+  end
+  context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 play on page 4")
+  context.grid.press(1, 1, 16, 1); assert_true(local_value("frozen")[1], "row 16 freeze on page 4")
+  assert_equal(device:get_led(1, 16), 12, "row 16 shows freeze on page 4")
+  assert_equal(device:get_led(16, 8), 15, "row 8 shows page 4 selected")
+  -- FX changes made elsewhere move the faders
+  params:set("delay_mix", 1)
+  assert_equal(device:get_led(16, 7), 15, "delay mix fader follows a param change")
+end)
+
+---------------------------------------------------------------------------
 -- harness: stubs for the norns APIs used by later features
 ---------------------------------------------------------------------------
 
