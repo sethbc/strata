@@ -2030,6 +2030,16 @@ function pattern_clock_stop()
   grid_redraw()
 end
 
+-- LED level for a pattern step: its stored level, or at the playhead 15 for
+-- an active step and 4 for an empty one
+function step_brightness(voice_idx, step)
+  local level = patterns[voice_idx][step]
+  if pattern_playing and step == pattern_position then
+    return level > 0 and 15 or 4
+  end
+  return level
+end
+
 function grid_redraw()
   if next(grids) == nil then return end  -- no grids: nothing to do
 
@@ -2101,12 +2111,7 @@ function grid_redraw_256(grid_device)
     -- Draw patterns (rows 1-NUM_VOICES)
     for voice_idx = 1, NUM_VOICES do
       for step = 1, PATTERN_LENGTH do
-        local brightness = patterns[voice_idx][step]
-        -- Highlight current step
-        if pattern_playing and step == pattern_position then
-          brightness = math.max(brightness, 4)
-          if brightness > 0 then brightness = 15 end
-        end
+        local brightness = step_brightness(voice_idx, step)
         grid_device:led(step, voice_idx, brightness)
       end
     end
@@ -2207,11 +2212,7 @@ function grid_redraw_128h(grid_device)
     -- Draw patterns (rows 1-NUM_VOICES)
     for voice_idx = 1, NUM_VOICES do
       for step = 1, PATTERN_LENGTH do
-        local brightness = patterns[voice_idx][step]
-        if pattern_playing and step == pattern_position then
-          brightness = math.max(brightness, 4)
-          if brightness > 0 then brightness = 15 end
-        end
+        local brightness = step_brightness(voice_idx, step)
         grid_device:led(step, voice_idx, brightness)
       end
     end
@@ -2244,11 +2245,7 @@ function grid_redraw_128v(grid_device)
   -- Draw patterns (columns 1-NUM_VOICES)
   for voice_idx = 1, NUM_VOICES do
     for step = 1, PATTERN_LENGTH do
-      local brightness = patterns[voice_idx][step]
-      if pattern_playing and step == pattern_position then
-        brightness = math.max(brightness, 4)
-        if brightness > 0 then brightness = 15 end
-      end
+      local brightness = step_brightness(voice_idx, step)
       grid_device:led(voice_idx, step, brightness)
     end
   end
@@ -2271,12 +2268,7 @@ function grid_redraw_64(grid_device)
   local visible_steps = math.min(PATTERN_LENGTH, grid_device.cols)
   for voice_idx = 1, NUM_VOICES do
     for step = 1, visible_steps do
-      local brightness = patterns[voice_idx][step]
-      -- Only highlight if pattern position is within visible range (1-8)
-      if pattern_playing and pattern_position == step then
-        brightness = math.max(brightness, 4)
-        if brightness > 0 then brightness = 15 end
-      end
+      local brightness = step_brightness(voice_idx, step)
       grid_device:led(step, voice_idx, brightness)
     end
   end
