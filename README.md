@@ -105,7 +105,7 @@ After installation with either method, restart norns or run `;restart` in maiden
 
 The screen has five pages: **MAIN**, **FX**, **LFO**, **BUFFER** and **SETUP**.
 
-- **E1** - Select the page (turn left toward MAIN, right toward SETUP)
+- **E1** - Select the page (turn left toward MAIN, right toward SETUP; one page per short turn, without acceleration)
 
 Every page shows the page name, master density (`dens:`), the `[M]` mutation indicator and the `S1`-`S8` scene indicator at the top, and the page's key hints on the bottom row. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see below).
 

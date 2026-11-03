@@ -702,6 +702,24 @@ test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
   key(3, 1); assert_true(local_value("frozen")[2], "K3 freezes a running voice on MAIN")
 end)
 
+test("E1 steps one page per detent: no acceleration, 4 ticks per page", function()
+  local context = load_strata()
+  local encoders = context.encoders
+  assert_equal(encoders.accel[1], false, "E1 acceleration off")
+  assert_equal(encoders.sens[1], 4, "E1 needs 4 ticks per page")
+  assert_equal(encoders.accel[2], true, "E2 keeps norns' default acceleration")
+  assert_equal(encoders.accel[3], true, "E3 keeps norns' default acceleration")
+  -- a fast turn (1 ms between ticks) of 4 ticks moves exactly one page
+  for _ = 1, 4 do encoders.deliver(1, 1, 0.001) end
+  assert_equal(local_value("ui_page"), 2, "fast E1 turn does not skip pages")
+  for _ = 1, 3 do encoders.deliver(1, 1, 0.001) end
+  assert_equal(local_value("ui_page"), 2, "three ticks are not yet a page")
+  encoders.deliver(1, 1, 0.001)
+  assert_equal(local_value("ui_page"), 3, "the fourth tick is")
+  for _ = 1, 8 do encoders.deliver(1, -1, 0.001) end
+  assert_equal(local_value("ui_page"), 1, "eight ticks back return two pages")
+end)
+
 test("every page draws within 128x64 with a header and hint row", function()
   local context = load_strata(); context.clock.advance()
   for page = 1, 5 do

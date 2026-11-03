@@ -636,6 +636,50 @@ local function make_arc()
 end
 
 ---------------------------------------------------------------------------
+-- encoders (norns.enc.accel/sens, mirroring lua/core/encoders.lua)
+---------------------------------------------------------------------------
+
+local function make_encoders()
+  -- lua/core/script.lua resets every script to accel on, sensitivity 2
+  local encoders = { accel = { true, true, true }, sens = { 2, 2, 2 }, tick = { 0, 0, 0 } }
+  local api = {}
+  function api.accel(n, enabled)
+    for k = 1, 3 do
+      if n == 0 or n == k then encoders.accel[k] = enabled; encoders.tick[k] = 0 end
+    end
+  end
+  function api.sens(n, sensitivity)
+    for k = 1, 3 do
+      if n == 0 or n == k then
+        encoders.sens[k] = math.min(16, math.max(1, sensitivity)); encoders.tick[k] = 0
+      end
+    end
+  end
+  encoders.api = api
+
+  -- test helper: one hardware encoder event the way encoders.process_with_accel
+  -- handles it; `interval` is the time since the previous event on that encoder
+  function encoders.deliver(n, delta, interval)
+    if encoders.accel[n] then
+      if interval < 0.005 then delta = delta * 6
+      elseif interval < 0.01 then delta = delta * 4
+      elseif interval < 0.02 then delta = delta * 3
+      elseif interval < 0.03 then delta = delta * 2
+      end
+    end
+    encoders.tick[n] = encoders.tick[n] + delta
+    if math.abs(encoders.tick[n]) >= encoders.sens[n] then
+      local value = encoders.tick[n] / encoders.sens[n]
+      value = (value > 0) and math.floor(value) or math.ceil(value)
+      _G.enc(n, value)
+      encoders.tick[n] = math.fmod(encoders.tick[n], encoders.sens[n])
+    end
+  end
+
+  return encoders
+end
+
+---------------------------------------------------------------------------
 -- screen / UI
 ---------------------------------------------------------------------------
 
@@ -831,6 +875,7 @@ function stubs.install(options)
     note_num_to_freq = function(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end,
   }
   context.menu = { rebuilds = 0 }
+  context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
 
   _G.engine = engine
@@ -847,7 +892,7 @@ function stubs.install(options)
   _G.fileselect = context.fileselect
   _G.poll = context.polls
   _G._menu = context.menu
-  _G.norns = { state = {} }
+  _G.norns = { state = {}, enc = context.encoders.api }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
   util.make_dir(_G._path.audio)
   package.loaded["ui"] = context.UI

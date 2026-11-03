@@ -203,6 +203,7 @@ local voices = {
 local selected_voice = 1
 local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
 local ui_page = 1  -- index into UI_PAGES
+local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local master_density = 1.0
 local frozen = {}
 for i = 1, NUM_VOICES do
@@ -469,6 +470,10 @@ function init()
   
   -- UI setup
   update_voice_list()
+  -- E1 only selects the page: without acceleration, and 4 ticks per page,
+  -- a fast turn steps through pages instead of jumping to SETUP
+  norns.enc.accel(1, false)
+  norns.enc.sens(1, E1_TICKS_PER_PAGE)
   
   -- Start LFO system
   lfo_metro = metro.init()
