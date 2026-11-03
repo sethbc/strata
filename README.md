@@ -412,6 +412,8 @@ Off-device checks (no norns needed):
 - `lua test/sync_check.lua` - checks Lua `engine.*` calls against the engine's commands
 - `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider)
 
+GitHub Actions (`.github/workflows/test.yml`) runs all three on every pull request and on pushes to `main`: the Lua tests under Lua 5.3 (the version norns runs) and LuaJIT, and the engine check on Ubuntu with SuperCollider, a dummy JACK server and `monome/norns` at a pinned commit.
+
 ## Credits
 
 Created for experimental ambient electronic music production.
