@@ -28,7 +28,7 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
-- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. Grain density does nothing in triggered mode, and neither does position spread unless the voice's source is a buffer (there it still jitters each grain's position). The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
+- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. Grain density does nothing in triggered mode, and neither does position spread for a voice playing its synth or the input (a buffer-sourced voice still spreads each triggered grain's position). Switching modes fades over about 50 ms instead of clicking. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
 ### Audio Sources (buffers and live input)
 
@@ -36,6 +36,7 @@ Every voice can grain something other than its own synth. Its **source** (the BU
 - **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
 - While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
+- Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
 - While a voice's source is the input, neither its synthesis nor its buffer parameters do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level), and K2, mutations and the drift change only the grain parameters
 - The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
@@ -53,7 +54,7 @@ Voices can modulate each other for evolving, interdependent textures:
 
 - **Master Density** - Controls grain density across all voices simultaneously
 - **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none)
-- **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered
+- **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered, and changing the filter type crossfades (20 ms) instead of clicking
 - **Delay** - Stereo delay (10 ms to 2 s) with feedback, after the filter; starts dry
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
 - **Limiter** - A limiter in the master stage catches peaks from filter resonance and delay feedback before the soft saturation
@@ -171,14 +172,14 @@ A scrolling list of the effects settings, five rows at a time: master density, t
 
 #### BUFFER
 
-Where a voice's source is chosen and its buffer is filled, so it works without a grid. The left column shows the selected voice, its source (`src: buf 2`), and the record duration and level. The right column lists the eight buffers: number, name (the file name, shortened, or `take <n>` for a recording, or `empty`) and length in seconds, or `REC` while recording. The selected voice's buffer is bright, buffers holding audio are mid, empty ones dim.
+Where a voice's source is chosen and its buffer is filled, so it works without a grid. The left column shows the selected voice, its source (`src: buf 2`), and the record duration and level. The right column lists the eight buffers: number, name (the file name, shortened, or `take <n>` for a recording, or `empty`) and length in seconds, or `REC` while recording. A take shows `REC` until the engine reports what it captured (a moment after the recording ends): then it becomes `take <n>`, or `empty` if nothing was captured (a stop right after the start; a take or file the engine reports late, such as a slow read at start, is still picked up, unless the buffer was cleared, loaded or recorded into meanwhile). A loaded file shows its name at once; if the engine reports no audio for it (an unreadable file), the buffer drops to dim. The selected voice's buffer is bright, buffers holding audio are mid, empty ones dim.
 
 - **E2** - Select voice (the same selection as MAIN)
 - **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
 - **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done
 - **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
-- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser)
-- The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
+- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser). For 1.5 s the hint row confirms it with `saved buf <n>`, shows `buf <n> busy` while the buffer is recording or waiting for its take, or `buf <n> empty` when the buffer holds no audio; nothing is saved in the last two cases
+- The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records, `K3:...` while a take that has ended waits for the engine; K3 does nothing then). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
 
 Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETERS > buffers).
 
@@ -194,7 +195,7 @@ One row per LFO: `L1`-`L3` (the selected one bright), one cycle of its shape, a 
 
 #### SETUP
 
-Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, how many buffers were restored when the script started (`buffers: 3 restored`), and the MIDI input: the port Strata listens to and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`) and the channel mode (`ch: per voice`).
+Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, how many buffers were restored when the script started (`buffers: 3 restored`, counting a buffer once the engine reports audio in it; `buffers: 2 ok, 1 missing` when remembered files were not found), and the MIDI input: the port Strata listens to and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`) and the channel mode (`ch: per voice`).
 
 - **E2** - MIDI port (1-4)
 - **E3** - MIDI channel mode (per voice, or omni to the selected voice)
@@ -207,7 +208,7 @@ A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page
 - **Channels** - In **per voice** mode (the default) MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored. In **omni to selected** mode every channel plays the voice selected with E2
 - **Notes** - A note sets the voice's pitch: its frequency for a synth voice (exact equal temperament, limited to 20 Hz-2 kHz), its buffer rate for a buffer-sourced voice (note 60 plays at rate 1, an octave up doubles it, limited to 0.25x-4x); an input-sourced voice takes no pitch. A voice that is off starts; then the note accents it at the note's velocity (Karplus plucks its string, a triggered-mode voice fires a grain). Voices keep their slow attacks: Strata is not a fast-attack synth, the velocity lands on the accent
 - **Note off** - Ignored by default, so a note starts a voice that keeps sounding. Set PARAMETERS > midi > midi note off to **voice off** for gated playing: a voice stops when its last held note is released, and a note played while it is still fading out brings it back without restarting its synths
-- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice
+- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice. In omni mode the bend follows the selection: selecting another voice with the wheel off centre returns the old voice to pitch and bends the new one by the wheel's position
 - **CC** - Strata has no fixed CC mapping: map CCs to any parameter with norns' PARAMS > MAP (below)
 
 ### MIDI CC mapping (norns PARAMS > MAP)
@@ -239,7 +240,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 #### Arc Encoders
 
-The rings control the current screen page. On the **MAIN** page:
+The rings control the current screen page. Every ring that sets a value sweeps its parameter's whole range in half a turn (512 of the arc's 1024 ticks per revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). The exceptions are the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per rate). On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
 - **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
@@ -265,7 +266,7 @@ Rings 1 and 2 adjust the voice's buffer parameters whatever its source (ready fo
 On the **LFO** page:
 
 - **Rings 1-3** - Depth of LFO 1-3 (10 ticks per percent; bright while the LFO runs)
-- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked
+- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked (part-turns toward the next rate are forgotten when you select another LFO or change its mode)
 
 On the **SETUP** page the rings are off and do nothing.
 
@@ -513,7 +514,8 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 ### LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
-- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min/max (keep -1 and 1) and baseline (keep "from center"): Strata's depth math assumes all three. With min -1, max 1 and a centre baseline an LFO swings up to half the destination's range either side of the value you set; "from min" makes it swing only below that value (down to half the range at 100 %), "from max" only above it, and other min/max values change the swing size, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min, max and baseline, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above (and swings half as wide as "from min"), and other min/max values change the size of the swing
 
 ### Buffers (group)
 - Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
@@ -528,7 +530,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 Strata writes audio to disk only when a recording finishes and when you save a buffer:
 - **Scratch take** - Every finished (or early-stopped) recording is written to `~/dust/audio/strata/scratch/buf<n>.wav`, replacing that buffer's previous take. It exists so the take survives a restart; save the buffer to keep it
 - **Save** - The buffer's save trigger (PARAMETERS > buffers, or K2 + K3 on the BUFFER page) writes a new timestamped file, `~/dust/audio/strata/<date-time>-buf<n>.wav`, which appears in the file browser for loading later. Nothing is overwritten
-- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that has been deleted or moved is skipped (the console says so), and the SETUP page shows how many buffers were restored
+- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that is not found (deleted, moved, or on a drive that is not mounted) is skipped and the console names it, but its path is kept for the next start, so the sample comes back once the file is there again; clearing, loading or recording into that buffer forgets it. The SETUP page shows how many buffers were restored (those the engine reports holding audio) and how many remembered files are missing
 - A damaged or incompatible `buffers.data` loads nothing, is reported in the console and is moved to `buffers.data.bak` so the save on exit does not overwrite it
 
 ### MIDI (group)
@@ -579,7 +581,7 @@ Each voice includes:
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
-- Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (position spread)
+- Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (the same fixed pan spread)
 - Eight stereo buffers (each a pair of 16 s mono buffers, about 49 MB in all) and a live stereo input bus
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses

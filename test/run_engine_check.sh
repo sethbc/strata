@@ -33,7 +33,9 @@ YAML
 
 output="$work_dir/output.txt"
 set +e
-"$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd" > "$output" 2>&1
+# started from the temp dir: anything the check writes to its working
+# directory is removed with it, never left in the caller's directory
+(cd "$work_dir" && "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1
 status=$?
 set -e
 

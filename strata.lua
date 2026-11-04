@@ -301,6 +301,11 @@ end
 
 local selected_voice = 1
 local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
+UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by its title)
+-- Arc pages follow the screen pages. Every continuous arc ring sweeps its
+-- param's whole range in this many ticks: half a turn of the arc's 1024
+-- ticks per revolution (monome arc spec; matron passes the deltas through)
+UI_PAGES.ARC_TICKS_PER_SWEEP = 512
 local ui_page = 1  -- index into UI_PAGES
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local master_density = 1.0
@@ -337,6 +342,9 @@ local scene_sequencer_position = 1
 local scene_sequencer_enabled = false
 local scene_sequencer_clock = nil
 local scene_transition_active = false
+-- true while recall_scene_instant sets params: the source action then leaves
+-- the full sync to the end of the recall
+local scene_recall_in_progress = false
 local scene_transition_clock = nil  -- Track transition clock for cancellation
 
 -- Arc device (the arc vport from arc.connect)
@@ -405,13 +413,33 @@ end
 -- Sample buffers. The engine holds the audio; Lua tracks what each slot
 -- holds for the screen and scenes. path is the loaded file, or the scratch
 -- take the engine writes when a recording completes (or stops early).
+-- The bufferState poll settles what the slot holds: a take is loaded only
+-- once the engine reports its seconds (recording stays set, finishing
+-- marks it, until then), and a file load, shown at once, stays loaded only
+-- if the engine reports audio. confirm_since is the util.time() of the
+-- change awaiting that report (nil = settled); restoring marks a load from
+-- load_buffers_from_disk (until the engine reports its audio);
+-- settled_empty is "take" or "load" when that settled without audio (a later
+-- report of audio adopts it: a slow take or file read), else false;
+-- missing_path is a remembered file that was not found on start (kept in
+-- buffers.data).
 local buffers = {}
 for slot = 1, NUM_BUFFERS do
-  buffers[slot] = {name = "empty", loaded = false, recording = false, seconds = 0, path = nil}
+  buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
+    settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
 end
-local buffer_record_clocks = {}  -- per slot: clock that ends the recording state
+-- per slot: clock that ends the recording state, then the finishing fallback
+local buffer_record_clocks = {}
 local buffer_state_poll = nil
 local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
+-- confirm_seconds: a report of 0 s settles a take or load only this long
+-- after the change (the periodic poll can carry a value read before the
+-- engine finished: the recording timer ends just before the engine's take
+-- completes). fallback_seconds: a finishing take with no report at all
+-- (no bufferState poll) settles this long after it ended, from the slot's
+-- last known seconds.
+local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5}
+local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
 local buffer_audio_dir = _path.audio .. "strata/"
 local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
 
@@ -438,13 +466,68 @@ function scratch_take_path(slot)
   return buffer_scratch_dir .. "buf" .. slot .. ".wav"
 end
 
--- A take is in the slot (the recording completed or was stopped early)
+-- A take or load in the slot holds audio: loaded (a take named take <n>,
+-- its path the scratch take; a load keeps its name), and a restored slot
+-- counts in buffers_restored
+function confirm_buffer_audio(slot, is_take)
+  local buffer = buffers[slot]
+  buffer.loaded = true
+  buffer.settled_empty = false
+  if is_take then
+    buffer.name = "take " .. slot
+    buffer.path = scratch_take_path(slot)
+  end
+  if buffer.restoring then
+    buffer.restoring = false
+    buffers_restored = buffers_restored + 1
+  end
+end
+
+-- Settle a take or load awaiting the engine (confirm_since set) from the
+-- slot's seconds (confirm_buffer_audio). Without audio a take leaves the slot
+-- empty and a load is not loaded (keeping its name); settled_empty records
+-- which, so a later report of audio still adopts it. Cancels the finishing
+-- fallback.
+function settle_buffer_slot(slot)
+  local buffer = buffers[slot]
+  local is_take = buffer.finishing
+  buffer.confirm_since = nil
+  if is_take then
+    cancel_buffer_recording_timer(slot)
+    buffer.finishing = false
+    buffer.recording = false
+  end
+  if buffer.seconds > 0 then
+    confirm_buffer_audio(slot, is_take)
+  else
+    buffer.loaded = false
+    buffer.settled_empty = is_take and "take" or "load"
+    if is_take then
+      buffer.name = "empty"
+      buffer.path = nil
+    end
+  end
+end
+
+-- The recording ended (its timer ran out or it was stopped early): the slot
+-- stays recording, finishing, until the engine reports what it captured, or
+-- BUFFER_SETTLE.fallback_seconds pass without a report. The fallback only
+-- matters when the bufferState poll is missing: with the poll, its periodic
+-- report settles a take within about 2 s. Without it the last known seconds
+-- is 0, so the take settles empty: the fallback exists so K3 is never
+-- ignored forever, not to recover audio.
 local function finish_buffer_take(slot)
   local buffer = buffers[slot]
-  buffer.recording = false
-  buffer.loaded = true
-  buffer.name = "take " .. slot
-  buffer.path = scratch_take_path(slot)
+  buffer.finishing = true
+  buffer.confirm_since = util.time()
+  buffer_record_clocks[slot] = clock.run(function()
+    clock.sleep(BUFFER_SETTLE.fallback_seconds)
+    buffer_record_clocks[slot] = nil
+    if buffer.finishing then
+      settle_buffer_slot(slot)
+      buffer_display_changed()
+    end
+  end)
 end
 
 -- A usable sound file path: not empty, not norns' "-" (no file chosen) and
@@ -471,17 +554,25 @@ function load_buffer(slot, path)
   local buffer = buffers[slot]
   -- a scratch take restored on start keeps its take name
   buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
+  -- shown at once; the engine's report settles loaded (buffer_state_changed)
   buffer.loaded = true
   buffer.recording = false
+  buffer.finishing = false
+  buffer.restoring = false
+  buffer.settled_empty = false
+  buffer.confirm_since = util.time()
   buffer.path = path
+  buffer.missing_path = nil
   buffer_display_changed()
 end
 
 -- Record the live input into a slot for record_duration seconds, or, if the
--- slot is already recording, stop early and keep what was captured
+-- slot is already recording, stop early and keep what was captured. A take
+-- that has ended and waits for the engine (finishing) ignores the press.
 function record_buffer(slot)
   if not valid_buffer_slot(slot) then return end
   local buffer = buffers[slot]
+  if buffer.finishing then return end
   cancel_buffer_recording_timer(slot)
   if buffer.recording then
     engine.stopRecord(slot - 1)
@@ -492,6 +583,10 @@ function record_buffer(slot)
     set_buffer_file_param(slot, _path.audio)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
+    buffer.restoring = false
+    buffer.settled_empty = false
+    buffer.confirm_since = nil
+    buffer.missing_path = nil
     buffer_record_clocks[slot] = clock.run(function()
       clock.sleep(duration)
       buffer_record_clocks[slot] = nil
@@ -511,8 +606,13 @@ function clear_buffer(slot)
   buffer.name = "empty"
   buffer.loaded = false
   buffer.recording = false
+  buffer.finishing = false
+  buffer.restoring = false
+  buffer.settled_empty = false
   buffer.seconds = 0
+  buffer.confirm_since = nil
   buffer.path = nil
+  buffer.missing_path = nil
   buffer_display_changed()
 end
 
@@ -523,8 +623,8 @@ end
 
 function save_buffer(slot)
   if not valid_buffer_slot(slot) then return end
-  -- seconds comes from the engine's poll: a load that failed leaves
-  -- loaded set but no audio, and a recording reads 0 s until it completes
+  -- seconds comes from the engine's poll: a load is loaded optimistically
+  -- until the poll settles it, and a recording reads 0 s until it completes
   if buffers[slot].seconds <= 0 then
     print("buffer " .. slot .. " is empty, nothing to save")
     return
@@ -535,16 +635,33 @@ function save_buffer(slot)
   print("buffer " .. slot .. " saved to " .. path)
 end
 
--- bufferState poll: one slot per message, slot index * 100 + seconds
+-- bufferState poll: one slot per message, slot index * 100 + seconds. It
+-- also settles a take or load awaiting the engine (confirm_since set,
+-- settle_buffer_slot), on any report, repeated or not: audio settles it at
+-- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or
+-- load that settled empty (a periodic 0 before a slow take or file read
+-- completed) is adopted when audio is reported later, as long as nothing
+-- else (load, clear, a new recording) happened in the slot since.
 local function buffer_state_changed(value)
   local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
   local slot = slot_index + 1
   if not valid_buffer_slot(slot) then return end
   local seconds = value - slot_index * BUFFER_STATE_STRIDE
+  local buffer = buffers[slot]
+  local changed = buffer.seconds ~= seconds
+  buffer.seconds = seconds
+  local has_audio = seconds > 0
+  if buffer.confirm_since ~= nil
+    and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
+    settle_buffer_slot(slot)
+    changed = true
+  elseif has_audio and buffer.settled_empty then
+    confirm_buffer_audio(slot, buffer.settled_empty == "take")
+    changed = true
+  end
   -- the periodic poll repeats unchanged values: redraw only on a change
-  if buffers[slot].seconds == seconds then return end
-  buffers[slot].seconds = seconds
-  redraw()  -- the BUFFER page shows the seconds
+  if not changed then return end
+  redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
   if grid_page == 4 then grid_redraw() end
 end
 
@@ -835,6 +952,10 @@ function add_lfo_params()
     for _, prefix in ipairs({"lfo_mode_", "lfo_clocked_", "lfo_free_"}) do
       wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end)
     end
+    -- arc ring 4's carried ticks were for the other mode's period param
+    wrap_param_action("lfo_mode_" .. n, nil, function()
+      if n == selected_lfo then forget_arc_lfo_period_ticks() end
+    end)
   end
 end
 
@@ -842,9 +963,11 @@ end
 -- restores it after a bypass
 local fx_filter_last_mix = 1
 
--- The filter and delay params are faders on the 256 grid's FX page
+-- The filter and delay params are faders on the 256 grid's FX page. A scene
+-- transition sets them on every step and redraws the grid once per step
+-- itself.
 local function fx_fader_changed()
-  if grid_page == 4 then grid_redraw() end
+  if grid_page == 4 and not scene_transition_active then grid_redraw() end
 end
 
 function init()
@@ -1194,6 +1317,8 @@ function init()
   -- a fast turn steps through pages instead of jumping to SETUP
   norns.enc.accel(1, false)
   norns.enc.sens(1, E1_TICKS_PER_PAGE)
+  -- forget held keys the moment the norns menu opens
+  watch_menu_opening()
   
   -- Start the per-voice drift
   drift_metro = metro.init()
@@ -1280,14 +1405,15 @@ function add_voice_params(voice_idx)
   -- (a stopped voice only records it; voiceOn then builds the right synths)
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_source",
+    id = prefix .. "source",
     name = "source",
     options = SOURCE_OPTIONS,
     default = v.source,
     action = function(x)
       voices[voice_idx].source = x
       engine.setGrainSource(voice_idx - 1, x - 1)
-      if voices[voice_idx].active then
+      -- a scene recall syncs once, after it has set every param
+      if voices[voice_idx].active and not scene_recall_in_progress then
         sync_voice_values_to_engine(voice_idx)
       end
       -- the grid fader list follows the source (buffer or synth params)
@@ -1301,7 +1427,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_pos",
+    id = prefix .. "buf_pos",
     name = "buffer position",
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
@@ -1319,7 +1445,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_rate",
+    id = prefix .. "buf_rate",
     name = "buffer rate",
     controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
     action = function(x)
@@ -1333,7 +1459,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_scan",
+    id = prefix .. "buf_scan",
     name = "buffer scan",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
     action = function(x)
@@ -1347,7 +1473,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_size",
+    id = prefix .. "grain_size",
     name = "grain size",
     controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
     action = function(x)
@@ -1361,7 +1487,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_density",
+    id = prefix .. "grain_density",
     name = "grain density",
     controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density),
     action = function(x)
@@ -1375,7 +1501,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_pitch",
+    id = prefix .. "grain_pitch",
     name = "grain pitch",
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
@@ -1393,7 +1519,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_spread",
+    id = prefix .. "grain_spread",
     name = "position spread",
     controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
     action = function(x)
@@ -1407,7 +1533,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_grain_env",
+    id = prefix .. "grain_env",
     name = "grain envelope",
     options = GRAIN_ENV_OPTIONS,
     default = v.grain.env,
@@ -1421,7 +1547,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_grain_mode",
+    id = prefix .. "grain_mode",
     name = "grain mode",
     options = GRAIN_MODE_OPTIONS,
     default = v.grain.mode,
@@ -1439,7 +1565,7 @@ function add_voice_params(voice_idx)
   -- Slot 1
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_1",
+    id = prefix .. "mod_source_1",
     name = "mod source 1",
     min = 0,
     max = NUM_VOICES,
@@ -1461,7 +1587,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_1",
+    id = prefix .. "mod_amp_amt_1",
     name = "amp mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
     action = function(x)
@@ -1473,7 +1599,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_1",
+    id = prefix .. "mod_freq_amt_1",
     name = "freq mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
     action = function(x)
@@ -1486,7 +1612,7 @@ function add_voice_params(voice_idx)
   -- Slot 2
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_2",
+    id = prefix .. "mod_source_2",
     name = "mod source 2",
     min = 0,
     max = NUM_VOICES,
@@ -1508,7 +1634,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_2",
+    id = prefix .. "mod_amp_amt_2",
     name = "amp mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
     action = function(x)
@@ -1520,7 +1646,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_2",
+    id = prefix .. "mod_freq_amt_2",
     name = "freq mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
     action = function(x)
@@ -1533,7 +1659,7 @@ function add_voice_params(voice_idx)
   -- Slot 3
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_3",
+    id = prefix .. "mod_source_3",
     name = "mod source 3",
     min = 0,
     max = NUM_VOICES,
@@ -1555,7 +1681,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_3",
+    id = prefix .. "mod_amp_amt_3",
     name = "amp mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
     action = function(x)
@@ -1567,7 +1693,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_3",
+    id = prefix .. "mod_freq_amt_3",
     name = "freq mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
     action = function(x)
@@ -1580,7 +1706,7 @@ function add_voice_params(voice_idx)
   -- Global mod speed (shared across all slots)
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_speed",
+    id = prefix .. "mod_speed",
     name = "mod speed",
     controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
     action = function(x)
@@ -1631,7 +1757,8 @@ function toggle_voice(voice_idx)
       voice.params.amp,
       voice.params.pan or 0,
       voice.grain.size,
-      voice.grain.density * master_density,
+      -- the values the engine has (as the grain density sender sends them)
+      engine_param_value("v" .. voice_idx .. "_grain_density") * engine_param_value("master_density"),
       voice.grain.pitch
     )
     sync_voice_to_engine(voice_idx)
@@ -1729,26 +1856,30 @@ function randomize_voice(voice_idx)
   grid_redraw()
 end
 
+-- One step of the drift's walk: a random step of width step (+/- step / 2)
+-- plus a pull back toward base, removing reversion of the offset per step
+function mean_reverting_step(current, base, step, reversion)
+  return current + ((math.random() - 0.5) * step - (current - base) * reversion)
+end
+
 function drift_update()
   -- Slow grain pitch drift for active, non-frozen voices: a small random
   -- step plus a pull back toward the last user/scene/mutation-set pitch, so
   -- the walk stays a subtle detune instead of wandering to the rails
   for i = 1, NUM_VOICES do
     if voices[i].active and not frozen[i] then
-      local current = voices[i].grain.pitch
-      local delta = (math.random() - 0.5) * DRIFT_PITCH_STEP
-        - (current - grain_pitch_base[i]) * DRIFT_PITCH_REVERSION
+      local pitch = mean_reverting_step(voices[i].grain.pitch, grain_pitch_base[i],
+        DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
       drift_writing = true
-      params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
+      params:set("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
       drift_writing = false
 
       -- Buffer sources also drift their position the same way
       if voice_uses_buffer(i) then
-        local position = voices[i].grain.buf_pos
-        local position_delta = (math.random() - 0.5) * DRIFT_BUF_POS_STEP
-          - (position - buf_pos_base[i]) * DRIFT_BUF_POS_REVERSION
+        local position = mean_reverting_step(voices[i].grain.buf_pos, buf_pos_base[i],
+          DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
         drift_writing = true
-        params:set("v" .. i .. "_buf_pos", util.clamp(position + position_delta, 0, 1))
+        params:set("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
         drift_writing = false
       end
     end
@@ -1763,6 +1894,15 @@ function drift_update()
   -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
   forget_keys_held_through_menu()
 end
+
+-- voices[i].grain keys holding an option index rather than a continuous
+-- value, mapped to their option count: smooth transitions switch them at the
+-- end instead of crossfading, mutation never touches them, and scenes must
+-- store integers from 1 to the option count
+local DISCRETE_GRAIN_KEYS = {
+  env = #GRAIN_ENV_OPTIONS,
+  mode = #GRAIN_MODE_OPTIONS
+}
 
 -- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
 local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
@@ -1802,7 +1942,7 @@ function gentle_mutate()
         -- synthesis params. Input sources mutate only the grain params
         -- below. The source itself never mutates.
         for _, key in ipairs(BUFFER_MUTATION_KEYS) do
-          if math.random() < probability then
+          if not DISCRETE_GRAIN_KEYS[key] and math.random() < probability then
             local param_id = "v" .. i .. "_" .. key
             local spec = params:lookup_param(param_id).controlspec
             -- delta across the normalized range, so exp buf_rate moves evenly
@@ -1812,24 +1952,20 @@ function gentle_mutate()
         end
       end
 
-      -- Occasionally mutate granular parameters (lower probability). The
-      -- discrete ones (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
-      if math.random() < probability * 0.5 then
-        local grain_size = v.grain.size
-        local size_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.2
-        params:set("v" .. i .. "_grain_size", util.clamp(grain_size + size_delta, 0.01, 0.5))
-      end
-
-      if math.random() < probability * 0.3 then
-        local grain_pitch = v.grain.pitch
-        local pitch_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 1.0
-        params:set("v" .. i .. "_grain_pitch", util.clamp(grain_pitch + pitch_delta, 0.25, 4))
-      end
-
-      if math.random() < probability * 0.2 then
-        local grain_spread = v.grain.spread
-        local spread_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.3
-        params:set("v" .. i .. "_grain_spread", util.clamp(grain_spread + spread_delta, 0, 1))
+      -- Occasionally mutate granular parameters (lower probability: a
+      -- fraction of it, and a delta scale, per key). The discrete ones
+      -- (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
+      for _, mutation in ipairs({
+        {key = "size", param = "grain_size", chance = 0.5, scale = 0.2},
+        {key = "pitch", param = "grain_pitch", chance = 0.3, scale = 1.0},
+        {key = "spread", param = "grain_spread", chance = 0.2, scale = 0.3}
+      }) do
+        if not DISCRETE_GRAIN_KEYS[mutation.key] and math.random() < probability * mutation.chance then
+          local param_id = "v" .. i .. "_" .. mutation.param
+          local spec = params:lookup_param(param_id).controlspec
+          local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * mutation.scale
+          params:set(param_id, util.clamp(v.grain[mutation.key] + delta, spec.minval, spec.maxval))
+        end
       end
     end
   end
@@ -1907,15 +2043,6 @@ local GRAIN_PARAM_IDS = {
   buf_pos = "buf_pos",
   buf_rate = "buf_rate",
   buf_scan = "buf_scan"
-}
-
--- voices[i].grain keys holding an option index rather than a continuous
--- value, mapped to their option count: smooth transitions switch them at the
--- end instead of crossfading, mutation never touches them, and scenes must
--- store integers from 1 to the option count
-local DISCRETE_GRAIN_KEYS = {
-  env = #GRAIN_ENV_OPTIONS,
-  mode = #GRAIN_MODE_OPTIONS
 }
 
 local SCENE_TRANSITION_STEPS = 20
@@ -2128,45 +2255,66 @@ function recall_scene(scene_num, transition_time)
 end
 
 -- Apply a scene immediately. The scene must have passed validate_scene.
+-- A voice whose source changes gets one full sync after all its params are
+-- set (not the source action's, which would send the old values first); a
+-- voice the recall starts is synced by toggle_voice instead.
 function recall_scene_instant(scene_num)
   local scene_data = scenes[scene_num].data
+  local source_changed = {}
+  scene_recall_in_progress = true
+  -- the flag must not outlive an error in a param action: clear it, then
+  -- raise the error again
+  local recalled, recall_error = pcall(function()
+    -- Restore global parameters
+    for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+      params:set(global.id, scene_data[global.id])
+    end
 
-  -- Restore global parameters
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    params:set(global.id, scene_data[global.id])
-  end
+    -- Restore voice states
+    for i = 1, NUM_VOICES do
+      local voice_data = scene_data.voices[i]
+      local prefix = "v" .. i .. "_"
 
-  -- Restore voice states
+      local previous_source = voices[i].source
+      params:set(prefix .. "source", voice_data.source)
+      source_changed[i] = voices[i].source ~= previous_source
+
+      for key, value in pairs(voice_data.params) do
+        params:set(prefix .. key, value)
+      end
+
+      for key, value in pairs(voice_data.grain) do
+        params:set(prefix .. GRAIN_PARAM_IDS[key], value)
+      end
+
+      -- Restore crossmod slots
+      for slot = 1, NUM_MOD_SLOTS do
+        local slot_data = voice_data.crossmod["slot" .. slot]
+        params:set(prefix .. "mod_source_" .. slot, slot_data.source)
+        params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+        params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+      end
+      params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
+
+      frozen[i] = scene_data.frozen[i]
+
+      -- Start/stop voices last: toggle_voice syncs the restored state
+      if voice_data.active ~= voices[i].active then
+        toggle_voice(i)
+        source_changed[i] = false
+      end
+    end
+  end)
+  scene_recall_in_progress = false
+
+  -- even after an error: a running voice whose source switched gets its sync
+  -- (of whatever was applied), so the engine never lags the Lua state
   for i = 1, NUM_VOICES do
-    local voice_data = scene_data.voices[i]
-    local prefix = "v" .. i .. "_"
-
-    params:set(prefix .. "source", voice_data.source)
-
-    for key, value in pairs(voice_data.params) do
-      params:set(prefix .. key, value)
-    end
-
-    for key, value in pairs(voice_data.grain) do
-      params:set(prefix .. GRAIN_PARAM_IDS[key], value)
-    end
-
-    -- Restore crossmod slots
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      params:set(prefix .. "mod_source_" .. slot, slot_data.source)
-      params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-      params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-    end
-    params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-    frozen[i] = scene_data.frozen[i]
-
-    -- Start/stop voices last: toggle_voice syncs the restored state
-    if voice_data.active ~= voices[i].active then
-      toggle_voice(i)
+    if source_changed[i] and voices[i].active then
+      sync_voice_values_to_engine(i)
     end
   end
+  if not recalled then error(recall_error, 0) end
 
   -- Restore patterns
   for i = 1, NUM_VOICES do
@@ -2339,15 +2487,16 @@ end
 local buffer_data_file = scene_data_dir .. "buffers.data"
 -- Set when a buffers file could not be loaded and could not be moved aside
 local buffer_autosave_blocked = false
-local buffers_restored = 0  -- slots reloaded by the last load_buffers_from_disk (SETUP page)
 
 function save_buffers_to_disk()
   if util.file_exists(scene_data_dir) == false then
     util.make_dir(scene_data_dir)
   end
+  -- a remembered file that was missing on start is kept (it may be on a
+  -- drive that is mounted again later)
   local paths = {}
   for slot = 1, NUM_BUFFERS do
-    paths[slot] = buffers[slot].path or ""
+    paths[slot] = buffers[slot].path or buffers[slot].missing_path or ""
   end
   tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file)
   print("buffer paths saved to " .. buffer_data_file)
@@ -2360,9 +2509,12 @@ local function preserve_unloadable_buffer_file()
 end
 
 -- Reload each remembered path that still exists through load_buffer. A
--- missing or damaged file loads nothing and never stops init.
+-- missing or damaged file loads nothing and never stops init. A slot counts
+-- in buffers_restored once the engine reports audio in it
+-- (buffer_state_changed); a missing file's path is kept for the next save.
 function load_buffers_from_disk()
   buffers_restored = 0
+  buffer_autosave_blocked = false
   if not util.file_exists(buffer_data_file) then
     print("no saved buffers file found")
     return
@@ -2387,20 +2539,23 @@ function load_buffers_from_disk()
     return
   end
 
+  local reloading = 0
   for slot = 1, NUM_BUFFERS do
     local path = loaded.paths[slot]
     if is_sound_file_path(path) then
-      -- the file may have been deleted, or a take never written
+      -- the file may have been deleted or be on an unmounted drive, or a
+      -- take was never written
       if util.file_exists(path) then
         load_buffer(slot, path)
-        buffers_restored = buffers_restored + 1
+        buffers[slot].restoring = true
+        reloading = reloading + 1
       else
-        print("buffer " .. slot .. ": " .. path .. " not found, not restored")
+        buffers[slot].missing_path = path
+        print("buffer " .. slot .. ": " .. path .. " not found, not restored (kept for the next start)")
       end
     end
   end
-  buffer_autosave_blocked = false
-  print(buffers_restored .. " buffers restored from " .. buffer_data_file)
+  print(reloading .. " buffers reloading from " .. buffer_data_file)
 end
 
 -- Check that one scene slot holds everything recall_scene_instant reads
@@ -2490,21 +2645,22 @@ function update_voice_list()
 end
 
 -- The synthesis param E3 and arc ring 2 adjust on MAIN, per voice type:
--- param id suffix, screen label, screen value format, and arc delta scale
+-- param id suffix, screen label and screen value format (the arc ring sweeps
+-- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring)
 local MAIN_PARAMS = {
-  resonator = {key = "freq", label = "freq", format = "%.0f Hz", arc_scale = 1},
-  fm = {key = "index", label = "index", format = "%.1f", arc_scale = 0.1},
-  folder = {key = "fold", label = "fold", format = "%.1f", arc_scale = 0.1},
-  sub = {key = "drift", label = "drift", format = "%.3f", arc_scale = 0.01},
-  pulse = {key = "width", label = "width", format = "%.2f", arc_scale = 0.01},
-  karplus = {key = "decay", label = "decay", format = "%.1f s", arc_scale = 0.1},
-  ring = {key = "ratio", label = "ratio", format = "%.2f", arc_scale = 0.01}
+  resonator = {key = "freq", label = "freq", format = "%.0f Hz"},
+  fm = {key = "index", label = "index", format = "%.1f"},
+  folder = {key = "fold", label = "fold", format = "%.1f"},
+  sub = {key = "drift", label = "drift", format = "%.3f"},
+  pulse = {key = "width", label = "width", format = "%.2f"},
+  karplus = {key = "decay", label = "decay", format = "%.1f s"},
+  ring = {key = "ratio", label = "ratio", format = "%.2f"}
 }
 
 -- A buffer-sourced voice shows and adjusts its buffer position instead; an
 -- input-sourced voice its grain size (its synth and buffer params do nothing)
-local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f", arc_scale = 0.1}
-local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s", arc_scale = 0.01}
+local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
+local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 function main_param_entry(voice_idx)
   if voice_uses_synth(voice_idx) then
@@ -2652,8 +2808,18 @@ function redraw_setup()
   screen.text("arc: " .. (arc_connected and "connected" or "none"))
   screen.move(0, 36)
   screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
+  -- restored = confirmed by the engine; missing files are remembered paths
+  -- not found on start ("restored" becomes "ok" to fit beside them)
+  local buffers_missing = 0
+  for slot = 1, NUM_BUFFERS do
+    if buffers[slot].missing_path then buffers_missing = buffers_missing + 1 end
+  end
   screen.move(0, 42)
-  screen.text("buffers: " .. buffers_restored .. " restored")
+  if buffers_missing > 0 then
+    screen.text("buffers: " .. buffers_restored .. " ok, " .. buffers_missing .. " missing")
+  else
+    screen.text("buffers: " .. buffers_restored .. " restored")
+  end
   -- the selected MIDI port and its device (cut to the screen width), then the channel mode
   local midi_prefix = "midi " .. params:get("midi_device") .. ": "
   screen.move(0, 48)
@@ -2822,7 +2988,9 @@ end
 
 local function lfo_enc(n, d)
   if n == 2 then
+    local previous_lfo = selected_lfo
     selected_lfo = util.clamp(selected_lfo + d, 1, NUM_LFOS)
+    if selected_lfo ~= previous_lfo then forget_arc_lfo_period_ticks() end
   elseif n == 3 then
     params:delta("lfo_depth_" .. selected_lfo, d)  -- percent steps
   end
@@ -2839,9 +3007,12 @@ end
 
 local function ignore_page_input() end
 
--- E2 on MAIN and BUFFER: step the shared selected voice
+-- E2 on MAIN and BUFFER: step the shared selected voice (an omni MIDI
+-- pitchbend moves with it)
 local function select_voice_by(d)
+  local previous_voice = selected_voice
   selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
+  if selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
   update_voice_list()
 end
 
@@ -2897,8 +3068,34 @@ local BUFFER_PAGE = {
   row_spacing = 6,        -- eight rows at y 14-56, clear of the hint row at y 62
   slot_x = 65,
   name_x = 71,
-  name_max_width = 31     -- the name ends before the widest seconds ("16.0s" from x 103)
+  name_max_width = 31,    -- the name ends before the widest seconds ("16.0s" from x 103)
+  flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
+  flash_text = nil,       -- the transient hint, drawn instead of the key hints
+  flash_until = 0,        -- util.time() when it ends
+  flash_clock = nil       -- redraws once when it ends
 }
+
+-- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
+-- redraw_buffer stops drawing it at flash_until; the clock clears it (even
+-- if it wakes a little early) and redraws once so it goes away untouched.
+function buffer_page_flash(text)
+  BUFFER_PAGE.flash_text = text
+  BUFFER_PAGE.flash_until = util.time() + BUFFER_PAGE.flash_seconds
+  cancel_buffer_page_flash_clock()
+  BUFFER_PAGE.flash_clock = clock.run(function()
+    clock.sleep(BUFFER_PAGE.flash_seconds)
+    BUFFER_PAGE.flash_clock = nil
+    BUFFER_PAGE.flash_text = nil
+    redraw()
+  end)
+end
+
+function cancel_buffer_page_flash_clock()
+  if BUFFER_PAGE.flash_clock then
+    clock.cancel(BUFFER_PAGE.flash_clock)
+    BUFFER_PAGE.flash_clock = nil
+  end
+end
 
 -- A buffer's name for the screen: the file name without its extension, cut
 -- to fit. Cached per slot until the name changes (load, take, clear), so a
@@ -2956,8 +3153,13 @@ function redraw_buffer()
     screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
   end
 
-  if voice_slot then
-    draw_hints("K2:load K3:" .. (buffers[voice_slot].recording and "stop" or "rec") .. " K2+3:save")
+  if BUFFER_PAGE.flash_text and util.time() < BUFFER_PAGE.flash_until then
+    draw_hints(BUFFER_PAGE.flash_text)
+  elseif voice_slot then
+    -- "..." while a take that ended waits for the engine (K3 does nothing)
+    local voice_buffer = buffers[voice_slot]
+    local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
+    draw_hints("K2:load K3:" .. record_hint .. " K2+3:save")
   else
     -- K2 and K3 need a buffer source; E3 picks one
     draw_hints("K2:- K3:- E3:source")
@@ -2985,12 +3187,30 @@ local function buffer_key(n)
     local slot = voice_buffer_slot(selected_voice)
     if not slot then return end
     if key_press_page[2] == ui_page then
-      save_buffer(slot)
+      -- a slot recording or awaiting its take is busy: nothing to save yet.
+      -- Otherwise save_buffer saves only a slot the engine reports holding audio
+      local buffer = buffers[slot]
+      if buffer.recording or buffer.finishing then
+        buffer_page_flash("buf " .. slot .. " busy")
+      else
+        local has_audio = buffer.seconds > 0
+        save_buffer(slot)
+        buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
+      end
       buffer_saved_during_k2 = true
     else
       record_buffer(slot)
     end
   end
+end
+
+-- Forget every held key (and the K2 save): for the norns menu and the file
+-- selector, which take the keys while open, so releases never reach key()
+function forget_held_keys()
+  for n in pairs(key_press_page) do
+    key_press_page[n] = nil
+  end
+  buffer_saved_during_k2 = false
 end
 
 -- K2 released: open the file selector for the voice's buffer, unless K3
@@ -3003,6 +3223,9 @@ local function buffer_key_release(n)
   end
   local slot = voice_buffer_slot(selected_voice)
   if not slot then return end
+  -- the selector takes every key while open, so keys held now are released
+  -- there, never reaching key(): forget them
+  forget_held_keys()
   fileselect.enter(_path.audio, function(path)
     -- loaded directly (it also shows the path in buf<n>_file): setting the
     -- param would do nothing when it already holds this path
@@ -3042,14 +3265,43 @@ end
 -- The norns menu (K1, or PARAMS and its file selector) takes every key
 -- while it is open, so a key released there never reaches key() and would
 -- stay "held" (on BUFFER, every later K3 would save instead of record).
--- Called on every 10 Hz drift_metro tick (end of drift_update): while the menu is open, forget
--- every held key and the BUFFER page's K2 gesture.
+-- While the menu is open, forget every held key and the BUFFER page's K2
+-- gesture. Called as the menu opens (watch_menu_opening) and, as a fallback,
+-- on every 10 Hz drift_metro tick (end of drift_update).
 function forget_keys_held_through_menu()
   if not norns.menu.status() then return end
-  for n in pairs(key_press_page) do
-    key_press_page[n] = nil
+  forget_held_keys()
+end
+
+-- Every way into the norns menu (K1, a script error, a keyboard's menu key)
+-- goes through _menu.set_mode(true) (lua/core/menu.lua), looked up on _menu
+-- at each call, so a wrapper sees the menu open. cleanup puts norns' own
+-- function back; if something wrapped it after Strata, that wrapper stays
+-- and Strata's becomes a plain pass-through.
+local menu_watch = {original_set_mode = nil, wrapper = nil, active = false}
+
+function watch_menu_opening()
+  if menu_watch.wrapper or not (_menu and _menu.set_mode) then return end
+  -- both held as upvalues: the wrapper never looks up a script global, so
+  -- it cannot break the system menu even if one is gone
+  local original_set_mode = _menu.set_mode
+  local forget_keys = forget_keys_held_through_menu
+  menu_watch.original_set_mode = original_set_mode
+  menu_watch.wrapper = function(mode)
+    original_set_mode(mode)
+    if mode == true and menu_watch.active then forget_keys() end
   end
-  buffer_saved_during_k2 = false
+  menu_watch.active = true
+  _menu.set_mode = menu_watch.wrapper
+end
+
+function unwatch_menu_opening()
+  menu_watch.active = false
+  if menu_watch.wrapper and _menu.set_mode == menu_watch.wrapper then
+    _menu.set_mode = menu_watch.original_set_mode
+  end
+  menu_watch.wrapper = nil
+  menu_watch.original_set_mode = nil
 end
 
 -- Keys. Presses go to the page's PAGE_KEY handler. A release goes to
@@ -3083,20 +3335,30 @@ end
 -- turns and ARC_PAGE_REDRAW[ui_page] draws the rings between arc_redraw's
 -- clear and refresh.
 
+-- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
+-- param's whole range. params:delta moves its 0-1 raw value by delta *
+-- quantum, so the sweep follows the warp (exp params sweep evenly) and the
+-- step only quantizes the value read back. (A global: the main chunk is near
+-- Lua's local limit.)
+-- Control params only: it reads the param's controlspec.
+function arc_sweep_param(param_id, delta)
+  local quantum = params:lookup_param(param_id).controlspec.quantum
+  params:delta(param_id, delta / (UI_PAGES.ARC_TICKS_PER_SWEEP * quantum))
+end
+
 local function arc_main_delta(n, delta)
   if n == 1 then
     -- Ring 1: Master density
-    params:delta("master_density", delta / 20)
+    arc_sweep_param("master_density", delta)
   elseif n == 2 then
     -- Ring 2: Selected voice's main parameter
-    local scale = main_param_entry(selected_voice).arc_scale
-    params:delta(main_param_id(selected_voice), delta * scale)
+    arc_sweep_param(main_param_id(selected_voice), delta)
   elseif n == 3 then
     -- Ring 3: Grain size
-    params:delta("v" .. selected_voice .. "_grain_size", delta / 100)
+    arc_sweep_param("v" .. selected_voice .. "_grain_size", delta)
   elseif n == 4 then
     -- Ring 4: Grain density
-    params:delta("v" .. selected_voice .. "_grain_density", delta / 10)
+    arc_sweep_param("v" .. selected_voice .. "_grain_density", delta)
   end
 end
 
@@ -3106,10 +3368,9 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
 
   -- Ring 2: Selected voice's main parameter, across its controlspec range
+  -- following the warp (as the sweep does: exp freq's midpoint at half a turn)
   local v = voices[selected_voice]
-  local param_id = main_param_id(selected_voice)
-  local param_min, param_max = param_range(param_id)
-  local param_pos = util.linlin(param_min, param_max, 0, 64, params:get(param_id))
+  local param_pos = param_fraction(main_param_id(selected_voice)) * 64
   arc_port:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
 
   -- Ring 3: Grain size (0.01 to 0.5)
@@ -3121,18 +3382,19 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
 end
 
--- FX page rings: the param each ring adjusts and its delta scale
+-- FX page rings: the param each ring adjusts (each sweeps its range in
+-- UI_PAGES.ARC_TICKS_PER_SWEEP ticks)
 local ARC_FX_RINGS = {
-  {param_id = "filter_freq", scale = 1 / 4},
-  {param_id = "filter_res", scale = 1 / 100},
-  {param_id = "delay_time", scale = 1 / 200},
-  {param_id = "delay_mix", scale = 1 / 100}
+  {param_id = "filter_freq"},
+  {param_id = "filter_res"},
+  {param_id = "delay_time"},
+  {param_id = "delay_mix"}
 }
 
 local function arc_fx_delta(n, delta)
   local ring = ARC_FX_RINGS[n]
   if ring then
-    params:delta(ring.param_id, delta * ring.scale)
+    arc_sweep_param(ring.param_id, delta)
   end
 end
 
@@ -3146,12 +3408,12 @@ end
 
 -- BUFFER page rings: the selected voice's buffer position and rate, then
 -- the recording duration and level. Param id suffixes after "v<i>_" for
--- the voice rings.
+-- the voice rings. Each sweeps its range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks.
 local ARC_BUFFER_RINGS = {
-  {voice_key = "buf_pos", scale = 1 / 200},
-  {voice_key = "buf_rate", scale = 1 / 100},
-  {param_id = "record_duration", scale = 1 / 20},
-  {param_id = "record_level", scale = 1 / 100}
+  {voice_key = "buf_pos"},
+  {voice_key = "buf_rate"},
+  {param_id = "record_duration"},
+  {param_id = "record_level"}
 }
 
 local function arc_buffer_ring_param(ring)
@@ -3163,7 +3425,7 @@ end
 local function arc_buffer_delta(n, delta)
   local ring = ARC_BUFFER_RINGS[n]
   if ring then
-    params:delta(arc_buffer_ring_param(ring), delta * ring.scale)
+    arc_sweep_param(arc_buffer_ring_param(ring), delta)
   end
 end
 
@@ -3181,14 +3443,21 @@ local function arc_buffer_redraw(arc_port)
 end
 
 -- LFO page rings: 1-3 the depth of LFO 1-3 (whole percents), 4 the
--- selected LFO's period (free seconds, or the clocked rate option)
+-- selected LFO's period (free seconds, swept like every continuous ring, or
+-- the clocked rate option in whole steps)
 local ARC_LFO = {
   ticks_per_percent = 10,
-  free_scale = 1 / 10,
   ticks_per_rate = 20,
   period_ring = 4
 }
 local arc_lfo_ticks = {}  -- per ring: ticks not yet worth a whole step
+
+-- Ring 4's carried ticks belong to one LFO's clocked rate: forget them when
+-- the selected LFO (E2 on the LFO page) or its mode changes, so they never
+-- step another param
+function forget_arc_lfo_period_ticks()
+  arc_lfo_ticks[ARC_LFO.period_ring] = nil
+end
 
 -- Whole steps in a ring's accumulated ticks; the rest is kept for later
 local function arc_whole_steps(ring, delta, ticks_per_step)
@@ -3212,7 +3481,7 @@ local function arc_lfo_delta(n, delta)
   elseif n == ARC_LFO.period_ring then
     local period_id = lfo_period_param_id(selected_lfo)
     if period_id == "lfo_free_" .. selected_lfo then
-      params:delta(period_id, delta * ARC_LFO.free_scale)
+      arc_sweep_param(period_id, delta)
     else
       local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_rate)
       if steps ~= 0 then params:delta(period_id, steps) end
@@ -3273,7 +3542,7 @@ end
 
 function arc_key(n, s)
   -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
-  if s == 1 and UI_PAGES[ui_page] == "MAIN" then
+  if s == 1 and ui_page == UI_PAGES.MAIN_PAGE then
     start_or_freeze_selected_voice()
     redraw()
   end
@@ -3404,9 +3673,24 @@ end
 -- engine applies it to the voice synth and to strataGrainBuf; a stopped
 -- voice gets it when it starts (sync_voice_values_to_engine).
 function midi_pitchbend(voice_idx, value)
-  local ratio = 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12)
+  midi_set_bend(voice_idx, 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12))
+end
+
+function midi_set_bend(voice_idx, ratio)
   midi_state.bend[voice_idx] = ratio
   if voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
+end
+
+-- Omni mode bends whichever voice is selected. When the selection moves with
+-- the wheel off centre, the voice it leaves returns to pitch and the newly
+-- selected voice takes the wheel's current bend (a stopped voice gets it
+-- when it starts). Per voice mode leaves bends with their channels' voices.
+function midi_bend_follow_selection(previous_voice)
+  if params:get("midi_channel_mode") ~= 2 then return end
+  local ratio = midi_state.bend[previous_voice]
+  if ratio == 1 then return end
+  midi_set_bend(previous_voice, 1)
+  midi_set_bend(selected_voice, ratio)
 end
 
 -- Grid functions
@@ -4195,6 +4479,10 @@ function grid_redraw_64(grid_device)
 end
 
 function cleanup()
+  -- Give the norns menu its own set_mode back first, before anything below
+  -- can fail
+  unwatch_menu_opening()
+
   -- Save scenes to disk before exiting, unless that would overwrite a scenes
   -- file that failed to load and could not be moved aside
   if scene_autosave_blocked then
@@ -4244,6 +4532,7 @@ function cleanup()
   for slot = 1, NUM_BUFFERS do
     cancel_buffer_recording_timer(slot)
   end
+  cancel_buffer_page_flash_clock()
 
   -- Stop listening to MIDI before the voices go off
   if midi_device then midi_device.event = nil end
