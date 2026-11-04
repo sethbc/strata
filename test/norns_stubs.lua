@@ -168,20 +168,23 @@ end
 ---------------------------------------------------------------------------
 
 -- norns stores numeric type codes in param.t (lua/core/paramset.lua); params:add
--- still takes the type name as a string
+-- still takes the type name as a string. This is the one table of codes: the
+-- locals below and ParamSet's tSEPARATOR ... tBINARY are built from it.
 local PARAM_TYPE_CODES = {
   separator = 0, number = 1, option = 2, control = 3, file = 4, taper = 5, trigger = 6, group = 7, text = 8,
   binary = 9,
 }
-local tSEPARATOR, tNUMBER, tOPTION, tCONTROL = 0, 1, 2, 3
-local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = 4, 6, 7, 8, 9
+stubs.PARAM_TYPE_CODES = PARAM_TYPE_CODES
+local codes = PARAM_TYPE_CODES
+local tSEPARATOR, tNUMBER, tOPTION, tCONTROL = codes.separator, codes.number, codes.option, codes.control
+local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = codes.file, codes.trigger, codes.group, codes.text, codes.binary
 
 local function make_params(util, controlspec)
   -- ParamSet.tSEPARATOR etc., reachable as params.tOPTION like in norns
-  local ParamSet = {
-    tSEPARATOR = 0, tNUMBER = 1, tOPTION = 2, tCONTROL = 3, tFILE = 4, tTAPER = 5, tTRIGGER = 6, tGROUP = 7,
-    tTEXT = 8, tBINARY = 9,
-  }
+  local ParamSet = {}
+  for type_name, code in pairs(PARAM_TYPE_CODES) do
+    ParamSet["t" .. type_name:upper()] = code
+  end
   ParamSet.__index = ParamSet
 
   -- open_group counts the params still to come in the current group, like
@@ -191,6 +194,10 @@ local function make_params(util, controlspec)
   local bang
 
   local function new_param(args)
+    -- norns prints "unknown type" and adds nothing; the stub fails loudly
+    if PARAM_TYPE_CODES[args.type] == nil then
+      error("stub params: unknown param type " .. tostring(args.type))
+    end
     local param = { id = args.id, name = args.name or args.id, t = PARAM_TYPE_CODES[args.type],
       action = args.action or function() end, hidden = false }
     if args.type == "control" then

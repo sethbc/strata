@@ -153,6 +153,7 @@ server.waitForBoot({
         var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
         var grainCount, voiceCount, grainBefore, voiceBefore;
         var countVoiceAndGrain, maxGrainCount, maxVoiceCount, staleGrain;
+        var triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
 
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
@@ -727,6 +728,39 @@ server.waitForBoot({
         command.(\clearBuffer, 2);
         command.(\setGrainSource, 1, 0);
         2.5.wait; server.sync;
+
+        // Triggered grain mode on a running synth voice (voice 0, its
+        // resonator long past its attack): no grain and no position-spread
+        // sound without a trigger, one grain after a retrigger. Its grain
+        // synth writes to a private bus for the measurement.
+        triggeredBus = Bus.audio(server, 2);
+        peakBus = Bus.control(server, 1);
+        engine.synths[\grain0].set(\out, triggeredBus.index);
+        probe = Synth(\strataCheckPeak, [\in, triggeredBus, \out, peakBus], engine.processGroup, \addToTail);
+        server.sync;
+        0.1.wait;                                  // let the grains reach the private bus
+        continuousPeak = readPeak.value;
+        check.(continuousPeak > 0.01, "a running synth voice's continuous grains sound (peak %)".format(continuousPeak));
+        command.(\setGrainParam, 0, \grainMode, 1);
+        0.5.wait; server.sync;                     // grains in flight and the PitchShift window have ended
+        untriggeredPeak = readPeak.value;
+        check.(untriggeredPeak < 0.001,
+            "a triggered-mode synth voice is silent without a trigger (peak %)".format(untriggeredPeak));
+        probe.set(\t_reset, 1); server.sync;
+        command.(\retrigger, 0, 1.0);
+        0.3.wait;
+        triggeredPeak = {
+            var condition = Condition(false), value;
+            peakBus.get({ arg result; value = result; condition.test = true; condition.signal });
+            condition.wait;
+            value
+        }.value;
+        check.(triggeredPeak > 0.01, "a retrigger fires a grain in triggered mode (peak %)".format(triggeredPeak));
+        command.(\setGrainParam, 0, \grainMode, 0);
+        engine.synths[\grain0].set(\out, engine.mainBus.index);
+        server.sync;
+        probe.free; peakBus.free; triggeredBus.free;
+        server.sync;
 
         // A burst of source switches (E3 scrolling) keeps at most one
         // releasing grain synth per voice: each switch cuts the one an
