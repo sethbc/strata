@@ -413,13 +413,15 @@ end
 -- marks it, until then), and a file load, shown at once, stays loaded only
 -- if the engine reports audio. confirm_since is the util.time() of the
 -- change awaiting that report (nil = settled); restoring marks a load from
--- load_buffers_from_disk; empty_take marks a take that settled without
--- audio (a later report of audio adopts it); missing_path is a remembered
--- file that was not found on start (kept in buffers.data).
+-- load_buffers_from_disk (until the engine reports its audio);
+-- settled_empty is "take" or "load" when that settled without audio (a later
+-- report of audio adopts it: a slow take or file read), else false;
+-- missing_path is a remembered file that was not found on start (kept in
+-- buffers.data).
 local buffers = {}
 for slot = 1, NUM_BUFFERS do
   buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
-    empty_take = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
+    settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
 end
 -- per slot: clock that ends the recording state, then the finishing fallback
 local buffer_record_clocks = {}
@@ -459,27 +461,46 @@ function scratch_take_path(slot)
   return buffer_scratch_dir .. "buf" .. slot .. ".wav"
 end
 
+-- A take or load in the slot holds audio: loaded (a take named take <n>,
+-- its path the scratch take; a load keeps its name), and a restored slot
+-- counts in buffers_restored
+function confirm_buffer_audio(slot, is_take)
+  local buffer = buffers[slot]
+  buffer.loaded = true
+  buffer.settled_empty = false
+  if is_take then
+    buffer.name = "take " .. slot
+    buffer.path = scratch_take_path(slot)
+  end
+  if buffer.restoring then
+    buffer.restoring = false
+    buffers_restored = buffers_restored + 1
+  end
+end
+
 -- Settle a take or load awaiting the engine (confirm_since set) from the
--- slot's seconds: a take with audio is loaded (named take <n>, its path the
--- scratch take), one without leaves the slot empty (empty_take); a load
--- stays loaded only with audio; a restored slot with audio counts in
--- buffers_restored. Cancels the finishing fallback.
+-- slot's seconds (confirm_buffer_audio). Without audio a take leaves the slot
+-- empty and a load is not loaded (keeping its name); settled_empty records
+-- which, so a later report of audio still adopts it. Cancels the finishing
+-- fallback.
 function settle_buffer_slot(slot)
   local buffer = buffers[slot]
-  local has_audio = buffer.seconds > 0
+  local is_take = buffer.finishing
   buffer.confirm_since = nil
-  if buffer.finishing then
+  if is_take then
     cancel_buffer_recording_timer(slot)
     buffer.finishing = false
     buffer.recording = false
-    buffer.empty_take = not has_audio
-    buffer.name = has_audio and ("take " .. slot) or "empty"
-    buffer.path = has_audio and scratch_take_path(slot) or nil
   end
-  buffer.loaded = has_audio
-  if buffer.restoring then
-    buffer.restoring = false
-    if has_audio then buffers_restored = buffers_restored + 1 end
+  if buffer.seconds > 0 then
+    confirm_buffer_audio(slot, is_take)
+  else
+    buffer.loaded = false
+    buffer.settled_empty = is_take and "take" or "load"
+    if is_take then
+      buffer.name = "empty"
+      buffer.path = nil
+    end
   end
 end
 
@@ -529,7 +550,7 @@ function load_buffer(slot, path)
   buffer.recording = false
   buffer.finishing = false
   buffer.restoring = false
-  buffer.empty_take = false
+  buffer.settled_empty = false
   buffer.confirm_since = util.time()
   buffer.path = path
   buffer.missing_path = nil
@@ -554,7 +575,7 @@ function record_buffer(slot)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
     buffer.restoring = false
-    buffer.empty_take = false
+    buffer.settled_empty = false
     buffer.confirm_since = nil
     buffer.missing_path = nil
     buffer_record_clocks[slot] = clock.run(function()
@@ -578,7 +599,7 @@ function clear_buffer(slot)
   buffer.recording = false
   buffer.finishing = false
   buffer.restoring = false
-  buffer.empty_take = false
+  buffer.settled_empty = false
   buffer.seconds = 0
   buffer.confirm_since = nil
   buffer.path = nil
@@ -593,8 +614,8 @@ end
 
 function save_buffer(slot)
   if not valid_buffer_slot(slot) then return end
-  -- seconds comes from the engine's poll: a load that failed leaves
-  -- loaded set but no audio, and a recording reads 0 s until it completes
+  -- seconds comes from the engine's poll: a load is loaded optimistically
+  -- until the poll settles it, and a recording reads 0 s until it completes
   if buffers[slot].seconds <= 0 then
     print("buffer " .. slot .. " is empty, nothing to save")
     return
@@ -608,10 +629,10 @@ end
 -- bufferState poll: one slot per message, slot index * 100 + seconds. It
 -- also settles a take or load awaiting the engine (confirm_since set,
 -- settle_buffer_slot), on any report, repeated or not: audio settles it at
--- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take
--- that settled empty (a periodic 0 before a slow take completed) is adopted
--- when audio is reported later, as long as nothing else (load, clear, a new
--- recording) happened in the slot since.
+-- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or
+-- load that settled empty (a periodic 0 before a slow take or file read
+-- completed) is adopted when audio is reported later, as long as nothing
+-- else (load, clear, a new recording) happened in the slot since.
 local function buffer_state_changed(value)
   local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
   local slot = slot_index + 1
@@ -625,11 +646,8 @@ local function buffer_state_changed(value)
     and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
     settle_buffer_slot(slot)
     changed = true
-  elseif has_audio and buffer.empty_take then
-    buffer.empty_take = false
-    buffer.loaded = true
-    buffer.name = "take " .. slot
-    buffer.path = scratch_take_path(slot)
+  elseif has_audio and buffer.settled_empty then
+    confirm_buffer_audio(slot, buffer.settled_empty == "take")
     changed = true
   end
   -- the periodic poll repeats unchanged values: redraw only on a change
