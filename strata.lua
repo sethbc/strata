@@ -342,6 +342,9 @@ local scene_sequencer_position = 1
 local scene_sequencer_enabled = false
 local scene_sequencer_clock = nil
 local scene_transition_active = false
+-- true while recall_scene_instant sets params: the source action then leaves
+-- the full sync to the end of the recall
+local scene_recall_in_progress = false
 local scene_transition_clock = nil  -- Track transition clock for cancellation
 
 -- Arc device (the arc vport from arc.connect)
@@ -410,13 +413,31 @@ end
 -- Sample buffers. The engine holds the audio; Lua tracks what each slot
 -- holds for the screen and scenes. path is the loaded file, or the scratch
 -- take the engine writes when a recording completes (or stops early).
+-- The bufferState poll settles what the slot holds: a take is loaded only
+-- once the engine reports its seconds (recording stays set, finishing
+-- marks it, until then), and a file load, shown at once, stays loaded only
+-- if the engine reports audio. confirm_since is the util.time() of the
+-- change awaiting that report (nil = settled); restoring marks a load from
+-- load_buffers_from_disk; empty_take marks a take that settled without
+-- audio (a later report of audio adopts it); missing_path is a remembered
+-- file that was not found on start (kept in buffers.data).
 local buffers = {}
 for slot = 1, NUM_BUFFERS do
-  buffers[slot] = {name = "empty", loaded = false, recording = false, seconds = 0, path = nil}
+  buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
+    empty_take = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
 end
-local buffer_record_clocks = {}  -- per slot: clock that ends the recording state
+-- per slot: clock that ends the recording state, then the finishing fallback
+local buffer_record_clocks = {}
 local buffer_state_poll = nil
 local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
+-- confirm_seconds: a report of 0 s settles a take or load only this long
+-- after the change (the periodic poll can carry a value read before the
+-- engine finished: the recording timer ends just before the engine's take
+-- completes). fallback_seconds: a finishing take with no report at all
+-- (no bufferState poll) settles this long after it ended, from the slot's
+-- last known seconds.
+local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5}
+local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
 local buffer_audio_dir = _path.audio .. "strata/"
 local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
 
@@ -443,13 +464,45 @@ function scratch_take_path(slot)
   return buffer_scratch_dir .. "buf" .. slot .. ".wav"
 end
 
--- A take is in the slot (the recording completed or was stopped early)
+-- Settle a take or load awaiting the engine (confirm_since set) from the
+-- slot's seconds: a take with audio is loaded (named take <n>, its path the
+-- scratch take), one without leaves the slot empty (empty_take); a load
+-- stays loaded only with audio; a restored slot with audio counts in
+-- buffers_restored. Cancels the finishing fallback.
+function settle_buffer_slot(slot)
+  local buffer = buffers[slot]
+  local has_audio = buffer.seconds > 0
+  buffer.confirm_since = nil
+  if buffer.finishing then
+    cancel_buffer_recording_timer(slot)
+    buffer.finishing = false
+    buffer.recording = false
+    buffer.empty_take = not has_audio
+    buffer.name = has_audio and ("take " .. slot) or "empty"
+    buffer.path = has_audio and scratch_take_path(slot) or nil
+  end
+  buffer.loaded = has_audio
+  if buffer.restoring then
+    buffer.restoring = false
+    if has_audio then buffers_restored = buffers_restored + 1 end
+  end
+end
+
+-- The recording ended (its timer ran out or it was stopped early): the slot
+-- stays recording, finishing, until the engine reports what it captured, or
+-- BUFFER_SETTLE.fallback_seconds pass without a report
 local function finish_buffer_take(slot)
   local buffer = buffers[slot]
-  buffer.recording = false
-  buffer.loaded = true
-  buffer.name = "take " .. slot
-  buffer.path = scratch_take_path(slot)
+  buffer.finishing = true
+  buffer.confirm_since = util.time()
+  buffer_record_clocks[slot] = clock.run(function()
+    clock.sleep(BUFFER_SETTLE.fallback_seconds)
+    buffer_record_clocks[slot] = nil
+    if buffer.finishing then
+      settle_buffer_slot(slot)
+      buffer_display_changed()
+    end
+  end)
 end
 
 -- A usable sound file path: not empty, not norns' "-" (no file chosen) and
@@ -476,17 +529,25 @@ function load_buffer(slot, path)
   local buffer = buffers[slot]
   -- a scratch take restored on start keeps its take name
   buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
+  -- shown at once; the engine's report settles loaded (buffer_state_changed)
   buffer.loaded = true
   buffer.recording = false
+  buffer.finishing = false
+  buffer.restoring = false
+  buffer.empty_take = false
+  buffer.confirm_since = util.time()
   buffer.path = path
+  buffer.missing_path = nil
   buffer_display_changed()
 end
 
 -- Record the live input into a slot for record_duration seconds, or, if the
--- slot is already recording, stop early and keep what was captured
+-- slot is already recording, stop early and keep what was captured. A take
+-- that has ended and waits for the engine (finishing) ignores the press.
 function record_buffer(slot)
   if not valid_buffer_slot(slot) then return end
   local buffer = buffers[slot]
+  if buffer.finishing then return end
   cancel_buffer_recording_timer(slot)
   if buffer.recording then
     engine.stopRecord(slot - 1)
@@ -497,6 +558,10 @@ function record_buffer(slot)
     set_buffer_file_param(slot, _path.audio)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
+    buffer.restoring = false
+    buffer.empty_take = false
+    buffer.confirm_since = nil
+    buffer.missing_path = nil
     buffer_record_clocks[slot] = clock.run(function()
       clock.sleep(duration)
       buffer_record_clocks[slot] = nil
@@ -516,8 +581,13 @@ function clear_buffer(slot)
   buffer.name = "empty"
   buffer.loaded = false
   buffer.recording = false
+  buffer.finishing = false
+  buffer.restoring = false
+  buffer.empty_take = false
   buffer.seconds = 0
+  buffer.confirm_since = nil
   buffer.path = nil
+  buffer.missing_path = nil
   buffer_display_changed()
 end
 
@@ -540,16 +610,36 @@ function save_buffer(slot)
   print("buffer " .. slot .. " saved to " .. path)
 end
 
--- bufferState poll: one slot per message, slot index * 100 + seconds
+-- bufferState poll: one slot per message, slot index * 100 + seconds. It
+-- also settles a take or load awaiting the engine (confirm_since set,
+-- settle_buffer_slot), on any report, repeated or not: audio settles it at
+-- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take
+-- that settled empty (a periodic 0 before a slow take completed) is adopted
+-- when audio is reported later, as long as nothing else (load, clear, a new
+-- recording) happened in the slot since.
 local function buffer_state_changed(value)
   local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
   local slot = slot_index + 1
   if not valid_buffer_slot(slot) then return end
   local seconds = value - slot_index * BUFFER_STATE_STRIDE
+  local buffer = buffers[slot]
+  local changed = buffer.seconds ~= seconds
+  buffer.seconds = seconds
+  local has_audio = seconds > 0
+  if buffer.confirm_since ~= nil
+    and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
+    settle_buffer_slot(slot)
+    changed = true
+  elseif has_audio and buffer.empty_take then
+    buffer.empty_take = false
+    buffer.loaded = true
+    buffer.name = "take " .. slot
+    buffer.path = scratch_take_path(slot)
+    changed = true
+  end
   -- the periodic poll repeats unchanged values: redraw only on a change
-  if buffers[slot].seconds == seconds then return end
-  buffers[slot].seconds = seconds
-  redraw()  -- the BUFFER page shows the seconds
+  if not changed then return end
+  redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
   if grid_page == 4 then grid_redraw() end
 end
 
@@ -851,9 +941,11 @@ end
 -- restores it after a bypass
 local fx_filter_last_mix = 1
 
--- The filter and delay params are faders on the 256 grid's FX page
+-- The filter and delay params are faders on the 256 grid's FX page. A scene
+-- transition sets them on every step and redraws the grid once per step
+-- itself.
 local function fx_fader_changed()
-  if grid_page == 4 then grid_redraw() end
+  if grid_page == 4 and not scene_transition_active then grid_redraw() end
 end
 
 function init()
@@ -1291,14 +1383,15 @@ function add_voice_params(voice_idx)
   -- (a stopped voice only records it; voiceOn then builds the right synths)
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_source",
+    id = prefix .. "source",
     name = "source",
     options = SOURCE_OPTIONS,
     default = v.source,
     action = function(x)
       voices[voice_idx].source = x
       engine.setGrainSource(voice_idx - 1, x - 1)
-      if voices[voice_idx].active then
+      -- a scene recall syncs once, after it has set every param
+      if voices[voice_idx].active and not scene_recall_in_progress then
         sync_voice_values_to_engine(voice_idx)
       end
       -- the grid fader list follows the source (buffer or synth params)
@@ -1312,7 +1405,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_pos",
+    id = prefix .. "buf_pos",
     name = "buffer position",
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
@@ -1330,7 +1423,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_rate",
+    id = prefix .. "buf_rate",
     name = "buffer rate",
     controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
     action = function(x)
@@ -1344,7 +1437,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_buf_scan",
+    id = prefix .. "buf_scan",
     name = "buffer scan",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
     action = function(x)
@@ -1358,7 +1451,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_size",
+    id = prefix .. "grain_size",
     name = "grain size",
     controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
     action = function(x)
@@ -1372,7 +1465,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_density",
+    id = prefix .. "grain_density",
     name = "grain density",
     controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density),
     action = function(x)
@@ -1386,7 +1479,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_pitch",
+    id = prefix .. "grain_pitch",
     name = "grain pitch",
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
@@ -1404,7 +1497,7 @@ function add_voice_params(voice_idx)
   
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_grain_spread",
+    id = prefix .. "grain_spread",
     name = "position spread",
     controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
     action = function(x)
@@ -1418,7 +1511,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_grain_env",
+    id = prefix .. "grain_env",
     name = "grain envelope",
     options = GRAIN_ENV_OPTIONS,
     default = v.grain.env,
@@ -1432,7 +1525,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "option",
-    id = "v" .. voice_idx .. "_grain_mode",
+    id = prefix .. "grain_mode",
     name = "grain mode",
     options = GRAIN_MODE_OPTIONS,
     default = v.grain.mode,
@@ -1450,7 +1543,7 @@ function add_voice_params(voice_idx)
   -- Slot 1
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_1",
+    id = prefix .. "mod_source_1",
     name = "mod source 1",
     min = 0,
     max = NUM_VOICES,
@@ -1472,7 +1565,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_1",
+    id = prefix .. "mod_amp_amt_1",
     name = "amp mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
     action = function(x)
@@ -1484,7 +1577,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_1",
+    id = prefix .. "mod_freq_amt_1",
     name = "freq mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
     action = function(x)
@@ -1497,7 +1590,7 @@ function add_voice_params(voice_idx)
   -- Slot 2
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_2",
+    id = prefix .. "mod_source_2",
     name = "mod source 2",
     min = 0,
     max = NUM_VOICES,
@@ -1519,7 +1612,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_2",
+    id = prefix .. "mod_amp_amt_2",
     name = "amp mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
     action = function(x)
@@ -1531,7 +1624,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_2",
+    id = prefix .. "mod_freq_amt_2",
     name = "freq mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
     action = function(x)
@@ -1544,7 +1637,7 @@ function add_voice_params(voice_idx)
   -- Slot 3
   params:add{
     type = "number",
-    id = "v" .. voice_idx .. "_mod_source_3",
+    id = prefix .. "mod_source_3",
     name = "mod source 3",
     min = 0,
     max = NUM_VOICES,
@@ -1566,7 +1659,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_amp_amt_3",
+    id = prefix .. "mod_amp_amt_3",
     name = "amp mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
     action = function(x)
@@ -1578,7 +1671,7 @@ function add_voice_params(voice_idx)
 
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_freq_amt_3",
+    id = prefix .. "mod_freq_amt_3",
     name = "freq mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
     action = function(x)
@@ -1591,7 +1684,7 @@ function add_voice_params(voice_idx)
   -- Global mod speed (shared across all slots)
   params:add{
     type = "control",
-    id = "v" .. voice_idx .. "_mod_speed",
+    id = prefix .. "mod_speed",
     name = "mod speed",
     controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
     action = function(x)
@@ -1642,7 +1735,8 @@ function toggle_voice(voice_idx)
       voice.params.amp,
       voice.params.pan or 0,
       voice.grain.size,
-      voice.grain.density * master_density,
+      -- the values the engine has (as the grain density sender sends them)
+      engine_param_value("v" .. voice_idx .. "_grain_density") * engine_param_value("master_density"),
       voice.grain.pitch
     )
     sync_voice_to_engine(voice_idx)
@@ -1740,26 +1834,30 @@ function randomize_voice(voice_idx)
   grid_redraw()
 end
 
+-- One step of the drift's walk: a random step of width step (+/- step / 2)
+-- plus a pull back toward base, removing reversion of the offset per step
+function mean_reverting_step(current, base, step, reversion)
+  return current + ((math.random() - 0.5) * step - (current - base) * reversion)
+end
+
 function drift_update()
   -- Slow grain pitch drift for active, non-frozen voices: a small random
   -- step plus a pull back toward the last user/scene/mutation-set pitch, so
   -- the walk stays a subtle detune instead of wandering to the rails
   for i = 1, NUM_VOICES do
     if voices[i].active and not frozen[i] then
-      local current = voices[i].grain.pitch
-      local delta = (math.random() - 0.5) * DRIFT_PITCH_STEP
-        - (current - grain_pitch_base[i]) * DRIFT_PITCH_REVERSION
+      local pitch = mean_reverting_step(voices[i].grain.pitch, grain_pitch_base[i],
+        DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
       drift_writing = true
-      params:set("v" .. i .. "_grain_pitch", util.clamp(current + delta, 0.25, 4))
+      params:set("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
       drift_writing = false
 
       -- Buffer sources also drift their position the same way
       if voice_uses_buffer(i) then
-        local position = voices[i].grain.buf_pos
-        local position_delta = (math.random() - 0.5) * DRIFT_BUF_POS_STEP
-          - (position - buf_pos_base[i]) * DRIFT_BUF_POS_REVERSION
+        local position = mean_reverting_step(voices[i].grain.buf_pos, buf_pos_base[i],
+          DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
         drift_writing = true
-        params:set("v" .. i .. "_buf_pos", util.clamp(position + position_delta, 0, 1))
+        params:set("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
         drift_writing = false
       end
     end
@@ -1774,6 +1872,15 @@ function drift_update()
   -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
   forget_keys_held_through_menu()
 end
+
+-- voices[i].grain keys holding an option index rather than a continuous
+-- value, mapped to their option count: smooth transitions switch them at the
+-- end instead of crossfading, mutation never touches them, and scenes must
+-- store integers from 1 to the option count
+local DISCRETE_GRAIN_KEYS = {
+  env = #GRAIN_ENV_OPTIONS,
+  mode = #GRAIN_MODE_OPTIONS
+}
 
 -- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
 local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
@@ -1813,7 +1920,7 @@ function gentle_mutate()
         -- synthesis params. Input sources mutate only the grain params
         -- below. The source itself never mutates.
         for _, key in ipairs(BUFFER_MUTATION_KEYS) do
-          if math.random() < probability then
+          if not DISCRETE_GRAIN_KEYS[key] and math.random() < probability then
             local param_id = "v" .. i .. "_" .. key
             local spec = params:lookup_param(param_id).controlspec
             -- delta across the normalized range, so exp buf_rate moves evenly
@@ -1823,24 +1930,20 @@ function gentle_mutate()
         end
       end
 
-      -- Occasionally mutate granular parameters (lower probability). The
-      -- discrete ones (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
-      if math.random() < probability * 0.5 then
-        local grain_size = v.grain.size
-        local size_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.2
-        params:set("v" .. i .. "_grain_size", util.clamp(grain_size + size_delta, 0.01, 0.5))
-      end
-
-      if math.random() < probability * 0.3 then
-        local grain_pitch = v.grain.pitch
-        local pitch_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 1.0
-        params:set("v" .. i .. "_grain_pitch", util.clamp(grain_pitch + pitch_delta, 0.25, 4))
-      end
-
-      if math.random() < probability * 0.2 then
-        local grain_spread = v.grain.spread
-        local spread_delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * 0.3
-        params:set("v" .. i .. "_grain_spread", util.clamp(grain_spread + spread_delta, 0, 1))
+      -- Occasionally mutate granular parameters (lower probability: a
+      -- fraction of it, and a delta scale, per key). The discrete ones
+      -- (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
+      for _, mutation in ipairs({
+        {key = "size", param = "grain_size", chance = 0.5, scale = 0.2},
+        {key = "pitch", param = "grain_pitch", chance = 0.3, scale = 1.0},
+        {key = "spread", param = "grain_spread", chance = 0.2, scale = 0.3}
+      }) do
+        if not DISCRETE_GRAIN_KEYS[mutation.key] and math.random() < probability * mutation.chance then
+          local param_id = "v" .. i .. "_" .. mutation.param
+          local spec = params:lookup_param(param_id).controlspec
+          local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * mutation.scale
+          params:set(param_id, util.clamp(v.grain[mutation.key] + delta, spec.minval, spec.maxval))
+        end
       end
     end
   end
@@ -1918,15 +2021,6 @@ local GRAIN_PARAM_IDS = {
   buf_pos = "buf_pos",
   buf_rate = "buf_rate",
   buf_scan = "buf_scan"
-}
-
--- voices[i].grain keys holding an option index rather than a continuous
--- value, mapped to their option count: smooth transitions switch them at the
--- end instead of crossfading, mutation never touches them, and scenes must
--- store integers from 1 to the option count
-local DISCRETE_GRAIN_KEYS = {
-  env = #GRAIN_ENV_OPTIONS,
-  mode = #GRAIN_MODE_OPTIONS
 }
 
 local SCENE_TRANSITION_STEPS = 20
@@ -2139,43 +2233,62 @@ function recall_scene(scene_num, transition_time)
 end
 
 -- Apply a scene immediately. The scene must have passed validate_scene.
+-- A voice whose source changes gets one full sync after all its params are
+-- set (not the source action's, which would send the old values first); a
+-- voice the recall starts is synced by toggle_voice instead.
 function recall_scene_instant(scene_num)
   local scene_data = scenes[scene_num].data
+  local source_changed = {}
+  scene_recall_in_progress = true
+  -- the flag must not outlive an error in a param action: clear it, then
+  -- raise the error again
+  local recalled, recall_error = pcall(function()
+    -- Restore global parameters
+    for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+      params:set(global.id, scene_data[global.id])
+    end
 
-  -- Restore global parameters
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    params:set(global.id, scene_data[global.id])
-  end
+    -- Restore voice states
+    for i = 1, NUM_VOICES do
+      local voice_data = scene_data.voices[i]
+      local prefix = "v" .. i .. "_"
 
-  -- Restore voice states
+      local previous_source = voices[i].source
+      params:set(prefix .. "source", voice_data.source)
+      source_changed[i] = voices[i].source ~= previous_source
+
+      for key, value in pairs(voice_data.params) do
+        params:set(prefix .. key, value)
+      end
+
+      for key, value in pairs(voice_data.grain) do
+        params:set(prefix .. GRAIN_PARAM_IDS[key], value)
+      end
+
+      -- Restore crossmod slots
+      for slot = 1, NUM_MOD_SLOTS do
+        local slot_data = voice_data.crossmod["slot" .. slot]
+        params:set(prefix .. "mod_source_" .. slot, slot_data.source)
+        params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+        params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+      end
+      params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
+
+      frozen[i] = scene_data.frozen[i]
+
+      -- Start/stop voices last: toggle_voice syncs the restored state
+      if voice_data.active ~= voices[i].active then
+        toggle_voice(i)
+        source_changed[i] = false
+      end
+    end
+  end)
+  scene_recall_in_progress = false
+  if not recalled then error(recall_error, 0) end
+
   for i = 1, NUM_VOICES do
-    local voice_data = scene_data.voices[i]
-    local prefix = "v" .. i .. "_"
-
-    params:set(prefix .. "source", voice_data.source)
-
-    for key, value in pairs(voice_data.params) do
-      params:set(prefix .. key, value)
-    end
-
-    for key, value in pairs(voice_data.grain) do
-      params:set(prefix .. GRAIN_PARAM_IDS[key], value)
-    end
-
-    -- Restore crossmod slots
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      params:set(prefix .. "mod_source_" .. slot, slot_data.source)
-      params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-      params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-    end
-    params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-    frozen[i] = scene_data.frozen[i]
-
-    -- Start/stop voices last: toggle_voice syncs the restored state
-    if voice_data.active ~= voices[i].active then
-      toggle_voice(i)
+    if source_changed[i] and voices[i].active then
+      sync_voice_values_to_engine(i)
     end
   end
 
@@ -2350,15 +2463,16 @@ end
 local buffer_data_file = scene_data_dir .. "buffers.data"
 -- Set when a buffers file could not be loaded and could not be moved aside
 local buffer_autosave_blocked = false
-local buffers_restored = 0  -- slots reloaded by the last load_buffers_from_disk (SETUP page)
 
 function save_buffers_to_disk()
   if util.file_exists(scene_data_dir) == false then
     util.make_dir(scene_data_dir)
   end
+  -- a remembered file that was missing on start is kept (it may be on a
+  -- drive that is mounted again later)
   local paths = {}
   for slot = 1, NUM_BUFFERS do
-    paths[slot] = buffers[slot].path or ""
+    paths[slot] = buffers[slot].path or buffers[slot].missing_path or ""
   end
   tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file)
   print("buffer paths saved to " .. buffer_data_file)
@@ -2371,9 +2485,12 @@ local function preserve_unloadable_buffer_file()
 end
 
 -- Reload each remembered path that still exists through load_buffer. A
--- missing or damaged file loads nothing and never stops init.
+-- missing or damaged file loads nothing and never stops init. A slot counts
+-- in buffers_restored once the engine reports audio in it
+-- (buffer_state_changed); a missing file's path is kept for the next save.
 function load_buffers_from_disk()
   buffers_restored = 0
+  buffer_autosave_blocked = false
   if not util.file_exists(buffer_data_file) then
     print("no saved buffers file found")
     return
@@ -2398,20 +2515,23 @@ function load_buffers_from_disk()
     return
   end
 
+  local reloading = 0
   for slot = 1, NUM_BUFFERS do
     local path = loaded.paths[slot]
     if is_sound_file_path(path) then
-      -- the file may have been deleted, or a take never written
+      -- the file may have been deleted or be on an unmounted drive, or a
+      -- take was never written
       if util.file_exists(path) then
         load_buffer(slot, path)
-        buffers_restored = buffers_restored + 1
+        buffers[slot].restoring = true
+        reloading = reloading + 1
       else
-        print("buffer " .. slot .. ": " .. path .. " not found, not restored")
+        buffers[slot].missing_path = path
+        print("buffer " .. slot .. ": " .. path .. " not found, not restored (kept for the next start)")
       end
     end
   end
-  buffer_autosave_blocked = false
-  print(buffers_restored .. " buffers restored from " .. buffer_data_file)
+  print(reloading .. " buffers reloading from " .. buffer_data_file)
 end
 
 -- Check that one scene slot holds everything recall_scene_instant reads
@@ -2664,8 +2784,18 @@ function redraw_setup()
   screen.text("arc: " .. (arc_connected and "connected" or "none"))
   screen.move(0, 36)
   screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
+  -- restored = confirmed by the engine; missing files are remembered paths
+  -- not found on start ("restored" becomes "ok" to fit beside them)
+  local buffers_missing = 0
+  for slot = 1, NUM_BUFFERS do
+    if buffers[slot].missing_path then buffers_missing = buffers_missing + 1 end
+  end
   screen.move(0, 42)
-  screen.text("buffers: " .. buffers_restored .. " restored")
+  if buffers_missing > 0 then
+    screen.text("buffers: " .. buffers_restored .. " ok, " .. buffers_missing .. " missing")
+  else
+    screen.text("buffers: " .. buffers_restored .. " restored")
+  end
   -- the selected MIDI port and its device (cut to the screen width), then the channel mode
   local midi_prefix = "midi " .. params:get("midi_device") .. ": "
   screen.move(0, 48)
@@ -3002,7 +3132,10 @@ function redraw_buffer()
   if BUFFER_PAGE.flash_text and util.time() < BUFFER_PAGE.flash_until then
     draw_hints(BUFFER_PAGE.flash_text)
   elseif voice_slot then
-    draw_hints("K2:load K3:" .. (buffers[voice_slot].recording and "stop" or "rec") .. " K2+3:save")
+    -- "..." while a take that ended waits for the engine (K3 does nothing)
+    local voice_buffer = buffers[voice_slot]
+    local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
+    draw_hints("K2:load K3:" .. record_hint .. " K2+3:save")
   else
     -- K2 and K3 need a buffer source; E3 picks one
     draw_hints("K2:- K3:- E3:source")

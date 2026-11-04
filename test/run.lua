@@ -270,6 +270,18 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
   end
 end)
 
+test("voiceOn's grain density is the voice's density times master density as the engine has them", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = local_value("voices")
+  if voices[5].active then toggle_voice(5) end
+  params:set("v5_grain_density", 20); params:set("master_density", 1.5)
+  -- as LFOs on both params would have left them
+  local sent_values = local_value("engine_param_values")
+  sent_values.master_density = 0.5; sent_values.v5_grain_density = 30
+  context.clear_engine_calls(); toggle_voice(5)
+  assert_near(context.calls_named("voiceOn")[1].args[6], 15, 1e-9, "voiceOn grainDensity")
+end)
+
 test("grain envelope option reaches the engine and is synced on start", function()
   local context = load_strata(); context.clock.advance()
   params:set("v1_grain_env", 3)
@@ -863,6 +875,110 @@ test("a smooth scene transition holds filter_type until the fade ends", function
   assert_equal(params:get("filter_type"), 3, "filter_type lands on the target")
   assert_equal(last_filter_type(), 2, "engine filter type lands on the target")
   assert_near(params:get("filter_freq"), 8000, 1.0, "the filter freq faded to its target")
+end)
+
+test("scene recall: one full sync per voice whose source changed, after its params", function()
+  -- every engine call since the script loaded, for each running voice, must
+  -- leave the engine with the voice's Lua state
+  local function assert_engine_has_lua_state(context, where)
+    local voices = local_value("voices")
+    local master = params:get("master_density")
+    for voice_idx = 1, 7 do
+      local voice = voices[voice_idx]
+      if voice.active then
+        local label = where .. ": voice " .. voice_idx .. " "
+        local sent = engine_state_for_voice(context.engine_calls, voice_idx - 1)
+        for key, value in pairs(voice.params) do
+          assert_near(sent.voice[key], value, 1e-9, label .. key)
+        end
+        assert_near(sent.grain.grainSize, voice.grain.size, 1e-9, label .. "grainSize")
+        assert_near(sent.grain.grainDensity, voice.grain.density * master, 1e-9, label .. "grainDensity")
+        assert_near(sent.grain.pitchShift, voice.grain.pitch, 1e-9, label .. "pitchShift")
+        assert_near(sent.grain.posSpread, voice.grain.spread, 1e-9, label .. "posSpread")
+        assert_equal(sent.grain.envShape, voice.grain.env - 1, label .. "envShape")
+        assert_equal(sent.grain.grainMode, voice.grain.mode - 1, label .. "grainMode")
+        assert_near(sent.grain.bufPos, voice.grain.buf_pos, 1e-9, label .. "bufPos")
+        assert_near(sent.grain.bufRate, voice.grain.buf_rate, 1e-9, label .. "bufRate")
+        assert_near(sent.grain.bufScan, voice.grain.buf_scan, 1e-9, label .. "bufScan")
+        for slot = 1, 3 do
+          local slot_state = voice.crossmod["slot" .. slot]
+          assert_equal(sent.source[slot], slot_state.source == 0 and -1 or slot_state.source - 1, label .. "mod source " .. slot)
+          assert_near(sent.amp_amt[slot], slot_state.amp_amt, 1e-9, label .. "amp mod " .. slot)
+          assert_near(sent.freq_amt[slot], slot_state.freq_amt, 1e-9, label .. "freq mod " .. slot)
+        end
+        assert_near(sent.speed, voice.crossmod.speed, 1e-9, label .. "mod speed")
+        local grain_sources = {}
+        for _, call in ipairs(context.calls_named("setGrainSource")) do
+          if call.args[1] == voice_idx - 1 then table.insert(grain_sources, call.args[2]) end
+        end
+        assert_equal(grain_sources[#grain_sources], voice.source - 1, label .. "grain source")
+      end
+    end
+  end
+  -- a full sync (sync_voice_values_to_engine) ends with the voice's bend.
+  -- MIDI pitchbend also sends setVoiceParam "bend", so this test must not
+  -- send any pitchbend, or it would count as a sync
+  local function full_syncs(context, first_call, engine_voice)
+    local count, last_sync, last_call = 0, nil, nil
+    for index = first_call, #context.engine_calls do
+      local call = context.engine_calls[index]
+      if call.args[1] == engine_voice then
+        last_call = index
+        if call.name == "setVoiceParam" and call.args[2] == "bend" then
+          count = count + 1; last_sync = index
+        end
+      end
+    end
+    return count, last_sync, last_call
+  end
+
+  for _, transition_time in ipairs({ 0, 4 }) do
+    local where = transition_time == 0 and "instant recall" or "smooth transition"
+    local context = load_strata(); context.clock.advance()
+    local voices = local_value("voices")
+    for voice_idx = 1, 7 do
+      if voices[voice_idx].active ~= (voice_idx <= 3) then toggle_voice(voice_idx) end
+    end
+    scramble_state(11)
+    params:set("v1_source", 1); params:set("v2_source", 3)
+    capture_scene(1)                     -- voices 1-3 running, v1 synth, v2 buf 2
+    scramble_state(23)
+    params:set("v1_source", 4)           -- v1's source differs from the scene's
+    params:set("v2_source", 3)           -- v2's is the scene's
+    toggle_voice(3); toggle_voice(4)     -- the recall starts voice 3 and stops voice 4
+
+    local first_call = #context.engine_calls + 1
+    recall_scene(1, transition_time)
+    for _ = 1, 25 do context.clock.advance() end
+    assert_equal(local_value("scene_transition_active"), false, where .. " finished")
+
+    local syncs, last_sync, last_call = full_syncs(context, first_call, 0)
+    assert_equal(syncs, 1, where .. ": voice 1 (source changed) gets one full sync")
+    assert_equal(last_sync, last_call, where .. ": voice 1's full sync comes after its recalled params")
+    assert_equal((full_syncs(context, first_call, 1)), 0, where .. ": voice 2 (same source) gets no full sync")
+    assert_equal((full_syncs(context, first_call, 2)), 1, where .. ": voice 3 (started) gets toggle_voice's sync only")
+    assert_equal((full_syncs(context, first_call, 3)), 0, where .. ": voice 4 (stopped) gets none")
+    assert_equal(local_value("scene_recall_in_progress"), false, where .. ": flag cleared")
+    assert_engine_has_lua_state(context, where)
+  end
+end)
+
+test("an error during a scene recall clears scene_recall_in_progress and is raised", function()
+  local context = load_strata(); context.clock.advance()   -- voices 1 and 2 running
+  params:set("v2_mod_speed", 3); capture_scene(1)
+  params:set("v2_mod_speed", 7)
+  params:set_action("v2_mod_speed", function() error("mod speed action failed") end)
+  local ok, recall_error = pcall(recall_scene, 1, 0)
+  assert_true(not ok, "the error reaches the caller")
+  assert_true(tostring(recall_error):find("mod speed action failed", 1, true), "the original error: " .. tostring(recall_error))
+  assert_equal(local_value("scene_recall_in_progress"), false, "flag cleared after the error")
+  -- the source action syncs a running voice again
+  context.clear_engine_calls(); params:set("v1_source", 3)
+  local bends = 0
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "bend" then bends = bends + 1 end
+  end
+  assert_equal(bends, 1, "a later source switch sends its full sync")
 end)
 
 local text_width = stubs.text_width
@@ -1481,6 +1597,29 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
   -- FX changes made elsewhere move the faders
   params:set("delay_mix", 1)
   assert_equal(device:get_led(16, 7), 15, "delay mix fader follows a param change")
+end)
+
+test("a scene transition redraws the grid once per step on grid page 4", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.grid.plug(1, 16, 16)
+  context.grid.press(1, 16, 8, 1)              -- page 4: the FX faders
+  local fx = { filter_freq = 1000, filter_res = 0.2, filter_mix = 0.6, delay_time = 0.8,
+    delay_feedback = 0.7, delay_mix = 0.5 }
+  for id, value in pairs(fx) do params:set(id, value) end
+  capture_scene(1)
+  for id, value in pairs(fx) do params:set(id, value / 2) end
+  recall_scene(1, 4)                           -- step 1 runs now
+  for step = 2, 20 do
+    local refreshes = device.refresh_count
+    context.clock.advance()
+    assert_equal(device.refresh_count - refreshes, 1, "one grid redraw at step " .. step)
+  end
+  context.clock.advance()                      -- the end: the instant recall
+  assert_near(params:get("filter_freq"), 1000, 1, "transition landed")
+  -- outside a transition each FX change still moves the faders at once
+  local refreshes = device.refresh_count
+  params:set("delay_mix", 0.1)
+  assert_equal(device.refresh_count - refreshes, 1, "an FX edit redraws the grid")
 end)
 
 ---------------------------------------------------------------------------
@@ -2109,6 +2248,27 @@ test("randomize and mutate touch buffer params, never source", function()
   end
 end)
 
+test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
+  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
+  math.randomseed(13)
+  for _ = 1, 50 do gentle_mutate() end
+  assert_equal(params:get("v1_grain_env"), 3, "envelope shape never mutates")
+  assert_equal(params:get("v1_grain_mode"), 2, "grain mode never mutates")
+  -- the guard is the table: any grain key marked discrete is left alone
+  local discrete = local_value("DISCRETE_GRAIN_KEYS")
+  for _, key in ipairs({ "size", "pitch", "spread", "buf_pos", "buf_rate", "buf_scan" }) do discrete[key] = 1 end
+  for _, source in ipairs({ 1, 2, 10 }) do   -- synth, buffer, input
+    params:set("v1_source", source)
+    local before = deep_copy(local_value("voices")[1].grain)
+    for _ = 1, 20 do gentle_mutate() end
+    for key, value in pairs(before) do
+      assert_equal(local_value("voices")[1].grain[key], value, "source " .. source .. ": grain " .. key .. " skipped")
+    end
+  end
+end)
+
 test("buffer position drifts subtly and reverts to the user-set position", function()
   local context = load_strata(); context.clock.advance()   -- voice 1 running
   assert_true(local_value("voices")[1].active, "voice 1 on")
@@ -2130,6 +2290,24 @@ test("buffer position drifts subtly and reverts to the user-set position", funct
   params:set("v1_source", 1); local pos = params:get("v1_buf_pos")
   for _ = 1, 100 do drift_update() end
   assert_equal(params:get("v1_buf_pos"), pos, "synth source: no position drift")
+end)
+
+test("mean_reverting_step: one random step plus a pull toward the base, used by both drifts", function()
+  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  math.randomseed(5); local random = math.random()
+  math.randomseed(5)
+  assert_near(mean_reverting_step(1.2, 1.0, 0.004, 0.01), 1.2 + (random - 0.5) * 0.004 - 0.2 * 0.01, 1e-12,
+    "current + (random - 0.5) * step - (current - base) * reversion")
+  -- drift_update's grain pitch and buffer position steps are exactly that
+  params:set("v1_source", 2); params:set("v1_grain_pitch", 1.5); params:set("v1_buf_pos", 0.4)
+  for _ = 1, 50 do drift_update() end
+  local pitch, position = params:get("v1_grain_pitch"), params:get("v1_buf_pos")
+  math.randomseed(9); local pitch_random = math.random(); local position_random = math.random()
+  math.randomseed(9); drift_update()
+  assert_near(params:get("v1_grain_pitch"), pitch + (pitch_random - 0.5) * 0.004 - (pitch - 1.5) * 0.01, 1e-12,
+    "grain pitch drift step")
+  assert_near(params:get("v1_buf_pos"), position + (position_random - 0.5) * 0.002 - (position - 0.4) * 0.01, 1e-12,
+    "buffer position drift step")
 end)
 
 test("transition skips discrete voice fields; scenes keep source and buffer params", function()
@@ -2220,7 +2398,9 @@ test("buffer triggers call the engine and track recording state", function()
   local call = context.calls_named("recordBuffer")[1]
   assert_equal(call.args[1], 2); assert_near(call.args[2], 2, 1e-9); assert_near(call.args[3], 1, 1e-9)
   assert_true(local_value("buffers")[3].recording)
-  context.clock.advance(); assert_true(not local_value("buffers")[3].recording)
+  context.clock.advance(); assert_true(local_value("buffers")[3].recording, "finishing until the engine reports")
+  context.polls.fire("bufferState", 202)  -- the engine reports the take
+  assert_true(not local_value("buffers")[3].recording)
   assert_equal(local_value("buffers")[3].name, "take 3"); assert_true(local_value("buffers")[3].loaded)
   assert_equal(local_value("buffers")[3].path, _path.audio .. "strata/scratch/buf3.wav", "scratch take path")
   params:set("buf3_file", "/tmp/a.wav"); assert_equal(context.calls_named("loadBuffer")[1].args[2], "/tmp/a.wav")
@@ -2248,6 +2428,7 @@ test("recording again stops early; clear and load cancel the timer", function()
   assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
   assert_equal(context.calls_named("stopRecord")[1].args[1], 1)
   assert_equal(#context.calls_named("recordBuffer"), 0, "and does not start a new one")
+  context.polls.fire("bufferState", 101)  -- the engine reports what was captured
   assert_true(not buffers[2].recording); assert_true(buffers[2].loaded); assert_equal(buffers[2].name, "take 2")
   local pending = context.clock.pending_count()
   record_buffer(2); assert_equal(context.clock.pending_count(), pending + 1, "new recording timer")
@@ -2266,6 +2447,119 @@ test("recording again stops early; clear and load cancel the timer", function()
   cleanup()
   assert_equal(context.clock.pending_count(), 0, "no recording timer left")
   assert_true(not context.polls.polls.bufferState.running, "bufferState poll stopped")
+end)
+
+test("a take or a load is confirmed by the engine's bufferState report", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  local function hint()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.x == 0 and entry.y == HINT_ROW_Y then return entry.text end
+    end
+  end
+  -- a take that ran its full duration
+  params:set("record_duration", 2)
+  record_buffer(3)
+  context.clock.advance()                       -- the recording timer ends
+  assert_true(buffers[3].recording, "finishing: still shown as recording")
+  assert_true(not buffers[3].loaded, "not loaded before the engine reports it")
+  assert_equal(buffers[3].name, "empty", "no take name yet")
+  params:set("v1_source", 4); show_page(4)      -- voice 1 reads buf 3
+  assert_equal(hint(), "K2:load K3:... K2+3:save", "BUFFER hint while finishing")
+  context.clear_engine_calls(); record_buffer(3)
+  assert_equal(#context.engine_calls, 0, "a press while finishing sends nothing (no new take, no stop)")
+  assert_true(buffers[3].recording, "and changes nothing")
+  context.polls.fire("bufferState", 200)        -- a periodic 0 s sent before the take completed
+  assert_true(buffers[3].recording and not buffers[3].loaded, "0 s inside the settle time is not the outcome")
+  context.polls.fire("bufferState", 202)        -- the engine reports the take
+  assert_true(not buffers[3].recording, "finished"); assert_true(buffers[3].loaded, "loaded")
+  assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
+  show_page(4)
+  assert_equal(hint(), "K2:load K3:rec K2+3:save", "hint back to rec")
+
+  -- stopped within the start-up window: the engine captured nothing
+  record_buffer(4); record_buffer(4)
+  assert_equal(#context.calls_named("stopRecord"), 1, "the stop is sent")
+  assert_true(buffers[4].recording and not buffers[4].loaded, "finishing after the stop")
+  context.set_time(5)                           -- past the settle time
+  context.polls.fire("bufferState", 300)
+  assert_true(not buffers[4].recording, "settled"); assert_true(not buffers[4].loaded, "nothing captured: empty")
+  assert_equal(buffers[4].name, "empty"); assert_equal(buffers[4].path, nil)
+  context.clear_engine_calls(); record_buffer(4)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "an empty slot records again")
+
+  -- a file load shows its name at once; 0 s after the settle time clears loaded
+  load_buffer(5, "/tmp/unreadable.wav")
+  assert_true(buffers[5].loaded, "optimistic load"); assert_equal(buffers[5].name, "unreadable.wav")
+  context.polls.fire("bufferState", 400)
+  assert_true(buffers[5].loaded, "0 s inside the settle time keeps the load")
+  context.set_time(10); context.polls.fire("bufferState", 400)
+  assert_true(not buffers[5].loaded, "the engine has no audio: not loaded")
+  assert_equal(buffers[5].name, "unreadable.wav", "the name stays")
+  load_buffer(6, "/tmp/fine.wav"); context.polls.fire("bufferState", 503.5)
+  assert_true(buffers[6].loaded, "audio reported: loaded"); assert_near(buffers[6].seconds, 3.5, 1e-9)
+end)
+
+test("a take settled empty adopts audio the engine reports later; a clear wins", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  params:set("record_duration", 2)
+  record_buffer(3); context.clock.advance()     -- the timer ends; the engine is slow
+  context.set_time(5); context.polls.fire("bufferState", 200)
+  assert_equal(buffers[3].name, "empty", "a periodic 0 after the settle time empties the slot")
+  context.polls.fire("bufferState", 202)        -- the take completes late
+  assert_true(buffers[3].loaded, "the late take is adopted"); assert_equal(buffers[3].name, "take 3")
+  assert_equal(buffers[3].path, scratch_take_path(3), "with the scratch take path")
+  context.polls.fire("bufferState", 202); context.polls.fire("bufferState", 203)
+  assert_equal(buffers[3].name, "take 3", "later reports leave it a take")
+  -- a slot cleared after an empty take is not brought back by a report
+  record_buffer(4); record_buffer(4)
+  context.set_time(10); context.polls.fire("bufferState", 300)
+  assert_equal(buffers[4].name, "empty")
+  clear_buffer(4); context.polls.fire("bufferState", 302)
+  assert_true(not buffers[4].loaded, "clear wins"); assert_equal(buffers[4].path, nil)
+  -- nor is a slot whose last event was a load or a new recording
+  record_buffer(5); record_buffer(5)
+  context.set_time(15); context.polls.fire("bufferState", 400)
+  record_buffer(5); context.polls.fire("bufferState", 401)
+  assert_true(buffers[5].recording, "a new recording is not adopted as the old take")
+  assert_true(not buffers[5].finishing)
+end)
+
+test("a finishing take settles from the last known seconds when no report comes", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  local fallback_seconds = 5   -- BUFFER_SETTLE.fallback_seconds (only local functions see the table)
+  params:set("record_duration", 2)
+  record_buffer(3); context.clock.advance()     -- the timer ends: finishing, no report ever
+  assert_true(buffers[3].finishing, "finishing")
+  local log = context.clock.sleep_log
+  assert_equal(log[#log].amount, fallback_seconds, "the fallback waits fallback_seconds after the take ends")
+  context.clock.advance()                       -- the fallback runs
+  assert_true(not buffers[3].finishing and not buffers[3].recording, "settled")
+  assert_equal(buffers[3].name, "empty", "no seconds known: empty")
+  context.clear_engine_calls(); record_buffer(3)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
+  -- a stopped take gets the fallback too, and settles as a take when the
+  -- slot's seconds are known
+  record_buffer(3)
+  assert_true(buffers[3].finishing)
+  buffers[3].seconds = 1.5                      -- as an earlier report left it
+  context.clock.advance()
+  assert_true(buffers[3].loaded, "known seconds: loaded"); assert_equal(buffers[3].name, "take 3")
+  -- a report, a load, a clear or cleanup cancels the fallback
+  local pending = context.clock.pending_count()
+  record_buffer(4); record_buffer(4)
+  assert_equal(context.clock.pending_count(), pending + 1, "fallback pending")
+  context.polls.fire("bufferState", 301)
+  assert_equal(context.clock.pending_count(), pending, "a report settles it and cancels the fallback")
+  record_buffer(5); record_buffer(5); load_buffer(5, "/tmp/x.wav")
+  assert_equal(context.clock.pending_count(), pending, "load cancels the fallback")
+  record_buffer(6); record_buffer(6); clear_buffer(6)
+  assert_equal(context.clock.pending_count(), pending, "clear cancels the fallback")
+  record_buffer(7); record_buffer(7)
+  cleanup()
+  assert_equal(context.clock.pending_count(), 0, "cleanup cancels the fallback")
 end)
 
 test("bufferState poll is found and started in init", function()
@@ -2307,6 +2601,7 @@ test("explicit save writes a timestamped file; cleanup/init persist buffer paths
   assert_equal(call.args[1], 1); assert_true(call.args[2]:match("strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf2%.wav$"))
   params:set("buf1_file", context.audio_dir .. "one.wav"); io.open(context.audio_dir .. "one.wav", "w"):close()
   params:set("buf4_record", 1); context.clock.advance()
+  context.polls.fire("bufferState", 304)  -- the engine reports the take
   assert_equal(local_value("buffers")[4].path, context.audio_dir .. "strata/scratch/buf4.wav")
   assert_equal(scratch_take_path(4), context.audio_dir .. "strata/scratch/buf4.wav")
   cleanup()
@@ -2330,6 +2625,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   io.open(loaded_file, "w"):close()
   load_buffer(3, loaded_file)
   record_buffer(5); context.clock.advance()
+  context.polls.fire("bufferState", 404)        -- the engine reports the take
   -- the engine wrote the take
   util.make_dir(context.audio_dir .. "strata/scratch/")
   io.open(scratch_take_path(5), "w"):close()
@@ -2353,6 +2649,8 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(params:get("buf3_file"), loaded_file, "a restored slot's file param shows its path (F2)")
   assert_equal(params:get("buf5_file"), scratch_take_path(5), "a restored take's file param shows the take")
   assert_equal(params:get("buf1_file"), _path.audio, "a slot with nothing restored stays at its starting folder")
+  assert_equal(local_value("buffers_restored"), 0, "restored once the engine reports audio")
+  context.polls.fire("bufferState", 202); context.polls.fire("bufferState", 404)
   assert_equal(local_value("buffers_restored"), 2)
   show_page(5)
   assert_true(screen_has("buffers: 2 restored"), "SETUP shows the restored count")
@@ -2363,6 +2661,8 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(#context.calls_named("loadBuffer"), 1, "missing file not loaded")
   assert_equal(local_value("buffers")[3].name, "empty")
   assert_true(table.concat(context.printed, "\n"):find(loaded_file, 1, true), "missing file reported")
+  assert_equal(local_value("buffers_restored"), 0, "nothing confirmed by the engine yet")
+  context.polls.fire("bufferState", 403)        -- buffer 5's take
   assert_equal(local_value("buffers_restored"), 1)
 end)
 
@@ -2386,6 +2686,77 @@ test("a buffer cleared before exit is saved empty and not restored", function()
   local buffers = local_value("buffers")
   assert_equal(buffers[6].name, "empty", "the cleared slot starts empty")
   assert_equal(buffers[6].path, nil, "the cleared slot has no path")
+end)
+
+test("restores count engine-confirmed slots; missing remembered files are kept across restarts", function()
+  local subdir = "buf_missing"
+  local context = load_strata({ data_subdir = subdir })
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  local present = context.audio_dir .. "here.wav"
+  local unreadable = context.audio_dir .. "bad.wav"
+  local away = context.audio_dir .. "drive/away.wav"   -- on a drive that is unmounted later
+  util.make_dir(context.audio_dir .. "drive/")
+  for _, path in ipairs({ present, unreadable, away }) do io.open(path, "w"):close() end
+  load_buffer(1, present); load_buffer(2, unreadable); load_buffer(3, away)
+  cleanup()
+  os.remove(away)
+
+  context = load_strata({ data_subdir = subdir })
+  local buffers = local_value("buffers")
+  assert_equal(#context.calls_named("loadBuffer"), 2, "the two files present are loaded")
+  assert_equal(buffers[3].name, "empty", "the missing file's slot stays empty")
+  assert_true(not buffers[3].loaded)
+  assert_true(table.concat(context.printed, "\n"):find(away, 1, true), "the console names the missing file")
+  assert_equal(local_value("buffers_restored"), 0, "nothing restored until the engine reports audio")
+  show_page(5)
+  assert_true(screen_has("buffers: 0 ok, 1 missing"), "SETUP shows the missing file")
+  context.polls.fire("bufferState", 3)          -- buffer 1 holds 3 s
+  context.polls.fire("bufferState", 3)          -- the periodic poll repeats it
+  assert_equal(local_value("buffers_restored"), 1, "a confirmed slot counts once")
+  context.set_time(5); context.polls.fire("bufferState", 100)   -- buffer 2: the engine could not read it
+  assert_equal(local_value("buffers_restored"), 1, "a slot without audio does not count")
+  assert_true(not buffers[2].loaded, "and is not loaded")
+  show_page(5)
+  assert_true(screen_has("buffers: 1 ok, 1 missing"), "SETUP count after the reports")
+  assert_screen_layout(context, "SETUP with missing buffers")
+
+  -- the missing path survives the next exit, so the sample comes back once
+  -- its drive is mounted again
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[1], present); assert_equal(saved.paths[2], unreadable)
+  assert_equal(saved.paths[3], away, "the missing file's path is kept")
+  io.open(away, "w"):close()
+  context = load_strata({ data_subdir = subdir })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 3, "the file is back: restored")
+  assert_equal(loads[3].args[1], 2); assert_equal(loads[3].args[2], away)
+  context.polls.fire("bufferState", 3); context.polls.fire("bufferState", 201)
+  assert_equal(local_value("buffers_restored"), 2)
+  show_page(5)
+  assert_true(screen_has("buffers: 2 restored"), "no missing files: the plain count")
+  -- a slot cleared after a missing restore forgets the path
+  cleanup(); os.remove(away)
+  context = load_strata({ data_subdir = subdir })
+  clear_buffer(3)
+  cleanup()
+  saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[3], "", "cleared: the missing path is forgotten")
+
+  -- an earlier blocked auto-save does not outlive the next load
+  local _, set_blocked = find_upvalue("buffer_autosave_blocked")
+  set_blocked(true)
+  load_buffers_from_disk()
+  assert_equal(local_value("buffer_autosave_blocked"), false, "reset at the top of load_buffers_from_disk")
+  set_blocked(true)
+  os.remove(context.data_dir .. "strata/buffers.data")
+  load_buffers_from_disk()
+  assert_equal(local_value("buffer_autosave_blocked"), false, "reset even when there is no file")
 end)
 
 test("a buffers file that fails to load does not stop init and survives cleanup", function()
@@ -2558,6 +2929,7 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)
   tap(2); assert_true(context.fileselect.last ~= nil, "K2 alone opens the selector")
   tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 alone records")
   tap(3); assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
+  context.polls.fire("bufferState", 205)  -- the engine reports the stopped take
   -- a K2 held across a page change is released elsewhere: no selector, and
   -- back on BUFFER K3 records
   context.fileselect.last = nil; context.clear_engine_calls()
@@ -2887,7 +3259,9 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   -- the selected source wins over "empty"
   params:set("v4_source", 9); assert_equal(device:get_led(9, 12), 15, "selected empty buffer lit 15")
   -- the recording completes: 15 -> 8
-  context.clock.advance(); assert_equal(device:get_led(6, 1), 8, "finished take shown as loaded")
+  context.clock.advance(); assert_equal(device:get_led(6, 1), 15, "a take waiting for the engine stays lit")
+  context.polls.fire("bufferState", 503)  -- the engine reports the take
+  assert_equal(device:get_led(6, 1), 8, "finished take shown as loaded")
   clear_buffer(2); assert_equal(device:get_led(2, 1), 2, "cleared buffer dim")
   -- a second row-1 press stops early; row 8 and 16 keep their meaning
   context.grid.press(1, 4, 1, 1); context.grid.press(1, 4, 1, 1)
