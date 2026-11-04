@@ -8,6 +8,8 @@ Strata is an ambient granular soundscape generator for monome norns. It combines
 
 See @README.md for additional project details
 
+**Development status:** read `docs/superpowers/status.md` first. It records what is open (with GitHub issues), the decisions taken on Seth's behalf, and how to run the checks. Update it at the end of each piece of work.
+
 ## Architecture
 
 ### Dual-Language System
