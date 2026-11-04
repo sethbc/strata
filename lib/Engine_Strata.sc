@@ -697,9 +697,11 @@ Engine_Strata : CroneEngine {
 
         // Node order inside the engine group (context.xg):
         // voiceGroup (input, voices, recorders) -> processGroup (grain
-        // synths at the head, mod synths at the tail, so a mirrored grain
-        // output reaches strataMod in the same block) -> filter -> delay
-        // -> reverb -> master.
+        // synths that read a voice bus at the head; grain synths that mirror
+        // into a voice bus just before that voice's live mod synth, so the
+        // mirror reaches strataMod in the same block; mod synths added at
+        // the tail; see startPlacedGrainSynth) -> filter -> delay -> reverb
+        // -> master.
         // Keeping everything inside xg leaves norns' output group (og) and
         // its output metering after the engine.
         voiceGroup = Group.head(context.xg);
@@ -988,7 +990,10 @@ Engine_Strata : CroneEngine {
 
         case
         { source == 0 } {
-            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0, \modLevel, 0];
+            // crossmod off, and read from the silent bus, never control bus 0 (the
+            // input amplitude follower on norns)
+            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0, \modLevel, 0,
+                \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
         }
         { source == this.inputSource } {
             args = args ++ [\in, inputBus, \mirrorLevel, 1, \accentAmt, 1, \modLevel, 1];
@@ -1011,16 +1016,20 @@ Engine_Strata : CroneEngine {
     // holds after any history of switches: one that reads the voice bus
     // (synth source) at the head of processGroup, so it runs before every
     // grain synth that mirrors into a voice bus and never re-grains a
-    // mirror; one that mirrors (buffer and input sources) right before the
-    // voice's running strataMod, or at the tail of processGroup while the
-    // voice has none (the mod synth started or re-gated next is put after
-    // it). Never next to a releasing synth, which may already have freed on
-    // the server (an /s_new to a missing target creates nothing).
+    // mirror; one that mirrors (buffer and input sources) at the tail of
+    // processGroup, then moved before the voice's running strataMod (the
+    // mod synth started or re-gated next is put after it when there is
+    // none). Never created next to another synth: that one may already
+    // have freed on the server without sclang knowing yet (an /s_new to a
+    // missing target creates nothing, leaving a grain synth that never
+    // frees). A move to a freed mod synth just fails; its onFree restart
+    // goes to the tail, after the grain synth.
     startPlacedGrainSynth { arg voice;
-        var modSynth = synths[this.modKey(voice)];
+        var modSynth = synths[this.modKey(voice)], grainSynth;
         if (grainSource[voice] == 0) { ^this.startGrainSynth(voice, processGroup, \addToHead) };
-        if (modSynth.notNil) { ^this.startGrainSynth(voice, modSynth, \addBefore) };
-        ^this.startGrainSynth(voice, processGroup, \addToTail)
+        grainSynth = this.startGrainSynth(voice, processGroup, \addToTail);
+        if (modSynth.notNil) { grainSynth.moveBefore(modSynth) };
+        ^grainSynth
     }
 
     // Start a voice: every synth it still has is re-gated instead of
@@ -1343,9 +1352,13 @@ Engine_Strata : CroneEngine {
     }
 
     // Delete the .part files a write interrupted by a crash or power cut left
-    // in scratchDir (alloc calls this; no write can be in progress then)
+    // in scratchDir (scratch takes) and its parent (saveBuffer's
+    // <date>-buf<n>.wav, in _path.audio/strata/ on norns); only *.part files.
+    // alloc calls this; no write can be in progress then.
     deleteStaleParts {
-        (scratchDir +/+ "*.part").pathMatch.do({ arg partPath; File.delete(partPath) });
+        [scratchDir, scratchDir.withoutTrailingSlash.dirname].do({ arg dir;
+            (dir +/+ "*.part").pathMatch.do({ arg partPath; File.delete(partPath) });
+        });
     }
 
     // Write a slot's valid region to path as a stereo 16-bit WAV at the

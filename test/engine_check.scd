@@ -661,6 +661,8 @@ server.waitForBoot({
             "synth source: grain reads the voice bus, no mirror, no grain accent, unity level");
         check.(getControl.(engine.synths[\grain0], \modLevel) == 0,
             "synth source: the grain synth's crossmod is off (the voice synth applies it)");
+        check.([\modBus1, \modBus2, \modBus3].every({ arg control; getControl.(engine.synths[\grain0], control) == silentIndex }),
+            "synth source: the grain synth's mod buses are the silent bus, never control bus 0");
         command.(\setGrainSource, 0, 10);
         command.(\setGrainSource, 0, -1);
         server.sync;
@@ -873,14 +875,24 @@ server.waitForBoot({
             "a failed newest write removes its writeGenerations entry");
         check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
             "a failed write leaves no temporary float files");
-        // .part files a crash left in scratchDir are deleted (alloc does this on start)
-        File.mkdir(engine.scratchDir);
-        File.use(engine.scratchDir +/+ "buf2.wav.17.part", "w", { arg text; text.write("stale") });
-        File.use(engine.scratchDir +/+ "keep.txt", "w", { arg text; text.write("keep") });
+        // .part files a crash left in scratchDir (scratch takes) and its parent
+        // (saveBuffer's dated files) are deleted at alloc. alloc runs before the
+        // check can point scratchDir away from ~/dust, so the deletion is checked
+        // through deleteStaleParts and alloc's own source is checked to call it.
+        info = [engine.scratchDir, engine.scratchDir.withoutTrailingSlash.dirname];
+        info.do({ arg dir;
+            File.mkdir(dir);
+            File.use(dir +/+ "buf2.wav.17.part", "w", { arg text; text.write("stale") });
+            File.use(dir +/+ "keep.txt", "w", { arg text; text.write("keep") });
+        });
         engine.tryPerform(\deleteStaleParts);
-        check.(File.exists(engine.scratchDir +/+ "buf2.wav.17.part").not and: { File.exists(engine.scratchDir +/+ "keep.txt") },
-            "deleteStaleParts deletes stale .part files in scratchDir and nothing else");
-        File.delete(engine.scratchDir +/+ "keep.txt");
+        check.(info.every({ arg dir; File.exists(dir +/+ "buf2.wav.17.part").not and: { File.exists(dir +/+ "keep.txt") } }),
+            "deleteStaleParts deletes stale .part files in scratchDir and its parent, and nothing else");
+        info.do({ arg dir; File.delete(dir +/+ "keep.txt"); File.delete(dir +/+ "buf2.wav.17.part") });
+        file = Engine_Strata.findMethod(\alloc);
+        data = File.readAllString(file.filenameSymbol.asString);
+        data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
+        check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");
 
         command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
         check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
