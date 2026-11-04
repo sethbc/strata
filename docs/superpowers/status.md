@@ -4,7 +4,7 @@ Last updated 2026-11-03, after Strata 3.0.1 (the deferred minor findings from th
 
 ## Where things are
 
-- **Released on `main`:** 3.0, which brought in Confluence's features through PR #3, and CI, through PR #4. 3.0.1 lands through the `minor-fixes` pull request.
+- **Released on `main`:** 3.0, which brought in Confluence's features through PR #3, and CI, through PR #4. 3.0.1, the deferred minor findings, through PR #7.
 - **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
