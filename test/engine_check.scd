@@ -909,9 +909,19 @@ server.waitForBoot({
         File.use(info[1], "w", { arg text; text.write("not stale") });
         engine.scratchDir = "strata-engine-check-relative/";
         engine.tryPerform(\deleteStaleParts);
-        check.(File.exists(info[1]), "deleteStaleParts with a relative scratchDir leaves the working directory alone");
+        check.(File.exists(info[1]), "deleteStaleParts with a relative scratchDir leaves the working directory (%) alone".format(File.getcwd));
         File.delete(info[1]);
         engine.scratchDir = info[0];
+        // Only absolute directories below the root are cleaned: an empty,
+        // relative or root scratchDir never globs the working directory or /
+        savePath = engine.scratchDir;
+        info = [["", []], ["/", []], [".", []], ["./", []], ["x/", []], ["//", []],
+            ["/a/", ["/a"]], ["/a/b/", ["/a/b", "/a"]]].reject({ arg pair;
+            engine.scratchDir = pair[0];
+            engine.tryPerform(\stalePartDirs) == pair[1]
+        });
+        check.(info.isEmpty, "deleteStaleParts cleans only absolute directories below / (wrong for %)".format(info));
+        engine.scratchDir = savePath;
 
         command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
         check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");

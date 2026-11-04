@@ -1356,14 +1356,23 @@ Engine_Strata : CroneEngine {
     // <date>-buf<n>.wav, in _path.audio/strata/ on norns); only *.part files.
     // alloc calls this; no write can be in progress then.
     deleteStaleParts {
-        var parent = scratchDir.withoutTrailingSlash.dirname;
-        var dirs = [scratchDir];
-        // a scratchDir with no directory part has no parent to clean
-        // (dirname gives "" or "."): never glob the working directory
-        if (parent.notEmpty and: { parent != "." }) { dirs = dirs.add(parent) };
-        dirs.do({ arg dir;
+        this.stalePartDirs.do({ arg dir;
             (dir +/+ "*.part").pathMatch.do({ arg partPath; File.delete(partPath) });
         });
+    }
+
+    // scratchDir and its parent, keeping only absolute directories below the
+    // root: an empty or relative scratchDir ("", ".", "scratch/", whose
+    // dirname is ".") would glob the working directory, and "" or "/" the
+    // root. "~" is expanded; other paths are not standardized, since
+    // standardizePath turns "." into the working directory.
+    stalePartDirs {
+        var dir = scratchDir.asString;
+        if (dir.beginsWith("~")) { dir = dir.standardizePath };
+        dir = dir.withoutTrailingSlash;
+        ^[dir, dir.dirname].select({ arg each;
+            each.beginsWith("/") and: { each.withoutTrailingSlash.size > 1 }
+        })
     }
 
     // Write a slot's valid region to path as a stereo 16-bit WAV at the
