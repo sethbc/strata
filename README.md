@@ -171,14 +171,14 @@ A scrolling list of the effects settings, five rows at a time: master density, t
 
 #### BUFFER
 
-Where a voice's source is chosen and its buffer is filled, so it works without a grid. The left column shows the selected voice, its source (`src: buf 2`), and the record duration and level. The right column lists the eight buffers: number, name (the file name, shortened, or `take <n>` for a recording, or `empty`) and length in seconds, or `REC` while recording. The selected voice's buffer is bright, buffers holding audio are mid, empty ones dim.
+Where a voice's source is chosen and its buffer is filled, so it works without a grid. The left column shows the selected voice, its source (`src: buf 2`), and the record duration and level. The right column lists the eight buffers: number, name (the file name, shortened, or `take <n>` for a recording, or `empty`) and length in seconds, or `REC` while recording. A take shows `REC` until the engine reports what it captured (a moment after the recording ends): then it becomes `take <n>`, or `empty` if nothing was captured (a stop right after the start). A loaded file shows its name at once; if the engine reports no audio for it (an unreadable file), the buffer drops to dim. The selected voice's buffer is bright, buffers holding audio are mid, empty ones dim.
 
 - **E2** - Select voice (the same selection as MAIN)
 - **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
 - **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done
 - **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
 - **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser)
-- The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
+- The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records, `K3:...` while a take that has ended waits for the engine; K3 does nothing then). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
 
 Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETERS > buffers).
 
@@ -194,7 +194,7 @@ One row per LFO: `L1`-`L3` (the selected one bright), one cycle of its shape, a 
 
 #### SETUP
 
-Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, how many buffers were restored when the script started (`buffers: 3 restored`), and the MIDI input: the port Strata listens to and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`) and the channel mode (`ch: per voice`).
+Shows how many grids are connected and their sizes, whether an arc is connected, how many of the 8 scene slots hold a scene, how many buffers were restored when the script started (`buffers: 3 restored`, counting a buffer once the engine reports audio in it; `buffers: 2 ok, 1 missing` when remembered files were not found), and the MIDI input: the port Strata listens to and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`) and the channel mode (`ch: per voice`).
 
 - **E2** - MIDI port (1-4)
 - **E3** - MIDI channel mode (per voice, or omni to the selected voice)
@@ -528,7 +528,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 Strata writes audio to disk only when a recording finishes and when you save a buffer:
 - **Scratch take** - Every finished (or early-stopped) recording is written to `~/dust/audio/strata/scratch/buf<n>.wav`, replacing that buffer's previous take. It exists so the take survives a restart; save the buffer to keep it
 - **Save** - The buffer's save trigger (PARAMETERS > buffers, or K2 + K3 on the BUFFER page) writes a new timestamped file, `~/dust/audio/strata/<date-time>-buf<n>.wav`, which appears in the file browser for loading later. Nothing is overwritten
-- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that has been deleted or moved is skipped (the console says so), and the SETUP page shows how many buffers were restored
+- **Restore on start** - When the script exits it remembers, for each buffer, the file loaded into it or its scratch take (in `~/dust/data/strata/buffers.data`, a list of paths, not audio). On the next start each remembered file that still exists is loaded again, so scenes that use buffers are not silent after a reboot. A file that is not found (deleted, moved, or on a drive that is not mounted) is skipped and the console names it, but its path is kept for the next start, so the sample comes back once the file is there again; clearing, loading or recording into that buffer forgets it. The SETUP page shows how many buffers were restored (those the engine reports holding audio) and how many remembered files are missing
 - A damaged or incompatible `buffers.data` loads nothing, is reported in the console and is moved to `buffers.data.bak` so the save on exit does not overwrite it
 
 ### MIDI (group)
