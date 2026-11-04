@@ -1,5 +1,54 @@
 # Strata Changelog
 
+## Version 3.0.1 - 2026-11-03
+
+Fixes the minor findings deferred from the 3.0 reviews. No engine command, param or file format changes: scenes and `buffers.data` from 3.0 load unchanged.
+
+### Fixes
+
+- **Arc ring speeds.** Every ring that sets a value (MAIN 1-4, FX 1-4, BUFFER 1-4 and the LFO page's ring 4 in free mode) sweeps its parameter's whole range in 512 ticks, half a turn of the arc's 1024 ticks per revolution, following the parameter's curve (256 ticks take resonator freq from 20 Hz to 200 Hz). In 3.0 each ring had its own scale: filter freq swept in under half a turn while res and mix took about ten turns and buffer position about twenty. The LFO depth rings (10 ticks per percent) and the clocked rate (20 ticks per rate) still step whole values.
+- **MAIN arc ring 2 follows the curve.** The main parameter's ring is drawn along the parameter's curve, like the FX and BUFFER rings: resonator freq at 200 Hz lights half the ring instead of about a tenth.
+- **LFO ring 4 forgets its part-turn.** Ticks carried toward the next clocked rate are dropped when another LFO is selected or the selected LFO's mode changes, so they never step a different LFO or mode.
+- **BUFFER save confirmation.** K2 + K3 shows `saved buf <n>` in the hint row for 1.5 s, or `buf <n> empty` when the buffer holds no audio and nothing was saved.
+- **Keys held into the norns menu.** Opening the menu (K1, a script error, a keyboard's menu key) forgets held keys at once instead of on the next 100 ms check, so even a quick menu visit with K2 held no longer turns the next BUFFER K3 into a save. Strata wraps norns' `_menu.set_mode` and gives it back on exit; the 10 Hz check stays as a fallback.
+- **Omni pitchbend follows the selection.** In omni mode, selecting another voice with the wheel off centre returns the old voice to pitch and bends the new one.
+- **Takes and loads are confirmed by the engine.** A take shows `REC` (hint `K3:...`, K3 does nothing) until the engine reports what it captured, then becomes `take <n>`, or `empty` when nothing was captured (a stop right after the start). A loaded file the engine reports no audio for (an unreadable file) drops to dim. A take or load the engine reports late, such as a slow read during the restore at start, is still picked up unless the buffer was cleared, loaded or recorded into meanwhile, and a take settles from its last known length after 5 s if no report ever comes. In 3.0 a take was named and counted as loaded the moment its timer ended, whatever the engine had captured.
+- **Restored buffers are counted when the engine has them.** SETUP's `buffers: k restored` counts a buffer once the engine reports audio in it, and reads `buffers: k ok, m missing` when remembered files were not found.
+- **Missing buffer files are remembered.** A file that is not found at start (deleted, moved or on a drive that is not mounted) is skipped but kept in `buffers.data`, so it comes back once the file is there again; clearing, loading or recording into that buffer forgets it.
+- **Scene recall syncs a switched voice once, after its params.** A running voice whose source a scene changes used to get its full sync from the source change, before the recalled params, so the new grain synth briefly played the old values. It now gets one sync after every recalled param, for instant recalls and smooth transitions alike. An error during a recall is still raised, but no longer leaves later source changes without their sync.
+- **Voice start under an LFO.** `voiceOn` sends the grain density the engine has (including any LFO offset on the voice's density or master density) instead of the stored values, so a voice started under such an LFO does not jump.
+- **Grid page 4 during scene transitions.** The FX faders redraw once per transition step instead of once per changed param.
+- **Filter type crossfades.** Changing the filter type crossfades over 20 ms instead of jumping between the lowpass, highpass and bandpass outputs (a click, loudest between the antiphase lowpass and highpass).
+- **Grain mode fades.** Switching a voice between continuous and triggered grains fades the position-spread path over 50 ms instead of clicking.
+- **Stop then clear.** Stopping a recording and clearing the buffer at once leaves it empty; the stopped take used to come back and be written as the scratch take.
+- **Loads apply when the file is read.** A buffer keeps its old length until the file has been read, so voices playing it never grain a half-loaded buffer, and a clear (or another load or recording) sent meanwhile wins.
+- **Grain synth order after source switches.** Grain synths that read a voice's bus always run before those that copy into one, and every grain synth runs before its voice's mod synth, after any history of source switches and restarts. No grain synth is placed next to a synth that may have freed already (which could create nothing, or leave a grain synth that never frees).
+- **Cross-modulation for input-sourced voices.** An input-sourced voice now takes amplitude modulation from its mod slots (frequency modulation means nothing for live input and is ignored). In 3.0 its routing and amounts had no effect.
+- **Failed and interrupted writes.** A save to a directory that cannot be made reports `cannot write` and deletes its temporary files; it used to stop with an error and leave them behind. Partial `.part` files left by a crash in `~/dust/audio/strata/` and its `scratch/` folder are deleted when the engine starts.
+- **Safer engine defaults.** Both grain SynthDefs mirror nothing unless the engine turns the mirror on, and a synth-sourced grain synth reads the silent bus for its unused mod slots instead of control bus 0 (the input amplitude follower on norns). The engine caches each SynthDef's control names instead of looking them up on every control change.
+
+### Other Changes
+
+- Code only, no change in behaviour: the arc button finds MAIN by its page index, not its title; `gentle_mutate` checks every grain key against `DISCRETE_GRAIN_KEYS`; the drift's step is one helper (`mean_reverting_step`); `add_voice_params` builds every param id the same way.
+- `strata.lua`'s main chunk holds 186 of Lua's 200 locals (183 in 3.0).
+
+### Decisions
+
+- **Arc rings sweep in half a turn.** 512 ticks per full sweep was chosen over a full revolution; the arc's 1024 ticks per revolution was checked against the monome arc documentation and matron's delta handling.
+- **The write interleave keeps its per-frame loop.** An array-level `lace` interleave was tried and measured about twice as slow (0.11 s against 0.057 s per 16 s take, standalone), because each chunk must be converted FloatArray → Array → FloatArray. The loop stays, and a new engine check writes a full 16 s buffer and checks every frame's position (end to end about 0.15 s on a Mac).
+- **Position spread in triggered mode.** It does nothing for synth- and input-sourced voices, but a buffer-sourced voice still jitters each triggered grain's position by it; the docs say so.
+
+### Testing
+
+- `lua test/run.lua` / `luajit test/run.lua` grew from 97 to 118 tests: arc rings per page and their sweep speed, the transition holding `filter_type`, bad `bufferState` values (NaN, infinities, unknown slots), cleared and missing buffers across restarts, engine-confirmed takes, loads and restores, MIDI-held voices stopped from the grid or a scene, the menu hook, the save flash, omni bend, one sync per recall, and the static `param.t` check for both quotes and both orders. The param stub takes its type codes from one table and rejects unknown types.
+- `test/run_engine_check.sh` checks the triggered grain mode (silent without a trigger, a grain on retrigger), the filter crossfade (largest sample step across type changes), the stop-then-clear race, grain synth order after rapid switches, mirror and crossmod controls, load completion, failed writes and stale `.part` files, and a full 16 s write. Every reply it waits for times out after 5 s and the whole check after 540 s, so a lost reply fails the run instead of hanging it. Engine checks on one machine share scsynth's port: run one at a time.
+
+### Check on Hardware
+
+- Arc feel with every ring sweeping in half a turn, especially long ranges (record duration, the LFO free period)
+- How soon a take or a restored buffer shows on the BUFFER and SETUP pages on the CM3
+- CPU: synth- and input-sourced grain synths carry seven more controls, and the filter runs its three filters as before
+
 ## Version 3.0 - 2026-11-03
 
 Absorbs the feature set the Confluence script promised (buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, a paged screen), so Confluence can be retired. Strata keeps its seven voices, and every grid row keeps its meaning. Not brought over, by design: Confluence's 16-voice polyphony, preset file export (scenes cover it), a buffer waveform display, MIDI learn code (norns' PARAMS > MAP does it) and 20 Hz LFOs. Design: `docs/superpowers/specs/2026-11-03-confluence-features-design.md`.
@@ -49,6 +98,9 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 - **`stopRecord` command.** Added so a recording can stop early and keep what it captured (the design asked for stopping early but listed no command).
 - **BUFFER page save gesture.** K2 acts on release (file browser); holding K2 and pressing K3 saves.
 - **Source changes reach stopped voices.** `v<i>_source` always sends `setGrainSource` (the engine records it for a stopped voice), so `voiceOn` builds the right synths directly.
+- **Grain-side accent only for the input source.** The design put the accent × velocity in `\strataGrain` for every voice. A synth-sourced voice is already accented by its voice synth, so `\strataGrain` applies its own accent only when it grains the live input (`accentAmt` 1; 0 for the synth source) and no voice is accented twice.
+- **Input-sourced grains mirror to the voice bus.** As for buffer sources, the input `\strataGrain` also writes its output to the voice's bus, so the voice's mod synth keeps feeding cross-modulation. The mirror is off for the synth source, whose grain synth reads that bus (it would feed back).
+- **Scratch directory is an engine variable.** `scratchDir` defaults to `~/dust/audio/strata/scratch/` (Lua's `_path.audio .. "strata/scratch/"` on norns) and is created on demand; the engine check points it at a temporary directory so it never writes into `~/dust`.
 
 ### Check on Hardware
 

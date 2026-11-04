@@ -514,7 +514,8 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 ### LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
-- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min/max (keep -1 and 1) and baseline (keep "from center"): Strata's depth math assumes all three. With min -1, max 1 and a centre baseline an LFO swings up to half the destination's range either side of the value you set; "from min" makes it swing only below that value (down to half the range at 100 %), "from max" only above it, and other min/max values change the swing size, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min, max and baseline, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
+- Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above, and other min/max values change the size of the swing
 
 ### Buffers (group)
 - Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
@@ -580,7 +581,7 @@ Each voice includes:
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
-- Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (position spread)
+- Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (the same fixed pan spread)
 - Eight stereo buffers (each a pair of 16 s mono buffers, about 49 MB in all) and a live stereo input bus
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
