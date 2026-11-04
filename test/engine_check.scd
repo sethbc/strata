@@ -37,13 +37,28 @@ var formatOf = { arg name;
     if (entry.isNil) { nil } { entry.format.asString };
 };
 
+// Wait (inside the check routine) for a reply that signals condition, at
+// most timeout seconds: a reply that never comes (a node or control the
+// engine does not have, a server that went away) fails the check instead
+// of hanging it. Returns true if the reply arrived.
+var awaitReply = { arg condition, timeout = 5;
+    var timedOut = false;
+    SystemClock.sched(timeout, {
+        if (condition.test.not) { timedOut = true; condition.test = true; condition.signal };
+        nil
+    });
+    condition.wait;
+    if (timedOut) { failures = failures + 1; ("FAIL no server reply within % s".format(timeout)).postln };
+    timedOut.not
+};
+
 // Depth-first list of synth def names under a node, from /g_queryTree.
 var synthNames = { arg group;
     var condition = Condition(false), reply, list = List.new, index = 2, parse;
     OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
         '/g_queryTree.reply', server.addr).oneShot;
     server.sendMsg('/g_queryTree', group.nodeID, 0);
-    condition.wait;
+    if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
     parse = {
         var numChildren = reply[index + 1];
         index = index + 2;
@@ -56,6 +71,61 @@ var synthNames = { arg group;
     };
     parse.value;
     list
+};
+
+// Depth-first list of the synths under a node with their controls, from
+// /g_queryTree with controls: one Event (id, def, controls) per synth. One
+// reply, so it never asks a synth that is freeing in the meantime.
+var synthNodes = { arg group;
+    var condition = Condition(false), reply, list = List.new, index = 2, parse;
+    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
+        '/g_queryTree.reply', server.addr).oneShot;
+    server.sendMsg('/g_queryTree', group.nodeID, 1);
+    if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
+    parse = {
+        var nodeID = reply[index], numChildren = reply[index + 1], def, controls;
+        index = index + 2;
+        if (numChildren == -1) {
+            def = reply[index].asSymbol;
+            controls = IdentityDictionary.new;
+            reply[index + 1].do({ arg pair;
+                controls[reply[index + 2 + (pair * 2)].asSymbol] = reply[index + 3 + (pair * 2)];
+            });
+            index = index + 2 + (reply[index + 1] * 2);
+            list.add((id: nodeID, def: def, controls: controls));
+        } {
+            numChildren.do({ parse.value });
+        };
+    };
+    parse.value;
+    list
+};
+
+// A voice's grain synths (live or releasing) in node order: [position in
+// nodes, reads the voice bus?] for each synth whose mirrorOut is the voice bus
+var voiceGrainNodes = { arg nodes, voice;
+    var voiceBus = engine.granBuses[voice].index;
+    nodes.collect({ arg node, position;
+        if (grainDefs.includes(node.def) and: { node.controls[\mirrorOut] == voiceBus }) {
+            [position, (node.def == \strataGrain) and: { node.controls[\in] == voiceBus }]
+        }
+    }).reject(_.isNil)
+};
+var voiceModPosition = { arg nodes, voice;
+    nodes.detectIndex({ arg node; (node.def == \strataMod) and: { node.controls[\in] == engine.granBuses[voice].index } })
+};
+// Every running voice's grain synths run before its own mod synth
+var grainsBeforeOwnMods = {
+    var nodes = synthNodes.(engine.processGroup);
+    (0..6).every({ arg voice;
+        var grains = voiceGrainNodes.(nodes, voice), modPosition = voiceModPosition.(nodes, voice);
+        grains.isEmpty or: { modPosition.notNil and: { grains.every({ arg each; each[0] < modPosition }) } }
+    })
+};
+
+var controlDefault = { arg defName, controlName;
+    var control = SynthDescLib.global.at(defName).controls.detect({ arg each; each.name == controlName });
+    control !? { control.defaultValue }
 };
 
 // Wait (inside the check routine) until condition is true or timeout passes
@@ -132,27 +202,38 @@ var writeTestFile = { arg path, sampleRate, frames, values;
 var bufferSample = { arg buffer, frame;
     var condition = Condition(false), value;
     buffer.loadToFloatArray(frame, 1, { arg array; value = array[0]; condition.test = true; condition.signal });
-    condition.wait;
+    awaitReply.(condition);
     value
 };
 
 var getControl = { arg synth, control;
     var condition = Condition(false), value;
     synth.get(control, { arg result; value = result; condition.test = true; condition.signal });
-    condition.wait;
+    awaitReply.(condition);
     value
 };
 
 server.options.numInputBusChannels = 2;
+// Whatever hangs (a server.sync to a server that went away), the check ends:
+// a failed run after 540 s, inside CI's 600 s timeout
+SystemClock.sched(540, {
+    "FAIL engine check did not finish within 540 s".postln;
+    ("ENGINE CHECK FAILED: timed out after % failures".format(failures)).postln;
+    server.quit;
+    SystemClock.sched(1, { 1.exit });
+    nil
+});
 server.waitForBoot({
     var exitCode;
     try {
         var oldTrio, before, after, silentIndex, startedNames, masterUGens, envSamples;
-        var oldGrain, oldVoiceSynth, grainBuf, processNames, scratchFile, savePath, file, frames, data;
+        var oldGrain, oldVoiceSynth, grainBuf, scratchFile, savePath, file, frames, data;
         var stereoPath, monoPath, longPath, textPath, info;
         var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
         var grainCount, voiceCount, grainBefore, voiceBefore;
         var countVoiceAndGrain, maxGrainCount, maxVoiceCount, staleGrain;
+        var filterGroup, filterIn, filterOut, stepBus, filterSynth, stepProbe, readStep, steadySteps, switchStep;
+        var orderNodes, orderGrains, busReadingAt, mirroringAt, longWritePath, writeStart, writeSeconds, rampValue;
 
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
@@ -160,6 +241,13 @@ server.waitForBoot({
         SynthDef(\strataCheckTone, { arg out; Out.ar(out, SinOsc.ar(440, 0, 0.5) ! 2) }).add;
         SynthDef(\strataCheckPeak, { arg in, out, t_reset = 0;
             Out.kr(out, A2K.kr(Peak.ar(In.ar(in, 2).abs.sum, t_reset)));
+        }).add;
+        // ... a sine of any frequency, and the largest sample-to-sample step
+        // of a bus's left channel since the last t_reset
+        SynthDef(\strataCheckSine, { arg out, freq = 1000; Out.ar(out, SinOsc.ar(freq, 0, 0.5) ! 2) }).add;
+        SynthDef(\strataCheckStep, { arg in, out, t_reset = 0;
+            var sig = In.ar(in, 2)[0];
+            Out.kr(out, A2K.kr(Peak.ar((sig - Delay1.ar(sig)).abs, t_reset)));
         }).add;
         server.sync;
         context = CroneAudioContext.new(server);
@@ -172,7 +260,7 @@ server.waitForBoot({
 
         done = Condition(false);
         engine = Engine_Strata.new(context, { done.test = true; done.signal });
-        done.wait;
+        awaitReply.(done, 30);
         server.sync;
         "compiled and allocated Engine_Strata".postln;
         check.(engine.scratchDir == (Platform.userHomeDir +/+ "dust/audio/strata/scratch/"),
@@ -213,6 +301,18 @@ server.waitForBoot({
             check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(control),
                 "strataGrain has a % control (input-source accent and mirror)".format(control));
         });
+        // mirrorOut defaults to bus 0, so a mirror is off unless the engine
+        // turns it on: mirrorLevel defaults to 0 in both grain SynthDefs
+        grainDefs.do({ arg name;
+            check.(controlDefault.(name, \mirrorLevel) == 0, "% has mirrorLevel, default 0 (got %)".format(name, controlDefault.(name, \mirrorLevel)));
+        });
+        // Amplitude crossmod for input-sourced voices, off (modLevel 0) by default
+        [\modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \modLevel].do({ arg control;
+            check.(controlFeedsAUGen.(\strataGrain, control), "strataGrain has a % control that reaches a UGen".format(control));
+        });
+        check.(controlDefault.(\strataGrain, \modLevel) == 0, "strataGrain's modLevel defaults to 0 (crossmod off)");
+        check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(\modFreqAmt1).not,
+            "strataGrain has no frequency crossmod (meaningless for live input)");
         [\out, \gate, \bufnumL, \bufnumR, \bufFrames, \bufPos, \bufRate, \bufScan, \grainSize, \grainDensity,
             \pitchShift, \posSpread, \panSpread, \amp, \modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2,
             \modAmpAmt3, \modFreqAmt1, \modFreqAmt2, \modFreqAmt3, \mirrorOut].do({ arg control;
@@ -376,7 +476,7 @@ server.waitForBoot({
         envSamples = { var condition = Condition(false), values;
             engine.envBuffers[3].loadToFloatArray(action: { arg array;
                 values = array; condition.test = true; condition.signal });
-            condition.wait;
+            awaitReply.(condition);
             values
         }.value;
         check.((envSamples[0].abs < 0.01) and: { (envSamples[512] - 1).abs < 0.01 },
@@ -440,6 +540,38 @@ server.waitForBoot({
         check.(getControl.(engine.synths[\delay], \time) == 0.25, "setDelay sets time");
         check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feedback");
         check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
+
+        // A filter type change crossfades: a strataFilter of its own (fully
+        // wet, on a 1 kHz sine at its cutoff, where lowpass and highpass are
+        // in antiphase) never steps further between two samples while the
+        // type changes than in any type's steady state
+        filterIn = Bus.audio(server, 2); filterOut = Bus.audio(server, 2); stepBus = Bus.control(server, 1);
+        filterGroup = Group.tail(server);
+        Synth(\strataCheckSine, [\out, filterIn, \freq, 1000], filterGroup, \addToTail);
+        filterSynth = Synth(\strataFilter, [\in, filterIn, \out, filterOut, \freq, 1000, \res, 0.5, \filterType, 0, \mix, 1],
+            filterGroup, \addToTail);
+        stepProbe = Synth(\strataCheckStep, [\in, filterOut, \out, stepBus], filterGroup, \addToTail);
+        // the largest step since the probe was last reset
+        readStep = {
+            var condition = Condition(false), value;
+            stepBus.get({ arg result; value = result; condition.test = true; condition.signal });
+            awaitReply.(condition);
+            value
+        };
+        steadySteps = [0, 1, 2].collect({ arg type;
+            filterSynth.set(\filterType, type); 0.4.wait;
+            stepProbe.set(\t_reset, 1); 0.3.wait;
+            readStep.value
+        });
+        filterSynth.set(\filterType, 0); 0.4.wait;
+        stepProbe.set(\t_reset, 1); 0.05.wait;
+        // six changes, each at a different point in the sine's cycle
+        [1, 2, 0, 2, 1, 0].do({ arg type; filterSynth.set(\filterType, type); 0.13.wait });
+        switchStep = readStep.value;
+        check.(switchStep <= (steadySteps.maxItem * 1.1),
+            "filter type changes crossfade (largest step % while switching, % at most in steady state %)".format(
+                switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
+        filterGroup.free; filterIn.free; filterOut.free; stepBus.free;
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 
         // retrigger never creates nodes (C3)
@@ -450,9 +582,7 @@ server.waitForBoot({
         check.(before == after, "50 retriggers create no nodes (% before, % after)".format(before, after));
 
         // ---- Audio sources: replace, never stack ----
-        processNames = { synthNames.(engine.processGroup) };
-        check.((processNames.value.collect({ arg name, index; if (grainDefs.includes(name)) { index } }).reject(_.isNil).maxItem)
-            < processNames.value.indexOf(\strataMod), "grain synths run before every mod synth (mirror reaches strataMod)");
+        check.(grainsBeforeOwnMods.value, "every voice's grain synths run before its mod synth (mirror reaches strataMod)");
         // voice 0 running from the earlier voiceOn; switch it to buffer 3
         before = synthNames.(context.xg).size;
         oldGrain = engine.synths[\grain0];
@@ -473,8 +603,8 @@ server.waitForBoot({
         check.(getControl.(grainBuf, \out) == engine.mainBus.index, "strataGrainBuf writes mainBus");
         check.(getControl.(grainBuf, \mirrorOut) == engine.granBuses[0].index, "strataGrainBuf mirrors into the voice bus");
         check.(getControl.(grainBuf, \bufFrames) == 0, "an empty slot plays with bufFrames 0");
-        check.((processNames.value.collect({ arg name, index; if (grainDefs.includes(name)) { index } }).reject(_.isNil).maxItem)
-            < processNames.value.indexOf(\strataMod), "a replacement grain synth still runs before every mod synth");
+        check.(getControl.(grainBuf, \mirrorLevel) == 1, "the engine turns strataGrainBuf's mirror on (mirrorLevel 1)");
+        check.(grainsBeforeOwnMods.value, "a replacement grain synth still runs before its voice's mod synth");
         after = synthNames.(context.xg).size;
         command.(\setGrainSource, 0, 3); server.sync;
         check.(engine.synths[\grain0] === grainBuf and: { synthNames.(context.xg).size == after },
@@ -506,6 +636,14 @@ server.waitForBoot({
         check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "grain controls carry over to the input source");
         command.(\retrigger, 0, 0.75); server.sync;
         check.(getControl.(engine.synths[\grain0], \velocity) == 0.75, "retrigger carries velocity to the input grain synth");
+        // amplitude crossmod reaches an input-sourced voice through its grain synth
+        check.(getControl.(engine.synths[\grain0], \modLevel) == 1, "input source: crossmod on (modLevel 1)");
+        check.(getControl.(engine.synths[\grain0], \modBus1) == engine.modBuses[2].index
+            and: { getControl.(engine.synths[\grain0], \modAmpAmt1) == 0.5 },
+            "input source: the grain synth reads its routed mod bus with the slot's amp amount");
+        command.(\setModAmpAmt, 0, 2, 0.75); server.sync;
+        check.(getControl.(engine.synths[\grain0], \modAmpAmt2) == 0.75, "setModAmpAmt reaches an input-sourced voice's grain synth");
+        command.(\setModAmpAmt, 0, 2, 0.0);
         command.(\setGrainSource, 0, 0); server.sync;
         check.(engine.synths[\voice0].notNil, "returning to synth restarts the voice synth");
         check.(engine.synths[\voice0].defName == \strataResonator, "the restarted voice synth is the voice's own SynthDef");
@@ -521,6 +659,8 @@ server.waitForBoot({
             and: { getControl.(engine.synths[\grain0], \accentAmt) == 0 }
             and: { getControl.(engine.synths[\grain0], \amp) == 1 },
             "synth source: grain reads the voice bus, no mirror, no grain accent, unity level");
+        check.(getControl.(engine.synths[\grain0], \modLevel) == 0,
+            "synth source: the grain synth's crossmod is off (the voice synth applies it)");
         command.(\setGrainSource, 0, 10);
         command.(\setGrainSource, 0, -1);
         server.sync;
@@ -597,6 +737,17 @@ server.waitForBoot({
         command.(\stopRecord, 3); 0.2.wait; server.sync;
         check.(engine.bufferFrames[3] == frames, "a second stopRecord is a no-op");
         command.(\clearBuffer, 3); server.sync;
+        // stopRecord then clearBuffer before the frame count arrives: the
+        // clear wins (slotChanges), nothing is restored and nothing written
+        File.delete(scratchFile);
+        command.(\recordBuffer, 3, 1.0, 1.0); 0.05.wait; server.sync;
+        0.15.wait;
+        check.(engine.recordSynths[3].notNil, "a recording runs before stopRecord + clearBuffer");
+        command.(\stopRecord, 3);
+        command.(\clearBuffer, 3);
+        1.0.wait; server.sync;
+        check.(engine.bufferFrames[3] == 0, "a clear right after stopRecord leaves the slot empty (got % frames)".format(engine.bufferFrames[3]));
+        check.(File.exists(scratchFile).not, "a clear right after stopRecord writes no scratch take");
 
         // loadBuffer: stereo, mono, too long, missing, unreadable
         stereoPath = scratchRoot +/+ "stereo.wav";
@@ -612,7 +763,10 @@ server.waitForBoot({
         info = [engine.buffersL[4].bufnum, engine.buffersR[4].bufnum];
         command.(\loadBuffer, 4, longPath); 0.5.wait; server.sync;
         check.(engine.bufferFrames[4] == (22050 * 16), "loadBuffer reads at most 16 s");
-        command.(\loadBuffer, 4, stereoPath); 0.3.wait; server.sync;
+        command.(\loadBuffer, 4, stereoPath);
+        check.(engine.bufferFrames[4] == (22050 * 16) and: { engine.bufferSampleRates[4] == 22050 },
+            "loadBuffer keeps the old length until the file has been read");
+        0.3.wait; server.sync;
         check.(engine.bufferFrames[4] == 11025, "loadBuffer sets the valid length from the file");
         check.([engine.buffersL[4].bufnum, engine.buffersR[4].bufnum] == info, "loadBuffer keeps the slot's bufnums");
         check.((bufferSample.(engine.buffersL[4], 100) - 0.5).abs < 0.001
@@ -626,6 +780,11 @@ server.waitForBoot({
         command.(\loadBuffer, 5, monoPath); 0.3.wait; server.sync;
         check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001
             and: { (bufferSample.(engine.buffersR[5], 10) - 0.4).abs < 0.001 }, "a mono file fills both channels");
+        // a clear right after a load wins: the load's completion changes nothing
+        command.(\loadBuffer, 5, stereoPath);
+        command.(\clearBuffer, 5);
+        0.5.wait; server.sync;
+        check.(engine.bufferFrames[5] == 0, "a clear right after loadBuffer leaves the slot empty (got % frames)".format(engine.bufferFrames[5]));
         check.(synthNames.(context.xg).size == before, "loading adds no nodes");
 
         // saveBuffer writes the valid region as a stereo 16-bit WAV
@@ -677,6 +836,52 @@ server.waitForBoot({
         check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
             "no temporary float files are left behind");
 
+        // A 16 s take at the server rate: the interleave finishes, every
+        // sample is in place (left ramp, right its negative) and the time is reported
+        rampValue = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 };
+        longWritePath = scratchRoot +/+ "long-server-rate.wav";
+        frames = (server.sampleRate * 16).asInteger;
+        file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
+        file.openWrite(longWritePath);
+        file.writeData(FloatArray.fill(frames * 2, { arg i; var value = rampValue.(i div: 2); if (i.odd) { value.neg } { value } }));
+        file.close;
+        command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
+        check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
+        savePath = scratchRoot +/+ "long/saved.wav";
+        writeStart = Main.elapsedTime;
+        command.(\saveBuffer, 7, savePath);
+        info = waitFor.({ File.exists(savePath) }, 30);
+        writeSeconds = Main.elapsedTime - writeStart;
+        check.(info, "a 16 s write completes (% frames at % Hz in % s)".format(frames, server.sampleRate, writeSeconds.round(0.01)));
+        file = SoundFile.openRead(savePath);
+        check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames }, "the 16 s file holds every frame");
+        if (file.notNil) {
+            data = FloatArray.newClear(frames * 2);
+            file.readData(data);
+            file.close;
+            check.(((0, 997 .. frames - 1) ++ [8191, 8192, 8193, 16383, 16384, frames - 1]).every({ arg frame;
+                    ((data[frame * 2] - rampValue.(frame)).abs < 0.001) and: { (data[(frame * 2) + 1] + rampValue.(frame)).abs < 0.001 } }),
+                "the 16 s file interleaves every frame in place (chunk boundaries included)");
+        };
+        File.delete(longWritePath);
+
+        // A write that fails (its directory cannot be made: the parent is a
+        // file) forgets its generation and leaves no temporary files
+        savePath = textPath +/+ "sub/cannot.wav";
+        command.(\saveBuffer, 4, savePath); 1.0.wait;
+        check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[savePath.standardizePath].isNil },
+            "a failed newest write removes its writeGenerations entry");
+        check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
+            "a failed write leaves no temporary float files");
+        // .part files a crash left in scratchDir are deleted (alloc does this on start)
+        File.mkdir(engine.scratchDir);
+        File.use(engine.scratchDir +/+ "buf2.wav.17.part", "w", { arg text; text.write("stale") });
+        File.use(engine.scratchDir +/+ "keep.txt", "w", { arg text; text.write("keep") });
+        engine.tryPerform(\deleteStaleParts);
+        check.(File.exists(engine.scratchDir +/+ "buf2.wav.17.part").not and: { File.exists(engine.scratchDir +/+ "keep.txt") },
+            "deleteStaleParts deletes stale .part files in scratchDir and nothing else");
+        File.delete(engine.scratchDir +/+ "keep.txt");
+
         command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
         check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
         check.(synthNames.(context.xg).size == before, "saving adds no nodes");
@@ -711,7 +916,7 @@ server.waitForBoot({
             probe.set(\t_reset, 1);
             0.3.wait;
             peakBus.get({ arg result; value = result; condition.test = true; condition.signal });
-            condition.wait;
+            awaitReply.(condition);
             value
         };
         command.(\recordBuffer, 2, 1.0, 1.0); 0.3.wait; server.sync;
@@ -785,6 +990,26 @@ server.waitForBoot({
             "after the release nothing a spaced burst released stays tracked");
         command.(\setGrainSource, 4, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "the spaced burst leaves no extra nodes");
+
+        // Grain node order holds for any switch history: synth -> buffer ->
+        // input -> synth within 1 s, read at once (the buffer grain synth is
+        // still in its cut): every grain synth that reads the voice bus runs
+        // before every one that mirrors into it, and all before the voice's mod synth
+        command.(\setGrainSource, 4, 3); 0.3.wait;
+        command.(\setGrainSource, 4, 9); 0.3.wait;
+        command.(\setGrainSource, 4, 0); server.sync;   // no wait: the buffer grain synth is in its 50 ms cut
+        orderNodes = synthNodes.(engine.processGroup);
+        orderGrains = voiceGrainNodes.(orderNodes, 4);
+        busReadingAt = orderGrains.select({ arg each; each[1] }).collect(_.first);
+        mirroringAt = orderGrains.reject({ arg each; each[1] }).collect(_.first);
+        check.(busReadingAt.notEmpty and: { mirroringAt.notEmpty } and: { busReadingAt.maxItem < mirroringAt.minItem },
+            "after 0 -> 3 -> 9 -> 0 every bus-reading grain synth runs before every mirroring one (bus-reading at %, mirroring at %)".format(busReadingAt, mirroringAt));
+        check.(voiceModPosition.(orderNodes, 4).notNil and: { orderGrains.every({ arg each; each[0] < voiceModPosition.(orderNodes, 4) }) },
+            "... and every grain synth of the voice before its mod synth (grains at %, mod at %)".format(
+                orderGrains.collect(_.first), voiceModPosition.(orderNodes, 4)));
+        check.(grainsBeforeOwnMods.value, "every voice's grain synths still run before its mod synth");
+        2.5.wait; server.sync;
+        check.(synthNames.(context.xg).size == before, "the 0 -> 3 -> 9 -> 0 switches leave no extra nodes");
 
         // voiceOn never stacks synths (M6; spec section 5 re-gate). A running
         // voice keeps its synths and takes the voiceOn values.
@@ -893,6 +1118,7 @@ server.waitForBoot({
         check.(after[0].isNil and: { after[1].defName == \strataGrain } and: { after[1] !== oldTrio[1] }
             and: { getControl.(after[1], \in) == engine.inputBus.index }
             and: { after[2] === oldTrio[2] }, "voiceOn after a source switch in the release builds the new grain synth, re-gates the mod synth");
+        check.(grainsBeforeOwnMods.value, "the new mirroring grain synth runs before the re-gated mod synth");
         2.5.wait; server.sync;
         check.(oldTrio[0].isPlaying.not and: { oldTrio[1].isPlaying.not } and: { synthNames.(context.xg).size == (before - 1) },
             "the old voice and grain synths free themselves within the grain release (no orphans)");

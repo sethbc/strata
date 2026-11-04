@@ -28,7 +28,7 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 - Pitch shifting (true transposition, 0.25x-4x, with a subtle slow detune drift on unfrozen voices)
 - Position spread (temporal smearing)
 - Grain envelope (the shape of each grain: hann, sine, perc, linen or trap); scene transitions switch it at the end instead of crossfading, and mutations leave it alone
-- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. Grain density does nothing in triggered mode, and neither does position spread unless the voice's source is a buffer (there it still jitters each grain's position). The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
+- Grain mode: **continuous** (grains stream at the grain density) or **triggered** (one grain per trigger; nothing sounds between triggers). The trigger's velocity sets the voice's accent, which the grain carries. Grain density does nothing in triggered mode, and neither does position spread for a voice playing its synth or the input (a buffer-sourced voice still spreads each triggered grain's position). Switching modes fades over a few milliseconds instead of clicking. In triggered mode grains fire from pattern steps (and MIDI notes); K3 keeps its start/freeze meaning, so it does not fire grains. Grain density does nothing in triggered mode, and neither does position spread unless the voice's source is a buffer (there it still jitters each grain's position). The MAIN page shows `[TRIG]` for a voice in triggered mode. Like the envelope, scene transitions switch it at the end and mutations leave it alone
 
 ### Audio Sources (buffers and live input)
 
@@ -36,6 +36,7 @@ Every voice can grain something other than its own synth. Its **source** (the BU
 - **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
 - While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
+- Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
 - While a voice's source is the input, neither its synthesis nor its buffer parameters do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level), and K2, mutations and the drift change only the grain parameters
 - The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
@@ -53,7 +54,7 @@ Voices can modulate each other for evolving, interdependent textures:
 
 - **Master Density** - Controls grain density across all voices simultaneously
 - **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none)
-- **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered
+- **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered, and changing the filter type crossfades (20 ms) instead of clicking
 - **Delay** - Stereo delay (10 ms to 2 s) with feedback, after the filter; starts dry
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
 - **Limiter** - A limiter in the master stage catches peaks from filter resonance and delay feedback before the soft saturation
