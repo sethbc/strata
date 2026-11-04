@@ -14,6 +14,7 @@ Last updated 2026-11-03, after Strata 3.0.1 (the deferred minor findings from th
   - `docs/superpowers/specs/2026-11-03-confluence-features-design.md`: the 3.0 design, still the reference for behaviour.
   - `docs/superpowers/plans/2026-11-03-confluence-features.md`: the 3.0 plan.
   - `docs/superpowers/plans/2026-11-03-minor-findings.md`: the 3.0.1 plan.
+- **Docs layout:** CLAUDE.md holds the rules and the engine command table (about 16k characters; it no longer imports README.md). The detailed implementation reference is in `docs/notes/engine.md` and `docs/notes/lua.md`. Keep CLAUDE.md short: put new details in the notes.
 - **Running the checks locally:**
   - `lua test/run.lua`, `luajit test/run.lua` and `lua test/sync_check.lua`.
   - `test/run_engine_check.sh` needs SuperCollider and a norns checkout at `~/src/norns` (`git clone https://github.com/monome/norns`; CI pins commit `227aa044`).
