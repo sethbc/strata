@@ -183,6 +183,13 @@ var voiceTrio = { arg voice;
     [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)].collect({ arg key; engine.synths[key] })
 };
 
+// The engine's temporary float files (strata-buf*) in the shared system
+// temp dir. Checks compare sets taken before and after their own writes, so
+// files a killed earlier run left behind never count.
+var tempFloatFiles = {
+    PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") })
+        .collect(_.fullPath).asSet
+};
 // bufferState poll value: slot index * 100 + valid seconds
 var decodeBufferState = { arg value; var slot = (value / 100).floor; [slot.asInteger, value - (slot * 100)] };
 var bufferStateSeen = { arg slot, seconds;
@@ -235,6 +242,7 @@ server.waitForBoot({
         var triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
         var filterGroup, filterIn, filterOut, stepBus, filterSynth, stepProbe, readStep, steadySteps, switchStep;
         var orderNodes, orderGrains, busReadingAt, mirroringAt, longWritePath, writeStart, writeSeconds, rampValue;
+        var tempFilesBefore = tempFloatFiles.value;
 
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
@@ -836,8 +844,8 @@ server.waitForBoot({
         file !? { file.close };
         check.(PathName(savePath.dirname).files.collect(_.fileName) == [PathName(savePath).fileName],
             "no .part files are left beside the written file (got %)".format(PathName(savePath.dirname).files.collect(_.fileName)));
-        check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
-            "no temporary float files are left behind");
+        info = tempFloatFiles.value - tempFilesBefore;
+        check.(info.isEmpty, "no temporary float files are left behind (new: %)".format(info.asArray));
 
         // A 16 s take at the server rate: the interleave finishes, every
         // sample is in place (left ramp, right its negative) and the time is reported
@@ -871,11 +879,12 @@ server.waitForBoot({
         // A write that fails (its directory cannot be made: the parent is a
         // file) forgets its generation and leaves no temporary files
         savePath = textPath +/+ "sub/cannot.wav";
+        tempFilesBefore = tempFloatFiles.value;
         command.(\saveBuffer, 4, savePath); 1.0.wait;
         check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[savePath.standardizePath].isNil },
             "a failed newest write removes its writeGenerations entry");
-        check.(PathName(Platform.defaultTempDir).files.select({ arg each; each.fileName.beginsWith("strata-buf") }).isEmpty,
-            "a failed write leaves no temporary float files");
+        info = tempFloatFiles.value - tempFilesBefore;
+        check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
         // .part files a crash left in scratchDir (scratch takes) and its parent
         // (saveBuffer's dated files) are deleted at alloc. alloc runs before the
         // check can point scratchDir away from ~/dust, so the deletion is checked
@@ -894,6 +903,15 @@ server.waitForBoot({
         data = File.readAllString(file.filenameSymbol.asString);
         data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
         check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");
+        // A scratchDir with no directory part has no parent to clean: the
+        // working directory's .part files are left alone
+        info = [engine.scratchDir, File.getcwd +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ ".part")];
+        File.use(info[1], "w", { arg text; text.write("not stale") });
+        engine.scratchDir = "strata-engine-check-relative/";
+        engine.tryPerform(\deleteStaleParts);
+        check.(File.exists(info[1]), "deleteStaleParts with a relative scratchDir leaves the working directory alone");
+        File.delete(info[1]);
+        engine.scratchDir = info[0];
 
         command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
         check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");

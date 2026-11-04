@@ -511,7 +511,11 @@ end
 
 -- The recording ended (its timer ran out or it was stopped early): the slot
 -- stays recording, finishing, until the engine reports what it captured, or
--- BUFFER_SETTLE.fallback_seconds pass without a report
+-- BUFFER_SETTLE.fallback_seconds pass without a report. The fallback only
+-- matters when the bufferState poll is missing: with the poll, its periodic
+-- report settles a take within about 2 s. Without it the last known seconds
+-- is 0, so the take settles empty: the fallback exists so K3 is never
+-- ignored forever, not to recover audio.
 local function finish_buffer_take(slot)
   local buffer = buffers[slot]
   buffer.finishing = true
@@ -2302,13 +2306,15 @@ function recall_scene_instant(scene_num)
     end
   end)
   scene_recall_in_progress = false
-  if not recalled then error(recall_error, 0) end
 
+  -- even after an error: a running voice whose source switched gets its sync
+  -- (of whatever was applied), so the engine never lags the Lua state
   for i = 1, NUM_VOICES do
     if source_changed[i] and voices[i].active then
       sync_voice_values_to_engine(i)
     end
   end
+  if not recalled then error(recall_error, 0) end
 
   -- Restore patterns
   for i = 1, NUM_VOICES do
@@ -3181,15 +3187,30 @@ local function buffer_key(n)
     local slot = voice_buffer_slot(selected_voice)
     if not slot then return end
     if key_press_page[2] == ui_page then
-      -- save_buffer saves only a slot the engine reports holding audio
-      local has_audio = buffers[slot].seconds > 0
-      save_buffer(slot)
-      buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
+      -- a slot recording or awaiting its take is busy: nothing to save yet.
+      -- Otherwise save_buffer saves only a slot the engine reports holding audio
+      local buffer = buffers[slot]
+      if buffer.recording or buffer.finishing then
+        buffer_page_flash("buf " .. slot .. " busy")
+      else
+        local has_audio = buffer.seconds > 0
+        save_buffer(slot)
+        buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
+      end
       buffer_saved_during_k2 = true
     else
       record_buffer(slot)
     end
   end
+end
+
+-- Forget every held key (and the K2 save): for the norns menu and the file
+-- selector, which take the keys while open, so releases never reach key()
+function forget_held_keys()
+  for n in pairs(key_press_page) do
+    key_press_page[n] = nil
+  end
+  buffer_saved_during_k2 = false
 end
 
 -- K2 released: open the file selector for the voice's buffer, unless K3
@@ -3202,6 +3223,9 @@ local function buffer_key_release(n)
   end
   local slot = voice_buffer_slot(selected_voice)
   if not slot then return end
+  -- the selector takes every key while open, so keys held now are released
+  -- there, never reaching key(): forget them
+  forget_held_keys()
   fileselect.enter(_path.audio, function(path)
     -- loaded directly (it also shows the path in buf<n>_file): setting the
     -- param would do nothing when it already holds this path
@@ -3246,10 +3270,7 @@ end
 -- on every 10 Hz drift_metro tick (end of drift_update).
 function forget_keys_held_through_menu()
   if not norns.menu.status() then return end
-  for n in pairs(key_press_page) do
-    key_press_page[n] = nil
-  end
-  buffer_saved_during_k2 = false
+  forget_held_keys()
 end
 
 -- Every way into the norns menu (K1, a script error, a keyboard's menu key)

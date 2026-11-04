@@ -178,7 +178,7 @@ Where a voice's source is chosen and its buffer is filled, so it works without a
 - **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
 - **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done
 - **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
-- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser). For 1.5 s the hint row confirms it with `saved buf <n>`, or shows `buf <n> empty` when the buffer holds no audio and nothing was saved
+- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser). For 1.5 s the hint row confirms it with `saved buf <n>`, shows `buf <n> busy` while the buffer is recording or waiting for its take, or `buf <n> empty` when the buffer holds no audio; nothing is saved in the last two cases
 - The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records, `K3:...` while a take that has ended waits for the engine; K3 does nothing then). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
 
 Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETERS > buffers).
@@ -515,7 +515,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 ### LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
 - **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 0), phase, offset, scaled and raw value (read-only), min, max and baseline, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
-- Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above, and other min/max values change the size of the swing
+- Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above (and swings half as wide as "from min"), and other min/max values change the size of the swing
 
 ### Buffers (group)
 - Record duration (0.5-16 s, default 8) and record level (0-2, default 1)

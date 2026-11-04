@@ -965,20 +965,28 @@ end)
 
 test("an error during a scene recall clears scene_recall_in_progress and is raised", function()
   local context = load_strata(); context.clock.advance()   -- voices 1 and 2 running
-  params:set("v2_mod_speed", 3); capture_scene(1)
-  params:set("v2_mod_speed", 7)
+  local function voice1_full_syncs()
+    local bends = 0
+    for _, call in ipairs(context.calls_named("setVoiceParam")) do
+      if call.args[1] == 0 and call.args[2] == "bend" then bends = bends + 1 end
+    end
+    return bends
+  end
+  -- the scene has voice 1 on buffer 2; voice 2's mod speed action fails
+  -- after voice 1's source has switched
+  params:set("v1_source", 3); params:set("v2_mod_speed", 3); capture_scene(1)
+  params:set("v1_source", 1); params:set("v2_mod_speed", 7)
   params:set_action("v2_mod_speed", function() error("mod speed action failed") end)
+  context.clear_engine_calls()
   local ok, recall_error = pcall(recall_scene, 1, 0)
   assert_true(not ok, "the error reaches the caller")
   assert_true(tostring(recall_error):find("mod speed action failed", 1, true), "the original error: " .. tostring(recall_error))
   assert_equal(local_value("scene_recall_in_progress"), false, "flag cleared after the error")
+  assert_equal(local_value("voices")[1].source, 3, "voice 1's source switched before the error")
+  assert_equal(voice1_full_syncs(), 1, "the switched running voice still gets its end-of-recall sync")
   -- the source action syncs a running voice again
-  context.clear_engine_calls(); params:set("v1_source", 3)
-  local bends = 0
-  for _, call in ipairs(context.calls_named("setVoiceParam")) do
-    if call.args[1] == 0 and call.args[2] == "bend" then bends = bends + 1 end
-  end
-  assert_equal(bends, 1, "a later source switch sends its full sync")
+  context.clear_engine_calls(); params:set("v1_source", 1)
+  assert_equal(voice1_full_syncs(), 1, "a later source switch sends its full sync")
 end)
 
 local text_width = stubs.text_width
@@ -2558,7 +2566,17 @@ end)
 test("a finishing take settles from the last known seconds when no report comes", function()
   local context = load_strata(); context.clock.advance()
   local buffers = local_value("buffers")
-  local fallback_seconds = 5   -- BUFFER_SETTLE.fallback_seconds (only local functions see the table)
+  -- BUFFER_SETTLE is an upvalue of the local finish_buffer_take, which the
+  -- global record_buffer holds
+  local finish_buffer_take = local_value("finish_buffer_take")
+  local buffer_settle
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(finish_buffer_take, index)
+    if not name then break end
+    if name == "BUFFER_SETTLE" then buffer_settle = value end
+  end
+  assert_true(buffer_settle ~= nil, "BUFFER_SETTLE reached through finish_buffer_take")
+  local fallback_seconds = buffer_settle.fallback_seconds
   params:set("record_duration", 2)
   record_buffer(3); context.clock.advance()     -- the timer ends: finishing, no report ever
   assert_true(buffers[3].finishing, "finishing")
@@ -3011,6 +3029,32 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
   assert_equal(page.flash_clock, nil)
 end)
 
+test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 4)
+  local buffers = local_value("buffers")
+  tap(3); assert_true(buffers[3].recording, "K3 records into buffer 3")
+  context.clear_engine_calls()
+  key(2, 1); tap(3); key(2, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
+  assert_equal(#context.calls_named("stopRecord"), 0, "K2+K3 does not stop the recording")
+  assert_equal(hint_text(context), "buf 3 busy", "the hint says the buffer is busy")
+  assert_screen_layout(context, "BUFFER with the busy flash while recording")
+  -- stopped early: the take waits for the engine (finishing)
+  tap(3); assert_true(buffers[3].finishing, "the stopped take is finishing")
+  context.clear_engine_calls()
+  key(2, 1); tap(3); key(2, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
+  assert_equal(hint_text(context), "buf 3 busy", "still busy while finishing")
+  assert_screen_layout(context, "BUFFER with the busy flash while finishing")
+  -- once the engine reports the take, K2+K3 saves it
+  context.polls.fire("bufferState", 205)
+  assert_true(not buffers[3].finishing, "the take settled")
+  key(2, 1); tap(3); key(2, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
+  assert_equal(hint_text(context), "saved buf 3")
+end)
+
 test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
@@ -3036,6 +3080,25 @@ test("a K2 released inside the norns menu is forgotten: K3 records again (fix ro
   assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
   key(2, 0); assert_equal(context.fileselect.last, nil)
   assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
+end)
+
+test("BUFFER K2's release forgets every held key as the file selector opens", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 4)
+  local held_at_enter
+  local stub_enter = context.fileselect.enter
+  context.fileselect.enter = function(...)
+    held_at_enter = {}
+    for n, page in pairs(local_value("key_press_page")) do held_at_enter[n] = page end
+    return stub_enter(...)
+  end
+  -- K3 goes down (it records), then K2 is pressed and released while K3 is
+  -- still held: the selector opens and takes K3's release
+  key(3, 1); key(2, 1); key(2, 0)
+  assert_true(context.fileselect.last ~= nil, "K2's release opens the selector")
+  assert_true(held_at_enter ~= nil and next(held_at_enter) == nil, "no key is held when the selector opens")
+  assert_equal(next(local_value("key_press_page")), nil, "and none afterwards")
+  assert_equal(local_value("buffer_saved_during_k2"), false, "the K2-save flag is clear")
 end)
 
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()

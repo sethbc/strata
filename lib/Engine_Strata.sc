@@ -1356,7 +1356,12 @@ Engine_Strata : CroneEngine {
     // <date>-buf<n>.wav, in _path.audio/strata/ on norns); only *.part files.
     // alloc calls this; no write can be in progress then.
     deleteStaleParts {
-        [scratchDir, scratchDir.withoutTrailingSlash.dirname].do({ arg dir;
+        var parent = scratchDir.withoutTrailingSlash.dirname;
+        var dirs = [scratchDir];
+        // a scratchDir with no directory part has no parent to clean
+        // (dirname gives "" or "."): never glob the working directory
+        if (parent.notEmpty and: { parent != "." }) { dirs = dirs.add(parent) };
+        dirs.do({ arg dir;
             (dir +/+ "*.part").pathMatch.do({ arg partPath; File.delete(partPath) });
         });
     }
