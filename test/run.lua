@@ -2526,6 +2526,35 @@ test("a take settled empty adopts audio the engine reports later; a clear wins",
   assert_true(not buffers[5].finishing)
 end)
 
+test("a load settled empty adopts audio the engine reports later; restores count; a clear wins", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  -- a slow read: the engine keeps reporting 0 s past the settle time
+  load_buffer(2, "/tmp/slow.wav")
+  context.set_time(2); context.polls.fire("bufferState", 100)
+  assert_true(not buffers[2].loaded, "settled empty")
+  context.polls.fire("bufferState", 116)        -- the read completes
+  assert_true(buffers[2].loaded, "the late load is adopted")
+  assert_equal(buffers[2].name, "slow.wav", "it keeps the file name")
+  assert_equal(buffers[2].path, "/tmp/slow.wav")
+  -- a restored slot read late counts once
+  load_buffer(3, "/tmp/restored.wav"); buffers[3].restoring = true   -- as load_buffers_from_disk does
+  context.set_time(4); context.polls.fire("bufferState", 200)
+  assert_equal(local_value("buffers_restored"), 0, "not counted while empty")
+  context.polls.fire("bufferState", 208); context.polls.fire("bufferState", 208)
+  assert_true(buffers[3].loaded); assert_equal(local_value("buffers_restored"), 1, "counted once when adopted")
+  -- a clear, or a new load, in between wins
+  load_buffer(4, "/tmp/gone.wav")
+  context.set_time(6); context.polls.fire("bufferState", 300)
+  clear_buffer(4); context.polls.fire("bufferState", 305)
+  assert_true(not buffers[4].loaded, "clear wins"); assert_equal(buffers[4].name, "empty")
+  load_buffer(5, "/tmp/first.wav")
+  context.set_time(8); context.polls.fire("bufferState", 400)
+  load_buffer(5, "/tmp/second.wav"); context.set_time(10); context.polls.fire("bufferState", 400)
+  assert_true(not buffers[5].loaded, "the second load settled empty too")
+  assert_equal(buffers[5].name, "second.wav", "a new load replaces the old one")
+end)
+
 test("a finishing take settles from the last known seconds when no report comes", function()
   local context = load_strata(); context.clock.advance()
   local buffers = local_value("buffers")
