@@ -177,7 +177,7 @@ Where a voice's source is chosen and its buffer is filled, so it works without a
 - **E3** - Cycle the voice's source: synth, buf 1 ... buf 8, input
 - **K3** - Record the input into the voice's buffer for the record duration (replacing what was there); press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done
 - **K2** - Load a sound file into the voice's buffer: K2 acts when released and opens the file browser at `~/dust/audio`
-- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser)
+- **K2 + K3** - Hold K2 and press K3 to save the voice's buffer to `~/dust/audio/strata/<date-time>-buf<n>.wav` (each K3 press while K2 is held saves again; releasing K2 then does not open the file browser). For 1.5 s the hint row confirms it with `saved buf <n>`, or shows `buf <n> empty` when the buffer holds no audio and nothing was saved
 - The hint row reads `K2:load K3:rec K2+3:save` (`K3:stop` while the buffer records). When the voice's source is the synth or the input there is no buffer: K2 and K3 do nothing and the hint row reads `K2:- K3:- E3:source`
 
 Record duration and level are on arc rings 3 and 4 of this page (and in PARAMETERS > buffers).
@@ -207,7 +207,7 @@ A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page
 - **Channels** - In **per voice** mode (the default) MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored. In **omni to selected** mode every channel plays the voice selected with E2
 - **Notes** - A note sets the voice's pitch: its frequency for a synth voice (exact equal temperament, limited to 20 Hz-2 kHz), its buffer rate for a buffer-sourced voice (note 60 plays at rate 1, an octave up doubles it, limited to 0.25x-4x); an input-sourced voice takes no pitch. A voice that is off starts; then the note accents it at the note's velocity (Karplus plucks its string, a triggered-mode voice fires a grain). Voices keep their slow attacks: Strata is not a fast-attack synth, the velocity lands on the accent
 - **Note off** - Ignored by default, so a note starts a voice that keeps sounding. Set PARAMETERS > midi > midi note off to **voice off** for gated playing: a voice stops when its last held note is released, and a note played while it is still fading out brings it back without restarting its synths
-- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice
+- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice. In omni mode the bend follows the selection: selecting another voice with the wheel off centre returns the old voice to pitch and bends the new one by the wheel's position
 - **CC** - Strata has no fixed CC mapping: map CCs to any parameter with norns' PARAMS > MAP (below)
 
 ### MIDI CC mapping (norns PARAMS > MAP)
@@ -239,7 +239,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 #### Arc Encoders
 
-The rings control the current screen page. On the **MAIN** page:
+The rings control the current screen page. Every ring that sets a value sweeps its parameter's whole range in half a turn (512 of the arc's 1024 ticks per revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). The exceptions are the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per rate). On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
 - **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
@@ -265,7 +265,7 @@ Rings 1 and 2 adjust the voice's buffer parameters whatever its source (ready fo
 On the **LFO** page:
 
 - **Rings 1-3** - Depth of LFO 1-3 (10 ticks per percent; bright while the LFO runs)
-- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked
+- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked (part-turns toward the next rate are forgotten when you select another LFO or change its mode)
 
 On the **SETUP** page the rings are off and do nothing.
 

@@ -1005,6 +1005,47 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   end
 end)
 
+test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
+  local context = load_strata(); context.clock.advance()
+  context.arc.plug(1)
+  local _, set_selected = find_upvalue("selected_voice")
+  local function sweep(page, ring, param_id, where)
+    show_page(page)
+    local spec = params:lookup_param(param_id).controlspec
+    -- the param's step quantizes the value; step-0 params land within float error
+    local tolerance = spec.step + 1e-6 * (spec.maxval - spec.minval)
+    params:set(param_id, spec.minval)
+    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
+    assert_near(params:get(param_id), spec:map(0.5), tolerance, where .. ": 256 ticks reach the warp's midpoint")
+    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
+    assert_near(params:get(param_id), spec.maxval, tolerance, where .. ": 512 ticks reach the maximum")
+    for _ = 1, 512 do context.arc.turn(1, ring, -1) end
+    assert_near(params:get(param_id), spec.minval, tolerance, where .. ": 512 back reach the minimum")
+  end
+  assert_equal(local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 512, "half of the arc's 1024 ticks per turn")
+  -- MAIN: density, every voice's main param, grain size and density
+  sweep(1, 1, "master_density", "MAIN ring 1")
+  for voice_idx = 1, 7 do
+    set_selected(voice_idx)
+    sweep(1, 2, main_param_id(voice_idx), "MAIN ring 2, voice " .. voice_idx)
+    sweep(1, 3, "v" .. voice_idx .. "_grain_size", "MAIN ring 3, voice " .. voice_idx)
+    sweep(1, 4, "v" .. voice_idx .. "_grain_density", "MAIN ring 4, voice " .. voice_idx)
+  end
+  set_selected(1)
+  params:set("v1_source", 3); sweep(1, 2, "v1_buf_pos", "MAIN ring 2, buffer source")
+  params:set("v1_source", 10); sweep(1, 2, "v1_grain_size", "MAIN ring 2, input source")
+  params:set("v1_source", 1)
+  for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
+    sweep(2, ring, param_id, "FX ring " .. ring)
+  end
+  for ring, param_id in ipairs({ "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }) do
+    sweep(4, ring, param_id, "BUFFER ring " .. ring)
+  end
+  -- LFO ring 4 in free mode (the selected LFO's period); its depth rings and
+  -- clocked rate keep their whole steps (the arc LFO page test)
+  sweep(3, 4, "lfo_free_1", "LFO ring 4, free period")
+end)
+
 test("main_param_id and main_param_label name each voice's E3 and arc ring 2 param", function()
   local context = load_strata()
   local device = context.arc.plug(1)
@@ -1017,15 +1058,15 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     local param_id = "v" .. voice_idx .. "_" .. key_name
     assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
     assert_equal(main_param_label(voice_idx), key_name, "main param label of voice " .. voice_idx)
-    -- arc ring 2 adjusts it and shows it across its controlspec range
+    -- arc ring 2 adjusts it and shows it across its controlspec range,
+    -- following the warp (param_fraction, as the FX and BUFFER rings)
     set_selected(voice_idx)
     local min_value, max_value = param_range(param_id)
     params:set(param_id, min_value)
     context.arc.turn(1, 2, 100)  -- enough for one step of sub's fine-scaled drift
     local value = params:get(param_id)
     assert_true(value > min_value, "arc ring 2 raises " .. param_id)
-    local expected_end = util.linlin(min_value, max_value, 0, 64, value) / 64 * math.pi * 2
-    assert_near(device.segments[2].to, expected_end, 1e-9, "ring 2 shows " .. param_id)
+    assert_near(device.segments[2].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring 2 shows " .. param_id)
     -- MAIN shows the label and value in the right column
     redraw()
     local label_found = false
@@ -1034,6 +1075,13 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     end
     assert_true(label_found, "MAIN shows the " .. key_name .. " label")
   end
+  -- an exp main param: the resonator's freq at the sweep's midpoint (200 Hz
+  -- on 20-2000) is drawn at half a turn, not at its linear 9 %
+  set_selected(1)
+  params:set("v1_freq", 20)
+  for _ = 1, 256 do context.arc.turn(1, 2, 1) end
+  assert_near(params:get("v1_freq"), 200, 1e-6, "256 ticks reach the exp midpoint")
+  assert_near(device.segments[2].to, math.pi, 1e-6, "ring 2 draws the exp midpoint at half a turn")
 end)
 
 test("every encoder, key and arc control is safe on every page; arc button only acts on MAIN", function()
@@ -1065,6 +1113,22 @@ test("every encoder, key and arc control is safe on every page; arc button only 
   local density = params:get("master_density")
   context.arc.turn(1, 1, 40)
   assert_equal(params:get("master_density"), density, "arc ring 1 does not change density on SETUP")
+end)
+
+test("the arc button finds MAIN by its page index, not its title", function()
+  local context = load_strata(); context.clock.advance()
+  context.arc.plug(1); show_page(1)
+  local pages = local_value("UI_PAGES")
+  assert_equal(pages.MAIN_PAGE, 1, "MAIN_PAGE is MAIN's index")
+  assert_equal(pages[pages.MAIN_PAGE], "MAIN")
+  local _, set_selected = find_upvalue("selected_voice"); set_selected(3)
+  local voices = local_value("voices")
+  assert_true(not voices[3].active, "voice 3 starts stopped")
+  local title = pages[1]
+  pages[1] = "HOME"   -- a renamed title must not change what the button does
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  pages[1] = title
+  assert_true(voices[3].active, "the button starts the selected voice on page 1")
 end)
 
 test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function()
@@ -1161,15 +1225,17 @@ test("hot-plugged grid and arc fire handlers once per event (I3)", function()
   assert_equal(calls, 2, "replugged grid still runs grid_key once per press")
   grid_key = real_grid_key
 
+  -- compared on the raw 0-1 position: the 0.01 step quantizes the value
+  local density = params:lookup_param("master_density")
   context.arc.plug(1)
-  local before = params:get("master_density")
-  context.arc.turn(1, 1, 20)  -- one delta of 20 -> +1 quantum step
-  local one_step = params:get("master_density") - before
+  local before = density.raw
+  context.arc.turn(1, 1, 20)  -- one delta of 20 -> 20/512 of the range
+  assert_near(density.raw - before, 20 / 512, 1e-9, "a turn is handled once")
   context.arc.unplug(1)
   context.arc.plug(1)
-  before = params:get("master_density")
+  before = density.raw
   context.arc.turn(1, 1, 20)
-  assert_near(params:get("master_density") - before, one_step, 1e-9, "replugged arc handles a turn once")
+  assert_near(density.raw - before, 20 / 512, 1e-9, "replugged arc handles a turn once")
 end)
 
 test("cleanup stops everything and darkens controllers (M9)", function()
@@ -1788,6 +1854,49 @@ test("pitchbend: range, buffer voices, stopped voices, restarts and resets", fun
   params:set("midi_channel_mode", 2)
   assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centred"); assert_near(last_bend(3), 1, 1e-12, "voice 4 re-centred")
   assert_equal(last_bend(0), nil, "an unbent voice gets nothing")
+end)
+
+test("omni pitchbend follows the selection: the old voice re-centres, the new one takes the wheel", function()
+  local context = load_strata(); context.clock.advance()
+  local bend = local_value("midi_state").bend
+  local function last_bend(engine_voice)
+    local value
+    for _, call in ipairs(context.calls_named("setVoiceParam")) do
+      if call.args[1] == engine_voice and call.args[2] == "bend" then value = call.args[3] end
+    end
+    return value
+  end
+  local up = 2 ^ (1 / 12)
+  params:set("midi_channel_mode", 2); show_page(1)
+  context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })   -- bends voice 1
+  context.clear_engine_calls()
+  enc(2, 1)   -- voice 2, wheel still up
+  assert_near(last_bend(0), 1, 1e-12, "voice 1 re-centred"); assert_equal(bend[1], 1)
+  assert_near(last_bend(1), up, 1e-9, "voice 2 takes the wheel"); assert_near(bend[2], up, 1e-9)
+  -- a stopped voice keeps the wheel for its start
+  context.clear_engine_calls()
+  enc(2, 1)   -- voice 3 (stopped)
+  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centred")
+  assert_equal(last_bend(2), nil, "nothing sent to a stopped voice"); assert_near(bend[3], up, 1e-9)
+  toggle_voice(3); assert_near(last_bend(2), up, 1e-9, "starting it sends the wheel")
+  -- BUFFER page E2 is the same selection
+  show_page(4); context.clear_engine_calls()
+  enc(2, -1)
+  assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centred"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
+  -- E2 against the end of the list changes nothing
+  show_page(1); enc(2, -1)   -- voice 1
+  context.clear_engine_calls(); enc(2, -1)
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "no selection change, no bend")
+  -- wheel centred: moving the selection sends nothing
+  context.midi.send(1, { type = "pitchbend", val = 8192, ch = 1 })
+  context.clear_engine_calls(); enc(2, 1)
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "a centred wheel moves nothing")
+  -- per voice: bends stay with their channels' voices
+  params:set("midi_channel_mode", 1)
+  context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })
+  context.clear_engine_calls(); enc(2, 1)
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "per voice mode: the selection does not move bends")
+  assert_near(bend[1], up, 1e-9)
 end)
 
 test("MIDI device param, hot-plug and the SETUP page", function()
@@ -2458,6 +2567,49 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
+test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
+  context.set_time(100)
+  key(2, 1); tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
+  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
+  assert_screen_layout(context, "BUFFER with the save confirmation")
+  key(2, 0); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
+  context.set_time(101.4); redraw()
+  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
+  context.set_time(101.5); redraw()
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the normal hint after 1.5 s")
+  -- an empty buffer: nothing saved, the hint says so
+  context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
+  context.clear_engine_calls()
+  key(2, 1); tap(3); key(2, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
+  assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
+  assert_screen_layout(context, "BUFFER with the empty-buffer flash")
+  -- one clock redraws when the flash ends: it sleeps 1.5 s, clears the flash
+  -- (even if it woke a little early) and redraws
+  local page = local_value("BUFFER_PAGE")
+  local flash_clock = page.flash_clock
+  assert_true(flash_clock ~= nil, "the flash has a clock")
+  local log = context.clock.sleep_log
+  assert_equal(log[#log].id, flash_clock); assert_near(log[#log].amount, 1.5, 1e-9, "it sleeps 1.5 s")
+  key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
+  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is cancelled")
+  flash_clock = page.flash_clock
+  context.clock.resume_thread(flash_clock)
+  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one redraw")
+  assert_equal(page.flash_clock, nil)
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "its redraw shows the normal hint")
+  -- cleanup cancels a pending flash clock
+  key(2, 1); tap(3); key(2, 0)
+  flash_clock = page.flash_clock
+  cleanup()
+  assert_equal(context.clock.threads[flash_clock], nil, "cleanup cancels the flash clock")
+  assert_equal(page.flash_clock, nil)
+end)
+
 test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
@@ -2483,6 +2635,51 @@ test("a K2 released inside the norns menu is forgotten: K3 records again (fix ro
   assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
   key(2, 0); assert_equal(context.fileselect.last, nil)
   assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
+end)
+
+test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()
+  local stub_set_mode
+  local context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
+  context.clock.advance(); show_page(4)
+  assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- K2 down, then K1 opens and closes the menu between two 10 Hz ticks
+  key(2, 1)
+  _menu.set_mode(true)
+  assert_equal(norns.menu.status(), true, "the wrapped set_mode still opens the menu")
+  assert_equal(local_value("key_press_page")[2], nil, "the held K2 is forgotten as the menu opens")
+  _menu.set_mode(false)
+  tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  -- a K2+K3 save, then the menu: the next K2 tap opens the selector
+  tap(3)  -- stop the recording
+  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
+  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1)
+  _menu.set_mode(true); _menu.set_mode(false)
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
+  -- closing the menu forgets nothing (only an opening does)
+  key(2, 1); _menu.set_mode(false)
+  assert_equal(local_value("key_press_page")[2], 4, "set_mode(false) keeps a held key")
+  key(2, 0)
+  -- cleanup gives norns its own set_mode back
+  cleanup()
+  assert_equal(_menu.set_mode, stub_set_mode, "cleanup restores set_mode")
+  -- something that wrapped set_mode after Strata keeps its wrapper; Strata's goes inert
+  stub_set_mode = nil
+  context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
+  local strata_set_mode = _menu.set_mode
+  local mod_set_mode = function(mode) strata_set_mode(mode) end
+  _menu.set_mode = mod_set_mode
+  cleanup()
+  assert_equal(_menu.set_mode, mod_set_mode, "a later wrapper is left in place")
+  show_page(4); key(2, 1)
+  _menu.set_mode(true)
+  assert_equal(norns.menu.status(), true, "the inert wrapper still passes the call on")
+  assert_equal(local_value("key_press_page")[2], 4, "and no longer touches the script's keys")
+  _menu.set_mode(false)
 end)
 
 test("key releases reach only the BUFFER page; other pages act once per press", function()
@@ -2630,7 +2827,7 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   params:set("v1_source", 2)
   params:set("v1_buf_pos", 0.5); params:set("v1_buf_rate", 1)
   params:set("record_duration", 8); params:set("record_level", 1)
-  context.arc.turn(1, 1, 20); assert_near(params:get("v1_buf_pos"), 0.5 + 20 / 200 * 0.01, 1e-6, "ring 1 buf_pos")
+  context.arc.turn(1, 1, 20); assert_near(params:get("v1_buf_pos"), 0.5 + 20 / 512, 1e-6, "ring 1 buf_pos")
   context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > 1, "ring 2 buf_rate")
   context.arc.turn(1, 3, 100); assert_true(params:get("record_duration") > 8, "ring 3 record duration")
   context.arc.turn(1, 4, 100); assert_true(params:get("record_level") > 1, "ring 4 record level")
@@ -3001,6 +3198,32 @@ test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", functio
   local rate = params:get("lfo_clocked_2")
   context.arc.turn(1, 4, -40); assert_equal(params:get("lfo_clocked_2"), rate - 2, "ring 4: clocked rate, 20 ticks a step")
   assert_near(device.segments[4].to, param_fraction("lfo_clocked_2") * math.pi * 2, 1e-9)
+end)
+
+test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode changes", function()
+  local context = load_strata(); context.clock.advance()
+  context.arc.plug(1); show_page(3)
+  for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
+  local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
+  context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_1"), rate_1, "15 ticks carried for LFO 1")
+  enc(2, 1)   -- LFO 2
+  context.arc.turn(1, 4, 5)
+  assert_equal(params:get("lfo_clocked_2"), rate_2, "LFO 1's carried ticks do not step LFO 2")
+  context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "20 of its own ticks do")
+  -- away and back again also forgets them
+  context.arc.turn(1, 4, 15); enc(2, -1); enc(2, 1)
+  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "reselecting forgets the carry")
+  -- the selected LFO's mode changing forgets them
+  context.arc.turn(1, 4, 10)   -- 15 carried
+  params:set("lfo_mode_2", 2); params:set("lfo_mode_2", 1)
+  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "a mode change forgets the carry")
+  -- another LFO's mode changing does not
+  context.arc.turn(1, 4, 10)   -- 15 carried
+  params:set("lfo_mode_3", 2)
+  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 2, "LFO 3's mode leaves LFO 2's carry")
+  -- the depth rings keep their own remainders
+  context.arc.turn(1, 1, 5); enc(2, 1); context.arc.turn(1, 1, 5)
+  assert_equal(params:get("lfo_depth_1"), 1, "ring 1's carry survives a selection change")
 end)
 
 test("scenes capture and recall the LFOs; old files load with LFOs off", function()

@@ -301,6 +301,11 @@ end
 
 local selected_voice = 1
 local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
+UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by its title)
+-- Arc pages follow the screen pages. Every continuous arc ring sweeps its
+-- param's whole range in this many ticks: half a turn of the arc's 1024
+-- ticks per revolution (monome arc spec; matron passes the deltas through)
+UI_PAGES.ARC_TICKS_PER_SWEEP = 512
 local ui_page = 1  -- index into UI_PAGES
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local master_density = 1.0
@@ -835,6 +840,10 @@ function add_lfo_params()
     for _, prefix in ipairs({"lfo_mode_", "lfo_clocked_", "lfo_free_"}) do
       wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end)
     end
+    -- arc ring 4's carried ticks were for the other mode's period param
+    wrap_param_action("lfo_mode_" .. n, nil, function()
+      if n == selected_lfo then forget_arc_lfo_period_ticks() end
+    end)
   end
 end
 
@@ -1194,6 +1203,8 @@ function init()
   -- a fast turn steps through pages instead of jumping to SETUP
   norns.enc.accel(1, false)
   norns.enc.sens(1, E1_TICKS_PER_PAGE)
+  -- forget held keys the moment the norns menu opens
+  watch_menu_opening()
   
   -- Start the per-voice drift
   drift_metro = metro.init()
@@ -2490,21 +2501,22 @@ function update_voice_list()
 end
 
 -- The synthesis param E3 and arc ring 2 adjust on MAIN, per voice type:
--- param id suffix, screen label, screen value format, and arc delta scale
+-- param id suffix, screen label and screen value format (the arc ring sweeps
+-- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring)
 local MAIN_PARAMS = {
-  resonator = {key = "freq", label = "freq", format = "%.0f Hz", arc_scale = 1},
-  fm = {key = "index", label = "index", format = "%.1f", arc_scale = 0.1},
-  folder = {key = "fold", label = "fold", format = "%.1f", arc_scale = 0.1},
-  sub = {key = "drift", label = "drift", format = "%.3f", arc_scale = 0.01},
-  pulse = {key = "width", label = "width", format = "%.2f", arc_scale = 0.01},
-  karplus = {key = "decay", label = "decay", format = "%.1f s", arc_scale = 0.1},
-  ring = {key = "ratio", label = "ratio", format = "%.2f", arc_scale = 0.01}
+  resonator = {key = "freq", label = "freq", format = "%.0f Hz"},
+  fm = {key = "index", label = "index", format = "%.1f"},
+  folder = {key = "fold", label = "fold", format = "%.1f"},
+  sub = {key = "drift", label = "drift", format = "%.3f"},
+  pulse = {key = "width", label = "width", format = "%.2f"},
+  karplus = {key = "decay", label = "decay", format = "%.1f s"},
+  ring = {key = "ratio", label = "ratio", format = "%.2f"}
 }
 
 -- A buffer-sourced voice shows and adjusts its buffer position instead; an
 -- input-sourced voice its grain size (its synth and buffer params do nothing)
-local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f", arc_scale = 0.1}
-local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s", arc_scale = 0.01}
+local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
+local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 function main_param_entry(voice_idx)
   if voice_uses_synth(voice_idx) then
@@ -2822,7 +2834,9 @@ end
 
 local function lfo_enc(n, d)
   if n == 2 then
+    local previous_lfo = selected_lfo
     selected_lfo = util.clamp(selected_lfo + d, 1, NUM_LFOS)
+    if selected_lfo ~= previous_lfo then forget_arc_lfo_period_ticks() end
   elseif n == 3 then
     params:delta("lfo_depth_" .. selected_lfo, d)  -- percent steps
   end
@@ -2839,9 +2853,12 @@ end
 
 local function ignore_page_input() end
 
--- E2 on MAIN and BUFFER: step the shared selected voice
+-- E2 on MAIN and BUFFER: step the shared selected voice (an omni MIDI
+-- pitchbend moves with it)
 local function select_voice_by(d)
+  local previous_voice = selected_voice
   selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
+  if selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
   update_voice_list()
 end
 
@@ -2897,8 +2914,34 @@ local BUFFER_PAGE = {
   row_spacing = 6,        -- eight rows at y 14-56, clear of the hint row at y 62
   slot_x = 65,
   name_x = 71,
-  name_max_width = 31     -- the name ends before the widest seconds ("16.0s" from x 103)
+  name_max_width = 31,    -- the name ends before the widest seconds ("16.0s" from x 103)
+  flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
+  flash_text = nil,       -- the transient hint, drawn instead of the key hints
+  flash_until = 0,        -- util.time() when it ends
+  flash_clock = nil       -- redraws once when it ends
 }
+
+-- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
+-- redraw_buffer stops drawing it at flash_until; the clock clears it (even
+-- if it wakes a little early) and redraws once so it goes away untouched.
+function buffer_page_flash(text)
+  BUFFER_PAGE.flash_text = text
+  BUFFER_PAGE.flash_until = util.time() + BUFFER_PAGE.flash_seconds
+  cancel_buffer_page_flash_clock()
+  BUFFER_PAGE.flash_clock = clock.run(function()
+    clock.sleep(BUFFER_PAGE.flash_seconds)
+    BUFFER_PAGE.flash_clock = nil
+    BUFFER_PAGE.flash_text = nil
+    redraw()
+  end)
+end
+
+function cancel_buffer_page_flash_clock()
+  if BUFFER_PAGE.flash_clock then
+    clock.cancel(BUFFER_PAGE.flash_clock)
+    BUFFER_PAGE.flash_clock = nil
+  end
+end
 
 -- A buffer's name for the screen: the file name without its extension, cut
 -- to fit. Cached per slot until the name changes (load, take, clear), so a
@@ -2956,7 +2999,9 @@ function redraw_buffer()
     screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
   end
 
-  if voice_slot then
+  if BUFFER_PAGE.flash_text and util.time() < BUFFER_PAGE.flash_until then
+    draw_hints(BUFFER_PAGE.flash_text)
+  elseif voice_slot then
     draw_hints("K2:load K3:" .. (buffers[voice_slot].recording and "stop" or "rec") .. " K2+3:save")
   else
     -- K2 and K3 need a buffer source; E3 picks one
@@ -2985,7 +3030,10 @@ local function buffer_key(n)
     local slot = voice_buffer_slot(selected_voice)
     if not slot then return end
     if key_press_page[2] == ui_page then
+      -- save_buffer saves only a slot the engine reports holding audio
+      local has_audio = buffers[slot].seconds > 0
       save_buffer(slot)
+      buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
       buffer_saved_during_k2 = true
     else
       record_buffer(slot)
@@ -3042,14 +3090,46 @@ end
 -- The norns menu (K1, or PARAMS and its file selector) takes every key
 -- while it is open, so a key released there never reaches key() and would
 -- stay "held" (on BUFFER, every later K3 would save instead of record).
--- Called on every 10 Hz drift_metro tick (end of drift_update): while the menu is open, forget
--- every held key and the BUFFER page's K2 gesture.
+-- While the menu is open, forget every held key and the BUFFER page's K2
+-- gesture. Called as the menu opens (watch_menu_opening) and, as a fallback,
+-- on every 10 Hz drift_metro tick (end of drift_update).
 function forget_keys_held_through_menu()
   if not norns.menu.status() then return end
   for n in pairs(key_press_page) do
     key_press_page[n] = nil
   end
   buffer_saved_during_k2 = false
+end
+
+-- Every way into the norns menu (K1, a script error, a keyboard's menu key)
+-- goes through _menu.set_mode(true) (lua/core/menu.lua), looked up on _menu
+-- at each call, so a wrapper sees the menu open. cleanup puts norns' own
+-- function back; if something wrapped it after Strata, that wrapper stays
+-- and Strata's becomes a plain pass-through.
+local menu_watch = {original_set_mode = nil, wrapper = nil, active = false}
+
+function watch_menu_opening()
+  if menu_watch.wrapper or not (_menu and _menu.set_mode) then return end
+  -- both held as upvalues: the wrapper never looks up a script global, so
+  -- it cannot break the system menu even if one is gone
+  local original_set_mode = _menu.set_mode
+  local forget_keys = forget_keys_held_through_menu
+  menu_watch.original_set_mode = original_set_mode
+  menu_watch.wrapper = function(mode)
+    original_set_mode(mode)
+    if mode == true and menu_watch.active then forget_keys() end
+  end
+  menu_watch.active = true
+  _menu.set_mode = menu_watch.wrapper
+end
+
+function unwatch_menu_opening()
+  menu_watch.active = false
+  if menu_watch.wrapper and _menu.set_mode == menu_watch.wrapper then
+    _menu.set_mode = menu_watch.original_set_mode
+  end
+  menu_watch.wrapper = nil
+  menu_watch.original_set_mode = nil
 end
 
 -- Keys. Presses go to the page's PAGE_KEY handler. A release goes to
@@ -3083,20 +3163,30 @@ end
 -- turns and ARC_PAGE_REDRAW[ui_page] draws the rings between arc_redraw's
 -- clear and refresh.
 
+-- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
+-- param's whole range. params:delta moves its 0-1 raw value by delta *
+-- quantum, so the sweep follows the warp (exp params sweep evenly) and the
+-- step only quantizes the value read back. (A global: the main chunk is near
+-- Lua's local limit.)
+-- Control params only: it reads the param's controlspec.
+function arc_sweep_param(param_id, delta)
+  local quantum = params:lookup_param(param_id).controlspec.quantum
+  params:delta(param_id, delta / (UI_PAGES.ARC_TICKS_PER_SWEEP * quantum))
+end
+
 local function arc_main_delta(n, delta)
   if n == 1 then
     -- Ring 1: Master density
-    params:delta("master_density", delta / 20)
+    arc_sweep_param("master_density", delta)
   elseif n == 2 then
     -- Ring 2: Selected voice's main parameter
-    local scale = main_param_entry(selected_voice).arc_scale
-    params:delta(main_param_id(selected_voice), delta * scale)
+    arc_sweep_param(main_param_id(selected_voice), delta)
   elseif n == 3 then
     -- Ring 3: Grain size
-    params:delta("v" .. selected_voice .. "_grain_size", delta / 100)
+    arc_sweep_param("v" .. selected_voice .. "_grain_size", delta)
   elseif n == 4 then
     -- Ring 4: Grain density
-    params:delta("v" .. selected_voice .. "_grain_density", delta / 10)
+    arc_sweep_param("v" .. selected_voice .. "_grain_density", delta)
   end
 end
 
@@ -3106,10 +3196,9 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
 
   -- Ring 2: Selected voice's main parameter, across its controlspec range
+  -- following the warp (as the sweep does: exp freq's midpoint at half a turn)
   local v = voices[selected_voice]
-  local param_id = main_param_id(selected_voice)
-  local param_min, param_max = param_range(param_id)
-  local param_pos = util.linlin(param_min, param_max, 0, 64, params:get(param_id))
+  local param_pos = param_fraction(main_param_id(selected_voice)) * 64
   arc_port:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
 
   -- Ring 3: Grain size (0.01 to 0.5)
@@ -3121,18 +3210,19 @@ local function arc_main_redraw(arc_port)
   arc_port:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
 end
 
--- FX page rings: the param each ring adjusts and its delta scale
+-- FX page rings: the param each ring adjusts (each sweeps its range in
+-- UI_PAGES.ARC_TICKS_PER_SWEEP ticks)
 local ARC_FX_RINGS = {
-  {param_id = "filter_freq", scale = 1 / 4},
-  {param_id = "filter_res", scale = 1 / 100},
-  {param_id = "delay_time", scale = 1 / 200},
-  {param_id = "delay_mix", scale = 1 / 100}
+  {param_id = "filter_freq"},
+  {param_id = "filter_res"},
+  {param_id = "delay_time"},
+  {param_id = "delay_mix"}
 }
 
 local function arc_fx_delta(n, delta)
   local ring = ARC_FX_RINGS[n]
   if ring then
-    params:delta(ring.param_id, delta * ring.scale)
+    arc_sweep_param(ring.param_id, delta)
   end
 end
 
@@ -3146,12 +3236,12 @@ end
 
 -- BUFFER page rings: the selected voice's buffer position and rate, then
 -- the recording duration and level. Param id suffixes after "v<i>_" for
--- the voice rings.
+-- the voice rings. Each sweeps its range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks.
 local ARC_BUFFER_RINGS = {
-  {voice_key = "buf_pos", scale = 1 / 200},
-  {voice_key = "buf_rate", scale = 1 / 100},
-  {param_id = "record_duration", scale = 1 / 20},
-  {param_id = "record_level", scale = 1 / 100}
+  {voice_key = "buf_pos"},
+  {voice_key = "buf_rate"},
+  {param_id = "record_duration"},
+  {param_id = "record_level"}
 }
 
 local function arc_buffer_ring_param(ring)
@@ -3163,7 +3253,7 @@ end
 local function arc_buffer_delta(n, delta)
   local ring = ARC_BUFFER_RINGS[n]
   if ring then
-    params:delta(arc_buffer_ring_param(ring), delta * ring.scale)
+    arc_sweep_param(arc_buffer_ring_param(ring), delta)
   end
 end
 
@@ -3181,14 +3271,21 @@ local function arc_buffer_redraw(arc_port)
 end
 
 -- LFO page rings: 1-3 the depth of LFO 1-3 (whole percents), 4 the
--- selected LFO's period (free seconds, or the clocked rate option)
+-- selected LFO's period (free seconds, swept like every continuous ring, or
+-- the clocked rate option in whole steps)
 local ARC_LFO = {
   ticks_per_percent = 10,
-  free_scale = 1 / 10,
   ticks_per_rate = 20,
   period_ring = 4
 }
 local arc_lfo_ticks = {}  -- per ring: ticks not yet worth a whole step
+
+-- Ring 4's carried ticks belong to one LFO's clocked rate: forget them when
+-- the selected LFO (E2 on the LFO page) or its mode changes, so they never
+-- step another param
+function forget_arc_lfo_period_ticks()
+  arc_lfo_ticks[ARC_LFO.period_ring] = nil
+end
 
 -- Whole steps in a ring's accumulated ticks; the rest is kept for later
 local function arc_whole_steps(ring, delta, ticks_per_step)
@@ -3212,7 +3309,7 @@ local function arc_lfo_delta(n, delta)
   elseif n == ARC_LFO.period_ring then
     local period_id = lfo_period_param_id(selected_lfo)
     if period_id == "lfo_free_" .. selected_lfo then
-      params:delta(period_id, delta * ARC_LFO.free_scale)
+      arc_sweep_param(period_id, delta)
     else
       local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_rate)
       if steps ~= 0 then params:delta(period_id, steps) end
@@ -3273,7 +3370,7 @@ end
 
 function arc_key(n, s)
   -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
-  if s == 1 and UI_PAGES[ui_page] == "MAIN" then
+  if s == 1 and ui_page == UI_PAGES.MAIN_PAGE then
     start_or_freeze_selected_voice()
     redraw()
   end
@@ -3404,9 +3501,24 @@ end
 -- engine applies it to the voice synth and to strataGrainBuf; a stopped
 -- voice gets it when it starts (sync_voice_values_to_engine).
 function midi_pitchbend(voice_idx, value)
-  local ratio = 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12)
+  midi_set_bend(voice_idx, 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12))
+end
+
+function midi_set_bend(voice_idx, ratio)
   midi_state.bend[voice_idx] = ratio
   if voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
+end
+
+-- Omni mode bends whichever voice is selected. When the selection moves with
+-- the wheel off centre, the voice it leaves returns to pitch and the newly
+-- selected voice takes the wheel's current bend (a stopped voice gets it
+-- when it starts). Per voice mode leaves bends with their channels' voices.
+function midi_bend_follow_selection(previous_voice)
+  if params:get("midi_channel_mode") ~= 2 then return end
+  local ratio = midi_state.bend[previous_voice]
+  if ratio == 1 then return end
+  midi_set_bend(previous_voice, 1)
+  midi_set_bend(selected_voice, ratio)
 end
 
 -- Grid functions
@@ -4195,6 +4307,10 @@ function grid_redraw_64(grid_device)
 end
 
 function cleanup()
+  -- Give the norns menu its own set_mode back first, before anything below
+  -- can fail
+  unwatch_menu_opening()
+
   -- Save scenes to disk before exiting, unless that would overwrite a scenes
   -- file that failed to load and could not be moved aside
   if scene_autosave_blocked then
@@ -4244,6 +4360,7 @@ function cleanup()
   for slot = 1, NUM_BUFFERS do
     cancel_buffer_recording_timer(slot)
   end
+  cancel_buffer_page_flash_clock()
 
   -- Stop listening to MIDI before the voices go off
   if midi_device then midi_device.event = nil end

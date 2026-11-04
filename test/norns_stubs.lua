@@ -943,6 +943,10 @@ function stubs.install(options)
   context.menu = { rebuilds = 0, mode = false }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
+  -- lua/core/menu.lua: _menu.set_mode(true) opens the menu (K1, a script
+  -- error), set_mode(false) returns to the script. The real one also swaps
+  -- the key/enc/redraw handlers; the stub only tracks the mode
+  function context.menu.set_mode(mode) context.menu.mode = mode end
 
   _G.engine = engine
   _G.util = util
