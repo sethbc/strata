@@ -892,7 +892,9 @@ test("scene recall: one full sync per voice whose source changed, after its para
       end
     end
   end
-  -- a full sync (sync_voice_values_to_engine) ends with the voice's bend
+  -- a full sync (sync_voice_values_to_engine) ends with the voice's bend.
+  -- MIDI pitchbend also sends setVoiceParam "bend", so this test must not
+  -- send any pitchbend, or it would count as a sync
   local function full_syncs(context, first_call, engine_voice)
     local count, last_sync, last_call = 0, nil, nil
     for index = first_call, #context.engine_calls do
@@ -936,6 +938,24 @@ test("scene recall: one full sync per voice whose source changed, after its para
     assert_equal(local_value("scene_recall_in_progress"), false, where .. ": flag cleared")
     assert_engine_has_lua_state(context, where)
   end
+end)
+
+test("an error during a scene recall clears scene_recall_in_progress and is raised", function()
+  local context = load_strata(); context.clock.advance()   -- voices 1 and 2 running
+  params:set("v2_mod_speed", 3); capture_scene(1)
+  params:set("v2_mod_speed", 7)
+  params:set_action("v2_mod_speed", function() error("mod speed action failed") end)
+  local ok, recall_error = pcall(recall_scene, 1, 0)
+  assert_true(not ok, "the error reaches the caller")
+  assert_true(tostring(recall_error):find("mod speed action failed", 1, true), "the original error: " .. tostring(recall_error))
+  assert_equal(local_value("scene_recall_in_progress"), false, "flag cleared after the error")
+  -- the source action syncs a running voice again
+  context.clear_engine_calls(); params:set("v1_source", 3)
+  local bends = 0
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "bend" then bends = bends + 1 end
+  end
+  assert_equal(bends, 1, "a later source switch sends its full sync")
 end)
 
 local text_width = stubs.text_width
@@ -2233,6 +2253,68 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   assert_equal(buffers[5].name, "unreadable.wav", "the name stays")
   load_buffer(6, "/tmp/fine.wav"); context.polls.fire("bufferState", 503.5)
   assert_true(buffers[6].loaded, "audio reported: loaded"); assert_near(buffers[6].seconds, 3.5, 1e-9)
+end)
+
+test("a take settled empty adopts audio the engine reports later; a clear wins", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  params:set("record_duration", 2)
+  record_buffer(3); context.clock.advance()     -- the timer ends; the engine is slow
+  context.set_time(5); context.polls.fire("bufferState", 200)
+  assert_equal(buffers[3].name, "empty", "a periodic 0 after the settle time empties the slot")
+  context.polls.fire("bufferState", 202)        -- the take completes late
+  assert_true(buffers[3].loaded, "the late take is adopted"); assert_equal(buffers[3].name, "take 3")
+  assert_equal(buffers[3].path, scratch_take_path(3), "with the scratch take path")
+  context.polls.fire("bufferState", 202); context.polls.fire("bufferState", 203)
+  assert_equal(buffers[3].name, "take 3", "later reports leave it a take")
+  -- a slot cleared after an empty take is not brought back by a report
+  record_buffer(4); record_buffer(4)
+  context.set_time(10); context.polls.fire("bufferState", 300)
+  assert_equal(buffers[4].name, "empty")
+  clear_buffer(4); context.polls.fire("bufferState", 302)
+  assert_true(not buffers[4].loaded, "clear wins"); assert_equal(buffers[4].path, nil)
+  -- nor is a slot whose last event was a load or a new recording
+  record_buffer(5); record_buffer(5)
+  context.set_time(15); context.polls.fire("bufferState", 400)
+  record_buffer(5); context.polls.fire("bufferState", 401)
+  assert_true(buffers[5].recording, "a new recording is not adopted as the old take")
+  assert_true(not buffers[5].finishing)
+end)
+
+test("a finishing take settles from the last known seconds when no report comes", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  local fallback_seconds = 5   -- BUFFER_SETTLE.fallback_seconds (only local functions see the table)
+  params:set("record_duration", 2)
+  record_buffer(3); context.clock.advance()     -- the timer ends: finishing, no report ever
+  assert_true(buffers[3].finishing, "finishing")
+  local log = context.clock.sleep_log
+  assert_equal(log[#log].amount, fallback_seconds, "the fallback waits fallback_seconds after the take ends")
+  context.clock.advance()                       -- the fallback runs
+  assert_true(not buffers[3].finishing and not buffers[3].recording, "settled")
+  assert_equal(buffers[3].name, "empty", "no seconds known: empty")
+  context.clear_engine_calls(); record_buffer(3)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
+  -- a stopped take gets the fallback too, and settles as a take when the
+  -- slot's seconds are known
+  record_buffer(3)
+  assert_true(buffers[3].finishing)
+  buffers[3].seconds = 1.5                      -- as an earlier report left it
+  context.clock.advance()
+  assert_true(buffers[3].loaded, "known seconds: loaded"); assert_equal(buffers[3].name, "take 3")
+  -- a report, a load, a clear or cleanup cancels the fallback
+  local pending = context.clock.pending_count()
+  record_buffer(4); record_buffer(4)
+  assert_equal(context.clock.pending_count(), pending + 1, "fallback pending")
+  context.polls.fire("bufferState", 301)
+  assert_equal(context.clock.pending_count(), pending, "a report settles it and cancels the fallback")
+  record_buffer(5); record_buffer(5); load_buffer(5, "/tmp/x.wav")
+  assert_equal(context.clock.pending_count(), pending, "load cancels the fallback")
+  record_buffer(6); record_buffer(6); clear_buffer(6)
+  assert_equal(context.clock.pending_count(), pending, "clear cancels the fallback")
+  record_buffer(7); record_buffer(7)
+  cleanup()
+  assert_equal(context.clock.pending_count(), 0, "cleanup cancels the fallback")
 end)
 
 test("bufferState poll is found and started in init", function()

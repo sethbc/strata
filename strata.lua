@@ -413,20 +413,25 @@ end
 -- marks it, until then), and a file load, shown at once, stays loaded only
 -- if the engine reports audio. confirm_since is the util.time() of the
 -- change awaiting that report (nil = settled); restoring marks a load from
--- load_buffers_from_disk; missing_path is a remembered file that was not
--- found on start (kept in buffers.data).
+-- load_buffers_from_disk; empty_take marks a take that settled without
+-- audio (a later report of audio adopts it); missing_path is a remembered
+-- file that was not found on start (kept in buffers.data).
 local buffers = {}
 for slot = 1, NUM_BUFFERS do
   buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
-    seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
+    empty_take = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
 end
-local buffer_record_clocks = {}  -- per slot: clock that ends the recording state
+-- per slot: clock that ends the recording state, then the finishing fallback
+local buffer_record_clocks = {}
 local buffer_state_poll = nil
 local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
--- A report of 0 s settles a take or load only this long after the change:
--- the periodic poll can carry a value read before the engine finished (the
--- recording timer ends just before the engine's take completes)
-local BUFFER_CONFIRM_SECONDS = 1
+-- confirm_seconds: a report of 0 s settles a take or load only this long
+-- after the change (the periodic poll can carry a value read before the
+-- engine finished: the recording timer ends just before the engine's take
+-- completes). fallback_seconds: a finishing take with no report at all
+-- (no bufferState poll) settles this long after it ended, from the slot's
+-- last known seconds.
+local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5}
 local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
 local buffer_audio_dir = _path.audio .. "strata/"
 local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
@@ -454,12 +459,45 @@ function scratch_take_path(slot)
   return buffer_scratch_dir .. "buf" .. slot .. ".wav"
 end
 
+-- Settle a take or load awaiting the engine (confirm_since set) from the
+-- slot's seconds: a take with audio is loaded (named take <n>, its path the
+-- scratch take), one without leaves the slot empty (empty_take); a load
+-- stays loaded only with audio; a restored slot with audio counts in
+-- buffers_restored. Cancels the finishing fallback.
+function settle_buffer_slot(slot)
+  local buffer = buffers[slot]
+  local has_audio = buffer.seconds > 0
+  buffer.confirm_since = nil
+  if buffer.finishing then
+    cancel_buffer_recording_timer(slot)
+    buffer.finishing = false
+    buffer.recording = false
+    buffer.empty_take = not has_audio
+    buffer.name = has_audio and ("take " .. slot) or "empty"
+    buffer.path = has_audio and scratch_take_path(slot) or nil
+  end
+  buffer.loaded = has_audio
+  if buffer.restoring then
+    buffer.restoring = false
+    if has_audio then buffers_restored = buffers_restored + 1 end
+  end
+end
+
 -- The recording ended (its timer ran out or it was stopped early): the slot
--- stays recording, finishing, until the engine reports what it captured
+-- stays recording, finishing, until the engine reports what it captured, or
+-- BUFFER_SETTLE.fallback_seconds pass without a report
 local function finish_buffer_take(slot)
   local buffer = buffers[slot]
   buffer.finishing = true
   buffer.confirm_since = util.time()
+  buffer_record_clocks[slot] = clock.run(function()
+    clock.sleep(BUFFER_SETTLE.fallback_seconds)
+    buffer_record_clocks[slot] = nil
+    if buffer.finishing then
+      settle_buffer_slot(slot)
+      buffer_display_changed()
+    end
+  end)
 end
 
 -- A usable sound file path: not empty, not norns' "-" (no file chosen) and
@@ -491,6 +529,7 @@ function load_buffer(slot, path)
   buffer.recording = false
   buffer.finishing = false
   buffer.restoring = false
+  buffer.empty_take = false
   buffer.confirm_since = util.time()
   buffer.path = path
   buffer.missing_path = nil
@@ -515,6 +554,7 @@ function record_buffer(slot)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
     buffer.restoring = false
+    buffer.empty_take = false
     buffer.confirm_since = nil
     buffer.missing_path = nil
     buffer_record_clocks[slot] = clock.run(function()
@@ -538,6 +578,7 @@ function clear_buffer(slot)
   buffer.recording = false
   buffer.finishing = false
   buffer.restoring = false
+  buffer.empty_take = false
   buffer.seconds = 0
   buffer.confirm_since = nil
   buffer.path = nil
@@ -565,12 +606,12 @@ function save_buffer(slot)
 end
 
 -- bufferState poll: one slot per message, slot index * 100 + seconds. It
--- also settles a take or load awaiting the engine (confirm_since set), on
--- any report, repeated or not: audio settles it at once, 0 s only
--- BUFFER_CONFIRM_SECONDS after the change. A take with audio is loaded
--- (named take <n>, its path the scratch take), one without leaves the slot
--- empty; a load stays loaded only with audio; a restored slot with audio
--- counts in buffers_restored.
+-- also settles a take or load awaiting the engine (confirm_since set,
+-- settle_buffer_slot), on any report, repeated or not: audio settles it at
+-- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take
+-- that settled empty (a periodic 0 before a slow take completed) is adopted
+-- when audio is reported later, as long as nothing else (load, clear, a new
+-- recording) happened in the slot since.
 local function buffer_state_changed(value)
   local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
   local slot = slot_index + 1
@@ -581,19 +622,14 @@ local function buffer_state_changed(value)
   buffer.seconds = seconds
   local has_audio = seconds > 0
   if buffer.confirm_since ~= nil
-    and (has_audio or util.time() - buffer.confirm_since >= BUFFER_CONFIRM_SECONDS) then
-    buffer.confirm_since = nil
-    if buffer.finishing then
-      buffer.finishing = false
-      buffer.recording = false
-      buffer.name = has_audio and ("take " .. slot) or "empty"
-      buffer.path = has_audio and scratch_take_path(slot) or nil
-    end
-    buffer.loaded = has_audio
-    if buffer.restoring then
-      buffer.restoring = false
-      if has_audio then buffers_restored = buffers_restored + 1 end
-    end
+    and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
+    settle_buffer_slot(slot)
+    changed = true
+  elseif has_audio and buffer.empty_take then
+    buffer.empty_take = false
+    buffer.loaded = true
+    buffer.name = "take " .. slot
+    buffer.path = scratch_take_path(slot)
     changed = true
   end
   -- the periodic poll repeats unchanged values: redraw only on a change
@@ -2193,48 +2229,52 @@ function recall_scene_instant(scene_num)
   local scene_data = scenes[scene_num].data
   local source_changed = {}
   scene_recall_in_progress = true
-
-  -- Restore global parameters
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    params:set(global.id, scene_data[global.id])
-  end
-
-  -- Restore voice states
-  for i = 1, NUM_VOICES do
-    local voice_data = scene_data.voices[i]
-    local prefix = "v" .. i .. "_"
-
-    local previous_source = voices[i].source
-    params:set(prefix .. "source", voice_data.source)
-    source_changed[i] = voices[i].source ~= previous_source
-
-    for key, value in pairs(voice_data.params) do
-      params:set(prefix .. key, value)
+  -- the flag must not outlive an error in a param action: clear it, then
+  -- raise the error again
+  local recalled, recall_error = pcall(function()
+    -- Restore global parameters
+    for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
+      params:set(global.id, scene_data[global.id])
     end
 
-    for key, value in pairs(voice_data.grain) do
-      params:set(prefix .. GRAIN_PARAM_IDS[key], value)
+    -- Restore voice states
+    for i = 1, NUM_VOICES do
+      local voice_data = scene_data.voices[i]
+      local prefix = "v" .. i .. "_"
+
+      local previous_source = voices[i].source
+      params:set(prefix .. "source", voice_data.source)
+      source_changed[i] = voices[i].source ~= previous_source
+
+      for key, value in pairs(voice_data.params) do
+        params:set(prefix .. key, value)
+      end
+
+      for key, value in pairs(voice_data.grain) do
+        params:set(prefix .. GRAIN_PARAM_IDS[key], value)
+      end
+
+      -- Restore crossmod slots
+      for slot = 1, NUM_MOD_SLOTS do
+        local slot_data = voice_data.crossmod["slot" .. slot]
+        params:set(prefix .. "mod_source_" .. slot, slot_data.source)
+        params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+        params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+      end
+      params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
+
+      frozen[i] = scene_data.frozen[i]
+
+      -- Start/stop voices last: toggle_voice syncs the restored state
+      if voice_data.active ~= voices[i].active then
+        toggle_voice(i)
+        source_changed[i] = false
+      end
     end
-
-    -- Restore crossmod slots
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      params:set(prefix .. "mod_source_" .. slot, slot_data.source)
-      params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-      params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-    end
-    params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-    frozen[i] = scene_data.frozen[i]
-
-    -- Start/stop voices last: toggle_voice syncs the restored state
-    if voice_data.active ~= voices[i].active then
-      toggle_voice(i)
-      source_changed[i] = false
-    end
-  end
-
+  end)
   scene_recall_in_progress = false
+  if not recalled then error(recall_error, 0) end
+
   for i = 1, NUM_VOICES do
     if source_changed[i] and voices[i].active then
       sync_voice_values_to_engine(i)
