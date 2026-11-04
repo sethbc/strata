@@ -1,0 +1,737 @@
+# Lua implementation notes
+
+Detailed reference moved out of CLAUDE.md. Read the section you need; grep for the function name.
+
+## Key Implementation Patterns
+
+### Voice State Management
+
+Each voice has a table structure containing:
+- `name` - Voice type identifier
+- `active` - Boolean state
+- `source` - Grain source, a `SOURCE_OPTIONS` index: 1 = synth, 2..`NUM_BUFFERS` + 1 = buffer 1-8, `NUM_BUFFERS` + 2 = input (`SOURCE_SYNTH`, `SOURCE_INPUT`)
+- `param_order` - Ordered list of the `params` keys (PARAMS menu order and grid fader order; amp/pan last)
+- `params` - Synthesis parameters (voice-specific); their values are also the param defaults
+- `grain` - Granular processing parameters (size, density, pitch, spread, env = grain envelope option index, mode = grain mode option index, buf_pos, buf_rate, buf_scan)
+- `crossmod` - `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`
+
+The `voices` table is the single source of truth. Engine state mirrors this: param actions forward changes (through `send_param_to_engine`, below) while a voice is active, and `sync_voice_to_engine` pushes everything when a voice starts.
+
+### Param -> engine: `send_param_to_engine`
+
+Every control param that reaches the engine (voice synthesis params, grain and buffer params, crossmod amounts and speed, master density, filter, delay, reverb, tape drift; also `filter_type`) has an action of the form `action = function(x) <store x>; send_param_to_engine(id, x) end`, and its engine call lives in `engine_senders[id] = function(value) ... end` (voice params through `add_voice_sender`, which gates the call on `voices[voice_idx].active`). `send_param_to_engine(id, value)` adds the offsets of every global LFO currently on that param (`with_lfo_offsets(id, value)`: value + Σ `lfo_scaled` × half the range, clamped; the value itself when no LFO is on it) and passes the result to `send_engine_value(id, value)`, which records `engine_param_values[id] = value` and runs the sender. So an edit, a mutation, a scene-fade step or the 10 Hz drift on a modulated param never sends the plain value under a running LFO (that mattered for `bufPos`, which has no lag in the engine: stray grains from the stored position). The LFOs drive the engine through `send_engine_value` too, so there is one path from a value to the engine. Action sends always go out (no dedupe).
+- Commands that carry several params send the others as the engine has them: `engine_param_value(id)` is the last value sent (or `params:get(id)` before any). `send_filter_to_engine`, `send_delay_to_engine`, `send_reverb_to_engine` build `setFilter`/`setDelay`/`setReverb` from it, the grain density sender multiplies by `engine_param_value("master_density")`, and the master density sender (`send_master_density_to_engine`) by each running voice's `engine_param_value("v<i>_grain_density")`. So an LFO on filter res does not undo one on filter freq
+- `sync_voice_values_to_engine` sends the voice's stored values and calls `forget_sent_voice_values(voice_idx)` first (an LFO re-applies its offset on its next step); its grain density uses the master density as sent
+- When adding a param that reaches the engine, give it a sender and call `send_param_to_engine` from its action; never call `engine.*` from the action directly. Option and number params that the LFOs cannot target (source, grain envelope/mode, mod sources) still call the engine from their action
+
+### Parameter System
+
+Use norns params for all adjustable values:
+1. Define in `init()` with `params:add{}`
+2. Include `action` function to update engine
+3. Reference params with `params:get("id")` or `params:set("id", value)`
+4. Group related params with `params:add_separator()`, or `params:add_group(id, name, n)` for a collapsible section (`strata_fx`, `strata_lfos`, `strata_buffers`, `strata_midi`; the LFO library adds `lfo_group_<n>` itself). Menu order: `strata` (master density, tempo), `strata_mutations`, `strata_scenes`, the fx, lfo destinations, LFO 1-3, buffers and midi groups, then each voice's synthesis, granular and cross-modulation sections. `n` must equal the number of params that follow it exactly: norns groups cannot nest, and the test stub errors on a group opened inside another
+
+### Global LFOs
+
+Three LFOs (`NUM_LFOS`) built on norns' `lib/lfo.lua` (`local LFO = require "lfo"`), stored in `lfos[n]`. Not the per-voice drift (`drift_update`, below).
+
+- **Construction** (`add_lfo_params()`, called from `init` after the FX group): `LFO:add{shape = "sine", min = -1, max = 1, depth = 0, mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`, then `lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`. The library owns the params `lfo_<n>` (state, option off/on), `lfo_shape_<n>`, `lfo_depth_<n>` (a **number 0-100, percent**), `lfo_phase_<n>`, `lfo_offset_<n>`, `lfo_mode_<n>` (clocked/free), `lfo_clocked_<n>` (rate option), `lfo_free_<n>` (0.1-300 s), `lfo_reset_<n>`, ... (`lfo_*` ids are reserved for it). The library starts an LFO from its state param's action (it is off by default, so `init` starts nothing) and hides the other params while it is off
+- **PARAMS layout**: norns groups cannot nest and the library adds its own group per LFO (`lfo_group_<n>`, "LFO n", 15 params), so Strata's destinations get their own group first: `strata_lfos` ("lfo destinations", `NUM_LFOS` params `strata_lfo<n>_dest`). Never pass a separator to `add_params` or wrap the library's params in a Strata group: the library sizes its group itself
+- **Destinations**: `LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, resolve}`: `none`, `density`, `drift`, `filt freq`, `filt res`, `filt mix`, `dly time`, `dly fdbk`, `dly mix`, `rev mix`, `rev size`, `rev damp`, then per voice `v<i> main` (`main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan` (`VOICE_LFO_DESTINATIONS`). 12 + 8 per voice = 68 entries; every resolved id is a control param. `lfo_destination_id(n)` returns the resolved id or nil. Labels must fit the LFO page's right column (49 px)
+- **Modulate around the stored value, never write it**: with min -1, max 1 and a centre baseline the library hands the action `scaled` in -depth..depth (depth = percent / 100; the library's `lfo_offset_<n>` param adds to it). The user can change `lfo_min_<n>`, `lfo_max_<n>` and `lfo_baseline_<n>` in PARAMS: a `min` baseline gives `scaled` in -1..-1 + 2 × depth (below the stored value up to 50 % depth), `max` in 1 - depth..1 (the library's `scaled_min = max * (1 - depth)`: above it, half as wide), and other min/max scale the swing; the README tells users to keep the defaults. `apply_lfo(n, scaled, raw)` stores `lfo_last_raw[n] = raw`, resolves the destination, records `lfo_last_dest[n]`/`lfo_scaled[n] = scaled` and sends `with_lfo_offsets(id, params:get(id))` through `send_engine_value`: clamp(stored + (sum of `lfo_scaled` of every LFO whose `lfo_last_dest` is id) × 0.5 × (maxval - minval)) over `param_range(id)`. LFOs on one destination add up. `params:set` is never called for a destination. `lfo_last_dest`/`lfo_scaled` are declared with `send_param_to_engine` (above the LFO block) because param actions read them
+- **Send dedupe**: `apply_lfo` skips the send when the new value differs from `engine_param_values[id]` (the last value sent to that destination by any path) by less than `LFO_SEND_THRESHOLD` (1/1000) of the destination's range, so a slow LFO sends only when it has moved. Restores and param-action sends are never skipped
+- **Restore rules** (`restore_lfo_destination(n)`: clear `lfo_last_dest[n]`/`lfo_scaled[n]` and `send_param_to_engine(old id, params:get(old id))`, i.e. the stored value plus any other LFO's offset on it; always sent). The library stops calling the action when an LFO is off or its depth is 0, so Strata restores explicitly: from the `strata_lfo<n>_dest` action (destination changed), and from wrappers installed with `wrap_param_action(id, before, after)` around the library's `lfo_<n>` action (state off) and `lfo_depth_<n>` action (depth 0). When a `main` destination re-resolves to a different param (voice source changed), `apply_lfo` restores the old id once, then modulates the new one
+- **Dot phase estimate**: the library's running phase is internal (`get("phase")` is the phase offset setting). `lfo_phase_estimate(n)` = (`lfo_phase_base[n]` + (`util.time()` - `lfo_phase_time[n]`) / period in seconds (clocked periods are beats × `clock.get_beat_sec()`) + phase offset) % 1. `note_lfo_reset(n)` sets the base to `LFO_RESET_PHASES[reset_target]` (floor 0.75, ceiling 0.25, mid: falling 0.5, mid: rising 0, as `LFO:reset_phase`) when the state turns on or `lfo_reset_<n>` fires; wrappers on `lfo_mode_<n>`, `lfo_clocked_<n>` and `lfo_free_<n>` call `rebase_lfo_phase(n)` before the library changes the period, which keeps the phase like the library's `change_period`. Tempo changes are not tracked (the estimate drifts until the next reset)
+- **Rate ceiling and message rate**: the library's ceiling - free periods down to 0.1 s (10 Hz), clocked rates down to "1/16" (a period of 1/4 beat; clocked periods are the rate × 4 beats). The library calls the action on every step while depth > 0, so each LFO is set to `LFO_PPQN` (48) steps per beat with `lfos[n]:set("ppqn", LFO_PPQN)` right after `LFO:add` (the library's default is 96; `set("ppqn")` before `start` is what the sprocket is built from, and its phase counter advances 1/ppqn per step, so phase maths are unchanged): at most 96 sends/s per LFO at 120 BPM, 240 at 300 BPM (one engine message, one per running voice for master density), fewer with the dedupe
+- **Scenes**: `SCENE_GLOBAL_PARAMS` holds per LFO `lfo_shape_<n>`, `lfo_mode_<n>`, `lfo_clocked_<n>` (default 13, the library's index for a period of 4), `lfo_free_<n>` and `lfo_depth_<n>` (continuous), `strata_lfo<n>_dest`, then `lfo_<n>` last so an LFO starts with its settings in place; scenes without them migrate to the defaults (LFOs off)
+- **Cleanup**: `stop_lfo_page_clock()`, then per LFO `lfos[n]:stop()`, `params:set("lfo_<n>", 1)` and `restore_lfo_destination(n)`
+- The grid has no LFO controls
+
+### MIDI Input
+
+MIDI notes, velocity and pitchbend play the voices (spec §5). CC is not handled in Strata's code: norns' PARAMS > MAP maps any CC to any param.
+
+- **State** (grouped in tables: the main chunk is near the 200-local limit): `MIDI` holds the constants (`max_port` 4, `velocity_max` 127, `rate_root_note` 60, `bend_center` 8192, `bend_semitones` 2, the option lists), `midi_device` is the vport Strata listens to, and `midi_state` holds `bend[voice]` (ratio, default 1), `held[voice]` (set of held notes), `note_voice[channel][note]` (the voice a note's note on played) and `removing` (see hot-plug). `local musicutil = require "musicutil"`
+- **Params** (group `strata_midi`, 3 params): `midi_device` number 1..`MIDI.max_port` default 1 (action `attach_midi(x)` then `reset_midi_input()`), `midi_channel_mode` option {`per voice`, `omni to selected`} default 1 (action `reset_midi_input()`), `midi_note_off` option {`ignore`, `voice off`} default 1
+- **Device lifecycle**: `midi_init()` (from `init`, after `grid_init`) calls `attach_midi(params:get("midi_device"))`, which clears the old vport's `event` and sets `midi_device = midi.connect(port); midi_device.event = midi_event`. The handler lives on the vport only (norns fires both `device.event` and `vports[port].event`, as for grids and arc). `midi.add(device)` re-attaches, redraws (SETUP) and prints; `midi.remove(device)` resets the input if the device was on the selected port, redraws and prints. norns clears the vport only after `midi.remove` returns, so it sets `midi_state.removing = device` around its redraw and `midi_device_name()` (the selected vport's name, or `none` without a device) treats that device as gone. `cleanup` clears `midi_device.event`
+- **Routing**: `midi_target_voice(channel)`: per voice, channel 1..`NUM_VOICES` addresses that voice and other channels nothing; omni, every channel addresses `selected_voice`. `midi_event(data)` parses with `midi.to_msg` and ignores everything but notes and pitchbend
+- **Note on** (velocity > 0): records the note in `held` and `note_voice`, then `midi_note_on(voice, note, vel)`: a synth source sets `v<i>_freq` to `musicutil.note_num_to_freq(note)` clamped to `param_range`, a buffer source `v<i>_buf_rate` to `2 ^ ((note - 60) / 12)` clamped (0.25-4), an input source takes no pitch (all through `params:set`); then `toggle_voice(i)` if the voice is off, and `engine.retrigger(i - 1, vel / 127)`. Voices keep their slow attacks; velocity lands on the accent. The `freq` controlspec has step 0 so notes keep exact equal-tempered pitch (a 1 Hz step was 37 cents at 46 Hz)
+- **Note off** (or note on with velocity 0): the note goes to the voice its note on played (`note_voice`; in omni mode the selection may have moved), or to `midi_target_voice` for a note never seen, and is removed from `held`. `midi_note_off_for(voice)`: in `voice off` mode, an active voice with no other held note is stopped with `toggle_voice`. A note during the release starts it again through `toggle_voice`/`voiceOn`, and the engine re-gates the releasing synths
+- **Pitchbend**: `midi_pitchbend(voice, value)`: `ratio = 2 ^ (((value - 8192) / 8192) * 2 / 12)`, stored in `midi_state.bend[voice]` and sent with `setVoiceParam(i - 1, "bend", ratio)` if the voice is active (a stopped voice gets it when it starts). `reset_midi_input()` (port or channel mode change, device removed) clears `held`/`note_voice` and re-centres every bent voice (sends `bend` 1 only for voices whose bend was not 1). `midi_set_bend(voice, ratio)` stores and (for an active voice) sends a bend. Omni bend follows the selection: `select_voice_by` (E2 on MAIN and BUFFER, the only place `selected_voice` changes) calls `midi_bend_follow_selection(previous_voice)` when the selection moved, which in `omni to selected` mode with the previous voice bent (`bend ~= 1`, the wheel off centre) re-centres it (`bend` 1) and gives the new selection the wheel's ratio (a stopped voice gets it on start). Per voice mode leaves bends alone
+
+### Probability-Based Mutation System
+
+Strata includes a mutation system that applies gentle, probabilistic changes to voice parameters over time, creating organic evolution:
+
+#### Architecture
+- **Mutation Metro**: `mutation_metro` - Timer that periodically calls `gentle_mutate()`
+- **Mutation Function**: `gentle_mutate()` - Applies probability-based parameter changes
+- **Global Parameters**: Controlled via PARAMS menu:
+  - `mutation_enabled` (0/1) - Toggle mutation system on/off
+  - `mutation_rate` (0.5-10s) - How often mutations are checked
+  - `mutation_probability` (0-1) - Chance each parameter will mutate per check
+  - `mutation_amount` (0-1) - Size of mutation delta relative to parameter range
+
+#### Implementation Details
+
+**Mutation Function** (`gentle_mutate()` in strata.lua):
+```lua
+function gentle_mutate()
+  local probability = params:get("mutation_probability")
+  local amount = params:get("mutation_amount")
+
+  for i = 1, #voices do
+    if voices[i].active and not frozen[i] then
+      -- Check each synthesis parameter
+      for key, current_val in pairs(v.params) do
+        if key ~= "amp" and key ~= "pan" then
+          if math.random() < probability then
+            -- Generate gaussian-like mutation delta
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
+            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
+            params:set("v" .. i .. "_" .. key, new_val)
+          end
+        end
+      end
+
+      -- Granular parameters mutate at lower probabilities
+      -- grain_size: 0.5× probability
+      -- grain_pitch: 0.3× probability
+      -- grain_spread: 0.2× probability
+    end
+  end
+end
+```
+
+**Key Design Decisions**:
+- **Excluded Parameters**: `amp` and `pan` are never mutated to preserve voice balance and stereo placement; neither are the grain envelope shape and grain mode (`DISCRETE_GRAIN_KEYS`) nor the voice's `source`. Every grain key `gentle_mutate` changes (the buffer keys and its size/pitch/spread list) is guarded by `not DISCRETE_GRAIN_KEYS[key]` (checked before the `math.random()` draw, so the random sequence is unchanged); `DISCRETE_GRAIN_KEYS` is declared above `gentle_mutate` for that
+- **Buffer and input sources**: a buffer-sourced voice mutates `BUFFER_MUTATION_KEYS` (`buf_pos`, `buf_rate`, `buf_scan`, each with `probability`, delta = gaussian × `amount` in the controlspec's normalized range, so the exp `buf_rate` moves evenly) instead of its synthesis params; an input-sourced voice mutates neither synthesis nor buffer params; grain size/pitch/spread mutate as for every voice
+- **Frozen Voice Exemption**: Frozen voices are excluded from mutations
+- **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
+- **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
+- **Granular Hierarchy**: Grain parameters mutate less frequently than synthesis parameters
+
+#### Usage Patterns
+
+**Starting Mutations**:
+```lua
+params:set("mutation_enabled", 1)  -- Enable via params
+params:set("mutation_probability", 0.15)  -- 15% chance per parameter
+params:set("mutation_amount", 0.25)  -- 25% of parameter range
+params:set("mutation_rate", 2)  -- Check every 2 seconds
+```
+
+**Recommended Settings**:
+- **Subtle Evolution**: probability=0.1, amount=0.15, rate=3s
+- **Moderate Change**: probability=0.15, amount=0.25, rate=2s (default)
+- **Dramatic Shift**: probability=0.25, amount=0.4, rate=1s
+
+**Integration with Existing Systems**:
+- **Drift**: Mutations work alongside `drift_update()` (the per-voice drift; not the global LFOs), which gives each active, unfrozen voice a subtle mean-reverting grain pitch drift: `mean_reverting_step(current, base, DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)` = `current + ((math.random() - 0.5) * step - (current - base) * reversion)` (step 0.004, reversion 0.01 per 100 ms tick; one `math.random()` per call). `base` (`grain_pitch_base[i]`) is the last grain pitch set by anything other than the drift (user, mutation, scene), tracked in the param action via the `drift_writing` flag. The `grain_pitch` controlspec has step 0 so these small steps are not quantized away. Buffer-sourced voices also drift `buf_pos` with the same helper (`DRIFT_BUF_POS_STEP` 0.002, `DRIFT_BUF_POS_REVERSION` 0.01, centre `buf_pos_base[i]`, `buf_pos` step 0)
+- **Freeze Feature**: Frozen voices are stable - neither the drift nor mutations affect them (buffer params included; `randomize_voice` also returns for a frozen voice)
+- **Cross-Modulation**: Mutations never touch the crossmod sources or amounts; the routing a voice has (set by hand or by a scene) keeps modulating the mutated params
+- **UI Feedback**: `[M]` indicator appears in the header (x=98) when enabled
+
+#### Lifecycle Management
+- **Initialization**: Metro created in `init()` but not started automatically
+- **Control**: `mutation_enabled` param action starts/stops the metro
+- **Cleanup**: `mutation_metro:stop()` called in `cleanup()` to prevent orphaned timers
+
+### Scene System for Longer-Form Automation
+
+Strata includes a comprehensive scene system for creating longer-form compositions and automations. Scenes capture complete snapshots of the instrument state and can be recalled manually or sequenced automatically.
+
+#### Architecture
+- **Scene Storage**: `scenes` table - 8 scene slots (numbered 1-8)
+- **Scene Data**: Complete instrument state including:
+  - All voice parameters (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents)
+  - Voice active states and freeze states
+  - Pattern data (all 7 voices × 16 steps)
+  - Global parameters (master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, destination and state)
+- **Scene Sequencer**: Automatic scene progression with configurable timing
+- **Transition Modes**: Instant recall or smooth crossfade between scenes
+
+#### Core Functions
+
+**Scene Capture** (`capture_scene()` in strata.lua):
+```lua
+function capture_scene(scene_num)
+  -- Captures complete current state:
+  -- - All voice parameters (params, grain, crossmod)
+  -- - Voice active/frozen states
+  -- - All pattern data
+  -- - Global parameters (density, tempo, reverb, mutations, etc.)
+  scenes[scene_num].data = scene_data
+  scenes[scene_num].populated = true
+end
+```
+
+**Scene Recall** (`recall_scene()` in strata.lua):
+```lua
+function recall_scene(scene_num, transition_time)
+  -- Validates the slot (validate_scene) and cancels any running transition
+  -- Instant recall (transition_time = 0) -> recall_scene_instant()
+  -- OR smooth transition (transition_time > 0)
+  --   - start values snapshotted once by scene_transition_targets()
+  --   - SCENE_TRANSITION_STEPS (20) steps of util.linlin(0, 1, start, target, step / steps)
+  --   - only continuous params fade; the rest switch at the end
+end
+```
+
+**Scene Sequencer** (`scene_sequencer_start()` in strata.lua):
+```lua
+function scene_sequencer_start()
+  scene_sequencer_clock = clock.run(function()
+    while scene_sequencer_enabled do
+      recall_scene(scene_sequencer_position, transition_time)
+      clock.sleep(scene_duration)
+      scene_sequencer_position = scene_sequencer_position % seq_length + 1
+    end
+  end)
+end
+```
+
+#### Parameters
+
+Controlled via PARAMS menu (strata_scenes section):
+- `scene_sequencer_enabled` (binary) - Start/stop automatic scene progression
+- `scene_transition_time` (0-30s, default 2s) - Crossfade duration for smooth transitions
+- `scene_duration` (4-120s, default 16s) - How long each scene plays before advancing
+- `scene_sequence_length` (1-8, default 4) - How many scenes to cycle through
+
+#### Grid Integration
+
+Scene controls on **Page 3** (16×16 grid):
+- **Row 1**: Scene recall (instant) - Press to immediately load scene 1-8
+- **Row 2**: Scene recall (with transition) - Press to crossfade into scene 1-8
+- **Row 3**: Scene save - Press to capture current state to scene 1-8
+- **Row 5, Column 1**: Toggle scene sequencer on/off
+- **Row 5, Columns 3-10**: Set sequence length (1-8 scenes)
+
+**LED Feedback**:
+- Populated scenes: brightness 8 (row 1) or 6 (row 2)
+- Current scene: brightness 15 (highlighted in row 1)
+- Empty scenes: brightness 2
+- Active sequencer: brightness 15, shows next scene position
+- Sequence length indicators: brightness 8 for included scenes, 2 for excluded
+
+#### UI Feedback
+
+**Screen Display**:
+- `S1` through `S8` indicator at top-right shows current scene number
+- Brightness level 10 when sequencer is active, 6 when static
+- Mutation indicator abbreviated to `[M]` to make room for scene indicator
+
+#### Implementation Details
+
+**State Capture**:
+- Deep copy of all parameter values (not references)
+- Preserves both the `voices` table state and norns param values
+- Patterns are copied step-by-step to avoid reference issues
+
+**Smooth Transitions**:
+- `scene_transition_targets(scene_data)` snapshots `{id, start, target}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift)
+- 20 interpolation steps regardless of transition time; step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole transition time (never re-read the current value inside the loop: that makes the fade front-loaded)
+- Mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), freeze and active states, tempo, filter type and mutation settings are not interpolated; they switch at the end via `recall_scene_instant()`, which also lands every param exactly on its target
+- Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `scene_transition_active`
+
+**Voice Activation Handling**:
+- Checks if voice state needs to change (on→off or off→on)
+- Uses existing `toggle_voice()` function to properly start/stop voices
+- Preserves freeze states across scene transitions
+
+**Source changes and the full sync**: `recall_scene_instant` sets `scene_recall_in_progress` while it sets params (the body runs in a `pcall`; the flag is always cleared, the end-of-recall syncs run, for whatever was applied before the error, and only then is an error raised again with `error(recall_error, 0)`, so the engine never lags the Lua state), so the `v<i>_source` action sends `setGrainSource` but not its `sync_voice_values_to_engine` (which would send the old values to the new grain synth before the recalled ones). After every param is set and the flag is cleared, each voice that is running and whose source changed gets one `sync_voice_values_to_engine`; a voice the recall starts is synced by `toggle_voice` instead. So a recall sends at most one full sync per voice, after its params, and both an instant recall and a smooth transition (which ends in `recall_scene_instant`) leave the engine with the Lua state of every running voice
+
+**Pattern Preservation**:
+- Patterns are restored after all parameter changes
+- Ensures `grid_redraw()` is called to update grid display
+- Pattern sequencer continues playing if it was active
+
+#### Usage Patterns
+
+**Manual Scene Performance**:
+```lua
+-- From grid page 3:
+-- 1. Build your sound
+-- 2. Press row 3 button to save to scene slot
+-- 3. Modify parameters
+-- 4. Save to another slot
+-- 5. Press row 1 buttons to instantly switch between scenes
+-- 6. Press row 2 buttons to smoothly transition between scenes
+```
+
+**Automatic Scene Sequencing**:
+```lua
+-- Setup:
+params:set("scene_transition_time", 3)  -- 3 second crossfades
+params:set("scene_duration", 20)  -- 20 seconds per scene
+params:set("scene_sequence_length", 4)  -- Cycle through scenes 1-4
+params:set("scene_sequencer_enabled", 1)  -- Start sequencer
+
+-- Result: Scenes 1→2→3→4→1... with 3s crossfades, 20s each
+```
+
+**Composition Workflow**:
+1. Create 4-8 distinct scenes with different voice combinations and parameters
+2. Set appropriate transition time (0s for rhythmic changes, 5-10s for ambient evolution)
+3. Set scene duration based on desired pacing
+4. Enable sequencer for hands-free long-form composition
+5. Mutations can still evolve non-frozen voices during scenes
+
+#### Integration with Other Systems
+
+- **Freeze Feature**: Frozen voices are captured and restored per-scene
+- **Mutations**: Mutation settings are per-scene; sequencer can alternate between static and evolving scenes
+- **Pattern Sequencer**: Pattern data is saved per-scene; can switch between different rhythmic patterns
+- **Cross-Modulation**: Modulation routing is per-scene; enables complex evolving relationships
+- **Drift**: Continues to operate during scenes unless voices are frozen; the global LFOs keep running with the LFO settings the scene recalled
+
+#### Lifecycle Management
+- **Initialization**: Scenes array initialized in global scope, empty by default
+- **Scene Sequencer Control**: Started/stopped via param action
+- **Cleanup**: `scene_sequencer_stop()` called in `cleanup()` to prevent orphaned clocks
+- **Transition State**: `scene_transition_clock` / `scene_transition_active` track the running transition; `cancel_scene_transition()` clears both
+
+#### Disk Persistence
+- **Storage Location**: `~/dust/data/strata/scenes.data`
+- **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 2). Version 1 files (`{version = 1, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version 1`; the next save writes version 2. Any other version is rejected
+- **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`. It fills only what is missing, so it runs for every version: each global from its `SCENE_GLOBAL_PARAMS` entry's `default` (the param default), top-level blocks from `SCENE_BLOCK_DEFAULTS` (`{key, default}`), and per-voice fields from `VOICE_SCENE_DEFAULTS` (`{path = keys inside data.voices[i], default}`; filled only when the parent table exists). Malformed scenes are left for validation to reject. When a later feature adds a scene field, add its default to one of these tables (`VOICE_SCENE_DEFAULTS` holds the grain envelope and mode, `source` and the three buffer params; `SCENE_BLOCK_DEFAULTS` is empty: the LFO settings are globals in `SCENE_GLOBAL_PARAMS`)
+- **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, unknown version, invalid data after migration) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
+- **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
+- **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
+- **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
+- **What's Saved**: Complete scenes table including all 8 scene slots, populated state, and scene data
+- **Persistence**: Scenes persist across norns reboots, allowing you to build a library of sonic palettes
+- **Buffers** (`~/dust/data/strata/buffers.data`, `buffer_data_file`): `save_buffers_to_disk()` writes `{version = BUFFER_DATA_VERSION, paths = {[n] = buffers[n].path or buffers[n].missing_path or ""}}` (the loaded file or scratch take per slot, or a remembered file that was missing on start; paths only, never audio). `cleanup()` calls it after the scenes save; `init()` calls `load_buffers_from_disk()` after `load_scenes_from_disk()`. It resets `buffers_restored` and `buffer_autosave_blocked` first, then `load_buffer`s each non-empty path that `util.file_exists` and marks the slot `restoring`; `buffers_restored` counts only the slots the poll then confirms holding audio (see the buffers table). A path that does not exist (deleted, or on an unmounted drive) is not loaded: the slot stays empty, the console names it, and it is kept in `missing_path`, so the next save writes it again and the sample comes back once the file is there (a clear, load or new recording in the slot forgets it). SETUP shows `buffers: k restored`, or `buffers: k ok, m missing` (m = slots with a `missing_path`; "restored" would not fit beside the missing count). Loading mirrors scenes: `tab.load` through `pcall`; on an error, a non-table, another version or no `paths` table the file is moved to `buffers.data.bak` (shared helper `move_aside_unloadable_file(data_file, label)`), and if that fails `buffer_autosave_blocked` makes `cleanup()` skip the save, so a bad file is never silently overwritten. Disk writes of audio happen only when a take completes (the engine's scratch file) or on an explicit `buf<n>_save`
+
+#### Scene Data Validation (v2.0+)
+
+**IMPORTANT**: Always validate scene data before using it to prevent crashes from corrupted files.
+
+`validate_scene(scene)` checks one slot and `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). A populated scene must contain everything `recall_scene_instant()` reads:
+```lua
+-- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*,
+--   drift_amount, and per LFO lfo_shape/mode/clocked/free/depth_<n>, strata_lfo<n>_dest, lfo_<n>);
+--   an option param's value is an integer from 1 to its option count
+-- data.voices: NUM_VOICES tables, each with
+--   active (boolean), source (integer 1..#SOURCE_OPTIONS), params (only known keys, numbers),
+--   grain (only GRAIN_PARAM_IDS keys, numbers; env/mode integers 1..option count),
+--   crossmod.slot1..3 {source = integer 0..NUM_VOICES, amp_amt, freq_amt numbers}, crossmod.speed number
+-- data.frozen: NUM_VOICES booleans
+-- data.patterns: NUM_VOICES x PATTERN_LENGTH integers 0..15
+```
+When adding a field to `capture_scene()`, add it to `validate_scene()` (and to `SCENE_GLOBAL_PARAMS`, with its `default`, for a global param), or recall will not restore it, and give it a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`) so older files still load.
+
+**When to validate**:
+- Always before loading scenes from disk (`load_scenes_from_disk`)
+- Before recalling scenes (`recall_scene` calls `validate_scene`)
+- After receiving scene data from external sources
+
+**Error handling patterns**:
+```lua
+-- Graceful degradation with console messages
+if not scene_data or not scene_data.voices then
+  print("error: scene " .. scene_num .. " has invalid data")
+  return
+end
+
+-- Nil-safe iteration
+if scene_data.voices[i] and scene_data.voices[i].params then
+  for key, target_val in pairs(scene_data.voices[i].params) do
+    -- Safe to access
+  end
+end
+```
+
+### Bounds Checking and Safety (v2.0+)
+
+**CRITICAL**: Always validate array indices before accessing to prevent expansion or crashes.
+
+**Pattern bounds checking**:
+```lua
+function toggle_pattern_step(voice_idx, step)
+  -- Bounds checking to prevent array expansion
+  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  if step < 1 or step > PATTERN_LENGTH then return end
+
+  -- Safe to access
+  patterns[voice_idx][step] = ...
+end
+```
+
+**Scene bounds checking**:
+```lua
+function recall_scene(scene_num, transition_time)
+  if scene_num < 1 or scene_num > NUM_SCENES then return end
+  if not scenes[scene_num].populated then
+    print("scene " .. scene_num .. " is empty")
+    return
+  end
+  -- Safe to proceed
+end
+```
+
+**Apply bounds checking to**:
+- All voice index access (1 to NUM_VOICES)
+- All scene index access (1 to NUM_SCENES)
+- All pattern step access (1 to PATTERN_LENGTH)
+- Grid button coordinates
+- Parameter ranges
+
+### Resource Management and Cleanup (v2.0+)
+
+**IMPORTANT**: Always clean up metros, clocks, and other resources to prevent leaks.
+
+The `cleanup()` function demonstrates proper cleanup:
+```lua
+function cleanup()
+  -- Give the norns menu its own _menu.set_mode back (watch_menu_opening wrapped it)
+  unwatch_menu_opening()
+
+  -- Save state before cleanup (each skipped if its file failed to load and could not be moved aside)
+  save_scenes_to_disk()
+  save_buffers_to_disk()
+
+  -- Stop metros with nil checks
+  if drift_metro then drift_metro:stop() end
+
+  -- Sync parameter state with actual state
+  if mutation_metro then
+    mutation_metro:stop()
+    params:set("mutation_enabled", 0)  -- Keep param in sync
+  end
+
+  -- Stop pattern and scene clocks (scene sequencer via its param, like mutations)
+  pattern_clock_stop()
+  params:set("scene_sequencer_enabled", 0)
+  scene_sequencer_stop()
+
+  -- Cancel transition clocks to prevent orphaned coroutines
+  cancel_scene_transition()
+
+  -- Cancel the BUFFER page's flash clock; stop the LFOs and give their destinations back their stored values
+  cancel_buffer_page_flash_clock()
+  stop_lfo_page_clock()
+  for n = 1, NUM_LFOS do
+    lfos[n]:stop()
+    params:set("lfo_" .. n, 1)
+    restore_lfo_destination(n)
+  end
+
+  -- Stop the buffer poll and recording timers (the engine finishes or frees any recording)
+  if buffer_state_poll then buffer_state_poll:stop() end
+  for slot = 1, NUM_BUFFERS do cancel_buffer_recording_timer(slot) end
+
+  -- Stop listening to MIDI before the voices go off
+  if midi_device then midi_device.event = nil end
+
+  -- Turn off all voices
+  for i = 1, NUM_VOICES do
+    if voices[i].active then
+      engine.voiceOff(i - 1)
+    end
+  end
+
+  -- Leave connected grids and arc dark
+  for _, grid_port in pairs(grids) do grid_port:all(0); grid_port:refresh() end
+  if arc_device then arc_device:all(0); arc_device:refresh() end
+end
+```
+
+**Clock management patterns**:
+```lua
+-- Before starting a clock, cancel existing one
+if scene_transition_clock then
+  clock.cancel(scene_transition_clock)
+  scene_transition_clock = nil
+end
+
+-- Then start new clock
+scene_transition_clock = clock.run(function()
+  -- Clock body
+end)
+```
+
+**Prevents**:
+- Orphaned clock coroutines
+- Concurrent clocks causing parameter oscillation
+- Memory leaks from uncancelled metros
+- State inconsistencies between params and actual state
+
+### Async Initialization
+
+Voice activation uses `clock.run()` for delayed starts:
+```lua
+clock.run(function()
+  toggle_voice(1)
+  clock.sleep(0.5)
+  toggle_voice(2)
+end)
+```
+
+### Grid Integration (Optional)
+
+Strata supports monome grid controllers for pattern sequencing and parameter manipulation. The implementation handles multiple grid sizes and multiple simultaneous grids.
+
+#### Device Lifecycle
+- `grid_init()` - Connect to up to 4 grid ports at startup
+- `grid.add(device)` - Global callback when grid connects (hot-plug support)
+- `grid.remove(device)` - Global callback when grid disconnects; clears the vport's `key` handler and the `grids` slot
+- `grids` table - Stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`
+- Never store the raw device passed to `grid.add`, and never set `key` on it: devices have no `.device` field (so `grid_redraw` would skip them) and norns fires both `device.key` and `vports[port].key`, so handlers on both run every press twice. The arc uses the same vport-only pattern (`attach_arc`)
+
+#### Grid Size Detection & Adaptive Layouts
+`grid_layout(grid_port)` matches the exact `cols`/`rows` (16x16 is tested as `cols == 16 and rows == 16`; a `rows >= 16` test would also catch 8x16) and routes to the appropriate layout:
+- **16×16 (256 buttons)**: `grid_key_256()` and `grid_redraw_256()` - Full-featured layout
+- **16×8 (128 horizontal)**: `grid_key_128h()` and `grid_redraw_128h()` - Horizontal layout
+- **8×16 (128 vertical)**: `grid_key_128v()` and `grid_redraw_128v()` - Vertical layout
+- **8×8 (64 buttons)**: `grid_key_64()` and `grid_redraw_64()` - Compact layout
+
+#### Pattern Sequencer Implementation
+- **Pattern Storage**: `patterns[voice_idx][step]` - NUM_VOICES × PATTERN_LENGTH steps, values 0-15 (the 64 grid shows and edits only steps 1-8, but patterns still play all 16)
+- **Playback Clock**: `pattern_clock` - Uses `clock.run()` and `clock.sync(1/4)` for tempo-synced 16th notes against norns' global clock. The script's `tempo` param (40-300, initialised from `clock_tempo`) sets `clock_tempo` in its action; grid tempo buttons adjust `tempo`. External clock sources still work because the sequencer only syncs
+- **Position Tracking**: `pattern_position` - Current step (1-16), wraps around. Each tick triggers the step, redraws the grid (so the highlight shows the step that just played), then advances
+- **Triggering**: an active voice gets `engine.retrigger(voice - 1, level / MAX_STEP_LEVEL)` (accent in place at the step's level as velocity, one grain in triggered grain mode, no new nodes); a stopped voice is started with `toggle_voice`. Never retrigger by toggling a voice off and on
+- **Pattern Operations**:
+  - `toggle_pattern_step(voice, step)` - Toggle step on/off
+  - `clear_pattern(voice)` - Reset all steps to 0
+  - `randomize_pattern(voice)` - Generate random pattern with 50% density
+
+#### Multi-Grid Synchronization
+- All grids display the same interface simultaneously
+- `grid_redraw()` iterates over `grids` table and updates each grid
+- Shared state (patterns, voice status, pages) ensures consistency
+- Each grid can trigger the same functions independently
+
+#### LED Feedback Patterns
+- **Active steps**: Brightness 15 (full)
+- **Current playback position**: 15 if the step is active, 4 if empty (`step_brightness()`)
+- **Voice active status**: Brightness 12
+- **Voice inactive status**: Brightness 2-4
+- **Page indicators**: 15 for selected, 2 for unselected
+- **256 parameter page faders (rows 9-12) and FX faders (page 4, rows 3-7)**: bar at 8 up to the value, the value's column at 15; row 13 (page 2): fader pages, selected 15, available 4
+- **256 page 4 buffers**: row 1 15 recording / 8 loaded / 2 empty, row 2 at 4; source rows 9-15 selected 15, others 4, empty buffers 2
+- Always call `grid_port:refresh()` after updating LEDs
+- Any state shown on the grid must call `grid_redraw()` when it changes, wherever it changes (`toggle_voice`, `toggle_freeze`, `randomize_voice`, scene recall, ...). `grid_redraw()` returns immediately when no grid is connected, so calling it is cheap
+
+#### Key Implementation Details
+- Grid key handler checks `z == 0` to ignore key releases (only respond to presses; only the norns keys have release handling, see Screen pages)
+- Use `grid_port:all(0)` to clear all LEDs before redrawing
+- Pattern clock uses `clock.sync()` for tempo-accurate timing
+- Voices auto-activate when pattern step triggers them
+- Stop pattern clock in `cleanup()` to prevent orphaned clock coroutines
+- Grid pages allow switching between pattern sequencing and parameter control
+- **Parameter page (256, page 2)**: `fader_param_ids(voice)` = the voice's `param_order` (synthesis params, amp/pan last; `BUFFER_FADER_KEYS` buf_pos/buf_rate/buf_scan/amp instead for a buffer source; for the input source no first keys, the grain params then `amp`; the source action clamps `param_page` to the new count), grain size/density/pitch/spread/envelope/mode, then source/amp mod/freq mod for crossmod slots 1-3. Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` on rows 9-12 (`GRID_LAYOUT.param_page_row`, `fader_rows`, `fader_first_row`; `fader_width` 16 columns); pressing column x calls `set_fader_param()`, which looks up the id and calls `set_param_from_column(param_id, x)`: `spec:map((x - 1) / 15)` for control params, so faders follow each controlspec's warp (exp for freq, cutoff, mod speed), and `round(util.linlin(1, 16, min, max, x))` for number params (mod sources) and option params (grain envelope and mode, `param_range` gives `1, count`; it tests `param.options` because norns' `param.t` is a number); `fader_position()` is the inverse (`param_fraction(id) * 15 + 1`, where `param_fraction` is `spec:unmap(value)` or the linear fraction of a number or option param's range). Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`. All through `params:set`. Voices have 4-6 fader pages
+- **Buffers / FX page (256, page 4)**: `grid_key_256` has an explicit `grid_page == 4` branch so page 4 never falls through to the pattern page.
+  - Row 1 (`GRID_LAYOUT.buffer_record_row`), columns 1-`NUM_BUFFERS`: `record_buffer(x)` (a second press stops early). Row 2 (`GRID_LAYOUT.buffer_clear_row`): `clear_buffer(x)`. `grid_redraw_256_buffers`: row 1 at 15 recording, 8 loaded, 2 empty; row 2 at 4
+  - Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`). The filter/delay param actions call `fx_fader_changed()`, which redraws the grid while page 4 is shown, so the faders follow the screen, arc and scene recalls. During a smooth scene transition (`scene_transition_active`) it does not redraw: the transition loop redraws once per step
+  - Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x (1..`#SOURCE_OPTIONS`) is `params:set("v<voice>_source", x)` (1 synth, 2-9 buffer 1-8, 10 input); columns 11-16 do nothing. `grid_redraw_256_sources`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2. The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`
+  - Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_freeze`/`grid_redraw_256_freeze`)
+  - Smaller grids have no buffers / FX page (buffers and sources are on the BUFFER screen page and in params)
+
+### Arc Integration (Optional)
+
+Strata supports the monome arc controller for tactile parameter control. The implementation follows these patterns:
+
+#### Device Lifecycle
+- `arc_init()` - Connect to the arc vport (`arc_device = arc.connect(1)`) and set up callbacks via `attach_arc()`
+- `arc.add(device)` - Global callback when arc connects; re-attaches the vport for `device.port` (handlers live on the vport only, as for grids)
+- `arc.remove(device)` - Global callback when arc disconnects
+- Graceful degradation: `arc_redraw()` returns unless `arc_device` has a connected device
+
+#### Arc Pages
+The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDRAW` are indexed like `UI_PAGES`: `arc_delta` calls `ARC_PAGE_DELTA[ui_page](ring, delta)`, and `arc_redraw` clears the rings, calls `ARC_PAGE_REDRAW[ui_page](arc_device)` and refreshes. MAIN uses `arc_main_delta`/`arc_main_redraw`, FX `arc_fx_delta`/`arc_fx_redraw`, LFO `arc_lfo_delta`/`arc_lfo_redraw`, BUFFER `arc_buffer_delta`/`arc_buffer_redraw`; SETUP has no rings (`arc_ignore_delta`/`arc_draw_nothing`). `enc(1, ...)` calls `arc_redraw()`, so changing page redraws the rings.
+
+#### Input Handling
+- **Ring speed rule**: every continuous ring (MAIN 1-4, FX 1-4, BUFFER 1-4, LFO ring 4 in free mode) goes through `arc_sweep_param(param_id, delta)`, which sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks: `params:delta(id, delta / (512 * controlspec.quantum))`. norns' `Control:delta` moves the 0-1 raw value by `d * quantum`, so the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq) and the step only quantizes the value read back (raw keeps the remainder). 512 is half a revolution: the arc reports 1024 ticks per revolution (monome arc docs: "high resolution knobs, 1024 ticks per revolution", every edition; matron passes libmonome's deltas through unscaled, `device_monome.cc`). There are no per-ring scales; never add one. The LFO depth rings (`ticks_per_percent`) and the clocked rate (`ticks_per_rate`) step whole values instead
+- `arc_delta(n, delta)` - Handle encoder rotation for rings 1-4 through the page's handler. MAIN:
+  - Ring 1: Master density
+  - Ring 2: Selected voice's main parameter (`main_param_id`; `buf_pos` for a buffer-sourced voice, `grain_size` for an input-sourced one)
+  - Ring 3: Grain size for selected voice
+  - Ring 4: Grain density for selected voice
+- FX (`ARC_FX_RINGS`, `{param_id}` per ring): ring 1 `filter_freq`, ring 2 `filter_res`, ring 3 `delay_time`, ring 4 `delay_mix`. Each ring is drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp
+- BUFFER (`ARC_BUFFER_RINGS`, `{voice_key | param_id}` per ring): ring 1 `v<selected>_buf_pos`, ring 2 `v<selected>_buf_rate`, ring 3 `record_duration`, ring 4 `record_level`, each drawn to `param_fraction` of a turn. Rings 1-2 adjust the voice's buffer params whatever its source (they apply once it switches to a buffer) and are drawn at 15 for a buffer-sourced voice, 4 otherwise; rings 3-4 at 12
+- LFO: rings 1-3 `lfo_depth_1..3` in whole percents (`arc_whole_steps` accumulates `ARC_LFO.ticks_per_percent` = 10 ticks per percent per ring, keeping the remainder, so the number param never holds a fraction), ring 4 (`ARC_LFO.period_ring`) the period of `selected_lfo`: `lfo_free_<n>` (`arc_sweep_param`) in free mode, `lfo_clocked_<n>` (one option per `ARC_LFO.ticks_per_rate` = 20 ticks) in clocked mode (`lfo_period_param_id`). Ring 4's carried remainder (`arc_lfo_ticks[4]`) belongs to one LFO's clocked rate: `forget_arc_lfo_period_ticks()` clears it when `selected_lfo` changes (`lfo_enc` E2) and when the selected LFO's `lfo_mode_<n>` changes (a `wrap_param_action` after-hook added in `add_lfo_params`), so it never steps another LFO or mode; the depth rings keep theirs. Depth rings are drawn to `param_fraction` at 15 while the LFO runs, 4 when off; ring 4 at 12
+- `arc_key(n, s)` - Handle button press (2025 arc models)
+  - On MAIN mirrors K3 (`start_or_freeze_selected_voice`); does nothing on other pages. MAIN is found by index, `ui_page == UI_PAGES.MAIN_PAGE` (1), never by the title string
+
+#### LED Feedback
+- `arc_redraw()` - Update all ring LEDs to reflect current parameter values (the current page's rings)
+- Called after parameter changes (from encoders or arc)
+- MAIN rings 1, 3 and 4 use `util.linlin()` to map their (linear) parameter ranges to 0-64 LED positions; MAIN ring 2 and the FX, BUFFER and LFO rings are drawn to `param_fraction(id)` of a turn (controlspec warp)
+- MAIN brightness levels indicate voice state:
+  - 15 = active voice primary parameter
+  - 12 = active voice secondary parameters
+  - 4 = inactive voice primary parameter
+  - 3 = inactive voice secondary parameters
+- FX rings at 12; BUFFER rings 1-2 at 15 (buffer source) or 4, rings 3-4 at 12; LFO depth rings at 15 (running) or 4, ring 4 at 12
+- Uses `arc_device:segment(ring, from, to, level)` for smooth arc visualizations
+
+#### Key Implementation Details
+- Continuous rings sweep their param's range in `UI_PAGES.ARC_TICKS_PER_SWEEP` ticks through `arc_sweep_param` (see the ring speed rule above); never give a ring its own delta scale
+- Parameters ranges must match between arc feedback and param specs
+- Arc redraw is triggered alongside screen redraw for consistency
+- All arc functions are non-blocking and safe to call even without arc connected
+
+### UI Updates
+
+#### Screen pages
+
+The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`; `ui_page` is the index of the shown page.
+- `enc(1, d)` selects the page (`set_ui_page(util.clamp(ui_page + d, 1, NUM_UI_PAGES))`; `set_ui_page` starts the LFO page's redraw clock when that page is shown and cancels it when leaving); E1 does nothing else. `init` turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP (norns resets these on every script load, so cleanup restores nothing). `enc(2|3, d)` calls `PAGE_ENC[ui_page](n, d)` and `key(n, 1)` calls `PAGE_KEY[ui_page](n)`
+- **Key releases**: `key(n, 1)` records `key_press_page[n] = ui_page`; `key(n, 0)` clears it and calls `PAGE_KEY_RELEASE[ui_page](n)` only if the key went down on the page still shown, so a key held across a page change does nothing when released. Every page but BUFFER has `ignore_page_input` there, so presses keep their meaning and releases do nothing. "K2 is held on this page" is `key_press_page[2] == ui_page`. The norns menu (K1, PARAMS, its file selector) takes every key while open (`_menu.key` is the menu's handler), so a key released there never reaches `key()`; `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `drift_metro` tick), clears `key_press_page` and `buffer_saved_during_k2` whenever `norns.menu.status()` is true. Without it a K2 released in the menu would stay held and every BUFFER K3 would save instead of record. It also runs the moment the menu opens: every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call, so `watch_menu_opening()` (from `init`) wraps it in `menu_watch.wrapper` (call norns' function, then `forget_keys_held_through_menu()` when `mode == true`). The wrapper holds norns' function and `forget_keys_held_through_menu` as upvalues (no script-global lookup). `unwatch_menu_opening()`, the first thing `cleanup` does, puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper; otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`). The 10 Hz tick stays as a fallback. (norns has no key-state query. A file selector opened from play mode, as BUFFER K2 does, keeps `norns.menu.status()` false and takes the keys through the global `key`; it opens on K2's release, so only a K3 held at that moment can be released there. `buffer_key_release` therefore calls `forget_held_keys()` (a global: clears `key_press_page` and `buffer_saved_during_k2`, also the body of `forget_keys_held_through_menu`) just before `fileselect.enter`)
+- `redraw()` is `screen.clear(); draw_header(); PAGE_DRAW[ui_page](); screen.update()`. Each page's draw function ends with `draw_hints(text)` (level 4, x=0, y=62)
+- `PAGE_DRAW`, `PAGE_ENC`, `PAGE_KEY` and `PAGE_KEY_RELEASE` are indexed like `UI_PAGES`; `ignore_page_input` fills the slots a page does not use. To add a page, write its draw/enc/key functions and put them in the tables (and the arc tables below)
+- The tables are script locals built after the functions they hold, so page functions must be defined above them
+- **MAIN** (`redraw_main`, `main_enc`, `main_key`): the original screen - E2 voice select, E3 main parameter, K2 randomize, K3 starts a stopped voice or freezes/unfreezes a running one (`start_or_freeze_selected_voice`; it never stops a voice)
+- **FX** (`redraw_fx`, `fx_enc`, `fx_key`): a scrolling list of `FX_PAGE.rows` (`{label, param_id, format}`; `format` is a `string.format` pattern, or nil for the param's own string): density, tape drift, filter type/freq/res/mix, delay time/fdbk/mix, reverb mix/size/damp. `FX_PAGE.visible_rows` (5) rows at y=18-50 (`first_row_y` 18, `row_spacing` 8), label at x=0 and value right-aligned at x=127, the selected row (`fx_row`) at level 15 and the others at 4; the view keeps one row above the selection. E2 selects the row, E3 is `params:delta` on its param. K3 toggles `filter_mix` between 0 and `fx_filter_last_mix`, which the `filter_mix` param action records whenever the mix is set above 0 (from E3, PARAMS, scenes or K3; initially 1). Hint: `K3:filter bypass` when the mix is above 0, else `K3:filter on`
+- **BUFFER** (`redraw_buffer`, `buffer_enc`, `buffer_key`, `buffer_key_release`): left column (x 0-60) the selected voice's name (y 18), `src: <voice_source_label>` (y 26), `dur:` record duration (y 42) and `lvl:` record level (y 50); divider at x 62; right column eight rows (`BUFFER_PAGE.row_first_y` 14, `row_spacing` 6, so y 14-56): slot number at x 65 (`slot_x`), name at x 71 (`name_x`) (file name without extension, cut by `fit_text` with `screen.text_extents` to `BUFFER_PAGE.name_max_width` 31 px, whole UTF-8 characters at a time; `buffer_display_name` caches the cut name in `buffers[slot].display_name` until `name` changes, so a redraw measures nothing), seconds (`%.1fs`) or `REC` right-aligned at x 127. Row level: the selected voice's buffer (`voice_buffer_slot`) 15, loaded or recording 8, empty 2. E2 is `select_voice_by` (shared with MAIN), E3 `params:delta("v<i>_source", d)`. K3 press: `record_buffer(slot)` (toggles: stops early while recording), or `save_buffer(slot)` when K2 is held on this page (`buffer_saved_during_k2` then makes the K2 release do nothing), confirmed by `buffer_page_flash(text)`: `buf <n> busy` (and no `save_buffer` call) while the slot is `recording` or `finishing`, else `saved buf <n>` when the slot reports audio (`seconds > 0`, the rule `save_buffer` saves by), else `buf <n> empty`. The flash stores `BUFFER_PAGE.flash_text` and `flash_until = util.time() + BUFFER_PAGE.flash_seconds` (1.5); `redraw_buffer` draws it in the hint row instead of the key hints while `util.time() < flash_until`, and `BUFFER_PAGE.flash_clock` (a `clock.run` that sleeps 1.5 s, clears the text and redraws once) makes it go away untouched. A new flash cancels the previous clock; `cleanup` cancels it (`cancel_buffer_page_flash_clock`). K2 release: `fileselect.enter(_path.audio, cb)`, where `cb` calls `load_buffer(slot, path)` unless the path is `"cancel"`, then redraws. With no buffer source (synth, input) K2 and K3 do nothing. Hints: `K2:load K3:rec K2+3:save` (`K3:stop` while the slot records, `K3:...` while it is `finishing`), or `K2:- K3:- E3:source`
+- **LFO** (`redraw_lfo`, `lfo_enc`, `lfo_key`): one row per LFO, row top `LFO_PAGE.row_first_y` (16) + (n - 1) × `LFO_PAGE.row_spacing` (15), so rows fill y 16-57: `L<n>` at x 0 (baseline top + 7; level 15 for `selected_lfo`, 4 otherwise), one cycle of the shape as a 64-px polyline from x `LFO_PAGE.wave_x` (12) to 75, value 1 at the row top and 0 at top + `LFO_PAGE.wave_height` (10), level 6 running / 2 off, from `lfo_shape_value(shape, phase)` (a mirror of the library's shape math; random is drawn as two held steps). While the LFO runs and has sent a value, a 3×3 dot at x = 12 + `lfo_phase_estimate(n)` × 63, y from `lfo_last_raw[n]`. Right-aligned at x 127: the destination label (baseline top + 5) and `on|off <depth>%` (top + 11). Hints `E3:depth K2:dest K3:on|off`. E2 selects `selected_lfo`, E3 `params:delta("lfo_depth_<n>", d)` (percent), K2 steps `strata_lfo<n>_dest` (wrapping to none), K3 toggles `lfo_<n>` between 1 and 2. The page redraws at `LFO_PAGE.fps` (15) from `lfo_page_clock` (`start_lfo_page_clock`/`stop_lfo_page_clock`), which runs only while the page is shown and is cancelled in `cleanup`
+- **SETUP** (`redraw_setup`, `setup_enc`, `setup_key`): grid count and sizes (in port order), arc connected/none, `scenes: k/8 saved`, `buffers: k restored` (`buffers_restored`, engine-confirmed; `buffers: k ok, m missing` when remembered files were missing), `midi <port>: <device>` (y 48; `midi_device_name()` cut with `fit_text` to end by x 127, so long norns device names fit) and `ch: <channel mode>` (y 54, level 4); rows y 18-54, 6 px apart. E2 is `params:delta("midi_device", d)`, E3 `params:delta("midi_channel_mode", d)`, K3 calls `save_scenes_to_disk()`. Hints `E2:port E3:ch K3:save`. `setup_enc` is a global function (the main chunk is near the local limit). `grid.add`/`grid.remove`/`arc.add`/`arc.remove`/`midi.add`/`midi.remove` call `redraw()` so SETUP stays current
+- Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page
+
+#### Main parameter
+
+`main_param_id(voice_idx)` returns the param E3 and arc ring 2 adjust on MAIN (`v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring) and `main_param_label(voice_idx)` its screen label. Both read `main_param_entry(voice_idx)`: the `MAIN_PARAMS` entry for the voice type (param id suffix, screen label, value format; arc ring 2 sweeps it with `arc_sweep_param`), `BUFFER_MAIN_PARAM` (`buf_pos`, label `pos`, `%.2f`) for a buffer source (spec §1), or `INPUT_MAIN_PARAM` (`grain_size`, label `size`, `%.2f s`) for the input source (its synth and buffer params do nothing). Use them instead of `if v.name ==` chains; arc ring 2 is drawn to `param_fraction(main_param_id(...))` of a turn (following the warp, like the FX and BUFFER rings)
+
+#### MAIN layout
+
+The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. The list shows:
+- Active status (● for on, ○ for off)
+- Voice name
+- Freeze status ([F] suffix)
+
+MAIN uses a two-column layout:
+- **Header (y=8, `draw_header()`, identical on every page)**: page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
+- **Left column (0-60px)**: Scrolling voice list (4 visible at a time, rows y=15-48)
+- **Right column (65-128px)**: Selected voice details (name, status, main parameter at y=42/50); `[FREEZE]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42)
+- **Divider (x=62)**: Subtle vertical line separating columns
+- **Hint row (y=62)**: `K2:rand K3:freeze|start`
+- `test/run.lua` checks, on every page and for every selected voice, that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), that `dens:` starts at least 4 px after the page title, that a hint row is drawn at y=62, and that the voice list's last row ends above the hint row; keep it passing when adding text. The width estimate is `stubs.text_width` in `test/norns_stubs.lua`, which the screen stub also uses for `screen.text_extents` (returns width, 8); the stub records each string's `x`, `y`, `align` and `level`
+- Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `drift_update` only when a grid shows page 2 (it runs 10x/s)
+
+When adding UI elements, update the page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()` itself.
+
+
+## Future Extension Points
+
+Potential expansion areas:
+- ~~Cross-modulation between voices~~ ✓ Implemented (v1.0)
+- ~~Additional voice types (Pulse, Karplus, Ring)~~ ✓ Implemented (v1.0)
+- ~~Probability-based parameter mutations~~ ✓ Implemented (v1.0)
+- ~~Monome grid integration~~ ✓ Implemented (v1.0)
+- ~~Longer-form automation/sequencing~~ ✓ Implemented (v1.0 - scene system)
+- ~~Multi-source modulation routing~~ ✓ Implemented (v1.0 - 3 slots per voice)
+- ~~Scene disk persistence~~ ✓ Implemented (v1.0 - auto-save/load + manual triggers)
+- ~~Scene data validation~~ ✓ Implemented (v2.0)
+- ~~Bounds checking and safety~~ ✓ Implemented (v2.0)
+- ~~Modulation signal clamping~~ ✓ Implemented (v2.0)
+- More voice types (wavetable, additive, granular noise, etc.)
+- Modulation matrix visualization on grid or arc
+- Per-scene naming/tagging system
+- ~~MIDI integration for external control~~ ✓ Implemented (v3.0 - notes, velocity, pitchbend; CC via norns PARAMS > MAP)
+- ~~Sample buffers and live input~~ ✓ Implemented (v3.0 - per-voice sources)
+- ~~Global LFOs~~ ✓ Implemented (v3.0 - three, on norns `lib/lfo.lua`)
+- Engine-side LFOs (above the Lua library's 10 Hz ceiling)
+- Buffer waveform display on the BUFFER page
+- Tempo-synced delay times
+- Undo/redo for parameter changes
+- Parameter automation recording
+
+## Version History
+
+### Version 3.0.1 (2026-11-03)
+
+Fixes the minor findings deferred from the 3.0 reviews; no command, param or file format changes. Highlights:
+- Arc: every continuous ring sweeps its range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512 ticks, half a revolution) through `arc_sweep_param`, following the warp; MAIN ring 2 drawn along the warp; LFO ring 4's carry reset on LFO or mode change; `arc_key` finds MAIN by index
+- BUFFER K2+K3 save flash (`buffer_page_flash`); held keys forgotten when the norns menu opens (`watch_menu_opening` wraps `_menu.set_mode`); omni pitchbend follows the selection
+- Buffer takes and loads settle on the engine's `bufferState` report (`finishing`, `settle_buffer_slot`, `settled_empty` for late reports, `BUFFER_SETTLE` fallback); `buffers_restored` engine-confirmed; missing files kept in `missing_path`
+- One full sync per scene recall, after the recalled params (`scene_recall_in_progress`); `voiceOn` density from `engine_param_value`
+- Engine: filter type crossfade (20 ms), grain-mode fade (50 ms), `slotChanges` guards against stop/clear and load races, loads apply on completion, grain synths placed by `startPlacedGrainSynth`, mirror off by default, amplitude crossmod for input-sourced voices, failed writes cleaned up and stale `.part` files deleted at alloc
+- Rulings: arc sweep 512 ticks; the write interleave keeps its per-frame loop (an array `lace` measured about twice as slow)
+- Tests: 118 Lua tests; the engine check bounds every reply wait (`awaitReply`, 5 s) and the whole run (540 s)
+
+See CHANGELOG.md.
+
+### Version 3.0 (2026-11-03)
+
+Absorbs the Confluence script's feature set (spec: `docs/superpowers/specs/2026-11-03-confluence-features-design.md`). Highlights:
+- Paged screen UI (MAIN, FX, LFO, BUFFER, SETUP; E1 selects, no acceleration) with arc pages that follow it
+- Master filter (`setFilter`) and stereo delay (`setDelay`) before the reverb; limiter moved before the saturator
+- Grain envelope shapes (`envShape`) and triggered grain mode (`grainMode`); `retrigger` carries velocity (`"if"`)
+- Eight stereo 16 s buffers and the live input as per-voice grain sources (`setGrainSource`, `loadBuffer`, `recordBuffer`, `stopRecord`, `clearBuffer`, `saveBuffer`, poll `bufferState`); BUFFER page, arc buffer rings, grid 256 page 4
+- Buffer persistence: scratch takes, remembered paths in `buffers.data`, explicit timestamped save
+- Three global LFOs on norns' `lib/lfo.lua`, modulating around stored values through `send_param_to_engine`; per-voice drift renamed `drift_update`
+- MIDI notes, velocity and pitchbend (`bend`) with per-voice channels; CC through norns PARAMS > MAP
+- Scene format version 2 with migration of version-1 files
+
+Deviations from the spec (controller rulings): limiter before the saturator; K3 keeps start/freeze (no grain trigger); input-sourced voices' main param is grain size; LFO ceiling 10 Hz, LFO depth in percent, 48 ppqn plus send dedupe; one-slot-per-message `bufferState` encoding; `stopRecord` added; K2+K3 save gesture; scenes capture LFO mode and clocked rate as well as the free period; grain-side accent only for the input source (`accentAmt`); the input `\strataGrain` mirrors to the voice bus; `scratchDir` is an engine variable. See CHANGELOG.md.
+
+### Version 2.1 (2026-11-03)
+
+Whole-app review fix release. Highlights:
+- `voiceOn` signature `"iffffff"` (freq was typed as a string and dropped); voices start with their full Lua state (`sync_voice_to_engine`)
+- Pattern steps accent running voices with the new `retrigger` command instead of stacking synth chains
+- Grain pitch is real pitch shifting; its LFO drift is subtle and mean-reverting
+- Tempo param drives `clock_tempo`; 128v layout reachable; grid hot-plug fixed; 256 parameter page implemented as faders; grid LEDs stay current
+- Silent bus for unrouted mod slots; frequency modulation clamped above zero; FM/Sub clamped
+- Linear scene transitions; thorough scene validation; versioned, crash-safe scene file loading
+- Engine nodes ordered inside `context.xg`; resonator and reverb no longer double their output; drift amounts mean depth
+- Off-device test harness (`test/`)
+
+See [CHANGELOG.md](CHANGELOG.md) for complete details.
+
+### Version 2.0 (2025-01-24)
+
+Major stability and code quality release focusing on bug fixes and defensive programming:
+
+**Critical Bug Fixes**:
+- Scene data validation prevents crashes from corrupted files
+- Scene sequencer position bounds checking prevents out-of-bounds access
+- Concurrent scene transition prevention via clock tracking and cancellation
+
+**High Priority Bug Fixes**:
+- Arc initialization race condition fixed
+- Mutation metro state synchronization in cleanup
+- 64-button grid pattern display corrected
+- Pattern/scene bounds checking added throughout
+- Scene transition nil access protection
+
+**Code Quality Improvements**:
+- Named constants (NUM_VOICES, NUM_SCENES, PATTERN_LENGTH) replace magic numbers
+- Comprehensive error handling and validation patterns
+- Resource management with proper cleanup
+- Modulation signal clamping in SuperCollider engine
+
+See [CHANGELOG.md](CHANGELOG.md) for complete details.
+
+### Version 1.0
+
+Initial release with:
+- 7 synthesis voices with granular processing
+- Cross-modulation (3 slots per voice)
+- Probability-based mutations
+- Scene system with disk persistence
+- Grid and arc integration
+- Pattern sequencer
+
+
+## Test harness details
+
+(Moved from CLAUDE.md.)
+
+**Off-device tests** (run from the repo root before committing):
+- `lua test/run.lua` and `luajit test/run.lua` - loads `strata.lua` into norns stubs (`test/norns_stubs.lua`) and runs the behaviour tests; exits non-zero on failure. The engine stub rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures, and the run includes the static sync check. Like norns, the param stub stores numeric type codes in `param.t` (`params.tOPTION` etc.), all taken from its one `PARAM_TYPE_CODES` table (exported as `stubs.PARAM_TYPE_CODES`; `params:add` with an unknown type raises an error, where norns prints one and adds nothing); never compare `param.t` with a string (a test enforces this for `strata.lua`, with either quote and either order: `p.t == "option"`, `'option' == p.t`).
+- `lua test/sync_check.lua` - static check that every `engine.<name>(...)` call in `strata.lua` has a matching `addCommand` with the same number of arguments, and that every command is used.
+- The run also checks CLAUDE.md: the command table under "Lua ↔ SuperCollider Communication" must have exactly one row per engine `addCommand`, with the same signature and argument count, and no `engine.<name>(` mentioned in CLAUDE.md or README.md may name a command the engine no longer has. Update the table in the same commit as the engine.
+- `test/run_engine_check.sh [path/to/norns]` - compiles `lib/Engine_Strata.sc` against the real norns `sc/core` classes (default `~/src/norns`, or `$NORNS_DIR`), boots a local scsynth with its output on a private bus (silent) and runs `test/engine_check.scd`, which drives every engine command. It adds SynthDefs of its own, `\strataCheckTone` (a 440 Hz tone written into `inputBus`) and `\strataCheckPeak` (a resettable peak meter on a stereo bus), to hear what a voice's bus carries, and `\strataCheckSine`/`\strataCheckStep` (a sine of any frequency; the largest sample-to-sample step on a bus) for the filter crossfade. Every server reply it waits for goes through `awaitReply` (5 s, then a FAIL) and the whole check fails after 540 s, so a reply that never comes fails the check instead of hanging it (CI kills the job at 600 s). Checks run at the same time on one machine share scsynth's port 57110 and break each other: run one at a time. Needs SuperCollider (`$SCLANG` overrides the sclang path).
+- `test/StrataTestNoBoot.sc.in` is deliberately not a `.sc` file: norns compiles every `.sc` under `~/dust`, and that test class disables Crone's boot.
+- Add a test to `test/run.lua` for every behaviour change; script locals are reached through `find_upvalue()`/`local_value()`.
+- The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behaviour there before changing them. Besides params (number, control, option, binary, trigger, file, text, separator, group; `set_action`, `hide`/`show`/`visible`), they provide: `require("lfo")` (`test/stub_lfo.lua`: the library's `lfo_*` params and actions; nothing runs on its own, `context.lfo.tick(instance, raw)` performs one library step with `raw` 0..1 as the shape output), `midi` (`test/stub_midi.lua`: 16 vports, `to_msg`/`to_data`; helpers `context.midi.plug(port, name)`, `unplug(port)`, `send(port, msg)`), `poll.set` (system polls plus the engine's `addPoll` names, unknown names return nil; `context.polls.fire(name, value)` reaches started polls), `fileselect.enter` (records `fileselect.last`), `require("musicutil").note_num_to_freq`, `_path.audio` (`context.audio_dir`), `util.scandir`/`util.os_capture`, `_menu.rebuild_params`, `util.time()` (stands still; `context.set_time(seconds)` moves it), `clock.get_beat_sec()` (60 / `clock_tempo`), `screen.line`/`screen.rect` recorded in `context.screen.lines` (`x1, y1, x2, y2, level`) and `context.screen.rects` (`x, y, w, h, level`) beside the texts, and `norns.enc.accel`/`sens` (state in `context.encoders.accel`/`sens`, starting at norns' script defaults accel on / sens 2; `context.encoders.deliver(n, delta, interval)` delivers one hardware encoder event the way `encoders.process_with_accel` does, with `interval` seconds since the previous one).
+
+**On hardware** - since this runs on norns hardware (or norns shield/fates):
+- Use maiden (norns web IDE at `http://norns.local/maiden`) to edit files and view console output
+- The maiden REPL is useful for testing Lua code
+- SuperCollider changes require script restart
+- Watch for errors in the maiden console (bottom panel)
