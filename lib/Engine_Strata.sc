@@ -37,11 +37,16 @@ Engine_Strata : CroneEngine {
     var <releasedGrainSource; // Per voice: the source its releasing grain synth was built for
     var controlNameSets;      // Per voice and grain SynthDef: its control names (IdentitySet), for controlPairs
     var <fadingSynths;        // Per voice: grain and voice synths a source switch gated off, still releasing
+    var <cuttingSynths;       // Per voice: grain and voice synths in their kill fade (cutSynth), freed by the next switch
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
+    // Real-time memory (see "Real-time memory" in docs/notes/engine.md). Both
+    // are built into the grain SynthDefs in alloc, so later changes do nothing.
+    var <pitchShiftWindow = 0.1;  // Grain PitchShift window (s): fixed, never the grain size (its delay line is allocated at that size)
+    var <maxGrains = 128;         // Grain table of every GrainIn/GrainBuf: Lua's largest overlap is 0.5 s x 200 grains/s = 100
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var <writeGenerations;        // Per output path: the newest write's number; older writes abandon
@@ -112,6 +117,7 @@ Engine_Strata : CroneEngine {
         releasingSynths = Array.fill(numVoices, { Dictionary.new });
         releasedGrainSource = Array.fill(numVoices, 0);
         fadingSynths = Array.fill(numVoices, { IdentitySet.new });
+        cuttingSynths = Array.fill(numVoices, { IdentitySet.new });
 
         // SynthDefs
 
@@ -527,8 +533,8 @@ Engine_Strata : CroneEngine {
             // Out then folds back to one channel apiece: pan spread did
             // nothing and the output path was doubled.) The voice's own pan
             // is already in the voice synth's output.
-            left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf);
-            right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf);
+            left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf, maxGrains);
+            right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
             // Position spread: a little of the input, smeared by a wandering delay
@@ -540,11 +546,12 @@ Engine_Strata : CroneEngine {
 
             // Transpose the whole grain-synth output (GrainIn has no rate
             // input). Shifting after the spread path is summed keeps every
-            // part transposed and time-aligned. PitchShift's window size is
-            // fixed when the synth starts.
+            // part transposed and time-aligned. The window is the fixed
+            // pitchShiftWindow, not the grain size: PitchShift allocates its
+            // delay line from the real-time pool for the window it starts with.
             sig = PitchShift.ar(
                 sig,
-                windowSize: grainSize.clip(0.01, 0.5),
+                windowSize: pitchShiftWindow,
                 pitchRatio: pitchShift.lag(0.5),
                 pitchDispersion: 0,
                 timeDispersion: 0
@@ -602,14 +609,14 @@ Engine_Strata : CroneEngine {
             // divided out, so the engine's bufRateScale applies exactly once
             rate = bufRate * bend * (bufRateScale / BufRateScale.kr(bufnumL)) * (1 + rateMod);
 
-            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf);
-            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf);
+            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf, maxGrains);
+            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
-            // Same transposition stage as strataGrain, once for the pair
+            // Same transposition stage as strataGrain (fixed window), once for the pair
             sig = PitchShift.ar(
                 sig,
-                windowSize: grainSize.clip(0.01, 0.5),
+                windowSize: pitchShiftWindow,
                 pitchRatio: pitchShift.lag(0.5),
                 pitchDispersion: 0,
                 timeDispersion: 0
@@ -1105,6 +1112,7 @@ Engine_Strata : CroneEngine {
         synth.onFree({
             if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
             fadingSynths[voice].remove(synth);
+            cuttingSynths[voice].remove(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case
@@ -1159,14 +1167,40 @@ Engine_Strata : CroneEngine {
     // releasing and no longer used: those a source switch gated off, and
     // those voiceOff released that voiceOn did not re-gate (built for
     // another source). The running voice's synths are never among them.
+    // Synths an earlier cut left in their kill fade are freed first, so a
+    // burst of switches (several inside one switchCutTime: a chord of scene
+    // buttons) never piles them up: a voice holds at most one live, one
+    // releasing and one cutting set of synths (see Real-time memory in
+    // docs/notes/engine.md).
     cutFadingSynths { arg voice;
         var releasing = releasingSynths[voice];
+        this.freeCuttingSynths(voice);
         [this.voiceKey(voice), this.grainKey(voice)].do({ arg key;
             var synth = releasing.removeAt(key);
             if (synth.notNil) { fadingSynths[voice].add(synth) };
         });
-        fadingSynths[voice].do({ arg synth; this.cutSynth(synth) });
+        fadingSynths[voice].do({ arg synth; this.cutVoiceSynth(voice, synth) });
         fadingSynths[voice].clear;
+    }
+
+    // cutSynth, remembering the synth until it frees so the next switch can
+    // free it at once if its fade has not ended
+    cutVoiceSynth { arg voice, synth;
+        if (synth.isPlaying) {
+            this.cutSynth(synth);
+            cuttingSynths[voice].add(synth);
+        };
+    }
+
+    // Free the voice's synths still in their kill fade, at once. One may
+    // have ended its fade on the server already (its /n_end not yet in
+    // sclang): /error -1 keeps that /n_free from being reported. onFree
+    // forgets them; they are never in synths or releasingSynths.
+    freeCuttingSynths { arg voice;
+        cuttingSynths[voice].do({ arg synth;
+            if (synth.isPlaying) { context.server.sendBundle(nil, ['/error', -1], ['/n_free', synth.nodeID]) };
+        });
+        cuttingSynths[voice].clear;
     }
 
     // End a voice or grain synth within switchCutTime through its kill
@@ -1552,7 +1586,7 @@ Engine_Strata : CroneEngine {
             var synth = synths.removeAt(key), superseded = releasingSynths[voice][key];
             if (synth.notNil) {
                 if (superseded.notNil and: { superseded !== synth } and: { key != this.modKey(voice) }) {
-                    this.cutSynth(superseded)
+                    this.cutVoiceSynth(voice, superseded)
                 };
                 synth.set(\gate, 0);
                 releasingSynths[voice][key] = synth;

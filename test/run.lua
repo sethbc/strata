@@ -473,6 +473,22 @@ test("voiceOn's grain density is the voice's density times master density as the
   assert_near(context.calls_named("voiceOn")[1].args[6], 15, 1e-9, "voiceOn grainDensity")
 end)
 
+test("the largest grain overlap Lua can send fits the engine's maxGrains", function()
+  load_strata()
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local max_grains = tonumber(source:match("var <maxGrains = (%d+);"))
+  assert_true(max_grains ~= nil, "the engine declares var <maxGrains = <n>;")
+  local master_max = params:lookup_param("master_density").controlspec.maxval
+  for voice_idx = 1, 7 do
+    local size_max = params:lookup_param("v" .. voice_idx .. "_grain_size").controlspec.maxval
+    local density_max = params:lookup_param("v" .. voice_idx .. "_grain_density").controlspec.maxval
+    -- a GrainIn/GrainBuf runs at most maxGrains - 1 grains and drops the rest
+    assert_true(size_max * density_max * master_max <= max_grains - 1,
+      string.format("voice %d: %.2f s x %d x %.1f = %.0f overlapping grains fit maxGrains %d",
+        voice_idx, size_max, density_max, master_max, size_max * density_max * master_max, max_grains))
+  end
+end)
+
 test("grain envelope option reaches the engine and is synced on start", function()
   local context = load_strata(); context.clock.advance()
   params:set("v1_grain_env", 3)
