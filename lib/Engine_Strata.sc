@@ -45,6 +45,7 @@ Engine_Strata : CroneEngine {
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
     var <bufferLoadFailedPoll;    // value = (load number * 2 + emptied) * numBuffers + slot index (bufferLoadFailedValue)
     var <loadCheckFrames = 16384; // Frames per chunk when loadSlot decodes a file to check it (fileDecodes)
+    var <loadShortfallFrames = 4096; // Frames a file may decode short of its header's count and still load (fileDecodes)
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
     // Real-time memory (see "Real-time memory" in docs/notes/engine.md). Both
@@ -1329,21 +1330,25 @@ Engine_Strata : CroneEngine {
         ^((((load * 2) + emptied.binaryValue) * numBuffers) + index).asFloat
     }
 
-    // true when libsndfile decodes all of the first `frames` frames of the
-    // open file. A damaged compressed file (a corrupt or truncated FLAC) has
-    // a sound header but stops decoding early, and the server's read then
-    // fills the rest with silence without reporting anything, so loadSlot
-    // decodes the frames itself first (16 s of 48 kHz stereo: about 2 ms for
-    // a WAV, 9 ms for a FLAC on a desktop; the file is then in the page
-    // cache for the server's read).
+    // true when libsndfile decodes the first `frames` frames of the open
+    // file, or all but loadShortfallFrames of them. A damaged compressed file
+    // (a corrupt or truncated FLAC) has a sound header but stops decoding
+    // early, and the server's read then fills the rest with silence without
+    // reporting anything, so loadSlot decodes the frames itself first (16 s
+    // of 48 kHz stereo: about 2 ms for a WAV, 9 ms for a FLAC on a desktop;
+    // the file is then in the page cache for the server's read). The
+    // shortfall allowed is one default FLAC block (4096 frames, 85 ms at
+    // 48 kHz), more than an MP3's encoder delay and padding (under 2 x 1152
+    // frames), so a header count that overshoots by a codec's padding still
+    // loads, while damage before the last block is caught. One chunk array
+    // serves the whole file (the last read may run past `frames`).
     fileDecodes { arg file, frames;
-        var remaining = frames, chunk, wanted;
+        var remaining = frames, chunk = FloatArray.newClear(loadCheckFrames * file.numChannels), decoded;
         while { remaining > 0 } {
-            wanted = remaining.min(loadCheckFrames);
-            chunk = FloatArray.newClear(wanted * file.numChannels);
             file.readData(chunk);  // shrinks chunk to the samples decoded
-            if (chunk.size < (wanted * file.numChannels)) { ^false };
-            remaining = remaining - wanted;
+            decoded = chunk.size div: file.numChannels;
+            remaining = remaining - decoded;
+            if ((decoded < loadCheckFrames) and: { remaining > 0 }) { ^remaining <= loadShortfallFrames };
         };
         ^true
     }
@@ -1407,11 +1412,15 @@ Engine_Strata : CroneEngine {
         this.afterSlotFade(index, change, {
             buffersL[index].zero;
             buffersR[index].zero;
-            // the server answers a read it cannot do with /fail, naming the bufnum
+            // the server answers a read it cannot do with /fail, naming the
+            // file ("File '<path>' could not be opened: ...") and the bufnum:
+            // both must match, so an earlier load's failed read of another
+            // file, still in flight in this slot, never fails this one
             readFailed = false;
             bufnums = [buffersL[index].bufnum, buffersR[index].bufnum];
             failWatcher = OSCFunc({ arg msg;
-                if ((msg[1].asSymbol == '/b_readChannel') and: { bufnums.includes(msg[3]) }) { readFailed = true };
+                if ((msg[1].asSymbol == '/b_readChannel') and: { bufnums.includes(msg[3]) }
+                    and: { msg[2].asString.contains("'" ++ path.standardizePath ++ "'") }) { readFailed = true };
             }, '/fail', context.server.addr);
             buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
             buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);

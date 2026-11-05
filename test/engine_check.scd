@@ -212,6 +212,8 @@ var bufferStateSeen = { arg slot, seconds;
         (msg[1] == engine.bufferStatePoll.index) and: { decoded[0] == slot }
             and: { (decoded[1] - seconds).abs < 0.011 } })
 };
+// bufferState poll messages received so far
+var bufferStateMessages = { pollMessages.select({ arg msg; msg[1] == engine.bufferStatePoll.index }) };
 // bufferLoadFailed poll values received so far
 var loadFailures = {
     pollMessages.select({ arg msg; msg[1] == engine.bufferLoadFailedPoll.index }).collect({ arg msg; msg[2] })
@@ -282,7 +284,10 @@ var checkBadLoadsDuringRecording = { arg textPath;
 // is sound (SoundFile.openRead gives its frames), but libsndfile stops
 // decoding early, and the server's /b_readChannel then fills the rest with
 // silence without any /fail (measured with scsynth 3.14: 12288 of 48000
-// frames decode). Returns its path and whether its header reads.
+// frames decode). Returns its path and whether its header reads. Decoding
+// it makes libFLAC 1.4 print "Rewinding, seeking necessary" to stderr:
+// expected, harmless, not silenceable from sclang, and not matched by
+// run_engine_check.sh's error patterns.
 var writeDamagedFlac = { arg path;
     var file = SoundFile.new.headerFormat_("FLAC").sampleFormat_("int16").numChannels_(1).sampleRate_(48000);
     var bytes, header, headerReads;
@@ -451,6 +456,42 @@ var checkFilePitch = {
         "a take recorded over a 44.1 kHz file plays at its pitch (a 440 Hz tone measures % Hz; readings %)".format(
             pitches[5].round(0.1), pitches.round(0.1)));
     probe.free; pitchBus.free;
+};
+
+// fileDecodes accepts a header count up to loadShortfallFrames more than
+// the frames that decode (asking a good file for more frames than it has
+// stands in for such a header), and rejects anything beyond
+var checkDecodeShortfall = { arg stereoPath, longPath;
+    var decodes = { arg path, frames;
+        var file = SoundFile.openRead(path), result = engine.fileDecodes(file, frames);
+        file.close;
+        result
+    };
+    check.(decodes.(stereoPath, 11025) and: { decodes.(longPath, 22050 * 16) },
+        "fileDecodes accepts files that decode in full (one chunk and many)");
+    check.(decodes.(stereoPath, 11025 + engine.loadShortfallFrames)
+        and: { decodes.(stereoPath, 11025 + engine.loadShortfallFrames + 1).not },
+        "fileDecodes tolerates a shortfall of loadShortfallFrames (%) and no more".format(engine.loadShortfallFrames));
+};
+
+// Two back-to-back loads into a slot no voice plays both read at once: a
+// /fail for the first one's file (simulated here, as the server sends it)
+// fails only that load, never the second one's good read of another file
+var checkReadFailureMatching = { arg stereoPath, monoPath;
+    var firstPath = scratchRoot +/+ "first-of-two.wav", before, firstLoad;
+    File.delete(firstPath); File.copy(monoPath, firstPath);
+    before = loadFailures.value.size;
+    command.(\loadBuffer, 5, firstPath);
+    firstLoad = engine.bufferLoads[5];
+    command.(\loadBuffer, 5, stereoPath);
+    thisProcess.recvOSCmessage(0, server.addr, NetAddr.langPort, ['/fail', '/b_readChannel',
+        "File '" ++ firstPath.standardizePath ++ "' could not be opened: System error : No such file or directory.\n",
+        engine.buffersL[5].bufnum]);
+    0.5.wait; server.sync;
+    check.(loadFailures.value.drop(before) == [((firstLoad * 2) + 1) * engine.numBuffers + 5],
+        "a /fail names its file: only the first of two loads fails (got %)".format(loadFailures.value.drop(before)));
+    check.(engine.bufferFrames[5] == 11025, "the second load's good read is kept (% frames)".format(engine.bufferFrames[5]));
+    File.delete(firstPath);
 };
 
 // A file that passes loadSlot's checks but is gone when the server reads it
@@ -1419,8 +1460,7 @@ server.waitForBoot({
             "a voice reading the slot gets the new valid length");
         check.(synthNames.(context.xg).size == before, "recording into a slot a voice is reading adds no lasting nodes");
         check.(waitFor.({ bufferStateSeen.(2, 0.3) }), "the bufferState poll reports the recorded seconds");
-        check.(pollMessages.notEmpty and: { pollMessages.every({ arg msg;
-            (msg[1] == engine.bufferStatePoll.index) and: { msg[2].isKindOf(Float) } }) },
+        check.(bufferStateMessages.value.notEmpty and: { bufferStateMessages.value.every({ arg msg; msg[2].isKindOf(Float) }) },
             "bufferState is sent as a float value poll (matron's /poll/value is typed if)");
         check.(waitFor.({ (0..7).every({ arg slot; pollMessages.any({ arg msg; decodeBufferState.(msg[2])[0] == slot }) }) }),
             "the periodic bufferState poll reports every slot");
@@ -1515,6 +1555,8 @@ server.waitForBoot({
         check.(engine.bufferFrames[4] == 11025 and: { (bufferSample.(engine.buffersL[4], 100) - 0.5).abs < 0.001 },
             "a missing or unreadable file leaves the slot unchanged");
         checkLoadFailureReports.(textPath, stereoPath);
+        checkDecodeShortfall.(stereoPath, longPath);
+        checkReadFailureMatching.(stereoPath, monoPath);
         checkBadLoadsDuringRecording.(textPath);
         command.(\loadBuffer, 5, monoPath); 0.3.wait; server.sync;
         check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001
