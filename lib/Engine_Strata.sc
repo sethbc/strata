@@ -27,6 +27,7 @@ Engine_Strata : CroneEngine {
     var <recordSynths;        // Running strataRecord synth per slot, or nil
     var <recordFrameBuses;    // Per slot: frames recorded so far, written by strataRecord
     var <slotChanges;         // Per slot: counts loads, records, clears and stops; a late reply applies only if unchanged
+    var <stopReplies;         // Per slot: the slotChanges count of a stopRecord whose frame count is still awaited, or nil
     var <inputBus;            // Stereo live input, written by inputSynth
     var <inputSynth;
     var <grainSource;
@@ -97,6 +98,7 @@ Engine_Strata : CroneEngine {
         recordSynths = Array.newClear(numBuffers);
         recordFrameBuses = Array.fill(numBuffers, { Bus.control(context.server, 1) });
         slotChanges = Array.fill(numBuffers, 0);
+        stopReplies = Array.newClear(numBuffers);
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -1267,17 +1269,19 @@ Engine_Strata : CroneEngine {
     }
 
     // A load whose file cannot be used leaves the slot as it is, except that
-    // it cancels a recording in progress or waiting to start, as Lua's
-    // load_buffer expects: that take never completes, so it is never
-    // adopted under the bad file's name. The slot reads empty (0 frames),
-    // as for a recording a clear cancelled.
+    // it cancels a recording in progress or waiting to start, or one stopped
+    // early whose frame count has not arrived yet (stopReplies; the slot
+    // change drops that reply), as Lua's load_buffer expects: that take
+    // never completes, so it is never adopted under the bad file's name.
+    // The slot reads empty (0 frames), as for a recording a clear cancelled.
     rejectLoad { arg index, reason;
-        var recording = recordSynths[index].notNil;
+        var recording = recordSynths[index].notNil or: { stopReplies[index].notNil };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
             ++ (if (recording) { " recording cancelled" } { " unchanged" }));
         if (recording) {
             this.stopRecording(index);
             this.slotChanged(index);
+            stopReplies[index] = nil;
             this.bufferChanged(index);
         };
     }
@@ -1378,7 +1382,9 @@ Engine_Strata : CroneEngine {
         this.stopRecording(index);
         change = this.slotChanged(index);
         if (started.not) { ^this };
+        stopReplies[index] = change;
         recordFrameBuses[index].get({ arg recorded;
+            if (stopReplies[index] == change) { stopReplies[index] = nil };
             if (slotChanges[index] == change) {
                 bufferFrames[index] = recorded.round.asInteger.clip(0, buffersL[index].numFrames);
                 this.bufferChanged(index);
@@ -1418,7 +1424,8 @@ Engine_Strata : CroneEngine {
         var oldest = Date.getDate.rawSeconds - stalePartAge;
         this.stalePartDirs.do({ arg dir;
             (dir +/+ "*.part").pathMatch.do({ arg partPath;
-                var modified = File.mtime(partPath);
+                // try: the file may be gone since pathMatch (File.mtime then throws)
+                var modified = try { File.mtime(partPath) };
                 if (modified.notNil and: { modified < oldest }) { File.delete(partPath) };
             });
         });

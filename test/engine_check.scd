@@ -244,6 +244,18 @@ var checkBadLoadsDuringRecording = { arg textPath;
             "a % file loaded during a recording cancels it: no take, nothing written (% frames)".format(
                 bad[1], engine.bufferFrames[6]));
     });
+    // ... also one stopped early whose frame count has not arrived yet: the
+    // late reply keeps nothing
+    File.delete(engine.scratchDir +/+ "buf7.wav");
+    command.(\recordBuffer, 6, 1.0, 1.0); 0.3.wait; server.sync;
+    info = engine.recordSynths[6].notNil;
+    command.(\stopRecord, 6);
+    command.(\loadBuffer, 6, scratchRoot +/+ "missing.wav");
+    1.0.wait; server.sync;
+    check.(info and: { engine.bufferFrames[6] == 0 } and: { engine.stopReplies[6].isNil }
+        and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
+        "a missing file loaded right after stopRecord cancels the stopped take: no take, nothing written (% frames)".format(
+            engine.bufferFrames[6]));
 };
 
 // A take recorded above level 1 holds samples beyond ±1 (the buffers are
@@ -1109,9 +1121,10 @@ server.waitForBoot({
         file.openWrite(longWritePath);
         file.writeData(FloatArray.fill(frames * 2, { arg i; var value = rampValue.(i div: 2); if (i.odd) { value.neg } { value } }));
         file.close;
+        info = pollMessages.size;   // slot 8 reported 716 before (16 s at 22.05 kHz): only later reports count
         command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
         check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
-        check.(waitFor.({ pollMessages.any({ arg msg; msg[2] == 716 }) }),
+        check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 716 }) }),
             "slot 8 holding 16 s reports 716 through bufferState (the encoding's maximum)");
         savePath = scratchRoot +/+ "long/saved.wav";
         writeStart = Main.elapsedTime;
