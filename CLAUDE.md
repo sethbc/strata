@@ -102,7 +102,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Named constants, never magic numbers.** They live in the Constants block at the top of `strata.lua`: `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (2), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (5), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `BUFFER_SECONDS` (16), `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers` and `bufferSeconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
-**Lua's 200-local limit**: `strata.lua`'s main chunk uses 187 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
+**Lua's 200-local limit**: `strata.lua`'s main chunk uses 184 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
 
 **Descriptive names**: `selected_voice`, not `sv`; `master_density`, not `md`.
 
@@ -120,6 +120,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 ### IMPORTANT: update the UI with every feature (128×64 screen)
 
 - Pages: `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`, dispatched through `PAGE_DRAW`/`PAGE_ENC`/`PAGE_KEY`/`PAGE_KEY_RELEASE`, with `ARC_PAGE_DELTA`/`ARC_PAGE_REDRAW` indexed the same way. A new page adds its functions to every table, defined above them. Change a page's draw function (`redraw_main`, ...), never `redraw()`.
+- **Redraws**: when state the screen or arc shows changes, call `request_redraw()`; never call `redraw()` or `arc_redraw()` from script code. The frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15), and every param action already requests one (details in `docs/notes/lua.md`, Redraws). Grid redraws stay direct (`grid_redraw()`).
 - Every page has the header at y=8 (`draw_header()`: title, `dens:`, `[M]` at x=98, scene `S1`-`S8` right-aligned at 127) and the hint row at y=62 (`draw_hints()`). On MAIN the voice list (x 0-60, `UI.ScrollingList`, 4 visible rows) sits left of the divider at x=62 and the selected voice's details at x 65-127. Status indicators use `[BRACKETS]`; levels are 15 bright, 4 dim, 1-2 subtle.
 - A new voice type needs a `MAIN_PARAMS` entry (E3, the MAIN display and arc ring 2 follow; `list_name` is its voice-list name, at most 5 characters) and `get_param_spec()` specs.
 - `test/run.lua` checks every page for overlapping strings, text off-screen, the hint row and the list's bottom edge, and that no MAIN string crosses the divider (width estimate: `stubs.text_width`). Keep it passing.

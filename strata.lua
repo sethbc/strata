@@ -313,6 +313,56 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 local ui_page = 1  -- index into UI_PAGES
+
+-- Screen and arc redraws. Anything that changes what they show calls
+-- request_redraw(); the frame clock (started by init, cancelled by cleanup)
+-- then draws whichever is dirty, at most FRAMES_PER_SECOND times a second,
+-- so a burst of arc turns, MIDI or param changes costs one frame. Handlers
+-- never draw directly. The global redraw() still draws at once when norns
+-- calls it (e.g. as its menu closes).
+UI_PAGES.FRAMES_PER_SECOND = 15
+UI_PAGES.screen_dirty = true  -- the first frame draws both
+UI_PAGES.arc_dirty = true
+UI_PAGES.frame_clock = nil
+
+function request_redraw()
+  UI_PAGES.screen_dirty = true
+  UI_PAGES.arc_dirty = true
+end
+
+-- One frame. It calls the global redraw(), so norns' swaps apply: nothing
+-- while its menu is open (redraw is norns.none then; norns redraws as the
+-- menu closes), and the file list while the file selector is open (redraw()
+-- never draws the page then). The LFO page draws every frame: its dots move.
+function draw_frame()
+  if UI_PAGES[ui_page] == "LFO" then UI_PAGES.screen_dirty = true end
+  if UI_PAGES.screen_dirty then
+    UI_PAGES.screen_dirty = false
+    redraw()
+  end
+  if UI_PAGES.arc_dirty then
+    UI_PAGES.arc_dirty = false
+    arc_redraw()
+  end
+end
+
+function start_frame_clock()
+  stop_frame_clock()
+  UI_PAGES.frame_clock = clock.run(function()
+    while true do
+      clock.sleep(1 / UI_PAGES.FRAMES_PER_SECOND)
+      draw_frame()
+    end
+  end)
+end
+
+function stop_frame_clock()
+  if UI_PAGES.frame_clock then
+    clock.cancel(UI_PAGES.frame_clock)
+    UI_PAGES.frame_clock = nil
+  end
+end
+
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local master_density = 1.0
 local frozen = {}
@@ -377,7 +427,6 @@ local midi_state = {
   bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
   held = {},                -- per voice: set of notes held on it
   note_voice = {},          -- per channel: note -> the voice its note on played
-  removing = nil,           -- the device being unplugged while midi.remove redraws
 }
 for i = 1, NUM_VOICES do
   midi_state.bend[i] = 1
@@ -455,7 +504,7 @@ end
 
 -- Buffer state is shown on the BUFFER page and the 256 grid's page 4
 local function buffer_display_changed()
-  redraw()
+  request_redraw()
   grid_redraw()
 end
 
@@ -667,7 +716,7 @@ local function buffer_state_changed(value)
   end
   -- the periodic poll repeats unchanged values: redraw only on a change
   if not changed then return end
-  redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
+  request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
   if grid_page == 4 then grid_redraw() end
 end
 
@@ -928,7 +977,6 @@ function add_lfo_params()
       default = 1,
       action = function()
         restore_lfo_destination(n)
-        redraw()
       end
     }
   end
@@ -1326,7 +1374,8 @@ function init()
   for i = 1, NUM_VOICES do
     add_voice_params(i)
   end
-  
+  redraw_on_param_changes()
+
   -- UI setup
   update_voice_list()
   -- E1 only selects the page: without acceleration, and 4 ticks per page,
@@ -1379,7 +1428,26 @@ function init()
     if not voices[2].active then toggle_voice(2) end
   end)
 
-  redraw()
+  start_frame_clock()
+end
+
+-- Nearly every param is shown on a page or an arc ring, so every param
+-- action asks for a redraw: PARAMS edits, CC maps (PARAMS > MAP), pset
+-- loads, scene fades and mutations all arrive through them. Run once, after
+-- every param is added. Left out, as they are shown nowhere and change
+-- many times a second: text params (the LFO library writes each LFO's
+-- scaled and raw value into its own on every step) and the drift's 10 Hz
+-- writes (drift_update asks for the buffer positions it moves itself).
+function redraw_on_param_changes()
+  for _, param in ipairs(params.params) do
+    local action = param.action
+    if param.t ~= params.tTEXT and type(action) == "function" then
+      param.action = function(...)
+        action(...)
+        if not drift_writing then request_redraw() end
+      end
+    end
+  end
 end
 
 function add_voice_params(voice_idx)
@@ -1437,7 +1505,6 @@ function add_voice_params(voice_idx)
       if grid_voice_select == voice_idx then
         param_page = util.clamp(param_page, 1, fader_page_count(voice_idx))
       end
-      redraw()
       grid_redraw()
     end
   }
@@ -1783,7 +1850,7 @@ function toggle_voice(voice_idx)
   end
   
   update_voice_list()
-  redraw()
+  request_redraw()
   grid_redraw()
 end
 
@@ -1791,6 +1858,7 @@ function toggle_freeze(voice_idx)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
   frozen[voice_idx] = not frozen[voice_idx]
   update_voice_list()
+  request_redraw()
   grid_redraw()
 end
 
@@ -1870,7 +1938,7 @@ function randomize_voice(voice_idx)
   params:set("v" .. voice_idx .. "_grain_size", math.random() * 0.3 + 0.05)
   params:set("v" .. voice_idx .. "_grain_pitch", math.random() * 2 + 0.5)
   
-  redraw()
+  request_redraw()
   grid_redraw()
 end
 
@@ -1899,6 +1967,7 @@ function drift_update()
         drift_writing = true
         params:set("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
         drift_writing = false
+        request_redraw()  -- MAIN and the BUFFER arc ring show the position
       end
     end
   end
@@ -1991,7 +2060,9 @@ function gentle_mutate()
     end
   end
 
-  -- Mutated values are shown by the 256 grid's parameter faders
+  -- Mutated values are shown on the screen, the arc and the 256 grid's
+  -- parameter faders
+  request_redraw()
   grid_redraw()
 end
 
@@ -2266,6 +2337,7 @@ function recall_scene(scene_num, transition_time)
           for _, target in ipairs(targets) do
             params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
           end
+          request_redraw()
           grid_redraw()  -- keep the parameter faders moving with the fade
         end)
         if not stepped then
@@ -2287,7 +2359,7 @@ function recall_scene(scene_num, transition_time)
   end
 
   current_scene = scene_num
-  redraw()
+  request_redraw()
 end
 
 -- Apply a scene immediately. The scene must have passed validate_scene.
@@ -2360,6 +2432,7 @@ function recall_scene_instant(scene_num)
   end
 
   update_voice_list()
+  request_redraw()  -- freeze and running states, and the end of a fade
   grid_redraw()
 end
 
@@ -2427,7 +2500,7 @@ function scene_sequencer_start()
         scene_sequencer_position = 1
       end
 
-      redraw()
+      request_redraw()
       grid_redraw()
     end
   end)
@@ -2439,7 +2512,7 @@ function scene_sequencer_stop()
     clock.cancel(scene_sequencer_clock)
     scene_sequencer_clock = nil
   end
-  redraw()
+  request_redraw()
   grid_redraw()
 end
 
@@ -2975,11 +3048,9 @@ local LFO_PAGE = {
   wave_height = 10,   -- shape value 1 at the row top, 0 at top + 10
   wave_x = 12,
   wave_width = 64,
-  fps = 15,
   -- the random shape holds a new value each half cycle; drawn as two steps
   random_display_levels = {0.75, 0.3}
 }
-local lfo_page_clock = nil
 
 -- One point (0..1) of a shape at a phase, as the library's process_lfo
 -- computes its raw value
@@ -3041,24 +3112,6 @@ function redraw_lfo()
   end
 
   draw_hints("E3:depth K2:dest K3:" .. (lfo_running(selected_lfo) and "off" or "on"))
-end
-
--- The LFO page redraws at 15 fps while it is shown, so the dots move
-local function start_lfo_page_clock()
-  if lfo_page_clock then return end
-  lfo_page_clock = clock.run(function()
-    while true do
-      clock.sleep(1 / LFO_PAGE.fps)
-      redraw()
-    end
-  end)
-end
-
-local function stop_lfo_page_clock()
-  if lfo_page_clock then
-    clock.cancel(lfo_page_clock)
-    lfo_page_clock = nil
-  end
 end
 
 local function lfo_enc(n, d)
@@ -3147,13 +3200,13 @@ local BUFFER_PAGE = {
   flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
   flash_text = nil,       -- the transient hint, drawn instead of the key hints
   flash_until = 0,        -- util.time() when it ends
-  flash_clock = nil,      -- redraws once when it ends
+  flash_clock = nil,      -- asks for a redraw when it ends
   file_selector_open = false  -- K2's file selector owns the screen: redraw() draws it
 }
 
 -- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
 -- redraw_buffer stops drawing it at flash_until; the clock clears it (even
--- if it wakes a little early) and redraws once so it goes away untouched.
+-- if it wakes a little early) and asks for a redraw so it goes away untouched.
 function buffer_page_flash(text)
   BUFFER_PAGE.flash_text = text
   BUFFER_PAGE.flash_until = util.time() + BUFFER_PAGE.flash_seconds
@@ -3162,7 +3215,7 @@ function buffer_page_flash(text)
     clock.sleep(BUFFER_PAGE.flash_seconds)
     BUFFER_PAGE.flash_clock = nil
     BUFFER_PAGE.flash_text = nil
-    redraw()
+    request_redraw()
   end)
 end
 
@@ -3314,7 +3367,7 @@ local function buffer_key_release(n)
       load_buffer(slot, path)
     end
     BUFFER_PAGE.file_selector_open = false
-    redraw()
+    request_redraw()
   end)
 end
 
@@ -3325,12 +3378,9 @@ local PAGE_ENC = {main_enc, fx_enc, lfo_enc, buffer_enc, setup_enc}
 local PAGE_KEY = {main_key, fx_key, lfo_key, buffer_key, setup_key}
 local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_input, buffer_key_release, ignore_page_input}
 
--- Show another page; the LFO page's redraw clock runs only while it is shown
+-- Show another page (draw_frame redraws the LFO page on every frame)
 local function set_ui_page(page)
-  if page == ui_page then return end
-  if UI_PAGES[ui_page] == "LFO" then stop_lfo_page_clock() end
   ui_page = page
-  if UI_PAGES[ui_page] == "LFO" then start_lfo_page_clock() end
 end
 
 -- Encoders
@@ -3340,8 +3390,7 @@ function enc(n, d)
   else
     PAGE_ENC[ui_page](n, d)
   end
-  arc_redraw()
-  redraw()
+  request_redraw()
 end
 
 -- The norns menu (K1, or PARAMS and its file selector) takes every key
@@ -3400,7 +3449,7 @@ function key(n, z)
       PAGE_KEY_RELEASE[ui_page](n)
     end
   end
-  redraw()
+  request_redraw()
 end
 
 -- Redraw
@@ -3619,10 +3668,7 @@ function arc_init()
       break
     end
   end
-  attach_arc(port)
-  if arc_connected then
-    arc_redraw()
-  end
+  attach_arc(port)  -- the first frame draws its rings
 end
 
 function arc.add(device)
@@ -3630,8 +3676,7 @@ function arc.add(device)
   if port < 1 or port > UI_PAGES.ARC_PORTS then return end
   if arc_connected and arc_device ~= arc.connect(port) then return end  -- already following another arc
   attach_arc(port)
-  arc_redraw()
-  redraw()  -- SETUP shows the arc state
+  request_redraw()  -- its rings, and SETUP shows the arc state
   print("arc connected")
 end
 
@@ -3640,21 +3685,20 @@ function arc.remove(device)
   if port < 1 or port > UI_PAGES.ARC_PORTS then return end
   if arc_device ~= arc.connect(port) then return end  -- not the arc Strata follows
   arc_connected = false
-  redraw()
+  request_redraw()
   print("arc disconnected")
 end
 
 function arc_delta(n, delta)
   ARC_PAGE_DELTA[ui_page](n, delta)
-  arc_redraw()
-  redraw()
+  request_redraw()
 end
 
 function arc_key(n, s)
   -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
   if s == 1 and ui_page == UI_PAGES.MAIN_PAGE then
     start_or_freeze_selected_voice()
-    redraw()
+    request_redraw()
   end
 end
 
@@ -3687,22 +3731,22 @@ end
 -- and clears the vport only after midi.remove returns.
 function midi.add(device)
   attach_midi(params:get("midi_device"))
-  redraw()  -- SETUP shows the device
+  request_redraw()  -- SETUP shows the device
   print("midi connected: " .. tostring(device.name))
 end
 
 function midi.remove(device)
   if device.port == params:get("midi_device") then reset_midi_input() end
-  midi_state.removing = device
-  redraw()  -- SETUP shows the port as empty
-  midi_state.removing = nil
+  -- SETUP shows the port as empty: norns clears the vport as midi.remove
+  -- returns, before the next frame draws
+  request_redraw()
   print("midi disconnected: " .. tostring(device.name))
 end
 
 -- The name of the device on the selected port, or "none"
 function midi_device_name()
   local device = midi_device and midi_device.device
-  if device == nil or device == midi_state.removing then return "none" end
+  if device == nil then return "none" end
   return midi_device.name
 end
 
@@ -3784,6 +3828,7 @@ end
 -- voice gets it when it starts (sync_voice_values_to_engine).
 function midi_pitchbend(voice_idx, value)
   midi_set_bend(voice_idx, 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12))
+  request_redraw()  -- the voice changed, like a note's (the frame clock coalesces a wheel's stream)
 end
 
 function midi_set_bend(voice_idx, ratio)
@@ -3865,7 +3910,7 @@ function grid.add(device)
   local grid_port = attach_grid(port)
   print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
   grid_redraw()
-  redraw()  -- SETUP lists the connected grids
+  request_redraw()  -- SETUP lists the connected grids
 end
 
 function grid.remove(device)
@@ -3875,7 +3920,7 @@ function grid.remove(device)
     grids[port].key = nil
     grids[port] = nil
   end
-  redraw()
+  request_redraw()
   print("grid " .. port .. " disconnected")
 end
 
@@ -3897,7 +3942,7 @@ function grid_key(port, x, y, z)
   end
 
   grid_redraw()
-  redraw()
+  request_redraw()
 end
 
 -- 16x16 grid layout
@@ -4605,6 +4650,7 @@ function cleanup()
   end
 
   -- Stop metros and clocks
+  stop_frame_clock()
   if drift_metro then drift_metro:stop() end
 
   -- Sync mutation metro state with param
@@ -4625,7 +4671,6 @@ function cleanup()
 
   -- Stop the LFOs (through their state params, like the library's menu) and
   -- give their destinations back their stored values
-  stop_lfo_page_clock()
   for n = 1, NUM_LFOS do
     lfos[n]:stop()
     params:set("lfo_" .. n, 1)

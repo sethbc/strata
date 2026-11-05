@@ -85,6 +85,12 @@ end
 
 local function local_value(name) return (find_upvalue(name)) end
 
+-- One tick of the frame clock: it draws the screen and the arc if anything
+-- asked for a redraw since the last frame
+local function next_frame(context)
+  context.clock.resume_thread(local_value("UI_PAGES").frame_clock)
+end
+
 -- Deep copy of plain data tables
 local function deep_copy(value)
   if type(value) ~= "table" then return value end
@@ -1744,6 +1750,7 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     local min_value, max_value = param_range(param_id)
     params:set(param_id, min_value)
     context.arc.turn(1, 2, 100)  -- enough for one step of sub's fine-scaled drift
+    next_frame(context)
     local value = params:get(param_id)
     assert_true(value > min_value, "arc ring 2 raises " .. param_id)
     assert_near(device.segments[2].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring 2 shows " .. param_id)
@@ -1760,6 +1767,7 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
   set_selected(1)
   params:set("v1_freq", 20)
   for _ = 1, 256 do context.arc.turn(1, 2, 1) end
+  next_frame(context)
   assert_near(params:get("v1_freq"), 200, 1e-6, "256 ticks reach the exp midpoint")
   assert_near(device.segments[2].to, math.pi, 1e-6, "ring 2 draws the exp midpoint at half a turn")
 end)
@@ -1811,6 +1819,183 @@ test("the arc button finds MAIN by its page index, not its title", function()
   assert_true(voices[3].active, "the button starts the selected voice on page 1")
 end)
 
+-- Counts screen draws (calls of the global redraw(), as the frame clock and
+-- norns make them) in counter.screen until restore() is called
+local function count_screen_draws()
+  local counter = { screen = 0 }
+  local real_redraw = redraw
+  redraw = function() counter.screen = counter.screen + 1; real_redraw() end
+  function counter.restore() redraw = real_redraw end
+  return counter
+end
+
+local function screen_shows(context, text)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text == text then return true end
+  end
+  return false
+end
+
+-- change() must only ask for a redraw: nothing draws until the next frame,
+-- which draws the screen and the arc once each
+local function assert_drawn_on_next_frame(context, arc_hardware, where, change)
+  next_frame(context)  -- start from a frame with nothing left to draw
+  local counter = count_screen_draws()
+  local arc_refreshes = arc_hardware.refresh_count
+  change()
+  local drawn_before_frame = counter.screen
+  local arc_before_frame = arc_hardware.refresh_count - arc_refreshes
+  next_frame(context)
+  counter.restore()
+  assert_equal(drawn_before_frame, 0, where .. ": the screen waits for the frame")
+  assert_equal(arc_before_frame, 0, where .. ": the arc waits for the frame")
+  assert_equal(counter.screen, 1, where .. ": the next frame draws the screen once")
+  assert_equal(arc_hardware.refresh_count - arc_refreshes, 1, where .. ": and the arc once")
+end
+
+test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)", function()
+  local context = load_strata(); context.clock.advance()
+  local arc_hardware = context.arc.plug(1)
+  local pages = local_value("UI_PAGES")
+  assert_equal(pages.FRAMES_PER_SECOND, 15, "one named frame rate")
+  local frame_clock = pages.frame_clock
+  assert_true(context.clock.threads[frame_clock] ~= nil, "init starts the frame clock")
+  next_frame(context)
+  local sleeps = context.clock.sleep_log
+  assert_equal(sleeps[#sleeps].id, frame_clock)
+  assert_near(sleeps[#sleeps].amount, 1 / 15, 1e-9, "a frame every 1/15 s")
+  -- nothing changed since the last frame: nothing is drawn
+  local counter = count_screen_draws()
+  local arc_refreshes = arc_hardware.refresh_count
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 0, "an idle frame leaves the screen alone")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes, "and the arc")
+  -- steps of a running LFO (the library writes its scaled and raw text
+  -- params) and the drift of a synth voice's grain pitch show nowhere
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  next_frame(context)
+  counter = count_screen_draws()
+  context.lfo.tick(local_value("lfos")[1], 0.7)
+  local drift_metro = local_value("drift_metro")
+  drift_metro.event()
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 0, "LFO steps and grain pitch drift ask for no redraw")
+  -- a drifting buffer position shows on MAIN
+  params:set("v1_source", 2)
+  next_frame(context)
+  counter = count_screen_draws()
+  drift_metro.event()
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 1, "a buffer voice's drifting position redraws")
+  -- norns' own redraw() (e.g. as its menu closes) still draws the page
+  context.screen.texts = {}
+  redraw()
+  assert_true(screen_shows(context, "MAIN"), "redraw() draws the current page at once")
+  cleanup()
+  assert_equal(context.clock.threads[frame_clock], nil, "cleanup cancels the frame clock")
+end)
+
+test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
+  local context = load_strata(); context.clock.advance()
+  local arc_hardware = context.arc.plug(1)
+  local grid_device = context.grid.plug(1, 16, 16)
+  context.midi.plug(1, "keys")
+  local voices = local_value("voices")
+  show_page(1)
+
+  assert_drawn_on_next_frame(context, arc_hardware, "MIDI note", function()
+    context.midi.send(1, { type = "note_on", ch = 1, note = 69, vel = 100 })
+  end)
+  assert_true(screen_shows(context, "440 Hz"), "MAIN shows the note's frequency")
+  assert_drawn_on_next_frame(context, arc_hardware, "MIDI pitchbend", function()
+    context.midi.send(1, { type = "pitchbend", ch = 1, val = 12000 })
+  end)
+  assert_drawn_on_next_frame(context, arc_hardware, "MIDI note on a stopped voice", function()
+    context.midi.send(1, { type = "note_on", ch = 4, note = 40, vel = 100 })
+  end)
+  assert_true(voices[4].active, "the note started voice 4")
+
+  params:set("mutation_probability", 1)
+  assert_drawn_on_next_frame(context, arc_hardware, "gentle_mutate", gentle_mutate)
+
+  assert_drawn_on_next_frame(context, arc_hardware, "K3 on MAIN", function() key(3, 1); key(3, 0) end)
+  assert_true(screen_shows(context, "[FREEZE]"), "K3 froze voice 1")
+  assert_drawn_on_next_frame(context, arc_hardware, "arc button", function()
+    context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  end)
+  assert_true(not screen_shows(context, "[FREEZE]"), "the arc button unfroze voice 1")
+  assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
+    context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
+  end)
+  assert_true(voices[5].active, "the grid started voice 5")
+  assert_drawn_on_next_frame(context, arc_hardware, "arc turn", function() context.arc.turn(1, 2, 8) end)
+  assert_drawn_on_next_frame(context, arc_hardware, "E3", function() enc(3, 1) end)
+
+  show_page(2)
+  assert_drawn_on_next_frame(context, arc_hardware, "params:set of an FX param", function()
+    params:set("filter_freq", 1234)
+  end)
+  assert_true(screen_shows(context, "1234 Hz"), "FX shows the new filter freq")
+
+  show_page(3)
+  assert_drawn_on_next_frame(context, arc_hardware, "LFO page K3", function() key(3, 1); key(3, 0) end)
+  assert_equal(params:string("lfo_1"), "on", "K3 started LFO 1")
+
+  show_page(4)
+  assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
+    context.polls.fire("bufferState", 305)
+  end)
+  assert_true(screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
+  assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
+end)
+
+test("a smooth scene transition reaches the screen and arc on every step and at its end (#11)", function()
+  local context = load_strata(); context.clock.advance()
+  local arc_hardware = context.arc.plug(1)
+  show_page(1)
+  -- the scene: voice 1 frozen at 100 Hz; now it plays 1000 Hz, unfrozen
+  toggle_freeze(1); capture_scene(1); toggle_freeze(1)
+  params:set("v1_freq", 1000)
+  assert_drawn_on_next_frame(context, arc_hardware, "transition start (step 1)", function()
+    recall_scene(1, 2)
+  end)
+  local steps = 1
+  while local_value("scene_transition_clock") do
+    steps = steps + 1
+    assert_drawn_on_next_frame(context, arc_hardware, "transition step " .. steps, function()
+      context.clock.resume_thread(local_value("scene_transition_clock"))
+    end)
+  end
+  assert_equal(steps, local_value("SCENE_TRANSITION").steps + 1, "every step, then the end")
+  assert_true(screen_shows(context, "100 Hz"), "the end shows the scene's freq")
+  assert_true(screen_shows(context, "[FREEZE]"), "and its freeze")
+end)
+
+test("many arc turns and encoder steps within one frame draw the screen and the arc once (#11)", function()
+  local context = load_strata(); context.clock.advance()
+  local arc_hardware = context.arc.plug(1)
+  show_page(1)
+  next_frame(context)
+  local counter = count_screen_draws()
+  local arc_refreshes = arc_hardware.refresh_count
+  for _ = 1, 50 do
+    for ring = 1, 4 do context.arc.turn(1, ring, 3) end
+    enc(3, 1)
+  end
+  assert_equal(counter.screen, 0, "no draws between frames")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes, "no arc refreshes between frames")
+  next_frame(context)
+  assert_equal(counter.screen, 1, "one screen draw for the whole burst")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "one arc redraw for the whole burst")
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 1, "the next frame has nothing left to draw")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1)
+end)
+
 test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function()
   local context = load_strata()
   local function screen_has(text)
@@ -1834,8 +2019,9 @@ test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function
   assert_true(screen_has("scenes: 1/8 saved"), "one scene")
   context.arc.unplug(1)
   context.grid.unplug(3)
-  assert_true(screen_has("arc: none"), "unplugging the arc redraws SETUP")
-  assert_true(screen_has("grid: 1 connected"), "unplugging a grid redraws SETUP")
+  next_frame(context)
+  assert_true(screen_has("arc: none"), "unplugging the arc redraws SETUP on the next frame")
+  assert_true(screen_has("grid: 1 connected"), "unplugging a grid redraws SETUP on the next frame")
 
   local scene_file = context.data_dir .. "strata/scenes.data"
   assert_true(not util.file_exists(scene_file), "no scenes file yet")
@@ -2131,6 +2317,7 @@ test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", 
   for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
     local before = params:get(param_id)
     context.arc.turn(1, ring, 100)
+    next_frame(context)
     assert_true(params:get(param_id) > before, "ring " .. ring .. " raises " .. param_id)
     local spec = params:lookup_param(param_id).controlspec
     assert_near(device.segments[ring].to, spec:unmap(params:get(param_id)) * math.pi * 2, 1e-9,
@@ -2714,10 +2901,10 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   show_page(5)
   assert_true(screen_has("midi 1: none"), "no device on port 1")
   assert_true(screen_has("ch: per voice"), "channel mode shown")
-  context.midi.plug(1, "keys")
+  context.midi.plug(1, "keys"); next_frame(context)
   assert_true(screen_has("midi 1: keys"), "plugging a device redraws SETUP")
   -- E2 selects the port; events on the old port no longer reach Strata
-  enc(2, 1); assert_equal(params:get("midi_device"), 2)
+  enc(2, 1); next_frame(context); assert_equal(params:get("midi_device"), 2)
   assert_true(screen_has("midi 2: none"))
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
@@ -2725,13 +2912,14 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   context.midi.send(2, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_true(#context.calls_named("retrigger") == 1, "port 2 is")
   -- E3 sets the channel mode
-  enc(3, 1); assert_equal(params:get("midi_channel_mode"), 2)
+  enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
   assert_true(screen_has("ch: omni to selected"))
-  -- unplugging the selected port's device shows none at once
-  context.midi.unplug(2)
+  assert_true(screen_has("midi 2: stub midi"), "the device that played is shown")
+  -- unplugging the selected port's device shows none on the next frame
+  context.midi.unplug(2); next_frame(context)
   assert_true(screen_has("midi 2: none"), "unplugging redraws SETUP without the device")
   -- a long device name is cut to fit the screen
-  context.midi.plug(2, "Very Long Manufacturer Name USB MIDI Interface Port 1")
+  context.midi.plug(2, "Very Long Manufacturer Name USB MIDI Interface Port 1"); next_frame(context)
   local midi_line
   for _, entry in ipairs(context.screen.texts) do
     if entry.text:find("^midi 2: ") then midi_line = entry.text end
@@ -2864,7 +3052,7 @@ test("buffer-sourced voices: E3, arc ring 2 and MAIN use buf_pos", function()
   enc(3, 2)
   assert_near(params:get("v1_buf_pos"), 0.52, 1e-6, "E3 moves buf_pos")
   assert_equal(params:get("v1_freq"), freq, "E3 leaves the synth freq alone")
-  context.arc.turn(1, 2, 10)
+  context.arc.turn(1, 2, 10); next_frame(context)
   assert_true(params:get("v1_buf_pos") > 0.52, "arc ring 2 moves buf_pos")
   assert_equal(params:get("v1_freq"), freq, "arc ring 2 leaves the synth freq alone")
   assert_near(device.segments[2].to, params:get("v1_buf_pos") * math.pi * 2, 1e-9, "ring 2 shows buf_pos")
@@ -3626,8 +3814,9 @@ test("the BUFFER page caches each slot's cut name (M3)", function()
   local measured = 0
   local text_extents = screen.text_extents
   screen.text_extents = function(text) measured = measured + 1; return text_extents(text) end
-  -- each load redraws the page (and measures the new name)
+  -- the loads redraw the page on the next frame (and measure the new names)
   for slot = 1, 8 do load_buffer(slot, "/tmp/a very long sample name number " .. slot .. ".wav") end
+  next_frame(context)
   assert_true(measured > 0, "a new name is measured")
   measured = 0
   redraw(); redraw()
@@ -3676,11 +3865,11 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
   context.set_time(100)
-  key(2, 1); tap(3)
+  key(2, 1); tap(3); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
   assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
   assert_screen_layout(context, "BUFFER with the save confirmation")
-  key(2, 0); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
+  key(2, 0); next_frame(context); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
   context.set_time(101.4); redraw()
   assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
   context.set_time(101.5); redraw()
@@ -3688,24 +3877,28 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
   -- an empty buffer: nothing saved, the hint says so
   context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
   context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0)
+  key(2, 1); tap(3); key(2, 0); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
   assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
   assert_screen_layout(context, "BUFFER with the empty-buffer flash")
-  -- one clock redraws when the flash ends: it sleeps 1.5 s, clears the flash
-  -- (even if it woke a little early) and redraws
+  -- one clock ends the flash: it sleeps 1.5 s, clears the flash (even if it
+  -- woke a little early) and asks for a redraw
   local page = local_value("BUFFER_PAGE")
   local flash_clock = page.flash_clock
   assert_true(flash_clock ~= nil, "the flash has a clock")
-  local log = context.clock.sleep_log
-  assert_equal(log[#log].id, flash_clock); assert_near(log[#log].amount, 1.5, 1e-9, "it sleeps 1.5 s")
+  local flash_sleep
+  for _, entry in ipairs(context.clock.sleep_log) do
+    if entry.id == flash_clock then flash_sleep = entry.amount end
+  end
+  assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
   key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
   assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is cancelled")
   flash_clock = page.flash_clock
   context.clock.resume_thread(flash_clock)
-  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one redraw")
+  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
   assert_equal(page.flash_clock, nil)
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "its redraw shows the normal hint")
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the next frame shows the normal hint")
   -- cleanup cancels a pending flash clock
   key(2, 1); tap(3); key(2, 0)
   flash_clock = page.flash_clock
@@ -3720,7 +3913,7 @@ test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and save
   local buffers = local_value("buffers")
   tap(3); assert_true(buffers[3].recording, "K3 records into buffer 3")
   context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0)
+  key(2, 1); tap(3); key(2, 0); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
   assert_equal(#context.calls_named("stopRecord"), 0, "K2+K3 does not stop the recording")
   assert_equal(hint_text(context), "buf 3 busy", "the hint says the buffer is busy")
@@ -3728,14 +3921,14 @@ test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and save
   -- stopped early: the take waits for the engine (finishing)
   tap(3); assert_true(buffers[3].finishing, "the stopped take is finishing")
   context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0)
+  key(2, 1); tap(3); key(2, 0); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
   assert_equal(hint_text(context), "buf 3 busy", "still busy while finishing")
   assert_screen_layout(context, "BUFFER with the busy flash while finishing")
   -- once the engine reports the take, K2+K3 saves it
   context.polls.fire("bufferState", 205)
   assert_true(not buffers[3].finishing, "the take settled")
-  key(2, 1); tap(3); key(2, 0)
+  key(2, 1); tap(3); key(2, 0); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
   assert_equal(hint_text(context), "saved buf 3")
 end)
@@ -3806,35 +3999,43 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   screen.update = function() draws = draws + 1; return update() end
   local selector = context.fileselect
   -- opening it on K2's release: fs.enter's redraw() (from norns.menu.init)
-  -- and key()'s redraw draw the selector, not the page
-  key(2, 1); draws = 0
+  -- and the frame after key() draw the selector, not the page
+  key(2, 1); next_frame(context); draws = 0
   key(2, 0); assert_true(selector.last ~= nil, "K2's release opens the selector")
+  next_frame(context)
   assert_equal(draws, 0, "the page does not draw over the selector as it opens")
-  assert_equal(selector.redraws, 3, "menu.init's redraw, fs.enter's own and key()'s draw the selector")
+  assert_equal(selector.redraws, 3, "menu.init's redraw, fs.enter's own and the next frame draw the selector")
   -- the norns menu opened and closed over it (K1 twice): set_mode(false)
   -- clears the screen and calls redraw(), which must show the selector again
   selector.redraws = 0
   _menu.set_mode(true); _menu.set_mode(false); redraw()
   assert_equal(selector.redraws, 1, "norns' redraw() as the menu closes draws the selector")
   assert_equal(draws, 0, "and not Strata's page")
-  -- Strata's own redraws (a buffer report, page turns, a load) while it is open
+  -- Strata's own redraws (a buffer report, page turns, a load) while it is
+  -- open: the frame clock's redraw() draws the selector
   selector.redraws = 0
   context.polls.fire("bufferState", 305)
   enc(1, -1); enc(1, 1)
   load_buffer(5, "/tmp/other.wav")
+  next_frame(context)
   assert_equal(draws, 0, "the page does not draw over the selector while it is open")
   assert_true(selector.redraws > 0, "they draw the selector instead")
-  -- cancelled: fs.exit's redraw() comes before the callback; then one redraw
+  -- cancelled: fs.exit's redraw() comes before the callback, which asks
+  -- for one redraw
   context.clear_engine_calls()
   context.fileselect.close()
+  assert_equal(draws, 0, "the page waits for the next frame")
+  next_frame(context)
   assert_equal(draws, 1, "a cancel redraws once")
   assert_equal(#context.calls_named("loadBuffer"), 0, "a cancel loads nothing")
   assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
   redraw(); assert_equal(draws, 2, "the script draws again after a cancel")
-  -- a chosen file: loads it, then one redraw
-  tap(2); assert_equal(draws, 3, "only K2's press draws as the selector opens again")
+  -- a chosen file: loads it, then one redraw. K2's tap opens the selector
+  -- before the next frame, which then draws the selector, not the page
+  tap(2); next_frame(context); assert_equal(draws, 2, "the page does not draw as the selector opens again")
   draws = 0
   context.fileselect.close("/tmp/chosen.wav")
+  next_frame(context)
   assert_equal(draws, 1, "a chosen file redraws once")
   assert_equal(#context.calls_named("loadBuffer"), 1, "and loads")
   redraw(); assert_equal(draws, 2, "the script draws again after a choice")
@@ -4002,9 +4203,10 @@ test("bufferState poll redraws the screen and the grid's buffer page", function(
   local refreshes = device.refresh_count
   context.screen.texts = {}
   context.polls.fire("bufferState", 212.5)
+  next_frame(context)
   local found = false
   for _, entry in ipairs(context.screen.texts) do if entry.text == "12.5s" then found = true end end
-  assert_true(found, "poll redraws the BUFFER page with the new seconds")
+  assert_true(found, "poll redraws the BUFFER page with the new seconds on the next frame")
   assert_true(device.refresh_count > refreshes, "grid page 4 redrawn")
 end)
 
@@ -4035,6 +4237,7 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > 1, "ring 2 buf_rate")
   context.arc.turn(1, 3, 100); assert_true(params:get("record_duration") > 8, "ring 3 record duration")
   context.arc.turn(1, 4, 100); assert_true(params:get("record_level") > 1, "ring 4 record level")
+  next_frame(context)
   local ids = { "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }
   for ring, param_id in ipairs(ids) do
     assert_near(device.segments[ring].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. param_id)
@@ -4044,6 +4247,7 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   -- a synth voice: rings 1-2 still set its buffer params, drawn dim
   params:set("v1_source", 1); local rate = params:get("v1_buf_rate")
   context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > rate, "ring 2 still adjusts buf_rate")
+  next_frame(context)
   assert_equal(device.segments[1].level, 4, "not buffer-sourced: ring 1 dim")
   assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
   assert_equal(device.segments[4].level, 12, "record rings stay lit")
@@ -4122,6 +4326,7 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   enc(3, 2); assert_true(params:get("v1_grain_size") > 0.2, "E3 on MAIN moves grain size")
   local size = params:get("v1_grain_size")
   context.arc.turn(1, 2, 200); assert_true(params:get("v1_grain_size") > size, "arc ring 2 moves grain size")
+  next_frame(context)
   local param_min, param_max = param_range("v1_grain_size")
   assert_near(device.segments[2].to,
     util.linlin(param_min, param_max, 0, 64, params:get("v1_grain_size")) / 64 * math.pi * 2, 1e-9, "ring 2 shows grain size")
@@ -4290,24 +4495,20 @@ test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destinati
   assert_equal(local_value("selected_voice"), 1)
 end)
 
-test("LFO page clock runs only while the page is shown", function()
+test("the LFO page redraws on every frame while it is shown, with no clock of its own", function()
   local context = load_strata(); context.clock.advance()
   local baseline = context.clock.pending_count()
   show_page(3)
-  assert_equal(context.clock.pending_count(), baseline + 1, "page clock started")
-  local sleeps = context.clock.sleep_log
-  assert_near(sleeps[#sleeps].amount, 1 / 15, 1e-9, "15 fps")
-  local redraws = 0
-  local real_redraw = redraw
-  redraw = function() redraws = redraws + 1; real_redraw() end
-  context.clock.advance()
-  redraw = real_redraw
-  assert_equal(redraws, 1, "each frame redraws")
-  show_page(3); assert_equal(context.clock.pending_count(), baseline + 1, "no second clock")
-  show_page(4); assert_equal(context.clock.pending_count(), baseline, "leaving the page cancels it")
-  show_page(2); show_page(3); show_page(1); assert_equal(context.clock.pending_count(), baseline)
-  show_page(3); cleanup()
-  assert_equal(context.clock.pending_count(), 0, "cleanup cancels it")
+  assert_equal(context.clock.pending_count(), baseline, "no page clock: the frame clock draws it")
+  next_frame(context)
+  local counter = count_screen_draws()
+  next_frame(context); next_frame(context)
+  assert_equal(counter.screen, 2, "each frame redraws, so the dots move")
+  show_page(4); next_frame(context)
+  counter.screen = 0
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 0, "other pages draw only when asked")
 end)
 
 -- The LFO page's waveform, dot and labels for LFO n
@@ -4394,15 +4595,18 @@ test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", functio
   context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
   context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
   context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
+  next_frame(context)
   assert_near(device.segments[1].to, 0.1 * math.pi * 2, 1e-9, "ring 1 shows depth")
   enc(2, 1)   -- LFO 2
   local period = params:get("lfo_free_2")
   context.arc.turn(1, 4, 100); assert_true(params:get("lfo_free_2") > period, "ring 4: free period")
   assert_equal(params:get("lfo_free_1"), 4, "only the selected LFO")
+  next_frame(context)
   assert_near(device.segments[4].to, param_fraction("lfo_free_2") * math.pi * 2, 1e-9, "ring 4 shows the period")
   params:set("lfo_mode_2", 1)   -- clocked
   local rate = params:get("lfo_clocked_2")
   context.arc.turn(1, 4, -40); assert_equal(params:get("lfo_clocked_2"), rate - 2, "ring 4: clocked rate, 20 ticks a step")
+  next_frame(context)
   assert_near(device.segments[4].to, param_fraction("lfo_clocked_2") * math.pi * 2, 1e-9)
 end)
 
