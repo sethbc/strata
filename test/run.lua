@@ -608,6 +608,36 @@ test("tempo param drives clock_tempo and grid tempo buttons (I1)", function()
   assert_equal(params:get("clock_tempo"), 134, "grid tempo buttons reach clock_tempo")
 end)
 
+test("tempo param follows a clock_tempo change made elsewhere (#15)", function()
+  local context = load_strata({ before_init = function() params:set("clock_tempo", 97) end })
+  -- PARAMETERS > CLOCK > tempo: a plain params:set on the system param
+  params:set("clock_tempo", 150)
+  assert_equal(params:get("tempo"), 150, "tempo param follows clock_tempo")
+  -- a scene captures the tempo that is playing
+  capture_scene(1)
+  assert_equal(local_value("scenes")[1].data.tempo, 150, "scene captured the external tempo")
+  -- grid +1 / -1 step from the external tempo, not from a stale value
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 13, 8, 1)
+  context.grid.press(1, 7, 8, 1)
+  assert_equal(params:get("clock_tempo"), 151, "grid +1 steps from the external tempo")
+  params:set("clock_tempo", 200)
+  context.grid.press(1, 6, 8, 1)
+  assert_equal(params:get("clock_tempo"), 199, "grid -1 steps from the external tempo")
+  -- recall applies the scene's tempo to the clock
+  params:set("clock_tempo", 80)
+  recall_scene(1)
+  assert_equal(params:get("clock_tempo"), 150, "recall sets clock_tempo")
+  assert_equal(params:get("tempo"), 150, "recall sets the tempo param")
+  -- out-of-range clock tempo clamps the param, not the clock
+  params:set("clock_tempo", 20)
+  assert_equal(params:get("tempo"), 40, "tempo param clamps to its range")
+  assert_equal(params:get("clock_tempo"), 20, "clock_tempo is left alone")
+  assert_true(clock.tempo_change_handler ~= nil, "handler installed")
+  cleanup()
+  assert_equal(clock.tempo_change_handler, nil, "cleanup restores the previous handler")
+end)
+
 test("256-grid parameter page faders set values and show them (I8)", function()
   local context = load_strata()
   local device = context.grid.plug(1, 16, 16)
