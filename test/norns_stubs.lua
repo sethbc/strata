@@ -607,6 +607,11 @@ local function make_params(util, controlspec)
 
   -- system params that exist before any script runs
   paramset:add { type = "number", id = "clock_tempo", name = "tempo", min = 1, max = 300, default = 120 }
+  -- lua/core/clock.lua: the clock_tempo action reports the new tempo to
+  -- clock.tempo_change_handler (the real one also sets the clock source's tempo)
+  paramset:set_action("clock_tempo", function(bpm)
+    if clock.tempo_change_handler ~= nil then clock.tempo_change_handler(bpm) end
+  end)
   paramset:add { type = "control", id = "reverb", name = "reverb", controlspec = controlspec.new(0, 1, "lin", 1, 1) }
 
   return paramset
@@ -675,6 +680,14 @@ local function make_clock(util)
 
   function clock.sync(beats)
     return coroutine.yield("sync", beats)
+  end
+
+  -- lua/core/clock.lua: static callback run when clock_tempo is set
+  clock.tempo_change_handler = nil
+
+  -- lua/core/clock.lua: the current tempo
+  function clock.get_tempo()
+    return params:get("clock_tempo")
   end
 
   -- lua/core/clock.lua: seconds per beat at the current tempo

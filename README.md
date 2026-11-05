@@ -58,7 +58,7 @@ Voices can modulate each other for evolving, interdependent textures:
 - **Delay** - Stereo delay (10 ms to 2 s) with feedback, after the filter; starts dry
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping
 - **Limiter** - A limiter in the master stage catches peaks from filter resonance and delay feedback before the soft saturation
-- **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows
+- **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows; a tempo changed in PARAMETERS > CLOCK or by an external clock is picked up too
 
 ### Performance Features
 

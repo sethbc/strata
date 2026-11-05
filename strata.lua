@@ -1006,6 +1006,16 @@ function init()
     end
   }
 
+  -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
+  -- external clock source): norns calls the handler with the new bpm. Set the
+  -- param silently, so its action does not write the clock back. The previous
+  -- handler is kept for cleanup() and still called.
+  previous_tempo_change_handler = clock.tempo_change_handler
+  clock.tempo_change_handler = function(bpm)
+    params:set("tempo", util.clamp(util.round(bpm), 40, 300), true)
+    if previous_tempo_change_handler then previous_tempo_change_handler(bpm) end
+  end
+
   -- Probability-based mutations
   params:add_separator("strata_mutations")
 
@@ -4573,6 +4583,8 @@ function grid_redraw_64(grid_device)
 end
 
 function cleanup()
+  clock.tempo_change_handler = previous_tempo_change_handler
+
   -- Give the norns menu its own set_mode back first, before anything below
   -- can fail
   unwatch_menu_opening()
