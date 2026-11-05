@@ -481,11 +481,13 @@ Scene LED feedback:
 - Adjust transition time in PARAMETERS to control crossfade duration
 
 **Automatic Scene Sequencing**:
-- Set scene sequence length (how many scenes to cycle through)
+- Set scene sequence length (how many scenes to cycle through). Shortened while a scene past the new end plays, the sequence wraps to scene 1
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
 - Each scene plays for the scene duration or the transition time, whichever is longer: the sequencer never moves on before a transition has ended, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. Recalling a scene by hand still interrupts a running transition
 - Press row 5, column 1 to start/stop the sequencer
+- A PSET saved with the sequencer on starts it once the whole PSET has loaded, from scene 1, with the PSET's transition time, duration and length
+- Loading scenes from disk stops a running transition where it is
 - Watch `S1`-`S8` indicator on screen (bright = sequencer active)
 
 **Creative Tips**:

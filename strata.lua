@@ -2274,7 +2274,7 @@ function cancel_scene_transition()
   scene_transition_active = false
 end
 
--- Snapshot {id, start, target} for every continuous param a smooth
+-- Snapshot {id, start, target, step} for every continuous param a smooth
 -- transition crossfades. Start values are read once, before the fade, so
 -- the fade moves linearly from start to target over the whole transition.
 -- Grain sources, mod sources, discrete grain params (envelope shape, grain
@@ -2282,7 +2282,10 @@ end
 function scene_transition_targets(scene_data)
   local targets = {}
   local function add_target(param_id, target_value)
-    table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value})
+    -- number params (the LFO depths) step in whole numbers: the fade rounds
+    -- to them (the end applies the scene's exact value)
+    local step = params:lookup_param(param_id).t == params.tNUMBER and 1 or nil
+    table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step})
   end
 
   for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
@@ -2344,7 +2347,9 @@ function recall_scene(scene_num, transition_time)
         -- sequencer waits for it): clear it, then raise the error again
         local stepped, step_error = pcall(function()
           for _, target in ipairs(targets) do
-            params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
+            local value = util.linlin(0, 1, target.start, target.target, mix)
+            if target.step then value = util.round(value, target.step) end
+            params:set(target.id, value)
           end
           request_redraw()
           grid_redraw()  -- keep the parameter faders moving with the fade
@@ -2479,11 +2484,17 @@ function scene_sequencer_start()
   scene_sequencer_position = 1
 
   scene_sequencer_clock = clock.run(function()
-    while scene_sequencer_enabled do
-      local seq_length = params:get("scene_sequence_length")
+    -- Begin on the next scheduler tick: a PSET load sets this param partway
+    -- through its read, and the params it sets later (transition time,
+    -- duration, length, FX, LFOs, voices) would overwrite scene 1
+    clock.sleep(0)
 
-      -- Clamp position to valid range (prevents wraparound bugs)
-      scene_sequencer_position = util.clamp(scene_sequencer_position, 1, seq_length)
+    while scene_sequencer_enabled do
+      -- the advance below wraps with the current length; this only guards
+      -- the index
+      if scene_sequencer_position > params:get("scene_sequence_length") then
+        scene_sequencer_position = 1
+      end
 
       -- Recall next scene in sequence (skip empty scenes)
       local transition_time = 0
@@ -2503,9 +2514,10 @@ function scene_sequencer_start()
       clock.sleep(held)
       wait_for_scene_transition(own_transition, transition_time, held)
 
-      -- Advance to next scene with proper wraparound
+      -- Advance, wrapping to scene 1 past the end of the sequence as it is
+      -- now (it may have been shortened during the wait)
       scene_sequencer_position = scene_sequencer_position + 1
-      if scene_sequencer_position > seq_length then
+      if scene_sequencer_position > params:get("scene_sequence_length") then
         scene_sequencer_position = 1
       end
 
@@ -2621,6 +2633,9 @@ function load_scenes_from_disk()
   for i = 1, NUM_SCENES do
     loaded_scenes[i] = scene_table[i] or empty_scene(i)
   end
+  -- a running transition ends by applying its slot: after the load that
+  -- would be the file's data for the slot, or nothing if it is now empty
+  cancel_scene_transition()
   scenes = loaded_scenes
   scene_autosave_blocked = false
   if file_version < SCENE_DATA_VERSION then
