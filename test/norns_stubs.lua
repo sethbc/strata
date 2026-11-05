@@ -916,17 +916,26 @@ end
 -- back in the global `redraw` and calls it; fs.exit does the same before it
 -- calls the callback with the chosen path or "cancel". The stub makes those
 -- redraw() calls too, but does not reroute key/enc (tests keep pressing the
--- script's keys while the selector is "open").
+-- script's keys while the selector is "open"). fs.redraw draws the file
+-- list; the stub counts the calls in `redraws` and draws nothing.
 ---------------------------------------------------------------------------
 
 local function make_fileselect()
-  local fileselect = { last = nil }
+  local fileselect = { last = nil, redraws = 0 }
+  local entered = false  -- tests reset `last`; the real module keeps its list
   local function menu_init_redraw()
     if not norns.menu.status() and type(redraw) == "function" then redraw() end
   end
+  function fileselect.redraw()
+    -- the real one draws fs.list, which fs.enter sets up
+    assert(entered, "fileselect.redraw before fileselect.enter")
+    fileselect.redraws = fileselect.redraws + 1
+  end
   function fileselect.enter(folder, callback, filter)
+    entered = true
     fileselect.last = { folder = folder, callback = callback, filter = filter }
     menu_init_redraw()
+    fileselect.redraw()
   end
   -- Test helper: close the selector the way fs.exit does, with `path`
   -- chosen, or cancelled when path is nil

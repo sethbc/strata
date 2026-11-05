@@ -3083,7 +3083,7 @@ local BUFFER_PAGE = {
   flash_text = nil,       -- the transient hint, drawn instead of the key hints
   flash_until = 0,        -- util.time() when it ends
   flash_clock = nil,      -- redraws once when it ends
-  file_selector_open = false  -- K2's file selector owns the screen: redraw() draws nothing
+  file_selector_open = false  -- K2's file selector owns the screen: redraw() draws it
 }
 
 -- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
@@ -3239,8 +3239,8 @@ local function buffer_key_release(n)
   forget_held_keys()
   -- From play mode norns puts Strata's redraw back while the selector is
   -- open (fs.enter calls norns.menu.init), so Strata's redraws would draw
-  -- over the file list: they do nothing until the callback, which norns
-  -- calls on a choice and on a cancel alike
+  -- over the file list: until the callback, which norns calls on a choice
+  -- and on a cancel alike, they draw the selector instead
   BUFFER_PAGE.file_selector_open = true
   fileselect.enter(_path.audio, function(path)
     -- loaded directly (it also shows the path in buf<n>_file): setting the
@@ -3340,7 +3340,12 @@ end
 
 -- Redraw
 function redraw()
-  if BUFFER_PAGE.file_selector_open then return end
+  -- the open file selector owns the screen: norns' own redraw() calls (as
+  -- the norns menu closes) and Strata's draw the file list, never the page
+  if BUFFER_PAGE.file_selector_open then
+    fileselect.redraw()
+    return
+  end
   screen.clear()
   draw_header()
   PAGE_DRAW[ui_page]()

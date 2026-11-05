@@ -3242,23 +3242,32 @@ test("BUFFER K2 loads a file with no fileselect global: the script requires it (
   assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], "/tmp/picked.wav")
 end)
 
-test("Strata draws nothing while the file selector is open, then redraws once (issue #10)", function()
+test("Strata's page never draws over the open file selector; redraws draw the selector (issue #10)", function()
   local context = load_strata(); context.clock.advance(); show_page(4)
   params:set("v1_source", 2)
-  local draws = 0
+  local draws = 0  -- Strata's page draws (the stub's fileselect.redraw draws nothing)
   local update = screen.update
   screen.update = function() draws = draws + 1; return update() end
-  -- opening it on K2's release: fs.enter's own redraw() and key()'s redraw
-  -- draw nothing
+  local selector = context.fileselect
+  -- opening it on K2's release: fs.enter's redraw() (from norns.menu.init)
+  -- and key()'s redraw draw the selector, not the page
   key(2, 1); draws = 0
-  key(2, 0); assert_true(context.fileselect.last ~= nil, "K2's release opens the selector")
-  assert_equal(draws, 0, "nothing draws over the selector as it opens")
-  -- redraws from a buffer report, a page turn and a load while it is open
+  key(2, 0); assert_true(selector.last ~= nil, "K2's release opens the selector")
+  assert_equal(draws, 0, "the page does not draw over the selector as it opens")
+  assert_equal(selector.redraws, 3, "menu.init's redraw, fs.enter's own and key()'s draw the selector")
+  -- the norns menu opened and closed over it (K1 twice): set_mode(false)
+  -- clears the screen and calls redraw(), which must show the selector again
+  selector.redraws = 0
+  _menu.set_mode(true); _menu.set_mode(false); redraw()
+  assert_equal(selector.redraws, 1, "norns' redraw() as the menu closes draws the selector")
+  assert_equal(draws, 0, "and not Strata's page")
+  -- Strata's own redraws (a buffer report, page turns, a load) while it is open
+  selector.redraws = 0
   context.polls.fire("bufferState", 305)
   enc(1, -1); enc(1, 1)
   load_buffer(5, "/tmp/other.wav")
-  redraw()
-  assert_equal(draws, 0, "nothing draws over the selector while it is open")
+  assert_equal(draws, 0, "the page does not draw over the selector while it is open")
+  assert_true(selector.redraws > 0, "they draw the selector instead")
   -- cancelled: fs.exit's redraw() comes before the callback; then one redraw
   context.clear_engine_calls()
   context.fileselect.close()
