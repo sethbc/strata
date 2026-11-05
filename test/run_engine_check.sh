@@ -40,13 +40,51 @@ excludePaths: []
 postInlineWarnings: false  # norns' own Crone.sc triggers inline warnings
 YAML
 
+# sclang never exits by itself when engine_check.scd or the class library
+# fails to compile: it waits at its prompt, holding the caller's lock (and
+# CI's job) for good. So the run is wrapped in timeout (sclang_timeout
+# seconds: a normal run takes about 2 minutes, the check's own deadline is
+# 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
+# timeout signals the whole process group, the scsynth sclang booted
+# included. stdbuf makes sclang's output line-buffered, so an error is in
+# the output file while sclang waits (block-buffered, it never would be).
+sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
+compile_error='^ERROR: (syntax error|Command line parse failed|file .* parse failed)|Library has not been compiled successfully'
+timeout_cmd=$(command -v timeout || command -v gtimeout || true)
+stdbuf_cmd=$(command -v stdbuf || command -v gstdbuf || true)
+set --
+[ -n "$timeout_cmd" ] && set -- "$timeout_cmd" --kill-after=10 "$sclang_timeout"
+[ -n "$stdbuf_cmd" ] && set -- "$@" "$stdbuf_cmd" -oL -eL
+
 output="$work_dir/output.txt"
 set +e
 # started from the temp dir: anything the check writes to its working
 # directory is removed with it, never left in the caller's directory
-(cd "$work_dir" && "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1
+(cd "$work_dir" && exec "$@" "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1 &
+sclang_pid=$!
+# Without a timeout command this loop enforces the limit itself
+elapsed=0
+stopped=
+while kill -0 "$sclang_pid" 2>/dev/null; do
+  if grep -qE "$compile_error" "$output"; then
+    stopped="sclang reported a compile error"
+  elif [ "$elapsed" -ge $((sclang_timeout + 15)) ]; then
+    stopped="no result within $sclang_timeout s"
+  fi
+  if [ -n "$stopped" ]; then
+    kill "$sclang_pid" 2>/dev/null
+    break
+  fi
+  sleep 1
+  elapsed=$((elapsed + 1))
+done
+wait "$sclang_pid"
 status=$?
 set -e
+if [ -z "$stopped" ] && [ "$status" -eq 124 ]; then stopped="no result within $sclang_timeout s"; fi
+if [ -n "$stopped" ]; then
+  echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2
+fi
 
 # keep the interesting lines: class-library errors and the check results
 grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled)|FAILURE|alloc failed|Parse error|syntax error|not understood" "$output" || true
