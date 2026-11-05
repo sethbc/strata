@@ -177,6 +177,7 @@ end
 --   num_voices, num_buffers,  var <numVoices = N; var <numBuffers = N;
 --   buffer_seconds,           var <bufferSeconds = N;
 --   buffer_state_stride       var <bufferStateStride = N;
+--   num_mod_slots             var <numModSlots = N; (the slots the crossmod commands accept)
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
@@ -285,6 +286,7 @@ function stubs.engine_spec_from_source(source)
     num_buffers = engine_number(source, "var%s+<?numBuffers%s*=%s*(%d+)", "numBuffers"),
     buffer_seconds = engine_number(source, "var%s+<?bufferSeconds%s*=%s*(%d+)", "bufferSeconds"),
     buffer_state_stride = engine_number(source, "var%s+<?bufferStateStride%s*=%s*(%d+)", "bufferStateStride"),
+    num_mod_slots = engine_number(source, "var%s+<?numModSlots%s*=%s*(%d+)", "numModSlots"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},

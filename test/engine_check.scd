@@ -117,7 +117,7 @@ var voiceModPosition = { arg nodes, voice;
 // Every running voice's grain synths run before its own mod synth
 var grainsBeforeOwnMods = {
     var nodes = synthNodes.(engine.processGroup);
-    (0..6).every({ arg voice;
+    (0..(engine.numVoices - 1)).every({ arg voice;
         var grains = voiceGrainNodes.(nodes, voice), modPosition = voiceModPosition.(nodes, voice);
         grains.isEmpty or: { modPosition.notNil and: { grains.every({ arg each; each[0] < modPosition }) } }
     })
@@ -137,35 +137,93 @@ var waitFor = { arg condition, timeout = 3;
 
 // true when the velocity control feeds nothing but EnvGen levelScale inputs
 // (a per-trigger accent depth), never a bare multiplier on a running signal.
-// One narrow allowance: \strataKarplus may multiply velocity into a T2A of
-// t_trig (a single-sample pluck impulse, so only that trigger's excitation
-// is scaled). sclang fuses `T2A * velocity + Impulse` into a MulAdd, so the
-// allowed user is either a '*' BinaryOpUGen or a MulAdd, and in both the
-// velocity is multiplied with a T2A (never added or used elsewhere).
-var velocityOnlyScalesAccents = { arg defName;
+// One narrow allowance, for \strataKarplus (or a check SynthDef given
+// pluckAllowed true): velocity may scale a T2A of the t_trig control (a
+// single-sample impulse per retrigger) on its way to the pluck excitation,
+// and nowhere else. sclang fuses `T2A * velocity + Impulse` into a MulAdd,
+// so the product is either a MulAdd (T2A and velocity, plus anything but
+// velocity) or a '*' BinaryOpUGen whose users are '+' sums; every user of
+// the MulAdd (or of those sums) must be a Decay's input (the noise burst)
+// or a Pluck's trigger (#47; checkKarplusMutants checks the check).
+var velocityOnlyScalesAccents = { arg defName, pluckAllowed;
     var desc = SynthDescLib.global.at(defName);
-    var control = desc.controls.detect({ arg each; each.name == \velocity });
-    var isVelocity = { arg input;
-        input.isKindOf(OutputProxy) and: { input.source.isKindOf(Control) }
-            and: { (input.source.specialIndex + input.outputIndex) == control.index }
+    var ugens = desc.def.children, allowPluck = pluckAllowed ? (defName == \strataKarplus);
+    var controlIndex = { arg name; desc.controls.detect({ arg each; each.name == name }) !? { arg control; control.index } };
+    var velocityIndex = controlIndex.(\velocity), trigIndex = controlIndex.(\t_trig);
+    var isControl = { arg input, index;
+        index.notNil and: { input.isKindOf(OutputProxy) } and: { input.source.isKindOf(Control) }
+            and: { (input.source.specialIndex + input.outputIndex) == index }
+    };
+    var isVelocity = { arg input; isControl.(input, velocityIndex) };
+    var isTrigImpulse = { arg input; input.isKindOf(T2A) and: { isControl.(input.inputs[0], trigIndex) } };
+    // [ugen, input index] for every input of every UGen that is source
+    var usersOf = { arg source;
+        ugens.collect({ arg ugen; (ugen.inputs ? []).collect({ arg input, index; if (input === source) { [ugen, index] } }).reject(_.isNil) })
+            .flatten(1)
+    };
+    var excitesOnly = { arg source;
+        var users = usersOf.(source);
+        users.notEmpty and: { users.every({ arg pair;
+            (pair[0].isKindOf(Decay) and: { pair[1] == 0 }) or: { pair[0].isKindOf(Pluck) and: { pair[1] == 1 } }
+        }) }
+    };
+    var scalesTrigImpulse = { arg factors;
+        (factors.select(isVelocity).size == 1) and: { factors.select(isTrigImpulse).size == 1 }
     };
     var isPluckImpulseProduct = { arg ugen;
-        (defName == \strataKarplus) and: { ugen.inputs.select(isVelocity).size == 1 }
-            and: {
-                (ugen.isKindOf(BinaryOpUGen) and: { ugen.operator == '*' }
-                    and: { ugen.inputs.any({ arg input; input.isKindOf(T2A) }) })
-                or: { ugen.isKindOf(MulAdd) and: { ugen.inputs[0].isKindOf(T2A) } and: { isVelocity.(ugen.inputs[1]) } }
+        var users;
+        allowPluck and: {
+            case
+            { ugen.isKindOf(MulAdd) } {
+                scalesTrigImpulse.(ugen.inputs.copyRange(0, 1)) and: { isVelocity.(ugen.inputs[2]).not }
+                    and: { excitesOnly.(ugen) }
             }
+            { ugen.isKindOf(BinaryOpUGen) and: { ugen.operator == '*' } } {
+                users = usersOf.(ugen);
+                scalesTrigImpulse.(ugen.inputs) and: { users.notEmpty } and: { users.every({ arg pair;
+                    pair[0].isKindOf(BinaryOpUGen) and: { pair[0].operator == '+' } and: { excitesOnly.(pair[0]) }
+                }) }
+            }
+            { false }
+        }
     };
     var users;
-    if (control.isNil) { false } {
-        users = desc.def.children.select({ arg ugen; (ugen.inputs ? []).any(isVelocity) });
+    if (velocityIndex.isNil) { false } {
+        users = ugens.select({ arg ugen; (ugen.inputs ? []).any(isVelocity) });
         users.notEmpty and: { users.every({ arg ugen;
             isPluckImpulseProduct.(ugen) or: {
                 ugen.isKindOf(EnvGen) and: { ugen.inputs.every({ arg input, index; isVelocity.(input).not or: { index == 1 } }) }
             }
         }) }
     }
+};
+
+// The Karplus allowance above is narrow (#47): a check-only copy of the
+// Karplus excitation passes with the allowance on, and copies bent three
+// ways fail with it: the impulse a T2A of the gate instead of t_trig, the
+// velocity-scaled impulse also scaling the output, and the excitation
+// trigger smeared into a running level (a Lag) that scales the output
+var checkKarplusMutants = {
+    var addKarplusCopy = { arg name, mutation;
+        SynthDef(name, { arg out, gate = 1, t_trig = 0, velocity = 1;
+            var accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
+            var exciteTrig = Impulse.ar(0.3) + (T2A.ar(if (mutation == \gateImpulse) { gate } { t_trig }) * velocity);
+            var sig = Pluck.ar(Decay.ar(exciteTrig, 0.01, PinkNoise.ar(1)), exciteTrig, 0.1, 0.005, 4, 0.5);
+            if (mutation == \impulseToOutput) { sig = sig * (1 + (T2A.ar(t_trig) * velocity)) };
+            if (mutation == \impulseLevel) { sig = sig * Lag.ar(exciteTrig, 0.5) };
+            Out.ar(out, sig * (1 + accent));
+        }).add;
+    };
+    [[\strataCheckKarplusCopy, nil, true, "a faithful copy of the Karplus excitation"],
+        [\strataCheckKarplusGateImpulse, \gateImpulse, false, "a velocity-scaled T2A of the gate (not of t_trig)"],
+        [\strataCheckKarplusImpulseOut, \impulseToOutput, false, "a velocity-scaled T2A of t_trig that also scales the output"],
+        [\strataCheckKarplusImpulseLevel, \impulseLevel, false, "an excitation trigger smeared into a level that scales the output"]
+    ].do({ arg mutant;
+        addKarplusCopy.(mutant[0], mutant[1]);
+        check.(velocityOnlyScalesAccents.(mutant[0], true) == mutant[2],
+            "the strict velocity check % % under the Karplus allowance".format(
+                if (mutant[2]) { "accepts" } { "rejects" }, mutant[3]));
+    });
 };
 
 // true when some UGen of the SynthDef reads the named control (it is not
@@ -249,7 +307,7 @@ var getControl = { arg synth, control;
 // A missing, unreadable or empty file loaded into a slot that is recording
 // cancels the recording (Lua's load_buffer assumes so): the take never
 // completes, the slot stays empty and no scratch take is written
-var checkBadLoadsDuringRecording = { arg textPath;
+var checkBadLoadsDuringRecording = { arg textPath, stereoPath;
     var emptyPath = scratchRoot +/+ "no-frames.wav", file, info;
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(1).sampleRate_(44100);
     file.openWrite(emptyPath); file.close;
@@ -278,6 +336,21 @@ var checkBadLoadsDuringRecording = { arg textPath;
         and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
         "a missing file loaded right after stopRecord cancels the stopped take: no take, nothing written (% frames)".format(
             engine.bufferFrames[6]));
+    // ... but a good load sent between them is a change of its own, which
+    // drops the awaited frame count: the missing file then finds no take to
+    // cancel and leaves the good load alone (#47)
+    File.delete(engine.scratchDir +/+ "buf7.wav");
+    command.(\recordBuffer, 6, 1.0, 1.0); 0.3.wait; server.sync;
+    info = engine.recordSynths[6].notNil;
+    command.(\stopRecord, 6);
+    command.(\loadBuffer, 6, stereoPath);
+    command.(\loadBuffer, 6, scratchRoot +/+ "missing.wav");
+    1.0.wait; server.sync;
+    check.(info and: { engine.bufferFrames[6] == 11025 } and: { (bufferSample.(engine.buffersL[6], 100) - 0.5).abs < 0.001 }
+        and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
+        "a missing file loaded after stopRecord and a good load leaves the good load (% frames), no take written".format(
+            engine.bufferFrames[6]));
+    command.(\clearBuffer, 6); server.sync;
 };
 
 // A FLAC whose data is overwritten from a third of the way in: its header
@@ -363,6 +436,41 @@ var checkLoudSave = {
     command.(\clearBuffer, 6); server.sync;
 };
 
+// writeSlot's temporary float files a crash left in the system temp dir
+// (strata-buf<n>-<tag>-<n>-<side>.wav) are deleted like stale .part files:
+// only those older than stalePartAge, and no other file (#47). A .part file
+// whose age cannot be read (its directory cannot be searched, so File.mtime
+// fails while the file is still there) is left, posted and returned.
+var checkStaleTempFiles = {
+    var tag = "check" ++ Date.getDate.stamp, unreadable, result, readable, savedDir = engine.scratchDir;
+    var names = ["strata-buf3-%-1-L.wav", "strata-buf3-%-2-R.wav", "strata-buf%.wav"].collect({ arg name;
+        Platform.defaultTempDir +/+ name.format(tag) });
+    names.do({ arg path; File.use(path, "w", { arg text; text.write("float") }) });
+    ("touch -t 202001010000 " ++ names[0].shellQuote ++ " " ++ names[2].shellQuote).systemCmd;  // a crash long ago
+    engine.tryPerform(\deleteStaleParts);
+    check.(File.exists(names[0]).not and: { File.exists(names[1]) } and: { File.exists(names[2]) },
+        "deleteStaleParts deletes old temporary float files and keeps fresh ones and other files (left: %)".format(
+            names.select({ arg path; File.exists(path) }).collect({ arg path; path.basename })));
+    names.do({ arg path; File.delete(path) });
+    unreadable = scratchRoot +/+ "unsearchable/";
+    File.mkdir(unreadable);
+    File.use(unreadable +/+ "buf4.wav.9.part", "w", { arg text; text.write("stale") });
+    ("chmod 644 " ++ unreadable.shellQuote).systemCmd;
+    readable = try { File.mtime(unreadable +/+ "buf4.wav.9.part"); true } { false };
+    engine.scratchDir = unreadable;
+    result = engine.tryPerform(\deleteStaleParts);
+    engine.scratchDir = savedDir;
+    ("chmod 755 " ++ unreadable.shellQuote).systemCmd;
+    if (readable) {
+        check.(true, "(skipped: a directory without search permission is still searchable here, as root)");
+    } {
+        check.(result.isKindOf(Array) and: { result.includesEqual(unreadable +/+ "buf4.wav.9.part") }
+            and: { File.exists(unreadable +/+ "buf4.wav.9.part") },
+            "deleteStaleParts leaves, posts and returns a .part file whose age it cannot read (got %)".format(result));
+    };
+    File.delete(unreadable +/+ "buf4.wav.9.part");
+};
+
 // .part files a crash left in scratchDir (scratch takes) and its parent
 // (saveBuffer's dated files) are deleted at alloc. alloc runs before the
 // check can point scratchDir away from ~/dust, so the deletion is checked
@@ -388,6 +496,7 @@ var checkStaleParts = {
     check.(engine.respondsTo(\stalePartAge) and: { engine.stalePartAge >= 60 },
         "stalePartAge is at least a minute (%)".format(engine.tryPerform(\stalePartAge)));
     info.do({ arg dir; ["keep.txt", "buf2.wav.17.part", "buf3.wav.5.part"].do({ arg name; File.delete(dir +/+ name) }) });
+    checkStaleTempFiles.value;
     // A write still interleaving survives deleteStaleParts, and its .part
     // name carries this engine instance's tag, so two instances' writes
     // to one path never share a .part file
@@ -527,6 +636,139 @@ var checkVanishedFileLoad = { arg stereoPath, monoPath;
             engine.bufferFrames[2], loadFailures.value.size - before));
 };
 
+// A control bus's first value (inside the check routine)
+var readBusValue = { arg bus;
+    var condition = Condition(false), value;
+    bus.get({ arg result; value = result; condition.test = true; condition.signal });
+    awaitReply.(condition);
+    value
+};
+
+// Grain synths that are no longer the voice's (releasing after voiceOff,
+// fading after a source switch) but still read a slot fade out before it is
+// zeroed or overwritten (#47): a clear, load or recording sends them
+// bufFrames 0 at once and waits for them as for a running voice, so the
+// tail never clicks, and they never take the new take's length (their tail
+// would replay it); voiceOn re-gates a releasing one with the slot as it is
+// then. Called from checkBufferFades inside its lengthened fade wait (voice 1
+// reads slot 2).
+var checkReleasingGrainFades = { arg stereoPath, monoPath;
+    var grainKey = engine.grainKey(1), grain, steadyLevel, cutStep, stepBus, stepProbe, peakBus, peakProbe;
+    var restart = { command.(\voiceOn, 1, 101.0, 1.0, 0.0, 0.2, 20.0, 1.0); server.sync };
+    var holds = { arg value; (bufferSample.(engine.buffersL[2], 100) - value).abs < 0.001 };
+    // a clear inside the release: faded at once, zeroed after the fade, no step
+    command.(\loadBuffer, 2, stereoPath); 1.0.wait; server.sync;
+    grain = engine.synths[grainKey];
+    stepBus = Bus.control(server, 1); peakBus = Bus.control(server, 1);
+    stepProbe = Synth(\strataCheckStep, [\in, engine.granBuses[1], \out, stepBus], engine.processGroup, \addToTail);
+    peakProbe = Synth(\strataCheckPeak, [\in, engine.granBuses[1], \out, peakBus], engine.processGroup, \addToTail);
+    server.sync; 0.3.wait;
+    peakProbe.set(\t_reset, 1); 0.3.wait;
+    steadyLevel = readBusValue.(peakBus);
+    stepProbe.set(\t_reset, 1); 0.05.wait;
+    command.(\voiceOff, 1);
+    command.(\clearBuffer, 2); 0.1.wait; server.sync;
+    check.(grain.isPlaying and: { getControl.(grain, \bufFrames) == 0 } and: { holds.(0.5) },
+        "a clear in a voiceOff release fades the releasing grain synth at once and leaves the buffers until the fade is over");
+    0.6.wait; server.sync;
+    cutStep = readBusValue.(stepBus);
+    check.((bufferSample.(engine.buffersL[2], 100) == 0) and: { steadyLevel > 0.05 } and: { cutStep < (steadyLevel * 0.01) },
+        "then zeroes the slot, and the release tail fades instead of cutting off (largest step %; level %)".format(
+            cutStep.round(0.000001), steadyLevel.round(0.0001)));
+    stepProbe.free; peakProbe.free; stepBus.free; peakBus.free;
+    restart.value;
+    check.(engine.synths[grainKey] === grain, "voiceOn in the release re-gates that grain synth");
+    // a load inside the release: faded at once, read after the fade, never taken by the tail
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    command.(\voiceOff, 1);
+    command.(\loadBuffer, 2, monoPath); 0.1.wait; server.sync;
+    check.((getControl.(grain, \bufFrames) == 0) and: { holds.(0.5) },
+        "a load in a voiceOff release fades the releasing grain synth at once and reads the file only after the fade");
+    0.7.wait; server.sync;
+    check.((engine.bufferFrames[2] == 4410) and: { holds.(0.4) } and: { grain.isPlaying } and: { getControl.(grain, \bufFrames) == 0 },
+        "the releasing grain synth never takes the loaded take (its tail would replay it)");
+    restart.value;
+    check.((engine.synths[grainKey] === grain) and: { getControl.(grain, \bufFrames) == 4410 },
+        "voiceOn re-gates it with the loaded take");
+    // a recording inside the release: faded first, recorded after the fade
+    File.delete(engine.scratchDir +/+ "buf3.wav");
+    command.(\voiceOff, 1);
+    command.(\recordBuffer, 2, 0.2, 1.0); 0.1.wait; server.sync;
+    check.((getControl.(grain, \bufFrames) == 0) and: { synthNames.(engine.voiceGroup).includes(\strataRecord).not } and: { holds.(0.4) },
+        "a recording in a voiceOff release fades the releasing grain synth first and starts only after the fade");
+    1.0.wait; server.sync;
+    check.((engine.bufferFrames[2] == (0.2 * server.sampleRate).round.asInteger) and: { grain.isPlaying }
+        and: { getControl.(grain, \bufFrames) == 0 }, "then records the take, which the releasing grain synth never takes");
+    restart.value;
+    // a grain synth a source switch left fading
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    command.(\setGrainSource, 1, 0); server.sync;
+    command.(\clearBuffer, 2); 0.1.wait; server.sync;
+    check.(engine.fadingSynths[1].includes(grain) and: { getControl.(grain, \bufFrames) == 0 } and: { holds.(0.5) },
+        "a clear fades a grain synth a switch left fading at once and leaves the buffers until the fade is over");
+    0.6.wait; server.sync;
+    check.(bufferSample.(engine.buffersL[2], 100) == 0, "then zeroes the slot");
+    command.(\setGrainSource, 1, 3); server.sync;
+};
+
+// A slot that empties keeps the rate of the grains still fading out (#47):
+// a clear or a recording leaves the voice's bufRateScale (a 22050 Hz file)
+// until the slot holds audio again, so no grain started in the hasAudio fade
+// plays at another pitch; a take's rate arrives with its length. Called from
+// checkBufferFades (voice 1 reads slot 2).
+var checkFadeRates = { arg stereoPath;
+    var fileScale = 22050 / server.sampleRate, rateScale = { getControl.(engine.synths[engine.grainKey(1)], \bufRateScale) };
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    command.(\clearBuffer, 2); 0.1.wait; server.sync;
+    check.(rateScale.value.equalWithPrecision(fileScale),
+        "a clear leaves the rate of the grains fading out (bufRateScale %, the file's %)".format(rateScale.value, fileScale));
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    File.delete(engine.scratchDir +/+ "buf3.wav");
+    command.(\recordBuffer, 2, 0.2, 1.0); 0.1.wait; server.sync;
+    check.(rateScale.value.equalWithPrecision(fileScale),
+        "a recording leaves the rate of the grains fading out until its take is in (bufRateScale %)".format(rateScale.value));
+    1.0.wait; server.sync;
+    check.((engine.bufferFrames[2] > 0) and: { rateScale.value == 1 },
+        "the take's rate arrives with its length (bufRateScale %)".format(rateScale.value));
+};
+
+// More interleavings inside the fade wait (#22, #47), on the slot voice 1
+// reads: a stopRecord before the recording has started cancels it (it never
+// starts, nothing is written); a missing file loaded while a recording waits
+// cancels it and is reported; of two recordings the later one wins and only
+// it runs. Called from checkBufferFades.
+var checkFadeWaitInterleavings = { arg longPath;
+    var takePath = engine.scratchDir +/+ "buf3.wav", before, running;
+    var recorders = { synthNames.(engine.voiceGroup).count({ arg name; name == \strataRecord }) };
+    command.(\loadBuffer, 2, longPath); 0.8.wait; server.sync;
+    File.delete(takePath);
+    command.(\recordBuffer, 2, 0.5, 1.0); 0.1.wait;
+    command.(\stopRecord, 2); 0.6.wait; server.sync;
+    running = recorders.value;
+    0.5.wait; server.sync;
+    check.((running == 0) and: { engine.recordSynths[2].isNil } and: { engine.bufferFrames[2] == 0 } and: { File.exists(takePath).not },
+        "a stopRecord inside the fade wait cancels the recording: it never starts, nothing is written");
+    command.(\loadBuffer, 2, longPath); 0.8.wait; server.sync;
+    before = loadFailures.value.size;
+    command.(\recordBuffer, 2, 0.5, 1.0);
+    command.(\loadBuffer, 2, scratchRoot +/+ "missing.wav"); 0.6.wait; server.sync;
+    running = recorders.value;
+    0.5.wait; server.sync;
+    check.((running == 0) and: { engine.recordSynths[2].isNil } and: { engine.bufferFrames[2] == 0 } and: { File.exists(takePath).not }
+        and: { loadFailures.value.drop(before) == [(engine.bufferLoads[2] * 2) * engine.numBuffers + 2] },
+        "a missing file loaded while a recording waits for its fade cancels it and is reported (reports %)".format(
+            loadFailures.value.drop(before)));
+    command.(\loadBuffer, 2, longPath); 0.8.wait; server.sync;
+    command.(\recordBuffer, 2, 0.5, 1.0);
+    command.(\recordBuffer, 2, 0.4, 1.0); 0.65.wait; server.sync;   // the later one runs from the fade's end (0.5 s) to 0.9 s
+    running = recorders.value;
+    0.8.wait; server.sync;
+    check.((running == 1) and: { engine.recordSynths[2].isNil } and: { engine.bufferFrames[2] == (0.4 * server.sampleRate).round.asInteger }
+        and: { File.exists(takePath) },
+        "of two recordings inside the fade wait the later one wins and only it runs (% running, % frames)".format(
+            running, engine.bufferFrames[2]));
+};
+
 // Clearing, loading or recording into a slot a voice plays fades it first:
 // the grain synth gets bufFrames 0 at once (strataGrainBuf's hasAudio lag
 // fades it) and the buffers are zeroed or overwritten only bufferFadeWait
@@ -534,12 +776,6 @@ var checkVanishedFileLoad = { arg stereoPath, monoPath;
 // (index 2).
 var checkBufferFades = { arg stereoPath, monoPath, longPath;
     var fadeLags, defaultFadeWait, steadyStep, cutStep, steadyLevel, stepBus, stepProbe, peakBus, peakProbe;
-    var readBus = { arg bus;
-        var condition = Condition(false), value;
-        bus.get({ arg result; value = result; condition.test = true; condition.signal });
-        awaitReply.(condition);
-        value
-    };
     fadeLags = SynthDescLib.global.at(\strataGrainBuf).def.children.select({ arg ugen;
         ugen.isKindOf(Lag) and: { ugen.inputs[0].isKindOf(BinaryOpUGen) } and: { ugen.inputs[0].operator == '>' }
     }).collect({ arg ugen; ugen.inputs[1] });
@@ -562,10 +798,10 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     peakProbe = Synth(\strataCheckPeak, [\in, engine.granBuses[1], \out, peakBus], engine.processGroup, \addToTail);
     1.0.wait;
     stepProbe.set(\t_reset, 1); peakProbe.set(\t_reset, 1); 0.5.wait;
-    steadyStep = readBus.(stepBus); steadyLevel = readBus.(peakBus);
+    steadyStep = readBusValue.(stepBus); steadyLevel = readBusValue.(peakBus);
     stepProbe.set(\t_reset, 1); 0.05.wait;
     command.(\clearBuffer, 2); 0.3.wait;
-    cutStep = readBus.(stepBus);
+    cutStep = readBusValue.(stepBus);
     check.(bufferSample.(engine.buffersL[2], 100) == 0, "the cleared slot is zeroed after the fade");
     // measured: a fade steps by about 0.1 % of the level, an abrupt cut by about 4 %
     check.(steadyLevel > 0.05 and: { cutStep < (steadyLevel * 0.01) },
@@ -624,8 +860,32 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     command.(\clearBuffer, 5); server.sync;
     check.(engine.bufferFrames[5] == 0 and: { bufferSample.(engine.buffersL[5], 100) == 0 },
         "and clears without it");
+    checkReleasingGrainFades.(stereoPath, monoPath);
+    checkFadeRates.(stereoPath);
+    checkFadeWaitInterleavings.(longPath);
     checkVanishedFileLoad.(stereoPath, monoPath);
     engine.bufferFadeWait = defaultFadeWait;
+};
+
+// free with fades still pending (#22, #47): with a long fade wait, a
+// clear, a load and a recording on slots that running voices read (voices 1-3,
+// engine 0-2, read slots 1-3 as checkMemoryWorstCase leaves them), then free
+// at once. Nothing that waited runs afterwards: no zeroing, read or record
+// synth reaches the freed buffers and nodes (the server reports no failure)
+// and no slot change completes. Frees the engine.
+var freeDuringPendingFades = { arg stereoPath;
+    var fails = List.new, watcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr), waiting;
+    engine.bufferFadeWait = 0.5;
+    command.(\clearBuffer, 0);
+    command.(\loadBuffer, 1, stereoPath);
+    command.(\recordBuffer, 2, 0.2, 1.0);
+    waiting = (0..2).every({ arg slot; engine.slotPlaying(slot) }) and: { engine.recordSynths[2].notNil };
+    engine.free;
+    1.0.wait; server.sync;
+    watcher.free;
+    check.(waiting and: { fails.isEmpty } and: { engine.bufferFrames[1] == 0 } and: { engine.recordSynths.every(_.isNil) },
+        "free with a clear, a load and a recording waiting for their fade runs none of them (waiting %, server failures %)".format(
+            waiting, fails));
 };
 
 // Real-time memory (#19), as top-level functions (the check routine is at
@@ -802,6 +1062,13 @@ var checkResonatorLevel = {
     var defaultCount = 8, cases = (defaultCount.collect({ defaults }) ++ extremes ++ [panned]);
     var buses = cases.collect({ Bus.audio(server, 2) }), peakBus = Bus.control(server, 2 * cases.size);
     var rmsBus = Bus.control(server, defaultCount), synths, peaks, rms, defaultPeak, extremePeak, pannedPeaks;
+    // Limiter delays its output by twice its lookahead (dur): its default
+    // 0.01 s put the Resonator 20 ms behind the other voices (#47)
+    var lookaheads = SynthDescLib.global.at(\strataResonator).def.children.select({ arg ugen; ugen.isKindOf(Limiter) })
+        .collect({ arg ugen; ugen.inputs[2] });
+    check.((lookaheads.size == 1) and: { lookaheads[0].isNumber } and: { lookaheads[0] >= 0.002 } and: { lookaheads[0] <= 0.005 }
+        and: { lookaheads[0] == engine.tryPerform(\voiceLimiterLookahead) },
+        "the Resonator's limiter looks ahead voiceLimiterLookahead, 2-5 ms, delaying the voice 4-10 ms (got %)".format(lookaheads));
     modBus.set(1);
     synths = cases.collect({ arg args, index;
         Synth(\strataResonator, [\out, buses[index], \modBus1, modBus.index, \modBus2, modBus.index, \modBus3, silent] ++ args, group)
@@ -856,6 +1123,37 @@ var checkEffectsGuard = {
     probe.free; mainProbe.free; badBus.free; mainBadBus.free;
 };
 
+// A NaN or inf on a voice bus (a voice blowing up) never reaches its mod bus
+// (#47), so it cannot spread through crossmod into the voices it modulates
+// and, through their mod synths, on, for good. On private buses: a tone and
+// 50 ms of inf and NaN on a voice bus, read by a strataMod; a Resonator
+// modulated by its mod bus at full amplitude and frequency depth. After the
+// burst the mod bus is finite and follows the tone again, and the Resonator
+// has produced no bad value.
+var checkModGuard = {
+    var group = Group.tail(server), voiceBus = Bus.audio(server, 2), out = Bus.audio(server, 2), modBus = Bus.control(server, 1);
+    var voiceBadBus = Bus.control(server, 1), badBus = Bus.control(server, 1), silent = engine.silentBus.index;
+    var mod, probe, voiceBad, bad, modValue;
+    Synth(\strataCheckTone, [\out, voiceBus], group);
+    mod = Synth(\strataMod, [\in, voiceBus, \out, modBus], group, \addToTail);
+    Synth(\strataCheckBadValues, [\in, voiceBus, \out, voiceBadBus], mod, \addBefore);
+    Synth(\strataResonator, [\out, out, \modBus1, modBus.index, \modBus2, silent, \modBus3, silent,
+        \modAmpAmt1, 2, \modFreqAmt1, 2], group, \addToTail);
+    probe = Synth(\strataCheckBadValues, [\in, out, \out, badBus], group, \addToTail);
+    server.sync; 0.5.wait;
+    Synth(\strataCheckBadSource, [\out, voiceBus], group, \addToHead);
+    server.sync; 0.3.wait;
+    voiceBad = readBus.(voiceBadBus);
+    check.(voiceBad.notEmpty and: { voiceBad[0] > 0 }, "the check's burst puts NaN and inf on the voice bus (seen: %)".format(voiceBad));
+    bad = measure.(probe, badBus, 0.5);
+    modValue = readBus.(modBus)[0];
+    check.(modValue.notNil and: { modValue.isNaN.not } and: { modValue > 0.3 } and: { modValue < 2 },
+        "after the burst strataMod's output is finite and follows the voice again (got %)".format(modValue));
+    check.(bad == [0], "a voice crossmodulated by a voice that blew up stays finite (bad values seen: %)".format(bad));
+    group.free; voiceBus.free; out.free; modBus.free; voiceBadBus.free; badBus.free;
+    server.sync;
+};
+
 // A mod synth the engine restarts (its release ended just as voiceOn
 // re-gated it) keeps the voice's mod speed
 var checkModSpeedRestart = { arg voice;
@@ -867,6 +1165,31 @@ var checkModSpeedRestart = { arg voice;
     check.(engine.synths[key].notNil and: { engine.synths[key] !== oldMod }
         and: { getControl.(engine.synths[key], \speed) == 3.5 },
         "a restarted mod synth keeps the voice's mod speed (got %)".format(engine.synths[key] !? { getControl.(engine.synths[key], \speed) }));
+};
+
+// The crossmod commands take slots 1..numModSlots, the modBus1..N of every
+// voice SynthDef, and ignore any other slot (#47): nothing is kept for it in
+// voiceControls (where it stayed for good) and the voice's slots are
+// unchanged. The voice runs on its synth source.
+var checkModSlots = { arg voice;
+    var slots = engine.tryPerform(\numModSlots), synth = engine.synths[engine.voiceKey(voice)], stray;
+    var modBusCounts = voiceDefs.collect({ arg name;
+        SynthDescLib.global.at(name).controlNames.count({ arg control; control.asString.beginsWith("modBus") })
+    });
+    check.(slots.notNil and: { modBusCounts.every({ arg count; count == slots }) },
+        "numModSlots (%) is the number of modBus controls of every voice SynthDef (%)".format(slots, modBusCounts));
+    [0, 4, -1].do({ arg slot;
+        command.(\setModSource, voice, slot, 0);
+        command.(\setModAmpAmt, voice, slot, 0.5);
+        command.(\setModFreqAmt, voice, slot, 0.5);
+    });
+    command.(\setModAmpAmt, voice, 3, 0.25);
+    server.sync;
+    stray = ["modBus", "modAmpAmt", "modFreqAmt"].collect({ arg prefix; [0, 4, -1].collect({ arg slot; (prefix ++ slot).asSymbol }) })
+        .flatten.select({ arg name; engine.voiceControls[voice][name].notNil });
+    check.(stray.isEmpty and: { getControl.(synth, \modAmpAmt3) == 0.25 } and: { engine.voiceControls[voice][\modAmpAmt3] == 0.25 },
+        "crossmod commands ignore slots 0, 4 and -1 and slot 3 still works (stray controls kept: %)".format(stray));
+    command.(\setModAmpAmt, voice, 3, 0.0);
 };
 
 // voiceOn after a source change in the release: the previous source's
@@ -981,6 +1304,11 @@ var checkInvariantWarnings = { arg voice, before;
     };
     check.(failPattern.notNil and: { lines.every({ arg line; ("WARNING: " ++ line).findRegexp(failPattern).notEmpty }) },
         "run_engine_check.sh's failure pattern matches the posted warnings (pattern found: %)".format(failPattern.notNil));
+    // ... and the line the server prints for a grain UGen past its maxGrains,
+    // which drops grains (#47). The check's own line must not quote it: the
+    // script would fail on that too
+    check.(failPattern.notNil and: { "Too many grains!".findRegexp(failPattern).notEmpty },
+        "run_engine_check.sh's failure pattern matches the server's line for a grain UGen past maxGrains");
     command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
     command.(\setGrainSource, voice, 0);
     server.sync;
@@ -992,6 +1320,55 @@ var checkInvariantWarnings = { arg voice, before;
     2.5.wait; server.sync;
     standInBus.free;
     check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio, the stand-ins gone");
+};
+
+// Messages to synths that can end on the server on their own go out
+// quietly (sendToSynth, #47). Each race frees synths on the server behind
+// sclang's back, so their /n_end is not handled yet and the engine still
+// sees them playing, then at once sends the command that messages them. The
+// server must report none of it: no /fail reply, so no "FAILURE IN SERVER"
+// line, on which run_engine_check.sh fails (the flake this prevents). Each
+// race is [what messages the freed synths, setup (may wait), the race]. The
+// voice runs on its synth source and ends there, with what it still uses
+// restarted by the engine; slot 8 (index 7) is free for the check.
+var checkQuietNodeSends = { arg voice, before;
+    var fails = List.new, watcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr);
+    var keys = [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)];
+    var start = { command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0) };
+    var freeBehind = { arg nodes; nodes.do({ arg node; if (node.notNil) { server.sendMsg(\n_free, node.nodeID) } }) };
+    var releasing = { arg names; names.collect({ arg key; engine.releasingSynths[voice][key] }) };
+    [
+        ["setSynth (a grain param) to the live grain synth", {}, {
+            freeBehind.([engine.synths[keys[1]]]); command.(\setGrainParam, voice, \grainSize, 0.1) }],
+        ["releaseVoice (voiceOff) gating off the live synths", {}, {
+            freeBehind.(voiceTrio.(voice)); command.(\voiceOff, voice) }],
+        ["gateVoice (voiceOn) re-gating the releasing synths", { start.value; server.sync; command.(\voiceOff, voice) }, {
+            freeBehind.(releasing.(keys)); start.value }],
+        ["replaceGrainSynth (a switch) releasing the live synths and moving the new grain synth before the freed mod synth", {}, {
+            freeBehind.(voiceTrio.(voice)); command.(\setGrainSource, voice, 9) }],
+        ["cutSynth (the next switch) cutting the fading synths", { command.(\setGrainSource, voice, 0) }, {
+            freeBehind.(engine.fadingSynths[voice].asArray); command.(\setGrainSource, voice, 9) }],
+        ["gateVoice (voiceOn for another source) releasing the voice synth and moving the mod synth", {
+            command.(\setGrainSource, voice, 0); server.sync; command.(\voiceOff, voice); command.(\setGrainSource, voice, 9) }, {
+            freeBehind.(releasing.([keys[0], keys[2]])); start.value }],
+        ["stopRecording (stopRecord) freeing a record synth whose take has just ended", {
+            command.(\recordBuffer, 7, 0.5, 1.0); 0.2.wait }, {
+            freeBehind.([engine.recordSynths[7]]); command.(\stopRecord, 7) }],
+        ["bufferChanged (a clear) fading a releasing buffer grain synth", {
+            command.(\setGrainSource, voice, 8); server.sync; command.(\voiceOff, voice) }, {
+            freeBehind.(releasing.([keys[1]])); command.(\clearBuffer, 7) }]
+    ].do({ arg race;
+        race[1].value;
+        server.sync; 0.1.wait; server.sync;
+        fails.clear;
+        race[2].value;
+        server.sync; 0.3.wait; server.sync;    // the engine has restarted what the voice still uses
+        check.(fails.isEmpty, "% sends quietly to synths that have just freed (server failures: %)".format(race[0], fails));
+    });
+    watcher.free;
+    command.(\setGrainSource, voice, 0); start.value;
+    2.5.wait; server.sync;
+    check.(synthNames.(context.xg).size == before, "after the races the voice is back on its synth with one trio");
 };
 
 // Buffer- and input-sourced voices, on a running voice on its synth source
@@ -1180,6 +1557,7 @@ server.waitForBoot({
             check.(velocityOnlyScalesAccents.(name),
                 "% uses velocity only as its accent's levelScale (no bare velocity multiplier)".format(name));
         });
+        checkKarplusMutants.value;
         grainDefs.do({ arg name;
             [\grainMode, \t_trig, \velocity, \bend, \envBuf].do({ arg control;
                 check.(SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).includes(control),
@@ -1259,7 +1637,7 @@ server.waitForBoot({
             "each buffer holds 16 s at the server rate");
         check.((engine.buffersL ++ engine.buffersR).collect(_.bufnum).asSet.size == 16, "sixteen distinct buffer numbers");
         check.(engine.bufferFrames == Array.fill(8, 0), "every slot starts empty");
-        check.(engine.grainSource == Array.fill(7, 0), "every voice starts on its synth source");
+        check.(engine.grainSource == Array.fill(engine.numVoices, 0), "every voice starts on its synth source");
         check.(engine.inputBus.numChannels == 2 and: { engine.inputBus.rate == \audio }, "inputBus is a stereo audio bus");
         check.(engine.inputSynth.defName == \strataInput
             and: { getControl.(engine.inputSynth, \out) == engine.inputBus.index }, "strataInput writes inputBus");
@@ -1299,7 +1677,7 @@ server.waitForBoot({
             "setGrainSource on a stopped voice records the source and creates no nodes");
 
         // Start every voice
-        7.do({ arg voice;
+        engine.numVoices.do({ arg voice;
             command.(\voiceOn, voice, 100.0 + voice, 0.2, 0.0, 0.1, 10.0, 1.0);
         });
         server.sync;
@@ -1339,6 +1717,7 @@ server.waitForBoot({
         server.sync;
         check.(getControl.(engine.synths[\voice1], \modBus2) == silentIndex,
             "setModSource -1 routes to the silent bus (I4)");
+        checkModSlots.(1);
 
         command.(\setGrainParam, 0, \pitchShift, 2.0);
         command.(\setGrainParam, 0, \posSpread, 0.7);
@@ -1395,7 +1774,7 @@ server.waitForBoot({
         voiceNames = names.select({ arg name; voiceDefs.includes(name) });
         grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
         firstGrain = grainIndices.minItem;
-        check.(names.size == ((6 * 3) + 2 + 1 + 4),
+        check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + 4),
             "xg holds 6 voice trios, 1 buffer voice (grain + mod), the input synth, filter, delay, reverb and master (got %)".format(names.size));
         check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
         check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");
@@ -1465,11 +1844,12 @@ server.waitForBoot({
         checkResonatorCeiling.value;
         checkResonatorLevel.value;
         checkEffectsGuard.value;
+        checkModGuard.value;
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 
         // retrigger never creates nodes (C3)
         before = synthNames.(context.xg).size;
-        50.do({ arg count; command.(\retrigger, count % 7, 1.0) });
+        50.do({ arg count; command.(\retrigger, count % engine.numVoices, 1.0) });
         server.sync;
         after = synthNames.(context.xg).size;
         check.(before == after, "50 retriggers create no nodes (% before, % after)".format(before, after));
@@ -1673,7 +2053,7 @@ server.waitForBoot({
         checkLoadFailureReports.(textPath, stereoPath);
         checkDecodeShortfall.(stereoPath, longPath);
         checkReadFailureMatching.(stereoPath, monoPath);
-        checkBadLoadsDuringRecording.(textPath);
+        checkBadLoadsDuringRecording.(textPath, stereoPath);
         command.(\loadBuffer, 5, monoPath); 0.3.wait; server.sync;
         check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001
             and: { (bufferSample.(engine.buffersR[5], 10) - 0.4).abs < 0.001 }, "a mono file fills both channels");
@@ -2089,6 +2469,7 @@ server.waitForBoot({
         checkSupersededAtStart.(3, before);
         checkStopStartCycles.(3);
         checkInvariantWarnings.(3, before);
+        checkQuietNodeSends.(3, before);
 
         // A re-gated synth whose release ends just as the gate arrives frees
         // anyway; the engine starts that synth again
@@ -2114,7 +2495,7 @@ server.waitForBoot({
         command.(\setReverb, 1.0, 0.5, 0.5);
         server.sync;
 
-        engine.free;
+        freeDuringPendingFades.(stereoPath);
         server.sync;
         check.(synthNames.(context.xg).size == 0, "free removes every engine node");
         check.(engine.envBuffers.every({ arg buffer; buffer.bufnum.isNil }), "free frees the envelope buffers");
