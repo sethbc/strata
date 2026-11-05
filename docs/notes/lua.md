@@ -72,6 +72,7 @@ Strata includes a mutation system that applies gentle, probabilistic changes to 
   - `mutation_rate` (0.5-10s) - How often mutations are checked
   - `mutation_probability` (0-1) - Chance each parameter will mutate per check
   - `mutation_amount` (0-1) - Size of mutation delta relative to parameter range
+- **Normalized space**: synth and buffer params mutate by a delta in the controlspec's normalized 0-1 range (`mutated_value(spec, current, delta)`: unmap, add, clamp, map), and `randomize_voice` draws synth params with `spec:map(math.random())`. Exponential params (freq, cutoff, buf_rate) therefore move evenly in octaves. Grain size, pitch and spread are linear, so their absolute deltas and ranges are unchanged. The Lua drifts (grain pitch, buffer position) act on linear params; the engine's tape drift is separate
 
 #### Implementation Details
 
