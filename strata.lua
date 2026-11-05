@@ -330,19 +330,28 @@ function request_redraw()
   UI_PAGES.arc_dirty = true
 end
 
+-- Run one draw of a frame. An error is printed with its traceback instead
+-- of ending the frame clock, so one failing frame never freezes the display:
+-- the next request draws again.
+function draw_frame_part(draw)
+  local drawn, draw_error = xpcall(draw, debug.traceback)
+  if not drawn then print("strata: frame draw failed: " .. tostring(draw_error)) end
+end
+
 -- One frame. It calls the global redraw(), so norns' swaps apply: nothing
 -- while its menu is open (redraw is norns.none then; norns redraws as the
 -- menu closes), and the file list while the file selector is open (redraw()
 -- never draws the page then). The LFO page draws every frame: its dots move.
+-- Each flag clears before its draw, so a failed draw is not retried.
 function draw_frame()
   if UI_PAGES[ui_page] == "LFO" then UI_PAGES.screen_dirty = true end
   if UI_PAGES.screen_dirty then
     UI_PAGES.screen_dirty = false
-    redraw()
+    draw_frame_part(redraw)
   end
   if UI_PAGES.arc_dirty then
     UI_PAGES.arc_dirty = false
-    arc_redraw()
+    draw_frame_part(arc_redraw)
   end
 end
 

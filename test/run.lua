@@ -1898,6 +1898,36 @@ test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)"
   assert_equal(context.clock.threads[frame_clock], nil, "cleanup cancels the frame clock")
 end)
 
+test("a draw that fails prints the error and the frame clock keeps drawing (#11)", function()
+  local context = load_strata(); context.clock.advance()
+  local arc_hardware = context.arc.plug(1)
+  next_frame(context)
+  local frame_clock = local_value("UI_PAGES").frame_clock
+  local real_redraw, real_arc_redraw = redraw, arc_redraw
+  local screen_draws = 0
+  redraw = function() error("screen draw failed") end
+  arc_redraw = function() error("arc draw failed") end
+  request_redraw()
+  context.printed = {}
+  next_frame(context)
+  redraw = function() screen_draws = screen_draws + 1; real_redraw() end
+  arc_redraw = real_arc_redraw
+  assert_true(context.clock.threads[frame_clock] ~= nil, "the frame clock survives the failed draws")
+  local output = table.concat(context.printed, "\n")
+  assert_true(output:find("screen draw failed", 1, true), "the screen error is printed")
+  assert_true(output:find("arc draw failed", 1, true), "the arc error is printed")
+  assert_true(output:find("stack traceback", 1, true), "with a traceback")
+  -- the failed frame cleared its flags: nothing is retried until asked
+  local arc_refreshes = arc_hardware.refresh_count
+  next_frame(context)
+  assert_equal(screen_draws, 0, "a failed frame is not retried on its own")
+  request_redraw()
+  next_frame(context)
+  redraw = real_redraw
+  assert_equal(screen_draws, 1, "the next request draws the screen again")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the arc")
+end)
+
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
   local context = load_strata(); context.clock.advance()
   local arc_hardware = context.arc.plug(1)
