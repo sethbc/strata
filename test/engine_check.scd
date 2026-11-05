@@ -209,7 +209,12 @@ var tempFloatFiles = {
 var decodeBufferState = { arg value; var slot = (value / 100).floor; [slot.asInteger, value - (slot * 100)] };
 var bufferStateSeen = { arg slot, seconds;
     pollMessages.any({ arg msg; var decoded = decodeBufferState.(msg[2]);
-        (decoded[0] == slot) and: { (decoded[1] - seconds).abs < 0.011 } })
+        (msg[1] == engine.bufferStatePoll.index) and: { decoded[0] == slot }
+            and: { (decoded[1] - seconds).abs < 0.011 } })
+};
+// bufferLoadFailed poll values received so far
+var loadFailures = {
+    pollMessages.select({ arg msg; msg[1] == engine.bufferLoadFailedPoll.index }).collect({ arg msg; msg[2] })
 };
 
 // Write a test sound file of constant per-channel values
@@ -271,6 +276,33 @@ var checkBadLoadsDuringRecording = { arg textPath;
         and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
         "a missing file loaded right after stopRecord cancels the stopped take: no take, nothing written (% frames)".format(
             engine.bufferFrames[6]));
+};
+
+// A missing, unreadable or empty file loaded into a slot holding audio
+// leaves the audio, and the bufferLoadFailed poll reports exactly that load
+// (load number * 8 + slot index) as a float, once; a good load reports
+// nothing. Slot 4 holds the stereo file's 11025 frames.
+var checkLoadFailureReports = { arg textPath, stereoPath;
+    var emptyPath = scratchRoot +/+ "no-frames-4.wav", file, before;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(1).sampleRate_(44100);
+    file.openWrite(emptyPath); file.close;
+    [[textPath, "unreadable"], [scratchRoot +/+ "missing.wav", "missing"], [emptyPath, "empty"]].do({ arg bad;
+        before = loadFailures.value.size;
+        command.(\loadBuffer, 4, bad[0]);
+        check.(waitFor.({ loadFailures.value.size > before }),
+            "the % file loaded over audio is reported by bufferLoadFailed".format(bad[1]));
+        0.2.wait; server.sync;
+        check.(loadFailures.value.drop(before) == [engine.bufferLoads[4] * engine.numBuffers + 4]
+            and: { loadFailures.value.last.isKindOf(Float) },
+            "the report names slot 4 and its load number % once, as a float (got %)".format(
+                engine.bufferLoads[4], loadFailures.value.drop(before)));
+        check.(engine.bufferFrames[4] == 11025 and: { (bufferSample.(engine.buffersL[4], 100) - 0.5).abs < 0.001 },
+            "the % file left the slot's audio".format(bad[1]));
+    });
+    before = loadFailures.value.size;
+    command.(\loadBuffer, 4, stereoPath); 0.5.wait; server.sync;
+    check.(loadFailures.value.size == before and: { engine.bufferFrames[4] == 11025 },
+        "a good load reports no failure");
 };
 
 // A take recorded above level 1 holds samples beyond ±1 (the buffers are
@@ -909,6 +941,7 @@ server.waitForBoot({
         // never write into ~/dust from the check; a nested dir also tests mkdir on demand
         engine.scratchDir = scratchRoot +/+ "nested/scratch/";
         engine.bufferStatePoll.start;
+        engine.bufferLoadFailedPoll.start;
 
         // SynthDefs
         allDefs.do({ arg name;
@@ -1425,6 +1458,7 @@ server.waitForBoot({
         command.(\loadBuffer, 4, textPath); 0.2.wait; server.sync;
         check.(engine.bufferFrames[4] == 11025 and: { (bufferSample.(engine.buffersL[4], 100) - 0.5).abs < 0.001 },
             "a missing or unreadable file leaves the slot unchanged");
+        checkLoadFailureReports.(textPath, stereoPath);
         checkBadLoadsDuringRecording.(textPath);
         command.(\loadBuffer, 5, monoPath); 0.3.wait; server.sync;
         check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001

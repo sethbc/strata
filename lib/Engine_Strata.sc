@@ -28,6 +28,7 @@ Engine_Strata : CroneEngine {
     var <recordFrameBuses;    // Per slot: frames recorded so far, written by strataRecord
     var <slotChanges;         // Per slot: counts loads, records, clears and stops; a late reply applies only if unchanged
     var <stopReplies;         // Per slot: the slotChanges count of a stopRecord whose frame count is still awaited, or nil
+    var <bufferLoads;         // Per slot: loadBuffer commands received (Lua's load_buffer counts the same), named in bufferLoadFailed
     var <inputBus;            // Stereo live input, written by inputSynth
     var <inputSynth;
     var <grainSource;
@@ -42,6 +43,7 @@ Engine_Strata : CroneEngine {
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
+    var <bufferLoadFailedPoll;    // value = load number * numBuffers + slot index (bufferLoadFailedValue)
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
     // Real-time memory (see "Real-time memory" in docs/notes/engine.md). Both
@@ -110,6 +112,7 @@ Engine_Strata : CroneEngine {
         recordFrameBuses = Array.fill(numBuffers, { Bus.control(context.server, 1) });
         slotChanges = Array.fill(numBuffers, 0);
         stopReplies = Array.newClear(numBuffers);
+        bufferLoads = Array.fill(numBuffers, 0);
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -888,6 +891,14 @@ Engine_Strata : CroneEngine {
             value
         });
 
+        // A load whose file cannot be used (rejectLoad), whether or not the
+        // slot held audio: one message per failed load, sent at once. It
+        // names the slot and that slot's load number (bufferLoadFailedValue),
+        // so Lua undoes exactly that load and never a later one. Not
+        // periodic; a value request resends the last report (Lua ignores a
+        // repeat).
+        bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
+
         this.addCommand(\setMasterDrift, "f", { arg msg;
             this.setSynth(\master, \drift, msg[1]);
         });
@@ -1305,6 +1316,14 @@ Engine_Strata : CroneEngine {
         ^(index * bufferStateStride) + (bufferFrames[index] / bufferSampleRates[index]).round(0.01)
     }
 
+    // One float, as bufferState (matron's /poll/value is typed "if"): the
+    // slot's load number (counted from 1) * numBuffers + slot index, exact
+    // for the first 2^21 loads of a slot (a float32 holds integers exactly
+    // up to 2^24)
+    bufferLoadFailedValue { arg index;
+        ^((bufferLoads[index] * numBuffers) + index).asFloat
+    }
+
     bufferRateScale { arg index;
         ^bufferSampleRates[index] / context.server.sampleRate
     }
@@ -1341,6 +1360,7 @@ Engine_Strata : CroneEngine {
     loadSlot { arg index, path;
         var file, frames, rightChannel, sampleRate, change;
         if (this.validBuffer(index).not) { ^this };
+        bufferLoads[index] = bufferLoads[index] + 1;
         file = SoundFile.openRead(path.standardizePath);
         if (file.isNil) { ^this.rejectLoad(index, "cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
@@ -1375,6 +1395,9 @@ Engine_Strata : CroneEngine {
     // change drops that reply), as Lua's load_buffer expects: that take
     // never completes, so it is never adopted under the bad file's name.
     // The slot reads empty (0 frames), as for a recording a clear cancelled.
+    // Either way the bufferLoadFailed poll reports the failure, so Lua puts
+    // back what the slot held (its bufferState reports cannot tell a
+    // rejected load over audio from a good one).
     rejectLoad { arg index, reason;
         var recording = recordSynths[index].notNil or: { stopReplies[index].notNil };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
@@ -1385,6 +1408,7 @@ Engine_Strata : CroneEngine {
             stopReplies[index] = nil;
             this.bufferChanged(index);
         };
+        bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index));
     }
 
     // true when a running voice's grain synth reads the slot
