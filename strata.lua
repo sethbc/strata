@@ -1124,6 +1124,47 @@ local function fx_fader_changed()
   if grid_page == 4 and not scene_transition_active then grid_redraw() end
 end
 
+-- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
+-- later; clock is the start-up clock while it waits (cleanup() cancels it).
+-- A global table: the main chunk is close to Lua's 200-local limit
+STARTUP = {voice_delay_seconds = 0.5, clock = nil}
+
+function cancel_startup_clock()
+  if STARTUP.clock then
+    clock.cancel(STARTUP.clock)
+    STARTUP.clock = nil
+  end
+end
+
+-- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
+-- external clock source): norns calls the handler with the new bpm (an
+-- external source's may be outside clock_tempo's range). Set the param
+-- silently, so its action does not write the clock back, then call the
+-- handler that was installed before the script's.
+function follow_clock_tempo(bpm)
+  local min_tempo, max_tempo = param_range("tempo")
+  params:set("tempo", util.clamp(util.round(bpm), min_tempo, max_tempo), true)
+  if previous_tempo_change_handler then previous_tempo_change_handler(bpm) end
+end
+
+-- Install follow_clock_tempo, keeping the handler it replaces for cleanup()
+-- (restore_tempo_change_handler). Installing it again (init run twice)
+-- changes nothing: the script's handler never chains to itself
+function install_tempo_change_handler()
+  if clock.tempo_change_handler == follow_clock_tempo then return end
+  previous_tempo_change_handler = clock.tempo_change_handler
+  clock.tempo_change_handler = follow_clock_tempo
+end
+
+-- Give the clock back the handler found at install, unless a handler
+-- installed after the script's has replaced it: that one stays (and any
+-- chain through follow_clock_tempo still reaches the previous handler)
+function restore_tempo_change_handler()
+  if clock.tempo_change_handler ~= follow_clock_tempo then return end
+  clock.tempo_change_handler = previous_tempo_change_handler
+  previous_tempo_change_handler = nil
+end
+
 function init()
   -- Set up params
   params:add_separator("strata")
@@ -1141,28 +1182,22 @@ function init()
   }
   
   -- Sequencer tempo: drives norns' global clock (clock_tempo), which the
-  -- pattern clock follows via clock.sync so external clock sources still work
+  -- pattern clock follows via clock.sync so external clock sources still work.
+  -- It has clock_tempo's range, so any clock tempo is captured and recalled
+  local min_tempo, max_tempo = param_range("clock_tempo")
   params:add{
     type = "number",
     id = "tempo",
     name = "tempo",
-    min = 40,
-    max = 300,
-    default = util.clamp(util.round(params:get("clock_tempo")), 40, 300),
+    min = min_tempo,
+    max = max_tempo,
+    default = util.clamp(util.round(params:get("clock_tempo")), min_tempo, max_tempo),
     action = function(x)
       params:set("clock_tempo", x)
     end
   }
 
-  -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
-  -- external clock source): norns calls the handler with the new bpm. Set the
-  -- param silently, so its action does not write the clock back. The previous
-  -- handler is kept for cleanup() and still called.
-  previous_tempo_change_handler = clock.tempo_change_handler
-  clock.tempo_change_handler = function(bpm)
-    params:set("tempo", util.clamp(util.round(bpm), 40, 300), true)
-    if previous_tempo_change_handler then previous_tempo_change_handler(bpm) end
-  end
+  install_tempo_change_handler()
 
   -- Probability-based mutations
   params:add_separator("strata_mutations")
@@ -1527,9 +1562,11 @@ function init()
   load_buffers_from_disk()
 
   -- Start with first two voices (delayed)
-  clock.run(function()
+  cancel_startup_clock()
+  STARTUP.clock = clock.run(function()
     toggle_voice(1)
-    clock.sleep(0.5)
+    clock.sleep(STARTUP.voice_delay_seconds)
+    STARTUP.clock = nil
     -- toggle_voice toggles: leave voice 2 alone if a MIDI note or grid press started it meanwhile
     if not voices[2].active then toggle_voice(2) end
   end)
@@ -2054,6 +2091,17 @@ function mean_reverting_step(current, base, step, reversion)
   return current + ((math.random() - 0.5) * step - (current - base) * reversion)
 end
 
+-- Set a param as the drift: its action sees drift_writing, so the write is
+-- not taken as a new centre for the walk. The flag must not outlive an
+-- error in the action (every later edit would be taken for the drift's):
+-- clear it, then raise the error again, with its traceback
+function set_drifted_param(param_id, value)
+  drift_writing = true
+  local set, set_error = xpcall(params.set, with_traceback, params, param_id, value)
+  drift_writing = false
+  if not set then error(set_error, 0) end
+end
+
 function drift_update()
   -- Slow grain pitch drift for active, non-frozen voices: a small random
   -- step plus a pull back toward the last user/scene/mutation-set pitch, so
@@ -2062,17 +2110,13 @@ function drift_update()
     if voices[i].active and not frozen[i] then
       local pitch = mean_reverting_step(voices[i].grain.pitch, grain_pitch_base[i],
         DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
-      drift_writing = true
-      params:set("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
-      drift_writing = false
+      set_drifted_param("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
 
       -- Buffer sources also drift their position the same way
       if voice_uses_buffer(i) then
         local position = mean_reverting_step(voices[i].grain.buf_pos, buf_pos_base[i],
           DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
-        drift_writing = true
-        params:set("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
-        drift_writing = false
+        set_drifted_param("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
         request_redraw()  -- MAIN and the BUFFER arc ring show the position
       end
     end
@@ -2247,9 +2291,11 @@ local GRAIN_PARAM_IDS = {
 -- scene for max(scene duration, transition time), then, while the fade is
 -- still running (its steps run late by their scheduling delay), checks
 -- again every `settle_seconds`, so it never cuts a fade short. A transition
--- still flagged `overrun_seconds` after its transition time is stuck: the
--- sequencer cancels it and moves on
+-- whose next step (or end) is `overrun_seconds` late is stuck: the
+-- sequencer cancels it and moves on. next_step_due is the running fade's
+-- progress: util.time() when its next step or its end is due
 local SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
+SCENE_TRANSITION.next_step_due = nil
 
 local function is_number(value)
   return type(value) == "number" and value == value  -- rejects NaN
@@ -2377,6 +2423,7 @@ function cancel_scene_transition()
     scene_transition_clock = nil
   end
   scene_transition_active = false
+  SCENE_TRANSITION.next_step_due = nil
 end
 
 -- Snapshot {id, start, target, step} for every continuous param a smooth
@@ -2440,9 +2487,13 @@ function recall_scene(scene_num, transition_time)
   cancel_scene_transition()
 
   if transition_time > 0 then
-    local targets = scene_transition_targets(scenes[scene_num].data)
+    -- the fade's end applies the scene as it was recalled: a capture into
+    -- this slot during the fade stores a new table and leaves this one be
+    local scene_data = scenes[scene_num].data
+    local targets = scene_transition_targets(scene_data)
 
     scene_transition_active = true
+    SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
     scene_transition_clock = clock.run(function()
       local step_time = transition_time / SCENE_TRANSITION.steps
 
@@ -2463,15 +2514,18 @@ function recall_scene(scene_num, transition_time)
         if not stepped then
           scene_transition_clock = nil
           scene_transition_active = false
+          SCENE_TRANSITION.next_step_due = nil
           error(step_error, 0)
         end
+        SCENE_TRANSITION.next_step_due = util.time() + step_time
         clock.sleep(step_time)
       end
 
       -- Final state: exact values plus the non-continuous params
       scene_transition_clock = nil
       scene_transition_active = false
-      recall_scene_instant(scene_num)
+      SCENE_TRANSITION.next_step_due = nil
+      recall_scene_instant(scene_num, scene_data)
     end)
   else
     -- Instant recall
@@ -2482,12 +2536,13 @@ function recall_scene(scene_num, transition_time)
   request_redraw()
 end
 
--- Apply a scene immediately. The scene must have passed validate_scene.
+-- Apply a scene immediately: scene_data, or the slot's data when nil. The
+-- scene must have passed validate_scene.
 -- A voice whose source changes gets one full sync after all its params are
 -- set (not the source action's, which would send the old values first); a
 -- voice the recall starts is synced by toggle_voice instead.
-function recall_scene_instant(scene_num)
-  local scene_data = scenes[scene_num].data
+function recall_scene_instant(scene_num, scene_data)
+  scene_data = scene_data or scenes[scene_num].data
   local source_changed = {}
   scene_recall_in_progress = true
   -- the flag must not outlive an error in a param action: clear it, then
@@ -2556,23 +2611,15 @@ function recall_scene_instant(scene_num)
   grid_redraw()
 end
 
--- Called by the scene sequencer `waited` seconds after it started
--- `own_transition` (a clock id, or nil) of `transition_time` seconds: wait
--- while a transition is flagged, but never for ever. A transition still
--- flagged SCENE_TRANSITION.overrun_seconds after its transition time is
--- stuck (its clock is gone) and is cancelled. A transition the sequencer did
--- not start (a manual recall's) is timed from when the wait sees it, with
--- the longest transition time, since its own is unknown
-function wait_for_scene_transition(own_transition, transition_time, waited)
-  local watched = own_transition
-  local deadline = util.time() - waited + transition_time + SCENE_TRANSITION.overrun_seconds
+-- Called by the scene sequencer when a scene's hold ends: wait while a
+-- transition (the sequencer's or a manual recall's) is flagged, but never
+-- for ever. A transition whose next step or end is
+-- SCENE_TRANSITION.overrun_seconds late is stuck (its clock is gone) and is
+-- cancelled. The bound follows the fade's progress, so a healthy fade whose
+-- steps each run late under load is never cut short, however late it ends
+function wait_for_scene_transition()
   while scene_transition_active do
-    if scene_transition_clock ~= watched then
-      watched = scene_transition_clock
-      local _, longest_transition = param_range("scene_transition_time")
-      deadline = util.time() + longest_transition + SCENE_TRANSITION.overrun_seconds
-    end
-    if util.time() >= deadline then
+    if util.time() >= SCENE_TRANSITION.next_step_due + SCENE_TRANSITION.overrun_seconds then
       print("scene transition overran; cancelled")
       cancel_scene_transition()
       return
@@ -2604,7 +2651,6 @@ function scene_sequencer_start()
 
       -- Recall next scene in sequence (skip empty scenes)
       local transition_time = 0
-      local own_transition = nil  -- the clock of the transition this recall started
       if scenes[scene_sequencer_position].populated then
         transition_time = params:get("scene_transition_time")
         -- An error in a param action (in the first fade step or an instant
@@ -2618,7 +2664,6 @@ function scene_sequencer_start()
         if not recalled then
           print("scene sequencer: scene " .. scene_sequencer_position .. " failed: " .. tostring(recall_error))
         end
-        own_transition = scene_transition_clock
       else
         print("skipping empty scene " .. scene_sequencer_position)
       end
@@ -2628,7 +2673,7 @@ function scene_sequencer_start()
       -- scene's discrete state (voices, sources, patterns, ...)
       local held = math.max(params:get("scene_duration"), transition_time)
       clock.sleep(held)
-      wait_for_scene_transition(own_transition, transition_time, held)
+      wait_for_scene_transition()
 
       -- Advance, wrapping to scene 1 past the end of the sequence as it is
       -- now (it may have been shortened during the wait)
@@ -4779,7 +4824,7 @@ function grid_redraw_64(grid_device)
 end
 
 function cleanup()
-  clock.tempo_change_handler = previous_tempo_change_handler
+  restore_tempo_change_handler()
 
   -- Give the norns menu its own set_mode back first, before anything below
   -- can fail
@@ -4801,6 +4846,7 @@ function cleanup()
   end
 
   -- Stop metros and clocks
+  cancel_startup_clock()
   stop_frame_clock()
   if drift_metro then drift_metro:stop() end
 

@@ -401,7 +401,7 @@ Scene LED feedback:
 - **Per-voice patterns** - each voice has independent pattern
 - **Real-time recording** - toggle steps while playing
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty)
-- **Tempo control** - 40-300 BPM (adjustable via grid or PARAMS)
+- **Tempo control** - 1-300 BPM, the range of norns' clock tempo (adjustable via grid or PARAMS)
 - **Pattern operations** - clear, randomize per voice
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
 - **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15
@@ -477,7 +477,7 @@ Scene LED feedback:
 
 **Manual Scene Performance**:
 - Press row 1 buttons for instant scene changes (good for rhythmic switching)
-- Press row 2 buttons for smooth crossfades (good for ambient transitions)
+- Press row 2 buttons for smooth crossfades (good for ambient transitions). Saving into the scene a crossfade is heading for stores the sound as it is at that moment; the crossfade still ends on the scene as it was recalled
 - Adjust transition time in PARAMETERS to control crossfade duration
 
 **Automatic Scene Sequencing**:
@@ -502,7 +502,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 ### Master
 - Master density
-- Tempo (40-300 BPM; sets norns' clock tempo, starts at the current clock tempo)
+- Tempo (1-300 BPM, the range of norns' clock tempo; sets norns' clock tempo, starts at the current clock tempo)
 
 ### FX (group)
 - Filter type (lowpass, highpass, bandpass)
