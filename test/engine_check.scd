@@ -662,14 +662,20 @@ var checkGrainMemorySizes = {
 // releasing and the buffer grain synth in its kill fade. Burst: the three
 // switches at once on every voice (a chord of grid scene buttons, or
 // PMAP-mapped source params), where each switch frees the synths the
-// previous one left in their kill fade, so the voice holds no more. Each
+// previous one left in their kill fade, so the voice holds no more. Recalls:
+// scenes A = on/synth, B = off/input, C = on/buffer recalled A -> B -> A -> C
+// at once (#46), each voice's source sent before its stop or start (the order
+// Lua used before #46, the worst one): B builds an input grain synth and
+// releases it, A's voiceOn hands it to fadingSynths, and the voice still
+// holds no more than its live synths, one fading and one cutting set. Each
 // time, on norns' 8192 KB pool (memSize, set before boot), four 256 KB probes
 // (1 MB) started at that moment must still allocate. The probe bus is zeroed
 // first, so a probe whose /s_new fails reads 0. run_engine_check.sh also
 // fails on any "alloc failed" the server prints.
 var checkMemoryWorstCase = {
     var probeCount = 4, probeBus = Bus.control(server, probeCount);
-    var startAll = { engine.numVoices.do({ arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) }) };
+    var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
+    var startAll = { engine.numVoices.do(startVoice) };
     var switchAll = { arg sourceOf; engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, sourceOf.(voice)) }) };
     var sourceSteps = [{ arg voice; voice + 1 }, { engine.numBuffers + 1 }, { 0 }];
     // started at once after the last command, while the cut synths still fade
@@ -701,6 +707,11 @@ var checkMemoryWorstCase = {
     probeBus.setAll(0); server.sync;
     sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
     probeHeadroom.("seven voices at grain size 0.5, each switched three times at once,");
+    probeBus.setAll(0); server.sync;
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, engine.numBuffers + 1); command.(\voiceOff, voice) });
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
+    probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer),");
     probeBus.free;
 };
 
@@ -858,24 +869,129 @@ var checkModSpeedRestart = { arg voice;
         "a restarted mod synth keeps the voice's mod speed (got %)".format(engine.synths[key] !? { getControl.(engine.synths[key], \speed) }));
 };
 
-// Fast stop / source change / start cycles on one voice, inside one
-// switchCutTime: each voiceOff cuts the grain synth the previous voiceOn
-// left releasing beside the new one, and frees the one an earlier cycle left
-// in its kill fade, so the voice never holds more than its live grain synth,
-// one releasing and one cutting
+// voiceOn after a source change in the release: the previous source's
+// releasing grain synth and the voice synth (now forced to release) are
+// tracked as the voice's fadingSynths, not left releasing beside the new
+// one, and the next start for another source cuts them (F4, #46). The voice
+// runs on its synth source.
+var checkSupersededAtStart = { arg voice, before;
+    var oldTrio = voiceTrio.(voice), fading = engine.fadingSynths[voice];
+    command.(\voiceOff, voice);
+    command.(\setGrainSource, voice, 9);
+    command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+    check.(oldTrio[1].isPlaying and: { engine.synths[engine.grainKey(voice)] !== oldTrio[1] }
+        and: { fading.includes(oldTrio[1]) } and: { fading.includes(oldTrio[0]) }
+        and: { engine.releasingSynths[voice][engine.grainKey(voice)].isNil }
+        and: { engine.releasingSynths[voice][engine.voiceKey(voice)].isNil },
+        "voiceOn hands the previous source's releasing grain and voice synths to fadingSynths");
+    command.(\voiceOff, voice); server.sync;
+    check.(oldTrio[1].isPlaying and: { fading.includes(oldTrio[1]) }, "voiceOff keeps them fading (tracked)");
+    command.(\setGrainSource, voice, 0);
+    command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 0.15.wait; server.sync;
+    check.(oldTrio[1].isPlaying.not and: { oldTrio[0].isPlaying.not } and: { engine.cuttingSynths[voice].isEmpty },
+        "the next start for another source cuts them (got grain %, voice %)".format(oldTrio[1].isPlaying, oldTrio[0].isPlaying));
+    2.5.wait; server.sync;
+    check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
+};
+
+// Fast stop / source change / start / running switch cycles on one voice:
+// voiceOn hands the releasing synths built for another source to
+// fadingSynths as a switch does (cutting the fading ones, freeing the
+// cutting ones), so the voice holds at most its live grain synth, one fading
+// and one cutting (#46), and as many voice synths. The cycles visit the
+// synth source too: [9, 0] from the synth source hands the released voice
+// synth to fadingSynths at voiceOn and cuts it as the switch back starts a
+// new one, so two voice synths are held at once there (the count measures
+// something). Two passes:
+// - the engine's own tracking (live, releasing, fading and cutting synths)
+//   after every command, all 24 commands without a yield: no /n_end is
+//   handled meanwhile, so nothing leaves the sets on its own and the counts
+//   do not depend on server timing (an upper bound on what the server runs)
+// - the server's node tree after every step (sync, one /g_queryTree), as an
+//   upper bound only: a slower server can only have freed more
 var checkStopStartCycles = { arg voice;
-    var before = synthNames.(context.xg).size, grains;
-    [9, 3, 9, 4, 9, 3].do({ arg source;
-        command.(\voiceOff, voice);
-        command.(\setGrainSource, voice, source);
-        command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+    var before = synthNames.(context.xg).size, cycles = [[9, 3], [0, 9], [4, 0], [9, 0], [4, 3], [0, 9]];
+    var trackedGrains = 0, trackedVoices = 0, serverGrains = 0, serverVoices = 0;
+    var runCycles = { arg afterStep;
+        // [stopped source, running source]: each differs from the one before
+        cycles.do({ arg sources;
+            command.(\voiceOff, voice); afterStep.value;
+            command.(\setGrainSource, voice, sources[0]); afterStep.value;
+            command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); afterStep.value;
+            command.(\setGrainSource, voice, sources[1]); afterStep.value;
+        });
+    };
+    runCycles.({
+        var held = IdentitySet.new;
+        [engine.synths, engine.releasingSynths[voice]].do({ arg dict;
+            [engine.voiceKey(voice), engine.grainKey(voice)].do({ arg key; dict[key] !? { arg synth; held.add(synth) } });
+        });
+        held.addAll(engine.fadingSynths[voice]); held.addAll(engine.cuttingSynths[voice]);
+        trackedGrains = max(trackedGrains, held.count({ arg synth; grainDefs.includes(synth.defName.asSymbol) }));
+        trackedVoices = max(trackedVoices, held.count({ arg synth; synth.defName.asSymbol == engine.voiceSynthDefs[voice] }));
     });
-    server.sync;
-    grains = voiceGrainNodes.(synthNodes.(engine.processGroup), voice);
-    check.(grains.size <= 3, "six fast stop / source / start cycles keep at most three grain synths (got %)".format(grains.size));
+    check.(trackedGrains <= 3, "six fast stop / source / start / switch cycles hold at most three grain synths after every command (worst %)".format(trackedGrains));
+    check.((trackedVoices <= 3) and: { trackedVoices >= 2 }, "and at most three voice synths, two at once after [9, 0] (worst %)".format(trackedVoices));
+    command.(\setGrainSource, voice, 0);
+    2.5.wait; server.sync;
+    runCycles.({
+        var nodes;
+        server.sync;
+        nodes = synthNodes.(context.xg);
+        serverGrains = max(serverGrains, voiceGrainNodes.(nodes, voice).size);
+        serverVoices = max(serverVoices, nodes.count({ arg node; node.def == engine.voiceSynthDefs[voice] }));
+    });
+    check.((serverGrains <= 3) and: { serverVoices <= 3 },
+        "and the server runs at most three of each after every step (worst % grain, % voice)".format(serverGrains, serverVoices));
     command.(\setGrainSource, voice, 0);
     2.5.wait; server.sync;
     check.(synthNames.(context.xg).size == before, "the fast cycles leave no extra nodes");
+};
+
+// The invariant warnings (#46): a synth found releasing where the
+// bookkeeping never leaves one (injected here: a stand-in synth in
+// releasingSynths of a running voice) is still handled, and the engine
+// posts a "Strata invariant broken" line that run_engine_check.sh fails
+// on. The lines are captured through postInvariantWarning, so this run
+// does not fail (nor do these checks print them); the stand-ins are freed
+// and forgotten afterwards. The voice runs on its synth source.
+var engineCheckScript = thisProcess.nowExecutingPath !? { arg path; path.dirname +/+ "run_engine_check.sh" };
+var checkInvariantWarnings = { arg voice, before;
+    var lines = List.new, grainKey = engine.grainKey(voice), standIns, failPattern, standInBus = Bus.control(server, 1);
+    var standIn = { Synth(\strataCheckMemProbe, [\out, standInBus.index], engine.processGroup, \addToTail).register(true) };
+    var scriptText = engineCheckScript !? { arg path; File.exists(path).if({ File.readAllString(path) }) };
+    engine.postInvariantWarning = { arg line; lines.add(line) };
+    standIns = [standIn.value, standIn.value]; server.sync;
+    // a switch of a running voice that finds a synth in releasingSynths
+    engine.releasingSynths[voice][grainKey] = standIns[0];
+    command.(\setGrainSource, voice, 9);
+    check.((lines.size == 1) and: { lines[0].contains("Strata invariant broken") }
+        and: { engine.releasingSynths[voice][grainKey].isNil } and: { engine.cuttingSynths[voice].includes(standIns[0]) },
+        "a switch that finds a synth releasing cuts it and warns (% lines)".format(lines.size));
+    // a stop that finds a superseded synth under a running synth's key
+    engine.releasingSynths[voice][grainKey] = standIns[1];
+    command.(\voiceOff, voice);
+    check.((lines.size == 2) and: { lines[1].contains("Strata invariant broken") }
+        and: { engine.fadingSynths[voice].includes(standIns[1]) },
+        "a stop that finds a superseded synth hands it to fadingSynths and warns (% lines)".format(lines.size));
+    engine.postInvariantWarning = nil;
+    // run_engine_check.sh fails on these lines as String.warn posts them
+    failPattern = scriptText !? { arg text;
+        text.split($\n).detect({ arg line; line.contains("! grep -qE") }) !? { arg line; line.split($").at(1) }
+    };
+    check.(failPattern.notNil and: { lines.every({ arg line; ("WARNING: " ++ line).findRegexp(failPattern).notEmpty }) },
+        "run_engine_check.sh's failure pattern matches the posted warnings (pattern found: %)".format(failPattern.notNil));
+    command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+    command.(\setGrainSource, voice, 0);
+    server.sync;
+    // the first was freed by the stop's freeCuttingSynths already
+    standIns.do({ arg synth;
+        if (synth.isPlaying) { server.sendBundle(nil, ['/error', -1], ['/n_free', synth.nodeID]) };
+        engine.fadingSynths[voice].remove(synth); engine.cuttingSynths[voice].remove(synth);
+    });
+    2.5.wait; server.sync;
+    standInBus.free;
+    check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio, the stand-ins gone");
 };
 
 // Buffer- and input-sourced voices, on a running voice on its synth source
@@ -994,7 +1110,7 @@ server.waitForBoot({
         var stereoPath, monoPath, longPath, textPath, info;
         var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
         var grainCount, voiceCount, grainBefore, voiceBefore;
-        var countVoiceAndGrain, maxGrainCount, maxVoiceCount, staleGrain;
+        var countVoiceAndGrain, maxGrainCount, maxVoiceCount;
         var triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
         var filterGroup, filterIn, filterOut, stepBus, filterSynth, stepProbe, readStep, steadySteps, switchStep;
         var orderNodes, orderGrains, busReadingAt, mirroringAt, longWritePath, writeStart, writeSeconds, rampValue;
@@ -1970,21 +2086,9 @@ server.waitForBoot({
         command.(\setGrainSource, 3, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "switching back to the synth restores the trio");
 
-        // voiceOff after a voiceOn that left the previous source's grain
-        // synth releasing beside the new one: that superseded grain synth is
-        // cut, not left releasing untracked where no later switch could cut it (F4)
-        oldTrio = voiceTrio.(3);
-        command.(\voiceOff, 3);
-        command.(\setGrainSource, 3, 9);
-        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
-        staleGrain = oldTrio[1];
-        check.(staleGrain.isPlaying and: { engine.synths[\grain3] !== staleGrain }, "the previous grain synth still releases beside the new one");
-        command.(\voiceOff, 3); 0.15.wait; server.sync;
-        check.(staleGrain.isPlaying.not, "voiceOff cuts a releasing grain synth that voiceOn superseded");
-        command.(\setGrainSource, 3, 0);
-        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 2.5.wait; server.sync;
-        check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
+        checkSupersededAtStart.(3, before);
         checkStopStartCycles.(3);
+        checkInvariantWarnings.(3, before);
 
         // A re-gated synth whose release ends just as the gate arrives frees
         // anyway; the engine starts that synth again

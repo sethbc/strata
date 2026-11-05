@@ -67,6 +67,10 @@ Engine_Strata : CroneEngine {
     // Wait after fading a slot's grain synths (bufFrames 0; strataGrainBuf's
     // hasAudio lag is 0.05 s) before zeroing or overwriting it. The engine check lengthens it.
     var <>bufferFadeWait = 0.06;
+    // nil: warnInvariant posts its line with String.warn. A function takes
+    // the line instead (the engine check captures the lines it provokes, so
+    // they do not fail the run)
+    var <>postInvariantWarning;
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -1129,16 +1133,30 @@ Engine_Strata : CroneEngine {
     // get gate 1 (the ASR restarts its attack from the current level) and
     // the values with set; the ones already freed are started. A releasing
     // synth that no longer fits the source (it changed while the voice was
-    // stopped) is left to finish: a grain synth for another source releases
-    // beside the new one, and a voice synth (the source is no longer the
-    // synth) is given a forced release (release(grainRelease)), as
-    // replaceGrainSynth does. New grain synths are placed by
-    // startPlacedGrainSynth; a mod synth re-gated after a new mirroring
-    // grain synth went to the tail of processGroup is moved after it.
+    // stopped) is treated as replaceGrainSynth treats the synths it
+    // replaces, before anything new starts: a grain synth built for another
+    // source finishes its release and a voice synth (the source is no
+    // longer the synth) is given a forced release (release(grainRelease)),
+    // both as the voice's fadingSynths (fadeSupersededSynths), so the next
+    // switch or mismatched start can cut them and the voice holds at most
+    // its live synths, one fading and one cutting set (#46). New grain
+    // synths are placed by startPlacedGrainSynth; a mod synth re-gated
+    // after a new mirroring grain synth went to the tail of processGroup is
+    // moved after it.
     gateVoice { arg voice;
         var releasing = releasingSynths[voice];
         var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
         var stillReleasing = { arg key; var synth = releasing[key]; synth.notNil and: { synth.isPlaying } };
+        var superseded = List.new;
+
+        if ((grainSource[voice] != 0) and: { stillReleasing.(voiceKey) }) {
+            releasing[voiceKey].release(grainRelease);
+            superseded.add(releasing.removeAt(voiceKey));
+        };
+        if (synths[grainKey].isNil and: { stillReleasing.(grainKey) } and: { releasedGrainSource[voice] != grainSource[voice] }) {
+            superseded.add(releasing.removeAt(grainKey));
+        };
+        this.fadeSupersededSynths(voice, superseded);
 
         // Voice synth: synth source only
         if (grainSource[voice] == 0) {
@@ -1148,12 +1166,11 @@ Engine_Strata : CroneEngine {
             } {
                 synths[voiceKey].set(\gate, 1, *this.controlPairs(voiceSynthDefs[voice], voiceControls[voice]));
             };
-        } {
-            if (stillReleasing.(voiceKey)) { releasing[voiceKey].release(grainRelease) };
         };
 
         // Grain synth: re-gated only if it was built for the current source
-        if (synths[grainKey].isNil and: { stillReleasing.(grainKey) } and: { releasedGrainSource[voice] == grainSource[voice] }) {
+        // (one built for another source is fading by now)
+        if (synths[grainKey].isNil and: { stillReleasing.(grainKey) }) {
             synths[grainKey] = releasing.removeAt(grainKey);
         };
         if (synths[grainKey].isNil) {
@@ -1205,10 +1222,11 @@ Engine_Strata : CroneEngine {
     // voice never runs two grain paths beyond that release. The new one is
     // placed by startPlacedGrainSynth (bus-reading at the head, mirroring
     // before the voice's mod synth), so no grain synth re-grains a mirror.
-    // Whatever an earlier switch (or a voiceOff the voice was restarted
-    // from) left releasing is cut first (cutSynth: gone within
-    // switchCutTime), so once a switch has been processed the voice has at
-    // most one releasing grain synth and one releasing voice synth.
+    // Whatever is fading (what an earlier switch replaced, or what voiceOn
+    // handed over when it restarted the voice for another source) is cut
+    // first (cutSynth: gone within switchCutTime), so once a switch has been
+    // processed the voice has at most one fading grain synth and one fading
+    // voice synth.
     replaceGrainSynth { arg voice;
         var oldGrain = synths.removeAt(this.grainKey(voice));
         var voiceSynth;
@@ -1237,24 +1255,52 @@ Engine_Strata : CroneEngine {
         };
     }
 
-    // Cut (switchCutTime) the voice's grain and voice synths that are still
-    // releasing and no longer used: those a source switch gated off, and
-    // those voiceOff released that voiceOn did not re-gate (built for
-    // another source). The running voice's synths are never among them.
-    // Synths an earlier cut left in their kill fade are freed first, so a
-    // burst of switches (several inside one switchCutTime: a chord of scene
-    // buttons) never piles them up: a voice holds at most one live, one
-    // releasing and one cutting set of synths (see Real-time memory in
-    // docs/notes/engine.md).
+    // Cut (switchCutTime) the voice's fading synths: those an earlier
+    // source switch gated off, and those voiceOn handed over (built for
+    // another source while the voice was stopped). The running voice's
+    // synths are never among them. Synths an earlier cut left in their kill
+    // fade are freed first, so a burst of switches (several inside one
+    // switchCutTime: a chord of scene buttons) never piles them up: a voice
+    // holds at most one live, one fading and one cutting set of synths (see
+    // Real-time memory in docs/notes/engine.md). Nothing of a running voice
+    // should be left in releasingSynths (voiceOn re-gates a releasing synth
+    // or hands it to fadingSynths); one that is is cut too, with a warning.
     cutFadingSynths { arg voice;
         var releasing = releasingSynths[voice];
-        this.freeCuttingSynths(voice);
         [this.voiceKey(voice), this.grainKey(voice)].do({ arg key;
             var synth = releasing.removeAt(key);
-            if (synth.notNil) { fadingSynths[voice].add(synth) };
+            if (synth.notNil) {
+                this.warnInvariant("voice % switched with % still releasing".format(voice, key));
+                fadingSynths[voice].add(synth);
+            };
         });
+        this.replaceFadingSynths(voice, []);
+    }
+
+    // A lifecycle invariant that should always hold did not: one line in
+    // maiden (and a failure in test/run_engine_check.sh), never an error
+    warnInvariant { arg message;
+        var line = "Strata invariant broken: " ++ message;
+        if (postInvariantWarning.notNil) { postInvariantWarning.value(line) } { line.warn };
+    }
+
+    // Synths the voice stopped using while they still release (gateVoice:
+    // built for another source; releaseVoice: superseded) become its
+    // fadingSynths, as the synths a switch replaces do: the synths an
+    // earlier cut left in their kill fade are freed and the fading ones are
+    // cut first. Nothing when there are none, so a start that re-gates
+    // everything cuts nothing.
+    fadeSupersededSynths { arg voice, superseded;
+        if (superseded.notEmpty) { this.replaceFadingSynths(voice, superseded) };
+    }
+
+    // Free the cutting synths, cut the fading ones, and make newFading the
+    // fading set: a voice then holds one cutting and one fading set at most
+    replaceFadingSynths { arg voice, newFading;
+        this.freeCuttingSynths(voice);
         fadingSynths[voice].do({ arg synth; this.cutVoiceSynth(voice, synth) });
         fadingSynths[voice].clear;
+        newFading.do({ arg synth; fadingSynths[voice].add(synth) });
     }
 
     // cutSynth, remembering the synth until it frees so the next switch can
@@ -1722,23 +1768,22 @@ Engine_Strata : CroneEngine {
     // Gate off a voice's synth trio (each frees itself after its release,
     // even one created in this control block: see openedGate), so later
     // commands to that voice are no-ops. The released synths are kept in
-    // releasingSynths until they free, for voiceOn to re-gate. One already
-    // releasing under the same key (a grain synth for the previous source
-    // that voiceOn left releasing beside the new one) is cut: it would
-    // otherwise release untracked, out of reach of the next switch's cut.
+    // releasingSynths until they free, for voiceOn to re-gate. gateVoice
+    // leaves nothing releasing beside a voice's running synths (it re-gates
+    // a releasing synth or hands it to fadingSynths), so no releasing synth
+    // should be under the same key; one that is (with a warning) would
+    // otherwise release untracked, out of reach of the next switch's cut, so
+    // it joins the fading set the way gateVoice's do (fadeSupersededSynths).
     // Only voice and grain synths have the kill fade; a releasing mod synth
-    // is always re-gated by voiceOn, never superseded. Before such a cut the
-    // synths an earlier cut left in their kill fade are freed, as a switch
-    // does (cutFadingSynths), so fast voiceOff / source change / voiceOn
-    // cycles never pile them up.
+    // is always re-gated by voiceOn, never superseded.
     releaseVoice { arg voice;
         var superseded = [this.voiceKey(voice), this.grainKey(voice)].select({ arg key;
             var synth = releasingSynths[voice][key];
             synths[key].notNil and: { synth.notNil } and: { synth !== synths[key] }
-        }).collect({ arg key; releasingSynths[voice][key] });
+        }).collect({ arg key; releasingSynths[voice].removeAt(key) });
         if (synths[this.grainKey(voice)].notNil) { releasedGrainSource[voice] = grainSource[voice] };
-        if (superseded.notEmpty) { this.freeCuttingSynths(voice) };
-        superseded.do({ arg synth; this.cutVoiceSynth(voice, synth) });
+        if (superseded.notEmpty) { this.warnInvariant("voice % stopped with a superseded synth still releasing".format(voice)) };
+        this.fadeSupersededSynths(voice, superseded.select(_.isPlaying));
         [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)].do({ arg key;
             var synth = synths.removeAt(key);
             if (synth.notNil) {
