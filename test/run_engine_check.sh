@@ -99,14 +99,15 @@ if [ -n "$stopped" ]; then
 fi
 
 # keep the interesting lines: class-library errors and the check results
-grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled)|FAILURE|alloc failed|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
+grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled)|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
-# then outputs zeros), and the engine "Strata invariant broken" when its synth
-# bookkeeping finds a state it should never reach; in any part of the check
-# either is a failure
+# then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
+# run more than its maxGrains (it drops the grain), and the engine "Strata
+# invariant broken" when its synth bookkeeping finds a state it should never
+# reach; in any part of the check each is a failure
 if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] \
-  && ! grep -qE "^ERROR|FAILURE|alloc failed|Strata invariant broken" "$output"; then
+  && ! grep -qE "^ERROR|FAILURE|alloc failed|Too many grains|Strata invariant broken" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"
