@@ -72,6 +72,7 @@ Strata includes a mutation system that applies gentle, probabilistic changes to 
   - `mutation_rate` (0.5-10s) - How often mutations are checked
   - `mutation_probability` (0-1) - Chance each parameter will mutate per check
   - `mutation_amount` (0-1) - Size of mutation delta relative to parameter range
+- **Normalized space**: synth and buffer params mutate by a delta in the controlspec's normalized 0-1 range (`mutated_value(spec, current, delta)`: unmap, add, clamp, map), and `randomize_voice` draws synth params with `spec:map(math.random())`. Exponential params (freq, cutoff, buf_rate) therefore move evenly in octaves. Grain size, pitch and spread are linear, so their absolute deltas and ranges are unchanged. The Lua drifts (grain pitch, buffer position) act on linear params; the engine's tape drift is separate
 
 #### Implementation Details
 
@@ -87,10 +88,9 @@ function gentle_mutate()
       for key, current_val in pairs(v.params) do
         if key ~= "amp" and key ~= "pan" then
           if math.random() < probability then
-            -- Generate gaussian-like mutation delta
-            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
-            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
-            params:set("v" .. i .. "_" .. key, new_val)
+            -- Gaussian-like delta as a fraction of the normalized 0-1 range
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
+            params:set("v" .. i .. "_" .. key, mutated_value(spec, current_val, delta))
           end
         end
       end
@@ -109,7 +109,7 @@ end
 - **Buffer and input sources**: a buffer-sourced voice mutates `BUFFER_MUTATION_KEYS` (`buf_pos`, `buf_rate`, `buf_scan`, each with `probability`, delta = gaussian × `amount` in the controlspec's normalized range, so the exp `buf_rate` moves evenly) instead of its synthesis params; an input-sourced voice mutates neither synthesis nor buffer params; grain size/pitch/spread mutate as for every voice
 - **Frozen Voice Exemption**: Frozen voices are excluded from mutations
 - **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
-- **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
+- **Relative Deltas**: Mutation amount is a fraction of the controlspec's normalized range, ensuring consistent behavior across different specs
 - **Granular Hierarchy**: Grain parameters mutate less frequently than synthesis parameters
 
 #### Usage Patterns

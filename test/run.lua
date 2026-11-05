@@ -2469,6 +2469,34 @@ test("randomize and mutate touch buffer params, never source", function()
   end
 end)
 
+test("randomize and mutation work in normalized space for exponential params", function()
+  local context = load_strata(); context.clock.advance()   -- voice 1 (synth source) running
+  local spec = params:lookup_param("v1_freq").controlspec
+  assert_true(spec.minval == 20 and spec.maxval == 2000 and spec.warp_name == "exp",
+    "voice 1 freq is the 20-2000 Hz exponential spec this test covers")
+  local midpoint = math.sqrt(spec.minval * spec.maxval)
+  math.randomseed(11)
+  local below, draws = 0, 2000
+  for _ = 1, draws do
+    randomize_voice(1)
+    if params:get("v1_freq") < midpoint then below = below + 1 end
+  end
+  local share = below / draws
+  assert_true(share > 0.35 and share < 0.65,
+    "freq randomize (20-2000 Hz exp) lands below the geometric midpoint about half the time (" .. share .. ")")
+  -- a mutation step moves freq by at most amount in normalized distance
+  params:set("mutation_probability", 1); params:set("mutation_amount", 0.25)
+  local max_step = 0
+  for _ = 1, 300 do
+    params:set("v1_freq", spec:map(math.random()))
+    local before = spec:unmap(params:get("v1_freq"))
+    gentle_mutate()
+    max_step = math.max(max_step, math.abs(spec:unmap(params:get("v1_freq")) - before))
+  end
+  assert_true(max_step <= 0.25 + 1e-6, "normalized mutation step within amount (" .. max_step .. ")")
+  assert_true(max_step > 0.05, "mutation actually moves freq (" .. max_step .. ")")
+end)
+
 test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
   local context = load_strata(); context.clock.advance()   -- voice 1 running
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)

@@ -1840,8 +1840,9 @@ function randomize_voice(voice_idx)
     for key, _ in pairs(voice.params) do
       if key ~= "amp" then -- Don't randomize amplitude
         local spec = get_param_spec(key)
-        local new_val = math.random() * (spec.maxval - spec.minval) + spec.minval
-        params:set(prefix .. key, new_val)
+        -- uniform in the normalized 0-1 range, so exp params (freq, cutoff)
+        -- spread evenly across octaves instead of piling up at the top
+        params:set(prefix .. key, spec:map(math.random()))
       end
     end
   elseif voice_uses_buffer(voice_idx) then
@@ -1913,6 +1914,12 @@ local DISCRETE_GRAIN_KEYS = {
 -- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
 local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
 
+-- The value a mutation step lands on: delta (a fraction of the param's
+-- normalized 0-1 range) added to current, clamped to the range
+function mutated_value(spec, current, delta)
+  return spec:map(util.clamp(spec:unmap(current) + delta, 0, 1))
+end
+
 function gentle_mutate()
   -- Probability-based parameter mutations
   local probability = params:get("mutation_probability")
@@ -1931,15 +1938,12 @@ function gentle_mutate()
             -- Check if this parameter should mutate
             if math.random() < probability then
               local spec = get_param_spec(key)
-              local range = spec.maxval - spec.minval
 
-              -- Generate mutation delta based on amount
-              -- Using gaussian-like distribution by averaging random values
-              local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
-
-              -- Apply mutation with clamping
-              local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
-              params:set("v" .. i .. "_" .. key, new_val)
+              -- Mutation delta as a fraction of the normalized range, so exp
+              -- params move evenly in octaves. Gaussian-like distribution by
+              -- averaging random values
+              local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
+              params:set("v" .. i .. "_" .. key, mutated_value(spec, current_val, delta))
             end
           end
         end
@@ -1953,7 +1957,7 @@ function gentle_mutate()
             local spec = params:lookup_param(param_id).controlspec
             -- delta across the normalized range, so exp buf_rate moves evenly
             local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-            params:set(param_id, spec:map(util.clamp(spec:unmap(v.grain[key]) + delta, 0, 1)))
+            params:set(param_id, mutated_value(spec, v.grain[key], delta))
           end
         end
       end
