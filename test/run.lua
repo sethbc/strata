@@ -15,6 +15,7 @@ local SC_PATH = repo_root .. "/lib/Engine_Strata.sc"
 local LUA_PATH = repo_root .. "/strata.lua"
 local signatures = stubs.parse_engine_signatures(SC_PATH)
 local engine_polls = stubs.parse_engine_polls(SC_PATH)
+local engine_spec = stubs.parse_engine_spec(SC_PATH)
 
 local data_root = os.tmpname()
 os.remove(data_root)
@@ -50,7 +51,7 @@ end
 local function load_strata(options)
   options = options or {}
   local data_dir = data_root .. (options.data_subdir or tostring(math.random(1, 1e9))) .. "/"
-  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, data_dir = data_dir, quiet = true }
+  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec, data_dir = data_dir, quiet = true }
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
   if options.before_load then options.before_load(context) end
@@ -151,6 +152,104 @@ test("Lua engine calls and SC addCommand signatures are in sync (T3)", function(
   assert_equal(#calls, 2, "comment ignored")
   assert_equal(calls[1].arg_count, 4, "nested commas ignored")
   assert_equal(calls[2].arg_count, 0, "empty call")
+end)
+
+-- Expects engine.<name>(...) to be rejected by the engine stub with an error
+-- containing `expected_text`
+local function assert_engine_rejects(expected_text, name, ...)
+  local ok, message = pcall(engine[name], ...)
+  assert_true(not ok, "engine." .. name .. " should be rejected (" .. expected_text .. ")")
+  assert_true(tostring(message):find(expected_text, 1, true) ~= nil,
+    "engine." .. name .. " error mentions " .. expected_text .. ": " .. tostring(message))
+end
+
+test("the engine stub reads its limits and controls from the engine source (#24)", function()
+  load_strata()
+  local spec = stubs.parse_engine_spec(SC_PATH)
+  assert_equal(spec.num_voices, local_value("NUM_VOICES"), "numVoices")
+  assert_equal(spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers")
+  assert_equal(spec.input_source, local_value("NUM_BUFFERS") + 1, "inputSource")
+  assert_equal(spec.mod_slots, local_value("NUM_MOD_SLOTS"), "modBus1..N on every voice SynthDef")
+  assert_equal(#spec.voice_synthdefs, spec.num_voices, "one voice SynthDef per voice")
+  assert_equal(spec.voice_synthdefs[1], "strataResonator", "voice 0 SynthDef")
+  assert_equal(spec.voice_synthdefs[7], "strataRing", "voice 6 SynthDef")
+  assert_true(spec.synthdef_controls.strataFM.ratio, "strataFM controls parsed")
+  assert_true(spec.synthdef_controls.strataGrainBuf.bufPos, "strataGrainBuf controls parsed")
+  assert_true(spec.grain_params.envShape, "setGrainParam's own envShape is accepted")
+  assert_true(spec.grain_params.bufPos and spec.grain_params.grainSize, "grain SynthDef controls are accepted")
+  -- each enumerated control is 0..options - 1 of its Lua option param
+  assert_equal(spec.enumerations.grainMode[1], 0, "grainMode from 0")
+  assert_equal(spec.enumerations.grainMode[2], #local_value("GRAIN_MODE_OPTIONS") - 1, "grainMode to triggered")
+  assert_equal(spec.enumerations.envShape[1], 0, "envShape from Hann")
+  assert_equal(spec.enumerations.envShape[2], #local_value("GRAIN_ENV_OPTIONS") - 1, "envShape to the last envelope buffer")
+  assert_equal(spec.enumerations.filterType[1], 0, "filterType from lowpass")
+  assert_equal(spec.enumerations.filterType[2], 2, "filterType to bandpass")
+  -- a control added to a grain SynthDef is picked up without stub changes
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local extended, count = source:gsub("SynthDef%(\\strataGrain, {%s*arg ", "%0newGrainControl=0, ")
+  assert_equal(count, 1, "test patch applies")
+  assert_true(stubs.engine_spec_from_source(extended).grain_params.newGrainControl, "new grain control accepted")
+end)
+
+test("the engine stub rejects out-of-range engine arguments (#24)", function()
+  load_strata()
+  -- voices are 0..numVoices-1
+  assert_engine_rejects("voice", "voiceOff", 7)
+  assert_engine_rejects("voice", "voiceOff", -1)
+  assert_engine_rejects("voice", "voiceOn", 7, 100, 0.3, 0, 0.1, 20, 1)
+  assert_engine_rejects("voice", "retrigger", 7, 1)
+  assert_engine_rejects("voice", "setVoiceParam", 7, "amp", 0.3)
+  assert_engine_rejects("voice", "setGrainParam", 7, "grainSize", 0.1)
+  assert_engine_rejects("voice", "setModSpeed", 7, 1)
+  engine.voiceOff(0); engine.voiceOff(6)
+  -- slots are 0..numBuffers-1
+  for _, command in ipairs({"clearBuffer", "stopRecord"}) do
+    assert_engine_rejects("slot", command, 8)
+    assert_engine_rejects("slot", command, -1)
+  end
+  assert_engine_rejects("slot", "loadBuffer", 8, "/tmp/x.wav")
+  assert_engine_rejects("slot", "saveBuffer", 8, "/tmp/x.wav")
+  assert_engine_rejects("slot", "recordBuffer", 8, 4, 1)
+  engine.clearBuffer(0); engine.clearBuffer(7)
+  -- sources are 0 (synth), 1..numBuffers, numBuffers + 1 (input)
+  assert_engine_rejects("source", "setGrainSource", 0, 10)
+  assert_engine_rejects("source", "setGrainSource", 0, -1)
+  engine.setGrainSource(0, 0); engine.setGrainSource(0, 9)
+  -- mod slots are 1..3, mod sources -1 (none) or a voice
+  for _, command in ipairs({"setModAmpAmt", "setModFreqAmt"}) do
+    assert_engine_rejects("mod slot", command, 0, 0, 0.5)
+    assert_engine_rejects("mod slot", command, 0, 4, 0.5)
+    assert_engine_rejects("voice", command, 7, 1, 0.5)
+  end
+  assert_engine_rejects("mod slot", "setModSource", 0, 4, 1)
+  assert_engine_rejects("mod source", "setModSource", 0, 1, 7)
+  assert_engine_rejects("mod source", "setModSource", 0, 1, -2)
+  engine.setModSource(0, 1, -1); engine.setModSource(0, 3, 6)
+  -- filter type 0..2
+  assert_engine_rejects("filterType", "setFilter", 5000, 0.5, 3, 0)
+  assert_engine_rejects("filterType", "setFilter", 5000, 0.5, -1, 0)
+  engine.setFilter(5000, 0.5, 2, 0)
+  -- enumerated grain params: whole numbers in range
+  assert_engine_rejects("grainMode", "setGrainParam", 0, "grainMode", 2)
+  assert_engine_rejects("grainMode", "setGrainParam", 0, "grainMode", 0.5)
+  assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", 5)
+  assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", -1)
+  engine.setGrainParam(0, "grainMode", 1); engine.setGrainParam(0, "envShape", 4)
+end)
+
+test("the engine stub rejects param names the SynthDefs do not have (#24)", function()
+  load_strata()
+  local spec = stubs.parse_engine_spec(SC_PATH)
+  -- ratio is a strataFM control (voice 1), not one of strataResonator (voice 0)
+  assert_engine_rejects("ratio", "setVoiceParam", 0, "ratio", 1.5)
+  engine.setVoiceParam(1, "ratio", 1.5)
+  assert_engine_rejects("nonsense", "setVoiceParam", 0, "nonsense", 1)
+  for engine_voice = 0, spec.num_voices - 1 do engine.setVoiceParam(engine_voice, "bend", 1) end
+  -- grain params: either grain SynthDef's controls (kept for a source switch) plus envShape
+  assert_engine_rejects("ratio", "setGrainParam", 0, "ratio", 1)
+  assert_engine_rejects("grainsize", "setGrainParam", 0, "grainsize", 0.1)
+  engine.setGrainParam(0, "bufPos", 0.5); engine.setGrainParam(0, "grainSize", 0.1)
+  engine.setGrainParam(0, "envShape", 0)
 end)
 
 test("CLAUDE.md command table lists exactly the engine's commands", function()
@@ -1713,6 +1812,12 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   params:set("mutation_enabled", 1)
   pattern_toggle()
   recall_scene(1, 5)
+  local voices = local_value("voices")
+  local expected_off = {}
+  for voice_idx = 1, 7 do
+    if voices[voice_idx].active then table.insert(expected_off, voice_idx - 1) end
+  end
+  assert_true(#expected_off >= 2 and expected_off[1] == 0, "voice 1 and others are running before cleanup")
   context.clear_engine_calls()
   cleanup()
   assert_equal(params:get("scene_sequencer_enabled"), 0, "scene sequencer param reset")
@@ -1723,8 +1828,10 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   for x = 1, 16 do for y = 1, 16 do lit = lit + grid_device:get_led(x, y) end end
   assert_equal(lit, 0, "grid LEDs cleared")
   assert_true(next(arc_hardware.segments) == nil, "arc rings cleared")
-  local voices_off = #context.calls_named("voiceOff")
-  assert_true(voices_off >= 1, "running voices turned off")
+  local voices_off = {}
+  for _, call in ipairs(context.calls_named("voiceOff")) do table.insert(voices_off, call.args[1]) end
+  assert_equal(table.concat(voices_off, ","), table.concat(expected_off, ","),
+    "exactly the running voices are turned off, by 0-based engine index")
   assert_true(util.file_exists(context.data_dir .. "strata/scenes.data"), "scenes saved on cleanup")
 end)
 
