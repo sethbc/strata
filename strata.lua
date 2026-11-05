@@ -18,6 +18,7 @@ engine.name = "Strata"
 local UI = require "ui"
 local LFO = require "lfo"
 local musicutil = require "musicutil"
+local fileselect = require "fileselect"
 
 -- Constants
 local NUM_VOICES = 7
@@ -3081,7 +3082,8 @@ local BUFFER_PAGE = {
   flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
   flash_text = nil,       -- the transient hint, drawn instead of the key hints
   flash_until = 0,        -- util.time() when it ends
-  flash_clock = nil       -- redraws once when it ends
+  flash_clock = nil,      -- redraws once when it ends
+  file_selector_open = false  -- K2's file selector owns the screen: redraw() draws nothing
 }
 
 -- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
@@ -3235,12 +3237,18 @@ local function buffer_key_release(n)
   -- the selector takes every key while open, so keys held now are released
   -- there, never reaching key(): forget them
   forget_held_keys()
+  -- From play mode norns puts Strata's redraw back while the selector is
+  -- open (fs.enter calls norns.menu.init), so Strata's redraws would draw
+  -- over the file list: they do nothing until the callback, which norns
+  -- calls on a choice and on a cancel alike
+  BUFFER_PAGE.file_selector_open = true
   fileselect.enter(_path.audio, function(path)
     -- loaded directly (it also shows the path in buf<n>_file): setting the
     -- param would do nothing when it already holds this path
     if path ~= "cancel" then
       load_buffer(slot, path)
     end
+    BUFFER_PAGE.file_selector_open = false
     redraw()
   end)
 end
@@ -3332,6 +3340,7 @@ end
 
 -- Redraw
 function redraw()
+  if BUFFER_PAGE.file_selector_open then return end
   screen.clear()
   draw_header()
   PAGE_DRAW[ui_page]()
