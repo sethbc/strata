@@ -45,6 +45,12 @@ Engine_Strata : CroneEngine {
     var writeCount = 0;
     var <writeGenerations;        // Per output path: the newest write's number; older writes abandon
     var <>writeChunkWait = 0.001; // Pause between interleave chunks (the engine check slows it)
+    var <int16Peak = 0.999969482421875; // 32767 / 32768: the largest sample a 16-bit write keeps (symmetric clip)
+    var <instanceTag;             // Unique per engine instance in the sclang session; part of every temporary and .part name
+    var <stalePartAge = 60;       // deleteStaleParts deletes only .part files older than this (s)
+    // Wait after fading a slot's grain synths (bufFrames 0; strataGrainBuf's
+    // hasAudio lag is 0.05 s) before zeroing or overwriting it. The engine check lengthens it.
+    var <>bufferFadeWait = 0.06;
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -94,6 +100,7 @@ Engine_Strata : CroneEngine {
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
+        instanceTag = UniqueID.next;
         this.deleteStaleParts;
 
         writeGenerations = Dictionary.new;
@@ -588,7 +595,10 @@ Engine_Strata : CroneEngine {
             validFraction = (bufFrames / BufFrames.kr(bufnumL)).clip(0, 1);
             scanPos = (bufPos + Phasor.ar(0, bufScan * SampleDur.ir, 0, 1)) % 1;
             grainPos = (scanPos + TRand.ar(posSpread * -0.5, posSpread * 0.5, grainTrigger)).wrap(0, 1) * validFraction;
-            rate = bufRate * bend * bufRateScale * (1 + rateMod);
+            // GrainBuf already scales by the buffer's own rate (BufRateScale), which
+            // the server keeps from the last file read even after a recording:
+            // divided out, so the engine's bufRateScale applies exactly once
+            rate = bufRate * bend * (bufRateScale / BufRateScale.kr(bufnumL)) * (1 + rateMod);
 
             left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf);
             right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf);
@@ -1217,42 +1227,80 @@ Engine_Strata : CroneEngine {
 
     // Read up to bufferSeconds of a sound file into a slot (channel 0 to the
     // left buffer, channel 1, or 0 again for a mono file, to the right).
-    // Missing or unreadable files leave the slot unchanged. The file's
-    // sample rate becomes the slot's bufRateScale, so it plays at pitch.
-    // The slot's length and rate, the grain synths reading it and the poll
-    // change once the reads have completed (a sync after them), and only if
-    // nothing else changed the slot meanwhile (slotChanges).
+    // At most bufferSeconds at the server rate fit (the buffers' size), so a
+    // file at twice the server rate keeps half as many seconds. A missing,
+    // unreadable or empty file leaves the slot unchanged (rejectLoad). The
+    // file's sample rate becomes the slot's bufRateScale, so it plays at
+    // pitch. The voices reading the slot fade out first (afterSlotFade):
+    // the slot reads 0 frames until the reads have completed (a sync after
+    // them), then its length and rate reach the grain synths and the poll,
+    // only if nothing else changed the slot meanwhile (slotChanges).
     loadSlot { arg index, path;
         var file, frames, rightChannel, sampleRate, change;
         if (this.validBuffer(index).not) { ^this };
         file = SoundFile.openRead(path.standardizePath);
-        if (file.isNil) {
-            postln("strata: cannot read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " unchanged");
-            ^this
-        };
+        if (file.isNil) { ^this.rejectLoad(index, "cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
         frames = [file.numFrames, (sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
         file.close;
-        if (frames < 1) {
-            postln("strata: sound file " ++ path ++ " is empty; buffer " ++ (index + 1) ++ " unchanged");
-            ^this
-        };
+        if (frames < 1) { ^this.rejectLoad(index, "sound file " ++ path ++ " is empty") };
 
         this.stopRecording(index);
         change = this.slotChanged(index);
-        buffersL[index].zero;
-        buffersR[index].zero;
-        buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
-        buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);
-        fork({
-            context.server.sync;  // answered once both reads are done
-            if (slotChanges[index] == change) {
-                bufferFrames[index] = frames;
-                bufferSampleRates[index] = sampleRate;
-                this.bufferChanged(index);
-            };
-        }, SystemClock);
+        bufferFrames[index] = 0;
+        this.bufferChanged(index);
+        this.afterSlotFade(index, change, {
+            buffersL[index].zero;
+            buffersR[index].zero;
+            buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
+            buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);
+            fork({
+                context.server.sync;  // answered once both reads are done
+                if (slotChanges[index] == change) {
+                    bufferFrames[index] = frames;
+                    bufferSampleRates[index] = sampleRate;
+                    this.bufferChanged(index);
+                };
+            }, SystemClock);
+        });
+    }
+
+    // A load whose file cannot be used leaves the slot as it is, except that
+    // it cancels a recording in progress or waiting to start, as Lua's
+    // load_buffer expects: that take never completes, so it is never
+    // adopted under the bad file's name. The slot reads empty (0 frames),
+    // as for a recording a clear cancelled.
+    rejectLoad { arg index, reason;
+        var recording = recordSynths[index].notNil;
+        postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
+            ++ (if (recording) { " recording cancelled" } { " unchanged" }));
+        if (recording) {
+            this.stopRecording(index);
+            this.slotChanged(index);
+            this.bufferChanged(index);
+        };
+    }
+
+    // true when a running voice's grain synth reads the slot
+    slotPlaying { arg index;
+        ^(0..(numVoices - 1)).any({ arg voice;
+            (grainSource[voice] == (index + 1)) and: { synths[this.grainKey(voice)].notNil }
+        })
+    }
+
+    // Run action (zeroing or overwriting a slot) once the voices reading it
+    // have faded out: the caller has set its bufFrames to 0 (bufferChanged),
+    // which strataGrainBuf's hasAudio lag fades, so the sound never cuts
+    // off. bufferFadeWait later when a running voice reads the slot, at once
+    // otherwise. A delayed action runs only if nothing changed the slot
+    // meanwhile (slotChanges), so a later load, record or clear always wins.
+    afterSlotFade { arg index, change, action;
+        if (this.slotPlaying(index).not) { ^action.value };
+        SystemClock.sched(bufferFadeWait, {
+            if (slotChanges[index] == change) { action.value };
+            nil
+        });
     }
 
     // Count a change to a slot (load, record, clear, stop) and return the
@@ -1262,53 +1310,56 @@ Engine_Strata : CroneEngine {
         ^slotChanges[index]
     }
 
-    // Record the stereo input into a slot, replacing it: the pair is
-    // zeroed and the record synth starts after a sync, so zeroing never
-    // lands on the new take, and only if nothing cancelled it meanwhile (a
-    // completion message could not be cancelled before the node exists).
-    // The slot reads as empty until the recording completes, then the take
-    // is written to scratchDir so it survives a restart.
+    // Record the stereo input into a slot, replacing it: the slot reads as
+    // empty at once (the voices reading it fade out, afterSlotFade), then
+    // the pair is zeroed and the record synth starts after a sync, so
+    // zeroing never lands on the new take, and only if nothing cancelled it
+    // meanwhile (a completion message could not be cancelled before the
+    // node exists). The slot reads as empty until the recording completes,
+    // then the take is written to scratchDir so it survives a restart.
     recordSlot { arg index, seconds, level;
-        var frames, synth;
+        var frames, synth, change;
         if (this.validBuffer(index).not) { ^this };
         frames = (seconds * context.server.sampleRate).round.asInteger.clip(0, buffersL[index].numFrames);
         if (frames < 1) { ^this };
 
         this.stopRecording(index);
-        this.slotChanged(index);
+        change = this.slotChanged(index);
         bufferFrames[index] = 0;
         bufferSampleRates[index] = context.server.sampleRate;
         this.bufferChanged(index);
-        buffersL[index].zero;
-        buffersR[index].zero;
 
         synth = Synth.basicNew(\strataRecord, context.server);
         recordSynths[index] = synth;
-        fork({
-            context.server.sync;
-            if (recordSynths[index] === synth) {
-                // Marked playing from the moment it is sent (not when /n_go
-                // arrives), so stopRecording frees it from here on
-                synth.register(true);
-                synth.onFree({
-                    if (recordSynths[index] === synth) {
-                        recordSynths[index] = nil;
-                        bufferFrames[index] = frames;
-                        this.bufferChanged(index);
-                        this.writeSlot(index, this.scratchPath(index));
-                    };
-                });
-                recordFrameBuses[index].set(0);
-                context.server.listSendMsg(synth.newMsg(inputSynth, [
-                    \in, inputBus,
-                    \bufnumL, buffersL[index].bufnum,
-                    \bufnumR, buffersR[index].bufnum,
-                    \level, level,
-                    \duration, frames / context.server.sampleRate,
-                    \framesOut, recordFrameBuses[index].index
-                ], \addAfter));
-            };
-        }, SystemClock);
+        this.afterSlotFade(index, change, {
+            buffersL[index].zero;
+            buffersR[index].zero;
+            fork({
+                context.server.sync;
+                if (recordSynths[index] === synth) {
+                    // Marked playing from the moment it is sent (not when /n_go
+                    // arrives), so stopRecording frees it from here on
+                    synth.register(true);
+                    synth.onFree({
+                        if (recordSynths[index] === synth) {
+                            recordSynths[index] = nil;
+                            bufferFrames[index] = frames;
+                            this.bufferChanged(index);
+                            this.writeSlot(index, this.scratchPath(index));
+                        };
+                    });
+                    recordFrameBuses[index].set(0);
+                    context.server.listSendMsg(synth.newMsg(inputSynth, [
+                        \in, inputBus,
+                        \bufnumL, buffersL[index].bufnum,
+                        \bufnumR, buffersR[index].bufnum,
+                        \level, level,
+                        \duration, frames / context.server.sampleRate,
+                        \framesOut, recordFrameBuses[index].index
+                    ], \addAfter));
+                };
+            }, SystemClock);
+        });
     }
 
     // Stop a recording now and keep it: the slot's valid length becomes the
@@ -1336,15 +1387,20 @@ Engine_Strata : CroneEngine {
         });
     }
 
+    // Empty a slot: it reads 0 frames at once (the voices reading it fade
+    // out) and is zeroed after the fade (afterSlotFade)
     clearSlot { arg index;
+        var change;
         if (this.validBuffer(index).not) { ^this };
         this.stopRecording(index);
-        this.slotChanged(index);
-        buffersL[index].zero;
-        buffersR[index].zero;
+        change = this.slotChanged(index);
         bufferFrames[index] = 0;
         bufferSampleRates[index] = context.server.sampleRate;
         this.bufferChanged(index);
+        this.afterSlotFade(index, change, {
+            buffersL[index].zero;
+            buffersR[index].zero;
+        });
     }
 
     scratchPath { arg index;
@@ -1353,11 +1409,18 @@ Engine_Strata : CroneEngine {
 
     // Delete the .part files a write interrupted by a crash or power cut left
     // in scratchDir (scratch takes) and its parent (saveBuffer's
-    // <date>-buf<n>.wav, in _path.audio/strata/ on norns); only *.part files.
-    // alloc calls this; no write can be in progress then.
+    // <date>-buf<n>.wav, in _path.audio/strata/ on norns); only *.part files,
+    // and only those older than stalePartAge. alloc calls this: after a
+    // script reload in the same sclang session the previous engine instance
+    // may still be writing, and a running write touches its .part with every
+    // chunk, so a fresh one is never deleted.
     deleteStaleParts {
+        var oldest = Date.getDate.rawSeconds - stalePartAge;
         this.stalePartDirs.do({ arg dir;
-            (dir +/+ "*.part").pathMatch.do({ arg partPath; File.delete(partPath) });
+            (dir +/+ "*.part").pathMatch.do({ arg partPath;
+                var modified = File.mtime(partPath);
+                if (modified.notNil and: { modified < oldest }) { File.delete(partPath) };
+            });
         });
     }
 
@@ -1378,12 +1441,15 @@ Engine_Strata : CroneEngine {
     // Write a slot's valid region to path as a stereo 16-bit WAV at the
     // content's sample rate, creating the directory. The server writes each
     // mono buffer to a temporary float file; sclang then interleaves them in
-    // chunks (yielding between chunks) into a per-write path.<n>.part file
-    // and renames it into place, so a reader never sees a half-written
-    // file. Each write to a path gets a new generation number: an older
-    // write still interleaving when a newer one starts abandons (deleting
-    // its .part), so the newest write always wins and two writes never mix.
-    // Temporary files are deleted in every case. Creates no synth nodes.
+    // chunks (yielding between chunks) into a per-write
+    // path.<instanceTag>-<n>.part file and renames it into place, so a
+    // reader never sees a half-written file. Each write to a path gets a new
+    // generation number: an older write still interleaving when a newer one
+    // starts abandons (deleting its .part), so the newest write always wins
+    // and two writes never mix. instanceTag keeps another engine instance's
+    // files apart. Samples beyond ±1 (a take recorded at a level above 1)
+    // are clipped symmetrically to ±int16Peak, never wrapped. Temporary
+    // files are deleted in every case. Creates no synth nodes.
     writeSlot { arg index, path;
         var frames = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
@@ -1397,9 +1463,9 @@ Engine_Strata : CroneEngine {
         generation = writeCount;
         writeGenerations[path] = generation;
         tempPaths = ["L", "R"].collect({ arg side;
-            Platform.defaultTempDir +/+ "strata-buf%-%-%.wav".format(index + 1, generation, side)
+            Platform.defaultTempDir +/+ "strata-buf%-%-%-%.wav".format(index + 1, instanceTag, generation, side)
         });
-        partPath = path ++ "." ++ generation ++ ".part";
+        partPath = path ++ "." ++ instanceTag ++ "-" ++ generation ++ ".part";
         buffersL[index].write(tempPaths[0], "wav", "float", frames);
         buffersR[index].write(tempPaths[1], "wav", "float", frames);
         fork({
@@ -1432,6 +1498,7 @@ Engine_Strata : CroneEngine {
         var chunkFrames = 8192;
         var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
         var output, left, right, interleaved, finished = true;
+        var peak = int16Peak, negativePeak = int16Peak.neg;
 
         // File.mkdir throws when the directory cannot be made; openWrite then fails below
         try { File.mkdir(path.dirname) };
@@ -1451,8 +1518,8 @@ Engine_Strata : CroneEngine {
             // FloatArray -> Array -> FloatArray (about twice as slow in sclang 3.13)
             interleaved = FloatArray.newClear(left.size * 2);
             left.size.do({ arg frame;
-                interleaved[frame * 2] = left[frame];
-                interleaved[(frame * 2) + 1] = right[frame] ? 0;
+                interleaved[frame * 2] = left[frame].clip(negativePeak, peak);
+                interleaved[(frame * 2) + 1] = (right[frame] ? 0).clip(negativePeak, peak);
             });
             output.writeData(interleaved);
             writeChunkWait.wait;
@@ -1493,8 +1560,9 @@ Engine_Strata : CroneEngine {
     }
 
     free {
-        // cancelled first, so no recording completes (and writes) on free
-        numBuffers.do({ arg index; this.stopRecording(index) });
+        // cancelled first, so no recording completes (and writes) on free;
+        // a slot change also drops a load or zeroing still waiting for its fade
+        numBuffers.do({ arg index; this.stopRecording(index); this.slotChanged(index) });
         synths.do({ arg synth; synth.free });
         synths.clear;  // their onFree must not start them again
         inputSynth.free;

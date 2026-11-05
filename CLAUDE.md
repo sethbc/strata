@@ -48,11 +48,11 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Crossmod frequency depth (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Mod signal LFO speed (0.1-50) |
 | `engine.setGrainSource(voice, source)` | `"ii"` | 0 = synth, 1-8 = buffer slot, 9 = input. A running voice's grain synth is replaced (never stacked); a stopped voice's choice is recorded. Same source = no-op |
-| `engine.loadBuffer(slot, path)` | `"is"` | Read up to 16 s of a file into slot 0-7 (mono fills both sides). An unreadable file leaves the slot unchanged |
+| `engine.loadBuffer(slot, path)` | `"is"` | Read a file into slot 0-7 (mono fills both sides): at most `bufferSeconds` at the server rate (a 96 kHz file keeps 8 s on a 48 kHz server). Voices reading the slot fade first. A missing, unreadable or empty file leaves the slot unchanged but cancels a recording in it |
 | `engine.recordBuffer(slot, seconds, level)` | `"iff"` | Record input × level into slot 0-7 (max 16 s). On completion writes the scratch take `buf<n>.wav` |
 | `engine.clearBuffer(slot)` | `"i"` | Zero slot 0-7 (cancels a recording) |
 | `engine.stopRecord(slot)` | `"i"` | End a recording early and keep what was captured (as a completed take). No-op if the slot is not recording |
-| `engine.saveBuffer(slot, path)` | `"is"` | Write the slot's valid region as a stereo 16-bit WAV (creates the directory) |
+| `engine.saveBuffer(slot, path)` | `"is"` | Write the slot's valid region as a stereo 16-bit WAV (creates the directory). Samples beyond ±1 clip symmetrically |
 
 **Poll `bufferState`** (engine → Lua): matron's polls carry one float, so each message carries **one** slot as `slot_index * 100 + seconds` (`BUFFER_STATE_STRIDE` = 100, 0-based slot, seconds ≤ 16). It cycles through the slots every 0.25 s, and every change is also sent at once. A slot that is recording reads 0 s.
 
@@ -69,8 +69,9 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - **Limiter before the tanh saturator** in `\strataMaster`. The engine check asserts the order.
 - **Buffer and input sources have no voice synth.** Their grain synth mirrors to `granBuses[i]` (`mirrorLevel` 1) so crossmod keeps working. The synth-source grain synth must keep `mirrorLevel` 0 (it reads that bus, so mirroring would feed back).
 - **Buffer memory**: 8 × 2 mono buffers of 16 s (≈ 49 MB). Never allocate longer ones. Bufnums never change.
-- **`slotChanges[i]`** guards late replies (load completion, `stopRecord` frame count): a clear or load sent later always wins.
-- **File writes** go to a `<path>.<generation>.part` file and are renamed into place. Never open the final path for writing.
+- **`slotChanges[i]`** guards late replies (load completion, `stopRecord` frame count) and the fade wait: a clear or load sent later always wins.
+- **Fade before zeroing**: load, record and clear set the slot's frames to 0 first (`hasAudio` fades the voices) and zero or overwrite its buffers through `afterSlotFade` (`bufferFadeWait`, 60 ms, when a voice reads the slot). Never zero a slot directly.
+- **File writes** go to a `<path>.<instanceTag>-<generation>.part` file and are renamed into place. Never open the final path for writing. `deleteStaleParts` deletes only `.part` files older than `stalePartAge`.
 - **`\strataFilter`**: never compare a UGen with `==` (that is object identity); use `BinaryOpUGen('==', ...)`.
 - **Param → engine** goes through `send_param_to_engine(id, value)` and an `engine_senders[id]` entry (this adds the LFO offsets). Never call `engine.*` from a control param's action directly. LFOs modulate around the stored value and never `params:set` their destination.
 - **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`scene_recall_in_progress`).
