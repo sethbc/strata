@@ -11,27 +11,44 @@
 --     every set; groups count the params that follow them and cannot nest,
 --     and must be followed by exactly n params (then a separator, a group or
 --     the end of the list, context.check_param_groups)
---   * param.t holds norns' numeric type codes (params.tOPTION etc.)
+--   * param.t holds norns' numeric type codes (params.tOPTION etc.); the
+--     param list starts with norns' system params (LEVELS ... CLOCK, see
+--     add_system_params), so a script id colliding with one fails
 --   * params:write/read follow lua/core/paramset.lua for absolute paths:
---     read sets each param in file order, firing its action on a change
+--     read sets each param in file order, firing its action on a change;
+--     params:set_save(id, false) keeps a param out of the file
+--   * param strings follow core/params/*.lua: a control without a formatter
+--     shows util.round(value, 0.01) .. " " .. units, a number or binary
+--     returns its value (a number); a ControlSpec made without a default has
+--     none (nil), and its control starts at raw 0
 --   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
 --     lib/musicutil.lua
---   * clock.run resumes the coroutine immediately; sleep/sync yield;
---     clock.get_beat_sec follows clock_tempo. Two ways to drive the clocks:
---     clock.advance() resumes every pending coroutine once, whatever it is
---     waiting for (one scheduler tick, util.time() stands still);
---     clock.run_for(seconds[, latency]) runs time-ordered, the way norns'
---     scheduler does: it resumes each coroutine when its sleep or sync is
---     due (earliest first, ties in the order they yielded), moving
---     util.time() to that moment, until `seconds` have passed. `latency`
---     (default 0) is a scheduling delay added to every wake-up, so a clock
---     that sleeps many short steps falls behind one that sleeps once.
---     A coroutine that raises an error is dropped (norns never resumes it)
---   * util.time stands still until a test calls context.set_time(seconds)
+--   * clock follows lua/core/clock.lua over matron's scheduler
+--     (clock_scheduler.cc): clock.run resumes the coroutine at once (an
+--     error there reaches the caller); sleep and sync yield to the
+--     scheduler, which wakes a sleep at its time and a sync at the next
+--     sync beat (counted from the coroutine's previous sync beat when it
+--     synced last, with the offset argument and FLT_EPSILON) on a beat
+--     timeline that runs at the clock tempo and keeps its beat when the
+--     tempo changes. A resumed coroutine gets the clock time (sleep) or beat
+--     (sync); one that cancels itself and then waits errors when it wakes,
+--     as on norns. util.time() moves with the clocks: clock.advance() is one
+--     scheduler step (util.time() moves to the next wake-up, and everything
+--     due then resumes); clock.advance_until(id) runs it event by event
+--     until coroutine id wakes once; clock.run_for(seconds[, latency]) runs the
+--     scheduler for `seconds`, each coroutine `latency` (default 0) after
+--     its wake-up, so a clock that sleeps many short steps falls behind one
+--     that sleeps once. An error raised in a scheduler resume is not raised:
+--     as norns prints it and keeps the other clocks running, the stub keeps
+--     it until the test claims it (clock.take_errors()), and the harness
+--     fails any test that leaves one behind (stubs.take_clock_errors())
+--   * util.time() is the clock's time; context.set_time(seconds) also moves it
+--   * clock_tempo starts at 120 BPM, not norns' factory 90 (core/state.lua):
+--     the tests assume 120, and on norns it is the user's saved tempo anyway
 --   * the screen records texts, lines and rects (for layout checks)
 --   * grid/arc device events fire both device.key and vports[port].key
---   * tab.load runs the file chunk unprotected
+--   * tab.save/tab.load are lib/tabutil.lua's, ported unchanged
 -- The engine stub validates every engine.* call against the addCommand
 -- signatures parsed from lib/Engine_Strata.sc, and range-checks indices,
 -- enumerated values and setVoiceParam/setGrainParam names against the limits
@@ -312,8 +329,9 @@ end
 
 local function make_util()
   local util = {}
-  -- lib/util.lua: util.time() is the wall clock in seconds. The stub's clock
-  -- stands still; tests move it with context.set_time(seconds)
+  -- lib/util.lua: util.time() is the wall clock in seconds. In the stub it
+  -- moves with the clocks (clock.advance, clock.run_for) and
+  -- context.set_time(seconds)
   util.stub_now = 0
   function util.time() return util.stub_now end
   function util.clamp(n, min, max) return math.min(max, math.max(n, min)) end
@@ -373,13 +391,37 @@ local function make_controlspec(util)
   local ControlSpec = {}
   ControlSpec.__index = ControlSpec
 
+  -- core/controlspec.lua's DbFaderWarp (math.log10 and math.pow are Lua
+  -- 5.3 compatibility functions, so the stub spells them out)
+  local function ampdb(amp) return math.log(amp, 10) * 20.0 end
+  local function dbamp(db) return 10.0 ^ (db * 0.05) end
+  local function db_map(spec, value)
+    local range = dbamp(spec.maxval) - dbamp(spec.minval)
+    if range >= 0 then
+      return ampdb(value * value * range + dbamp(spec.minval))
+    else
+      return ampdb((1 - (1 - value) * (1 - value)) * range + dbamp(spec.minval))
+    end
+  end
+  local function db_unmap(spec, value)
+    local minval, maxval = spec.minval, spec.maxval
+    if maxval - minval >= 0 then
+      return math.sqrt((dbamp(value) - dbamp(minval)) / (dbamp(maxval) - dbamp(minval)))
+    else
+      return 1 - math.sqrt(1 - ((dbamp(value) - dbamp(minval)) / (dbamp(maxval) - dbamp(minval))))
+    end
+  end
+
+  -- core/controlspec.lua: `s.default = default or minval` reads the unset
+  -- global minval, so a spec made without a default has none (nil), and a
+  -- control param made from it starts at raw 0 (params/control.lua)
   function ControlSpec.new(min, max, warp, step, default, units, quantum, wrap)
     local spec = setmetatable({}, ControlSpec)
     spec.minval = min or 0
     spec.maxval = max or 1
-    spec.warp_name = (warp == "exp") and "exp" or "lin"
+    spec.warp_name = (warp == "exp" or warp == "db") and warp or "lin"
     spec.step = step or 0
-    spec.default = default or spec.minval
+    spec.default = default
     spec.units = units or ""
     spec.quantum = quantum or 0.01
     spec.wrap = wrap or false
@@ -391,6 +433,8 @@ local function make_controlspec(util)
     local mapped
     if self.warp_name == "exp" then
       mapped = util.linexp(0, 1, self.minval, self.maxval, clamped)
+    elseif self.warp_name == "db" then
+      mapped = db_map(self, clamped)
     else
       mapped = util.linlin(0, 1, self.minval, self.maxval, clamped)
     end
@@ -402,11 +446,13 @@ local function make_controlspec(util)
       math.max(self.minval, self.maxval))
     if self.warp_name == "exp" then
       return util.explin(self.minval, self.maxval, 0, 1, clamped)
+    elseif self.warp_name == "db" then
+      return db_unmap(self, clamped)
     end
     return util.linlin(self.minval, self.maxval, 0, 1, clamped)
   end
 
-  return { new = ControlSpec.new }
+  return { new = ControlSpec.new, UNIPOLAR = ControlSpec.new(0, 1, "lin", 0, 0, "") }
 end
 
 ---------------------------------------------------------------------------
@@ -424,6 +470,90 @@ stubs.PARAM_TYPE_CODES = PARAM_TYPE_CODES
 local codes = PARAM_TYPE_CODES
 local tSEPARATOR, tNUMBER, tOPTION, tCONTROL = codes.separator, codes.number, codes.option, codes.control
 local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = codes.file, codes.trigger, codes.group, codes.text, codes.binary
+
+-- The params norns adds before every script (lua/core/script.lua calls
+-- audio.add_params() and clock.add_params() after params:clear()), in
+-- order, with their types, ranges, group sizes and factory defaults
+-- (core/state.lua; clock_tempo 120 rather than 90, the tempo the tests
+-- assume). They cover every id in core/paramset.lua's system_param_ids
+-- except "clock_midi_out", which norns never adds (its params are
+-- clock_midi_out_1..16), so a script param with one of these ids collides
+-- as it would on norns. Their actions do nothing, except clock_tempo's,
+-- which sets the internal clock's tempo and calls
+-- clock.tempo_change_handler like norns'. clock.add_params' three clocks
+-- (crow out, MIDI clock out, external tempo) are not started: they touch no
+-- script state, and clock.advance() would mostly step them.
+local function add_system_params(paramset, controlspec)
+  local function db(id, name, max, default)
+    paramset:add_control(id, name, controlspec.new(-math.huge, max, "db", 0, default, "dB"))
+  end
+  paramset:add_group("LEVELS", 9)
+  db("output_level", "output", 6, 0); db("input_level", "input", 6, 0); db("monitor_level", "monitor", 6, 0)
+  db("engine_level", "engine", 6, 0); db("softcut_level", "softcut", 6, 0); db("tape_level", "tape", 6, 0)
+  paramset:add_separator("monitoring_separator", "monitoring")
+  paramset:add_option("monitor_mode", "monitor mode", {"STEREO", "MONO"}, 1)
+  paramset:add_number("headphone_gain", "headphone gain", 0, 63, 40)
+
+  paramset:add_group("REVERB", 11)
+  paramset:add_option("reverb", "reverb", {"OFF", "ON"}, 2)
+  db("rev_eng_input", "input engine", 18, -9); db("rev_cut_input", "input softcut", 18, -9)
+  db("rev_monitor_input", "input monitor", 18, -math.huge); db("rev_tape_input", "input tape", 18, -math.huge)
+  db("rev_return_level", "return level", 18, 0)
+  paramset:add_control("rev_pre_delay", "pre delay", controlspec.new(20, 100, "lin", 0, 60, "ms"))
+  paramset:add_control("rev_lf_fc", "lf fc", controlspec.new(50, 1000, "exp", 0, 200, "hz"))
+  paramset:add_control("rev_low_time", "low time", controlspec.new(0.1, 16, "lin", 0, 6, "s"))
+  paramset:add_control("rev_mid_time", "mid time", controlspec.new(0.1, 16, "lin", 0, 6, "s"))
+  paramset:add_control("rev_hf_damping", "hf damping", controlspec.new(1500, 20000, "exp", 0, 6000, "hz"))
+
+  paramset:add_group("COMPRESSOR", 8)
+  paramset:add_option("compressor", "compressor", {"OFF", "ON"}, 1)
+  paramset:add_control("comp_mix", "mix", controlspec.new(0, 1, "lin", 0, 1, ""))
+  paramset:add_control("comp_ratio", "ratio", controlspec.new(1, 20, "lin", 0, 4, ""))
+  paramset:add_control("comp_threshold", "threshold", controlspec.new(-100, 10, "db", 0, -18, "dB"))
+  paramset:add_control("comp_attack", "attack", controlspec.new(1, 1000, "exp", 0, 5, "ms"))
+  paramset:add_control("comp_release", "release", controlspec.new(1, 1000, "exp", 0, 50, "ms"))
+  paramset:add_control("comp_pre_gain", "pre gain", controlspec.new(-20, 60, "db", 0, 0, "dB"))
+  paramset:add_control("comp_post_gain", "post gain", controlspec.new(-20, 60, "db", 0, 9, "dB"))
+
+  paramset:add_group("SOFTCUT", 3)
+  db("cut_input_adc", "input adc", 18, 0); db("cut_input_eng", "input engine", 18, 0)
+  db("cut_input_tape", "input tape", 18, -math.huge)
+
+  paramset:add_group("CLOCK", 29)
+  paramset:add_option("clock_source", "source", {"internal", "midi", "link", "crow"}, 1)
+  paramset:add_number("clock_tempo", "tempo", 1, 300, 120)
+  -- lua/core/clock.lua's clock_tempo action (link and norns.state left out)
+  paramset:set_action("clock_tempo", function(bpm)
+    if paramset:string("clock_source") == "internal" then clock.internal.set_tempo(bpm) end
+    if clock.tempo_change_handler ~= nil then clock.tempo_change_handler(bpm) end
+  end)
+  paramset:add_trigger("clock_reset", "reset")
+  paramset:add_separator("link_separator", "link")
+  paramset:add_number("link_quantum", "link quantum", 1, 32, 4)
+  paramset:add_option("link_start_stop_sync", "link start/stop sync", {"disabled", "enabled"}, 1)
+  paramset:add_separator("midi_clock_out_separator", "midi clock out")
+  for port = 1, 16 do
+    paramset:add_binary("clock_midi_out_" .. port, port .. ". none", "toggle", 0)
+    paramset:hide("clock_midi_out_" .. port)  -- no MIDI device is connected yet
+  end
+  paramset:add_separator("midi_clock_in_separator", "midi clock in")
+  local midi_clock_in_options = { "all", "none" }
+  for port = 1, 16 do table.insert(midi_clock_in_options, tostring(port)) end
+  paramset:add_option("clock_midi_in", "midi clock in", midi_clock_in_options, 1)
+  paramset:add_separator("crow_clock_separator", "crow")
+  paramset:add_option("clock_crow_out", "crow out", {"off", "output 1", "output 2", "output 3", "output 4"}, 1)
+  paramset:add_number("clock_crow_out_div", "crow out div", 1, 32, 4)
+  paramset:add_number("clock_crow_in_div", "crow in div", 1, 32, 4)
+  -- the ones audio.lua and clock.lua keep out of PSET files (set_save false);
+  -- the reverb, compressor and softcut levels are saved
+  for _, id in ipairs({ "output_level", "input_level", "monitor_level", "engine_level", "softcut_level",
+    "tape_level", "monitor_mode", "headphone_gain", "reverb", "compressor", "clock_source", "clock_tempo",
+    "link_quantum", "link_start_stop_sync", "clock_midi_in", "clock_crow_out", "clock_crow_out_div",
+    "clock_crow_in_div" }) do
+    paramset:set_save(id, false)
+  end
+  for port = 1, 16 do paramset:set_save("clock_midi_out_" .. port, false) end
+end
 
 local function make_params(util, controlspec)
   -- ParamSet.tSEPARATOR etc., reachable as params.tOPTION like in norns
@@ -448,8 +578,9 @@ local function make_params(util, controlspec)
     local param = { id = args.id, name = args.name or args.id, t = PARAM_TYPE_CODES[args.type],
       action = args.action or function() end, hidden = false }
     if args.type == "control" then
-      param.controlspec = args.controlspec or controlspec.new(0, 1, "lin", 0, 0)
-      param.raw = param.controlspec:unmap(param.controlspec.default)
+      param.controlspec = args.controlspec or controlspec.UNIPOLAR
+      -- params/control.lua: raw 0 when the spec has no default
+      param.raw = param.controlspec.default and param.controlspec:unmap(param.controlspec.default) or 0
       param.formatter = args.formatter
     elseif args.type == "number" then
       param.min = args.min or -2147483648
@@ -552,8 +683,10 @@ local function make_params(util, controlspec)
     return register(new_param(args))
   end
 
+  -- params/separator.lua: the name defaults to the id, the id to the name
   function ParamSet:add_separator(id, name)
-    register(new_param({ id = id or "separator", name = name, type = "separator" }))
+    local separator_name = name or id or "separator"
+    register(new_param({ id = id or separator_name, name = separator_name, type = "separator" }))
   end
 
   function ParamSet:add_group(id, name, n)
@@ -624,6 +757,7 @@ local function make_params(util, controlspec)
     if param.t == tFILE then return param.path end
     if param.t == tTEXT then return param.text end
     if param.t == tGROUP then return param.n end
+    if param.t == tSEPARATOR then return "" end
     return param.value
   end
 
@@ -700,9 +834,14 @@ local function make_params(util, controlspec)
     end
   end
 
+  -- each type's string() in lua/core/params/*.lua: a control without a
+  -- formatter shows its value rounded to 0.01 and its units ("0.5 s",
+  -- "0.25 " when there are none); a number or binary returns its value
+  -- itself, a number, not a string
   function ParamSet:string(id)
     local param = self:lookup_param(id)
     if param.formatter then return param.formatter(param) end
+    if param.t == tCONTROL then return util.round(self:get(id), 0.01) .. " " .. param.controlspec.units end
     if param.t == tOPTION then return param.options[param.selected] end
     if param.t == tFILE then
       if param.path == "-" then return "-" end
@@ -710,8 +849,8 @@ local function make_params(util, controlspec)
     end
     if param.t == tTEXT then return param.text end
     if param.t == tTRIGGER then return "" end
-    if param.t == tGROUP then return param.name end
-    return tostring(self:get(id))
+    if param.t == tGROUP or param.t == tSEPARATOR then return param.name end
+    return param.value
   end
 
   -- like norns: everything but triggers (and idle trigger binaries) bangs
@@ -777,131 +916,254 @@ local function make_params(util, controlspec)
     if self.action_read ~= nil then self.action_read(filename, silent) end
   end
 
-  -- system params that exist before any script runs
-  paramset:add { type = "number", id = "clock_tempo", name = "tempo", min = 1, max = 300, default = 120 }
-  -- lua/core/clock.lua: the clock_tempo action reports the new tempo to
-  -- clock.tempo_change_handler (the real one also sets the clock source's tempo)
-  paramset:set_action("clock_tempo", function(bpm)
-    if clock.tempo_change_handler ~= nil then clock.tempo_change_handler(bpm) end
-  end)
-  paramset:add { type = "control", id = "reverb", name = "reverb", controlspec = controlspec.new(0, 1, "lin", 1, 1) }
+  -- lua/core/paramset.lua: a param with save false is left out of params:write
+  function ParamSet:set_save(id, state) self:lookup_param(id).save = state end
+
+  add_system_params(paramset, controlspec)
+  -- the script's params start a new list: the CLOCK group ends here
+  paramset.last_group = nil
 
   return paramset, check_groups
 end
 
 ---------------------------------------------------------------------------
--- clock
+-- clock (lua/core/clock.lua over matron's scheduler: clocks/clock_scheduler.cc,
+-- the _clock_* functions and w_handle_clock_resume in weaver.cc)
 ---------------------------------------------------------------------------
 
-local function make_clock(util)
-  -- wake_at[id] = {time, order}: when a pending coroutine's sleep or sync is
-  -- due (util.time() seconds), and a counter for ties (first yielded first)
-  local clock = { threads = {}, next_id = 1, sleep_log = {}, wake_at = {} }
-  local wake_order = 0
+-- matron's scheduler compares beats with C's FLT_EPSILON (2^-23)
+local FLT_EPSILON = 2 ^ -23
 
-  -- lua/core/clock.lua yields (mode, time); matron schedules a sleep at
-  -- now + time and a sync at the next multiple of `beats` on the beat
-  -- timeline (clock_scheduler.cc: ceil((beat + epsilon) / sync) * sync).
-  -- The stub's beat timeline is util.time() / clock.get_beat_sec()
-  local function wake_time(mode, amount)
-    local now = util.time()
-    if mode == "sleep" then return now + (amount or 0) end
-    if mode == "sync" then
-      local beat_sec = clock.get_beat_sec()
-      local beats = amount or 1
-      local next_beat = math.ceil((now / beat_sec + 1e-7) / beats) * beats
-      return next_beat * beat_sec
-    end
-    return now
+-- lua/core/clock.lua's scheduler modes, as clock.sleep and clock.sync yield them
+local SCHEDULE_SLEEP, SCHEDULE_SYNC = 0, 1
+
+-- Errors raised while the scheduler resumed a coroutine. On norns
+-- w_handle_clock_resume reports them on the console (l_report) and every
+-- other clock keeps running, so the stub does not raise them either: it
+-- keeps them here, shared by every installed clock, until a test claims them
+-- (clock.take_errors()). The harness fails a test that leaves any behind
+-- (stubs.take_clock_errors()), so an error can never pass unnoticed.
+stubs.clock_errors = {}
+
+function stubs.take_clock_errors()
+  local errors = stubs.clock_errors
+  stubs.clock_errors = {}
+  return errors
+end
+
+-- luaL_checknumber's conversion and message
+local function check_number(value, position, function_name)
+  local number = (type(value) == "number" or type(value) == "string") and tonumber(value) or nil
+  if number == nil then
+    error(string.format("bad argument #%d to '%s' (number expected, got %s)", position, function_name, type(value)), 0)
+  end
+  return number
+end
+
+local function make_clock(util)
+  -- events[coro_id] is the coroutine's scheduler event, as matron keeps it:
+  -- type (SCHEDULE_SLEEP or SCHEDULE_SYNC), ready (waiting to fire),
+  -- sleep_time (seconds) or sync_beat (on the beat timeline), scheduled_at
+  -- (util.time() when it was scheduled) and order (for ties: first scheduled
+  -- fires first). It outlives the wake-up, so a repeated sync counts on from
+  -- its beat, and goes when the coroutine is cancelled or ends
+  local clock = { threads = {}, sleep_log = {}, events = {}, tempo = 120 }
+  local next_id, schedule_order = 1, 0
+  -- the internal clock's beat timeline: beat_reference.beat at
+  -- beat_reference.time, then one beat per 60 / clock.tempo seconds. A tempo
+  -- change (clock.internal.set_tempo) keeps the beat, as matron's internal
+  -- clock does (it takes the new tempo from its next tick, 1/24 beat later)
+  local beat_reference = { beat = 0, time = 0 }
+
+  local function beats_at(time) return beat_reference.beat + (time - beat_reference.time) * clock.tempo / 60 end
+  local function time_of_beat(beat) return beat_reference.time + (beat - beat_reference.beat) * 60 / clock.tempo end
+
+  -- clock_scheduler_next_clock_beat
+  local function next_clock_beat(clock_beat, sync_beat, sync_beat_offset)
+    local next_beat = math.ceil((clock_beat + FLT_EPSILON) / sync_beat) * sync_beat
+    next_beat = next_beat + sync_beat_offset
+    while next_beat < clock_beat + FLT_EPSILON do next_beat = next_beat + sync_beat end
+    return math.max(next_beat, 0)
   end
 
+  local function ready_event(coro_id, event_type)
+    local event = clock.events[coro_id] or {}
+    schedule_order = schedule_order + 1
+    event.type, event.ready, event.scheduled_at, event.order = event_type, true, util.time(), schedule_order
+    clock.events[coro_id] = event
+    return event
+  end
+
+  -- _clock_schedule_sleep + clock_scheduler_schedule_sleep
+  local function schedule_sleep(coro_id, seconds)
+    seconds = check_number(seconds, 2, "clock_schedule_sleep")
+    if seconds < 0 then seconds = 0 end
+    ready_event(coro_id, SCHEDULE_SLEEP).sleep_time = util.time() + seconds
+  end
+
+  -- _clock_schedule_sync + clock_scheduler_schedule_sync: a sync by the
+  -- coroutine whose last wait was a sync counts from that sync's beat
+  -- (clock_scheduler.cc:171-173), so a late wake-up does not skip a beat
+  local function schedule_sync(coro_id, sync_beat, offset)
+    sync_beat = check_number(sync_beat, 2, "clock_schedule_sync")
+    offset = offset == nil and 0 or check_number(offset, 3, "clock_schedule_sync")
+    if sync_beat <= 0 then error(string.format("invalid sync beat: %f", sync_beat), 0) end
+    local previous = clock.events[coro_id]
+    local from = (previous and previous.type == SCHEDULE_SYNC) and previous.sync_beat or beats_at(util.time())
+    ready_event(coro_id, SCHEDULE_SYNC).sync_beat = next_clock_beat(from, sync_beat, offset)
+  end
+
+  -- lua/core/clock.lua's clock.resume. A coroutine cancelled from inside that
+  -- then sleeps or syncs is scheduled all the same (the yield comes after
+  -- the cancel), so its wake-up resumes a coroutine that is no longer in
+  -- clock.threads: coroutine.resume(nil) raises, as on norns
   local function resume(coro_id, ...)
     local coro = clock.threads[coro_id]
-    if not coro then return end
-    clock.wake_at[coro_id] = nil
-    local ok, mode, amount = coroutine.resume(coro, ...)
-    -- a coroutine that raised is dead: norns never schedules it again
-    if not ok then clock.threads[coro_id] = nil; error(mode, 0) end
+    local result, mode, time, offset = coroutine.resume(coro, ...)
     if coroutine.status(coro) == "dead" then
-      clock.threads[coro_id] = nil
-    else
-      table.insert(clock.sleep_log, { id = coro_id, mode = mode, amount = amount })
-      if clock.threads[coro_id] == coro then  -- not cancelled from inside
-        wake_order = wake_order + 1
-        clock.wake_at[coro_id] = { time = wake_time(mode, amount), order = wake_order }
+      if result then clock.cancel(coro_id) else error(mode, 0) end
+    elseif result and mode ~= nil then
+      local mode_name = (mode == SCHEDULE_SLEEP and "sleep") or (mode == SCHEDULE_SYNC and "sync") or tostring(mode)
+      table.insert(clock.sleep_log, { id = coro_id, mode = mode_name, amount = time, offset = offset })
+      if mode == SCHEDULE_SLEEP then
+        schedule_sleep(coro_id, time)
+      elseif mode == SCHEDULE_SYNC then
+        schedule_sync(coro_id, time, offset)
+      else
+        error("invalid clock scheduler mode", 0)
       end
     end
   end
 
   function clock.run(func, ...)
-    local coro_id = clock.next_id
-    clock.next_id = clock.next_id + 1
-    clock.threads[coro_id] = coroutine.create(func)
+    local coro = coroutine.create(func)
+    local coro_id = next_id
+    next_id = next_id + 1
+    clock.threads[coro_id] = coro
     resume(coro_id, ...)
     return coro_id
   end
 
+  -- _clock_cancel (luaL_checkinteger, then clock_scheduler_clear)
   function clock.cancel(coro_id)
+    if check_number(coro_id, 1, "clock_cancel") % 1 ~= 0 then
+      error("bad argument #1 to 'clock_cancel' (number has no integer representation)", 0)
+    end
+    clock.events[coro_id] = nil
     clock.threads[coro_id] = nil
-    clock.wake_at[coro_id] = nil
   end
 
-  function clock.sleep(seconds)
-    return coroutine.yield("sleep", seconds)
+  function clock.sleep(...)
+    return coroutine.yield(SCHEDULE_SLEEP, ...)
   end
 
-  function clock.sync(beats)
-    return coroutine.yield("sync", beats)
+  function clock.sync(...)
+    return coroutine.yield(SCHEDULE_SYNC, ...)
   end
 
   -- lua/core/clock.lua: static callback run when clock_tempo is set
   clock.tempo_change_handler = nil
 
-  -- lua/core/clock.lua: the current tempo
-  function clock.get_tempo()
-    return params:get("clock_tempo")
+  -- the internal clock source (the clock_tempo param's action sets its tempo)
+  clock.internal = {}
+  function clock.internal.set_tempo(bpm)
+    beat_reference.beat, beat_reference.time = beats_at(util.time()), util.time()
+    clock.tempo = bpm
   end
 
-  -- lua/core/clock.lua: seconds per beat at the current tempo
-  function clock.get_beat_sec()
-    return 60 / params:get("clock_tempo")
+  function clock.get_tempo() return clock.tempo end
+  function clock.get_beat_sec() return 60.0 / clock.get_tempo() end
+  function clock.get_beats() return beats_at(util.time()) end
+
+  -- When the scheduler fires an event: a sleep at its wake time, a sync when
+  -- the beat reaches its beat (at the current tempo), and never before it
+  -- was scheduled (a sync counted from an old beat fires at once)
+  local function fire_time(event)
+    local due = event.type == SCHEDULE_SLEEP and event.sleep_time or time_of_beat(event.sync_beat)
+    return math.max(due, event.scheduled_at)
   end
 
-  -- test helper: resume every pending coroutine once (one scheduler tick)
+  -- the ready events in the order the scheduler fires them
+  local function ready_events()
+    local list = {}
+    for coro_id, event in pairs(clock.events) do
+      if event.ready then table.insert(list, { id = coro_id, event = event, order = event.order, time = fire_time(event) }) end
+    end
+    table.sort(list, function(left, right)
+      if left.time ~= right.time then return left.time < right.time end
+      return left.order < right.order
+    end)
+    return list
+  end
+
+  -- The scheduler fires an event: w_handle_clock_resume calls clock.resume
+  -- with the clock's time in seconds (a sleep) or in beats (a sync) at the
+  -- moment it fired; an error is reported, not raised
+  local function fire(entry)
+    entry.event.ready = false
+    local value = entry.event.type == SCHEDULE_SYNC and beats_at(entry.time) or entry.time
+    local ok, message = pcall(resume, entry.id, value)
+    if not ok then table.insert(stubs.clock_errors, tostring(message)) end
+  end
+
+  -- Test helper: claim the errors the scheduler's resumes raised (from every
+  -- installed clock), so the harness does not fail the test for them
+  clock.take_errors = stubs.take_clock_errors
+
+  -- Test helper: one scheduler step. util.time() moves to the moment the
+  -- first pending event fires (never back), and every event due by then
+  -- fires, in order (events scheduled during the step wait for the next one)
   function clock.advance()
-    local ids = {}
-    for coro_id in pairs(clock.threads) do table.insert(ids, coro_id) end
-    table.sort(ids)
-    for _, coro_id in ipairs(ids) do resume(coro_id) end
+    local due = ready_events()
+    if #due == 0 then return end
+    util.stub_now = math.max(util.time(), due[1].time)
+    for _, entry in ipairs(due) do
+      if entry.time > util.time() then break end
+      -- skip an event cancelled or rescheduled by an earlier one in this step
+      if clock.events[entry.id] == entry.event and entry.event.ready and entry.event.order == entry.order then
+        fire(entry)
+      end
+    end
   end
 
-  -- test helper: run the clocks time-ordered for `seconds`. Each step resumes
-  -- the coroutine due first (by wake time, then yield order), at its wake
-  -- time plus `latency` (never earlier than util.time()), and moves
-  -- util.time() there. Coroutines started or rescheduled meanwhile join in.
-  -- util.time() ends at the start time plus `seconds`
+  -- Test helper: run the scheduler, one event at a time in firing order,
+  -- until the coroutine coro_id has been resumed once (every clock due
+  -- before it runs first, as on norns). It must be waiting
+  function clock.advance_until(coro_id)
+    local target = clock.events[coro_id]
+    assert(target and target.ready, "clock.advance_until: coroutine " .. tostring(coro_id) .. " is not waiting")
+    local order = target.order
+    for _ = 1, 1e6 do
+      local entry = ready_events()[1]
+      util.stub_now = math.max(util.time(), entry.time)
+      fire(entry)
+      if entry.id == coro_id and entry.order == order then return end
+    end
+    error("clock.advance_until: coroutine " .. tostring(coro_id) .. " never woke", 2)
+  end
+
+  -- Test helper: run the scheduler for `seconds`. Each event fires in turn,
+  -- and its coroutine runs `latency` seconds later (default 0; never before
+  -- util.time(), as one coroutine runs at a time), with util.time() at that
+  -- moment, so a clock that sleeps many short steps falls behind one that
+  -- sleeps once, as on norns. Coroutines started or rescheduled meanwhile
+  -- join in. util.time() ends at the start time plus `seconds`
   function clock.run_for(seconds, latency)
     latency = latency or 0
     local end_time = util.time() + seconds
     local resumes = 0
     while true do
-      local due_id, due
-      for coro_id, wake in pairs(clock.wake_at) do
-        if not due or wake.time < due.time or (wake.time == due.time and wake.order < due.order) then
-          due_id, due = coro_id, wake
-        end
-      end
-      if not due or due.time + latency > end_time then break end
+      local entry = ready_events()[1]
+      if not entry then break end
+      local run_at = math.max(util.time(), entry.time + latency)
+      if run_at > end_time then break end
       resumes = resumes + 1
       if resumes > 1e6 then error("clock.run_for: a coroutine never sleeps", 2) end
-      util.stub_now = math.max(util.time(), due.time + latency)
-      resume(due_id)
+      util.stub_now = run_at
+      fire(entry)
     end
     util.stub_now = end_time
   end
-
-  -- test helper: resume one coroutine
-  function clock.resume_thread(coro_id) resume(coro_id) end
 
   function clock.pending_count()
     local count = 0
@@ -1220,47 +1482,120 @@ local function make_ui(util, screen)
 end
 
 ---------------------------------------------------------------------------
--- tab (tabutil save/load)
+-- tab: lib/tabutil.lua's tab.save and tab.load, ported unchanged (norns,
+-- GPL-3.0), so scene and buffer files are written and read as on norns:
+-- tabutil's "-- Table: {n}" layout, shared tables saved once, numbers
+-- written with tostring (%.14g: they lose precision as on norns), functions
+-- and userdata skipped, and the loaded file run unprotected
 ---------------------------------------------------------------------------
 
 local function make_tab()
   local tab = {}
 
-  -- simple serializer; only round-trip fidelity matters for the tests
-  local function serialize(value, indent)
-    local value_type = type(value)
-    if value_type == "table" then
-      local keys = {}
-      for key in pairs(value) do table.insert(keys, key) end
-      table.sort(keys, function(left, right)
-        if type(left) == type(right) then return left < right end
-        return type(left) == "number"
-      end)
-      local parts = {}
-      for _, key in ipairs(keys) do
-        local key_text = type(key) == "number" and ("[" .. key .. "]") or ("[" .. string.format("%q", key) .. "]")
-        table.insert(parts, indent .. "  " .. key_text .. " = " .. serialize(value[key], indent .. "  "))
-      end
-      return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
-    elseif value_type == "string" then
-      return string.format("%q", value)
-    else
-      return tostring(value)
-    end
-  end
-
   function tab.save(tbl, filename)
+    local charS, charE = "   ", "\n"
     local file, err = io.open(filename, "wb")
     if err then return err end
-    file:write("return " .. serialize(tbl, ""))
+
+    -- initiate variables for save procedure
+    local tables, lookup = { tbl }, { [tbl] = 1 }
+    file:write("return {"..charE)
+
+    for idx, t in ipairs(tables) do
+      file:write("-- Table: {"..idx.."}"..charE)
+      file:write("{"..charE)
+      local thandled = {}
+
+      for i, v in ipairs(t) do
+        thandled[i] = true
+        local stype = type(v)
+        -- only handle value
+        if stype == "table" then
+          if not lookup[v] then
+            table.insert(tables, v)
+            lookup[v] = #tables
+          end
+          file:write(charS.."{"..lookup[v].."},"..charE)
+        elseif stype == "string" then
+          file:write(charS..string.format("%q", v)..","..charE)
+        elseif stype == "number" then
+          file:write(charS..tostring(v)..","..charE)
+        elseif stype == "boolean" then
+          file:write(charS..tostring(v)..","..charE)
+        end
+      end
+
+      for i, v in pairs(t) do
+        -- escape handled values
+        if (not thandled[i]) then
+
+          local str = ""
+          local stype = type(i)
+          -- handle index
+          if stype == "table" then
+            if not lookup[i] then
+               table.insert(tables, i)
+               lookup[i] = #tables
+            end
+            str = charS.."[{"..lookup[i].."}]="
+          elseif stype == "string" then
+            str = charS.."["..string.format("%q", i).."]="
+          elseif stype == "number" then
+            str = charS.."["..tostring(i).."]="
+          elseif stype == "boolean" then
+            str = charS.."["..tostring(i).."]="
+          end
+
+          if str ~= "" then
+            stype = type(v)
+            -- handle value
+            if stype == "table" then
+              if not lookup[v] then
+                table.insert(tables, v)
+                lookup[v] = #tables
+              end
+              file:write(str.."{"..lookup[v].."},"..charE)
+            elseif stype == "string" then
+              file:write(str..string.format("%q", v)..","..charE)
+            elseif stype == "number" then
+              file:write(str..tostring(v)..","..charE)
+            elseif stype == "boolean" then
+              file:write(str..tostring(v)..","..charE)
+            end
+          end
+        end
+      end
+      file:write("},"..charE)
+    end
+    file:write("}")
     file:close()
   end
 
-  -- like norns: the loaded chunk runs unprotected
-  function tab.load(filename)
-    local chunk, err = loadfile(filename)
-    if err then return nil, err end
-    return chunk()
+  -- `_` is an unset global here, as in tabutil: the first result is nil
+  function tab.load(sfile)
+    local ftables,err = loadfile(sfile)
+    if err then return _, err end
+    local tables = ftables()
+    if tables ~= nil then
+      for idx = 1, #tables do
+        local tolinki = {}
+        for i, v in pairs(tables[idx]) do
+          if type(v) == "table" then
+            tables[idx][i] = tables[v[1]]
+          end
+          if type(i) == "table" and tables[i[1]] then
+            table.insert(tolinki, { i, tables[i[1]] })
+          end
+        end
+        -- link indices
+        for _, v in ipairs(tolinki) do
+          tables[idx][v[2]], tables[idx][v[1]] =  tables[idx][v[1]], nil
+        end
+      end
+      return tables[1]
+    else
+      return nil
+    end
   end
 
   return tab
@@ -1474,5 +1809,6 @@ function stubs.install(options)
 end
 
 stubs.shallow_copy = shallow_copy
+stubs.make_tab = make_tab
 
 return stubs

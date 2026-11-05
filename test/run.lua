@@ -85,10 +85,28 @@ end
 
 local function local_value(name) return (find_upvalue(name)) end
 
--- One tick of the frame clock: it draws the screen and the arc if anything
--- asked for a redraw since the last frame
+-- Run the clocks to the frame clock's next tick, which draws the screen and
+-- the arc if anything asked for a redraw since the last frame (any clock due
+-- before it runs first, as on norns)
 local function next_frame(context)
-  context.clock.resume_thread(local_value("UI_PAGES").frame_clock)
+  context.clock.advance_until(local_value("UI_PAGES").frame_clock)
+end
+
+-- Run the clocks through init's start-up coroutine, which sleeps 0.5 s and
+-- then starts voice 2 (the frame clock ticks meanwhile)
+local function finish_startup(context)
+  context.clock.run_for(0.5)
+end
+
+-- Run the clocks until the clock held in the script local `name` wakes once
+-- (a pattern step, a scene transition step, ...)
+local function wake(context, name)
+  context.clock.advance_until(local_value(name))
+end
+
+-- Run the clocks until buffer slot's recording timer or fallback wakes once
+local function wake_buffer_clock(context, slot)
+  context.clock.advance_until(local_value("buffer_record_clocks")[slot])
 end
 
 -- Deep copy of plain data tables
@@ -97,6 +115,16 @@ local function deep_copy(value)
   local copy = {}
   for key, inner in pairs(value) do copy[key] = deep_copy(inner) end
   return copy
+end
+
+-- The text lib/tabutil.lua's tab.save writes for `value`: a data file as
+-- norns writes it (tab.load reads only that layout)
+local function tabutil_text(value)
+  local path = os.tmpname()
+  stubs.make_tab().save(value, path)
+  local file = assert(io.open(path, "r")); local text = file:read("*a"); file:close()
+  os.remove(path)
+  return text
 end
 
 -- Compare a voice's live state with a captured scene voice, allowing for
@@ -161,6 +189,37 @@ test("Lua engine calls and SC addCommand signatures are in sync (T3)", function(
   assert_equal(#calls, 2, "comment ignored")
   assert_equal(calls[1].arg_count, 4, "nested commas ignored")
   assert_equal(calls[2].arg_count, 0, "empty call")
+end)
+
+test("sync_check fails on engine uses it cannot check: engine[...], references, the table as a value (#27)", function()
+  local sample = table.concat({
+    'local f = engine.voiceOn',          -- 1: a command passed by value
+    'engine["voiceOff"](0)',             -- 2: a computed name
+    'local e = engine',                  -- 3: the table itself
+    'engine:voiceOff(0)',                -- 4: a method call
+    'engine.loadBuffer "x.wav"',         -- 5: a call without parentheses
+    'engine.name = "Strata"',            -- allowed: the engine to load
+    'x = context.engine; s = "a" .. engine.name',  -- a field of another table; engine.name read
+    'engine . retrigger (0, 1)',         -- a call, spaces and all
+    'local engine_senders = {} -- engine.bad', 'y = "engine.bad"',
+  }, "\n")
+  local problems = sync_check.lua_reference_problems(sample)
+  local lines = {}
+  for _, entry in ipairs(problems) do table.insert(lines, entry.line) end
+  assert_equal(table.concat(lines, " "), "1 2 3 4 5", "each unchecked use is reported, nothing else")
+  assert_true(problems[1].text:find("engine.voiceOn", 1, true), "the report names the command")
+  local calls = sync_check.lua_calls(sample)
+  assert_equal(#calls, 1, "only engine.<name>(...) is a call")
+  assert_equal(calls[1].name, "retrigger"); assert_equal(calls[1].arg_count, 2, "a spaced call is counted")
+  -- the whole check fails when strata.lua holds one
+  local file = assert(io.open(LUA_PATH, "r")); local lua_source = file:read("*a"); file:close()
+  file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
+  assert_true((sync_check.check(lua_source, sc_source)), "strata.lua passes as it is")
+  for _, patch in ipairs({ "local f = engine.voiceOn", 'engine["voiceOff"](0)', "local e = engine" }) do
+    local ok, found = sync_check.check(lua_source .. "\n" .. patch .. "\n", sc_source)
+    assert_true(not ok, "the check fails on: " .. patch)
+    assert_true(found[#found]:find("strata.lua:%d+ "), "with the line: " .. tostring(found[#found]))
+  end
 end)
 
 test("the engine source parsers skip // and /* */ comments (#25)", function()
@@ -413,7 +472,7 @@ end
 
 test("starting a voice sends its complete state to the engine (C1, C2)", function()
   local context = load_strata()
-  context.clock.advance()
+  finish_startup(context)
   local voices = local_value("voices")
   -- turn everything off, then edit every voice while it is off
   for voice_idx = 1, 7 do
@@ -462,7 +521,7 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
 end)
 
 test("voiceOn's grain density is the voice's density times master density as the engine has them", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   if voices[5].active then toggle_voice(5) end
   params:set("v5_grain_density", 20); params:set("master_density", 1.5)
@@ -490,7 +549,7 @@ test("the largest grain overlap Lua can send fits the engine's maxGrains", funct
 end)
 
 test("grain envelope option reaches the engine and is synced on start", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v1_grain_env", 3)
   local calls = context.calls_named("setGrainParam"); local last = calls[#calls]
   assert_equal(last.args[2], "envShape"); assert_equal(last.args[3], 2)
@@ -499,7 +558,7 @@ test("grain envelope option reaches the engine and is synced on start", function
   local sent = engine_state_for_voice(context.engine_calls, 2)
   assert_equal(sent.grain.envShape, 4)
   capture_scene(1); params:set("v1_grain_env", 1)
-  recall_scene(1, 2); context.clock.advance()
+  recall_scene(1, 2); wake(context, "scene_transition_clock")
   assert_equal(params:get("v1_grain_env"), 1, "transition does not interpolate env")
   recall_scene(1, 0); assert_equal(params:get("v1_grain_env"), 3)
   -- an option param floors fractional values, so check the fade list directly
@@ -509,7 +568,7 @@ test("grain envelope option reaches the engine and is synced on start", function
 end)
 
 test("grain envelope param: options, default, scenes, never mutated or randomized", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   for voice_idx = 1, 7 do
     local param = params:lookup_param("v" .. voice_idx .. "_grain_env")
     assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_env is an option")
@@ -563,7 +622,7 @@ end)
 
 test("pattern steps retrigger running voices and never stack synths (C3)", function()
   local context = load_strata()
-  context.clock.advance()  -- voices 1 and 2 running
+  finish_startup(context)  -- voices 1 and 2 running
   local voices = local_value("voices")
   assert_true(voices[1].active and not voices[3].active, "voice 1 on, voice 3 off")
   for step = 1, 16 do toggle_pattern_step(1, step) end
@@ -571,7 +630,7 @@ test("pattern steps retrigger running voices and never stack synths (C3)", funct
   context.clear_engine_calls()
 
   pattern_toggle()  -- plays step 1 immediately
-  for _ = 1, 31 do context.clock.advance() end  -- 31 more 16ths: two full bars
+  for _ = 1, 31 do wake(context, "pattern_clock") end  -- 31 more 16ths: two full bars
   pattern_toggle()
 
   local retriggers = context.calls_named("retrigger")
@@ -592,9 +651,9 @@ test("pattern steps retrigger running voices and never stack synths (C3)", funct
 end)
 
 test("pattern steps retrigger with velocity from the step level", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns"); patterns[1][1] = 15; patterns[1][2] = 6
-  context.clear_engine_calls(); pattern_toggle(); context.clock.advance(); pattern_toggle()
+  context.clear_engine_calls(); pattern_toggle(); wake(context, "pattern_clock"); pattern_toggle()
   local calls = context.calls_named("retrigger")
   assert_equal(#calls, 2, "one retrigger per active step")
   assert_equal(calls[1].args[1], 0); assert_near(calls[1].args[2], 1.0, 1e-9)
@@ -602,7 +661,7 @@ test("pattern steps retrigger with velocity from the step level", function()
 end)
 
 test("restarting the pattern clock leaves one pattern clock running", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   for step = 1, 16 do patterns[1][step] = 15 end
   pattern_clock_start()
@@ -620,7 +679,7 @@ test("restarting the pattern clock leaves one pattern clock running", function()
 end)
 
 test("grain mode option is sent, synced and never mutated", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v1_grain_mode", 2)
   local calls = context.calls_named("setGrainParam"); assert_equal(calls[#calls].args[2], "grainMode"); assert_equal(calls[#calls].args[3], 1)
   params:set("mutation_probability", 1); params:set("mutation_amount", 1); gentle_mutate()
@@ -628,7 +687,7 @@ test("grain mode option is sent, synced and never mutated", function()
 end)
 
 test("grain mode param: options, default, sync, scenes, never mutated, randomized or crossfaded", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   for voice_idx = 1, 7 do
     local param = params:lookup_param("v" .. voice_idx .. "_grain_mode")
@@ -683,7 +742,7 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
 end)
 
 test("MAIN shows [TRIG] for a voice in triggered grain mode", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local function trig_drawn()
     redraw()
     for _, entry in ipairs(context.screen.texts) do
@@ -900,13 +959,13 @@ test("the startup clock leaves a voice 2 started within 0.5 s running", function
   local voices = local_value("voices")
   assert_true(not voices[2].active, "voice 2 starts stopped")
   toggle_voice(2)  -- a MIDI note or grid press starts it before the startup sleep ends
-  context.clock.advance()
+  finish_startup(context)
   assert_true(voices[2].active, "voice 2 is still running after the startup clock")
 end)
 
 test("scene capture -> change -> recall restores every voice", function()
   local context = load_strata()
-  context.clock.advance()  -- let init start voice 2
+  finish_startup(context)  -- let init start voice 2
   scramble_state(11)
   toggle_voice(3)
   toggle_freeze(1)
@@ -986,7 +1045,7 @@ end)
 
 test("scene files: round trip, version check, missing slots, erroring file", function()
   local context = load_strata({ data_subdir = "roundtrip" })
-  context.clock.advance()
+  finish_startup(context)
   scramble_state(5)
   capture_scene(4)
   save_scenes_to_disk()
@@ -1011,7 +1070,7 @@ test("scene files: round trip, version check, missing slots, erroring file", fun
 
   -- wrong version is rejected
   file = assert(io.open(file_path, "w"))
-  file:write("return { version = 99, scenes = {} }")
+  file:write(tabutil_text({ version = 99, scenes = {} }))
   file:close()
   context = load_strata({ data_subdir = "roundtrip" })
   local found = false
@@ -1034,7 +1093,7 @@ end)
 
 test("a scenes file that fails to load survives cleanup (fix round 1)", function()
   local bad_files = {
-    { name = "wrong version", content = "return { version = 99, scenes = {} }" },
+    { name = "wrong version", content = tabutil_text({ version = 99, scenes = {} }) },
     { name = "raises on load", content = 'error("corrupt scenes file")' },
   }
   -- a versioned file with one bad slot (validate_scene_data rejects it whole)
@@ -1087,7 +1146,7 @@ test("a scenes file that fails to load survives cleanup (fix round 1)", function
 end)
 
 test("scene transitions crossfade linearly from snapshotted start values (I6)", function()
-  local context = load_strata()
+  local context = load_strata(); finish_startup(context)  -- finish init's start-up coroutine
   params:set("v1_freq", 1000)
   params:set("reverb_mix", 0.8)
   params:set("v2_mod_source_1", 3)
@@ -1102,10 +1161,10 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
     assert_near(params:get("v1_freq"), 200 + 800 * mix, 1.0, "freq at step " .. step)
     assert_near(params:get("reverb_mix"), 0.8 * mix, 0.0051, "reverb mix at step " .. step)
     assert_equal(params:get("v2_mod_source_1"), 0, "mod source switches only at the end")
-    context.clock.advance()
+    wake(context, "scene_transition_clock")
   end
   assert_near(params:get("v1_freq"), 1000, 1.0, "freq at the end")
-  context.clock.advance()
+  wake(context, "scene_transition_clock")
   assert_equal(params:get("v2_mod_source_1"), 3, "mod source set when the fade ends")
   assert_equal(local_value("scene_transition_active"), false, "transition finished")
 
@@ -1117,12 +1176,12 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
   assert_equal(local_value("scene_transition_active"), false, "cancelled transition clears the flag")
   assert_equal(local_value("scene_transition_clock"), nil, "cancelled transition clock cleared")
   assert_near(params:get("v1_freq"), 1000, 1.0, "instant recall wins")
-  context.clock.advance()
+  context.clock.run_for(1)  -- longer than a step of the cancelled 10 s fade
   assert_near(params:get("v1_freq"), 1000, 1.0, "cancelled transition no longer writes")
 end)
 
 test("a smooth scene transition holds filter_type until the fade ends", function()
-  local context = load_strata()
+  local context = load_strata(); finish_startup(context)  -- finish init's start-up coroutine
   -- the filter freq fades, so setFilter goes out on every step
   params:set("filter_type", 3); params:set("filter_freq", 8000)
   capture_scene(1)
@@ -1136,7 +1195,7 @@ test("a smooth scene transition holds filter_type until the fade ends", function
   for step = 1, 20 do
     assert_equal(params:get("filter_type"), 1, "filter_type at step " .. step)
     assert_equal(last_filter_type(), 0, "engine filter type at step " .. step)
-    context.clock.advance()
+    wake(context, "scene_transition_clock")
   end
   assert_equal(local_value("scene_transition_active"), false, "transition finished")
   assert_equal(params:get("filter_type"), 3, "filter_type lands on the target")
@@ -1158,7 +1217,7 @@ test("a smooth transition fades LFO depths in whole percents and ends on the sce
       assert_equal(depth, math.floor(depth), "LFO " .. n .. " depth is a whole percent at step " .. step)
       assert_near(depth, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " depth at step " .. step)
     end
-    context.clock.advance()
+    wake(context, "scene_transition_clock")
   end
   assert_equal(local_value("scene_transition_active"), false, "transition finished")
   assert_equal(params:get("lfo_depth_1"), 75, "LFO 1 ends on the scene's depth")
@@ -1169,7 +1228,7 @@ end)
 -- apply the slot's new data (or fail on a slot that is now empty) when it ends
 for _, slot_on_disk in ipairs({ "empty", "other" }) do
   test("loading scenes from disk during a transition (its slot on disk: " .. slot_on_disk .. ")", function()
-    local context = load_strata(); context.clock.advance()
+    local context = load_strata(); finish_startup(context)
     local voices = local_value("voices")
     if slot_on_disk == "other" then
       params:set("v1_freq", 500); toggle_voice(3); capture_scene(1); toggle_voice(3)
@@ -1209,13 +1268,14 @@ end
 -- wake-up (so the fade's 20 sleeps fall behind one long sleep, as on norns).
 -- Returns the list of recalls (it keeps growing while the test runs the
 -- clocks on; the next load_strata defines recall_scene afresh): scene,
--- util.time() and whether a transition was still running (the recall
--- would cancel it)
+-- seconds since the sequencer started and whether a transition was still
+-- running (the recall would cancel it)
 local function run_scene_sequencer(context, transition, duration, seconds)
   local recalls = {}
   local real_recall = recall_scene
+  local start = util.time()
   recall_scene = function(scene_num, transition_time)
-    table.insert(recalls, { scene = scene_num, time = util.time(),
+    table.insert(recalls, { scene = scene_num, time = util.time() - start,
       interrupts = local_value("scene_transition_active") })
     return real_recall(scene_num, transition_time)
   end
@@ -1228,7 +1288,7 @@ end
 for _, case in ipairs({ { transition = 20, duration = 16 }, { transition = 16, duration = 16 } }) do
   test(string.format("the scene sequencer lets a %d s transition finish with a %d s scene duration",
     case.transition, case.duration), function()
-    local context = load_strata(); context.clock.advance()
+    local context = load_strata(); finish_startup(context)
     local voices = capture_sequencer_scenes()
     local period = math.max(case.transition, case.duration)
     local recalls = run_scene_sequencer(context, case.transition, case.duration, period + 1)
@@ -1252,7 +1312,7 @@ for _, case in ipairs({ { transition = 20, duration = 16 }, { transition = 16, d
 end
 
 test("the scene sequencer holds a scene for its duration when the transition is shorter", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = capture_sequencer_scenes()
   local recalls = run_scene_sequencer(context, 10, 16, 43)
   assert_equal(#recalls, 3, "a recall every 16 s")
@@ -1262,7 +1322,7 @@ test("the scene sequencer holds a scene for its duration when the transition is 
 end)
 
 test("the scene sequencer moves on when a transition never finishes", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   capture_sequencer_scenes()
   local overrun = local_value("SCENE_TRANSITION").overrun_seconds
   assert_true(type(overrun) == "number" and overrun > 0, "SCENE_TRANSITION.overrun_seconds")
@@ -1280,7 +1340,7 @@ test("the scene sequencer moves on when a transition never finishes", function()
 end)
 
 test("the scene sequencer waits for a manual transition it did not start, within a bound", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = capture_sequencer_scenes()
   local overrun = local_value("SCENE_TRANSITION").overrun_seconds
   local recalls = run_scene_sequencer(context, 0, 4, 1)           -- instant recalls every 4 s
@@ -1304,7 +1364,7 @@ test("the scene sequencer waits for a manual transition it did not start, within
 end)
 
 test("an error inside a scene transition's fade clears the transition flag", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v1_freq", 1000); capture_scene(1); params:set("v1_freq", 200)
   params:set_action("v1_freq", function() error("fade failed") end)
   local ok, message = pcall(recall_scene, 1, 4)                  -- the first step runs at once
@@ -1318,9 +1378,10 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   params:set_action("v1_freq", function() end)
   recall_scene(1, 4)
   params:set_action("v1_freq", function() error("fade failed") end)
-  ok, message = pcall(context.clock.advance)
-  assert_true(not ok and tostring(message):find("fade failed", 1, true), "the later error is raised")
-  traceback = tostring(message):match("stack traceback:.*")
+  wake(context, "scene_transition_clock")                                        -- the scheduler reports the error
+  local errors = context.clock.take_errors()
+  assert_true(#errors == 1 and errors[1]:find("fade failed", 1, true), "the later error is raised")
+  traceback = errors[1]:match("stack traceback:.*")
   assert_true(traceback and traceback:find("run.lua:%d+"), "a later step's error keeps its traceback")
   assert_equal(local_value("scene_transition_active"), false, "flag cleared after a later step")
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared after a later step")
@@ -1330,7 +1391,7 @@ end)
 -- runs inside the sequencer's own clock) is reported and the sequencer
 -- keeps going: the recall has already cleared its transition state
 test("an error in a sequenced recall is reported and the scene sequencer keeps going", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v1_freq", 1000); capture_scene(1)
   params:set("v1_freq", 400); capture_scene(2)
   params:set("v1_freq", 200); params:set("scene_sequence_length", 2)
@@ -1355,7 +1416,7 @@ test("an error in a sequenced recall is reported and the scene sequencer keeps g
 end)
 
 test("a manual recall still interrupts a transition the scene sequencer started", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = capture_sequencer_scenes()
   local recalls = run_scene_sequencer(context, 20, 16, 25)       -- scene 2's transition is running
   assert_equal(recalls[#recalls].scene, 2, "the sequencer recalled scene 2")
@@ -1368,7 +1429,7 @@ test("a manual recall still interrupts a transition the scene sequencer started"
 end)
 
 test("shortening the sequence while the sequencer waits wraps to scene 1", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   for scene = 1, 4 do capture_scene(scene) end
   params:set("scene_sequence_length", 4)
   local recalls = run_scene_sequencer(context, 0, 4, 9)          -- scene 3 is playing
@@ -1382,7 +1443,7 @@ test("shortening the sequence while the sequencer waits wraps to scene 1", funct
 end)
 
 test("restarting the scene sequencer leaves one sequencer clock running", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   capture_sequencer_scenes()
   local recalls = run_scene_sequencer(context, 0, 4, 1)          -- scene 1 at 0 s
   local first_clock = local_value("scene_sequencer_clock")
@@ -1400,7 +1461,7 @@ end)
 -- and voice params, so a sequencer started inside the read would recall
 -- scene 1 with the old transition time and then have the PSET overwrite it
 test("a PSET read that turns the scene sequencer on starts it once the read has finished", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("reverb_mix", 0.9); params:set("v1_freq", 1000); capture_scene(1)
   -- the PSET: the sequencer on, a 4 s transition and other values
   params:set("reverb_mix", 0.2); params:set("v1_freq", 300)
@@ -1487,7 +1548,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
 
   for _, transition_time in ipairs({ 0, 4 }) do
     local where = transition_time == 0 and "instant recall" or "smooth transition"
-    local context = load_strata(); context.clock.advance()
+    local context = load_strata(); finish_startup(context)
     local voices = local_value("voices")
     for voice_idx = 1, 7 do
       if voices[voice_idx].active ~= (voice_idx <= 3) then toggle_voice(voice_idx) end
@@ -1502,7 +1563,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
 
     local first_call = #context.engine_calls + 1
     recall_scene(1, transition_time)
-    for _ = 1, 25 do context.clock.advance() end
+    context.clock.run_for(transition_time + 1)
     assert_equal(local_value("scene_transition_active"), false, where .. " finished")
 
     local syncs, last_sync, last_call = full_syncs(context, first_call, 0)
@@ -1517,7 +1578,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
 end)
 
 test("an error during a scene recall clears scene_recall_in_progress and is raised", function()
-  local context = load_strata(); context.clock.advance()   -- voices 1 and 2 running
+  local context = load_strata(); finish_startup(context)   -- voices 1 and 2 running
   local function voice1_full_syncs()
     local bends = 0
     for _, call in ipairs(context.calls_named("setVoiceParam")) do
@@ -1638,7 +1699,7 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
 end)
 
 test("MAIN voice list fits its column for every voice, state and selection (#23)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   local frozen = local_value("frozen")
   local _, set_selected = find_upvalue("selected_voice")
@@ -1688,7 +1749,7 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
 end)
 
 test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   assert_equal(local_value("ui_page"), 1)
   local density = params:get("master_density")
   enc(1, 1); assert_equal(local_value("ui_page"), 2)
@@ -1720,7 +1781,7 @@ test("E1 steps one page per detent: no acceleration, 4 ticks per page", function
 end)
 
 test("every page draws within 128x64 with a header and hint row", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   for page = 1, 5 do
     enc(1, page - local_value("ui_page")); redraw()
     local texts = context.screen.texts
@@ -1733,7 +1794,7 @@ test("every page draws within 128x64 with a header and hint row", function()
 end)
 
 test("arc rings follow the page; MAIN mapping unchanged", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
   -- rings drawn (with at least one segment) on each page: SETUP none
@@ -1750,7 +1811,7 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
 end)
 
 test("every arc ring lights all 64 LEDs at its maximum, about half at half, none at its minimum", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   local function set_fraction(param_id, fraction)
     local spec = params:lookup_param(param_id).controlspec
@@ -1792,7 +1853,7 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
 end)
 
 test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   show_page(1)
   local voice = local_value("selected_voice")
@@ -1832,7 +1893,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
     return result
   end
   -- the only arc is on port 2
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.arc.plug(2)
   assert_equal(setup_text(context), "connected", "arc on port 2 connects")
   local density = params:lookup_param("master_density")
@@ -1843,7 +1904,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_equal(setup_text(context), "none", "removing it disconnects")
 
   -- already plugged at start: found on its port
-  context = load_strata(); context.clock.advance()
+  context = load_strata(); finish_startup(context)
   context.arc.plug(3)
   context.arc.unplug(3)
   context.arc.vports[4].device = {port = 4, segments = {}, all = function() end, refresh = function() end, segment = function() end, led = function() end}
@@ -1851,7 +1912,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_true(context.arc.vports[4].delta ~= nil, "init attaches the vport holding a device")
 
   -- port 2 first, then port 1: Strata stays on 2
-  context = load_strata(); context.clock.advance()
+  context = load_strata(); finish_startup(context)
   density = params:lookup_param("master_density")
   context.arc.plug(2)
   context.arc.plug(1)
@@ -1865,7 +1926,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_equal(setup_text(context), "none", "removing Strata's arc disconnects")
 
   -- port 1 first, then 2
-  context = load_strata(); context.clock.advance()
+  context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   context.arc.plug(2)
   assert_equal(context.arc.vports[2].delta, nil, "no handler on the second arc")
@@ -1876,7 +1937,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
 end)
 
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   local _, set_selected = find_upvalue("selected_voice")
   local function sweep(page, ring, param_id, where)
@@ -1957,7 +2018,7 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
 end)
 
 test("every encoder, key and arc control is safe on every page; arc button only acts on MAIN", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   context.grid.plug(1, 16, 16)
   for page = 1, #PAGE_TITLES do
@@ -1988,7 +2049,7 @@ test("every encoder, key and arc control is safe on every page; arc button only 
 end)
 
 test("the arc button finds MAIN by its page index, not its title", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.arc.plug(1); show_page(1)
   local pages = local_value("UI_PAGES")
   assert_equal(pages.MAIN_PAGE, 1, "MAIN_PAGE is MAIN's index")
@@ -2038,7 +2099,7 @@ local function assert_drawn_on_next_frame(context, arc_hardware, where, change)
 end
 
 test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
   local pages = local_value("UI_PAGES")
   assert_equal(pages.FRAMES_PER_SECOND, 15, "one named frame rate")
@@ -2083,7 +2144,7 @@ test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)"
 end)
 
 test("a draw that fails prints the error and the frame clock keeps drawing (#11)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
   next_frame(context)
   local frame_clock = local_value("UI_PAGES").frame_clock
@@ -2113,7 +2174,7 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
 end)
 
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
   local grid_device = context.grid.plug(1, 16, 16)
   context.midi.plug(1, "keys")
@@ -2167,7 +2228,7 @@ test("displayed changes from every source reach the screen and arc on the next f
 end)
 
 test("a smooth scene transition reaches the screen and arc on every step and at its end (#11)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
   show_page(1)
   -- the scene: voice 1 frozen at 100 Hz; now it plays 1000 Hz, unfrozen
@@ -2176,12 +2237,24 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
   assert_drawn_on_next_frame(context, arc_hardware, "transition start (step 1)", function()
     recall_scene(1, 2)
   end)
+  -- each step runs 0.1 s after the last and a frame comes every 1/15 s, so
+  -- the frame after a step always comes before the next step (frames that
+  -- run before a step find nothing to draw)
   local steps = 1
   while local_value("scene_transition_clock") do
     steps = steps + 1
-    assert_drawn_on_next_frame(context, arc_hardware, "transition step " .. steps, function()
-      context.clock.resume_thread(local_value("scene_transition_clock"))
-    end)
+    local where = "transition step " .. steps
+    local counter = count_screen_draws()
+    local arc_refreshes = arc_hardware.refresh_count
+    wake(context, "scene_transition_clock")
+    local drawn_before_frame = counter.screen
+    local arc_before_frame = arc_hardware.refresh_count - arc_refreshes
+    next_frame(context)
+    counter.restore()
+    assert_equal(drawn_before_frame, 0, where .. ": the screen waits for the frame")
+    assert_equal(arc_before_frame, 0, where .. ": the arc waits for the frame")
+    assert_equal(counter.screen, 1, where .. ": the next frame draws the screen once")
+    assert_equal(arc_hardware.refresh_count - arc_refreshes, 1, where .. ": and the arc once")
   end
   assert_equal(steps, local_value("SCENE_TRANSITION").steps + 1, "every step, then the end")
   assert_true(screen_shows(context, "100 Hz"), "the end shows the scene's freq")
@@ -2189,7 +2262,7 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
 end)
 
 test("many arc turns and encoder steps within one frame draw the screen and the arc once (#11)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
   show_page(1)
   next_frame(context)
@@ -2322,7 +2395,7 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   local context = load_strata()
   local grid_device = context.grid.plug(1, 16, 16)
   local arc_hardware = context.arc.plug(1)
-  context.clock.advance()  -- finish init's voice start-up coroutine
+  finish_startup(context)  -- finish init's voice start-up coroutine
   capture_scene(1)
   params:set("scene_sequencer_enabled", 1)
   params:set("mutation_enabled", 1)
@@ -2432,7 +2505,7 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   context = load_strata({ data_subdir = "v1" })
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
-  local saved = dofile(context.data_dir .. "strata/scenes.data")
+  local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
   assert_equal(saved.version, 2, "scenes are saved as version 2")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
@@ -2560,7 +2633,7 @@ test("play/stop columns 1-4 on row 8 all light with the state (256 and 16x8)", f
 end)
 
 test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
   context.grid.press(1, 16, 8, 1)              -- page 4
   context.grid.press(1, 16, 3, 1); assert_near(params:get("filter_freq"), 20000, 1)
@@ -2592,7 +2665,7 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
 end)
 
 test("a scene transition redraws the grid once per step on grid page 4", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
   context.grid.press(1, 16, 8, 1)              -- page 4: the FX faders
   local fx = { filter_freq = 1000, filter_res = 0.2, filter_mix = 0.6, delay_time = 0.8,
@@ -2603,10 +2676,10 @@ test("a scene transition redraws the grid once per step on grid page 4", functio
   recall_scene(1, 4)                           -- step 1 runs now
   for step = 2, 20 do
     local refreshes = device.refresh_count
-    context.clock.advance()
+    wake(context, "scene_transition_clock")
     assert_equal(device.refresh_count - refreshes, 1, "one grid redraw at step " .. step)
   end
-  context.clock.advance()                      -- the end: the instant recall
+  wake(context, "scene_transition_clock")                      -- the end: the instant recall
   assert_near(params:get("filter_freq"), 1000, 1, "transition landed")
   -- outside a transition each FX change still moves the faders at once
   local refreshes = device.refresh_count
@@ -2734,10 +2807,11 @@ test("stub params store norns' numeric type constants in param.t", function()
 end)
 
 test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves util.time", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("clock_tempo", 120)                 -- 0.5 s per beat
+  local start = util.time()                      -- on a beat: init's start-up clock slept 0.5 s
   local events = {}
-  local function log(name) table.insert(events, string.format("%s@%.3f", name, util.time())) end
+  local function log(name) table.insert(events, string.format("%s@%.3f", name, util.time() - start)) end
   clock.run(function() while true do clock.sleep(0.3); log("short") end end)
   clock.run(function() clock.sleep(1); log("long") end)
   clock.run(function() for _ = 1, 3 do clock.sync(1/4); log("sync") end end)
@@ -2747,7 +2821,7 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
   assert_equal(table.concat(events, " "),
     "sync@0.125 sync@0.250 short@0.300 sync@0.375 short@0.600 short@0.900 long@1.000",
     "wake-time order")
-  assert_near(util.time(), 1, 1e-12, "util.time() ends at the start plus the run time")
+  assert_near(util.time(), start + 1, 1e-12, "util.time() ends at the start plus the run time")
   -- a scheduling delay on every wake-up: twenty short sleeps fall behind one long one
   events = {}
   clock.run(function() for _ = 1, 20 do clock.sleep(0.5) end; log("steps") end)
@@ -2761,6 +2835,113 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
   end
   assert_equal(table.concat(order, " "), "once@11.001 steps@11.020", "latency accumulates per sleep")
   assert_true(#events > before, "the clocks ran")
+end)
+
+test("stub clock.advance is one time-ordered scheduler step and moves util.time (#27)", function()
+  local context = load_strata()                  -- init's start-up clock sleeps 0.5 s
+  stop_frame_clock()                             -- (its 1/15 s ticks would come first)
+  local events = {}
+  local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
+  clock.run(function() clock.sleep(2); log("two") end)
+  clock.run(function() clock.sleep(1); log("one-a") end)
+  clock.run(function() clock.sleep(1); log("one-b") end)
+  context.clock.advance()
+  assert_near(util.time(), 0.5, 1e-12, "the first step is the start-up clock's wake-up")
+  assert_true(local_value("voices")[2].active, "which started voice 2")
+  assert_equal(#events, 0, "nothing else was due")
+  context.clock.advance()
+  assert_equal(table.concat(events, " "), "one-a@1.00 one-b@1.00", "both due at 1 s, in the order they slept")
+  context.clock.advance()
+  assert_equal(events[3], "two@2.00", "then the 2 s sleep")
+  context.clock.advance()
+  assert_near(util.time(), 2, 1e-12, "with nothing pending a step changes nothing")
+  -- a clock overdue after util.time() jumped wakes at once, without moving time back
+  clock.run(function() clock.sleep(1); log("late") end)
+  context.set_time(10); context.clock.advance()
+  assert_equal(events[4], "late@10.00", "an overdue sleep wakes at the current time")
+end)
+
+test("stub clock follows matron's scheduler: sync beats, offsets, FLT_EPSILON, tempo, resume values (#27)", function()
+  local context = load_strata(); finish_startup(context)   -- util.time() 0.5 s: beat 1 at 120 BPM
+  assert_near(clock.get_beats(), 1, 1e-12, "the beat timeline runs at the clock tempo")
+  -- a repeated sync counts from the sync's own beat (clock_scheduler.cc), so a
+  -- coroutine that wakes a whole period late never skips a beat
+  local wakes = {}
+  local syncing = clock.run(function()
+    while true do table.insert(wakes, clock.sync(1/4)) end
+  end)
+  context.clock.run_for(1, 0.125)                          -- a 16th's latency on every wake-up
+  clock.cancel(syncing)
+  assert_equal(#wakes, 7, "one wake-up per 16th after the first (0.75 s .. 1.5 s)")
+  for index, beat in ipairs(wakes) do
+    assert_near(beat, 1 + index * 0.25, 1e-9, "wake-up " .. index .. " resumes with the beat it fired on")
+  end
+  -- the offset argument (clock.sync(beats, offset)) moves the sync point
+  local function wake_after(func)
+    local from, woke = util.time(), nil
+    clock.run(function() func(); woke = util.time() end)
+    context.clock.run_for(4)
+    return woke and (woke - from)
+  end
+  assert_near(clock.get_beats(), 3, 1e-9, "on beat 3")
+  assert_near(wake_after(function() clock.sync(1, 0.5) end), 0.75, 1e-9, "beat 4.5: the next beat plus the offset")
+  assert_near(wake_after(function() clock.sync(4, -0.5) end), 0.25, 1e-9,
+    "beat 11.5: a negative offset lands before the next multiple (12)")
+  assert_near(wake_after(function() clock.sync(2, -1.5) end), 0.75, 1e-9,
+    "beat 20.5: never in the past (18.5), one period on")
+  -- FLT_EPSILON: a clock within 2^-23 beat of a beat counts it as passed
+  assert_near(clock.get_beats(), 27, 1e-9, "on beat 27")
+  context.set_time((28 - 1.1e-7) * 0.5)
+  assert_near(wake_after(function() clock.sync(1) end), 0.5 + 0.55e-7, 1e-9, "beat 29, not beat 28")
+  -- a tempo change keeps the beat, and a waiting sync follows the new tempo
+  context.set_time(18)
+  assert_near(clock.get_beats(), 36, 1e-9, "on beat 36")
+  params:set("clock_tempo", 60)
+  assert_near(clock.get_beats(), 36, 1e-9, "the beat does not jump")
+  assert_equal(clock.get_tempo(), 60, "the clock tempo follows clock_tempo")
+  assert_near(wake_after(function() clock.sync(1) end), 1, 1e-9, "beat 37, 1 s a beat")
+  local from, woke = util.time(), nil
+  clock.run(function() clock.sync(1); woke = util.time() end)
+  params:set("clock_tempo", 240)                           -- while it waits for beat 41
+  context.clock.run_for(1)
+  assert_near(woke - from, 0.25, 1e-9, "the waiting sync woke at the new tempo")
+  -- sleeps resume with the clock time
+  local slept
+  from = util.time()
+  clock.run(function() slept = clock.sleep(0.25) end)
+  context.clock.run_for(0.5)
+  assert_near(slept, from + 0.25, 1e-9, "clock.sleep returns the time it woke")
+end)
+
+test("stub clock errors: reported per wake-up, the other clocks keep running (#27)", function()
+  local context = load_strata(); finish_startup(context)
+  -- an error in a scheduler resume is reported, not raised, as l_report does
+  local ticks = 0
+  clock.run(function() while true do clock.sleep(0.1); ticks = ticks + 1 end end)
+  local failing = clock.run(function() clock.sleep(0.25); error("tick failed") end)
+  context.clock.run_for(1)
+  assert_true(ticks >= 9, "the other clock kept running (" .. ticks .. " ticks)")
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "one error reported")
+  assert_true(errors[1]:find("tick failed", 1, true), "the coroutine's error")
+  assert_equal(#context.clock.take_errors(), 0, "claimed errors are gone")
+  assert_true(clock.threads[failing] ~= nil, "norns keeps the dead coroutine in clock.threads")
+  -- a coroutine that cancels itself and then sleeps errors at its wake-up
+  local own
+  own = clock.run(function() clock.sleep(0.1); clock.cancel(own); clock.sleep(0.1); error("never reached") end)
+  context.clock.run_for(0.5)
+  errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the self-cancelled coroutine's wake-up errors")
+  assert_true(errors[1]:find("expected", 1, true) and not errors[1]:find("never reached", 1, true),
+    "coroutine.resume of the cancelled coroutine raises: " .. tostring(errors[1]))
+  -- the first run of clock.run is a direct call: its errors reach the caller
+  assert_true(not pcall(clock.run, function() error("at once") end), "clock.run raises the first segment's error")
+  local ok, message = pcall(clock.run, function() clock.sleep() end)
+  assert_true(not ok and message:find("number expected", 1, true), "clock.sleep needs a number")
+  ok, message = pcall(clock.run, function() clock.sync(0) end)
+  assert_true(not ok and message:find("invalid sync beat", 1, true), "clock.sync needs a positive beat")
+  assert_true(not pcall(clock.cancel, nil), "clock.cancel needs an id (luaL_checkinteger)")
+  assert_equal(#context.clock.take_errors(), 0, "direct errors are raised, not reported")
 end)
 
 test("stub param type codes come from one table; an unknown type is an error", function()
@@ -2790,6 +2971,80 @@ test("stub param type codes come from one table; an unknown type is an error", f
     assert_equal(params.lookup["stub_" .. bad_type], nil, "nothing registered for type " .. bad_type)
   end
   assert_true(not pcall(function() params:add { id = "stub_untyped" } end), "params:add without a type raises an error")
+end)
+
+-- lua/core/paramset.lua's system_param_ids
+local NORNS_SYSTEM_PARAM_IDS = {
+  "comp_release", "monitor_level", "cut_input_eng", "comp_attack", "COMPRESSOR", "rev_cut_input",
+  "rev_return_level", "tape_level", "reverb", "comp_post_gain", "rev_pre_delay", "clock_crow_out_div",
+  "compressor", "cut_input_tape", "rev_lf_fc", "clock_crow_out", "REVERB", "rev_low_time", "comp_threshold",
+  "rev_monitor_input", "LEVELS", "rev_hf_damping", "rev_eng_input", "input_level", "rev_tape_input",
+  "clock_midi_out", "comp_pre_gain", "link_start_stop_sync", "softcut_level", "clock_reset", "link_quantum",
+  "engine_level", "clock_tempo", "clock_source", "CLOCK", "output_level", "clock_crow_in_div", "rev_mid_time",
+  "cut_input_adc", "comp_mix", "SOFTCUT", "monitor_mode", "headphone_gain", "comp_ratio",
+}
+
+test("stub params hold norns' system params, so a script id colliding with one fails (#27)", function()
+  load_strata()
+  local expected_types = { CLOCK = params.tGROUP, LEVELS = params.tGROUP, reverb = params.tOPTION,
+    clock_tempo = params.tNUMBER, clock_source = params.tOPTION, clock_reset = params.tTRIGGER,
+    output_level = params.tCONTROL, comp_mix = params.tCONTROL, headphone_gain = params.tNUMBER }
+  for _, param_id in ipairs(NORNS_SYSTEM_PARAM_IDS) do
+    if param_id == "clock_midi_out" then
+      -- norns adds clock_midi_out_1..16, never clock_midi_out itself
+      for port = 1, 16 do
+        assert_equal(params:lookup_param("clock_midi_out_" .. port).t, params.tBINARY, "clock_midi_out_" .. port)
+      end
+      assert_equal(params.lookup.clock_midi_out, nil, "no clock_midi_out param, as on norns")
+    else
+      local param = params.lookup[param_id]
+      assert_true(param ~= nil, "system param " .. param_id .. " registered")
+      if expected_types[param_id] then assert_equal(param.t, expected_types[param_id], param_id .. " type") end
+    end
+  end
+  assert_equal(params.params[1].id, "LEVELS", "system params come first, as norns adds them before the script")
+  for _, param_id in ipairs({ "reverb", "comp_mix", "clock_source", "link_quantum" }) do
+    local ok, message = pcall(params.add_number, params, param_id, "script param", 0, 1, 0)
+    assert_true(not ok and tostring(message):find("collision", 1, true), param_id .. ": a script param collides")
+  end
+  -- the system groups hold exactly their params; the script's list starts after them
+  for _, group in ipairs({ { "LEVELS", 9 }, { "REVERB", 11 }, { "COMPRESSOR", 8 }, { "SOFTCUT", 3 }, { "CLOCK", 29 } }) do
+    assert_equal(params:get(group[1]), group[2], group[1] .. " size")
+  end
+  assert_equal(params:string("reverb"), "ON", "the reverb is on")
+  assert_equal(params:get("clock_tempo"), 120)
+end)
+
+test("stub param strings and controlspec defaults follow core/params and core/controlspec (#27)", function()
+  load_strata()
+  -- Control:string: the value rounded to 0.01, a space and the units
+  params:add_control("stub_time", "time", controlspec.new(0, 10, "lin", 0, 1.23456, "s"))
+  assert_equal(params:string("stub_time"), "1.23 s", "control value and units")
+  params:add_control("stub_plain", "plain", controlspec.new(0, 1, "lin", 0, 0.5))
+  assert_equal(params:string("stub_plain"), "0.5 ", "no units: the space stays")
+  -- Number:string and Binary:string return the value itself
+  params:add_number("stub_count", "count", 0, 10, 3)
+  assert_equal(params:string("stub_count"), 3, "a number param's string is its number")
+  params:add_binary("stub_switch", "switch", "toggle", 1)
+  assert_equal(params:string("stub_switch"), 1, "a binary param's string is its value")
+  params:add_separator("stub_heading")
+  assert_equal(params:string("stub_heading"), "stub_heading", "a separator shows its name (its id)")
+  assert_equal(params:get("stub_heading"), "", "and has an empty value")
+  -- a ControlSpec without a default has none: its control starts at raw 0
+  local spec = controlspec.new(2, 8, "lin", 0)
+  assert_equal(spec.default, nil, "no default (core/controlspec.lua reads an unset global)")
+  params:add_control("stub_nodefault", "no default", spec)
+  assert_equal(params:lookup_param("stub_nodefault").raw, 0, "raw 0")
+  assert_equal(params:get("stub_nodefault"), 2, "the minimum")
+  -- a control without a spec uses ControlSpec.UNIPOLAR
+  params:add { type = "control", id = "stub_unipolar", name = "unipolar" }
+  local unipolar = params:lookup_param("stub_unipolar").controlspec
+  assert_true(unipolar.minval == 0 and unipolar.maxval == 1 and unipolar.default == 0, "UNIPOLAR")
+  -- the db warp of norns' level params: -inf at 0, 0 dB in between, the maximum at 1
+  local level = params:lookup_param("output_level").controlspec
+  assert_equal(level:map(0), -math.huge, "db warp floor")
+  assert_near(level:map(1), 6, 1e-9, "db warp top")
+  assert_near(level:map(level:unmap(0)), 0, 1e-9, "db warp round trip")
 end)
 
 -- The first place source compares a param type (x.t) with a string literal,
@@ -2896,8 +3151,33 @@ test("stub midi delivers note_on, cc and pitchbend messages", function()
   assert_equal(removed, device); assert_equal(midi.connect(2).device, nil)
 end)
 
+test("stub tab.save and tab.load are lib/tabutil.lua's (#27)", function()
+  local context = load_strata()
+  local shared = { 1, 2 }
+  local path = context.data_dir .. "tabutil.data"
+  tab.save({ version = 2, list = { "a", true, 0.1 + 0.2 }, first = shared, second = shared,
+    skipped = function() end }, path)
+  local file = assert(io.open(path, "r")); local text = file:read("*a"); file:close()
+  assert_equal(text:sub(1, #"return {\n-- Table: {1}\n{\n"), "return {\n-- Table: {1}\n{\n", "tabutil's layout")
+  assert_true(text:find('\n   ["version"]=2,\n', 1, true), "keys written as [\"key\"]=value")
+  assert_true(not text:find("skipped", 1, true), "functions are not saved")
+  local _, shared_count = text:gsub("%-%- Table: {", "")
+  assert_equal(shared_count, 3, "the outer table, the list and the shared table once")
+  local loaded = tab.load(path)
+  assert_equal(loaded.version, 2)
+  assert_equal(loaded.first, loaded.second, "a table saved twice loads as one table")
+  assert_equal(loaded.list[1], "a"); assert_equal(loaded.list[2], true)
+  assert_equal(loaded.list[3], 0.3, "numbers are written with tostring (%.14g), as on norns")
+  assert_true(loaded.list[3] ~= 0.1 + 0.2, "so they lose precision")
+  -- a plain `return {...}` file is not tabutil's: it has no table list, so it loads as nil
+  file = assert(io.open(path, "w")); file:write("return { version = 2 }"); file:close()
+  assert_equal(tab.load(path), nil, "a plain table file loads as nil")
+  local missing, message = tab.load(context.data_dir .. "missing.data")
+  assert_true(missing == nil and message ~= nil, "a missing file returns nil and the error")
+end)
+
 test("MIDI notes set pitch per source, start or retrigger the voice with velocity", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.midi.send(1, { type = "note_on", note = 69, vel = 127, ch = 3 })   -- voice 3, off
   assert_near(params:get("v3_freq"), 440, 0.01); assert_true(local_value("voices")[3].active)
   local rt = context.calls_named("retrigger"); assert_equal(rt[#rt].args[1], 2); assert_near(rt[#rt].args[2], 1, 1e-9)
@@ -2912,7 +3192,7 @@ test("MIDI notes set pitch per source, start or retrigger the voice with velocit
 end)
 
 test("MIDI note details: start order, exact pitch, clamping, ignored channels", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   -- a stopped voice is started (voiceOn) before the retrigger
   context.clear_engine_calls()
@@ -2960,7 +3240,7 @@ test("MIDI note details: start order, exact pitch, clamping, ignored channels", 
 end)
 
 test("note off mode and pitchbend", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 }); assert_true(local_value("voices")[1].active)
   params:set("midi_note_off", 2); context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 })
   assert_true(not local_value("voices")[1].active)
@@ -2970,7 +3250,7 @@ test("note off mode and pitchbend", function()
 end)
 
 test("voice off mode: the voice stops when its last held note is released", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   params:set("midi_note_off", 2)
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
@@ -2999,7 +3279,7 @@ test("voice off mode: the voice stops when its last held note is released", func
 end)
 
 test("a MIDI-held voice stopped another way: its note off changes nothing and leaves nothing held", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   local midi_state = local_value("midi_state")
   context.grid.plug(1, 16, 16)
@@ -3048,7 +3328,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
 end)
 
 test("pitchbend: range, buffer voices, stopped voices, restarts and resets", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local function last_bend(engine_voice)
     local value
     for _, call in ipairs(context.calls_named("setVoiceParam")) do
@@ -3086,7 +3366,7 @@ test("pitchbend: range, buffer voices, stopped voices, restarts and resets", fun
 end)
 
 test("omni pitchbend follows the selection: the old voice re-centres, the new one takes the wheel", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local bend = local_value("midi_state").bend
   local function last_bend(engine_voice)
     local value
@@ -3129,7 +3409,7 @@ test("omni pitchbend follows the selection: the old voice re-centres, the new on
 end)
 
 test("MIDI device param, hot-plug and the SETUP page", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local function screen_has(text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return true end
@@ -3209,7 +3489,7 @@ end)
 ---------------------------------------------------------------------------
 
 test("source switching syncs through setGrainSource and swaps the main param", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.clear_engine_calls(); params:set("v1_source", 4)      -- buf 3
   local calls = context.calls_named("setGrainSource")
   assert_equal(#calls, 1, "one setGrainSource per switch")
@@ -3285,7 +3565,7 @@ test("source and buffer params: options, defaults, voices table, labels", functi
 end)
 
 test("buffer-sourced voices: E3, arc ring 2 and MAIN use buf_pos", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   params:set("v1_source", 3)
   params:set("v1_buf_pos", 0.5)
@@ -3308,7 +3588,7 @@ test("buffer-sourced voices: E3, arc ring 2 and MAIN use buf_pos", function()
 end)
 
 test("randomize and mutate touch buffer params, never source", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v1_source", 2); local freq = params:get("v1_freq")
   local synth_before = deep_copy(local_value("voices")[1].params)
   math.randomseed(7); randomize_voice(1)
@@ -3343,7 +3623,7 @@ test("randomize and mutate touch buffer params, never source", function()
 end)
 
 test("randomize and mutation work in normalized space for exponential params", function()
-  local context = load_strata(); context.clock.advance()   -- voice 1 (synth source) running
+  local context = load_strata(); finish_startup(context)   -- voice 1 (synth source) running
   local spec = params:lookup_param("v1_freq").controlspec
   assert_true(spec.minval == 20 and spec.maxval == 2000 and spec.warp_name == "exp",
     "voice 1 freq is the 20-2000 Hz exponential spec this test covers")
@@ -3371,7 +3651,7 @@ test("randomize and mutation work in normalized space for exponential params", f
 end)
 
 test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
-  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  local context = load_strata(); finish_startup(context)   -- voice 1 running
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
   math.randomseed(13)
@@ -3392,7 +3672,7 @@ test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
 end)
 
 test("buffer position drifts subtly and reverts to the user-set position", function()
-  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  local context = load_strata(); finish_startup(context)   -- voice 1 running
   assert_true(local_value("voices")[1].active, "voice 1 on")
   params:set("v1_source", 2); params:set("v1_buf_pos", 0.4)
   local synth_freq = params:get("v1_freq")
@@ -3415,7 +3695,7 @@ test("buffer position drifts subtly and reverts to the user-set position", funct
 end)
 
 test("mean_reverting_step: one random step plus a pull toward the base, used by both drifts", function()
-  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  local context = load_strata(); finish_startup(context)   -- voice 1 running
   math.randomseed(5); local random = math.random()
   math.randomseed(5)
   assert_near(mean_reverting_step(1.2, 1.0, 0.004, 0.01), 1.2 + (random - 0.5) * 0.004 - 0.2 * 0.01, 1e-12,
@@ -3433,17 +3713,17 @@ test("mean_reverting_step: one random step plus a pull toward the base, used by 
 end)
 
 test("transition skips discrete voice fields; scenes keep source and buffer params", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("v2_source", 3); params:set("v2_buf_pos", 0.7); capture_scene(1)
   assert_equal(local_value("scenes")[1].data.voices[2].source, 3, "source captured")
   params:set("v2_source", 1); params:set("v2_buf_pos", 0.1)
-  recall_scene(1, 4); context.clock.advance()
+  recall_scene(1, 4); wake(context, "scene_transition_clock")
   assert_equal(params:get("v2_source"), 1, "source only changes at the end of a transition")
   assert_true(params:get("v2_buf_pos") > 0.1, "buf_pos interpolates")
   for _, target in ipairs(scene_transition_targets(local_value("scenes")[1].data)) do
     assert_true(not target.id:find("_source$"), target.id .. " is not crossfaded")
   end
-  for _ = 1, 25 do context.clock.advance() end
+  context.clock.run_for(5)   -- past the 4 s transition
   assert_equal(params:get("v2_source"), 3); assert_near(params:get("v2_buf_pos"), 0.7, 1e-6)
   -- validation and migration of the source field
   local scene = deep_copy(local_value("scenes")[1])
@@ -3515,12 +3795,12 @@ test("buffer group params: exact group, triggers and defaults", function()
 end)
 
 test("buffer triggers call the engine and track recording state", function()
-  local context = load_strata()
+  local context = load_strata(); finish_startup(context)  -- finish init's start-up coroutine
   params:set("record_duration", 2); params:set("buf3_record", 1)
   local call = context.calls_named("recordBuffer")[1]
   assert_equal(call.args[1], 2); assert_near(call.args[2], 2, 1e-9); assert_near(call.args[3], 1, 1e-9)
   assert_true(local_value("buffers")[3].recording)
-  context.clock.advance(); assert_true(local_value("buffers")[3].recording, "finishing until the engine reports")
+  wake_buffer_clock(context, 3); assert_true(local_value("buffers")[3].recording, "finishing until the engine reports")
   context.polls.fire("bufferState", 202)  -- the engine reports the take
   assert_true(not local_value("buffers")[3].recording)
   assert_equal(local_value("buffers")[3].name, "take 3"); assert_true(local_value("buffers")[3].loaded)
@@ -3541,7 +3821,7 @@ test("buffer triggers call the engine and track recording state", function()
 end)
 
 test("recording again stops early; clear and load cancel the timer", function()
-  local context = load_strata(); context.clock.advance()   -- finish init's start-up coroutine
+  local context = load_strata(); finish_startup(context)   -- finish init's start-up coroutine
   local buffers = local_value("buffers")
   params:set("record_duration", 4)
   record_buffer(2); assert_true(buffers[2].recording)
@@ -3572,7 +3852,7 @@ test("recording again stops early; clear and load cancel the timer", function()
 end)
 
 test("a file the engine cannot read, loaded during a recording, leaves a cancelled recording", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   params:set("record_duration", 4)
   local pending = context.clock.pending_count()
@@ -3586,12 +3866,12 @@ test("a file the engine cannot read, loaded during a recording, leaves a cancell
   assert_true(not buffers[3].loaded, "not loaded"); assert_equal(buffers[3].settled_empty, "load")
   assert_equal(buffers[3].name, "missing.wav", "a failed load, never take 3")
   assert_equal(buffers[3].path, "/tmp/missing.wav")
-  context.clock.advance()              -- nothing pending turns it into a take later
+  context.clock.run_for(10)              -- nothing pending turns it into a take later
   assert_equal(buffers[3].name, "missing.wav"); assert_true(not buffers[3].loaded)
 end)
 
 test("a take or a load is confirmed by the engine's bufferState report", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   local function hint()
     for _, entry in ipairs(context.screen.texts) do
@@ -3601,7 +3881,7 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   -- a take that ran its full duration
   params:set("record_duration", 2)
   record_buffer(3)
-  context.clock.advance()                       -- the recording timer ends
+  wake_buffer_clock(context, 3)                       -- the recording timer ends
   assert_true(buffers[3].recording, "finishing: still shown as recording")
   assert_true(not buffers[3].loaded, "not loaded before the engine reports it")
   assert_equal(buffers[3].name, "empty", "no take name yet")
@@ -3642,10 +3922,10 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
 end)
 
 test("a take settled empty adopts audio the engine reports later; a clear wins", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   params:set("record_duration", 2)
-  record_buffer(3); context.clock.advance()     -- the timer ends; the engine is slow
+  record_buffer(3); wake_buffer_clock(context, 3)     -- the timer ends; the engine is slow
   context.set_time(5); context.polls.fire("bufferState", 200)
   assert_equal(buffers[3].name, "empty", "a periodic 0 after the settle time empties the slot")
   context.polls.fire("bufferState", 202)        -- the take completes late
@@ -3668,7 +3948,7 @@ test("a take settled empty adopts audio the engine reports later; a clear wins",
 end)
 
 test("a load settled empty adopts audio the engine reports later; restores count; a clear wins", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   -- a slow read: the engine keeps reporting 0 s past the settle time
   load_buffer(2, "/tmp/slow.wav")
@@ -3697,7 +3977,7 @@ test("a load settled empty adopts audio the engine reports later; restores count
 end)
 
 test("a finishing take settles from the last known seconds when no report comes", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   -- BUFFER_SETTLE is an upvalue of the local finish_buffer_take, which the
   -- global record_buffer holds
@@ -3711,11 +3991,11 @@ test("a finishing take settles from the last known seconds when no report comes"
   assert_true(buffer_settle ~= nil, "BUFFER_SETTLE reached through finish_buffer_take")
   local fallback_seconds = buffer_settle.fallback_seconds
   params:set("record_duration", 2)
-  record_buffer(3); context.clock.advance()     -- the timer ends: finishing, no report ever
+  record_buffer(3); wake_buffer_clock(context, 3)     -- the timer ends: finishing, no report ever
   assert_true(buffers[3].finishing, "finishing")
   local log = context.clock.sleep_log
   assert_equal(log[#log].amount, fallback_seconds, "the fallback waits fallback_seconds after the take ends")
-  context.clock.advance()                       -- the fallback runs
+  wake_buffer_clock(context, 3)                       -- the fallback runs
   assert_true(not buffers[3].finishing and not buffers[3].recording, "settled")
   assert_equal(buffers[3].name, "empty", "no seconds known: empty")
   context.clear_engine_calls(); record_buffer(3)
@@ -3725,7 +4005,7 @@ test("a finishing take settles from the last known seconds when no report comes"
   record_buffer(3)
   assert_true(buffers[3].finishing)
   buffers[3].seconds = 1.5                      -- as an earlier report left it
-  context.clock.advance()
+  wake_buffer_clock(context, 3)
   assert_true(buffers[3].loaded, "known seconds: loaded"); assert_equal(buffers[3].name, "take 3")
   -- a report, a load, a clear or cleanup cancels the fallback
   local pending = context.clock.pending_count()
@@ -3774,13 +4054,13 @@ test("save_buffer writes a timestamped wav under audio/strata", function()
 end)
 
 test("explicit save writes a timestamped file; cleanup/init persist buffer paths", function()
-  local context = load_strata({ data_subdir = "buf" })
+  local context = load_strata({ data_subdir = "buf" }); finish_startup(context)  -- init's start-up coroutine
   context.polls.fire("bufferState", 104)  -- buffer 2 holds 4 s (save needs the engine's seconds)
   params:set("buf2_save", 1)
   local call = context.calls_named("saveBuffer")[1]
   assert_equal(call.args[1], 1); assert_true(call.args[2]:match("strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf2%.wav$"))
   params:set("buf1_file", context.audio_dir .. "one.wav"); io.open(context.audio_dir .. "one.wav", "w"):close()
-  params:set("buf4_record", 1); context.clock.advance()
+  params:set("buf4_record", 1); wake_buffer_clock(context, 4)
   context.polls.fire("bufferState", 304)  -- the engine reports the take
   assert_equal(local_value("buffers")[4].path, context.audio_dir .. "strata/scratch/buf4.wav")
   assert_equal(scratch_take_path(4), context.audio_dir .. "strata/scratch/buf4.wav")
@@ -3792,7 +4072,7 @@ test("explicit save writes a timestamped file; cleanup/init persist buffer paths
 end)
 
 test("buffers.data format, restored scratch takes and the SETUP count", function()
-  local context = load_strata({ data_subdir = "buf_format" })
+  local context = load_strata({ data_subdir = "buf_format" }); finish_startup(context)  -- init's start-up coroutine
   local function screen_has(text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return true end
@@ -3804,7 +4084,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   local loaded_file = context.audio_dir .. "loop.wav"
   io.open(loaded_file, "w"):close()
   load_buffer(3, loaded_file)
-  record_buffer(5); context.clock.advance()
+  record_buffer(5); wake_buffer_clock(context, 5)
   context.polls.fire("bufferState", 404)        -- the engine reports the take
   -- the engine wrote the take
   util.make_dir(context.audio_dir .. "strata/scratch/")
@@ -3941,10 +4221,10 @@ end)
 
 test("a buffers file that fails to load does not stop init and survives cleanup", function()
   local bad_files = {
-    { name = "wrong version", content = "return { version = 99, paths = {} }" },
+    { name = "wrong version", content = tabutil_text({ version = 99, paths = {} }) },
     { name = "raises on load", content = 'error("corrupt buffers file")' },
     { name = "not a table", content = "return 42" },
-    { name = "paths not a table", content = 'return { version = 1, paths = "x" }' },
+    { name = "paths not a table", content = tabutil_text({ version = 1, paths = "x" }) },
   }
   for index, bad in ipairs(bad_files) do
     local subdir = "buf_survive_" .. index
@@ -3983,7 +4263,7 @@ test("a buffers file that fails to load does not stop init and survives cleanup"
 end)
 
 test("MAIN layout holds for buffer- and input-sourced voices", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local _, set_selected = find_upvalue("selected_voice")
   for _, source in ipairs({ 9, 10 }) do
     for voice_idx = 1, 7 do
@@ -4022,7 +4302,7 @@ local function hint_text(context)
 end
 
 test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens the file selector", function()
-  local context = load_strata(); context.clock.advance(); enc(1, 3)
+  local context = load_strata(); finish_startup(context); enc(1, 3)
   assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
   enc(3, 2); assert_equal(params:get("v1_source"), 3)
   key(3, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 1)
@@ -4046,7 +4326,7 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
 end)
 
 test("the same file loads again after a record or clear, from the BUFFER page and PARAMS (F2)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 2)  -- voice 1 reads buffer 1
   context.clear_engine_calls()
   local function loads() return #context.calls_named("loadBuffer") end
@@ -4070,7 +4350,7 @@ test("the same file loads again after a record or clear, from the BUFFER page an
 end)
 
 test("the BUFFER page caches each slot's cut name (M3)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   local measured = 0
   local text_extents = screen.text_extents
   screen.text_extents = function(text) measured = measured + 1; return text_extents(text) end
@@ -4096,7 +4376,7 @@ test("the BUFFER page caches each slot's cut name (M3)", function()
 end)
 
 test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
   context.clear_engine_calls(); context.fileselect.last = nil
@@ -4121,7 +4401,7 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)
 end)
 
 test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
   context.set_time(100)
@@ -4154,7 +4434,7 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
   key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
   assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is cancelled")
   flash_clock = page.flash_clock
-  context.clock.resume_thread(flash_clock)
+  context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
   assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
   assert_equal(page.flash_clock, nil)
   next_frame(context)
@@ -4168,7 +4448,7 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
 end)
 
 test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4)
   local buffers = local_value("buffers")
   tap(3); assert_true(buffers[3].recording, "K3 records into buffer 3")
@@ -4194,7 +4474,7 @@ test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and save
 end)
 
 test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   local drift_metro = local_value("drift_metro")
   context.clear_engine_calls(); context.fileselect.last = nil
@@ -4221,7 +4501,7 @@ test("a K2 released inside the norns menu is forgotten: K3 records again (fix ro
 end)
 
 test("BUFFER K2's release forgets every held key as the file selector opens", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4)
   local held_at_enter
   local stub_enter = context.fileselect.enter
@@ -4240,7 +4520,7 @@ test("BUFFER K2's release forgets every held key as the file selector opens", fu
 end)
 
 test("BUFFER K2 loads a file with no fileselect global: the script requires it (issue #10)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   assert_equal(rawget(_G, "fileselect"), nil, "norns has no fileselect global")
   params:set("v1_source", 2)  -- voice 1 reads buffer 1
   context.clear_engine_calls()
@@ -4252,7 +4532,7 @@ test("BUFFER K2 loads a file with no fileselect global: the script requires it (
 end)
 
 test("Strata's page never draws over the open file selector; redraws draw the selector (issue #10)", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 2)
   local draws = 0  -- Strata's page draws (the stub's fileselect.redraw draws nothing)
   local update = screen.update
@@ -4305,7 +4585,7 @@ end)
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()
   local stub_set_mode
   local context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
-  context.clock.advance(); show_page(4)
+  finish_startup(context); show_page(4)
   assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)
@@ -4348,7 +4628,7 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
 end)
 
 test("key releases reach only the BUFFER page; other pages act once per press", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(2)
   show_page(1)
@@ -4368,7 +4648,7 @@ test("key releases reach only the BUFFER page; other pages act once per press", 
 end)
 
 test("BUFFER page draws the voice, its source and eight buffer rows", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
   load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
@@ -4426,7 +4706,7 @@ test("BUFFER page draws the voice, its source and eight buffer rows", function()
 end)
 
 test("BUFFER page layout holds for every voice, source and buffer state", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("mutation_enabled", 1); params:set("master_density", 2.0)
   capture_scene(8); recall_scene(8, 0)
   local _, set_selected = find_upvalue("selected_voice")
@@ -4457,7 +4737,7 @@ test("BUFFER page layout holds for every voice, source and buffer state", functi
 end)
 
 test("bufferState poll redraws the screen and the grid's buffer page", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
   load_buffer(3, "/tmp/a.wav")
   local refreshes = device.refresh_count
@@ -4471,7 +4751,7 @@ test("bufferState poll redraws the screen and the grid's buffer page", function(
 end)
 
 test("bufferState poll ignores NaN, infinities and out-of-range slots", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   local buffers = local_value("buffers")
   context.polls.fire("bufferState", 304)   -- slot 4 holds 4 s
   local before = deep_copy(buffers)
@@ -4488,7 +4768,7 @@ test("bufferState poll ignores NaN, infinities and out-of-range slots", function
 end)
 
 test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
-  local context = load_strata(); context.clock.advance(); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page(4)
   local device = context.arc.plug(1)
   params:set("v1_source", 2)
   params:set("v1_buf_pos", 0.5); params:set("v1_buf_rate", 1)
@@ -4520,7 +4800,7 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
 end)
 
 test("grid page 4 buffer rows record, clear and set sources with LED feedback", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
   context.grid.press(1, 5, 1, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 4)
   assert_equal(device:get_led(5, 1), 15)
@@ -4530,7 +4810,7 @@ test("grid page 4 buffer rows record, clear and set sources with LED feedback", 
 end)
 
 test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid changes", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
   load_buffer(2, "/tmp/a.wav")              -- loaded, not from the grid
   params:set("record_duration", 2); params:set("buf6_record", 1)  -- recording, from params
@@ -4555,7 +4835,7 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   -- the selected source wins over "empty"
   params:set("v4_source", 9); assert_equal(device:get_led(9, 12), 15, "selected empty buffer lit 15")
   -- the recording completes: 15 -> 8
-  context.clock.advance(); assert_equal(device:get_led(6, 1), 15, "a take waiting for the engine stays lit")
+  wake_buffer_clock(context, 6); assert_equal(device:get_led(6, 1), 15, "a take waiting for the engine stays lit")
   context.polls.fire("bufferState", 503)  -- the engine reports the take
   assert_equal(device:get_led(6, 1), 8, "finished take shown as loaded")
   clear_buffer(2); assert_equal(device:get_led(2, 1), 2, "cleared buffer dim")
@@ -4574,7 +4854,7 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
 end)
 
 test("input-sourced voices: main param, faders, randomize, mutate and drift use grain params", function()
-  local context = load_strata(); context.clock.advance()   -- voice 1 running
+  local context = load_strata(); finish_startup(context)   -- voice 1 running
   local device = context.arc.plug(1)
   params:set("v1_source", 10)
   assert_equal(main_param_id(1), "v1_grain_size"); assert_equal(main_param_label(1), "size")
@@ -4624,7 +4904,7 @@ end)
 
 -- lfo_depth_<n> is the library's percentage (0-100)
 test("LFO modulates around the stored value without writing it, and restores on disable", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("filter_freq", 1000); params:set("strata_lfo1_dest", 4)   -- filt freq
   params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
   context.clear_engine_calls(); context.lfo.tick(local_value("lfos")[1], 1.0)   -- scaled = +0.5
@@ -4636,7 +4916,7 @@ test("LFO modulates around the stored value without writing it, and restores on 
 end)
 
 test("main destination follows a voice's source and restores the old param", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("strata_lfo2_dest", 13)   -- v1 main
   params:set("lfo_depth_2", 100); params:set("lfo_2", 2)
   context.lfo.tick(local_value("lfos")[2], 0.5)
@@ -4648,7 +4928,7 @@ test("main destination follows a voice's source and restores the old param", fun
 end)
 
 test("LFO restores the stored value when its depth reaches 0 or its destination changes", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local lfos = local_value("lfos")
   params:set("delay_mix", 0.2); params:set("strata_lfo1_dest", 9)   -- dly mix
   params:set("lfo_depth_1", 40); params:set("lfo_1", 2)
@@ -4674,7 +4954,7 @@ test("LFO restores the stored value when its depth reaches 0 or its destination 
 end)
 
 test("LFOs on params of one command, or on one param, do not undo each other", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local lfos = local_value("lfos")
   params:set("filter_freq", 1000); params:set("filter_res", 0.5)
   params:set("strata_lfo1_dest", 4); params:set("strata_lfo2_dest", 5)   -- filt freq, filt res
@@ -4740,7 +5020,7 @@ test("LFO params: library groups, a destination group, labels and resolvers", fu
 end)
 
 test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destination", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   show_page(3)
   enc(2, 1); assert_equal(local_value("selected_lfo"), 2)
   enc(2, 5); assert_equal(local_value("selected_lfo"), 3, "clamped to 3 LFOs")
@@ -4756,7 +5036,7 @@ test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destinati
 end)
 
 test("the LFO page redraws on every frame while it is shown, with no clock of its own", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local baseline = context.clock.pending_count()
   show_page(3)
   assert_equal(context.clock.pending_count(), baseline, "no page clock: the frame clock draws it")
@@ -4788,7 +5068,7 @@ local function lfo_row_drawing(context, n)
 end
 
 test("LFO page rows: waveform, dot from the last raw value and elapsed period, labels; cleanup stops LFOs", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local lfos = local_value("lfos")
   context.set_time(100)
   params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
@@ -4849,7 +5129,7 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
 end)
 
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   show_page(3)
   context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
@@ -4871,7 +5151,7 @@ test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", functio
 end)
 
 test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode changes", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   context.arc.plug(1); show_page(3)
   for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
   local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
@@ -4897,7 +5177,7 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
 end)
 
 test("scenes capture and recall the LFOs; old files load with LFOs off", function()
-  local context = load_strata({ data_subdir = "lfo_scenes" }); context.clock.advance()
+  local context = load_strata({ data_subdir = "lfo_scenes" }); finish_startup(context)
   params:set("lfo_shape_1", 2); params:set("lfo_mode_1", 1); params:set("lfo_clocked_1", 5)
   params:set("lfo_free_2", 9); params:set("lfo_depth_2", 60); params:set("strata_lfo2_dest", 14)
   params:set("lfo_2", 2)
@@ -4940,7 +5220,7 @@ test("scenes capture and recall the LFOs; old files load with LFOs off", functio
 end)
 
 test("param actions under a running LFO send the modulated value (drift, edits)", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local lfos = local_value("lfos")
   params:set("v1_source", 2)                                     -- buf 1: the drift moves buf_pos
   params:set("v1_buf_pos", 0.4); params:set("strata_lfo1_dest", 18)  -- v1 pos
@@ -4965,7 +5245,7 @@ test("param actions under a running LFO send the modulated value (drift, edits)"
 end)
 
 test("LFO steps run at 48 ppqn and skip sends below 1/1000 of the range; restores always send", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   local lfos = local_value("lfos")
   for n = 1, 3 do assert_equal(lfos[n]:get("ppqn"), 48, "LFO " .. n .. " ppqn") end
   params:set("filter_mix", 0.5); params:set("strata_lfo1_dest", 6)  -- filt mix (0-1)
@@ -5002,7 +5282,7 @@ test("LFO steps run at 48 ppqn and skip sends below 1/1000 of the range; restore
 end)
 
 test("cleanup stops the LFOs and restores their destinations", function()
-  local context = load_strata(); context.clock.advance()
+  local context = load_strata(); finish_startup(context)
   params:set("filter_freq", 800); params:set("strata_lfo1_dest", 4)
   params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
   context.lfo.tick(local_value("lfos")[1], 1.0)
@@ -5019,6 +5299,12 @@ local failures = 0
 for _, entry in ipairs(tests) do
   local ok, err = xpcall(entry.func, debug.traceback)
   print = real_print
+  -- errors the scheduler reported while resuming a clock (norns prints them
+  -- and keeps running) fail the test unless it claimed them (clock.take_errors)
+  local clock_errors = stubs.take_clock_errors()
+  if ok and #clock_errors > 0 then
+    ok, err = false, "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
+  end
   if ok then
     real_print("ok   " .. entry.name)
   else
