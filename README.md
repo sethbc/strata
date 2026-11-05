@@ -236,7 +236,7 @@ Confluence mapped CC 7 to the global grain amplitude and CC 10 to position sprea
 
 ### Monome Arc (optional)
 
-Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). If a second arc is plugged in while one is connected, it is ignored.
+Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). If a second arc is plugged in while one is connected, it is ignored; unplugging the connected arc moves Strata to the other one.
 
 #### Arc Encoders
 
@@ -311,6 +311,7 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 **Rows 9-12: Parameter Faders** (Page 2)
 - Each row is a fader for one parameter of the voice selected in row 14
 - Press a column to set the value: column 1 = minimum, column 16 = maximum, following each parameter's curve (frequency and cutoff faders are exponential, so low frequencies get as many columns as high ones)
+- Faders whose range runs through zero (pan, buffer scan and the cross-modulation amounts) have a column that sets exactly zero (column 9 for their symmetric ranges); each side of it spreads its half of the range over its own columns
 - The row lights up to the current value (dim bar, bright value position)
 - The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap); the grain mode fader is continuous on columns 1-8 and triggered on columns 9-16
 - Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread, envelope and mode, then source / amp mod / freq mod for cross-modulation slots 1-3

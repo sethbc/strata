@@ -985,6 +985,51 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   end
 end)
 
+test("bipolar grid faders have a column that sets exactly 0, and keep both ends (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  -- 16 columns have no centre: a plain sweep of -1..1 gives +/-0.07 there
+  params:set("v1_source", 2)  -- a buffer voice: its faders include scan and pan
+  for _, param_id in ipairs({"v1_pan", "v1_buf_scan", "v1_mod_amp_amt_1", "v1_mod_freq_amt_1"}) do
+    local minval, maxval = param_range(param_id)
+    local zero_column
+    local previous = -math.huge
+    for x = 1, 16 do
+      set_param_from_column(param_id, x)
+      local value = params:get(param_id)
+      assert_true(value > previous, param_id .. ": column " .. x .. " sets more than column " .. (x - 1))
+      previous = value
+      if value == 0 then zero_column = x end
+      assert_equal(fader_position(param_id), x, param_id .. ": the value set by column " .. x .. " shows there")
+    end
+    assert_true(zero_column ~= nil, param_id .. ": a column sets exactly 0")
+    assert_equal(zero_column, 9, param_id .. ": column 9 for a symmetric range (README)")
+    set_param_from_column(param_id, 1)
+    assert_near(params:get(param_id), minval, 1e-9, param_id .. ": column 1 still sets the minimum")
+    set_param_from_column(param_id, 16)
+    assert_near(params:get(param_id), maxval, 1e-9, param_id .. ": column 16 still sets the maximum")
+    params:set(param_id, 0)  -- 0 set elsewhere (PARAMS, a scene) shows at the zero column
+    assert_equal(fader_position(param_id), zero_column, param_id .. ": 0 shows at its column")
+  end
+  -- on the grid: page 2, voice 1, fader page 2 (row 9: pan)
+  context.grid.press(1, 14, 8, 1); context.grid.press(1, 1, 14, 1); context.grid.press(1, 2, 13, 1)
+  params:set("v1_pan", 1)
+  local pan_zero_column = (function()
+    for x = 1, 16 do
+      set_param_from_column("v1_pan", x)
+      if params:get("v1_pan") == 0 then return x end
+    end
+  end)()
+  params:set("v1_pan", 1)
+  context.grid.press(1, pan_zero_column, 9, 1)
+  assert_equal(params:get("v1_pan"), 0, "the pan fader's zero column centres the pan")
+  assert_equal(device:get_led(pan_zero_column, 9), 15, "and the fader shows it there")
+  -- unipolar faders keep the plain sweep: column 8 on the exp freq fader
+  params:set("v1_source", 1)
+  set_param_from_column("v1_freq", 8)
+  assert_near(params:get("v1_freq"), 20 * (2000 / 20) ^ (7 / 15), 1.0, "column 8 on an exp fader")
+end)
+
 local GRID_SIZES = {
   { name = "256", cols = 16, rows = 16 },
   { name = "128h", cols = 16, rows = 8 },
@@ -1989,6 +2034,18 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
   end
 end)
 
+test("every voice type's list name is at most 5 characters, as MAIN_PARAMS states (#49)", function()
+  load_strata()
+  local main_params = local_value("MAIN_PARAMS")
+  local voices = local_value("voices")
+  for voice_idx = 1, #voices do
+    local voice_type = voices[voice_idx].name
+    local list_name = main_params[voice_type].list_name
+    assert_true(type(list_name) == "string" and #list_name >= 1, voice_type .. " has a list name")
+    assert_true(#list_name <= 5, voice_type .. "'s list name '" .. list_name .. "' has at most 5 characters")
+  end
+end)
+
 test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
   local context = load_strata(); finish_startup(context)
   assert_equal(local_value("ui_page"), 1)
@@ -2185,6 +2242,29 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_equal(setup_text(context), "connected", "removing another port's arc keeps Strata's arc")
   context.arc.unplug(1)
   assert_equal(setup_text(context), "none", "removing Strata's arc disconnects it")
+
+  -- two arcs: unplugging the followed one moves to the other (#49). norns
+  -- clears the removed vport only after arc.remove returns, so it is skipped
+  context = load_strata(); finish_startup(context)
+  density = params:lookup_param("master_density")
+  context.arc.plug(1)
+  local second_arc = context.arc.plug(3)
+  context.arc.unplug(1)
+  assert_equal(setup_text(context), "connected", "the other arc is followed")
+  assert_true(context.arc.vports[3].delta ~= nil, "its vport gets the handlers")
+  assert_equal(context.arc.vports[1].delta, nil, "the removed arc's vport keeps none")
+  before = density.raw
+  context.arc.turn(3, 1, 20)
+  assert_near(density.raw - before, 20 / 512, 1e-9, "turning the other arc works")
+  local refreshes = second_arc.refresh_count
+  next_frame(context)
+  assert_equal(second_arc.refresh_count, refreshes + 1, "its rings are drawn")
+  context.arc.plug(1)
+  assert_equal(context.arc.vports[1].delta, nil, "an arc plugged back in is not followed")
+  context.arc.unplug(3)
+  assert_true(context.arc.vports[1].delta ~= nil, "until the followed one goes")
+  context.arc.unplug(1)
+  assert_equal(setup_text(context), "none", "removing the last arc disconnects")
 end)
 
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
@@ -2397,6 +2477,60 @@ test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)"
   assert_equal(context.clock.threads[frame_clock], nil, "cleanup cancels the frame clock")
 end)
 
+test("a drifting buffer position redraws only for the selected voice (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  local voices = local_value("voices")
+  assert_true(voices[2].active, "voice 2 runs")
+  params:set("v2_source", 3)  -- voice 2 drifts its buffer position; voice 1 (selected) is a synth
+  params:set("v2_buf_pos", 0.5)  -- away from the ends, so every drift step moves it
+  local drift_metro = local_value("drift_metro")
+  for page = 1, #PAGE_TITLES do
+    show_page(page)
+    next_frame(context)
+    local counter = count_screen_draws()
+    local arc_refreshes = arc_hardware.refresh_count
+    local position = params:get("v2_buf_pos")
+    drift_metro.event()
+    next_frame(context)
+    counter.restore()
+    assert_true(params:get("v2_buf_pos") ~= position, "voice 2's position drifted")
+    -- the LFO page draws every frame anyway
+    if PAGE_TITLES[page] ~= "LFO" then
+      assert_equal(counter.screen, 0, PAGE_TITLES[page] .. ": an unselected voice's drift draws nothing")
+    end
+    assert_equal(arc_hardware.refresh_count, arc_refreshes, PAGE_TITLES[page] .. ": nor the arc")
+  end
+  -- selected, its drift shows on MAIN and the BUFFER page's arc ring
+  show_page(1); enc(2, 1)
+  assert_equal(local_value("selected_voice"), 2)
+  next_frame(context)
+  local counter = count_screen_draws()
+  drift_metro.event()
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 1, "the selected voice's drift redraws")
+end)
+
+test("the arc keeps drawing while the norns menu is open (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  next_frame(context)
+  _menu.set_mode(true)
+  -- norns' set_mode(true) swaps the global redraw for norns.none (the stub only tracks the mode)
+  local script_redraw = redraw
+  local screen_draws = 0
+  redraw = function() screen_draws = screen_draws + 1 end
+  local arc_refreshes = arc_hardware.refresh_count
+  local density = params:get("master_density")
+  params:set("master_density", density / 2)  -- PARAMS, a CC map or an LFO while the menu is open
+  next_frame(context)
+  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "the frame draws the arc's rings")
+  assert_equal(screen_draws, 1, "and calls the global redraw, which is norns.none in the menu")
+  redraw = script_redraw
+  _menu.set_mode(false)
+end)
+
 test("a draw that fails prints the error and the frame clock keeps drawing (#11)", function()
   local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
@@ -2427,6 +2561,42 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
   assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the arc")
 end)
 
+test("a draw that keeps failing prints its error once, until the error changes (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  next_frame(context)
+  local real_redraw, real_arc_redraw = redraw, arc_redraw
+  local screen_message = "screen draw failed"
+  redraw = function() error(screen_message) end
+  arc_redraw = function() error("arc draw failed") end
+  local function failures_printed(text)
+    local count = 0
+    for _, line in ipairs(context.printed) do
+      if line:find(text, 1, true) then count = count + 1 end
+    end
+    return count
+  end
+  context.printed = {}
+  for _ = 1, 15 do  -- a second of frames, each asked for
+    request_redraw()
+    next_frame(context)
+  end
+  assert_equal(failures_printed("screen draw failed"), 1, "a persistent screen error prints once")
+  assert_equal(failures_printed("arc draw failed"), 1, "a persistent arc error prints once")
+  screen_message = "another screen failure"
+  request_redraw(); next_frame(context)
+  request_redraw(); next_frame(context)
+  assert_equal(failures_printed("another screen failure"), 1, "a new error prints, once")
+  assert_equal(failures_printed("arc draw failed"), 1, "the arc's unchanged error stays quiet")
+  -- after a good frame the same error is news again
+  redraw = real_redraw
+  request_redraw(); next_frame(context)
+  redraw = function() error(screen_message) end
+  request_redraw(); next_frame(context)
+  assert_equal(failures_printed("another screen failure"), 2, "the error after a good frame prints")
+  redraw, arc_redraw = real_redraw, real_arc_redraw
+end)
+
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
   local context = load_strata()
   local arc_hardware = context.arc.plug(1)
@@ -2443,9 +2613,15 @@ test("displayed changes from every source reach the screen and arc on the next f
     context.midi.send(1, { type = "note_on", ch = 1, note = 69, vel = 100 })
   end)
   assert_true(screen_shows(context, "440 Hz"), "MAIN shows the note's frequency")
-  assert_drawn_on_next_frame(context, arc_hardware, "MIDI pitchbend", function()
-    context.midi.send(1, { type = "pitchbend", ch = 1, val = 12000 })
-  end)
+  -- nothing shows the bend: a wheel's stream draws nothing (#49)
+  next_frame(context)
+  local bend_counter = count_screen_draws()
+  local bend_arc_refreshes = arc_hardware.refresh_count
+  context.midi.send(1, { type = "pitchbend", ch = 1, val = 12000 })
+  next_frame(context)
+  bend_counter.restore()
+  assert_equal(bend_counter.screen, 0, "MIDI pitchbend draws no screen")
+  assert_equal(arc_hardware.refresh_count, bend_arc_refreshes, "nor the arc")
   assert_drawn_on_next_frame(context, arc_hardware, "MIDI note on a stopped voice", function()
     context.midi.send(1, { type = "note_on", ch = 4, note = 40, vel = 100 })
   end)
@@ -2660,6 +2836,41 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   context.grid.unplug(1)
   assert_equal(next(local_value("grids")), nil, "unplug clears the grids table")
   grid_redraw()
+end)
+
+test("grid scene LEDs light the scene a sequenced instant recall loaded at once (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  context.grid.press(1, 15, 8, 1)  -- grid page 3 (scenes)
+  capture_scene(1); capture_scene(2)
+  params:set("scene_sequence_length", 2)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(local_value("current_scene"), 1, "the sequencer recalled scene 1")
+  -- at 4 s the sequencer moves on and recalls scene 2 instantly
+  context.clock.run_for(4, 0.001)
+  assert_equal(local_value("current_scene"), 2, "the sequencer recalled scene 2")
+  assert_equal(device:get_led(2, 1), 15, "scene 2 is lit")
+  assert_equal(device:get_led(1, 1), 8, "scene 1 shows as populated, no longer as the current scene")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("grid sequencer LEDs follow a length or start set outside the grid (#49)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  context.grid.press(1, 15, 8, 1)  -- grid page 3 (scenes)
+  -- row 5: column 1 the sequencer, columns 3-10 the sequence length
+  params:set("scene_sequence_length", 6)  -- PARAMS, a CC map or a PSET
+  assert_equal(device:get_led(8, 5), 8, "length 6 lights column 8")
+  assert_equal(device:get_led(9, 5), 2, "and not column 9")
+  params:set("scene_sequence_length", 2)
+  assert_equal(device:get_led(4, 5), 8, "length 2 lights column 4")
+  assert_equal(device:get_led(5, 5), 2, "the LEDs past it go dark at once")
+  params:set("scene_sequencer_enabled", 1)  -- started from PARAMS
+  assert_equal(device:get_led(1, 5), 15, "the sequencer LED lights as it starts")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(device:get_led(1, 5), 4, "and dims as it stops")
 end)
 
 test("hot-plugged grid and arc fire handlers once per event (I3)", function()
@@ -5082,6 +5293,83 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   assert_equal(#context.calls_named("loadBuffer"), 1, "and loads")
   redraw(); assert_equal(draws, 2, "the script draws again after a choice")
   screen.update = update
+end)
+
+test("a file selector that fails to open leaves the BUFFER page drawing (#49)", function()
+  local context = load_strata(); finish_startup(context); show_page(4)
+  params:set("v1_source", 2)
+  local stub_enter = context.fileselect.enter
+  local script_key, script_enc = key, enc
+  -- fails after it has put its own handlers in the globals, as fs.enter does
+  context.fileselect.enter = function()
+    key, enc = function() end, function() end
+    error("no audio folder")
+  end
+  key(2, 1)
+  local released, release_error = pcall(key, 2, 0)
+  context.fileselect.enter = stub_enter
+  assert_equal(key, script_key, "Strata's key handler is back")
+  assert_equal(enc, script_enc, "and its encoder handler")
+  assert_true(not released, "K2's release raises the selector's error")
+  assert_true(tostring(release_error):find("no audio folder", 1, true), "the same error: " .. tostring(release_error))
+  assert_equal(local_value("BUFFER_PAGE").file_selector_open, false, "the selector state is cleared")
+  local draws = 0
+  local update = screen.update
+  screen.update = function() draws = draws + 1; return update() end
+  next_frame(context)
+  screen.update = update
+  assert_equal(draws, 1, "the next frame draws the page, not a selector that never opened")
+  tap(2); assert_true(context.fileselect.last ~= nil, "K2 opens the selector afterwards")
+  context.fileselect.close("/tmp/after.wav")
+  assert_equal(#context.calls_named("loadBuffer"), 1, "and its choice loads")
+end)
+
+test("a menu file selector opened over BUFFER K2's gives Strata its keys and page back as the menu closes (#49)", function()
+  local context = load_strata(); finish_startup(context); show_page(4)
+  params:set("v1_source", 2)
+  local page = local_value("BUFFER_PAGE")
+  local selector = context.fileselect
+  local script_key, script_enc = key, enc
+  tap(2); assert_true(page.file_selector_open, "K2 opens the selector")
+  -- norns' fs.enter, from play mode, puts its own key and enc handlers in
+  -- the globals (the stub does not): only fs.exit for this selector restores them
+  local selector_key, selector_enc = function() end, function() end
+  key, enc = selector_key, selector_enc
+  -- K1 opens and closes the menu over it: the selector is still Strata's
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_true(page.file_selector_open, "the menu alone leaves the selector open")
+  assert_equal(key, selector_key, "and its keys with it")
+  -- K1, PARAMS, a file param: norns has one selector, now the menu's (Strata's
+  -- callback is gone); fs.exit gives the menu its handlers back, not Strata's
+  _menu.set_mode(true)
+  local picked
+  selector.enter(_path.audio, function(path) picked = path end)
+  selector.close("/tmp/param.wav")
+  assert_equal(picked, "/tmp/param.wav", "the PARAMS selector's choice")
+  _menu.set_mode(false)  -- K1 back to play mode
+  assert_equal(page.file_selector_open, false, "the superseded selector state is cleared")
+  assert_equal(key, script_key, "Strata's key handler is back")
+  assert_equal(enc, script_enc, "and its encoder handler")
+  local draws, selector_redraws = 0, selector.redraws
+  local update = screen.update
+  screen.update = function() draws = draws + 1; return update() end
+  redraw()
+  screen.update = update
+  assert_equal(draws, 1, "redraw() draws the page again")
+  assert_equal(selector.redraws, selector_redraws, "not the file list")
+  -- the same, with the menu closed while the PARAMS selector is still open
+  tap(2); assert_true(page.file_selector_open, "K2 opens Strata's selector again")
+  key, enc = selector_key, selector_enc
+  _menu.set_mode(true)
+  selector.enter(_path.audio, function() end)
+  _menu.set_mode(false)
+  assert_equal(page.file_selector_open, false, "cleared")
+  assert_equal(key, script_key, "and the keys are Strata's")
+  -- Strata's own selector still works
+  context.clear_engine_calls()
+  tap(2); selector.close("/tmp/b.wav")
+  assert_equal(#context.calls_named("loadBuffer"), 1, "K2's selector loads its choice")
+  assert_equal(page.file_selector_open, false)
 end)
 
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()

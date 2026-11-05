@@ -1646,7 +1646,9 @@ end
 -- calls the callback with the chosen path or "cancel". The stub makes those
 -- redraw() calls too, but does not reroute key/enc (tests keep pressing the
 -- script's keys while the selector is "open"). fs.redraw draws the file
--- list; the stub counts the calls in `redraws` and draws nothing.
+-- list; the stub counts the calls in `redraws` and draws nothing. Like
+-- fs.enter, enter stores the callback in `callback`: norns has one selector,
+-- so a second enter (from a PARAMS file param) replaces the first's.
 ---------------------------------------------------------------------------
 
 local function make_fileselect()
@@ -1663,6 +1665,7 @@ local function make_fileselect()
   function fileselect.enter(folder, callback, filter)
     entered = true
     fileselect.last = { folder = folder, callback = callback, filter = filter }
+    fileselect.callback = callback
     menu_init_redraw()
     fileselect.redraw()
   end
