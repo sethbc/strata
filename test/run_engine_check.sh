@@ -4,13 +4,22 @@
 # private bus, so it is silent) and exercises every engine command.
 #
 # usage: test/run_engine_check.sh [path/to/norns]
-#   NORNS_DIR / SCLANG environment variables override the defaults.
+#   NORNS_DIR / SCLANG environment variables override the defaults. sclang is
+#   $SCLANG if set, else `sclang` on PATH, else the macOS SuperCollider app.
+#   scsynth needs a running JACK server on Linux (see README, Development).
 set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 norns_dir=${1:-${NORNS_DIR:-$HOME/src/norns}}
-sclang=${SCLANG:-/Applications/SuperCollider.app/Contents/MacOS/sclang}
+mac_sclang=/Applications/SuperCollider.app/Contents/MacOS/sclang
+if [ -n "${SCLANG:-}" ]; then
+  sclang=$SCLANG
+elif command -v sclang >/dev/null 2>&1; then
+  sclang=$(command -v sclang)
+else
+  sclang=$mac_sclang
+fi
 
 if [ ! -d "$norns_dir/sc/core" ]; then
   echo "norns source not found at $norns_dir (pass it as the first argument)" >&2

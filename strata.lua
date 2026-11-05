@@ -4335,12 +4335,9 @@ end
 
 -- 256 row 8: pattern controls, tempo and page indicators
 function grid_redraw_256_transport(grid_device)
-  if pattern_playing then
-    grid_device:led(1, 8, 15)
-    grid_device:led(2, 8, 15)
-  else
-    grid_device:led(1, 8, 4)
-    grid_device:led(2, 8, 4)
+  -- columns 1-4 all act as play/stop
+  for x = 1, 4 do
+    grid_device:led(x, 8, pattern_playing and 15 or 4)
   end
 
   -- Tempo indicators
@@ -4429,12 +4426,9 @@ function grid_redraw_128h(grid_device)
   end
 
   -- Row 8: Controls (always visible)
-  if pattern_playing then
-    grid_device:led(1, 8, 15)
-    grid_device:led(2, 8, 15)
-  else
-    grid_device:led(1, 8, 4)
-    grid_device:led(2, 8, 4)
+  -- columns 1-4 all act as play/stop
+  for x = 1, 4 do
+    grid_device:led(x, 8, pattern_playing and 15 or 4)
   end
 
   -- Page indicators (3 pages now)

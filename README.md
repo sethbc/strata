@@ -87,7 +87,7 @@ Three LFOs, built on norns' own LFO library, can each modulate one parameter:
 - **Destinations** - none, master density, tape drift, filter freq / res / mix, delay time / feedback / mix, reverb mix / size / damp, and for each voice: its main parameter (the one E3 adjusts: the synthesis parameter, or buffer position for a buffer-sourced voice, grain size for an input-sourced one), grain size, density, pitch, spread, buffer position, rate and scan
 - **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
 
-The fastest rate is 10 Hz (the library's 0.1 s free period); Confluence promised 20 Hz, which would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
+The fastest free rate is 10 Hz (the library's 0.1 s free period). Clocked rates follow the tempo: 1/16 bar is a quarter beat, so it is 8 Hz at 120 BPM and 20 Hz at 300 BPM. Confluence promised 20 Hz at any tempo, which would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
 ### MIDI Input
 
@@ -361,12 +361,12 @@ Scene LED feedback:
 - 16 steps per voice pattern
 
 **Row 8: Multi-function Controls**
-- Columns 1-4: Play/stop
+- Columns 1-4: Play/stop (all four light while the pattern plays)
 - Column 5: Patterns page
-- Column 6: Parameters page
+- Column 6: Selects page 2, which looks and behaves exactly like the patterns page on this layout (the parameter faders exist only on the 256)
 - Column 7: Scenes page
 - Columns 9-15: Voice toggle on/off
-- Column 16: Cycle voice selection
+- Column 16: Cycles the selected voice, which only matters for the 256's faders; it has no visible effect on this layout
 
 **Scenes page (row 8, column 7)**
 - Row 1: Scene recall (instant), scenes 1-8
@@ -383,7 +383,7 @@ Scene LED feedback:
 **Column 8: Controls**
 - Rows 1-7: Toggle voices on/off
 - Row 9: Play/stop sequencer
-- Rows 10-16: Voice selection for parameters (row 10 = voice 1 ... row 16 = voice 7)
+- Rows 10-16: Select the voice (row 10 = voice 1 ... row 16 = voice 7) and light the selected one. The selection only matters for the 256's faders, so it has no effect on this layout
 
 #### 8×8 Grid Layout (64 buttons)
 
@@ -614,7 +614,16 @@ Input source:   Audio input → Input Bus → Granular Processor → Main Bus (a
 Off-device checks (no norns needed):
 - `lua test/run.lua` (or `luajit test/run.lua`) - behaviour tests against norns stubs
 - `lua test/sync_check.lua` - checks Lua `engine.*` calls against the engine's commands
-- `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider)
+- `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider; the norns source defaults to `~/src/norns` or `$NORNS_DIR`)
+
+The engine check uses `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app. On Linux, install `supercollider-language`, `supercollider-server` and `jackd2`, start a JACK server with a dummy driver (scsynth needs one, no sound card required) and run the check headless:
+
+```sh
+jackd --no-realtime -d dummy -r 48000 -p 1024 &
+QT_QPA_PLATFORM=offscreen test/run_engine_check.sh ~/src/norns
+```
+
+Run only one engine check at a time per machine (it uses scsynth's port 57110).
 
 `test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands.
 
