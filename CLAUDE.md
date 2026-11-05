@@ -4,14 +4,14 @@ This file gives Claude Code (claude.ai/code) guidance for working in this reposi
 
 ## Project Overview
 
-Strata is an ambient granular soundscape generator for monome norns. It has seven synthesis voices (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring), each with its own granular processor. Any voice's grain stage can read one of eight stereo sample buffers or the live input instead of its synth. A filter, delay and reverb, three global LFOs, MIDI input, scenes, a five-page screen UI, grid and arc complete it. Version 3.0 absorbed the Confluence script's feature set (see CHANGELOG.md).
+Strata is an ambient granular soundscape generator for monome norns. It has seven synthesis voices (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring), each with its own granular processor. Any voice's grain stage can read one of eight stereo sample buffers or the live input instead of its synth. A filter, delay and reverb, three global LFOs, MIDI input, scenes, a five-page screen UI, grid and arc complete it. Version 3.0 added the buffers and live input, the filter and delay, grain envelopes and triggered grains, the LFOs, MIDI and the paged screen. The current release is 3.0.2 (see CHANGELOG.md).
 
 **Where things are documented:**
-- `docs/superpowers/status.md`: **read first.** It lists open items (with GitHub issues), the decisions taken on Seth's behalf and how to run the checks. Update it at the end of each piece of work.
+- `docs/status.md`: **read first.** It lists open items (with GitHub issues), the decisions taken during development (each with what it costs if wrong) and how to run the checks. Update it at the end of each piece of work.
 - `docs/notes/engine.md`: the engine. Signal flow, cross-modulation, `voiceOn` sync, retrigger and accent, pitchbend, the grain/envelope/mode params, audio sources (buffers, input, mirror, replace-never-stack, kill fade), buffer commands and file writes, SynthDefs, buses, node ordering, synth lifecycle.
 - `docs/notes/lua.md`: the Lua side. Voice state, `send_param_to_engine`, the param system, LFOs, MIDI, mutations, scenes (transitions, migration, validation, persistence), buffers persistence, bounds checks, cleanup, grid, arc, screen pages and MAIN layout, plus the version history and future ideas.
 - `README.md`: user documentation (controls, grid/arc layouts, params). `CHANGELOG.md`: per-release changes.
-- `docs/superpowers/specs/2026-11-03-confluence-features-design.md`: the 3.0 design, still the reference for behaviour.
+- `docs/design/3.0-design.md`: the 3.0 design, still the reference for behaviour. Where the code differs from it, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how.
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md or `docs/notes/` may name a command the engine no longer has. Behaviour details are in `docs/notes/engine.md`.
+**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md, `docs/status.md` or `docs/notes/` may name a command the engine no longer has. Behaviour details are in `docs/notes/engine.md`.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
@@ -54,7 +54,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 | `engine.stopRecord(slot)` | `"i"` | End a recording early and keep what was captured (as a completed take). No-op if the slot is not recording |
 | `engine.saveBuffer(slot, path)` | `"is"` | Write the slot's valid region as a stereo 16-bit WAV (creates the directory). Samples beyond ±1 clip symmetrically |
 
-**Poll `bufferState`** (engine → Lua): matron's polls carry one float, so each message carries **one** slot as `slot_index * 100 + seconds` (`BUFFER_STATE_STRIDE` = 100, 0-based slot, seconds ≤ 16). It cycles through the slots every 0.25 s, and every change is also sent at once. A slot that is recording reads 0 s.
+**Poll `bufferState`** (engine → Lua): matron's polls carry one float, so each message carries **one** slot as `slot_index * 100 + seconds` (`BUFFER_STATE_STRIDE` = 100, 0-based slot, seconds ≤ 16). It sends one slot every 0.25 s, in turn, so a full cycle of the eight slots takes 2 s, and every change is also sent at once. A slot that is recording reads 0 s.
 
 **Poll `bufferLoadFailed`** (engine → Lua, not periodic): one message per failed load (a missing, unreadable, unsupported, empty or damaged file, at once; a server read that fails, after the fade and the read), whether or not the slot held audio, as `(load_number * 2 + emptied) * 8 + slot_index` (`NUM_BUFFERS` = 8, 0-based slot; `load_number` counts that slot's `loadBuffer` commands from 1, in the engine and in `load_buffer` alike; `emptied` = 1 when the failed server read left the slot zeroed). Lua's `buffer_load_failed` undoes exactly that load (its previous name, path and file param come back, or the slot shows empty) and never a later load, clear or recording, in whatever order the reports arrive.
 
@@ -90,8 +90,8 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **On norns:** copy the project to `~/dust/code/`, then restart norns or run `;restart` in maiden. SuperCollider changes need a script restart. Watch the maiden console for errors.
 
-**Off-device checks** (run from the repo root before committing; CI runs all three, see status.md):
-- `lua test/run.lua` and `luajit test/run.lua`: behaviour tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal their `strata.lua` constants.
+**Off-device checks** (run from the repo root before committing; CI runs all three, see `docs/status.md`):
+- `lua test/run.lua` and `luajit test/run.lua`: behaviour tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, a docs check (no `engine.<name>(` in this file, README.md, `docs/status.md` or `docs/notes/` names a missing command, and every path under docs/, test/ or .github/ that they name in backticks exists), and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal their `strata.lua` constants.
 - `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand` with the same argument count, and every command is used. Call engine commands only as `engine.<name>(...)`: any other use of `engine` (`engine[name](...)`, `local f = engine.voiceOn`, `local e = engine`) fails the check, which cannot see what it calls.
 - `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` (default `~/src/norns`, or `$NORNS_DIR`) and runs `test/engine_check.scd` on a silent local scsynth. It needs SuperCollider (`$SCLANG` overrides the path). Run only one at a time per machine (port 57110). It stops sclang after `$ENGINE_CHECK_TIMEOUT` s (570) and at once on a compile error, so a broken check never hangs. Besides a failed check it fails on any `ERROR`, `FAILURE`, `alloc failed`, `Too many grains` or `Strata invariant broken` line.
 - Add a test to `test/run.lua` for every behaviour change. Script locals are reached through `find_upvalue()`/`local_value()`.
@@ -114,7 +114,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Bounds-check every index** (voice 1..`NUM_VOICES`, scene, step, slot, grid coordinates) before indexing, so tables never grow by accident. **Clean up** every metro, clock, poll and device handler in `cleanup()`, and cancel an existing clock before starting its replacement.
 
-**Keep docs current in the same change**: README.md (user-facing behaviour), this file (rules, command table) and the matching `docs/notes/` file (implementation details), plus `docs/superpowers/status.md`.
+**Keep docs current in the same change**: README.md (user-facing behaviour), this file (rules, command table) and the matching `docs/notes/` file (implementation details), plus `docs/status.md`.
 
 ### CRITICAL: keep Lua and the engine in sync
 

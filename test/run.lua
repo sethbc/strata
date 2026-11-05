@@ -147,10 +147,13 @@ local function tabutil_text(value)
   return text
 end
 
--- The docs (paths from the repo root) whose engine.<name>( mentions must
--- name commands the engine has: CLAUDE.md, README.md and every docs/notes file
-local function engine_command_docs()
-  local docs = { "CLAUDE.md", "README.md" }
+-- The maintained docs (paths from the repo root): CLAUDE.md, README.md,
+-- docs/status.md and every docs/notes file. Their engine.<name>( mentions
+-- must name commands the engine has, and the repo paths they name must
+-- exist. CHANGELOG.md and docs/design/ are history: they describe a release
+-- as it was, so they are not held to today's commands and files
+local function maintained_docs()
+  local docs = { "CLAUDE.md", "README.md", "docs/status.md" }
   local listing = io.popen('ls "' .. repo_root .. '/docs/notes" 2>/dev/null')
   for name in listing:read("*a"):gmatch("[^\n]+") do
     if name:match("%.md$") then table.insert(docs, "docs/notes/" .. name) end
@@ -684,9 +687,10 @@ test("CLAUDE.md command table lists exactly the engine's commands", function()
   for name in pairs(rows) do
     assert_true(signatures[name] ~= nil, "CLAUDE.md command table lists engine." .. name .. ", which the engine does not have")
   end
-  -- no engine command mentioned anywhere in CLAUDE.md, README.md or docs/notes is gone
-  local doc_names = engine_command_docs()
-  for _, note in ipairs({"docs/notes/engine.md", "docs/notes/lua.md"}) do
+  -- no engine command mentioned anywhere in CLAUDE.md, README.md,
+  -- docs/status.md or docs/notes is gone
+  local doc_names = maintained_docs()
+  for _, note in ipairs({"docs/status.md", "docs/notes/engine.md", "docs/notes/lua.md"}) do
     local listed = false
     for _, doc_name in ipairs(doc_names) do listed = listed or doc_name == note end
     assert_true(listed, "the check reads " .. note)
@@ -697,6 +701,36 @@ test("CLAUDE.md command table lists exactly the engine's commands", function()
       assert_true(signatures[name] ~= nil, doc_name .. " mentions engine." .. name .. ", which the engine does not have")
     end
   end
+end)
+
+test("every repo path the maintained docs name exists (#52)", function()
+  local function exists(path)
+    local handle = io.open(repo_root .. "/" .. path, "r")
+    if handle then handle:close() end
+    return handle ~= nil
+  end
+  local checked = 0
+  for _, doc_name in ipairs(maintained_docs()) do
+    local file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
+    local paths = {}
+    -- `docs/...`, `test/...` and `.github/...` name files in this repo
+    -- (`lib/...` may be a norns library path, so it is not checked)
+    for path in text:gmatch("`([%w%._/%-]+)`") do
+      if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") then
+        table.insert(paths, path)
+      end
+    end
+    -- relative Markdown link targets to a file, such as
+    -- [CHANGELOG.md](CHANGELOG.md) (not code such as `PAGE_KEY[ui_page](n)`)
+    for target in text:gmatch("%]%(([%w%._/%-]+%.%a+)%)") do
+      table.insert(paths, target)
+    end
+    for _, path in ipairs(paths) do
+      checked = checked + 1
+      assert_true(exists(path), doc_name .. " names " .. path .. ", which does not exist")
+    end
+  end
+  assert_true(checked > 0, "the check finds the paths the docs name")
 end)
 
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
@@ -4531,7 +4565,7 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   assert_equal(calls[1].args[1], 0); assert_equal(calls[1].args[2], 3)
   assert_equal(main_param_id(1), "v1_buf_pos"); assert_equal(main_param_label(1), "pos")
   params:set("v1_source", 10); calls = context.calls_named("setGrainSource"); assert_equal(calls[#calls].args[2], 9)
-  assert_equal(main_param_id(1), "v1_grain_size", "input source shows grain size (controller ruling: its buffer params are dead too)")
+  assert_equal(main_param_id(1), "v1_grain_size", "input source shows grain size (a 3.0 decision: its buffer params are dead too)")
   params:set("v1_source", 1); assert_equal(main_param_id(1), "v1_freq")
   -- a stopped voice's source is sent at once (R11) and nothing else is
   context.clear_engine_calls(); params:set("v3_source", 5)

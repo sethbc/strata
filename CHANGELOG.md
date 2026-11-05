@@ -1,5 +1,88 @@
 # Strata Changelog
 
+## Version 3.0.2 - 2026-11-05
+
+Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of those fixes, plus the corrupt-load issue left open in 3.0.1 (issue #5). The numbers in brackets after each fix are its pull requests. No engine command, param or file format changes: scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.0.1 load unchanged. The engine gains one poll, `bufferLoadFailed`. Two fixes change the sound: the Resonator's level, and the pitch of buffers loaded from files that are not at 48 kHz (see Upgrade Notes).
+
+### Fixes
+
+**Sound and engine**
+
+- **Resonator level.** At its defaults the Resonator peaked about 23 on its bus, against 0.05-0.5 for the other voices, so whenever it played the master limiter pushed every other voice down by about 28 dB. A fixed gain cut and a limiter on this voice alone keep it in line (peaks at most 0.75 per channel). As a cross-modulation source, voice 1 now modulates in the same range as the other voices; it used to drive what it modulated to the limit at almost any depth. (#45)
+- **Voices no longer go silent at large grain sizes.** Each grain synth's `PitchShift` window followed the grain size (up to 0.5 s), so seven voices at large grain sizes, plus the synths still fading out after source switches, ran out of scsynth's 8 MB real-time memory pool (norns never raises it), and the newest voices went silent with nothing on screen. The window is now a fixed 0.1 s, grain tables hold 128 grains instead of 512 (still more than Lua can ever ask for), and a voice holds at most one live, one fading and one cutting grain synth, and at most three voice synths, however source switches, stops, starts and scene recalls interleave: fast scrolling, a grid chord of instant recalls, PMAP-mapped source params and fast alternating recalls (A → B → A → C) all stay within the pool, at about 6.9 MB at the peak. (#42, #45, #57)
+- **Scene recalls stop and start voices in order.** A recall that stops a voice stops it before setting its source and params, so no grain synth is built just to be released, and its release tail keeps the outgoing scene's sound. A voice the recall starts is started after its params. (#57)
+- **Buffers from 44.1 kHz files play at the right pitch.** `\strataGrainBuf` applied a file's rate correction twice for files not at the server's rate: a 1 kHz sine in a 44.1 kHz file played at 920 Hz, about 1.4 semitones flat, and a take recorded over that slot was flat too. (#41)
+- **No clicks when a played buffer changes.** Clearing, recording into or loading a slot that a voice is playing fades the voice first, then zeroes or overwrites the buffer. A clear or load sent later still always wins. (#41)
+- **Buffer grains stay inside the sample.** Grains never read past the slot's recorded or loaded length, at any rate, and keep their length while a slot fades out. (#45)
+- **Pan works for buffer and input voices.** Both grain SynthDefs now pan, and the 256 grid's fader pages for these voices include pan. (#45)
+- **NaN guard and filter ceiling.** The Resonator's cutoff stays below Nyquist, and a guard before the effects stops a NaN or an infinity from silencing the delay and reverb until a restart. (#45)
+- **Mod speed survives a restart.** Each voice's mod speed is stored in the engine, so a restarted mod synth gets it back. (#45)
+<!-- #47 (engine minors) goes here once it merges. Draft, from issue #47:
+- **Engine minors.** Releasing and fading grain synths are faded before their slot is zeroed or overwritten (a voice stopped just before a clear, load or recording no longer clicks or replays the new take in its release tail); clearing or recording no longer changes the rate of grains still fading out; the Resonator's limiter looks ahead 3 ms instead of 10 ms (about 20 ms of latency before); a NaN in one voice can no longer spread through cross-modulation into the voices it modulates; mod commands ignore a slot outside 1-3; float temporaries left by a crash are cleaned up at start; a bad load can no longer cancel a command sent just before it; a file whose age cannot be read is reported instead of skipped silently. (#NN)
+-->
+
+**Buffers**
+
+- **Failed loads are reported and undone.** Loading a missing, unreadable, unsupported, empty or damaged file into a slot that held audio was shown as loaded, and its path was remembered for the next start. The engine now decodes a file before reading it (a file more than 4096 frames short of its header, such as a damaged FLAC, is rejected) and reports every rejected load through the new `bufferLoadFailed` poll. The slot gets its previous name, path and file param back, or shows `empty` if the server's read failed after the slot was zeroed; the bad path is never stored, and the BUFFER page flashes `buf <n> load failed`. Each report undoes exactly the load it belongs to, never a later load, clear or recording. (#53)
+- **A bad load cancels a recording** in that slot, including one waiting to start and a stopped take still waiting for its length, so the take is never kept under the bad file's name. (#41)
+- **Leftover `.part` files.** At start the engine deletes only `.part` files older than 60 s, so a write still running in another engine instance (a script reload) is never deleted, and a `.part` file that vanishes during the scan no longer stops the engine starting. (#41)
+- **Takes above level 1 clip** symmetrically when saved instead of wrapping around. (#41)
+
+**Screen, arc and grid**
+
+- **BUFFER K2 works on norns.** Pressing K2 on the BUFFER page raised `attempt to index a nil value (global 'fileselect')` on a real norns, because `fileselect` is not a global there; Strata now loads it with `require`. While the file selector is open, Strata draws the selector, never its page. If the selector fails to open, keys and encoders return to Strata, and a second selector opened from PARAMS over the BUFFER page's no longer leaves the page stuck. (#32, #56)
+- **The screen and arc stay current.** Nothing redrew the screen or arc on a timer, so a MIDI note, a PARAMS edit or CC map, a mutation or a scene transition changed what the pages show without redrawing them. One 15 fps frame clock now draws the screen and the arc whenever something changed, and a burst of arc turns or encoder steps costs one draw per frame instead of one per event. A draw error is printed once, with its traceback, and the next frame still draws. (#39, #56)
+- **Arc rings at their maximum light up.** A ring at its maximum lit nothing on hardware (norns' `Arc:segment` turns a full turn into an empty segment); it now lights all 64 LEDs. (#28)
+- **Arc rings follow their params.** MAIN rings 1, 3 and 4 are drawn from the param specs like every other ring. (#33)
+- **Arc on any port.** Strata follows one arc, on whichever port SYSTEM > DEVICES gives it; at start it used to look only at port 1, and unplugging any arc disconnected it. A second arc is ignored while one is connected, and unplugging the followed arc moves to the next port that holds one. (#33, #56)
+- **The MAIN voice list fits.** A frozen resonator entry ran into the voice details. Entries are now `+` (running) or `-` (stopped), a short type name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[F]` when frozen, all plain ASCII. (#31)
+- **Grid LEDs.** On the 256 and 16×8 layouts all four play/stop columns light to show voice state (only columns 1-2 did). The scene LED follows a sequenced instant recall at once, and the grid repaints when the sequence length changes or the sequencer is started from PARAMS, a MIDI map or a PSET. (#30, #56)
+- **Bipolar faders reach 0.** On the 256 grid's fader pages, a param whose range spans 0 (pan, buffer scan, crossmod depths) is exactly 0 at column 9. (#56)
+
+**Scenes, sequencer and tempo**
+
+- **Sequenced transitions finish.** When the transition time was at least the scene duration, the sequencer's next recall cut the running transition short, so none of a scene's switched settings (voices on/off, sources, patterns, freeze, grain envelope and mode, mod sources, tempo, filter type, LFO settings) ever arrived: the header moved on but the sound didn't. Each scene now plays for the longer of the two times and the sequencer then waits for the transition to end. The wait is bounded: a transition whose next step or end is 1 s overdue has stopped and is cancelled, with a console message, while a slow but healthy one is never cut short. (#34, #54)
+- **Scene edge cases.** Loading scenes during a transition stops it first. Shortening the sequence while it waits wraps to scene 1. LFO depths fade in whole percents and end on the scene's value. A PSET saved with the sequencer on starts it once the whole PSET has loaded (it used to recall scene 1 partway through the read, with the old transition time). A failing sequenced recall is printed with its traceback and the sequencer keeps going. Saving into the scene a transition is heading for no longer makes the transition's end snap back. (#40, #54)
+- **The tempo param follows the clock.** It was copied from norns' clock tempo once at start, so after a tempo change in PARAMETERS > CLOCK or from an external clock, scenes captured a stale tempo, recalling one jumped the clock back, and the grid's tempo buttons stepped from the stale value. It now follows the clock, over the clock's own 1-300 BPM range (it was 40-300). Running `init` twice no longer overflows the stack, and cleanup gives back norns' previous tempo handler. (#37, #54)
+- **Randomize and mutate follow each param's curve.** K2 and mutations drew and stepped linearly between a param's min and max: for exponential params such as freq, 92 % of K2 presses put a Sub voice above 200 Hz, and a mutation could move it by up to 495 Hz. Both now work in the param's normalized range; linear params behave as before. (#29)
+- **Start-up keeps voice 2.** A MIDI note or grid press that started voice 2 in the first half second was undone by the start-up clock, which now starts voice 2 only if it is not running; cleanup cancels that clock. (#35, #54)
+
+### Other Changes
+
+- Documentation: the engine keeps at most 16 s of a file at the server rate (a 96 kHz file keeps 8 s); README's 16×8 and 8×16 grid sections and the LFO rate ceiling describe what the code does; the 3.0 design and the development status moved to `docs/design/3.0-design.md` and `docs/status.md`, the old implementation plans were removed (git history keeps them), and the docs that no longer matched the code were corrected (the `bufferState` poll's cadence, the sequencer's bounded wait, LFO cleanup, redraws).
+- Engine check script: it uses `$SCLANG`, else `sclang` on `PATH`, else the macOS app, and README explains running it on Linux with a JACK dummy server. It stops at once on a compile error and after its own timeout (570 s, below CI's 600 s), killing only its own processes. It fails on "alloc failed" and on a "Strata invariant broken" warning, which two engine paths that should be unreachable now post.
+- CI: `actions/checkout` is pinned to a commit and SuperCollider to the 3.13.0 package norns ships; superseded pull-request runs are cancelled, and runs on `main` never are.
+- `strata.lua`'s main chunk holds 184 of Lua's 200 locals (186 in 3.0.1): `fileselect` added one, and the LFO page's own clock, folded into the frame clock, freed three.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/status.md`. The ones users notice:
+- **Plain ASCII voice-list marks** (`+`/`-`) instead of `●`/`○`, so the list never depends on the norns font having those glyphs.
+- **Loads are decode-checked before they are read.** The check is synchronous: an estimated 0.2 s per FLAC on a norns, a short pause in engine commands during a load you started.
+- **Rapid source switches cut hard.** A synth already in its 50 ms fade-out when the next switch arrives is freed at once, so bursts stay within the memory pool.
+- **Transitions are cancelled after 1 s without progress**, measured from the fade's next due step, not from its start.
+
+### Testing
+
+- `lua test/run.lua` / `luajit test/run.lua` grew from 118 to 210 tests. The stubs now follow norns' own code: `Arc:segment`, `UI.ScrollingList`, `fileselect` (only through `require`), tabutil, the system params, param strings, menu routing and matron's clock scheduler (sleep and sync wake-ups, tie order, event slots). Tests drive the clock they mean (`next_frame`, `finish_startup`, `wake`, `run_for`), and a clock error no test claims fails the run. The engine stub range-checks every index, enumerated and continuous argument and every param name against limits parsed from the engine source; the parsers skip SuperCollider comments; group sizes, the FX defaults and the shared constants are checked against the engine; `sync_check.lua` fails on any use of `engine` it cannot check. A docs check also reads `docs/status.md` and checks that every repo path the docs name exists. Each new test was shown to fail before its fix or against a mutated `strata.lua`.
+- `test/run_engine_check.sh` runs scsynth with norns' 8192 KB pool and checks the memory peak, bursts and alternating recalls with memory probes; measures output pitch for 44.1 kHz files; checks that velocity only scales accent envelopes in every voice and grain SynthDef; and covers buffer fades, bad, damaged and vanished loads and their reports, the Resonator's level, the NaN guard, triggered grains on buffer and input sources, and stop/start cycles counted from the engine's own synth lists.
+
+### Check on Hardware
+
+Tracked on [#6](https://github.com/sethbc/strata/issues/6). New in 3.0.2:
+- The Resonator in the mix and as a cross-modulation source; pitch-shifted voices with the fixed 0.1 s window
+- Real-time memory on norns' own scsynth with seven voices at large grain sizes, and CPU at that peak
+- A 44.1 kHz file's pitch; how long the decode check and a take's write take on the CM3
+- Clicks when scrolling sources fast or chording scene buttons
+- Frame-clock CPU with the arc spinning; tempo following under Link and MIDI clock
+
+### Upgrade Notes
+
+- The Resonator is much quieter on its own, and the other voices are louder whenever it plays (the limiter no longer squashes them). Patches that used voice 1 as a cross-modulation source modulate much less; raise those depths.
+- Buffers loaded from files that are not at 48 kHz (such as 44.1 kHz) play about 1.4 semitones higher than in 3.0.1, at the file's real pitch. Re-tune buffer rates you set to compensate.
+- K2 randomize and mutations spread differently over exponential params (more low frequencies).
+- The `tempo` param's range is 1-300 BPM.
+
 ## Version 3.0.1 - 2026-11-03
 
 Fixes the minor findings deferred from the 3.0 reviews. No engine command, param or file format changes: scenes and `buffers.data` from 3.0 load unchanged.
@@ -51,7 +134,7 @@ Fixes the minor findings deferred from the 3.0 reviews. No engine command, param
 
 ## Version 3.0 - 2026-11-03
 
-Absorbs the feature set the Confluence script promised (buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, a paged screen), so Confluence can be retired. Strata keeps its seven voices, and every grid row keeps its meaning. Not brought over, by design: Confluence's 16-voice polyphony, preset file export (scenes cover it), a buffer waveform display, MIDI learn code (norns' PARAMS > MAP does it) and 20 Hz LFOs. Design: `docs/superpowers/specs/2026-11-03-confluence-features-design.md`.
+Adds sample buffers and the live input as grain sources, a filter and a delay, grain envelopes and triggered grains, global LFOs, MIDI input and a paged screen. Strata keeps its seven voices, and every grid row keeps its meaning. Left out by design: more voices, preset file export (scenes cover it), a buffer waveform display, MIDI learn code (norns' PARAMS > MAP does it) and 20 Hz LFOs. Design: `docs/design/3.0-design.md`.
 
 ### New Features
 
@@ -65,7 +148,7 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 - **Buffer persistence.** A finished take is written to `~/dust/audio/strata/scratch/buf<n>.wav`; K2+K3 on the BUFFER page (or `buf<n>_save`) writes a timestamped WAV to `~/dust/audio/strata/`. On exit Strata remembers each buffer's file or take in `~/dust/data/strata/buffers.data` and reloads them on start (SETUP shows how many). Overlapping writes to one file can never mix.
 - **Grid 256 page 4 (buffers / FX).** Row 1 record/stop, row 2 clear, rows 3-7 filter and delay faders, rows 9-15 each voice's source; rows 8 and 16 as on page 1.
 - **Global LFOs.** Three LFOs on norns' `lib/lfo.lua` (sine, tri, square, random, up, down; free or clocked), each routed to one destination (68 options, none included): master density, drift, filter, delay and reverb settings, and per voice its main parameter (following its source), grain size, density, pitch, spread and buffer position, rate and scan. They modulate around the stored value and never write it; the value returns exactly when an LFO stops, reaches depth 0 or changes destination. LFO page with a waveform and a moving dot per LFO.
-- **MIDI input.** Notes play voices (per-voice channels 1-7, or omni to the selected voice): pitch from the note (frequency, or buffer rate for a buffer source), velocity on the accent, pitchbend up to 2 semitones (`bend`, transient). Note off is ignored by default; in "voice off" mode a note during the release re-gates the releasing synths instead of starting new ones. SETUP shows the port, device and channel mode (E2/E3); hot-plug works. CC mapping is norns' PARAMS > MAP (README lists Confluence's suggested CCs).
+- **MIDI input.** Notes play voices (per-voice channels 1-7, or omni to the selected voice): pitch from the note (frequency, or buffer rate for a buffer source), velocity on the accent, pitchbend up to 2 semitones (`bend`, transient). Note off is ignored by default; in "voice off" mode a note during the release re-gates the releasing synths instead of starting new ones. SETUP shows the port, device and channel mode (E2/E3); hot-plug works. CC mapping is norns' PARAMS > MAP (README suggests a CC mapping to start from).
 - **Scenes, format 2.** Scenes capture the FX settings, grain envelope and mode, each voice's source and buffer parameters (not buffer audio) and the LFO settings. Version-1 files migrate on load with defaults (FX at defaults, every voice on its synth, LFOs off) and are saved as version 2.
 
 ### Other Changes
@@ -90,7 +173,7 @@ Absorbs the feature set the Confluence script promised (buffers and live input, 
 - **Limiter before the saturator.** The design put `Limiter.ar` after the tanh stage, whose output is already bounded to ±0.5, so it could never act. It runs before the saturator.
 - **K3 keeps start/freeze.** The design let K3 on MAIN fire a triggered grain for a running voice; K3 keeps freezing it, so triggered grains come from pattern steps and MIDI notes only.
 - **Input-sourced voices' main parameter is grain size.** The design mapped every non-synth source to buffer position, which does nothing for the input; E3, arc ring 2, MAIN and the first fader use grain size, and randomize, mutations and the drift touch only grain parameters.
-- **LFO rate ceiling 10 Hz.** The library's fastest free period is 0.1 s; Confluence promised 20 Hz, which would need engine-side LFOs.
+- **LFO rate ceiling 10 Hz.** The library's fastest free period is 0.1 s; 20 Hz would need engine-side LFOs.
 - **LFO depth in percent.** Depth is the library's 0-100 % number param; E3 and the arc step whole percents.
 - **LFO message rate bounded.** Each LFO steps at 48 ppqn (the library's default is 96) and skips a send when its destination would move less than 1/1000 of its range; restores and param actions always send.
 - **LFO params.** norns groups cannot nest, so the destinations are `strata_lfo<n>_dest` in their own "lfo destinations" group beside the library's own LFO 1-3 groups (`lfo_*` ids are the library's). Scenes capture each LFO's mode and clocked rate as well as its free period.
