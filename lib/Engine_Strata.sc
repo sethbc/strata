@@ -218,8 +218,10 @@ Engine_Strata : CroneEngine {
             // than the other voices (at 20 Hz with noise 1, thousands):
             // resonatorGain brings its defaults into their range, and a
             // limiter at voiceCeiling (mono, before the pan) bounds the
-            // reachable extremes, accents and crossmod included; it never
-            // acts at the defaults
+            // reachable extremes, accents and crossmod included. At the
+            // defaults it only catches the hottest moments (the cutoff's
+            // slow noise factor near 4, full-velocity accents), where the
+            // master limiter used to act on every sample
             sig = Limiter.ar(sig * resonatorGain * modAmp, voiceCeiling);
             sig = Pan2.ar(sig, pan);
 
@@ -607,7 +609,7 @@ Engine_Strata : CroneEngine {
             velocity=1, mirrorOut=0, mirrorLevel=0, kill=0, pan=0;
             var sig, env, accent, mod1Sig, mod2Sig, mod3Sig, modSig, rateMod, modAmp;
             var mode, grainTrigger, scanPos, grainPos, rate, left, right, hasAudio;
-            var readRate, grainDur, grainFrames, startFrames;
+            var validFrames, readRate, grainDur, grainFrames, startFrames;
 
             env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent fired by retrigger; levelScale is sampled per trigger
@@ -637,11 +639,15 @@ Engine_Strata : CroneEngine {
             // SampleRate x readRate frames. The duration is capped at the valid region (less
             // grainEndMargin), and the start positions (the scan, spread
             // included) are scaled to the frames before the region's end
-            // minus that span, so every grain ends inside the region.
+            // minus that span, so every grain ends inside the region. While
+            // the slot reads empty (bufFrames 0: cleared, reloading or
+            // recording, faded out by hasAudio) the last valid length is
+            // held, so the grains fading out keep their size and place.
+            validFrames = Gate.kr(bufFrames, bufFrames > 0);
             readRate = (rate * BufRateScale.kr(bufnumL)).max(0.001);  // never 0: grainDur divides by it
-            grainDur = grainSize.min((bufFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
+            grainDur = grainSize.min((validFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
             grainFrames = grainDur * SampleRate.ir * readRate;
-            startFrames = (bufFrames - grainEndMargin - grainFrames).clip(0, BufFrames.kr(bufnumL));
+            startFrames = (validFrames - grainEndMargin - grainFrames).clip(0, BufFrames.kr(bufnumL));
             grainPos = (scanPos + TRand.ar(posSpread * -0.5, posSpread * 0.5, grainTrigger)).wrap(0, 1)
                 * (startFrames / BufFrames.kr(bufnumL));
 
