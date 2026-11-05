@@ -158,7 +158,7 @@ local function names_no_global(sanitized, start, finish)
   local before = sanitized:sub(math.max(1, start - 300), start - 1)
   local after = sanitized:sub(finish + 1, finish + 40)
   if before:match("#%s*$") then return true end
-  if before:match("%f[%w_]function%s*[%w_%.:]*%s*%([%w_,%s%.]*$") then return true end
+  if before:match("%f[%w_]function%f[^%w_]%s*[%w_%.:]*%s*%([%w_,%s%.]*$") then return true end
   local is_key = before:match("[{,;]%s*$") and after:match("^%s*=") and not after:match("^%s*==")
   return is_key and innermost_open_bracket(sanitized, start) == "{" or false
 end

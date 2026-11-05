@@ -244,7 +244,8 @@ local function engine_block(source, open_index)
     end
     cursor = cursor + 1
   end
-  error("engine source: unbalanced { at offset " .. open_index)
+  local _, newlines = source:sub(1, open_index):gsub("\n", "")
+  error(string.format("engine source: unbalanced { from line %d", newlines + 1), 0)
 end
 
 -- `.clip(low, high)` with two literal numbers
@@ -1287,19 +1288,23 @@ local function make_clock(util)
   end
 
   -- The scheduler fires an event: w_handle_clock_resume calls clock.resume
-  -- with the clock's time in seconds (a sleep) or in beats (a sync) when it
-  -- fired: the time or beat it waited for, or the one it was scheduled at if
-  -- that was later. Both come from the event, not from a fire time worked
-  -- out earlier, so a tempo change in between cannot move them. An error is
-  -- reported, not raised
-  local function fire(entry)
+  -- with the clock's time in seconds (a sleep) or in beats (a sync) that the
+  -- tick posted it with: clock_time and clock_beat, sampled once per tick
+  -- before any coroutine runs (clock_scheduler_tick_thread_run). advance()
+  -- passes its step's `tick` ({time, beat}, sampled at the step's start, so
+  -- a tempo change by an earlier resume in the step cannot move it).
+  -- run_for and advance_until fire each event at its own wake-up, so their
+  -- tick is the event's: the time or beat it waited for, or the one it was
+  -- scheduled at if that was later (taken from the event, not from a fire
+  -- time worked out earlier). An error is reported, not raised
+  local function fire(entry, tick)
     local event = entry.event
     event.ready = false
     local value
     if event.type == SCHEDULE_SYNC then
-      value = math.max(event.sync_beat, event.scheduled_beat)
+      value = tick and tick.beat or math.max(event.sync_beat, event.scheduled_beat)
     else
-      value = math.max(event.sleep_time, event.scheduled_at)
+      value = tick and tick.time or math.max(event.sleep_time, event.scheduled_at)
     end
     local ok, message = pcall(resume, entry.id, value)
     if not ok then table.insert(stubs.clock_errors, tostring(message)) end
@@ -1312,8 +1317,9 @@ local function make_clock(util)
   -- Test helper: one scheduler step, a matron tick at the first pending
   -- event's fire time. util.time() moves there (never back); the events due
   -- then are fixed before any of them runs, as the tick posts them all at
-  -- once, and fire in slot order: every one whose fire time has passed, and
-  -- those at the step's time of the first one's rank (a sleep at the step's
+  -- once with the time and beat it sampled (an overdue event resumes with
+  -- the step's, not its own), and fire in slot order: every one whose fire
+  -- time has passed, and those at the step's time of the first one's rank (a sleep at the step's
   -- time leaves a sync at that time to the next step, at the same time).
   -- Events scheduled during the step wait for the next one; one cancelled or
   -- rescheduled by an earlier one in the step is skipped
@@ -1331,8 +1337,9 @@ local function make_clock(util)
       end
     end
     table.sort(due, function(left, right) return left.slot < right.slot end)
+    local tick = { time = step_time, beat = beats_at(step_time) }
     for _, entry in ipairs(due) do
-      if still_waiting(entry) then fire(entry) end
+      if still_waiting(entry) then fire(entry, tick) end
     end
   end
 
@@ -1516,9 +1523,10 @@ local function make_arc()
       if not is_integer(value) then error("arc " .. what .. " must be an integer, got " .. tostring(value), 3) end
     end
     -- Arc:led -> _arc_set_led (luaL_checkinteger) -> dev_monome_arc_set_led:
-    -- rel adds to the LED's level, clamped to 0..15. matron masks a ring or
-    -- LED outside 1..4 / 1..64 into range; the stub fails instead, and like
-    -- the grid stub rejects an absolute level outside 0..15
+    -- rel adds to the LED's level, clamped to 0..15; an absolute level is
+    -- stored as it is. matron masks a ring or LED outside 1..4 / 1..64 into
+    -- range; the stub fails instead, and like the grid stub rejects an
+    -- absolute level outside 0..15
     function device:led(ring, x, level, rel)
       check_integer(ring, "ring"); check_integer(x, "LED"); check_integer(level, "level")
       if ring < 1 or ring > 4 or x < 1 or x > 64 then
@@ -1532,9 +1540,11 @@ local function make_arc()
         self.rings[ring][x] = level
       end
     end
-    -- Arc:all -> dev_monome_all_led, absolute or relative (clamped 0..15)
+    -- Arc:all -> dev_monome_all_led: rel adds to every level, clamped to
+    -- 0..15; an absolute level outside 0..15 fails, as in led()
     function device:all(level, rel)
       check_integer(level, "level")
+      if not rel and (level < 0 or level > 15) then error("arc all level out of range: " .. tostring(level), 2) end
       self.cleared = self.cleared + 1
       self.segments = {}
       for ring = 1, 4 do

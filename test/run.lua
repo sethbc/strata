@@ -284,10 +284,13 @@ test("sync_check accepts a table key or parameter named engine and #engine (#51)
     'if { engine == 1 } then end',       -- 4: compared, not a key
     'local e = (engine)',                -- 5: in parentheses
     'g(function() end, engine)',         -- 6: an argument after a function
+    'functions.apply(engine)',           -- 7: calls whose names start with "function"
+    'function_call(a, engine)',          -- 8
+    'local x = functional(engine)',      -- 9
   }, "\n")
   local lines = {}
   for _, entry in ipairs(sync_check.lua_reference_problems(flagged)) do table.insert(lines, entry.line) end
-  assert_equal(table.concat(lines, " "), "1 2 3 4 5 6", "each use of the table as a value is reported")
+  assert_equal(table.concat(lines, " "), "1 2 3 4 5 6 7 8 9", "each use of the table as a value is reported")
 end)
 
 test("the engine source parsers skip // and /* */ comments (#25)", function()
@@ -339,6 +342,12 @@ test("strip_sc_comments fails on an unterminated string, symbol or block comment
   assert_strip_fails("a = 1;\n\nb = 'open;", "symbol", 3)
   assert_strip_fails('a = 1; /* open /* nested */ still open', "block comment", 1)
   assert_strip_fails('a = "ends in an escape\\"', "string", 1)
+  -- a SynthDef whose { never closes: the error names its line too
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local _, lines = source:gsub("\n", "")
+  local ok, message = pcall(stubs.engine_spec_from_source, source .. "\nSynthDef(\\open, { arg x; x = 1;\n")
+  assert_true(not ok and tostring(message):find("unbalanced { from line " .. (lines + 2), 1, true),
+    "unbalanced: " .. tostring(message))
   -- closed ones, with escapes, still pass
   assert_equal(stubs.strip_sc_comments('a = "x\\"y"; b = \'q\\\'r\';'), 'a = "x\\"y"; b = \'q\\\'r\';', "escaped quotes")
 end)
@@ -453,6 +462,54 @@ test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
       assert_true(set_arguments[index], "engine." .. name .. " argument " .. index .. " sets a control")
     end
   end
+end)
+
+-- A Lua FX param whose range is wider than the limit the engine clips its
+-- control to fails here (the range check only sees the values sent)
+-- The FX params whose controlspec range leaves the limit the engine clips
+-- their argument to (each param's argument: the one that changes with it),
+-- and how many param/limit pairs were compared
+local function fx_specs_outside_engine_limits(context)
+  local group_index
+  for index, param in ipairs(params.params) do
+    if param.id == "strata_fx" then group_index = index end
+  end
+  local problems, compared = {}, 0
+  for index = group_index + 1, group_index + params:get("strata_fx") do
+    local param = params.params[index]
+    local spec = param.controlspec
+    if spec then
+      local function sent(fraction)
+        context.clear_engine_calls(); send_param_to_engine(param.id, spec:map(fraction))
+        return context.engine_calls[#context.engine_calls]
+      end
+      local low, high = sent(0.25), sent(0.75)
+      for argument = 1, #high.args do
+        local limit = (engine_spec.argument_limits[high.name] or {})[argument]
+        if low.args[argument] ~= high.args[argument] and limit then
+          compared = compared + 1
+          if spec.minval < limit.low or spec.maxval > limit.high then
+            table.insert(problems, string.format("%s %g..%g leaves engine.%s's %s limit %g..%g", param.id,
+              spec.minval, spec.maxval, high.name, limit.name, limit.low, limit.high))
+          end
+        end
+      end
+    end
+  end
+  return problems, compared
+end
+
+-- A Lua FX range wider than the engine's limit fails here directly (the
+-- range check only sees the values a test happens to send)
+test("each FX param's controlspec lies within the engine's limit for its argument (#51)", function()
+  local problems, compared = fx_specs_outside_engine_limits(load_strata())
+  assert_equal(#problems, 0, table.concat(problems, "; "))
+  assert_equal(compared, 6, "filter freq, res and mix; delay time, feedback and mix compared")
+  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
+  local widened, count = source:gsub('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
+  assert_equal(count, 1, "delay feedback patch applies")
+  problems = fx_specs_outside_engine_limits(load_strata { source = widened })
+  assert_true(#problems == 1 and problems[1]:find("delay_feedback", 1, true), "a widened range fails: " .. table.concat(problems, "; "))
 end)
 
 test("fx_commands reads every setSynth in a command body (#51)", function()
@@ -3821,18 +3878,23 @@ test("stub clock ties: equal wake times fire in event-slot order, a sync after a
   assert_equal(table.concat(events, " "), "sleep@3.50 sync@3.50", "event by event: the sleep first too")
 end)
 
-test("stub clock.advance: a tempo change in a step does not change the resume values after it (#51)", function()
+-- matron's tick samples clock_time and clock_beat once and posts every due
+-- event with them (clock_scheduler_tick_thread_run)
+test("stub clock.advance resumes every event with the step's time and beat, whatever a tempo change in it (#51)", function()
   local context = load_strata(); finish_startup(context)   -- 0.5 s: beat 1 at 120 BPM
   stop_frame_clock()
-  -- A wakes at 1 s and halves the tempo; S syncs to beat 2.5 (1.25 s).
-  -- util.time() jumps past both, so one step fires both, A first (its slot)
-  local woke_on_beat
+  -- A wakes at 1 s and halves the tempo; S syncs to beat 2.5 (1.25 s), L
+  -- sleeps to 1.5 s. util.time() jumps to 2 s (beat 4) past all three, so
+  -- one step fires them, A first (its slot)
+  local woke_on_beat, woke_at
   clock.run(function() clock.sleep(0.5); params:set("clock_tempo", 60) end)
   clock.run(function() woke_on_beat = clock.sync(1, 0.5) end)
+  clock.run(function() woke_at = clock.sleep(1) end)
   context.set_time(2)
   context.clock.advance()
   assert_equal(clock.get_tempo(), 60, "A changed the tempo")
-  assert_near(woke_on_beat, 2.5, 1e-9, "S resumes with the beat it waited for")
+  assert_near(woke_on_beat, 4, 1e-9, "S resumes with the beat at the step, sampled before A ran")
+  assert_near(woke_at, 2, 1e-9, "L resumes with the time at the step")
 end)
 
 test("stub param type codes come from one table; an unknown type is an error", function()
@@ -4111,6 +4173,9 @@ test("stub arc segment, led and all follow lua/core/arc.lua and matron's LED buf
   vport:all(3); assert_equal(device:get_led(4, 64), 3)
   vport:all(14, true); assert_equal(device:get_led(1, 1), 15); assert_equal(device:get_led(3, 2), 15)
   vport:all(0); assert_equal(device:get_led(1, 1), 0)
+  assert_true(not pcall(vport.all, vport, 16), "an absolute all() level of 16 is out of range")
+  assert_true(not pcall(vport.all, vport, -1), "and so is -1")
+  vport:all(-1, true); assert_equal(device:get_led(1, 1), 0, "a relative all() clamps at 0")
   assert_true(next(device.segments) == nil, "all() clears the recorded segments")
   assert_true(not pcall(vport.led, vport, 5, 1, 1), "ring 5 does not exist")
   assert_true(not pcall(vport.led, vport, 1, 65, 1), "LED 65 does not exist")
