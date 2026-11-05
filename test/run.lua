@@ -2436,10 +2436,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   show_page(1)
 
   assert_drawn_on_next_frame(context, arc_hardware, "the startup clock starting voice 2", function()
-    for _ = 1, 100 do  -- one scheduler step at a time: frames tick until the clock wakes
-      if voices[2].active then break end
-      context.clock.advance()
-    end
+    context.clock.advance_until(STARTUP.clock)
   end)
   assert_true(voices[2].active, "the startup clock started voice 2")
   assert_drawn_on_next_frame(context, arc_hardware, "MIDI note", function()
@@ -2468,6 +2465,9 @@ test("displayed changes from every source reach the screen and arc on the next f
     context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   end)
   assert_true(not screen_shows(context, "[FREEZE]"), "the arc button unfroze voice 1")
+  -- its callers (keys, arc, grid) ask for redraws too: call it directly
+  assert_drawn_on_next_frame(context, arc_hardware, "toggle_freeze", function() toggle_freeze(1) end)
+  assert_true(screen_shows(context, "[FREEZE]"), "toggle_freeze froze voice 1"); toggle_freeze(1)
   assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
     context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
   end)
