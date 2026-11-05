@@ -4,9 +4,16 @@
 -- this.addCommand(\<name>, "<sig>", ...) from lib/Engine_Strata.sc (skipping
 -- commented-out ones), then checks that the two name sets are equal and that
 -- every Lua call passes exactly as many arguments as its signature declares.
+-- Any other use of `engine` is an error, because the check cannot see what
+-- it calls: engine[name](...), engine.voiceOn passed or stored without a
+-- call (local f = engine.voiceOn), engine:method(), a call without
+-- parentheses (engine.loadBuffer "x") or the engine table itself used as a
+-- value (local e = engine). Only engine.name (the engine the script loads)
+-- may be read or set.
 --
 -- Standalone:  lua test/sync_check.lua   (exit status 1 on mismatch)
--- As a module: require("sync_check").run(repo_root) -> ok, report_lines
+-- As a module: require("sync_check").run(repo_root) -> ok, problems, summary
+--              require("sync_check").check(lua_source, sc_source) -> the same
 
 local sync_check = {}
 
@@ -102,21 +109,63 @@ local function line_number(source, offset)
   return newlines + 1
 end
 
+-- Whether the `engine` at `start` is the global (not x.engine or x:engine;
+-- `"a" .. engine` is a concatenation)
+local function is_global_engine(sanitized, start)
+  local before = sanitized:sub(1, start - 1):match("([%.:]*)%s*$")
+  return not (before:match("[%.:]$") and before ~= "..")
+end
+
 function sync_check.lua_calls(lua_source)
   local sanitized = sanitize_lua(lua_source)
   local calls = {}
   local search_from = 1
   while true do
-    local start, finish, name = sanitized:find("engine%.([%a_][%w_]*)%s*%(", search_from)
+    local start, finish, name = sanitized:find("%f[%w_]engine%s*%.%s*([%a_][%w_]*)%s*%(", search_from)
     if not start then break end
-    table.insert(calls, {
-      name = name,
-      arg_count = count_arguments(sanitized, finish),
-      line = line_number(sanitized, start),
-    })
+    if is_global_engine(sanitized, start) then
+      table.insert(calls, {
+        name = name,
+        arg_count = count_arguments(sanitized, finish),
+        line = line_number(sanitized, start),
+      })
+    end
     search_from = finish + 1
   end
   return calls
+end
+
+-- Every use of the global `engine` that is not an engine.<name>(...) call
+-- or engine.name: { line = n, text = description }
+function sync_check.lua_reference_problems(lua_source)
+  local sanitized = sanitize_lua(lua_source)
+  local problems = {}
+  local function problem(offset, text)
+    table.insert(problems, { line = line_number(sanitized, offset), text = text })
+  end
+  local search_from = 1
+  while true do
+    local start, finish = sanitized:find("%f[%w_]engine%f[^%w_]", search_from)
+    if not start then break end
+    search_from = finish + 1
+    if is_global_engine(sanitized, start) then
+      local after = sanitized:sub(finish + 1)
+      local name, rest = after:match("^%s*%.%s*([%a_][%w_]*)()")
+      if name then
+        local follows = after:sub(rest):match("^%s*(.?)")
+        if follows ~= "(" and name ~= "name" then
+          problem(start, "engine." .. name .. " is used without a call, so the check cannot see its arguments")
+        end
+      elseif after:match("^%s*%[") then
+        problem(start, "engine[...] names a command the check cannot see")
+      elseif after:match("^%s*:") then
+        problem(start, "engine:method() is not an engine command call")
+      else
+        problem(start, "the engine table is used as a value, so the check cannot see what it calls")
+      end
+    end
+  end
+  return problems
 end
 
 -- name -> signature of every addCommand that is not commented out
@@ -124,13 +173,15 @@ function sync_check.sc_commands(sc_source)
   return stubs.engine_signatures_from_source(sc_source)
 end
 
-function sync_check.run(repo_root)
-  local lua_source = read_file(repo_root .. "/strata.lua")
-  local sc_source = read_file(repo_root .. "/lib/Engine_Strata.sc")
+function sync_check.check(lua_source, sc_source)
   local calls = sync_check.lua_calls(lua_source)
   local commands = sync_check.sc_commands(sc_source)
   local problems = {}
   local lua_names = {}
+
+  for _, reference in ipairs(sync_check.lua_reference_problems(lua_source)) do
+    table.insert(problems, string.format("strata.lua:%d %s", reference.line, reference.text))
+  end
 
   for _, call in ipairs(calls) do
     lua_names[call.name] = true
@@ -155,6 +206,10 @@ function sync_check.run(repo_root)
 
   local summary = string.format("%d engine.* call sites, %d engine commands", #calls, #command_names)
   return #problems == 0, problems, summary
+end
+
+function sync_check.run(repo_root)
+  return sync_check.check(read_file(repo_root .. "/strata.lua"), read_file(repo_root .. "/lib/Engine_Strata.sc"))
 end
 
 -- standalone use
