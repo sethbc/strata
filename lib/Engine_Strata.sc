@@ -38,6 +38,7 @@ Engine_Strata : CroneEngine {
     var controlNameSets;      // Per voice and grain SynthDef: its control names (IdentitySet), for controlPairs
     var <fadingSynths;        // Per voice: grain and voice synths a source switch gated off, still releasing
     var <cuttingSynths;       // Per voice: grain and voice synths in their kill fade (cutSynth), freed by the next switch
+    var <modSpeeds;           // Per voice: the last setModSpeed (nil until one arrives), for a restarted strataMod
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
@@ -47,6 +48,9 @@ Engine_Strata : CroneEngine {
     // are built into the grain SynthDefs in alloc, so later changes do nothing.
     var <pitchShiftWindow = 0.1;  // Grain PitchShift window (s): fixed, never the grain size (its delay line is allocated at that size)
     var <maxGrains = 128;         // Grain table of every GrainIn/GrainBuf: Lua's largest overlap is 0.5 s x 200 grains/s = 100
+    // Built into the SynthDefs in alloc too (see Signal safety in docs/notes/engine.md)
+    var <filterCeiling = 0.45;    // Highest Resonator cutoff, as a fraction of the sample rate: below Nyquist, so RLPF stays stable
+    var <grainEndMargin = 4;      // Frames a buffer grain stops short of the valid region's end (interpolation, rounding)
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var <writeGenerations;        // Per output path: the newest write's number; older writes abandon
@@ -118,6 +122,7 @@ Engine_Strata : CroneEngine {
         releasedGrainSource = Array.fill(numVoices, 0);
         fadingSynths = Array.fill(numVoices, { IdentitySet.new });
         cuttingSynths = Array.fill(numVoices, { IdentitySet.new });
+        modSpeeds = Array.newClear(numVoices);
 
         // SynthDefs
 
@@ -203,7 +208,10 @@ Engine_Strata : CroneEngine {
             // below receives a mono signal (a 2-element array here doubled
             // the output into two summed stereo pairs)
             sig = sig * ((LFNoise1.kr(mod1).range(0.5, 1) + LFNoise1.kr(mod2).range(0.5, 1)) * 0.5);
-            sig = RLPF.ar(sig, modFreq * LFNoise1.kr(0.1).range(1, 4), rq);
+            // The cutoff is kept below Nyquist: above it RLPF's poles leave
+            // the unit circle (high freq, frequency crossmod, bend and the
+            // noise factor can get there) and the NaN would kill the output
+            sig = RLPF.ar(sig, (modFreq * LFNoise1.kr(0.1).range(1, 4)).min(SampleRate.ir * filterCeiling), rq);
             sig = Pan2.ar(sig, pan);
 
             Out.ar(out, sig * env * modAmp);
@@ -494,15 +502,16 @@ Engine_Strata : CroneEngine {
         // sets accentAmt 1 (there is no voice synth to carry the accent),
         // mirrorLevel 1 (copies the output to the voice bus for strataMod)
         // and modLevel 1 (amplitude crossmod; frequency crossmod has no
-        // meaning for live input and is ignored); for the synth source all
-        // three are 0 (their defaults), since the voice synth already accents
-        // and crossmods and this synth reads the voice bus. bend is unused here.
+        // meaning for live input and is ignored), and the voice's pan; for
+        // the synth source all four are 0 (their defaults), since the voice
+        // synth already accents, crossmods and pans and this synth reads the
+        // voice bus. bend is unused here.
         SynthDef(\strataGrain, {
             arg in, out, gate=1,
             grainSize=0.1, grainDensity=20, pitchShift=1,
             posSpread=0.5, panSpread=0.5, amp=1, envBuf = -1,
             grainMode=0, t_trig=0, velocity=1, accentAmt=0,
-            mirrorOut=0, mirrorLevel=0, bend=1, kill=0,
+            mirrorOut=0, mirrorLevel=0, bend=1, kill=0, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0, modLevel=0;
             var sig, env, input, mode, grainTrigger, spreadLevel, accent, left, right, modSig;
@@ -532,7 +541,7 @@ Engine_Strata : CroneEngine {
             // input expands into two, each panning its own channel, which
             // Out then folds back to one channel apiece: pan spread did
             // nothing and the output path was doubled.) The voice's own pan
-            // is already in the voice synth's output.
+            // is applied after the PitchShift (panBalance).
             left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf, maxGrains);
             right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
@@ -556,6 +565,7 @@ Engine_Strata : CroneEngine {
                 pitchDispersion: 0,
                 timeDispersion: 0
             );
+            sig = this.panBalance(sig, pan);
 
             sig = sig * env * (amp * (1 + modSig) * (1 + (accent * accentAmt))).clip(0, 2);
             Out.ar(out, sig);
@@ -567,8 +577,11 @@ Engine_Strata : CroneEngine {
         // every grain is sample-aligned across the pair. bufPos (0-1) and the
         // scan are fractions of the valid region (bufFrames), so a short
         // sample uses the whole position range; bufScan moves the position
-        // in valid-region lengths per second and wraps. Crossmod applies to
-        // amplitude and rate as voice synths apply it to amp and freq.
+        // in valid-region lengths per second and wraps. Positions are scaled
+        // to the part of the region a grain can start in and still end inside
+        // it (and a grain is never longer than the region), so no grain reads
+        // the zeroed rest of the buffer. Crossmod applies to amplitude and
+        // rate as voice synths apply it to amp and freq; pan is the voice's.
         // bufRateScale is the content's sample rate over the server's (what
         // BufRateScale.kr would report), tracked by the engine: b_alloc keeps
         // a loaded file's rate, and norns' scsynth has no b_setSampleRate. The
@@ -582,9 +595,10 @@ Engine_Strata : CroneEngine {
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
-            velocity=1, mirrorOut=0, mirrorLevel=0, kill=0;
+            velocity=1, mirrorOut=0, mirrorLevel=0, kill=0, pan=0;
             var sig, env, accent, mod1Sig, mod2Sig, mod3Sig, modSig, rateMod, modAmp;
-            var mode, grainTrigger, validFraction, scanPos, grainPos, rate, left, right, hasAudio;
+            var mode, grainTrigger, scanPos, grainPos, rate, left, right, hasAudio;
+            var readRate, grainDur, grainFrames, startFrames;
 
             env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(gate), doneAction: 2) * this.killFade(kill);
             // Accent fired by retrigger; levelScale is sampled per trigger
@@ -601,16 +615,29 @@ Engine_Strata : CroneEngine {
             mode = grainMode.round.clip(0, 1);
             grainTrigger = Select.ar(mode, [Impulse.ar(grainDensity), T2A.ar(t_trig)]);
 
-            validFraction = (bufFrames / BufFrames.kr(bufnumL)).clip(0, 1);
             scanPos = (bufPos + Phasor.ar(0, bufScan * SampleDur.ir, 0, 1)) % 1;
-            grainPos = (scanPos + TRand.ar(posSpread * -0.5, posSpread * 0.5, grainTrigger)).wrap(0, 1) * validFraction;
             // GrainBuf already scales by the buffer's own rate (BufRateScale), which
             // the server keeps from the last file read even after a recording:
             // divided out, so the engine's bufRateScale applies exactly once
             rate = bufRate * bend * (bufRateScale / BufRateScale.kr(bufnumL)) * (1 + rateMod);
 
-            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf, maxGrains);
-            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf, maxGrains);
+            // Grain end: GrainBuf reads rate x its buffer's BufRateScale
+            // frames per output sample (it applies the buffer's rate scale
+            // itself; with the division above that is bufRate x bend x
+            // bufRateScale x (1 + rateMod)), so a grain covers grainDur x
+            // SampleRate x readRate frames. The duration is capped at the valid region (less
+            // grainEndMargin), and the start positions (the scan, spread
+            // included) are scaled to the frames before the region's end
+            // minus that span, so every grain ends inside the region.
+            readRate = (rate * BufRateScale.kr(bufnumL)).max(0.001);  // never 0: grainDur divides by it
+            grainDur = grainSize.min((bufFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
+            grainFrames = grainDur * SampleRate.ir * readRate;
+            startFrames = (bufFrames - grainEndMargin - grainFrames).clip(0, BufFrames.kr(bufnumL));
+            grainPos = (scanPos + TRand.ar(posSpread * -0.5, posSpread * 0.5, grainTrigger)).wrap(0, 1)
+                * (startFrames / BufFrames.kr(bufnumL));
+
+            left = GrainBuf.ar(1, grainTrigger, grainDur, bufnumL, rate, grainPos, 2, 0, envBuf, maxGrains);
+            right = GrainBuf.ar(1, grainTrigger, grainDur, bufnumR, rate, grainPos, 2, 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
             // Same transposition stage as strataGrain (fixed window), once for the pair
@@ -621,6 +648,7 @@ Engine_Strata : CroneEngine {
                 pitchDispersion: 0,
                 timeDispersion: 0
             );
+            sig = this.panBalance(sig, pan);
 
             // Silent while the slot is empty or being recorded (bufFrames 0):
             // every grain would read position 0 and loop the take's first grain
@@ -633,6 +661,9 @@ Engine_Strata : CroneEngine {
 
         // Multimode filter: 0 lowpass, 1 highpass, 2 bandpass. res 0..1 maps
         // to rq 1..0.05; mix crossfades dry (0, the default bypass) to filtered.
+        // First in the effects chain, it also replaces any NaN or inf (and
+        // denormal) sample with 0 (CheckBadValues), so a voice that blows up
+        // can never poison the delay feedback or the reverb for good.
         // A type change crossfades over 20 ms: the three filters always run
         // and each is weighted by a lagged "this is the type" (the weights
         // sum to 1 once settled), so switching never steps the output.
@@ -640,7 +671,7 @@ Engine_Strata : CroneEngine {
             arg in, out, freq=5000, res=0.5, filterType=0, mix=0;
             var dry, filtered, cutoff, rq, wet, type;
 
-            dry = In.ar(in, 2);
+            dry = In.ar(in, 2).collect({ arg channel; Select.ar(CheckBadValues.ar(channel, 0, 0) > 0, [channel, DC.ar(0)]) });
             cutoff = freq.lag(0.05).clip(20, 20000);
             rq = 1 - (res.clip(0, 1) * 0.95);
             type = filterType.round.clip(0, 2);
@@ -888,8 +919,14 @@ Engine_Strata : CroneEngine {
             this.setVoiceControl(msg[1], ("modFreqAmt" ++ msg[2]).asSymbol, msg[3]);
         });
 
+        // Kept per voice, so a mod synth the engine starts again (onFree,
+        // gateVoice) runs at the voice's speed, not the SynthDef default
         this.addCommand(\setModSpeed, "if", { arg msg;
-            this.setSynth(this.modKey(msg[1]), \speed, msg[2]);
+            var voice = msg[1];
+            if (this.validVoice(voice)) {
+                modSpeeds[voice] = msg[2];
+                this.setSynth(this.modKey(voice), \speed, msg[2]);
+            };
         });
 
         // Start the effects chain and master at the tail of the engine
@@ -961,8 +998,8 @@ Engine_Strata : CroneEngine {
 
     // A voice-level control (synthesis param, crossmod routing or amount):
     // kept for restarts, sent to the voice synth, and to the grain synth
-    // when that has the control (strataGrainBuf takes crossmod, amp and
-    // bend; the input strataGrain takes amp and the amplitude crossmod)
+    // when that has the control (strataGrainBuf takes crossmod, amp, pan and
+    // bend; the input strataGrain takes amp, pan and the amplitude crossmod)
     // while the voice is not on its synth source
     setVoiceControl { arg voice, control, value;
         if (this.validVoice(voice)) {
@@ -981,12 +1018,17 @@ Engine_Strata : CroneEngine {
                 target: voiceGroup))
     }
 
-    // Modulation output synth, after every grain synth
+    // Modulation output synth, after every grain synth, at the voice's mod speed
     startModSynth { arg voice;
         ^this.watchVoiceSynth(voice, this.modKey(voice), Synth(\strataMod, [
             \in, granBuses[voice],
             \out, modBuses[voice]
-        ], target: processGroup, addAction: \addToTail))
+        ] ++ this.modSpeedPairs(voice), target: processGroup, addAction: \addToTail))
+    }
+
+    // The voice's mod speed as strataMod controls; empty until Lua has sent one
+    modSpeedPairs { arg voice;
+        ^if (modSpeeds[voice].notNil) { [\speed, modSpeeds[voice]] } { [] }
     }
 
     // The voice-level (buffer and input sources) and grain controls a grain
@@ -1000,8 +1042,8 @@ Engine_Strata : CroneEngine {
 
     // The grain synth for the voice's current source, with its current
     // grain controls. Buffer and input sources also take the voice-level
-    // controls the grain SynthDef has (level, crossmod, bend). The mirror,
-    // accent and (strataGrain) crossmod switches are always set explicitly.
+    // controls the grain SynthDef has (level, pan, crossmod, bend). The mirror,
+    // accent, pan and (strataGrain) crossmod switches are always set explicitly.
     startGrainSynth { arg voice, target, addAction;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
@@ -1011,7 +1053,7 @@ Engine_Strata : CroneEngine {
         { source == 0 } {
             // crossmod off, and read from the silent bus, never control bus 0 (the
             // input amplitude follower on norns)
-            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0, \modLevel, 0,
+            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0, \modLevel, 0, \pan, 0,
                 \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
         }
         { source == this.inputSource } {
@@ -1098,7 +1140,9 @@ Engine_Strata : CroneEngine {
             // and its replacement starts at the tail)
             if (grainSource[voice] != 0) { synths[modKey].moveAfter(synths[grainKey]) };
         };
-        if (synths[modKey].isNil) { synths[modKey] = this.startModSynth(voice) } { synths[modKey].set(\gate, 1) };
+        if (synths[modKey].isNil) { synths[modKey] = this.startModSynth(voice) } {
+            synths[modKey].set(\gate, 1, *this.modSpeedPairs(voice));
+        };
     }
 
     // Watch one of a voice's synths (key: its voiceKey, grainKey or modKey)
@@ -1232,6 +1276,14 @@ Engine_Strata : CroneEngine {
     // first control block (a gate that starts at 0 never starts).
     killFade { arg kill;
         ^EnvGen.kr(Env([1, 0], [switchCutTime]), kill, doneAction: 2)
+    }
+
+    // The voice's pan on a buffer or input grain synth's stereo output, as a
+    // balance: the far channel is turned down (pan -1 leaves the left only,
+    // 1 the right only) and a centred voice is unchanged. Not a Balance2,
+    // which takes 3 dB off both channels at the centre.
+    panBalance { arg sig, pan;
+        ^sig * [1 - pan.clip(0, 1), 1 + pan.clip(-1, 0)]
     }
 
     bufferStateValue { arg index;
@@ -1579,15 +1631,21 @@ Engine_Strata : CroneEngine {
     // that voiceOn left releasing beside the new one) is cut: it would
     // otherwise release untracked, out of reach of the next switch's cut.
     // Only voice and grain synths have the kill fade; a releasing mod synth
-    // is always re-gated by voiceOn, never superseded.
+    // is always re-gated by voiceOn, never superseded. Before such a cut the
+    // synths an earlier cut left in their kill fade are freed, as a switch
+    // does (cutFadingSynths), so fast voiceOff / source change / voiceOn
+    // cycles never pile them up.
     releaseVoice { arg voice;
+        var superseded = [this.voiceKey(voice), this.grainKey(voice)].select({ arg key;
+            var synth = releasingSynths[voice][key];
+            synths[key].notNil and: { synth.notNil } and: { synth !== synths[key] }
+        }).collect({ arg key; releasingSynths[voice][key] });
         if (synths[this.grainKey(voice)].notNil) { releasedGrainSource[voice] = grainSource[voice] };
+        if (superseded.notEmpty) { this.freeCuttingSynths(voice) };
+        superseded.do({ arg synth; this.cutVoiceSynth(voice, synth) });
         [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)].do({ arg key;
-            var synth = synths.removeAt(key), superseded = releasingSynths[voice][key];
+            var synth = synths.removeAt(key);
             if (synth.notNil) {
-                if (superseded.notNil and: { superseded !== synth } and: { key != this.modKey(voice) }) {
-                    this.cutVoiceSynth(voice, superseded)
-                };
                 synth.set(\gate, 0);
                 releasingSynths[voice][key] = synth;
             };

@@ -575,6 +575,206 @@ var checkMemoryWorstCase = {
     probeBus.free;
 };
 
+// ---- Engine audio (#21), also as top-level functions ----
+
+// Check-only SynthDefs: the peak of each channel of a stereo bus since the
+// last t_reset; 1 once a NaN or inf (CheckBadValues codes 1 and 2; 3 is a
+// denormal) has reached a stereo bus since the last t_reset; and 50 ms of
+// inf (left, a float overflow: log(0) does not give -inf in scsynth) and NaN
+// (right), after which it frees itself
+var addAudioCheckDefs = {
+    SynthDef(\strataCheckChannelPeaks, { arg in, out, t_reset = 0;
+        Out.kr(out, A2K.kr(Peak.ar(In.ar(in, 2).abs, t_reset)));
+    }).add;
+    SynthDef(\strataCheckBadValues, { arg in, out, t_reset = 0;
+        var codes = CheckBadValues.ar(In.ar(in, 2), 0, 0);
+        Out.kr(out, A2K.kr(Peak.ar(((codes > 0.5) * (codes < 2.5)).sum, t_reset)));
+    }).add;
+    SynthDef(\strataCheckBadSource, { arg out, big = 1e30;
+        var infinite = DC.ar(big) * big;
+        Line.kr(0, 0, 0.05, doneAction: 2);
+        Out.ar(out, [infinite, infinite - infinite]);
+    }).add;
+};
+
+// A control bus's values (inside the check routine)
+var readBus = { arg bus;
+    var condition = Condition(false), values;
+    bus.getn(bus.numChannels, { arg result; values = result; condition.test = true; condition.signal });
+    awaitReply.(condition);
+    values ? []
+};
+// Reset a peak probe, wait, and read what it measured meanwhile
+var measure = { arg probe, bus, seconds = 0.3;
+    probe.set(\t_reset, 1);
+    seconds.wait;
+    readBus.(bus)
+};
+
+// The Resonator's filter cutoff stays below Nyquist: sixteen Resonators far
+// past it (10-25 kHz, x 3 by frequency crossmod, bent up 2 semitones, rq 1,
+// each with its own noise factor of 1-4) on a private bus produce no NaN or
+// inf. Unclamped, RLPF is unstable whenever cutoff x rq falls between SR/2
+// and SR (or the same band above a multiple of SR), so some would blow up.
+var checkResonatorCeiling = {
+    var group = Group.tail(server), out = Bus.audio(server, 2), modBus = Bus.control(server, 1);
+    var badBus = Bus.control(server, 1), probe, bad;
+    modBus.set(1);
+    16.do({ arg index;
+        Synth(\strataResonator, [\out, out, \freq, 10000 + (index * 1000), \rq, 1, \amp, 0.3, \bend, 2 ** (2 / 12),
+            \modBus1, modBus.index, \modBus2, engine.silentBus.index, \modBus3, engine.silentBus.index,
+            \modFreqAmt1, 2], group);
+    });
+    probe = Synth(\strataCheckBadValues, [\in, out, \out, badBus], group, \addToTail);
+    server.sync;
+    bad = measure.(probe, badBus, 1.5);
+    check.(bad == [0], "Resonators with a cutoff far past Nyquist stay finite (bad values seen: %)".format(bad));
+    group.free; out.free; modBus.free; badBus.free;
+    server.sync;
+};
+
+// A NaN or inf reaching mainBus (a voice blowing up) becomes silence before
+// the effects: with the delay feeding back and the reverb on, 50 ms of inf
+// and NaN on mainBus leave the master output free of bad values once they
+// have passed. Unguarded, they circulate in the delay feedback and the
+// reverb combs for good.
+var checkEffectsGuard = {
+    var badBus = Bus.control(server, 1), probe, bad;
+    command.(\setDelay, 0.25, 0.5, 0.5);
+    command.(\setReverb, 0.5, 0.8, 0.5);
+    probe = Synth(\strataCheckBadValues, [\in, context.out_b, \out, badBus], context.xg, \addAfter);
+    Synth(\strataCheckBadSource, [\out, engine.mainBus], engine.processGroup, \addToTail);
+    server.sync; 0.3.wait;
+    bad = measure.(probe, badBus, 0.5);
+    check.(bad == [0], "NaN and inf on mainBus never reach the master output after they pass (bad values seen: %)".format(bad));
+    probe.free; badBus.free;
+};
+
+// A mod synth the engine restarts (its release ended just as voiceOn
+// re-gated it) keeps the voice's mod speed
+var checkModSpeedRestart = { arg voice;
+    var key = engine.modKey(voice), oldMod;
+    command.(\setModSpeed, voice, 3.5); server.sync;
+    oldMod = engine.synths[key];
+    server.sendMsg(\n_free, oldMod.nodeID);  // ends without sclang having freed it
+    0.2.wait; server.sync;
+    check.(engine.synths[key].notNil and: { engine.synths[key] !== oldMod }
+        and: { getControl.(engine.synths[key], \speed) == 3.5 },
+        "a restarted mod synth keeps the voice's mod speed (got %)".format(engine.synths[key] !? { getControl.(engine.synths[key], \speed) }));
+};
+
+// Fast stop / source change / start cycles on one voice, inside one
+// switchCutTime: each voiceOff cuts the grain synth the previous voiceOn
+// left releasing beside the new one, and frees the one an earlier cycle left
+// in its kill fade, so the voice never holds more than its live grain synth,
+// one releasing and one cutting
+var checkStopStartCycles = { arg voice;
+    var before = synthNames.(context.xg).size, grains;
+    [9, 3, 9, 4, 9, 3].do({ arg source;
+        command.(\voiceOff, voice);
+        command.(\setGrainSource, voice, source);
+        command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+    });
+    server.sync;
+    grains = voiceGrainNodes.(synthNodes.(engine.processGroup), voice);
+    check.(grains.size <= 3, "six fast stop / source / start cycles keep at most three grain synths (got %)".format(grains.size));
+    command.(\setGrainSource, voice, 0);
+    2.5.wait; server.sync;
+    check.(synthNames.(context.xg).size == before, "the fast cycles leave no extra nodes");
+};
+
+// Buffer- and input-sourced voices, on a running voice on its synth source
+// and an empty slot: the voice's pan places their grains (pan -1 left only,
+// 1 right only), triggered grain mode fires one grain per retrigger and
+// nothing without one (as for a synth voice), and a buffer grain never reads
+// past the end of the slot's valid region. The grain synth writes to a
+// private bus for the measurements.
+var checkSourceGrains = { arg voice, slot;
+    var grainKey = engine.grainKey(voice), privateBus = Bus.audio(server, 2), peakBus = Bus.control(server, 2);
+    var group = Group.after(engine.processGroup), path = scratchRoot +/+ "source-grains.wav";
+    var tone, probe, peaks, file, frames = server.sampleRate.asInteger;
+    var toPrivate = { engine.synths[grainKey].set(\out, privateBus.index); server.sync };
+    var toMain = { engine.synths[grainKey].set(\out, engine.mainBus.index) };
+
+    grainDefs.do({ arg name;
+        check.(controlFeedsAUGen.(name, \pan), "% has a pan control that reaches a UGen".format(name));
+    });
+    // the synth source's grain synth never pans again (the voice synth does)
+    command.(\setVoiceParam, voice, \pan, -1.0); server.sync;
+    check.((getControl.(engine.synths[engine.voiceKey(voice)], \pan) == -1) and: { getControl.(engine.synths[grainKey], \pan) == 0 },
+        "a synth-sourced voice's pan reaches its voice synth, never its grain synth");
+
+    // a 1 s stereo 440 Hz sine at 0.5, at the server rate
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
+    file.openWrite(path);
+    file.writeData(FloatArray.fill(frames * 2, { arg i; sin(2pi * 440 * (i div: 2) / server.sampleRate) * 0.5 }));
+    file.close;
+    command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+    tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
+    probe = Synth(\strataCheckChannelPeaks, [\in, privateBus, \out, peakBus], group);
+
+    [[slot + 1, "a buffer"], [engine.numBuffers + 1, "an input"]].do({ arg pair;
+        var label = pair[1];
+        command.(\setVoiceParam, voice, \pan, -1.0);
+        command.(\setGrainSource, voice, pair[0]); server.sync;
+        toPrivate.value;
+        check.(getControl.(engine.synths[grainKey], \pan) == -1, "%-sourced voice's grain synth starts at the voice's pan".format(label));
+        [[-1.0, [true, false]], [1.0, [false, true]], [0.0, [true, true]]].do({ arg panCase;
+            command.(\setVoiceParam, voice, \pan, panCase[0]); server.sync;
+            peaks = measure.(probe, peakBus, 0.3);
+            check.((peaks.size == 2) and: { [0, 1].every({ arg channel;
+                    if (panCase[1][channel]) { peaks[channel] > 0.01 } { peaks[channel] < 0.001 } }) },
+                "%-sourced voice at pan % sounds % (peaks %)".format(label, panCase[0],
+                    ["left only", "right only", "on both sides"][[[true, false], [false, true], [true, true]].indexOfEqual(panCase[1])], peaks));
+        });
+        // triggered grain mode
+        command.(\setGrainParam, voice, \grainMode, 1);
+        0.5.wait; server.sync;                 // grains in flight and the PitchShift window have ended
+        peaks = measure.(probe, peakBus, 0.3);
+        check.(peaks.sum < 0.001, "%-sourced voice in triggered mode is silent without a trigger (peaks %)".format(label, peaks));
+        probe.set(\t_reset, 1); server.sync;
+        command.(\retrigger, voice, 1.0);
+        0.3.wait;
+        peaks = readBus.(peakBus);
+        check.(peaks.sum > 0.01, "a retrigger fires a grain on %-sourced voice in triggered mode (peaks %)".format(label, peaks));
+        command.(\setGrainParam, voice, \grainMode, 0);
+        toMain.value;
+    });
+
+    // Grain end: a slot of silence whose frames past the valid region hold 1
+    // (set by hand after the load, which zeroes them). Grains scanning up to
+    // the region's end, at a rate and size that read far past it unless
+    // limited, must read silence only: at the server rate, at 22050 Hz and
+    // rate 2, and with a region shorter than a grain. [file rate, seconds, grain size, rate]
+    command.(\setGrainSource, voice, slot + 1); server.sync;
+    toPrivate.value;
+    [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
+        var validFrames;
+        writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
+        command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+        validFrames = engine.bufferFrames[slot];
+        [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(validFrames, buffer.numFrames - validFrames, 1) });
+        command.(\setGrainParam, voice, \grainSize, grainCase[2]);
+        command.(\setGrainParam, voice, \bufRate, grainCase[3]);
+        command.(\setGrainParam, voice, \bufPos, 0.9);
+        command.(\setGrainParam, voice, \bufScan, 0.5);
+        server.sync; 0.3.wait;                 // grains started before the fill have ended
+        peaks = measure.(probe, peakBus, 0.6);
+        check.((peaks.size == 2) and: { peaks.maxItem < 0.001 },
+            "grains never read past the valid region (% s at % Hz, grain % s, rate %; peaks %)".format(
+                grainCase[1], grainCase[0], grainCase[2], grainCase[3], peaks));
+    });
+    toMain.value;
+    [[\grainSize, 0.1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    command.(\setVoiceParam, voice, \pan, 0.0);
+    command.(\clearBuffer, slot);
+    command.(\setGrainSource, voice, 0);
+    tone.free; group.free;
+    2.5.wait; server.sync;
+    privateBus.free; peakBus.free;
+    File.delete(path);
+};
+
 server.options.numInputBusChannels = 2;
 // norns' real-time memory pool: Crone.sc boots Server.local without setting
 // memSize, so scsynth gets the ServerOptions default of 8192 KB. Set it
@@ -621,6 +821,7 @@ server.waitForBoot({
         // (256 KB) taken from the real-time pool; it passes 1 through, or
         // reads 0 if the allocation failed
         SynthDef(\strataCheckMemProbe, { arg out; Out.kr(out, A2K.kr(DelayN.ar(DC.ar(1), 1.0, 0.01))) }).add;
+        addAudioCheckDefs.value;
         server.sync;
         context = CroneAudioContext.new(server);
         context.out_b = Bus.audio(server, 2);  // keep the check silent
@@ -947,6 +1148,8 @@ server.waitForBoot({
             "filter type changes crossfade (largest step % while switching, % at most in steady state %)".format(
                 switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
         filterGroup.free; filterIn.free; filterOut.free; stepBus.free;
+        checkResonatorCeiling.value;
+        checkEffectsGuard.value;
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 
         // retrigger never creates nodes (C3)
@@ -1365,6 +1568,7 @@ server.waitForBoot({
         server.sync;
         probe.free; peakBus.free; triggeredBus.free;
         server.sync;
+        checkSourceGrains.(1, 2);
 
         // A burst of source switches (E3 scrolling) keeps at most one
         // releasing grain synth per voice: each switch cuts the one an
@@ -1579,6 +1783,7 @@ server.waitForBoot({
         command.(\setGrainSource, 3, 0);
         command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
+        checkStopStartCycles.(3);
 
         // A re-gated synth whose release ends just as the gate arrives frees
         // anyway; the engine starts that synth again
@@ -1588,6 +1793,7 @@ server.waitForBoot({
         after = voiceTrio.(2);
         check.(after[1].notNil and: { after[1] !== oldTrio[1] } and: { after[1].isPlaying }
             and: { synthNames.(context.xg).size == before }, "a running voice's synth that ends unexpectedly is started again");
+        checkModSpeedRestart.(2);
 
         // voiceOff twice, then commands to the stopped voice
         command.(\voiceOff, 4);
