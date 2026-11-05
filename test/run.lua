@@ -1236,6 +1236,53 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
   check(4, { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
 end)
 
+test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.arc.plug(1)
+  show_page(1)
+  local voice = local_value("selected_voice")
+  local function lit(ring)
+    local count = 0
+    for _, level in ipairs(device.segments[ring].leds) do
+      if level > 0 then count = count + 1 end
+    end
+    return count
+  end
+  local rings = { [1] = "master_density", [3] = "v" .. voice .. "_grain_size", [4] = "v" .. voice .. "_grain_density" }
+  for ring, param_id in pairs(rings) do
+    local param = params:lookup_param(param_id)
+    -- a different range: a ring with its own hardcoded range would not follow
+    param.controlspec = controlspec.new(0, 10, "lin", 0.01, 5)
+    for _, value in ipairs({0, 2.5, 5, 7.5, 10}) do
+      params:set(param_id, value); arc_redraw()
+      local expected = param_fraction(param_id) >= 1 and 64 or math.floor(param_fraction(param_id) * 64 + 0.5)
+      assert_true(math.abs(lit(ring) - expected) <= 1,
+        param_id .. " = " .. value .. " lights " .. expected .. " LEDs, got " .. lit(ring))
+    end
+  end
+end)
+
+test("an arc on another port neither attaches handlers nor disconnects Strata's arc", function()
+  local context = load_strata(); context.clock.advance()
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  context.arc.plug(1)
+  context.arc.plug(2)
+  assert_equal(context.arc.vports[2].delta, nil, "no handler on a foreign port")
+  assert_equal(context.arc.vports[2].key, nil, "no key handler on a foreign port")
+  context.arc.unplug(2)
+  show_page(5); redraw()
+  assert_true(screen_has("arc: connected"), "removing another port's arc keeps Strata's arc connected")
+  context.arc.turn(1, 1, 20)  -- still handled
+  context.arc.unplug(1)
+  redraw()
+  assert_true(screen_has("arc: none"), "removing Strata's arc disconnects it")
+end)
+
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
   local context = load_strata(); context.clock.advance()
   context.arc.plug(1)

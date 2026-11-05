@@ -307,6 +307,7 @@ UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by
 -- param's whole range in this many ticks: half a turn of the arc's 1024
 -- ticks per revolution (monome arc spec; matron passes the deltas through)
 UI_PAGES.ARC_TICKS_PER_SWEEP = 512
+UI_PAGES.ARC_PORT = 1  -- the one arc vport the script uses (arc.connect's default)
 -- norns' Arc:segment reduces angles modulo 2*pi, so a full turn lights nothing;
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
@@ -3395,23 +3396,14 @@ function arc_ring_fill(arc_port, ring, fraction, level)
 end
 
 local function arc_main_redraw(arc_port)
-  -- Ring 1: Master density (0.1 to 2.0)
-  local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
-  arc_ring_fill(arc_port, 1, density_pos / 64, 15)
-
-  -- Ring 2: Selected voice's main parameter, across its controlspec range
-  -- following the warp (as the sweep does: exp freq's midpoint at half a turn)
+  -- Every ring is drawn across its param's controlspec range (as the sweep
+  -- moves it): density, the selected voice's main param, grain size, grain density
   local v = voices[selected_voice]
-  local param_pos = param_fraction(main_param_id(selected_voice)) * 64
-  arc_ring_fill(arc_port, 2, param_pos / 64, v.active and 15 or 4)
-
-  -- Ring 3: Grain size (0.01 to 0.5)
-  local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
-  arc_ring_fill(arc_port, 3, grain_size_pos / 64, v.active and 12 or 3)
-
-  -- Ring 4: Grain density (1 to 100)
-  local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
-  arc_ring_fill(arc_port, 4, grain_density_pos / 64, v.active and 12 or 3)
+  local prefix = "v" .. selected_voice .. "_"
+  arc_ring_fill(arc_port, 1, param_fraction("master_density"), 15)
+  arc_ring_fill(arc_port, 2, param_fraction(main_param_id(selected_voice)), v.active and 15 or 4)
+  arc_ring_fill(arc_port, 3, param_fraction(prefix .. "grain_size"), v.active and 12 or 3)
+  arc_ring_fill(arc_port, 4, param_fraction(prefix .. "grain_density"), v.active and 12 or 3)
 end
 
 -- FX page rings: the param each ring adjusts (each sweeps its range in
@@ -3547,20 +3539,24 @@ local function attach_arc(port)
 end
 
 function arc_init()
-  attach_arc(1)
+  attach_arc(UI_PAGES.ARC_PORT)
   if arc_connected then
     arc_redraw()
   end
 end
 
+-- Only the script's own vport counts: a device that lands on another port is
+-- ignored, as is its removal
 function arc.add(device)
-  attach_arc(device.port or 1)
+  if device.port ~= UI_PAGES.ARC_PORT then return end
+  attach_arc(UI_PAGES.ARC_PORT)
   arc_redraw()
   redraw()  -- SETUP shows the arc state
   print("arc connected")
 end
 
 function arc.remove(device)
+  if device.port ~= UI_PAGES.ARC_PORT then return end
   arc_connected = false
   redraw()
   print("arc disconnected")

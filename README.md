@@ -236,7 +236,7 @@ Confluence mapped CC 7 to the global grain amplitude and CC 10 to position sprea
 
 ### Monome Arc (optional)
 
-Strata supports the monome arc controller for hands-on parameter control with visual LED feedback.
+Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. It uses the arc on arc port 1 (the first arc in norns' DEVICES > ARC menu); an arc on another port is ignored.
 
 #### Arc Encoders
 

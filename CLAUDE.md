@@ -76,7 +76,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`scene_recall_in_progress`).
 - **Source tests**: use `voice_uses_synth(i)` / `voice_uses_buffer(i)`. Never use `not voice_uses_synth` (that includes input).
 - **Grid and arc handlers live on the vport only** (`grid.connect(port)`, `arc.connect`). Never store or attach to the raw device passed to `grid.add`.
-- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale.
+- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale: the only exceptions are the LFO page's whole-value rings (depth at 10 ticks per percent, clocked rate at 20 ticks per rate), and every ring is drawn through `param_fraction`. The script uses one arc vport (`UI_PAGES.ARC_PORT`, 1): `arc.add`/`arc.remove` of a device on another port are ignored.
 
 ## Development & Testing
 
