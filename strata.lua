@@ -2292,10 +2292,11 @@ local GRAIN_PARAM_IDS = {
 -- still running (its steps run late by their scheduling delay), checks
 -- again every `settle_seconds`, so it never cuts a fade short. A transition
 -- whose next step (or end) is `overrun_seconds` late is stuck: the
--- sequencer cancels it and moves on. next_step_due is the running fade's
--- progress: util.time() when its next step or its end is due
+-- sequencer cancels it and moves on. next_step_due (nil when no fade runs)
+-- is the running fade's progress: util.time() when its next step or its end
+-- is due. It is set and cleared together with scene_transition_active, as
+-- wait_for_scene_transition reads it whenever the flag is set
 local SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
-SCENE_TRANSITION.next_step_due = nil
 
 local function is_number(value)
   return type(value) == "number" and value == value  -- rejects NaN
@@ -2492,6 +2493,10 @@ function recall_scene(scene_num, transition_time)
     local scene_data = scenes[scene_num].data
     local targets = scene_transition_targets(scene_data)
 
+    -- scene_transition_active and SCENE_TRANSITION.next_step_due are always
+    -- set and cleared together (here, at the fade's end or error, and in
+    -- cancel_scene_transition): the sequencer's wait reads the due time
+    -- whenever the flag is set
     scene_transition_active = true
     SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
     scene_transition_clock = clock.run(function()

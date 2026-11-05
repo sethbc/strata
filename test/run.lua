@@ -859,6 +859,9 @@ test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48
   assert_equal(params:get("clock_tempo"), 31, "grid +1 steps from 30 BPM")
   params:set("clock_tempo", clock_min)
   assert_equal(params:get("tempo"), clock_min, "the param follows the clock down to its minimum")
+  context.grid.press(1, 6, 8, 1)   -- -1 BPM
+  assert_equal(params:get("tempo"), clock_min, "grid -1 at the minimum keeps the tempo param there")
+  assert_equal(params:get("clock_tempo"), clock_min, "and the clock")
   -- an external source's tempo reaches the handler unclamped
   clock.tempo_change_handler(clock_max + 100)
   assert_equal(params:get("tempo"), clock_max, "the param clamps to the clock's maximum")
@@ -1016,7 +1019,7 @@ test("grid_redraw draws every layout (I2) and a hot-plugged grid (I3)", function
   end
 end)
 
-test("the startup clock leaves a voice 2 started within 0.5 s running", function()
+test("the startup clock leaves a voice 2 started within STARTUP.voice_delay_seconds running", function()
   local context = load_strata()
   local voices = local_value("voices")
   assert_true(not voices[2].active, "voice 2 starts stopped")
@@ -1484,9 +1487,10 @@ test("the scene sequencer waits for a manual transition it did not start, within
   assert_true(not recalls[3].interrupts, "without cutting it short")
   -- a manual transition that gets stuck is cancelled once its next step is overrun_seconds late
   recall_scene(2, 25)
+  local started = util.time() - recalls[#recalls].time           -- recall times count from here
   context.clock.run_for(10, 0.001)                                 -- the sequencer is waiting for it
   assert_equal(#recalls, 4, "the sequencer waits for the second manual transition")
-  local due = local_value("SCENE_TRANSITION").next_step_due - util.time() + recalls[4].time + 10
+  local due = local_value("SCENE_TRANSITION").next_step_due - started
   clock.cancel(local_value("scene_transition_clock"))
   context.clock.run_for(overrun + 2, 0.001)
   assert_equal(#recalls, 5, "the sequencer moved on after the bound")
@@ -2959,7 +2963,9 @@ end)
 test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves util.time", function()
   local context = load_strata(); finish_startup(context)
   params:set("clock_tempo", 120)                 -- 0.5 s per beat
-  local start = util.time()                      -- on a beat: init's start-up clock slept 0.5 s
+  -- start on a beat, whatever init's start-up clock slept (STARTUP.voice_delay_seconds)
+  context.clock.run_for((math.ceil(clock.get_beats() - 1e-9) - clock.get_beats()) * clock.get_beat_sec())
+  local start = util.time()
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.3f", name, util.time() - start)) end
   clock.run(function() while true do clock.sleep(0.3); log("short") end end)
@@ -2988,15 +2994,16 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
 end)
 
 test("stub clock.advance is one time-ordered scheduler step and moves util.time (#27)", function()
-  local context = load_strata()                  -- init's start-up clock sleeps 0.5 s
+  local context = load_strata()                  -- init's start-up clock sleeps STARTUP.voice_delay_seconds
   stop_frame_clock()                             -- (its 1/15 s ticks would come first)
+  assert_true(STARTUP.voice_delay_seconds < 1, "this test needs the start-up clock to wake before the 1 s sleeps")
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
   clock.run(function() clock.sleep(2); log("two") end)
   clock.run(function() clock.sleep(1); log("one-a") end)
   clock.run(function() clock.sleep(1); log("one-b") end)
   context.clock.advance()
-  assert_near(util.time(), 0.5, 1e-12, "the first step is the start-up clock's wake-up")
+  assert_near(util.time(), STARTUP.voice_delay_seconds, 1e-12, "the first step is the start-up clock's wake-up")
   assert_true(local_value("voices")[2].active, "which started voice 2")
   assert_equal(#events, 0, "nothing else was due")
   context.clock.advance()
@@ -3012,7 +3019,9 @@ test("stub clock.advance is one time-ordered scheduler step and moves util.time 
 end)
 
 test("stub clock follows matron's scheduler: sync beats, offsets, FLT_EPSILON, tempo, resume values (#27)", function()
-  local context = load_strata(); finish_startup(context)   -- util.time() 0.5 s: beat 1 at 120 BPM
+  local context = load_strata(); finish_startup(context)   -- util.time() STARTUP.voice_delay_seconds
+  -- the beats below count from beat 1: the start-up delay must be one beat at 120 BPM
+  assert_equal(STARTUP.voice_delay_seconds, 0.5, "this test assumes a 0.5 s start-up delay (beat 1 at 120 BPM)")
   assert_near(clock.get_beats(), 1, 1e-12, "the beat timeline runs at the clock tempo")
   -- a repeated sync counts from the sync's own beat (clock_scheduler.cc), so a
   -- coroutine that wakes a whole period late never skips a beat
