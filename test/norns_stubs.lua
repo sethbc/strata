@@ -14,7 +14,16 @@
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
 --     lib/musicutil.lua
 --   * clock.run resumes the coroutine immediately; sleep/sync yield;
---     clock.get_beat_sec follows clock_tempo
+--     clock.get_beat_sec follows clock_tempo. Two ways to drive the clocks:
+--     clock.advance() resumes every pending coroutine once, whatever it is
+--     waiting for (one scheduler tick, util.time() stands still);
+--     clock.run_for(seconds[, latency]) runs time-ordered, the way norns'
+--     scheduler does: it resumes each coroutine when its sleep or sync is
+--     due (earliest first, ties in the order they yielded), moving
+--     util.time() to that moment, until `seconds` have passed. `latency`
+--     (default 0) is a scheduling delay added to every wake-up, so a clock
+--     that sleeps many short steps falls behind one that sleeps once.
+--     A coroutine that raises an error is dropped (norns never resumes it)
 --   * util.time stands still until a test calls context.set_time(seconds)
 --   * the screen records texts, lines and rects (for layout checks)
 --   * grid/arc device events fire both device.key and vports[port].key
@@ -458,18 +467,43 @@ end
 -- clock
 ---------------------------------------------------------------------------
 
-local function make_clock()
-  local clock = { threads = {}, next_id = 1, sleep_log = {} }
+local function make_clock(util)
+  -- wake_at[id] = {time, order}: when a pending coroutine's sleep or sync is
+  -- due (util.time() seconds), and a counter for ties (first yielded first)
+  local clock = { threads = {}, next_id = 1, sleep_log = {}, wake_at = {} }
+  local wake_order = 0
+
+  -- lua/core/clock.lua yields (mode, time); matron schedules a sleep at
+  -- now + time and a sync at the next multiple of `beats` on the beat
+  -- timeline (clock_scheduler.cc: ceil((beat + epsilon) / sync) * sync).
+  -- The stub's beat timeline is util.time() / clock.get_beat_sec()
+  local function wake_time(mode, amount)
+    local now = util.time()
+    if mode == "sleep" then return now + (amount or 0) end
+    if mode == "sync" then
+      local beat_sec = clock.get_beat_sec()
+      local beats = amount or 1
+      local next_beat = math.ceil((now / beat_sec + 1e-7) / beats) * beats
+      return next_beat * beat_sec
+    end
+    return now
+  end
 
   local function resume(coro_id, ...)
     local coro = clock.threads[coro_id]
     if not coro then return end
+    clock.wake_at[coro_id] = nil
     local ok, mode, amount = coroutine.resume(coro, ...)
-    if not ok then error(mode, 0) end
+    -- a coroutine that raised is dead: norns never schedules it again
+    if not ok then clock.threads[coro_id] = nil; error(mode, 0) end
     if coroutine.status(coro) == "dead" then
       clock.threads[coro_id] = nil
     else
       table.insert(clock.sleep_log, { id = coro_id, mode = mode, amount = amount })
+      if clock.threads[coro_id] == coro then  -- not cancelled from inside
+        wake_order = wake_order + 1
+        clock.wake_at[coro_id] = { time = wake_time(mode, amount), order = wake_order }
+      end
     end
   end
 
@@ -483,6 +517,7 @@ local function make_clock()
 
   function clock.cancel(coro_id)
     clock.threads[coro_id] = nil
+    clock.wake_at[coro_id] = nil
   end
 
   function clock.sleep(seconds)
@@ -504,6 +539,31 @@ local function make_clock()
     for coro_id in pairs(clock.threads) do table.insert(ids, coro_id) end
     table.sort(ids)
     for _, coro_id in ipairs(ids) do resume(coro_id) end
+  end
+
+  -- test helper: run the clocks time-ordered for `seconds`. Each step resumes
+  -- the coroutine due first (by wake time, then yield order), at its wake
+  -- time plus `latency` (never earlier than util.time()), and moves
+  -- util.time() there. Coroutines started or rescheduled meanwhile join in.
+  -- util.time() ends at the start time plus `seconds`
+  function clock.run_for(seconds, latency)
+    latency = latency or 0
+    local end_time = util.time() + seconds
+    local resumes = 0
+    while true do
+      local due_id, due
+      for coro_id, wake in pairs(clock.wake_at) do
+        if not due or wake.time < due.time or (wake.time == due.time and wake.order < due.order) then
+          due_id, due = coro_id, wake
+        end
+      end
+      if not due or due.time + latency > end_time then break end
+      resumes = resumes + 1
+      if resumes > 1e6 then error("clock.run_for: a coroutine never sleeps", 2) end
+      util.stub_now = math.max(util.time(), due.time + latency)
+      resume(due_id)
+    end
+    util.stub_now = end_time
   end
 
   -- test helper: resume one coroutine
@@ -995,7 +1055,7 @@ function stubs.install(options)
   context.util = util
   context.controlspec = controlspec
   context.params = make_params(util, controlspec)
-  context.clock = make_clock()
+  context.clock = make_clock(util)
   function context.set_time(seconds) util.stub_now = seconds end
   context.metro = make_metro()
   context.grid = make_grid()

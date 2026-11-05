@@ -2055,7 +2055,13 @@ local GRAIN_PARAM_IDS = {
   buf_scan = "buf_scan"
 }
 
-local SCENE_TRANSITION_STEPS = 20
+-- A smooth transition fades in `steps` steps. The scene sequencer holds a
+-- scene for max(scene duration, transition time), then, while the fade is
+-- still running (its steps run late by their scheduling delay), checks
+-- again every `settle_seconds`, so it never cuts a fade short. A transition
+-- still flagged `overrun_seconds` after its transition time is stuck: the
+-- sequencer cancels it and moves on
+local SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
 
 local function is_number(value)
   return type(value) == "number" and value == value  -- rejects NaN
@@ -2239,14 +2245,23 @@ function recall_scene(scene_num, transition_time)
 
     scene_transition_active = true
     scene_transition_clock = clock.run(function()
-      local step_time = transition_time / SCENE_TRANSITION_STEPS
+      local step_time = transition_time / SCENE_TRANSITION.steps
 
-      for step = 1, SCENE_TRANSITION_STEPS do
-        local mix = step / SCENE_TRANSITION_STEPS
-        for _, target in ipairs(targets) do
-          params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
+      for step = 1, SCENE_TRANSITION.steps do
+        local mix = step / SCENE_TRANSITION.steps
+        -- the flag must not outlive an error in a param action (the
+        -- sequencer waits for it): clear it, then raise the error again
+        local stepped, step_error = pcall(function()
+          for _, target in ipairs(targets) do
+            params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
+          end
+          grid_redraw()  -- keep the parameter faders moving with the fade
+        end)
+        if not stepped then
+          scene_transition_clock = nil
+          scene_transition_active = false
+          error(step_error, 0)
         end
-        grid_redraw()  -- keep the parameter faders moving with the fade
         clock.sleep(step_time)
       end
 
@@ -2337,6 +2352,31 @@ function recall_scene_instant(scene_num)
   grid_redraw()
 end
 
+-- Called by the scene sequencer `waited` seconds after it started
+-- `own_transition` (a clock id, or nil) of `transition_time` seconds: wait
+-- while a transition is flagged, but never for ever. A transition still
+-- flagged SCENE_TRANSITION.overrun_seconds after its transition time is
+-- stuck (its clock is gone) and is cancelled. A transition the sequencer did
+-- not start (a manual recall's) is timed from when the wait sees it, with
+-- the longest transition time, since its own is unknown
+function wait_for_scene_transition(own_transition, transition_time, waited)
+  local watched = own_transition
+  local deadline = util.time() - waited + transition_time + SCENE_TRANSITION.overrun_seconds
+  while scene_transition_active do
+    if scene_transition_clock ~= watched then
+      watched = scene_transition_clock
+      local _, longest_transition = param_range("scene_transition_time")
+      deadline = util.time() + longest_transition + SCENE_TRANSITION.overrun_seconds
+    end
+    if util.time() >= deadline then
+      print("scene transition overran; cancelled")
+      cancel_scene_transition()
+      return
+    end
+    clock.sleep(SCENE_TRANSITION.settle_seconds)
+  end
+end
+
 function scene_sequencer_start()
   if scene_sequencer_clock then
     clock.cancel(scene_sequencer_clock)
@@ -2353,14 +2393,22 @@ function scene_sequencer_start()
       scene_sequencer_position = util.clamp(scene_sequencer_position, 1, seq_length)
 
       -- Recall next scene in sequence (skip empty scenes)
+      local transition_time = 0
+      local own_transition = nil  -- the clock of the transition this recall started
       if scenes[scene_sequencer_position].populated then
-        recall_scene(scene_sequencer_position, params:get("scene_transition_time"))
+        transition_time = params:get("scene_transition_time")
+        recall_scene(scene_sequencer_position, transition_time)
+        own_transition = scene_transition_clock
       else
         print("skipping empty scene " .. scene_sequencer_position)
       end
 
-      -- Wait for scene duration
-      clock.sleep(params:get("scene_duration"))
+      -- Hold the scene for its duration, and at least until its transition
+      -- ends: the next recall would cancel the fade before it applies the
+      -- scene's discrete state (voices, sources, patterns, ...)
+      local held = math.max(params:get("scene_duration"), transition_time)
+      clock.sleep(held)
+      wait_for_scene_transition(own_transition, transition_time, held)
 
       -- Advance to next scene with proper wraparound
       scene_sequencer_position = scene_sequencer_position + 1
