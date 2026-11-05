@@ -994,12 +994,17 @@ local text_width = stubs.text_width
 local function text_span(entry)
   local width = text_width(entry.text)
   if entry.align == "right" then return entry.x - width, entry.x end
+  if entry.align == "center" then return entry.x - width / 2, entry.x + width / 2 end
   return entry.x, entry.x + width
 end
 
 local PAGE_TITLES = { "MAIN", "FX", "LFO", "BUFFER", "SETUP" }
 local HINT_ROW_Y = 62
 local TEXT_HEIGHT = 6   -- 04B_03 glyph height plus one row of spacing
+-- MAIN: the voice list ends at x 60, left of the divider at 62; the selected
+-- voice's details start at x 65
+local MAIN_LIST_RIGHT = 60
+local MAIN_DETAILS_LEFT = 65
 
 local function show_page(page)
   enc(1, page - local_value("ui_page"))
@@ -1021,6 +1026,11 @@ local function assert_screen_layout(context, where)
         string.format("'%s' overlaps '%s' on row %d (%s)", entry.text, other.text, entry.y, where))
     end
     table.insert(rows[entry.y], { left = left, right = right, text = entry.text })
+    -- between the header and the hint row, MAIN text stays in its column
+    if local_value("ui_page") == 1 and entry.y > 8 and entry.y < HINT_ROW_Y then
+      assert_true(right <= MAIN_LIST_RIGHT or left >= MAIN_DETAILS_LEFT,
+        string.format("'%s' at %d,%d crosses the MAIN divider (%s)", entry.text, entry.x, entry.y, where))
+    end
   end
   local title = PAGE_TITLES[local_value("ui_page")]
   local title_right, density_left, hint_found
@@ -1034,6 +1044,11 @@ local function assert_screen_layout(context, where)
     "dens: starts at least 4 px after " .. title .. " (" .. where .. ")")
   assert_true(hint_found, "hint row at y " .. HINT_ROW_Y .. " (" .. where .. ")")
 end
+
+test("stub text_width counts UTF-8 characters, not bytes", function()
+  assert_equal(text_width("\226\151\143"), text_width("o"), "a three-byte glyph is one character")
+  assert_equal(text_width("\226\151\139 ab"), 4 * text_width("o"), "glyph, space and two letters")
+end)
 
 test("every page's header, hints and text stay apart and inside 128x64 (M7)", function()
   local context = load_strata()
@@ -1060,11 +1075,61 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
     end
   end
   -- UI.ScrollingList draws row i at y + 5 + (i - 1) * 11; its last row must
-  -- end above the hint row (the stub list draws nothing, so check geometry)
+  -- end above the hint row
   local voice_list = local_value("voice_list")
   local last_row_y = voice_list.y + 5 + (voice_list.num_visible - 1) * 11
   assert_true(last_row_y <= HINT_ROW_Y - TEXT_HEIGHT,
     "voice list's last row (y " .. last_row_y .. ") clears the hint row")
+end)
+
+test("MAIN voice list fits its column for every voice, state and selection (#23)", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = local_value("voices")
+  local frozen = local_value("frozen")
+  local _, set_selected = find_upvalue("selected_voice")
+  local states = { { active = false, frozen = false }, { active = false, frozen = true },
+    { active = true, frozen = false }, { active = true, frozen = true } }
+  local entries_by_state = {}
+  for state_idx, state in ipairs(states) do
+    for voice_idx = 1, 7 do
+      if voices[voice_idx].active ~= state.active then toggle_voice(voice_idx) end
+      if (frozen[voice_idx] or false) ~= state.frozen then toggle_freeze(voice_idx) end
+    end
+    for voice_idx = 1, 7 do
+      set_selected(voice_idx)
+      update_voice_list()
+      show_page(1)
+      local where = string.format("MAIN, voice %d, active %s, frozen %s", voice_idx,
+        tostring(state.active), tostring(state.frozen))
+      assert_screen_layout(context, where)
+      -- the list draws its four rows; the selected voice's entry is bright
+      local voice_list = local_value("voice_list")
+      local rows_drawn, selected_entry = 0, nil
+      for _, entry in ipairs(context.screen.texts) do
+        local row = (entry.y - voice_list.y - 5) / 11
+        if entry.x == voice_list.x and row >= 0 and row < voice_list.num_visible and row % 1 == 0 then
+          rows_drawn = rows_drawn + 1
+          if entry.level == 15 then selected_entry = entry.text end
+        end
+      end
+      assert_equal(rows_drawn, voice_list.num_visible, "list rows drawn (" .. where .. ")")
+      assert_equal(selected_entry, voice_list.entries[voice_idx], "selected entry bright (" .. where .. ")")
+    end
+    entries_by_state[state_idx] = local_value("voice_list").entries
+  end
+  for voice_idx = 1, 7 do
+    local stopped, stopped_frozen = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
+    local running, running_frozen = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
+    assert_true(stopped ~= running, "running and stopped entries differ: " .. stopped)
+    assert_true(not stopped:find("[F]", 1, true) and not running:find("[F]", 1, true), "[F] only when frozen")
+    assert_true(stopped_frozen:find("[F]", 1, true) and running_frozen:find("[F]", 1, true),
+      "frozen entries show [F]: " .. running_frozen)
+    -- every entry is plain ASCII, so its width does not depend on how the
+    -- norns font draws other glyphs
+    for _, entry in ipairs({ stopped, stopped_frozen, running, running_frozen }) do
+      assert_true(not entry:find("[\128-\255]"), "ASCII entry: " .. entry)
+    end
+  end
 end)
 
 test("E1 selects pages; MAIN keeps its encoder and key mappings", function()

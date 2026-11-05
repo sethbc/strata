@@ -598,10 +598,12 @@ The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LF
 
 #### MAIN layout
 
-The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. The list shows:
-- Active status (● for on, ○ for off)
-- Voice name
-- Freeze status ([F] suffix)
+The `update_voice_list()` function recreates the `UI.ScrollingList` on every change. Each entry is plain ASCII, so its width does not depend on how the norns font draws other glyphs:
+- Active status (`+` running, `-` stopped)
+- The voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF
+- Freeze status (` [F]` suffix)
+
+The widest entry, `+ pulse [F]`, is 54 px by the harness estimate, so it ends 8 px before the divider. The list puts the selected voice on row 2 (y=26, the ON/OFF row) except at the ends of the list (`num_above_selected` = 1), so entries must stay left of x=60 or they overlap the details.
 
 MAIN uses a two-column layout:
 - **Header (y=8, `draw_header()`, identical on every page)**: page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127
@@ -609,7 +611,7 @@ MAIN uses a two-column layout:
 - **Right column (65-128px)**: Selected voice details (name, status, main parameter at y=42/50); `[FREEZE]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42)
 - **Divider (x=62)**: Subtle vertical line separating columns
 - **Hint row (y=62)**: `K2:rand K3:freeze|start`
-- `test/run.lua` checks, on every page and for every selected voice, that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), that `dens:` starts at least 4 px after the page title, that a hint row is drawn at y=62, and that the voice list's last row ends above the hint row; keep it passing when adding text. The width estimate is `stubs.text_width` in `test/norns_stubs.lua`, which the screen stub also uses for `screen.text_extents` (returns width, 8); the stub records each string's `x`, `y`, `align` and `level`
+- `test/run.lua` checks, on every page and for every selected voice, that no two strings on a row overlap and that nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise), that `dens:` starts at least 4 px after the page title, that a hint row is drawn at y=62, and that the voice list's last row ends above the hint row. On MAIN every string between the header and the hint row must end by x=60 or start at x=65 or later (never across the divider); a separate test draws the list for every voice, selection and running/frozen state. Keep them passing when adding text. The width estimate is `stubs.text_width` in `test/norns_stubs.lua` (it counts UTF-8 characters, not bytes), which the screen stub also uses for `screen.text_extents` (returns width, 8); the stub records each string's `x`, `y`, `align` (`left`, `right`, `center`) and `level`. The stub's `UI.ScrollingList:redraw` is the real one from `lua/lib/ui.lua`, so the list's entries are recorded like any other text (an empty string where the list scrolls past an end)
 - Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `drift_update` only when a grid shows page 2 (it runs 10x/s)
 
 When adding UI elements, update the page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()` itself.

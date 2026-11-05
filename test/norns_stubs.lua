@@ -741,10 +741,11 @@ end
 
 -- Approximate advance of norns' default font (04B_03 at size 8): capitals
 -- about 6 px, brackets/colon/period about 4 px, everything else 5 px. The
--- stub's screen.text_extents and the layout tests both use it.
+-- stub's screen.text_extents and the layout tests both use it. It counts
+-- UTF-8 characters, not bytes, so a multi-byte glyph such as "●" is one.
 function stubs.text_width(text)
   local width = 0
-  for char in text:gmatch(".") do
+  for char in text:gmatch("[^\128-\191][\128-\191]*") do
     if char:match("%u") then
       width = width + 6
     elseif char:match("[%[%]%.:]") then
@@ -768,6 +769,7 @@ local function make_screen()
   end
   function screen.text(str) record_text(str, "left") end
   function screen.text_right(str) record_text(str, "right") end
+  function screen.text_center(str) record_text(str, "center") end
   -- lua/core/screen.lua: text_extents(str) returns width, height
   function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
   -- lines and rectangles are recorded too (from/to points, x/y/w/h), so
@@ -788,15 +790,38 @@ local function make_screen()
   return screen
 end
 
-local function make_ui(util)
+local function make_ui(util, screen)
   local UI = { ScrollingList = {} }
   UI.ScrollingList.__index = UI.ScrollingList
   function UI.ScrollingList.new(x, y, index, entries)
     assert(x and y and index and entries, "UI.ScrollingList.new requires all parameters")
     return setmetatable({ x = x, y = y, index = index, entries = entries,
-      num_visible = 5, num_above_selected = 1, active = true }, UI.ScrollingList)
+      num_visible = 5, num_above_selected = 1, text_align = "left", active = true }, UI.ScrollingList)
   end
-  function UI.ScrollingList:redraw() end
+  -- lua/lib/ui.lua's ScrollingList:redraw, unchanged: row i at
+  -- y + 5 + (i - 1) * 11, the selected entry at level 15 and the rest at 3,
+  -- an empty string where the scroll offset runs past either end
+  function UI.ScrollingList:redraw()
+    local num_entries = #self.entries
+    local scroll_offset = self.index - 1 - math.max(self.index - (num_entries - 2), 0)
+    scroll_offset = scroll_offset - util.linlin(num_entries - self.num_above_selected, num_entries,
+      self.num_above_selected, 0, self.index - 1) -- For end of list
+
+    for i = 1, self.num_visible do
+      if self.active and self.index == i + scroll_offset then screen.level(15)
+      else screen.level(3) end
+      screen.move(self.x, self.y + 5 + (i - 1) * 11)
+      local entry = self.entries[i + scroll_offset] or ""
+      if self.text_align == "center" then
+        screen.text_center(entry)
+      elseif self.text_align == "right" then
+        screen.text_right(entry)
+      else
+        screen.text(entry)
+      end
+    end
+    screen.fill()
+  end
   return UI
 end
 
@@ -949,7 +974,7 @@ function stubs.install(options)
   context.grid = make_grid()
   context.arc = make_arc()
   context.screen = make_screen()
-  context.UI = make_ui(util)
+  context.UI = make_ui(util, context.screen)
   context.tab = make_tab()
   context.engine = engine
   context.midi = require("stub_midi")()
