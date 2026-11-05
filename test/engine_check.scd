@@ -442,7 +442,7 @@ var checkLoudSave = {
 // whose age cannot be read (its directory cannot be searched, so File.mtime
 // fails while the file is still there) is left, posted and returned.
 var checkStaleTempFiles = {
-    var tag = "check" ++ Date.getDate.stamp, unreadable, result, readable, savedDir = engine.scratchDir;
+    var tag = "check" ++ Date.getDate.stamp, unreadable, result, readable, savedDir = engine.scratchDir, lines = List.new;
     var names = ["strata-buf3-%-1-L.wav", "strata-buf3-%-2-R.wav", "strata-buf%.wav"].collect({ arg name;
         Platform.defaultTempDir +/+ name.format(tag) });
     names.do({ arg path; File.use(path, "w", { arg text; text.write("float") }) });
@@ -458,7 +458,9 @@ var checkStaleTempFiles = {
     ("chmod 644 " ++ unreadable.shellQuote).systemCmd;
     readable = try { File.mtime(unreadable +/+ "buf4.wav.9.part"); true } { false };
     engine.scratchDir = unreadable;
+    engine.postStaleFileLine = { arg line; lines.add(line) };
     result = engine.tryPerform(\deleteStaleParts);
+    engine.postStaleFileLine = nil;
     engine.scratchDir = savedDir;
     ("chmod 755 " ++ unreadable.shellQuote).systemCmd;
     if (readable) {
@@ -467,6 +469,8 @@ var checkStaleTempFiles = {
         check.(result.isKindOf(Array) and: { result.includesEqual(unreadable +/+ "buf4.wav.9.part") }
             and: { File.exists(unreadable +/+ "buf4.wav.9.part") },
             "deleteStaleParts leaves, posts and returns a .part file whose age it cannot read (got %)".format(result));
+        check.(lines.asArray == [("strata: cannot read when " ++ unreadable ++ "buf4.wav.9.part was last written; left in place")],
+            "and posts one line naming it (got %)".format(lines));
     };
     File.delete(unreadable +/+ "buf4.wav.9.part");
 };
@@ -1132,8 +1136,28 @@ var checkEffectsGuard = {
 // has produced no bad value.
 var checkModGuard = {
     var group = Group.tail(server), voiceBus = Bus.audio(server, 2), out = Bus.audio(server, 2), modBus = Bus.control(server, 1);
-    var voiceBadBus = Bus.control(server, 1), badBus = Bus.control(server, 1), silent = engine.silentBus.index;
-    var mod, probe, voiceBad, bad, modValue;
+    var voiceBadBus = Bus.control(server, 1), badBus = Bus.control(server, 1), abBus = Bus.control(server, 4), silent = engine.silentBus.index;
+    var mod, probe, voiceBad, bad, modValue, ab;
+    var guards = SynthDescLib.global.at(\strataMod).def.children.count({ arg ugen; ugen.isKindOf(CheckBadValues) });
+    // A/B first: zeroBadValues, the guard strataMod applies to its input
+    // (audio) and output (control), passes normal values bit for bit: the
+    // largest difference between guarded and unguarded copies of a varied
+    // signal (and of its follower) is exactly 0, while the signals are not
+    SynthDef(\strataCheckGuardAB, { arg in, out;
+        var audio = In.ar(in, 2).sum * LFNoise1.ar(50).exprange(0.001, 3);
+        var control = (Amplitude.kr(audio, 0.01, 0.1) * 0.7) + LFNoise1.kr(10).range(0, 0.3);
+        Out.kr(out, [A2K.kr(Peak.ar((engine.zeroBadValues(audio) - audio).abs)),
+            Peak.kr((engine.zeroBadValues(control) - control).abs), A2K.kr(Peak.ar(audio.abs)), Peak.kr(control.abs)]);
+    }).add;
+    server.sync;
+    Synth(\strataCheckTone, [\out, voiceBus], group);
+    Synth(\strataCheckGuardAB, [\in, voiceBus, \out, abBus], group, \addToTail);
+    server.sync; 0.5.wait;
+    ab = readBus.(abBus);
+    check.((guards == 2) and: { ab.size == 4 } and: { ab[0] == 0 } and: { ab[1] == 0 } and: { ab[2] > 0.1 } and: { ab[3] > 0.1 },
+        "strataMod guards its input and output (% CheckBadValues) and the guard passes normal values bit for bit (largest difference audio %, control %; peaks %, %)".format(
+            guards, ab[0], ab[1], ab[2], ab[3]));
+    group.freeAll; server.sync;
     Synth(\strataCheckTone, [\out, voiceBus], group);
     mod = Synth(\strataMod, [\in, voiceBus, \out, modBus], group, \addToTail);
     Synth(\strataCheckBadValues, [\in, voiceBus, \out, voiceBadBus], mod, \addBefore);
@@ -1150,8 +1174,33 @@ var checkModGuard = {
     check.(modValue.notNil and: { modValue.isNaN.not } and: { modValue > 0.3 } and: { modValue < 2 },
         "after the burst strataMod's output is finite and follows the voice again (got %)".format(modValue));
     check.(bad == [0], "a voice crossmodulated by a voice that blew up stays finite (bad values seen: %)".format(bad));
-    group.free; voiceBus.free; out.free; modBus.free; voiceBadBus.free; badBus.free;
+    group.free; voiceBus.free; out.free; modBus.free; voiceBadBus.free; badBus.free; abBus.free;
     server.sync;
+};
+
+// setSynth sends to the effects chain plainly (#47 review): filter, delay,
+// reverb and master never end on their own, so a "Node not found" there is a
+// real bug the server must report, while a voice's synth may have just freed
+// and gets sendToSynth's quiet bundle. With \filter pointed at a freed node
+// (restored afterwards), each FX command's messages are captured with
+// makeBundle(false), which sends nothing (a real failure would print a
+// FAILURE line and fail this run on purpose): no /error -1 among them, and
+// the filter's /n_set names the freed node. A voice param's set has one.
+var checkEffectSendsReported = {
+    var quiet = { arg messages; messages.any({ arg msg; (msg[0] == '/error') and: { msg[1] == -1 } }) };
+    var filter = engine.synths[\filter], freed = Group.tail(server);
+    var captured;
+    server.sync; freed.free; server.sync;
+    engine.synths[\filter] = freed;
+    captured = [{ command.(\setFilter, 5000.0, 0.5, 0, 0.0) }, { command.(\setDelay, 0.375, 0.4, 0.0) },
+        { command.(\setReverb, 0.3, 0.8, 0.5) }, { command.(\setMasterDrift, 0.01) }, { command.(\setVoiceParam, 0, \amp, 0.2) }
+    ].collect({ arg send; server.makeBundle(false, send) });
+    engine.synths[\filter] = filter;
+    check.(captured.keep(4).every({ arg messages; messages.notEmpty and: { quiet.(messages).not } })
+        and: { captured[0].every({ arg msg; (msg[0] == 15) and: { msg[1] == freed.nodeID } }) },
+        "setSynth sends to the effects chain without /error -1, so a missing FX node is reported (filter, delay, reverb, master: %)".format(
+            captured.keep(4)));
+    check.(quiet.(captured[4]), "and to a voice's synth inside a quiet bundle (got %)".format(captured[4]));
 };
 
 // A mod synth the engine restarts (its release ended just as voiceOn
@@ -1775,7 +1824,8 @@ server.waitForBoot({
         grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
         firstGrain = grainIndices.minItem;
         check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + 4),
-            "xg holds 6 voice trios, 1 buffer voice (grain + mod), the input synth, filter, delay, reverb and master (got %)".format(names.size));
+            "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, filter, delay, reverb and master (got %)".format(
+                engine.numVoices - 1, names.size));
         check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
         check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");
         check.(grainIndices.maxItem < names.indexOf(\strataFilter), "grain/mod synths run before the effects chain");
@@ -1845,6 +1895,7 @@ server.waitForBoot({
         checkResonatorLevel.value;
         checkEffectsGuard.value;
         checkModGuard.value;
+        checkEffectSendsReported.value;
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 
         // retrigger never creates nodes (C3)
@@ -2396,6 +2447,8 @@ server.waitForBoot({
         // note-off in one bundle): the trio created in that block still
         // releases and frees, instead of waiting forever on an envelope that
         // never started (F4)
+        // (inside makeBundle, sendToSynth's bundle is flattened into the
+        // outer one: its /error -1 then silences the rest of that bundle)
         command.(\voiceOff, 5); 2.5.wait; server.sync;
         server.makeBundle(0.1, {
             command.(\voiceOn, 5, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0);

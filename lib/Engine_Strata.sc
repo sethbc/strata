@@ -74,6 +74,12 @@ Engine_Strata : CroneEngine {
     // the line instead (the engine check captures the lines it provokes, so
     // they do not fail the run)
     var <>postInvariantWarning;
+    // nil: deleteStaleParts posts each file it cannot age with postln. A
+    // function takes the line instead (the engine check captures it)
+    var <>postStaleFileLine;
+    // The effects chain's synths: they never end on their own, so setSynth
+    // sends to them plainly (a failure there is a real bug and is reported)
+    var <effectKeys = #[\filter, \delay, \reverb, \master];
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -1748,7 +1754,10 @@ Engine_Strata : CroneEngine {
                 if (modified.notNil and: { modified < oldest }) { File.delete(path) };
             });
         });
-        unreadable.do({ arg path; postln("strata: cannot read when " ++ path ++ " was last written; left in place") });
+        unreadable.do({ arg path;
+            var line = "strata: cannot read when " ++ path ++ " was last written; left in place";
+            if (postStaleFileLine.notNil) { postStaleFileLine.value(line) } { line.postln };
+        });
         ^unreadable.asArray
     }
 
@@ -1886,11 +1895,15 @@ Engine_Strata : CroneEngine {
         });
     }
 
-    // Set controls on a synth only if it is running (through sendToSynth:
-    // a voice's synth may have freed a moment ago, see watchVoiceSynth)
+    // Set controls on a synth only if it is running. A voice's synth (voice,
+    // grain or mod key) may have freed a moment ago (see watchVoiceSynth), so
+    // it goes through sendToSynth; the effects chain's (effectKeys) never
+    // ends on its own, so a plain set, whose failure the server reports
     setSynth { arg key ... controls;
         var synth = synths[key];
-        if (synth.notNil) { this.sendToSynth(synth.setMsg(*controls)) };
+        if (synth.notNil) {
+            if (effectKeys.includes(key)) { synth.set(*controls) } { this.sendToSynth(synth.setMsg(*controls)) };
+        };
     }
 
     free {
