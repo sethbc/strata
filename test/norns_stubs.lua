@@ -12,6 +12,8 @@
 --     and must be followed by exactly n params (then a separator, a group or
 --     the end of the list, context.check_param_groups)
 --   * param.t holds norns' numeric type codes (params.tOPTION etc.)
+--   * params:write/read follow lua/core/paramset.lua for absolute paths:
+--     read sets each param in file order, firing its action on a change
 --   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
 --     lib/musicutil.lua
@@ -719,6 +721,60 @@ local function make_params(util, controlspec)
         bang(param)
       end
     end
+  end
+
+  -- lua/core/paramset.lua write/read, for absolute paths only (the stub has
+  -- no norns.state for numbered PSETs). write saves every param but
+  -- separators and triggers as `"id": value`; read sets them in file order,
+  -- each through its own set() (so actions fire on a change unless silent),
+  -- skipping trigger binaries, then calls params.action_read
+  local function quote(text) return '"' .. text:gsub('"', '\\"') .. '"' end
+  local function unquote(text) return (text:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')) end
+
+  function ParamSet:write(filename, name)
+    assert(type(filename) == "string", "stub params:write supports absolute paths only")
+    local file = assert(io.open(filename, "w+"))
+    if name then file:write("-- " .. name .. "\n") end
+    for _, param in ipairs(self.params) do
+      if param.id and param.save ~= false and param.t ~= tTRIGGER and param.t ~= tSEPARATOR then
+        file:write(string.format("%s: %s\n", quote(param.id), tostring(self:get(param.id))))
+      end
+    end
+    file:close()
+    if self.action_write ~= nil then self.action_write(filename, name) end
+  end
+
+  function ParamSet:read(filename, silent)
+    assert(type(filename) == "string", "stub params:read supports absolute paths only")
+    local file = io.open(filename, "r")
+    if not file then return end
+    file:close()
+    local already_set = {}
+    for line in io.lines(filename) do
+      if line:sub(1, 2) == "--" then
+        self.name = line:sub(4, -1)
+      else
+        local id, value = line:match('(".-")%s*:%s*(.*)')
+        if id and value then
+          local param = self.lookup[unquote(id)]
+          if param and not already_set[param] then
+            if param.t ~= tTEXT and tonumber(value) ~= nil then
+              if not (param.t == tBINARY and param.behavior == "trigger") then
+                param:set(tonumber(value), silent)
+              end
+            elseif value == "-inf" then
+              param:set(-math.huge, silent)
+            elseif value == "inf" then
+              param:set(math.huge, silent)
+            else
+              param:set(value, silent)
+            end
+            already_set[param] = true
+          end
+        end
+      end
+    end
+    if self.action_read ~= nil then self.action_read(filename, silent) end
   end
 
   -- system params that exist before any script runs

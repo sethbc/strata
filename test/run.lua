@@ -585,6 +585,24 @@ test("pattern steps retrigger with velocity from the step level", function()
   assert_equal(calls[2].args[1], 0); assert_near(calls[2].args[2], 6 / 15, 1e-9)
 end)
 
+test("restarting the pattern clock leaves one pattern clock running", function()
+  local context = load_strata(); context.clock.advance()
+  local patterns = local_value("patterns")
+  for step = 1, 16 do patterns[1][step] = 15 end
+  pattern_clock_start()
+  local first_clock = local_value("pattern_clock")
+  pattern_clock_start()                                          -- restart while it plays
+  assert_true(context.clock.threads[first_clock] == nil, "the first pattern clock was cancelled")
+  context.clear_engine_calls()
+  context.clock.run_for(clock.get_beat_sec() + 0.01)             -- four 16th steps
+  local retriggers = 0
+  for _, call in ipairs(context.calls_named("retrigger")) do
+    if call.args[1] == 0 then retriggers = retriggers + 1 end
+  end
+  assert_equal(retriggers, 4, "voice 1 retriggered once per step")
+  pattern_clock_stop()
+end)
+
 test("grain mode option is sent, synced and never mutated", function()
   local context = load_strata(); context.clock.advance()
   params:set("v1_grain_mode", 2)
@@ -940,6 +958,9 @@ test("validate_scene_data rejects malformed scenes and accepts captured ones", f
   rejects(function(data) data.voices[7] = nil end, "missing voice")
   rejects(function(data) data.voices[2].crossmod.slot2 = nil end, "missing crossmod slot")
   rejects(function(data) data.voices[2].crossmod.slot1.source = 9 end, "out-of-range mod source")
+  -- recall would send engine.setModSpeed with nil
+  rejects(function(data) data.voices[4].crossmod.speed = nil end, "missing mod speed")
+  rejects(function(data) data.voices[4].crossmod.speed = "fast" end, "non-numeric mod speed")
   rejects(function(data) data.voices[1].params.bogus = 1 end, "unknown voice param")
   rejects(function(data) data.voices[1].grain.size = "big" end, "non-numeric grain param")
   rejects(function(data, all) all[1].populated = "yes" end, "non-boolean populated")
@@ -1107,6 +1128,55 @@ test("a smooth scene transition holds filter_type until the fade ends", function
   assert_near(params:get("filter_freq"), 8000, 1.0, "the filter freq faded to its target")
 end)
 
+test("a smooth transition fades LFO depths in whole percents and ends on the scene's exact depth", function()
+  local context = load_strata()
+  params:set("lfo_depth_1", 75); params:set("lfo_depth_2", 37.5)   -- a file may hold any number
+  capture_scene(1)
+  params:set("lfo_depth_1", 0); params:set("lfo_depth_2", 100)
+
+  recall_scene(1, 20)  -- 20 steps; the first runs immediately
+  for step = 1, 20 do
+    local mix = step / 20
+    for n, fade in ipairs({ { from = 0, to = 75 }, { from = 100, to = 37.5 } }) do
+      local depth = params:get("lfo_depth_" .. n)
+      assert_equal(depth, math.floor(depth), "LFO " .. n .. " depth is a whole percent at step " .. step)
+      assert_near(depth, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " depth at step " .. step)
+    end
+    context.clock.advance()
+  end
+  assert_equal(local_value("scene_transition_active"), false, "transition finished")
+  assert_equal(params:get("lfo_depth_1"), 75, "LFO 1 ends on the scene's depth")
+  assert_equal(params:get("lfo_depth_2"), 37.5, "LFO 2 ends on the scene's exact depth")
+end)
+
+-- Loading scenes replaces every slot: a transition that is running must not
+-- apply the slot's new data (or fail on a slot that is now empty) when it ends
+for _, slot_on_disk in ipairs({ "empty", "other" }) do
+  test("loading scenes from disk during a transition (its slot on disk: " .. slot_on_disk .. ")", function()
+    local context = load_strata(); context.clock.advance()
+    local voices = local_value("voices")
+    if slot_on_disk == "other" then
+      params:set("v1_freq", 500); toggle_voice(3); capture_scene(1); toggle_voice(3)
+    end
+    save_scenes_to_disk()
+    params:set("v1_freq", 1000); params:set("v4_grain_mode", 2); capture_scene(1)
+    params:set("v1_freq", 200); params:set("v4_grain_mode", 1)
+
+    recall_scene(1, 4)
+    context.clock.run_for(1, 0.001)
+    local faded = params:get("v1_freq")
+    assert_true(faded > 200 and faded < 1000, "the fade is under way")
+    load_scenes_from_disk()
+    assert_equal(local_value("scenes")[1].populated, slot_on_disk == "other", "slot 1 loaded from disk")
+    local ran, run_error = pcall(context.clock.run_for, 5, 0.001)
+    assert_true(ran, "the transition's end raised no error: " .. tostring(run_error))
+    assert_equal(local_value("scene_transition_active"), false, "no transition left running")
+    assert_equal(params:get("v1_freq"), faded, "the cancelled fade applied nothing more")
+    assert_equal(params:get("v4_grain_mode"), 1, "nor the old scene's discrete state")
+    assert_true(not voices[3].active, "nor the new slot's voices")
+  end)
+end
+
 -- Two scenes for the sequencer: scene 2 starts voice 3 in triggered grain
 -- mode (both switch only when a transition ends), scene 1 has it stopped
 local function capture_sequencer_scenes()
@@ -1223,6 +1293,9 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   params:set_action("v1_freq", function() error("fade failed") end)
   local ok, message = pcall(recall_scene, 1, 4)                  -- the first step runs at once
   assert_true(not ok and tostring(message):find("fade failed", 1, true), "the error is raised")
+  -- with the traceback of where the param action failed (maiden shows it)
+  local traceback = tostring(message):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "the raised error keeps its traceback: " .. tostring(message))
   assert_equal(local_value("scene_transition_active"), false, "flag cleared")
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared")
   -- an error in a later step
@@ -1231,8 +1304,38 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   params:set_action("v1_freq", function() error("fade failed") end)
   ok, message = pcall(context.clock.advance)
   assert_true(not ok and tostring(message):find("fade failed", 1, true), "the later error is raised")
+  traceback = tostring(message):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "a later step's error keeps its traceback")
   assert_equal(local_value("scene_transition_active"), false, "flag cleared after a later step")
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared after a later step")
+end)
+
+-- An error in a sequenced recall (here the first step of its fade, which
+-- runs inside the sequencer's own clock) is reported and the sequencer
+-- keeps going: the recall has already cleared its transition state
+test("an error in a sequenced recall is reported and the scene sequencer keeps going", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v1_freq", 1000); capture_scene(1)
+  params:set("v1_freq", 400); capture_scene(2)
+  params:set("v1_freq", 200); params:set("scene_sequence_length", 2)
+  local freq_param = params:lookup_param("v1_freq")
+  local real_action, failures = freq_param.action, 1
+  freq_param.action = function(value)
+    if failures > 0 then failures = failures - 1; error("fade failed") end
+    return real_action(value)
+  end
+  local ran, run_error = pcall(run_scene_sequencer, context, 2, 4, 1)  -- scene 1's first step fails
+  assert_true(ran, "the error did not escape the sequencer: " .. tostring(run_error))
+  local printed = table.concat(context.printed, "\n")
+  assert_true(printed:find("fade failed", 1, true), "the error is printed")
+  assert_true(printed:find("stack traceback:", 1, true), "with its traceback")
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "the sequencer param stays on")
+  assert_true(context.clock.threads[local_value("scene_sequencer_clock")] ~= nil, "its clock is still running")
+  assert_true(not local_value("scene_transition_active"), "no transition left flagged")
+  ran, run_error = pcall(context.clock.run_for, 6, 0.001)
+  assert_true(ran, "the sequencer runs on: " .. tostring(run_error))
+  assert_equal(local_value("current_scene"), 2, "it recalled scene 2 after scene 1's duration")
+  assert_near(params:get("v1_freq"), 400, 1.0, "and scene 2's transition ended")
 end)
 
 test("a manual recall still interrupts a transition the scene sequencer started", function()
@@ -1246,6 +1349,69 @@ test("a manual recall still interrupts a transition the scene sequencer started"
   assert_true(voices[3].active, "and applied scene 2 at once")
   context.clock.run_for(16, 0.001)                               -- the sequencer keeps going
   assert_equal(local_value("current_scene"), 1, "the sequencer moved on to scene 1")
+end)
+
+test("shortening the sequence while the sequencer waits wraps to scene 1", function()
+  local context = load_strata(); context.clock.advance()
+  for scene = 1, 4 do capture_scene(scene) end
+  params:set("scene_sequence_length", 4)
+  local recalls = run_scene_sequencer(context, 0, 4, 9)          -- scene 3 is playing
+  assert_equal(recalls[#recalls].scene, 3, "the sequencer reached scene 3")
+  params:set("scene_sequence_length", 2)                         -- scene 3 is now past the end
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 1, "the sequencer wrapped to scene 1")
+  context.clock.run_for(8, 0.001)
+  assert_equal(recalls[#recalls - 1].scene, 2, "then played scene 2")
+  assert_equal(recalls[#recalls].scene, 1, "and wrapped again")
+end)
+
+test("restarting the scene sequencer leaves one sequencer clock running", function()
+  local context = load_strata(); context.clock.advance()
+  capture_sequencer_scenes()
+  local recalls = run_scene_sequencer(context, 0, 4, 1)          -- scene 1 at 0 s
+  local first_clock = local_value("scene_sequencer_clock")
+  scene_sequencer_start()                                        -- restart at 1 s: scene 1 again
+  assert_true(context.clock.threads[first_clock] == nil, "the first sequencer clock was cancelled")
+  context.clock.run_for(8.5, 0.001)
+  assert_equal(#recalls, 4, "one recall every 4 s from the restart")
+  assert_near(recalls[3].time, 5, 0.01, "scene 2 4 s after the restart")
+  assert_near(recalls[4].time, 9, 0.01, "scene 1 4 s later")
+  assert_equal(recalls[3].scene, 2); assert_equal(recalls[4].scene, 1)
+end)
+
+-- A PSET load (norns' params:read, from the PARAMS menu) sets params in file
+-- order. scene_sequencer_enabled comes before the transition time, FX, LFO
+-- and voice params, so a sequencer started inside the read would recall
+-- scene 1 with the old transition time and then have the PSET overwrite it
+test("a PSET read that turns the scene sequencer on starts it once the read has finished", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("reverb_mix", 0.9); params:set("v1_freq", 1000); capture_scene(1)
+  -- the PSET: the sequencer on, a 4 s transition and other values
+  params:set("reverb_mix", 0.2); params:set("v1_freq", 300)
+  params:set("scene_transition_time", 4); params:set("scene_duration", 30)
+  params:set("scene_sequencer_enabled", 1, true)                 -- saved on, not started
+  local pset_path = context.data_dir .. "strata-01.pset"
+  params:write(pset_path)
+  params:set("scene_sequencer_enabled", 0, true)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("reverb_mix", 0.5); params:set("v1_freq", 500)
+
+  local recalls = {}
+  local real_recall = recall_scene
+  recall_scene = function(scene_num, transition_time)
+    table.insert(recalls, { scene = scene_num, transition = transition_time, reverb = params:get("reverb_mix") })
+    return real_recall(scene_num, transition_time)
+  end
+  params:read(pset_path)
+  assert_equal(#recalls, 0, "no scene recalled while the PSET was being read")
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "the PSET turned the sequencer on")
+  context.clock.run_for(5, 0.001)
+  assert_equal(#recalls, 1, "the sequencer recalled scene 1 after the read")
+  assert_equal(recalls[1].scene, 1, "scene 1")
+  assert_equal(recalls[1].transition, 4, "with the PSET's transition time")
+  assert_near(recalls[1].reverb, 0.2, 1e-9, "fading from the PSET's values")
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "scene 1's reverb after the transition")
+  assert_near(params:get("v1_freq"), 1000, 1.0, "scene 1's voice 1 freq after the transition")
 end)
 
 test("scene recall: one full sync per voice whose source changed, after its params", function()
@@ -1352,6 +1518,8 @@ test("an error during a scene recall clears scene_recall_in_progress and is rais
   local ok, recall_error = pcall(recall_scene, 1, 0)
   assert_true(not ok, "the error reaches the caller")
   assert_true(tostring(recall_error):find("mod speed action failed", 1, true), "the original error: " .. tostring(recall_error))
+  local traceback = tostring(recall_error):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "the raised error keeps its traceback")
   assert_equal(local_value("scene_recall_in_progress"), false, "flag cleared after the error")
   assert_equal(local_value("voices")[1].source, 3, "voice 1's source switched before the error")
   assert_equal(voice1_full_syncs(), 1, "the switched running voice still gets its end-of-recall sync")
@@ -2500,6 +2668,33 @@ test("stub params: each group is followed by exactly n params (#25)", function()
   params:add_separator("stub_after"); params:add_number("stub_c", "c")
   params:add_group("stub_last", "last", 1); params:add_number("stub_d", "d")
   context.check_param_groups()
+end)
+
+test("stub params:write and params:read follow lua/core/paramset.lua", function()
+  local context = load_strata()
+  local pset_path = context.data_dir .. "stub.pset"
+  params:set("reverb_mix", 0.25); params:set("filter_type", 2); params:set("lfo_depth_1", 40)
+  params:write(pset_path, "my pset")
+  local file = assert(io.open(pset_path, "r")); local text = file:read("*a"); file:close()
+  assert_true(text:find('^%-%- my pset\n'), "the name line comes first")
+  assert_true(text:find('"filter_type": 2\n', 1, true), "params are written as \"id\": value")
+  assert_true(not text:find('"save_scenes"', 1, true), "triggers are not written")
+  assert_true(not text:find('"strata_scenes"', 1, true), "separators are not written")
+  params:set("reverb_mix", 0.5); params:set("filter_type", 1); params:set("lfo_depth_1", 0)
+  local order, read_called = {}, nil
+  params:set_action("filter_type", function() table.insert(order, "filter_type") end)
+  params:set_action("reverb_mix", function() table.insert(order, "reverb_mix") end)
+  params.action_read = function(filename, silent) read_called = { filename = filename, silent = silent } end
+  params:read(pset_path)
+  assert_equal(params:get("filter_type"), 2); assert_near(params:get("reverb_mix"), 0.25, 1e-9)
+  assert_equal(params:get("lfo_depth_1"), 40)
+  assert_equal(table.concat(order, ","), "filter_type,reverb_mix", "actions fire in file order, on a change")
+  assert_equal(read_called and read_called.filename, pset_path, "action_read runs after the read")
+  assert_equal(params.name, "my pset")
+  params:set("filter_type", 1, true); order = {}
+  params:read(pset_path, true)
+  assert_equal(params:get("filter_type"), 2); assert_equal(#order, 0, "a silent read fires no actions")
+  params.action_read = nil
 end)
 
 test("stub params store norns' numeric type constants in param.t", function()
