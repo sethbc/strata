@@ -4050,9 +4050,10 @@ test("bufferState poll is found and started in init", function()
 end)
 
 -- bufferLoadFailed poll value for Lua slot `slot`'s load number `load_number`
--- (the engine counts the loads of each slot from 1)
-local function load_failed_value(slot, load_number)
-  return load_number * local_value("NUM_BUFFERS") + (slot - 1)
+-- (the engine counts the loads of each slot from 1); emptied: the server's
+-- read failed after the slot was zeroed
+local function load_failed_value(slot, load_number, emptied)
+  return (load_number * 2 + (emptied and 1 or 0)) * local_value("NUM_BUFFERS") + (slot - 1)
 end
 
 local function buffer_hint(context)
@@ -4143,7 +4144,7 @@ test("a late or duplicate load failure report never undoes a later load, clear o
   assert_equal(params:get("buf5_file"), "/tmp/orig.wav")
   -- duplicates, loads that succeeded, loads never sent and bad values change nothing
   local before = deep_copy(buffers)
-  for _, value in ipairs({ load_failed_value(5, 3), load_failed_value(5, 2), load_failed_value(5, 1),
+  for _, value in ipairs({ load_failed_value(5, 3), load_failed_value(5, 2), load_failed_value(5, 3, true),
     load_failed_value(5, 9), load_failed_value(6, 1), 0 / 0, math.huge, -math.huge, -1, 41.5 }) do
     local ok, message = pcall(context.polls.fire, "bufferLoadFailed", value)
     assert_true(ok, "report " .. tostring(value) .. " raises no error: " .. tostring(message))
@@ -4180,6 +4181,51 @@ test("a late or duplicate load failure report never undoes a later load, clear o
   context.polls.fire("bufferState", 304)
   assert_true(buffers[4].loaded, "the take is adopted"); assert_equal(buffers[4].name, "take 4")
   assert_equal(buffers[4].path, scratch_take_path(4))
+end)
+
+test("a load whose server read failed leaves the slot empty, in either report order", function()
+  local subdir = "failed-read-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local buffers = local_value("buffers")
+  -- the file vanished between the engine's checks and the server's read
+  load_buffer(2, "/tmp/good.wav"); context.polls.fire("bufferState", 104)
+  load_buffer(2, "/tmp/vanished.wav")
+  context.polls.fire("bufferState", 100)        -- the slot reads 0 while it fades and reads
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 2, true))
+  assert_equal(buffers[2].name, "empty", "the old audio was zeroed: empty, not good.wav")
+  assert_equal(buffers[2].path, nil); assert_true(not buffers[2].loaded)
+  assert_equal(buffers[2].confirm_since, nil); assert_equal(buffers[2].settled_empty, false)
+  assert_equal(params:get("buf2_file"), _path.audio)
+  local printed = table.concat(context.printed, "\n")
+  assert_true(printed:find("/tmp/vanished.wav", 1, true) and printed:find("the buffer is now empty", 1, true),
+    "the console names the file and says the buffer is empty")
+  -- a later load that fails at once is reported first: it puts back the
+  -- earlier load, whose emptied report then empties the slot
+  load_buffer(3, "/tmp/first.wav"); context.polls.fire("bufferState", 203)
+  load_buffer(3, "/tmp/vanishing.wav")          -- load 2: its read will fail
+  load_buffer(3, "/tmp/missing.wav")            -- load 3: rejected at once
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 3))
+  assert_equal(buffers[3].name, "vanishing.wav", "load 3 undone: load 2 is shown")
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 2, true))
+  assert_equal(buffers[3].name, "empty", "then load 2 empties the slot"); assert_equal(buffers[3].path, nil)
+  -- ... and the other way round
+  load_buffer(4, "/tmp/first.wav"); context.polls.fire("bufferState", 303)
+  load_buffer(4, "/tmp/vanishing.wav")          -- load 2
+  load_buffer(4, "/tmp/missing.wav")            -- load 3, sent before load 2's report arrived
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 2, true))
+  assert_equal(buffers[4].name, "missing.wav", "the later load stays")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 3))
+  assert_equal(buffers[4].name, "empty", "it fails too: the slot load 2 emptied")
+  assert_equal(buffers[4].path, nil); assert_equal(params:get("buf4_file"), _path.audio)
+  -- a load that succeeds after an emptied one stays
+  load_buffer(5, "/tmp/vanishing.wav"); load_buffer(5, "/tmp/fine.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(5, 1, true))
+  assert_equal(buffers[5].name, "fine.wav"); context.polls.fire("bufferState", 402)
+  assert_true(buffers[5].loaded, "and is loaded")
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[2], "", "the vanished file is not remembered")
+  assert_equal(saved.paths[3], ""); assert_equal(saved.paths[4], ""); assert_equal(saved.paths[5], "/tmp/fine.wav")
 end)
 
 test("save_buffer writes a timestamped wav under audio/strata", function()

@@ -507,8 +507,8 @@ local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid
 -- completes). fallback_seconds: a finishing take with no report at all
 -- (no bufferState poll) settles this long after it ended, from the slot's
 -- last known seconds. tracked_loads: a slot's newest loads a bufferLoadFailed
--- report can still undo (a report arrives within milliseconds, so more than
--- one is only ever pending for loads sent back to back).
+-- report can still undo (a report arrives within a fade wait and a read, so
+-- more than one is only ever pending for loads sent back to back).
 local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4}
 local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
 local buffer_audio_dir = _path.audio .. "strata/"
@@ -615,6 +615,14 @@ function set_buffer_file_param(slot, path)
   params:set("buf" .. slot .. "_file", path, true)
 end
 
+-- An empty slot's shown state and file param, for buffer_load_failed.
+-- settled_empty is "take" after a cancelled recording whose take may have
+-- completed (a later report of audio adopts it), else false.
+function empty_buffer_state(settled_empty)
+  return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
+    confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio}
+end
+
 -- What a load replaces in the slot, for buffer_load_failed to put back: the
 -- shown state and the buf<n>_file param. A recording (or a take waiting for
 -- the engine) has nothing to put back: the engine cancels it when the load
@@ -622,10 +630,7 @@ end
 -- that had already completed is still adopted from the engine's report.
 function buffer_state_before_load(slot)
   local buffer = buffers[slot]
-  if buffer.recording or buffer.finishing then
-    return {name = "empty", loaded = false, restoring = false, settled_empty = "take",
-      confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio}
-  end
+  if buffer.recording or buffer.finishing then return empty_buffer_state("take") end
   return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
     settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
     missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file")}
@@ -760,23 +765,29 @@ local function buffer_state_changed(value)
 end
 
 -- bufferLoadFailed poll: the engine could not use the file of one of the
--- slot's loads (missing, unreadable, unsupported or empty) and left the slot
--- as it was (cancelling a recording in it). value = load number *
--- NUM_BUFFERS + slot index; the engine and load_buffer count a slot's loads
--- alike, from 1. The failed load is undone only while the slot still tracks
--- it (pending_loads): the newest load puts back the state it replaced (name,
--- path, the file param, settled or not; buffer_state_before_load), so the
--- bad path is never remembered in buffers.data; a load sent after it (before
--- the report arrived) stays, and will put back that same state if it fails
--- too. Reports arrive in the order the engine sends them, so tracked loads
--- older than the failed one succeeded and are forgotten. A clear or a new
--- recording forgets every tracked load, so it wins; a repeated report finds
--- nothing. The BUFFER page flashes the failure.
+-- slot's loads (missing, unreadable, unsupported, empty or damaged). value =
+-- (load number * 2 + emptied) * NUM_BUFFERS + slot index; the engine and
+-- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
+-- left the slot as it was (cancelling a recording in it), 1 when it left it
+-- empty (the server's read failed after the slot was zeroed). The failed
+-- load is undone only while the slot still tracks it (pending_loads): the
+-- newest load gives the slot the state the failed load left (the state it
+-- replaced: name, path, the file param, settled or not, from
+-- buffer_state_before_load; or an empty slot), so the bad path is never
+-- remembered in buffers.data. A load sent after it (before the report
+-- arrived) stays and inherits that state, to put back if it fails too.
+-- Reports can arrive out of load order (a failed server read is reported
+-- after the fade and the read, a missing file at once), and the splice
+-- handles either order. A clear or a new recording forgets every tracked
+-- load, so it wins; a repeated report finds nothing. The BUFFER page
+-- flashes the failure.
 function buffer_load_failed(value)
   if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
     or value ~= math.floor(value) then return end
   local slot = math.floor(value % NUM_BUFFERS) + 1
-  local load_number = math.floor(value / NUM_BUFFERS)
+  local load_and_emptied = math.floor(value / NUM_BUFFERS)
+  local emptied = load_and_emptied % 2 == 1
+  local load_number = math.floor(load_and_emptied / 2)
   if not valid_buffer_slot(slot) then return end
   local buffer = buffers[slot]
   local pending = buffer.pending_loads
@@ -788,22 +799,23 @@ function buffer_load_failed(value)
     end
   end
   if not found then return end
-  local failed = pending[found]
-  for _ = 1, found do table.remove(pending, 1) end
-  if #pending > 0 then
-    pending[1].previous = failed.previous
+  local failed = table.remove(pending, found)
+  local left = emptied and empty_buffer_state(false) or failed.previous
+  if found <= #pending then
+    pending[found].previous = left
   else
-    local previous = failed.previous
-    buffer.name = previous.name
-    buffer.loaded = previous.loaded
-    buffer.restoring = previous.restoring
-    buffer.settled_empty = previous.settled_empty
-    buffer.confirm_since = previous.confirm_since
-    buffer.path = previous.path
-    buffer.missing_path = previous.missing_path
-    set_buffer_file_param(slot, previous.file_param)
+    buffer.name = left.name
+    buffer.loaded = left.loaded
+    -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
+    buffer.restoring = left.restoring
+    buffer.settled_empty = left.settled_empty
+    buffer.confirm_since = left.confirm_since
+    buffer.path = left.path
+    buffer.missing_path = left.missing_path
+    set_buffer_file_param(slot, left.file_param)
   end
-  print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable or empty)")
+  print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
+    .. (emptied and "; the buffer is now empty" or ""))
   buffer_page_flash("buf " .. slot .. " load failed")
   buffer_display_changed()
 end

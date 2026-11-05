@@ -48,7 +48,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Crossmod frequency depth (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Mod signal LFO speed (0.1-50), kept per voice for restarted mod synths |
 | `engine.setGrainSource(voice, source)` | `"ii"` | 0 = synth, 1-8 = buffer slot, 9 = input. A running voice's grain synth is replaced (never stacked); a stopped voice's choice is recorded. Same source = no-op |
-| `engine.loadBuffer(slot, path)` | `"is"` | Read a file into slot 0-7 (mono fills both sides): at most `bufferSeconds` at the server rate (a 96 kHz file keeps 8 s on a 48 kHz server). Voices reading the slot fade first. A missing, unreadable or empty file leaves the slot unchanged but cancels a recording in it, and is reported by the `bufferLoadFailed` poll |
+| `engine.loadBuffer(slot, path)` | `"is"` | Read a file into slot 0-7 (mono fills both sides): at most `bufferSeconds` at the server rate (a 96 kHz file keeps 8 s on a 48 kHz server). Voices reading the slot fade first. A missing, unreadable, empty or damaged file (checked by decoding it) leaves the slot unchanged but cancels a recording in it; a server read that fails anyway (the file vanished) leaves it empty. Both are reported by the `bufferLoadFailed` poll |
 | `engine.recordBuffer(slot, seconds, level)` | `"iff"` | Record input × level into slot 0-7 (max 16 s). On completion writes the scratch take `buf<n>.wav` |
 | `engine.clearBuffer(slot)` | `"i"` | Zero slot 0-7 (cancels a recording) |
 | `engine.stopRecord(slot)` | `"i"` | End a recording early and keep what was captured (as a completed take). No-op if the slot is not recording |
@@ -56,7 +56,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Poll `bufferState`** (engine → Lua): matron's polls carry one float, so each message carries **one** slot as `slot_index * 100 + seconds` (`BUFFER_STATE_STRIDE` = 100, 0-based slot, seconds ≤ 16). It cycles through the slots every 0.25 s, and every change is also sent at once. A slot that is recording reads 0 s.
 
-**Poll `bufferLoadFailed`** (engine → Lua, not periodic): one message per load the engine rejects (missing, unreadable, unsupported or empty file), whether or not the slot held audio, as `load_number * 8 + slot_index` (`NUM_BUFFERS` = 8, 0-based slot; `load_number` counts that slot's `loadBuffer` commands from 1, in the engine and in `load_buffer` alike). Lua's `buffer_load_failed` undoes exactly that load (its previous name, path and file param come back) and never a later load, clear or recording.
+**Poll `bufferLoadFailed`** (engine → Lua, not periodic): one message per failed load (a missing, unreadable, unsupported, empty or damaged file, at once; a server read that fails, after the fade and the read), whether or not the slot held audio, as `(load_number * 2 + emptied) * 8 + slot_index` (`NUM_BUFFERS` = 8, 0-based slot; `load_number` counts that slot's `loadBuffer` commands from 1, in the engine and in `load_buffer` alike; `emptied` = 1 when the failed server read left the slot zeroed). Lua's `buffer_load_failed` undoes exactly that load (its previous name, path and file param come back, or the slot shows empty) and never a later load, clear or recording, in whatever order the reports arrive.
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 

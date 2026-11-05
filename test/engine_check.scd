@@ -278,21 +278,43 @@ var checkBadLoadsDuringRecording = { arg textPath;
             engine.bufferFrames[6]));
 };
 
-// A missing, unreadable or empty file loaded into a slot holding audio
-// leaves the audio, and the bufferLoadFailed poll reports exactly that load
-// (load number * 8 + slot index) as a float, once; a good load reports
-// nothing. Slot 4 holds the stereo file's 11025 frames.
+// A FLAC whose data is overwritten from a third of the way in: its header
+// is sound (SoundFile.openRead gives its frames), but libsndfile stops
+// decoding early, and the server's /b_readChannel then fills the rest with
+// silence without any /fail (measured with scsynth 3.14: 12288 of 48000
+// frames decode). Returns its path and whether its header reads.
+var writeDamagedFlac = { arg path;
+    var file = SoundFile.new.headerFormat_("FLAC").sampleFormat_("int16").numChannels_(1).sampleRate_(48000);
+    var bytes, header, headerReads;
+    file.openWrite(path); file.writeData(FloatArray.fill(48000, { 1.0.rand2 * 0.5 })); file.close;
+    file = File(path, "rb"); bytes = Int8Array.newClear(file.length); file.read(bytes); file.close;
+    ((bytes.size div: 3)..(bytes.size - 1)).do({ arg i; bytes[i] = 0x55 });
+    file = File(path, "wb"); file.write(bytes); file.close;
+    header = SoundFile.openRead(path);
+    headerReads = header.notNil and: { header.numFrames == 48000 };
+    if (header.notNil) { header.close };
+    [path, headerReads]
+};
+
+// A missing, unreadable, empty or damaged file loaded into a slot holding
+// audio leaves the audio, and the bufferLoadFailed poll reports exactly that
+// load ((load number * 2 + 0) * 8 + slot index: not emptied) as a float,
+// once; a good load reports nothing. Slot 4 holds the stereo file's 11025
+// frames.
 var checkLoadFailureReports = { arg textPath, stereoPath;
-    var emptyPath = scratchRoot +/+ "no-frames-4.wav", file, before;
+    var emptyPath = scratchRoot +/+ "no-frames-4.wav", file, before, damaged;
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(1).sampleRate_(44100);
     file.openWrite(emptyPath); file.close;
-    [[textPath, "unreadable"], [scratchRoot +/+ "missing.wav", "missing"], [emptyPath, "empty"]].do({ arg bad;
+    damaged = writeDamagedFlac.(scratchRoot +/+ "damaged.flac");
+    check.(damaged[1], "the damaged FLAC still has a sound header (48000 frames)");
+    [[textPath, "unreadable"], [scratchRoot +/+ "missing.wav", "missing"], [emptyPath, "empty"],
+        [damaged[0], "damaged FLAC"]].do({ arg bad;
         before = loadFailures.value.size;
         command.(\loadBuffer, 4, bad[0]);
         check.(waitFor.({ loadFailures.value.size > before }),
             "the % file loaded over audio is reported by bufferLoadFailed".format(bad[1]));
         0.2.wait; server.sync;
-        check.(loadFailures.value.drop(before) == [engine.bufferLoads[4] * engine.numBuffers + 4]
+        check.(loadFailures.value.drop(before) == [(engine.bufferLoads[4] * 2) * engine.numBuffers + 4]
             and: { loadFailures.value.last.isKindOf(Float) },
             "the report names slot 4 and its load number % once, as a float (got %)".format(
                 engine.bufferLoads[4], loadFailures.value.drop(before)));
@@ -431,6 +453,39 @@ var checkFilePitch = {
     probe.free; pitchBus.free;
 };
 
+// A file that passes loadSlot's checks but is gone when the server reads it
+// (after the fade wait; a drive unplugged, say) is the one way to make the
+// server's read itself fail: /fail for /b_readChannel. The slot was zeroed,
+// so it stays empty and the load is reported as emptied ((load * 2 + 1) * 8
+// + slot index). Called from checkBufferFades inside its lengthened fade
+// wait (voice 1 reads slot 2).
+var checkVanishedFileLoad = { arg stereoPath, monoPath;
+    var path = scratchRoot +/+ "vanishing.wav", before, expected;
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    File.copy(stereoPath, path);
+    before = loadFailures.value.size;
+    command.(\loadBuffer, 2, path);
+    expected = ((engine.bufferLoads[2] * 2) + 1) * engine.numBuffers + 2;
+    File.delete(path);   // the server reads it bufferFadeWait from now
+    check.(loadFailures.value.size == before, "a file that passes the checks is not reported before the server reads it");
+    check.(waitFor.({ loadFailures.value.size > before }), "a file gone when the server reads it is reported by bufferLoadFailed");
+    0.1.wait; server.sync;
+    check.(loadFailures.value.drop(before) == [expected],
+        "as that load's failure with the slot emptied (expected %, got %)".format(expected, loadFailures.value.drop(before)));
+    check.(engine.bufferFrames[2] == 0 and: { getControl.(engine.synths[\grain1], \bufFrames) == 0 }
+        and: { bufferSample.(engine.buffersL[2], 100) == 0 }, "the slot stays empty (zeroed, 0 frames)");
+    // a later load inside the wait wins: the vanished file is never read and nothing is reported
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    File.copy(stereoPath, path);
+    before = loadFailures.value.size;
+    command.(\loadBuffer, 2, path); File.delete(path);
+    command.(\loadBuffer, 2, monoPath);
+    1.2.wait; server.sync;
+    check.(engine.bufferFrames[2] == 4410 and: { loadFailures.value.size == before },
+        "a load inside the fade wait wins over a vanished file's load (% frames, % reports)".format(
+            engine.bufferFrames[2], loadFailures.value.size - before));
+};
+
 // Clearing, loading or recording into a slot a voice plays fades it first:
 // the grain synth gets bufFrames 0 at once (strataGrainBuf's hasAudio lag
 // fades it) and the buffers are zeroed or overwritten only bufferFadeWait
@@ -528,6 +583,7 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     command.(\clearBuffer, 5); server.sync;
     check.(engine.bufferFrames[5] == 0 and: { bufferSample.(engine.buffersL[5], 100) == 0 },
         "and clears without it");
+    checkVanishedFileLoad.(stereoPath, monoPath);
     engine.bufferFadeWait = defaultFadeWait;
 };
 
