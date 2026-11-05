@@ -42,6 +42,10 @@ Engine_Strata : CroneEngine {
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
+    // Real-time memory (see "Real-time memory" in docs/notes/engine.md). Both
+    // are built into the grain SynthDefs in alloc, so later changes do nothing.
+    var <pitchShiftWindow = 0.1;  // Grain PitchShift window (s): fixed, never the grain size (its delay line is allocated at that size)
+    var <maxGrains = 128;         // Grain table of every GrainIn/GrainBuf: Lua's largest overlap is 0.5 s x 200 grains/s = 100
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var <writeGenerations;        // Per output path: the newest write's number; older writes abandon
@@ -527,8 +531,8 @@ Engine_Strata : CroneEngine {
             // Out then folds back to one channel apiece: pan spread did
             // nothing and the output path was doubled.) The voice's own pan
             // is already in the voice synth's output.
-            left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf);
-            right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf);
+            left = GrainIn.ar(1, grainTrigger, grainSize, input[0], 0, envBuf, maxGrains);
+            right = GrainIn.ar(1, grainTrigger, grainSize, input[1], 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
             // Position spread: a little of the input, smeared by a wandering delay
@@ -540,11 +544,12 @@ Engine_Strata : CroneEngine {
 
             // Transpose the whole grain-synth output (GrainIn has no rate
             // input). Shifting after the spread path is summed keeps every
-            // part transposed and time-aligned. PitchShift's window size is
-            // fixed when the synth starts.
+            // part transposed and time-aligned. The window is the fixed
+            // pitchShiftWindow, not the grain size: PitchShift allocates its
+            // delay line from the real-time pool for the window it starts with.
             sig = PitchShift.ar(
                 sig,
-                windowSize: grainSize.clip(0.01, 0.5),
+                windowSize: pitchShiftWindow,
                 pitchRatio: pitchShift.lag(0.5),
                 pitchDispersion: 0,
                 timeDispersion: 0
@@ -602,14 +607,14 @@ Engine_Strata : CroneEngine {
             // divided out, so the engine's bufRateScale applies exactly once
             rate = bufRate * bend * (bufRateScale / BufRateScale.kr(bufnumL)) * (1 + rateMod);
 
-            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf);
-            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf);
+            left = GrainBuf.ar(1, grainTrigger, grainSize, bufnumL, rate, grainPos, 2, 0, envBuf, maxGrains);
+            right = GrainBuf.ar(1, grainTrigger, grainSize, bufnumR, rate, grainPos, 2, 0, envBuf, maxGrains);
             sig = Balance2.ar(left, right, LFNoise1.kr(2).range(panSpread.neg, panSpread));
 
-            // Same transposition stage as strataGrain, once for the pair
+            // Same transposition stage as strataGrain (fixed window), once for the pair
             sig = PitchShift.ar(
                 sig,
-                windowSize: grainSize.clip(0.01, 0.5),
+                windowSize: pitchShiftWindow,
                 pitchRatio: pitchShift.lag(0.5),
                 pitchDispersion: 0,
                 timeDispersion: 0

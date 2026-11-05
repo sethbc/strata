@@ -69,6 +69,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - **Limiter before the tanh saturator** in `\strataMaster`. The engine check asserts the order.
 - **Buffer and input sources have no voice synth.** Their grain synth mirrors to `granBuses[i]` (`mirrorLevel` 1) so crossmod keeps working. The synth-source grain synth must keep `mirrorLevel` 0 (it reads that bus, so mirroring would feed back).
 - **Buffer memory**: 8 × 2 mono buffers of 16 s (≈ 49 MB). Never allocate longer ones. Bufnums never change.
+- **Real-time memory**: norns' scsynth pool is 8192 KB. The grain `PitchShift` window is the fixed `pitchShiftWindow` (0.1 s) and every `GrainIn`/`GrainBuf` uses `maxGrains` (128); never size a delay line or table from a control. The worst case uses about 6.9 MB and the engine check requires 1 MB left (see Real-time memory in `docs/notes/engine.md`).
 - **`slotChanges[i]`** guards late replies (load completion, `stopRecord` frame count) and the fade wait: a clear or load sent later always wins.
 - **Fade before zeroing**: load, record and clear set the slot's frames to 0 first (`hasAudio` fades the voices) and zero or overwrite its buffers through `afterSlotFade` (`bufferFadeWait`, 60 ms, when a voice reads the slot). Never zero a slot directly.
 - **File writes** go to a `<path>.<instanceTag>-<generation>.part` file and are renamed into place. Never open the final path for writing. `deleteStaleParts` deletes only `.part` files older than `stalePartAge`.
