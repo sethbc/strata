@@ -29,7 +29,9 @@
 --   * grid/arc device events fire both device.key and vports[port].key
 --   * tab.load runs the file chunk unprotected
 -- The engine stub validates every engine.* call against the addCommand
--- signatures parsed from lib/Engine_Strata.sc.
+-- signatures parsed from lib/Engine_Strata.sc, and range-checks indices,
+-- enumerated values and setVoiceParam/setGrainParam names against the limits
+-- and SynthDef controls parsed from the same file (stubs.parse_engine_spec).
 
 local stubs = {}
 
@@ -47,10 +49,15 @@ end
 -- engine command signatures (parsed from the SC engine)
 ---------------------------------------------------------------------------
 
-function stubs.parse_engine_signatures(sc_path)
+local function read_engine_source(sc_path)
   local file = assert(io.open(sc_path, "r"))
   local source = file:read("*a")
   file:close()
+  return source
+end
+
+function stubs.parse_engine_signatures(sc_path)
+  local source = read_engine_source(sc_path)
   local signatures = {}
   for name, signature in source:gmatch('addCommand%(%s*\\(%w+)%s*,%s*"([^"]*)"') do
     signatures[name] = signature
@@ -60,13 +67,155 @@ end
 
 -- engine polls (this.addPoll(\name, ...) in the SC engine)
 function stubs.parse_engine_polls(sc_path)
-  local file = assert(io.open(sc_path, "r"))
-  local source = file:read("*a")
-  file:close()
+  local source = read_engine_source(sc_path)
   local names = {}
   for name in source:gmatch('addPoll%(%s*\\(%w+)') do table.insert(names, name) end
   for name in source:gmatch('addPoll%(%s*"([^"]+)"') do table.insert(names, name) end
   return names
+end
+
+-- The engine's limits and SynthDef controls, for the engine stub's range and
+-- name checks. Everything is read from the SC source, so a limit or control
+-- changed there needs no stub change:
+--   num_voices, num_buffers   var <numVoices = N; var <numBuffers = N;
+--   input_source              inputSource { ^numBuffers + N }
+--   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
+--   voice_synthdefs[i]        voiceSynthDefs = [...], i = engine voice + 1
+--   mod_slots                 modBus1..N on every voice SynthDef
+--   grain_params              setGrainParam names: every control of the
+--                             grain SynthDefs (grainDefFor), whichever the
+--                             voice uses now (the engine keeps the value for a
+--                             source switch), plus the names the command
+--                             handles itself (param == \name)
+--   voice_params[i]           setVoiceParam names: the voice's SynthDef's
+--                             controls (bend is one), plus any `param == \name`
+--   enumerations[name]        {low, high}: whole-number controls the engine
+--                             rounds (name.round.clip(low, high)), and envShape
+--                             (0 = Hann, 1..envBuffers.size, envBufnumFor)
+local function engine_number(source, pattern, what)
+  return tonumber((assert(source:match(pattern), "engine source: cannot find " .. what)))
+end
+
+-- The source of one addCommand's function, up to the next addCommand
+local function engine_command_body(source, name)
+  local start = assert(source:find("addCommand%(%s*\\" .. name .. "%f[^%w]"), "engine source: no addCommand \\" .. name)
+  local finish = source:find("addCommand%(", start + 1) or #source
+  return source:sub(start, finish)
+end
+
+local function engine_special_params(source, name, into)
+  for param in engine_command_body(source, name):gmatch("param%s*==%s*\\([%w_]+)") do into[param] = true end
+  return into
+end
+
+function stubs.engine_spec_from_source(source)
+  local spec = {
+    num_voices = engine_number(source, "var%s+<?numVoices%s*=%s*(%d+)", "numVoices"),
+    num_buffers = engine_number(source, "var%s+<?numBuffers%s*=%s*(%d+)", "numBuffers"),
+    synthdef_controls = {},
+    voice_synthdefs = {},
+    grain_params = {},
+    voice_params = {},
+    enumerations = {},
+  }
+  spec.input_source = spec.num_buffers
+    + engine_number(source, "inputSource%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}", "inputSource")
+
+  for name, position in source:gmatch("SynthDef%(%s*\\([%w_]+)%s*,%s*{()") do
+    local rest = source:sub(position)
+    local arg_list = rest:match("^%s*arg%s+([^;]*);") or rest:match("^%s*|([^|]*)|")
+    assert(arg_list, "engine source: SynthDef \\" .. name .. " has no argument list the stub can read")
+    local controls = {}
+    for item in arg_list:gmatch("[^,]+") do
+      controls[assert(item:match("^%s*([%a_][%w_]*)"), "SynthDef \\" .. name .. ": bad argument " .. item)] = true
+    end
+    spec.synthdef_controls[name] = controls
+  end
+
+  local voice_list = assert(source:match("voiceSynthDefs%s*=%s*%[(.-)%]"), "engine source: no voiceSynthDefs")
+  for name in voice_list:gmatch("\\([%w_]+)") do
+    assert(spec.synthdef_controls[name], "engine source: voiceSynthDefs names unknown SynthDef \\" .. name)
+    table.insert(spec.voice_synthdefs, name)
+  end
+  assert(#spec.voice_synthdefs == spec.num_voices, "engine source: voiceSynthDefs does not list numVoices SynthDefs")
+
+  spec.mod_slots = 0
+  while true do
+    local control = "modBus" .. (spec.mod_slots + 1)
+    for _, name in ipairs(spec.voice_synthdefs) do
+      if not spec.synthdef_controls[name][control] then control = nil; break end
+    end
+    if not control then break end
+    spec.mod_slots = spec.mod_slots + 1
+  end
+
+  local grain_def_body = assert(source:match("grainDefFor%s*{(.-)\n%s*}"), "engine source: no grainDefFor")
+  for name in grain_def_body:gmatch("\\([%w_]+)") do
+    for control in pairs(assert(spec.synthdef_controls[name], "grainDefFor names unknown SynthDef \\" .. name)) do
+      spec.grain_params[control] = true
+    end
+  end
+  engine_special_params(source, "setGrainParam", spec.grain_params)
+  for index, name in ipairs(spec.voice_synthdefs) do
+    spec.voice_params[index] = engine_special_params(source, "setVoiceParam", shallow_copy(spec.synthdef_controls[name]))
+  end
+
+  for name, low, high in source:gmatch("([%a_][%w_]*)%.round%.clip%(%s*(%-?%d+)%s*,%s*(%-?%d+)%s*%)") do
+    local range = { tonumber(low), tonumber(high) }
+    local known = spec.enumerations[name]
+    assert(not known or (known[1] == range[1] and known[2] == range[2]), "engine source: " .. name .. " is clipped to two ranges")
+    spec.enumerations[name] = range
+  end
+  local envelopes = assert(source:match("envBuffers%s*=%s*%[(.-)%]%.collect"), "engine source: no envBuffers")
+  local _, envelope_count = envelopes:gsub("Env[%.%(]", "")
+  spec.enumerations.envShape = { 0, envelope_count }
+  return spec
+end
+
+function stubs.parse_engine_spec(sc_path)
+  return stubs.engine_spec_from_source(read_engine_source(sc_path))
+end
+
+-- Per-command checks of argument values (after the type checks): each
+-- returns an error message, or nil when the arguments are valid. Every
+-- engine command needs an entry, so a new command gets its limits checked.
+local function engine_argument_checks(spec)
+  local last_voice = spec.num_voices - 1
+  local function range(what, value, low, high)
+    if value < low or value > high then
+      return string.format("%s %s is outside %d..%d", what, tostring(value), low, high)
+    end
+  end
+  local function enumerated(name, value)
+    local limits = spec.enumerations[name]
+    if not limits then return nil end
+    if not is_integer(value) then return name .. " " .. tostring(value) .. " must be a whole number" end
+    return range(name, value, limits[1], limits[2])
+  end
+  local function none() return nil end
+  local function voice(args) return range("voice", args[1], 0, last_voice) end
+  local function slot(args) return range("slot", args[1], 0, spec.num_buffers - 1) end
+  local function voice_and_mod_slot(args) return voice(args) or range("mod slot", args[2], 1, spec.mod_slots) end
+  local function named_param(args, accepted, what)
+    if not accepted[args[2]] then return string.format("param \"%s\" is not a control of %s", args[2], what) end
+    return enumerated(args[2], args[3])
+  end
+  return {
+    voiceOn = voice, voiceOff = voice, retrigger = voice, setModSpeed = voice,
+    setVoiceParam = function(args)
+      return voice(args)
+        or named_param(args, spec.voice_params[args[1] + 1], "\\" .. spec.voice_synthdefs[args[1] + 1])
+    end,
+    setGrainParam = function(args)
+      return voice(args) or named_param(args, spec.grain_params, "the grain SynthDefs")
+    end,
+    setGrainSource = function(args) return voice(args) or range("source", args[2], 0, spec.input_source) end,
+    loadBuffer = slot, recordBuffer = slot, clearBuffer = slot, stopRecord = slot, saveBuffer = slot,
+    setModSource = function(args) return voice_and_mod_slot(args) or range("mod source", args[3], -1, last_voice) end,
+    setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
+    setFilter = function(args) return enumerated("filterType", args[3]) end,
+    setMasterDrift = none, setReverb = none, setDelay = none,
+  }
 end
 
 ---------------------------------------------------------------------------
@@ -1022,6 +1171,11 @@ function stubs.install(options)
     printed = {},
   }
 
+  local argument_checks = engine_argument_checks(assert(options.engine_spec, "stubs.install needs engine_spec"))
+  for command_name in pairs(context.signatures) do
+    assert(argument_checks[command_name], "the engine stub has no argument check for engine." .. command_name)
+  end
+
   local engine = { name = nil }
   setmetatable(engine, {
     __index = function(_, command_name)
@@ -1047,6 +1201,8 @@ function stubs.install(options)
             error(string.format("engine.%s arg %d must be a string, got %s", command_name, index, tostring(value)), 2)
           end
         end
+        local problem = argument_checks[command_name](args)
+        if problem then error("engine." .. command_name .. ": " .. problem, 2) end
         table.insert(context.engine_calls, { name = command_name, args = args })
       end
     end,
