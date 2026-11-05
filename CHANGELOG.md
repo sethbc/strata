@@ -8,10 +8,10 @@ Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of
 
 **Sound and engine**
 
-- **Resonator level.** At its defaults the Resonator peaked about 23 on its bus, against 0.05-0.5 for the other voices, so whenever it played the master limiter pushed every other voice down by about 28 dB. A fixed gain cut and a limiter on this voice alone (3 ms lookahead) keep it in line (peaks at most 0.75 per channel). As a cross-modulation source, voice 1 now modulates in the same range as the other voices; it used to drive what it modulated to the limit at almost any depth. (#45, #59)
+- **Resonator level.** At its defaults the Resonator peaked about 23 on its bus, against 0.05-0.5 for the other voices, so whenever it played the master limiter pushed every other voice down by about 28 dB. A fixed gain cut and a limiter on this voice alone (3 ms lookahead) keep it in line: centred it peaks at most 0.75 per channel, and panned hard about 1 on one channel. As a cross-modulation source, voice 1 now modulates in the same range as the other voices; it used to drive what it modulated to the limit at almost any depth. (#45, #59)
 - **Voices no longer go silent at large grain sizes.** Each grain synth's `PitchShift` window followed the grain size (up to 0.5 s), so seven voices at large grain sizes, plus the synths still fading out after source switches, ran out of scsynth's 8 MB real-time memory pool (norns never raises it), and the newest voices went silent with nothing on screen. The window is now a fixed 0.1 s, grain tables hold 128 grains instead of 512 (still more than Lua can ever ask for), and a voice holds at most one live, one fading and one cutting grain synth, and at most three voice synths, however source switches, stops, starts and scene recalls interleave: fast scrolling, a grid chord of instant recalls, PMAP-mapped source params and fast alternating recalls (A → B → A → C) all stay within the pool, at about 6.9 MB at the peak. (#42, #45, #57)
 - **Scene recalls stop and start voices in order.** A recall that stops a voice stops it before setting its source and params, so no grain synth is built just to be released, and its release tail keeps the outgoing scene's sound. A voice the recall starts is started after its params. (#57)
-- **Buffers from 44.1 kHz files play at the right pitch.** `\strataGrainBuf` applied a file's rate correction twice for files not at the server's rate: a 1 kHz sine in a 44.1 kHz file played at 920 Hz, about 1.4 semitones flat, and a take recorded over that slot was flat too. (#41)
+- **Buffers from files not at 48 kHz play at their real pitch.** `\strataGrainBuf` applied a file's rate correction twice for files not at the server's rate, so a file played off by its sample rate ratio: a 1 kHz sine in a 44.1 kHz file played at 920 Hz, about 1.47 semitones flat, a 96 kHz file played an octave sharp, and a take recorded over that slot was off by the same amount. (#41)
 - **No clicks when a played buffer changes.** Clearing, recording into or loading a slot that a voice is playing fades the voice first, then zeroes or overwrites the buffer. A clear or load sent later still always wins. (#41)
 - **Buffer grains stay inside the sample.** Grains never read past the slot's recorded or loaded length, at any rate, and keep their length while a slot fades out. (#45)
 - **Pan works for buffer and input voices.** Both grain SynthDefs now pan, and the 256 grid's fader pages for these voices include pan. (#45)
@@ -49,24 +49,29 @@ Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of
 
 ### Other Changes
 
-- Documentation: the engine keeps at most 16 s of a file at the server rate (a 96 kHz file keeps 8 s); README's 16×8 and 8×16 grid sections and the LFO rate ceiling describe what the code does; the 3.0 design and the development status moved to `docs/design/3.0-design.md` and `docs/status.md`, the old implementation plans were removed (git history keeps them), and the docs that no longer matched the code were corrected (the `bufferState` poll's cadence, the sequencer's bounded wait, LFO cleanup, redraws).
-- Engine check script: it uses `$SCLANG`, else `sclang` on `PATH`, else the macOS app, and README explains running it on Linux with a JACK dummy server. It stops at once on a compile error and after its own timeout (570 s, below CI's 600 s), killing only its own processes. It fails on "alloc failed", "Too many grains!" and a "Strata invariant broken" warning, which two engine paths that should be unreachable now post.
+- Documentation: the engine keeps at most 16 s of a file at the server rate, so a 96 kHz file keeps 8 s (#41); README's 16×8 and 8×16 grid sections and the LFO rate ceiling describe what the code does (#30); the 3.0 design and the development status moved to `docs/design/3.0-design.md` and `docs/status.md`, the old implementation plans were removed (git history keeps them), and the docs that no longer matched the code were corrected (the `bufferState` poll's cadence, the sequencer's bounded wait, LFO cleanup, redraws), in the docs pull request that closes issue #52.
+- Engine check script: it uses `$SCLANG`, else `sclang` on `PATH`, else the macOS app, and README explains running it on Linux with a JACK dummy server (#30). It stops at once on a compile error and after its own timeout (570 s, below CI's 600 s), killing only its own processes (#45). It fails on "alloc failed" (#42), on a "Strata invariant broken" warning, which two engine paths that should be unreachable now post (#57), and on "Too many grains!" (#59).
 - Messages to voice, grain and mod synths that may have freed a moment before they arrive are sent so that scsynth no longer prints `FAILURE` lines for them. Messages to the filter, delay, reverb and master stay plain, so a missing effects node is still reported. (#59)
-- CI: `actions/checkout` is pinned to a commit and SuperCollider to the 3.13.0 package norns ships; superseded pull-request runs are cancelled, and runs on `main` never are.
-- `strata.lua`'s main chunk holds 184 of Lua's 200 locals (186 in 3.0.1): `fileselect` added one, and the LFO page's own clock, folded into the frame clock, freed three.
+- CI: `actions/checkout` is pinned to a commit and SuperCollider to the 3.13.0 package norns ships (#30); superseded pull-request runs are cancelled, and runs on `main` never are (#58).
+- `strata.lua`'s main chunk holds 184 of Lua's 200 locals (186 in 3.0.1): `fileselect` added one (#32), and the LFO page's own clock, folded into the frame clock, freed three (#39).
 
 ### Decisions
 
 The full list, with what each costs if wrong, is in `docs/status.md`. The ones users notice:
-- **Plain ASCII voice-list marks** (`+`/`-`) instead of `●`/`○`, so the list never depends on the norns font having those glyphs.
-- **Loads are decode-checked before they are read.** The check is synchronous: an estimated 0.2 s per FLAC on a norns, a short pause in engine commands during a load you started.
-- **Rapid source switches cut hard.** A synth already in its 50 ms fade-out when the next switch arrives is freed at once, so bursts stay within the memory pool.
-- **Transitions are cancelled after 1 s without progress**, measured from the fade's next due step, not from its start.
+- **Plain ASCII voice-list marks** (`+`/`-`) instead of `●`/`○`, so the list never depends on the norns font having those glyphs. (#31)
+- **Loads are decode-checked before they are read.** The check is synchronous: an estimated 0.2 s per FLAC on a norns, a short pause in engine commands during a load you started. (#53)
+- **Rapid source switches cut hard.** A synth already in its 50 ms fade-out when the next switch arrives is freed at once, so bursts stay within the memory pool. (#42)
+- **Transitions are cancelled after 1 s without progress**, measured from the fade's next due step, not from its start. (#34, #54)
 
 ### Testing
 
-- `lua test/run.lua` / `luajit test/run.lua` grew from 118 to 210 tests. The stubs now follow norns' own code: `Arc:segment`, `UI.ScrollingList`, `fileselect` (only through `require`), tabutil, the system params, param strings, menu routing and matron's clock scheduler (sleep and sync wake-ups, tie order, event slots). Tests drive the clock they mean (`next_frame`, `finish_startup`, `wake`, `run_for`), and a clock error no test claims fails the run. The engine stub range-checks every index, enumerated and continuous argument and every param name against limits parsed from the engine source; the parsers skip SuperCollider comments; group sizes, the FX defaults and the shared constants are checked against the engine; `sync_check.lua` fails on any use of `engine` it cannot check. A docs check also reads `docs/status.md` and checks that every repo path the docs name exists. Each new test was shown to fail before its fix or against a mutated `strata.lua`.
-- `test/run_engine_check.sh` runs scsynth with norns' 8192 KB pool and checks the memory peak, bursts and alternating recalls with memory probes; measures output pitch for 44.1 kHz files; checks that velocity only scales accent envelopes in every voice and grain SynthDef; and covers buffer fades, bad, damaged and vanished loads and their reports, the Resonator's level, the NaN guard, triggered grains on buffer and input sources, and stop/start cycles counted from the engine's own synth lists. The Karplus velocity allowance accepts only the `t_trig` pluck, and mutant SynthDefs compiled inside the check must be rejected; new checks cover recordings, loads and frees during a slot's fade wait. (#59)
+- `lua test/run.lua` / `luajit test/run.lua` grew from 118 to 210 tests.
+  - The stubs follow norns' own code: `Arc:segment` (#28, #58), `UI.ScrollingList` (#31), `fileselect` only through `require` (#32), menu routing (#56), and tabutil, the system params, param strings and matron's clock scheduler (sleep and sync wake-ups, then tie order and event slots) (#43, #58). Tests drive the clock they mean (`run_for` from #34; `next_frame`, `finish_startup` and `wake` from #43), and a clock error no test claims fails the run (#43, #58).
+  - The engine stub range-checks every index and enumerated argument and every param name (#36), and the continuous arguments (#58), against limits parsed from the engine source. The parsers skip SuperCollider comments, and group sizes, the FX defaults and the shared constants are checked against the engine (#38). `sync_check.lua` fails on any use of `engine` it cannot check (#43, #58).
+  - The behaviour-test gaps from the final review are closed: tempo handler chain, LFO offset clamp, scene validation, redraw requests, start-up, sequencer restarts (#55).
+  - A docs check also reads `docs/status.md` and checks that every repo path the docs name exists (the docs pull request for #52).
+  - Each new test was shown to fail before its fix or against a mutated `strata.lua`.
+- `test/run_engine_check.sh` runs scsynth with norns' 8192 KB pool and checks the memory peak, bursts and alternating recalls with memory probes (#42, #45, #57); measures output pitch for files not at the server rate (#41); checks that velocity only scales accent envelopes in every voice and grain SynthDef (#44), with a Karplus allowance that accepts only the `t_trig` pluck and mutant SynthDefs compiled inside the check that must be rejected (#59); covers buffer fades and bad loads (#41), damaged and vanished loads and their reports (#53), the Resonator's level, the NaN guard and triggered grains on buffer and input sources (#45), stop/start cycles counted from the engine's own synth lists (#57), and recordings, loads and frees during a slot's fade wait (#59).
 
 ### Check on Hardware
 
@@ -79,10 +84,10 @@ Tracked on [#6](https://github.com/sethbc/strata/issues/6). New in 3.0.2:
 
 ### Upgrade Notes
 
-- The Resonator is much quieter on its own, and the other voices are louder whenever it plays (the limiter no longer squashes them). Patches that used voice 1 as a cross-modulation source modulate much less; raise those depths.
-- Buffers loaded from files that are not at 48 kHz (such as 44.1 kHz) play about 1.4 semitones higher than in 3.0.1, at the file's real pitch. Re-tune buffer rates you set to compensate.
-- K2 randomize and mutations spread differently over exponential params (more low frequencies).
-- The `tempo` param's range is 1-300 BPM.
+- The Resonator is much quieter on its own, and the other voices are louder whenever it plays (the limiter no longer squashes them). Patches that used voice 1 as a cross-modulation source modulate much less; raise those depths. (#45)
+- Buffers loaded from files that are not at 48 kHz now play at their real pitch, so they sound different from 3.0.1 by 12 × log2(48 kHz / file rate) semitones: a 44.1 kHz file plays about 1.47 semitones higher than before, a 32 kHz file about 7.02 higher and a 22.05 kHz file about 13.47 higher, while a 96 kHz file plays an octave (12 semitones) lower. A take recorded over such a slot changes the same way. Re-tune buffer rates you set to compensate. (#41)
+- K2 randomize and mutations spread differently over exponential params (more low frequencies). (#29)
+- The `tempo` param's range is 1-300 BPM. (#54)
 
 ## Version 3.0.1 - 2026-11-03
 

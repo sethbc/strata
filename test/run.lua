@@ -5575,7 +5575,7 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
   enc(3, 2); assert_equal(params:get("v1_source"), 3)
   key(3, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 1)
   key(3, 0)
-  -- adapted (R12): K2 acts on release, so the brief's key(2, 1) is a press and release
+  -- K2 acts on release (a 3.0 review fix), so the K2 press is a press and release
   tap(2); assert_true(context.fileselect.last ~= nil, "fileselect opened")
   assert_equal(context.fileselect.last.folder, _path.audio, "file selector starts in the audio folder")
   context.fileselect.last.callback("/tmp/b.wav"); assert_equal(params:get("buf2_file"), "/tmp/b.wav")

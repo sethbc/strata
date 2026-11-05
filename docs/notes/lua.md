@@ -678,7 +678,7 @@ Fixes the whole-codebase review of 3.0.1, its final review and #5; no command, p
 - Scenes: the sequencer waits for a transition's end, bounded by its progress (`wait_for_scene_transition`, `SCENE_TRANSITION.next_step_due`); a fade ends on the data it started with; PSET loads start the sequencer one tick later; `tempo` follows `clock.tempo_change_handler` over `clock_tempo`'s range
 - Randomize and mutations in normalized space (`mutated_value`); the start-up clock checks voice 2 and is cancelled in cleanup (`STARTUP`)
 - Buffers: failed loads reported by `bufferLoadFailed` and undone per load number (`buffer_load_failed`)
-- Engine: fixed `PitchShift` window and `maxGrains` 128, at most one live, one fading and one cutting grain synth per voice; Resonator gain and limiter; 44.1 kHz rate fix; fades before a played slot changes; pan for buffer and input voices; NaN guard
+- Engine: fixed `PitchShift` window and `maxGrains` 128, at most one live, one fading and one cutting grain synth per voice; Resonator gain and limiter; rate fix for files not at 48 kHz; fades before a played slot changes; pan for buffer and input voices; NaN guard
 - Tests: 210 Lua tests on stubs that follow norns and matron; the engine check runs with norns' 8192 KB pool
 
 See CHANGELOG.md and `docs/status.md`.
