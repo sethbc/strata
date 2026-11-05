@@ -88,10 +88,9 @@ function gentle_mutate()
       for key, current_val in pairs(v.params) do
         if key ~= "amp" and key ~= "pan" then
           if math.random() < probability then
-            -- Generate gaussian-like mutation delta
-            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * range
-            local new_val = util.clamp(current_val + delta, spec.minval, spec.maxval)
-            params:set("v" .. i .. "_" .. key, new_val)
+            -- Gaussian-like delta as a fraction of the normalized 0-1 range
+            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
+            params:set("v" .. i .. "_" .. key, mutated_value(spec, current_val, delta))
           end
         end
       end
@@ -110,7 +109,7 @@ end
 - **Buffer and input sources**: a buffer-sourced voice mutates `BUFFER_MUTATION_KEYS` (`buf_pos`, `buf_rate`, `buf_scan`, each with `probability`, delta = gaussian × `amount` in the controlspec's normalized range, so the exp `buf_rate` moves evenly) instead of its synthesis params; an input-sourced voice mutates neither synthesis nor buffer params; grain size/pitch/spread mutate as for every voice
 - **Frozen Voice Exemption**: Frozen voices are excluded from mutations
 - **Gaussian Distribution**: Averaging two random values creates a bell curve distribution, favoring smaller changes
-- **Relative Deltas**: Mutation amount is scaled to parameter range, ensuring consistent behavior across different specs
+- **Relative Deltas**: Mutation amount is a fraction of the controlspec's normalized range, ensuring consistent behavior across different specs
 - **Granular Hierarchy**: Grain parameters mutate less frequently than synthesis parameters
 
 #### Usage Patterns
