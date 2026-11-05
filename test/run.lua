@@ -31,6 +31,21 @@ local function test(name, func) table.insert(tests, { name = name, func = func }
 
 local function fail(message, level) error(message, (level or 1) + 1) end
 
+-- Run one test function: ok, or false and the error. Errors the scheduler
+-- reported while resuming a clock (norns prints them and keeps running)
+-- fail the test unless it claimed them (clock.take_errors); when the test
+-- failed anyway, they are added to its error
+local function run_test(func)
+  local ok, err = xpcall(func, debug.traceback)
+  local clock_errors = stubs.take_clock_errors()
+  if #clock_errors > 0 then
+    local report = "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
+    err = ok and report or (tostring(err) .. "\n" .. report)
+    ok = false
+  end
+  return ok, err
+end
+
 local function assert_true(value, message)
   if not value then fail(message or "expected true", 2) end
 end
@@ -130,6 +145,18 @@ local function tabutil_text(value)
   local file = assert(io.open(path, "r")); local text = file:read("*a"); file:close()
   os.remove(path)
   return text
+end
+
+-- The docs (paths from the repo root) whose engine.<name>( mentions must
+-- name commands the engine has: CLAUDE.md, README.md and every docs/notes file
+local function engine_command_docs()
+  local docs = { "CLAUDE.md", "README.md" }
+  local listing = io.popen('ls "' .. repo_root .. '/docs/notes" 2>/dev/null')
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    if name:match("%.md$") then table.insert(docs, "docs/notes/" .. name) end
+  end
+  listing:close()
+  return docs
 end
 
 -- Compare a voice's live state with a captured scene voice, allowing for
@@ -233,6 +260,36 @@ test("sync_check fails on engine uses it cannot check: engine[...], references, 
   end
 end)
 
+test("sync_check accepts a table key or parameter named engine and #engine (#51)", function()
+  local allowed = table.concat({
+    'local t = { engine = 1 }',
+    'local u = { a = 1, engine = { 2 }; [3] = 4 }',
+    'local v = {',
+    '  engine = "Strata",',
+    '}',
+    'local function f(engine) return 1 end',
+    'local g = function(x, engine, ...) end',
+    'function obj:method(a,engine) end',
+    'local n = #engine',
+  }, "\n")
+  local problems = sync_check.lua_reference_problems(allowed)
+  local reported = {}
+  for _, entry in ipairs(problems) do table.insert(reported, entry.line .. ": " .. entry.text) end
+  assert_equal(#problems, 0, "nothing to report, got:\n" .. table.concat(reported, "\n"))
+  -- the global engine still fails in the same places
+  local flagged = table.concat({
+    'local t = { engine }',              -- 1: the table as a list item
+    'f(engine)',                         -- 2: as an argument
+    'local w = { k = engine }',          -- 3: as a key's value
+    'if { engine == 1 } then end',       -- 4: compared, not a key
+    'local e = (engine)',                -- 5: in parentheses
+    'g(function() end, engine)',         -- 6: an argument after a function
+  }, "\n")
+  local lines = {}
+  for _, entry in ipairs(sync_check.lua_reference_problems(flagged)) do table.insert(lines, entry.line) end
+  assert_equal(table.concat(lines, " "), "1 2 3 4 5 6", "each use of the table as a value is reported")
+end)
+
 test("the engine source parsers skip // and /* */ comments (#25)", function()
   local stripped = stubs.strip_sc_comments('a = "x // y /* z"; b = \'s//\'; c = $"; // gone\nd /* e /* f */ g */ h')
   assert_equal(stripped, 'a = "x // y /* z"; b = \'s//\'; c = $"; ' .. string.rep(" ", #"// gone")
@@ -269,6 +326,21 @@ test("the engine source parsers skip // and /* */ comments (#25)", function()
   assert_true(not spec.synthdef_controls.strataGrain.ghostControl, "a commented-out argument is skipped")
   assert_true(spec.synthdef_controls.strataGrain.grainSize, "the arguments around it are read")
   assert_equal(spec.enumerations.envShape[2], engine_spec.enumerations.envShape[2], "a commented-out Env is not counted")
+end)
+
+test("strip_sc_comments fails on an unterminated string, symbol or block comment (#51)", function()
+  local function assert_strip_fails(source, expected_text, line)
+    local ok, message = pcall(stubs.strip_sc_comments, source)
+    assert_true(not ok, "unterminated " .. expected_text .. " is an error, not the rest of the file")
+    assert_true(tostring(message):find("unterminated " .. expected_text, 1, true)
+      and tostring(message):find("line " .. line, 1, true), "the error says what and where: " .. tostring(message))
+  end
+  assert_strip_fails('a = 1;\nb = "open;\nc = 2;', "string", 2)
+  assert_strip_fails("a = 1;\n\nb = 'open;", "symbol", 3)
+  assert_strip_fails('a = 1; /* open /* nested */ still open', "block comment", 1)
+  assert_strip_fails('a = "ends in an escape\\"', "string", 1)
+  -- closed ones, with escapes, still pass
+  assert_equal(stubs.strip_sc_comments('a = "x\\"y"; b = \'q\\\'r\';'), 'a = "x\\"y"; b = \'q\\\'r\';', "escaped quotes")
 end)
 
 -- Expects engine.<name>(...) to be rejected by the engine stub with an error
@@ -319,11 +391,36 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
 end)
 
+test("the engine stub's voice and slot limits follow numVoices and numBuffers in the engine source (#51)", function()
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local patched, count = source:gsub("var <numVoices = %d+;", "var <numVoices = 6;")
+  assert_equal(count, 1, "numVoices patch applies")
+  patched, count = patched:gsub(",%s*\\strataRing%]", "]")
+  assert_equal(count, 1, "voiceSynthDefs patch applies")
+  patched, count = patched:gsub("var <numBuffers = %d+;", "var <numBuffers = 4;")
+  assert_equal(count, 1, "numBuffers patch applies")
+  local path = data_root .. "Engine_Patched.sc"
+  file = assert(io.open(path, "w")); file:write(patched); file:close()
+  local spec = stubs.parse_engine_spec(path)
+  os.remove(path)
+  assert_equal(spec.num_voices, 6, "numVoices read from the patched copy")
+  assert_equal(spec.num_buffers, 4, "numBuffers read from the patched copy")
+  assert_equal(spec.input_source, 5, "inputSource follows numBuffers")
+  -- the stub's range checks use them
+  stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = spec,
+    data_dir = data_root .. "patched_engine/", quiet = true }
+  engine.voiceOff(5); engine.clearBuffer(3); engine.setGrainSource(0, 5); engine.setModSource(0, 1, 5)
+  assert_engine_rejects("voice", "voiceOff", 6)
+  assert_engine_rejects("slot", "clearBuffer", 4)
+  assert_engine_rejects("source", "setGrainSource", 0, 6)
+  assert_engine_rejects("mod source", "setModSource", 0, 1, 6)
+end)
+
 -- The script never bangs its params, so until a param changes the engine
 -- plays the FX SynthDef's own default: it must be the Lua param's default.
--- Each FX command sets controls of one FX synth from its arguments (parsed
--- from the command bodies); sending every fx param's default must send
--- exactly those SynthDef defaults.
+-- Each FX command sets FX synth controls from its arguments (parsed from
+-- every setSynth in the command bodies); sending every fx param's default
+-- must send exactly those SynthDef defaults.
 test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
   local context = load_strata()
   local fx_commands = engine_spec.fx_commands
@@ -340,17 +437,49 @@ test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
     local param_id = params.params[index].id
     send_param_to_engine(param_id, params:get(param_id))
   end
-  for name, fx in pairs(fx_commands) do
+  for name, settings in pairs(fx_commands) do
     local calls = context.calls_named(name)
     assert_true(#calls > 0, "an fx param sends engine." .. name)
-    assert_equal(#fx.controls, #signatures[name], "every engine." .. name .. " argument sets a control")
-    local defaults = engine_spec.synthdef_defaults[fx.synthdef]
-    for index, control in ipairs(fx.controls) do
-      assert_true(defaults[control] ~= nil, "\\" .. fx.synthdef .. " has a numeric default for " .. control)
-      assert_near(calls[#calls].args[index], defaults[control], 1e-6,
-        "engine." .. name .. " argument " .. index .. " (Lua default) vs \\" .. fx.synthdef .. " " .. control)
+    local set_arguments = {}
+    for _, setting in ipairs(settings) do
+      set_arguments[setting.argument] = true
+      local defaults = engine_spec.synthdef_defaults[setting.synthdef]
+      local label = "\\" .. setting.synthdef .. " " .. setting.control
+      assert_true(defaults[setting.control] ~= nil, label .. " has a numeric default")
+      assert_near(calls[#calls].args[setting.argument], defaults[setting.control], 1e-6,
+        "engine." .. name .. " argument " .. setting.argument .. " (Lua default) vs " .. label)
+    end
+    for index = 1, #signatures[name] do
+      assert_true(set_arguments[index], "engine." .. name .. " argument " .. index .. " sets a control")
     end
   end
+end)
+
+test("fx_commands reads every setSynth in a command body (#51)", function()
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  -- \setFilter split into two setSynth calls, and \setReverb also setting the master's drift
+  local patched, count = source:gsub(
+    "this%.setSynth%(\\filter, \\freq, msg%[1%], \\res, msg%[2%], \\filterType, msg%[3%], \\mix, msg%[4%]%);",
+    "this.setSynth(\\filter, \\freq, msg[1], \\res, msg[2]);\n            "
+      .. "this.setSynth(\\filter, \\filterType, msg[3], \\mix, msg[4]);")
+  assert_equal(count, 1, "setFilter patch applies")
+  patched, count = patched:gsub("(this%.setSynth%(\\reverb, [^;]*;)", "%1 this.setSynth(\\master, \\drift, msg[3]);")
+  assert_equal(count, 1, "setReverb patch applies")
+  local function settings_of(spec, command)
+    local found = {}
+    for _, setting in ipairs(spec.fx_commands[command]) do
+      table.insert(found, setting.argument .. ":" .. setting.synthdef .. "." .. setting.control)
+    end
+    table.sort(found)
+    return table.concat(found, " ")
+  end
+  local spec = stubs.engine_spec_from_source(patched)
+  assert_equal(settings_of(spec, "setFilter"), settings_of(engine_spec, "setFilter"), "both setSynth calls read")
+  assert_equal(settings_of(spec, "setFilter"),
+    "1:strataFilter.freq 2:strataFilter.res 3:strataFilter.filterType 4:strataFilter.mix", "every argument")
+  assert_equal(settings_of(spec, "setReverb"),
+    "1:strataReverb.mix 2:strataReverb.size 3:strataMaster.drift 3:strataReverb.damp",
+    "a second FX synth set by the same command")
 end)
 
 test("the engine stub rejects out-of-range engine arguments (#24)", function()
@@ -399,6 +528,65 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
   engine.setGrainParam(0, "grainMode", 1); engine.setGrainParam(0, "envShape", 4)
 end)
 
+-- Continuous limits come from where the engine enforces them: a control its
+-- FX SynthDef clips (feedback.clip(0, 0.95), freq.lag(0.05).clip(20, 20000))
+-- or an argument the command clips (msg[2].clip(0, 1)). The engine clips no
+-- crossmod depth or mod speed itself; CLAUDE.md's command table documents
+-- their ranges, and the stub reads them from the spec of the Lua param that
+-- sends the value.
+test("the engine stub range-checks continuous arguments at the engine's own limits (#51)", function()
+  load_strata()
+  local limits = engine_spec.argument_limits
+  local unpack_args = table.unpack or unpack
+  -- base_args with argument `index` set to `value`
+  local function args_with(base_args, index, value)
+    local args = { unpack_args(base_args) }
+    args[index] = value
+    return unpack_args(args)
+  end
+  local function check_limits(command, base_args, index, name, low, high)
+    assert_engine_rejects(name, command, args_with(base_args, index, high + 1e-6))
+    assert_engine_rejects(name, command, args_with(base_args, index, low - 1e-6))
+    engine[command](args_with(base_args, index, low)); engine[command](args_with(base_args, index, high))
+  end
+  local function engine_limit(command, index, name)
+    local limit = limits[command] and limits[command][index]
+    assert_true(limit ~= nil, "engine." .. command .. " argument " .. index .. " (" .. name .. ") has a limit")
+    assert_true(limit.name == name, "engine." .. command .. " argument " .. index .. " is " .. name)
+    return limit.low, limit.high
+  end
+  check_limits("setFilter", {5000, 0.5, 0, 0}, 1, "freq", engine_limit("setFilter", 1, "freq"))
+  check_limits("setFilter", {5000, 0.5, 0, 0}, 2, "res", engine_limit("setFilter", 2, "res"))
+  check_limits("setFilter", {5000, 0.5, 0, 0}, 4, "mix", engine_limit("setFilter", 4, "mix"))
+  check_limits("setDelay", {0.375, 0.4, 0}, 1, "time", engine_limit("setDelay", 1, "time"))
+  check_limits("setDelay", {0.375, 0.4, 0}, 2, "feedback", engine_limit("setDelay", 2, "feedback"))
+  check_limits("setDelay", {0.375, 0.4, 0}, 3, "mix", engine_limit("setDelay", 3, "mix"))
+  check_limits("retrigger", {0, 1}, 2, "velocity", engine_limit("retrigger", 2, "velocity"))
+  -- the limits follow the engine source
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local patched, count = source:gsub("feedback%.clip%(0, 0%.95%)", "feedback.clip(0, 0.5)")
+  assert_equal(count, 1, "feedback patch applies")
+  patched, count = patched:gsub("msg%[2%]%.clip%(0, 1%)", "msg[2].clip(0, 0.8)")
+  assert_equal(count, 1, "velocity patch applies")
+  local patched_limits = stubs.engine_spec_from_source(patched).argument_limits
+  assert_equal(patched_limits.setDelay[2].high, 0.5, "the delay feedback limit is read from \\strataDelay")
+  assert_equal(patched_limits.retrigger[2].high, 0.8, "the velocity limit is read from \\retrigger")
+  -- documented, not clipped: the Lua param's controlspec, which CLAUDE.md's row states
+  file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
+  local documented = {
+    { command = "setModAmpAmt", args = {6, 3, 0}, index = 3, param = "v7_mod_amp_amt_3", range = "%g to %g" },
+    { command = "setModFreqAmt", args = {0, 1, 0}, index = 3, param = "v1_mod_freq_amt_1", range = "%g to %g" },
+    { command = "setModSpeed", args = {2, 10}, index = 2, param = "v3_mod_speed", range = "%g-%g" },
+  }
+  for _, entry in ipairs(documented) do
+    local spec = params:lookup_param(entry.param).controlspec
+    check_limits(entry.command, entry.args, entry.index, entry.param, spec.minval, spec.maxval)
+    local row = doc:match("\n| `engine%." .. entry.command .. "%(.-\n")
+    assert_true(row and row:find(string.format(entry.range, spec.minval, spec.maxval), 1, true),
+      "CLAUDE.md documents engine." .. entry.command .. "'s range as " .. entry.param .. "'s spec")
+  end
+end)
+
 test("the engine stub rejects param names the SynthDefs do not have (#24)", function()
   load_strata()
   local spec = stubs.parse_engine_spec(SC_PATH)
@@ -436,13 +624,29 @@ test("CLAUDE.md command table lists exactly the engine's commands", function()
   for name in pairs(rows) do
     assert_true(signatures[name] ~= nil, "CLAUDE.md command table lists engine." .. name .. ", which the engine does not have")
   end
-  -- no engine command mentioned anywhere in CLAUDE.md or README.md is gone
-  for _, doc_name in ipairs({"CLAUDE.md", "README.md"}) do
+  -- no engine command mentioned anywhere in CLAUDE.md, README.md or docs/notes is gone
+  local doc_names = engine_command_docs()
+  for _, note in ipairs({"docs/notes/engine.md", "docs/notes/lua.md"}) do
+    local listed = false
+    for _, doc_name in ipairs(doc_names) do listed = listed or doc_name == note end
+    assert_true(listed, "the check reads " .. note)
+  end
+  for _, doc_name in ipairs(doc_names) do
     file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
     for name in text:gmatch("engine%.(%w+)%(") do
       assert_true(signatures[name] ~= nil, doc_name .. " mentions engine." .. name .. ", which the engine does not have")
     end
   end
+end)
+
+test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
+  local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
+  local setting = workflow:match("\n%s*cancel%-in%-progress:%s*([^\n]-)%s*\n")
+  assert_equal(setting, "${{ github.event_name == 'pull_request' }}", "cancel-in-progress")
+  -- a pending run in a shared group is replaced by the next one even without
+  -- cancel-in-progress, so a run on main gets a group of its own
+  local group = workflow:match("\n%s*group:%s*([^\n]-)%s*\n")
+  assert_equal(group, "tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}", "group")
 end)
 
 test("every voice param has a menu param, ordered by param_order", function()
@@ -3294,6 +3498,14 @@ test("stub params support option, group, trigger, binary, file and set_action", 
   params:set("stub_trig", 1); params:set("stub_trig", 1)
   assert_equal(triggered, 2, "triggers fire on every set")
   params:set("stub_bin", 5); assert_equal(params:get("stub_bin"), 1, "toggle binary stores 0/1")
+  -- core/params/binary.lua: a trigger binary fires for a value above 0 only (#51)
+  params:add_binary("stub_trigger_bin", "trigger bin", "trigger")
+  local trigger_fired = 0
+  params:set_action("stub_trigger_bin", function() trigger_fired = trigger_fired + 1 end)
+  params:set("stub_trigger_bin", 0); params:set("stub_trigger_bin", -1)
+  assert_equal(trigger_fired, 0, "a trigger binary set to 0 or below does not fire")
+  params:set("stub_trigger_bin", 1); params:set("stub_trigger_bin", 1); params:set("stub_trigger_bin")
+  assert_equal(trigger_fired, 3, "it fires on every set above 0 (nil counts as 1)")
   params:add_group("stub_group", "group", 2); params:hide("stub_opt"); params:show("stub_opt")
   assert_true(params:visible("stub_opt"), "shown param is visible")
   params:hide("stub_file"); assert_true(not params:visible("stub_file"), "hidden param is not visible")
@@ -3532,6 +3744,97 @@ test("stub clock errors: reported per wake-up, the other clocks keep running (#2
   assert_equal(#context.clock.take_errors(), 0, "direct errors are raised, not reported")
 end)
 
+test("the runner adds the clock errors to a failing test's own error (#51)", function()
+  local context = load_strata(); finish_startup(context)
+  local function leave_clock_error()
+    clock.run(function() clock.sleep(0); error("the clock failed") end)
+    context.clock.run_for(0.01)
+  end
+  local ok, message = run_test(function() leave_clock_error(); error("the test failed") end)
+  assert_true(not ok, "the test fails")
+  assert_true(tostring(message):find("the test failed", 1, true), "its own error is kept: " .. tostring(message))
+  assert_true(tostring(message):find("the clock failed", 1, true), "the clock error is added: " .. tostring(message))
+  ok, message = run_test(leave_clock_error)
+  assert_true(not ok and tostring(message):find("the clock failed", 1, true), "a passing test with a clock error fails")
+  assert_true(run_test(function() end), "a passing test passes")
+  assert_equal(#context.clock.take_errors(), 0, "the runner claimed them")
+end)
+
+test("stub clock.advance_until fails at once when its coroutine is cancelled or nothing is pending (#51)", function()
+  local context = load_strata(); finish_startup(context)
+  stop_frame_clock()
+  local ticker = clock.run(function() while true do clock.sleep(0.1) end end)
+  local target = clock.run(function() clock.sleep(1) end)
+  clock.run(function() clock.sleep(0.45); clock.cancel(target) end)
+  local start = util.time()
+  local ok, message = pcall(context.clock.advance_until, target)
+  assert_true(not ok and tostring(message):find("cancelled", 1, true), "a cancelled target: " .. tostring(message))
+  assert_near(util.time(), start + 0.45, 1e-9, "it stops at the cancel, the ticker running on no further")
+  clock.cancel(ticker)
+  ok, message = pcall(context.clock.advance_until, target)
+  assert_true(not ok and tostring(message):find("nothing is pending", 1, true), "nothing pending: " .. tostring(message))
+  local finished = clock.run(function() end)
+  clock.run(function() clock.sleep(1) end)
+  ok, message = pcall(context.clock.advance_until, finished)
+  assert_true(not ok and tostring(message):find("is not waiting", 1, true), "a finished coroutine: " .. tostring(message))
+end)
+
+-- matron's scheduler keeps one event slot per coroutine (the lowest free one
+-- when it first waits, kept until it is cancelled or ends) and every tick
+-- posts the due events in slot order; a sleep is due once the time reaches it
+-- (>=), a sync once the beat is past it (>)
+test("stub clock ties: equal wake times fire in event-slot order, a sync after a sleep (#51)", function()
+  local context = load_strata(); finish_startup(context)
+  stop_frame_clock()
+  local events = {}
+  local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
+  -- a placeholder takes the lowest free slot and B the next; once the
+  -- placeholder is cancelled, D (which sleeps after B) gets the lower slot
+  local function start_tied_pair()
+    local placeholder = clock.run(function() clock.sleep(100) end)
+    clock.run(function() clock.sleep(1); log("B") end)
+    clock.cancel(placeholder)
+    clock.run(function() clock.sleep(1); log("D") end)
+  end
+  start_tied_pair()
+  context.clock.run_for(1)
+  assert_equal(table.concat(events, " "), "D@1.50 B@1.50", "event by event: slot order, not the order they slept")
+  events = {}
+  start_tied_pair()
+  context.clock.advance()
+  assert_equal(table.concat(events, " "), "D@2.50 B@2.50", "one step: both, in slot order")
+  -- a sync (lower slot) and a sleep due at the same instant: the sleep first
+  assert_near(clock.get_beats() % 1, 0, 1e-12, "on a beat")
+  local function start_sync_and_sleep()
+    clock.run(function() clock.sync(1); log("sync") end)
+    clock.run(function() clock.sleep(clock.get_beat_sec()); log("sleep") end)
+  end
+  events = {}
+  start_sync_and_sleep()
+  context.clock.advance()
+  assert_equal(table.concat(events, " "), "sleep@3.00", "the step at the tie fires the sleep only")
+  context.clock.advance()
+  assert_equal(table.concat(events, " "), "sleep@3.00 sync@3.00", "the next step, at the same time, the sync")
+  events = {}
+  start_sync_and_sleep()
+  context.clock.run_for(1)
+  assert_equal(table.concat(events, " "), "sleep@3.50 sync@3.50", "event by event: the sleep first too")
+end)
+
+test("stub clock.advance: a tempo change in a step does not change the resume values after it (#51)", function()
+  local context = load_strata(); finish_startup(context)   -- 0.5 s: beat 1 at 120 BPM
+  stop_frame_clock()
+  -- A wakes at 1 s and halves the tempo; S syncs to beat 2.5 (1.25 s).
+  -- util.time() jumps past both, so one step fires both, A first (its slot)
+  local woke_on_beat
+  clock.run(function() clock.sleep(0.5); params:set("clock_tempo", 60) end)
+  clock.run(function() woke_on_beat = clock.sync(1, 0.5) end)
+  context.set_time(2)
+  context.clock.advance()
+  assert_equal(clock.get_tempo(), 60, "A changed the tempo")
+  assert_near(woke_on_beat, 2.5, 1e-9, "S resumes with the beat it waited for")
+end)
+
 test("stub param type codes come from one table; an unknown type is an error", function()
   load_strata()
   local codes = stubs.PARAM_TYPE_CODES
@@ -3713,6 +4016,42 @@ test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw",
   assert_equal(instance:get("enabled"), 0)
 end)
 
+-- lib/lfo.lua's reset_phase and change_period, line by line
+test("stub lfo resets and rescales the phase counter as lib/lfo.lua does (#51)", function()
+  load_strata()
+  local LFO = require("lfo")
+  local beat_sec = clock.get_beat_sec()
+  local clocked = LFO:add{ mode = "clocked", period = 4 }
+  local expected_clocked = { floor = 0.75 * 4, ceiling = 0.25 * 4, ["mid: falling"] = 0.5 * 4, ["mid: rising"] = 4 }
+  for target, counter in pairs(expected_clocked) do
+    clocked:set("reset_target", target); clocked:reset_phase()
+    assert_near(clocked.phase_counter, counter, 1e-12, "clocked reset to " .. target)
+  end
+  local free = LFO:add{ mode = "free", period = 2 }
+  local baseline = beat_sec / 2
+  local expected_free = { floor = 0.75 / baseline, ceiling = 0.25 / baseline, ["mid: falling"] = 0.5 / baseline,
+    ["mid: rising"] = baseline }
+  for target, counter in pairs(expected_free) do
+    free:set("reset_target", target); free:reset_phase()
+    assert_near(free.phase_counter, counter, 1e-12, "free reset to " .. target)
+  end
+  -- a new period keeps the phase: the counter is rescaled (change_period)
+  clocked:set("reset_target", "floor"); clocked:reset_phase()
+  local ppqn = clocked:get("ppqn")
+  clocked:set("period", 8)
+  assert_equal(clocked:get("period"), 8)
+  assert_near(clocked.phase_counter, ((3 + 1 / ppqn) / 4) * 8 - 1 / ppqn, 1e-12, "clocked counter rescaled")
+  free:set("reset_target", "floor"); free:reset_phase()
+  local counter = free.phase_counter
+  free:set("period", 6)
+  local phase = (counter + 1 / ppqn) * beat_sec / 2
+  assert_near(free.phase_counter, (phase * 6 / beat_sec) - 1 / ppqn, 1e-12, "free counter rescaled")
+  -- starting an LFO resets its phase first, as LFO:start does
+  local started = LFO:add{ mode = "clocked", period = 2 }
+  started:start()
+  assert_near(started.phase_counter, 0.75 * 2, 1e-12, "start resets to the floor")
+end)
+
 test("stub midi delivers note_on, cc and pitchbend messages", function()
   local context = load_strata()
   -- port 3: Strata listens to port 1 (midi_device) and re-attaches it on midi.add
@@ -3737,6 +4076,46 @@ test("stub midi delivers note_on, cc and pitchbend messages", function()
   assert_equal(midi.devices[device.id], device)
   context.midi.unplug(2)
   assert_equal(removed, device); assert_equal(midi.connect(2).device, nil)
+end)
+
+test("stub arc segment, led and all follow lua/core/arc.lua and matron's LED buffer (#51)", function()
+  local context = load_strata()
+  local device = context.arc.plug(1)
+  local vport = arc.connect(1)
+  local function ring_levels(ring)
+    local levels = {}
+    for x = 1, 64 do levels[x] = device:get_led(ring, x) end
+    return levels
+  end
+  -- segment sets each of the 64 LEDs through led(): half a turn at level 8
+  local led_calls = 0
+  local real_led = device.led
+  device.led = function(self, ...) led_calls = led_calls + 1; return real_led(self, ...) end
+  vport:segment(1, 0, math.pi, 8)
+  assert_equal(led_calls, 64, "one led() call per LED")
+  local levels = ring_levels(1)
+  assert_equal(levels[1], 8); assert_equal(levels[32], 8); assert_equal(levels[33], 0)
+  -- rel adds to the levels already there, clamped to 15 (dev_monome_arc_set_led)
+  vport:segment(1, 0, math.pi / 2, 10, true)
+  levels = ring_levels(1)
+  assert_equal(levels[1], 15, "8 + 10 clamps to 15"); assert_equal(levels[16], 15)
+  assert_equal(levels[17], 8, "rel adds 0 outside the segment"); assert_equal(levels[33], 0)
+  -- without rel a segment overwrites every LED of its ring, lit or not
+  vport:segment(1, 0, math.pi / 2, 4)
+  levels = ring_levels(1)
+  assert_equal(levels[1], 4); assert_equal(levels[17], 0, "outside the segment: 0")
+  assert_equal(device.segments[1].level, 4, "the last segment is recorded for the ring tests")
+  -- led and all, absolute and relative
+  vport:led(2, 5, 9); assert_equal(device:get_led(2, 5), 9)
+  vport:led(2, 5, -12, true); assert_equal(device:get_led(2, 5), 0, "rel clamps at 0")
+  vport:all(3); assert_equal(device:get_led(4, 64), 3)
+  vport:all(14, true); assert_equal(device:get_led(1, 1), 15); assert_equal(device:get_led(3, 2), 15)
+  vport:all(0); assert_equal(device:get_led(1, 1), 0)
+  assert_true(next(device.segments) == nil, "all() clears the recorded segments")
+  assert_true(not pcall(vport.led, vport, 5, 1, 1), "ring 5 does not exist")
+  assert_true(not pcall(vport.led, vport, 1, 65, 1), "LED 65 does not exist")
+  assert_true(not pcall(vport.led, vport, 1, 1, 16), "level 16 is out of range")
+  assert_true(not pcall(vport.led, vport, 1, 1, 1.5), "levels are integers (luaL_checkinteger)")
 end)
 
 test("stub tab.save and tab.load are lib/tabutil.lua's (#27)", function()
@@ -6272,14 +6651,8 @@ end)
 
 local failures = 0
 for _, entry in ipairs(tests) do
-  local ok, err = xpcall(entry.func, debug.traceback)
+  local ok, err = run_test(entry.func)
   print = real_print
-  -- errors the scheduler reported while resuming a clock (norns prints them
-  -- and keeps running) fail the test unless it claimed them (clock.take_errors)
-  local clock_errors = stubs.take_clock_errors()
-  if ok and #clock_errors > 0 then
-    ok, err = false, "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
-  end
   if ok then
     real_print("ok   " .. entry.name)
   else
