@@ -662,14 +662,20 @@ var checkGrainMemorySizes = {
 // releasing and the buffer grain synth in its kill fade. Burst: the three
 // switches at once on every voice (a chord of grid scene buttons, or
 // PMAP-mapped source params), where each switch frees the synths the
-// previous one left in their kill fade, so the voice holds no more. Each
+// previous one left in their kill fade, so the voice holds no more. Recalls:
+// scenes A = on/synth, B = off/input, C = on/buffer recalled A -> B -> A -> C
+// at once (#46), each voice's source sent before its stop or start (the order
+// Lua used before #46, the worst one): B builds an input grain synth and
+// releases it, A's voiceOn hands it to fadingSynths, and the voice still
+// holds no more than its live synths, one fading and one cutting set. Each
 // time, on norns' 8192 KB pool (memSize, set before boot), four 256 KB probes
 // (1 MB) started at that moment must still allocate. The probe bus is zeroed
 // first, so a probe whose /s_new fails reads 0. run_engine_check.sh also
 // fails on any "alloc failed" the server prints.
 var checkMemoryWorstCase = {
     var probeCount = 4, probeBus = Bus.control(server, probeCount);
-    var startAll = { engine.numVoices.do({ arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) }) };
+    var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
+    var startAll = { engine.numVoices.do(startVoice) };
     var switchAll = { arg sourceOf; engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, sourceOf.(voice)) }) };
     var sourceSteps = [{ arg voice; voice + 1 }, { engine.numBuffers + 1 }, { 0 }];
     // started at once after the last command, while the cut synths still fade
@@ -701,6 +707,11 @@ var checkMemoryWorstCase = {
     probeBus.setAll(0); server.sync;
     sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
     probeHeadroom.("seven voices at grain size 0.5, each switched three times at once,");
+    probeBus.setAll(0); server.sync;
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, engine.numBuffers + 1); command.(\voiceOff, voice) });
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
+    engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
+    probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer),");
     probeBus.free;
 };
 
@@ -858,21 +869,54 @@ var checkModSpeedRestart = { arg voice;
         "a restarted mod synth keeps the voice's mod speed (got %)".format(engine.synths[key] !? { getControl.(engine.synths[key], \speed) }));
 };
 
-// Fast stop / source change / start cycles on one voice, inside one
-// switchCutTime: each voiceOff cuts the grain synth the previous voiceOn
-// left releasing beside the new one, and frees the one an earlier cycle left
-// in its kill fade, so the voice never holds more than its live grain synth,
-// one releasing and one cutting
+// voiceOn after a source change in the release: the previous source's
+// releasing grain synth and the voice synth (now forced to release) are
+// tracked as the voice's fadingSynths, not left releasing beside the new
+// one, and the next start for another source cuts them (F4, #46). The voice
+// runs on its synth source.
+var checkSupersededAtStart = { arg voice, before;
+    var oldTrio = voiceTrio.(voice), fading = engine.fadingSynths[voice];
+    command.(\voiceOff, voice);
+    command.(\setGrainSource, voice, 9);
+    command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+    check.(oldTrio[1].isPlaying and: { engine.synths[engine.grainKey(voice)] !== oldTrio[1] }
+        and: { fading.includes(oldTrio[1]) } and: { fading.includes(oldTrio[0]) }
+        and: { engine.releasingSynths[voice][engine.grainKey(voice)].isNil }
+        and: { engine.releasingSynths[voice][engine.voiceKey(voice)].isNil },
+        "voiceOn hands the previous source's releasing grain and voice synths to fadingSynths");
+    command.(\voiceOff, voice); server.sync;
+    check.(oldTrio[1].isPlaying and: { fading.includes(oldTrio[1]) }, "voiceOff keeps them fading (tracked)");
+    command.(\setGrainSource, voice, 0);
+    command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 0.15.wait; server.sync;
+    check.(oldTrio[1].isPlaying.not and: { oldTrio[0].isPlaying.not } and: { engine.cuttingSynths[voice].isEmpty },
+        "the next start for another source cuts them (got grain %, voice %)".format(oldTrio[1].isPlaying, oldTrio[0].isPlaying));
+    2.5.wait; server.sync;
+    check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
+};
+
+// Fast stop / source change / start / running switch cycles on one voice,
+// each step a few ms after the last (well inside one switchCutTime): voiceOn
+// hands the releasing synths built for another source to fadingSynths as a
+// switch does (cutting the fading ones, freeing the cutting ones), so after
+// every step the voice holds at most its live grain synth, one fading and
+// one cutting (#46), and as many voice synths. The cycles visit the synth
+// source too, so voice synths are released, re-gated and superseded
 var checkStopStartCycles = { arg voice;
-    var before = synthNames.(context.xg).size, grains;
-    [9, 3, 9, 4, 9, 3].do({ arg source;
-        command.(\voiceOff, voice);
-        command.(\setGrainSource, voice, source);
-        command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+    var before = synthNames.(context.xg).size, worstGrains = 0, worstVoices = 0;
+    var countStep = {
+        server.sync;
+        worstGrains = max(worstGrains, voiceGrainNodes.(synthNodes.(engine.processGroup), voice).size);
+        worstVoices = max(worstVoices, synthNodes.(engine.voiceGroup).count({ arg node; node.def == engine.voiceSynthDefs[voice] }));
+    };
+    // [stopped source, running source]: each differs from the one before
+    [[9, 3], [0, 9], [4, 0], [9, 4], [0, 3], [4, 9]].do({ arg sources;
+        command.(\voiceOff, voice); countStep.value;
+        command.(\setGrainSource, voice, sources[0]); countStep.value;
+        command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); countStep.value;
+        command.(\setGrainSource, voice, sources[1]); countStep.value;
     });
-    server.sync;
-    grains = voiceGrainNodes.(synthNodes.(engine.processGroup), voice);
-    check.(grains.size <= 3, "six fast stop / source / start cycles keep at most three grain synths (got %)".format(grains.size));
+    check.(worstGrains <= 3, "six fast stop / source / start / switch cycles keep at most three grain synths after every step (worst %)".format(worstGrains));
+    check.(worstVoices <= 3, "and at most three voice synths (worst %)".format(worstVoices));
     command.(\setGrainSource, voice, 0);
     2.5.wait; server.sync;
     check.(synthNames.(context.xg).size == before, "the fast cycles leave no extra nodes");
@@ -994,7 +1038,7 @@ server.waitForBoot({
         var stereoPath, monoPath, longPath, textPath, info;
         var grainInUGens, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
         var grainCount, voiceCount, grainBefore, voiceBefore;
-        var countVoiceAndGrain, maxGrainCount, maxVoiceCount, staleGrain;
+        var countVoiceAndGrain, maxGrainCount, maxVoiceCount;
         var triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
         var filterGroup, filterIn, filterOut, stepBus, filterSynth, stepProbe, readStep, steadySteps, switchStep;
         var orderNodes, orderGrains, busReadingAt, mirroringAt, longWritePath, writeStart, writeSeconds, rampValue;
@@ -1970,20 +2014,7 @@ server.waitForBoot({
         command.(\setGrainSource, 3, 0); 2.5.wait; server.sync;
         check.(synthNames.(context.xg).size == before, "switching back to the synth restores the trio");
 
-        // voiceOff after a voiceOn that left the previous source's grain
-        // synth releasing beside the new one: that superseded grain synth is
-        // cut, not left releasing untracked where no later switch could cut it (F4)
-        oldTrio = voiceTrio.(3);
-        command.(\voiceOff, 3);
-        command.(\setGrainSource, 3, 9);
-        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
-        staleGrain = oldTrio[1];
-        check.(staleGrain.isPlaying and: { engine.synths[\grain3] !== staleGrain }, "the previous grain synth still releases beside the new one");
-        command.(\voiceOff, 3); 0.15.wait; server.sync;
-        check.(staleGrain.isPlaying.not, "voiceOff cuts a releasing grain synth that voiceOn superseded");
-        command.(\setGrainSource, 3, 0);
-        command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); 2.5.wait; server.sync;
-        check.(synthNames.(context.xg).size == before, "the voice is back on its synth with one trio");
+        checkSupersededAtStart.(3, before);
         checkStopStartCycles.(3);
 
         // A re-gated synth whose release ends just as the gate arrives frees

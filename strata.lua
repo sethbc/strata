@@ -2573,7 +2573,9 @@ end
 -- scene must have passed validate_scene.
 -- A voice whose source changes gets one full sync after all its params are
 -- set (not the source action's, which would send the old values first); a
--- voice the recall starts is synced by toggle_voice instead.
+-- voice the recall starts is synced by toggle_voice instead. A voice the
+-- recall stops is stopped before its params are set, and one it starts is
+-- started after them.
 function recall_scene_instant(scene_num, scene_data)
   scene_data = scene_data or scenes[scene_num].data
   local source_changed = {}
@@ -2590,6 +2592,10 @@ function recall_scene_instant(scene_num, scene_data)
     for i = 1, NUM_VOICES do
       local voice_data = scene_data.voices[i]
       local prefix = "v" .. i .. "_"
+
+      -- A voice the scene stops is stopped first, so the engine only records
+      -- its source switch instead of building a grain synth to release at once
+      if voices[i].active and not voice_data.active then toggle_voice(i) end
 
       local previous_source = voices[i].source
       params:set(prefix .. "source", voice_data.source)
@@ -2614,8 +2620,8 @@ function recall_scene_instant(scene_num, scene_data)
 
       frozen[i] = scene_data.frozen[i]
 
-      -- Start/stop voices last: toggle_voice syncs the restored state
-      if voice_data.active ~= voices[i].active then
+      -- Start voices last: toggle_voice syncs the restored state
+      if voice_data.active and not voices[i].active then
         toggle_voice(i)
         source_changed[i] = false
       end
