@@ -119,8 +119,8 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 - Pages: `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`, dispatched through `PAGE_DRAW`/`PAGE_ENC`/`PAGE_KEY`/`PAGE_KEY_RELEASE`, with `ARC_PAGE_DELTA`/`ARC_PAGE_REDRAW` indexed the same way. A new page adds its functions to every table, defined above them. Change a page's draw function (`redraw_main`, ...), never `redraw()`.
 - Every page has the header at y=8 (`draw_header()`: title, `dens:`, `[M]` at x=98, scene `S1`-`S8` right-aligned at 127) and the hint row at y=62 (`draw_hints()`). On MAIN the voice list (x 0-60, `UI.ScrollingList`, 4 visible rows) sits left of the divider at x=62 and the selected voice's details at x 65-127. Status indicators use `[BRACKETS]`; levels are 15 bright, 4 dim, 1-2 subtle.
-- A new voice type needs a `MAIN_PARAMS` entry (E3, the MAIN display and arc ring 2 follow) and `get_param_spec()` specs.
-- `test/run.lua` checks every page for overlapping strings, text off-screen, the hint row and the list's bottom edge (width estimate: `stubs.text_width`). Keep it passing.
+- A new voice type needs a `MAIN_PARAMS` entry (E3, the MAIN display and arc ring 2 follow; `list_name` is its voice-list name, at most 5 characters) and `get_param_spec()` specs.
+- `test/run.lua` checks every page for overlapping strings, text off-screen, the hint row and the list's bottom edge, and that no MAIN string crosses the divider (width estimate: `stubs.text_width`). Keep it passing.
 - Before finishing, check that new values are visible with units, hints match the keys, all 7 voices fit, and nothing leaves 128×64.
 
 ### CRITICAL: keep grid and arc in step with the code

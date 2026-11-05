@@ -2633,12 +2633,31 @@ function validate_scene_data(scene_table)
   return true
 end
 
+-- Per voice type, on MAIN: the synthesis param E3 and arc ring 2 adjust
+-- (param id suffix, screen label and screen value format; the arc ring sweeps
+-- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
+-- and the short name the voice list shows (at most 5 characters, so the
+-- widest entry, "+ pulse [F]", ends well left of the divider at x 62)
+local MAIN_PARAMS = {
+  resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},
+  fm = {key = "index", label = "index", format = "%.1f", list_name = "fm"},
+  folder = {key = "fold", label = "fold", format = "%.1f", list_name = "fold"},
+  sub = {key = "drift", label = "drift", format = "%.3f", list_name = "sub"},
+  pulse = {key = "width", label = "width", format = "%.2f", list_name = "pulse"},
+  karplus = {key = "decay", label = "decay", format = "%.1f s", list_name = "karp"},
+  ring = {key = "ratio", label = "ratio", format = "%.2f", list_name = "ring"}
+}
+
+-- MAIN's voice list: "+" for a running voice, "-" for a stopped one, then the
+-- type's short name and [F] when frozen. Plain ASCII, so the entries' width
+-- does not depend on the font drawing other glyphs (the details column shows
+-- the full name and ON/OFF).
 function update_voice_list()
   local items = {}
   for i = 1, NUM_VOICES do
-    local status = voices[i].active and "●" or "○"
+    local status = voices[i].active and "+" or "-"
     local freeze = frozen[i] and " [F]" or ""
-    items[i] = status .. " " .. voices[i].name .. freeze
+    items[i] = status .. " " .. MAIN_PARAMS[voices[i].name].list_name .. freeze
   end
   voice_list = UI.ScrollingList.new(0, 10, 1, items)
   voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
@@ -2646,19 +2665,6 @@ function update_voice_list()
   voice_list.active = true
   voice_list.index = selected_voice
 end
-
--- The synthesis param E3 and arc ring 2 adjust on MAIN, per voice type:
--- param id suffix, screen label and screen value format (the arc ring sweeps
--- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring)
-local MAIN_PARAMS = {
-  resonator = {key = "freq", label = "freq", format = "%.0f Hz"},
-  fm = {key = "index", label = "index", format = "%.1f"},
-  folder = {key = "fold", label = "fold", format = "%.1f"},
-  sub = {key = "drift", label = "drift", format = "%.3f"},
-  pulse = {key = "width", label = "width", format = "%.2f"},
-  karplus = {key = "decay", label = "decay", format = "%.1f s"},
-  ring = {key = "ratio", label = "ratio", format = "%.2f"}
-}
 
 -- A buffer-sourced voice shows and adjusts its buffer position instead; an
 -- input-sourced voice its grain size (its synth and buffer params do nothing)
