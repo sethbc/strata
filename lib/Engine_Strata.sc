@@ -28,6 +28,7 @@ Engine_Strata : CroneEngine {
     var <recordFrameBuses;    // Per slot: frames recorded so far, written by strataRecord
     var <slotChanges;         // Per slot: counts loads, records, clears and stops; a late reply applies only if unchanged
     var <stopReplies;         // Per slot: the slotChanges count of a stopRecord whose frame count is still awaited, or nil
+    var <bufferLoads;         // Per slot: loadBuffer commands received (Lua's load_buffer counts the same), named in bufferLoadFailed
     var <inputBus;            // Stereo live input, written by inputSynth
     var <inputSynth;
     var <grainSource;
@@ -42,6 +43,9 @@ Engine_Strata : CroneEngine {
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
+    var <bufferLoadFailedPoll;    // value = (load number * 2 + emptied) * numBuffers + slot index (bufferLoadFailedValue)
+    var <loadCheckFrames = 16384; // Frames per chunk when loadSlot decodes a file to check it (fileDecodes)
+    var <loadShortfallFrames = 4096; // Frames a file may decode short of its header's count and still load (fileDecodes)
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
     // Real-time memory (see "Real-time memory" in docs/notes/engine.md). Both
@@ -110,6 +114,7 @@ Engine_Strata : CroneEngine {
         recordFrameBuses = Array.fill(numBuffers, { Bus.control(context.server, 1) });
         slotChanges = Array.fill(numBuffers, 0);
         stopReplies = Array.newClear(numBuffers);
+        bufferLoads = Array.fill(numBuffers, 0);
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -888,6 +893,16 @@ Engine_Strata : CroneEngine {
             value
         });
 
+        // A load whose file cannot be used, whether or not the slot held
+        // audio: one message per failed load, sent at once (rejectLoad) or,
+        // when the server's read fails after the slot was zeroed, once the
+        // reads are done (the slot is then emptied). It names the slot, that
+        // slot's load number and whether the slot was emptied
+        // (bufferLoadFailedValue), so Lua undoes exactly that load and never
+        // a later one. Not periodic; a value request resends the last report
+        // (Lua ignores a repeat).
+        bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
+
         this.addCommand(\setMasterDrift, "f", { arg msg;
             this.setSynth(\master, \drift, msg[1]);
         });
@@ -1305,6 +1320,39 @@ Engine_Strata : CroneEngine {
         ^(index * bufferStateStride) + (bufferFrames[index] / bufferSampleRates[index]).round(0.01)
     }
 
+    // One float, as bufferState (matron's /poll/value is typed "if"):
+    // (load * 2 + emptied) * numBuffers + slot index, where load is the
+    // slot's load number (counted from 1) and emptied is 1 when the failed
+    // load left the slot empty (the server's read failed after the zeroing),
+    // 0 when it left the slot as it was. Exact for the first 2^20 loads of a
+    // slot (a float32 holds integers exactly up to 2^24).
+    bufferLoadFailedValue { arg index, load, emptied;
+        ^((((load * 2) + emptied.binaryValue) * numBuffers) + index).asFloat
+    }
+
+    // true when libsndfile decodes the first `frames` frames of the open
+    // file, or all but loadShortfallFrames of them. A damaged compressed file
+    // (a corrupt or truncated FLAC) has a sound header but stops decoding
+    // early, and the server's read then fills the rest with silence without
+    // reporting anything, so loadSlot decodes the frames itself first (16 s
+    // of 48 kHz stereo: about 2 ms for a WAV, 9 ms for a FLAC on a desktop;
+    // the file is then in the page cache for the server's read). The
+    // shortfall allowed is one default FLAC block (4096 frames, 85 ms at
+    // 48 kHz), more than an MP3's encoder delay and padding (under 2 x 1152
+    // frames), so a header count that overshoots by a codec's padding still
+    // loads, while damage before the last block is caught. One chunk array
+    // serves the whole file (the last read may run past `frames`).
+    fileDecodes { arg file, frames;
+        var remaining = frames, chunk = FloatArray.newClear(loadCheckFrames * file.numChannels), decoded;
+        while { remaining > 0 } {
+            file.readData(chunk);  // shrinks chunk to the samples decoded
+            decoded = chunk.size div: file.numChannels;
+            remaining = remaining - decoded;
+            if ((decoded < loadCheckFrames) and: { remaining > 0 }) { ^remaining <= loadShortfallFrames };
+        };
+        ^true
+    }
+
     bufferRateScale { arg index;
         ^bufferSampleRates[index] / context.server.sampleRate
     }
@@ -1332,22 +1380,30 @@ Engine_Strata : CroneEngine {
     // left buffer, channel 1, or 0 again for a mono file, to the right).
     // At most bufferSeconds at the server rate fit (the buffers' size), so a
     // file at twice the server rate keeps half as many seconds. A missing,
-    // unreadable or empty file leaves the slot unchanged (rejectLoad). The
+    // unreadable, empty or damaged file (one that stops decoding before its
+    // frames end: fileDecodes) leaves the slot unchanged (rejectLoad). The
     // file's sample rate becomes the slot's bufRateScale, so it plays at
     // pitch. The voices reading the slot fade out first (afterSlotFade):
     // the slot reads 0 frames until the reads have completed (a sync after
     // them), then its length and rate reach the grain synths and the poll,
-    // only if nothing else changed the slot meanwhile (slotChanges).
+    // only if nothing else changed the slot meanwhile (slotChanges). A
+    // server read that fails (/fail for /b_readChannel: the file vanished,
+    // or became unreadable, after the checks) leaves the slot zeroed, so it
+    // stays empty and the load is reported as failed with the slot emptied.
     loadSlot { arg index, path;
-        var file, frames, rightChannel, sampleRate, change;
+        var file, frames, rightChannel, sampleRate, change, load, decodes, readFailed, failWatcher, bufnums;
         if (this.validBuffer(index).not) { ^this };
+        bufferLoads[index] = bufferLoads[index] + 1;
+        load = bufferLoads[index];
         file = SoundFile.openRead(path.standardizePath);
-        if (file.isNil) { ^this.rejectLoad(index, "cannot read sound file " ++ path) };
+        if (file.isNil) { ^this.rejectLoad(index, load, "cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
         frames = [file.numFrames, (sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
+        decodes = (frames < 1) or: { this.fileDecodes(file, frames) };
         file.close;
-        if (frames < 1) { ^this.rejectLoad(index, "sound file " ++ path ++ " is empty") };
+        if (frames < 1) { ^this.rejectLoad(index, load, "sound file " ++ path ++ " is empty") };
+        if (decodes.not) { ^this.rejectLoad(index, load, "sound file " ++ path ++ " is damaged (it stops decoding early)") };
 
         this.stopRecording(index);
         change = this.slotChanged(index);
@@ -1356,14 +1412,34 @@ Engine_Strata : CroneEngine {
         this.afterSlotFade(index, change, {
             buffersL[index].zero;
             buffersR[index].zero;
+            // the server answers a read it cannot do with /fail, naming the
+            // file ("File '<path>' could not be opened: ...") and the bufnum:
+            // both must match, so an earlier load's failed read of another
+            // file, still in flight in this slot, never fails this one
+            readFailed = false;
+            bufnums = [buffersL[index].bufnum, buffersR[index].bufnum];
+            failWatcher = OSCFunc({ arg msg;
+                if ((msg[1].asSymbol == '/b_readChannel') and: { bufnums.includes(msg[3]) }
+                    and: { msg[2].asString.contains("'" ++ path.standardizePath ++ "'") }) { readFailed = true };
+            }, '/fail', context.server.addr);
             buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
             buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);
             fork({
-                context.server.sync;  // answered once both reads are done
-                if (slotChanges[index] == change) {
-                    bufferFrames[index] = frames;
-                    bufferSampleRates[index] = sampleRate;
-                    this.bufferChanged(index);
+                context.server.sync;  // answered once both reads are done (after any /fail)
+                failWatcher.free;
+                if (readFailed) {
+                    postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " emptied");
+                    if (slotChanges[index] == change) {
+                        bufferSampleRates[index] = context.server.sampleRate;
+                        this.bufferChanged(index);
+                    };
+                    bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, true));
+                } {
+                    if (slotChanges[index] == change) {
+                        bufferFrames[index] = frames;
+                        bufferSampleRates[index] = sampleRate;
+                        this.bufferChanged(index);
+                    };
                 };
             }, SystemClock);
         });
@@ -1375,7 +1451,11 @@ Engine_Strata : CroneEngine {
     // change drops that reply), as Lua's load_buffer expects: that take
     // never completes, so it is never adopted under the bad file's name.
     // The slot reads empty (0 frames), as for a recording a clear cancelled.
-    rejectLoad { arg index, reason;
+    // Either way the bufferLoadFailed poll reports the failure (load is the
+    // slot's load number), so Lua puts back what the slot held (its
+    // bufferState reports cannot tell a rejected load over audio from a
+    // good one).
+    rejectLoad { arg index, load, reason;
         var recording = recordSynths[index].notNil or: { stopReplies[index].notNil };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
             ++ (if (recording) { " recording cancelled" } { " unchanged" }));
@@ -1385,6 +1465,7 @@ Engine_Strata : CroneEngine {
             stopReplies[index] = nil;
             this.bufferChanged(index);
         };
+        bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
     }
 
     // true when a running voice's grain synth reads the slot

@@ -486,23 +486,30 @@ end
 -- settled_empty is "take" or "load" when that settled without audio (a later
 -- report of audio adopts it: a slow take or file read), else false;
 -- missing_path is a remembered file that was not found on start (kept in
--- buffers.data).
+-- buffers.data). loads_sent counts the slot's loadBuffer commands (the
+-- engine counts them too and names one in its bufferLoadFailed report);
+-- pending_loads holds the newest of them, oldest first, each with the state
+-- it replaced, so a failed load can be undone (buffer_load_failed).
 local buffers = {}
 for slot = 1, NUM_BUFFERS do
   buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
-    settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil}
+    settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
+    loads_sent = 0, pending_loads = {}}
 end
 -- per slot: clock that ends the recording state, then the finishing fallback
 local buffer_record_clocks = {}
-local buffer_state_poll = nil
+-- the engine's bufferState and bufferLoadFailed polls (nil if missing)
+local buffer_polls = {state = nil, load_failed = nil}
 local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
 -- confirm_seconds: a report of 0 s settles a take or load only this long
 -- after the change (the periodic poll can carry a value read before the
 -- engine finished: the recording timer ends just before the engine's take
 -- completes). fallback_seconds: a finishing take with no report at all
 -- (no bufferState poll) settles this long after it ended, from the slot's
--- last known seconds.
-local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5}
+-- last known seconds. tracked_loads: a slot's newest loads a bufferLoadFailed
+-- report can still undo (a report arrives within a fade wait and a read, so
+-- more than one is only ever pending for loads sent back to back).
+local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4}
 local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
 local buffer_audio_dir = _path.audio .. "strata/"
 local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
@@ -608,14 +615,40 @@ function set_buffer_file_param(slot, path)
   params:set("buf" .. slot .. "_file", path, true)
 end
 
+-- An empty slot's shown state and file param, for buffer_load_failed.
+-- settled_empty is "take" after a cancelled recording whose take may have
+-- completed (a later report of audio adopts it), else false.
+function empty_buffer_state(settled_empty)
+  return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
+    confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio}
+end
+
+-- What a load replaces in the slot, for buffer_load_failed to put back: the
+-- shown state and the buf<n>_file param. A recording (or a take waiting for
+-- the engine) has nothing to put back: the engine cancels it when the load
+-- fails, so the slot becomes empty, settled_empty "take" so that a take
+-- that had already completed is still adopted from the engine's report.
+function buffer_state_before_load(slot)
+  local buffer = buffers[slot]
+  if buffer.recording or buffer.finishing then return empty_buffer_state("take") end
+  return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
+    settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
+    missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file")}
+end
+
 function load_buffer(slot, path)
   if not valid_buffer_slot(slot) or not is_sound_file_path(path) then return end
+  local buffer = buffers[slot]
+  -- remembered (with what it replaces) until a clear or recording, or
+  -- tracked_loads newer loads, in case the engine reports it failed
+  buffer.loads_sent = buffer.loads_sent + 1
+  if #buffer.pending_loads >= BUFFER_SETTLE.tracked_loads then table.remove(buffer.pending_loads, 1) end
+  table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
   -- loading cancels a recording in progress in the engine
   cancel_buffer_recording_timer(slot)
   engine.loadBuffer(slot - 1, path)
   -- the BUFFER page's file selector and a restore on start load directly
   set_buffer_file_param(slot, path)
-  local buffer = buffers[slot]
   -- a scratch take restored on start keeps its take name
   buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
   -- shown at once; the engine's report settles loaded (buffer_state_changed)
@@ -647,6 +680,7 @@ function record_buffer(slot)
     set_buffer_file_param(slot, _path.audio)
     buffer.recording = true
     buffer.seconds = 0  -- the engine reports 0 s until the take completes
+    buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
     buffer.restoring = false
     buffer.settled_empty = false
     buffer.confirm_since = nil
@@ -677,6 +711,7 @@ function clear_buffer(slot)
   buffer.confirm_since = nil
   buffer.path = nil
   buffer.missing_path = nil
+  buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
   buffer_display_changed()
 end
 
@@ -727,6 +762,62 @@ local function buffer_state_changed(value)
   if not changed then return end
   request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
   if grid_page == 4 then grid_redraw() end
+end
+
+-- bufferLoadFailed poll: the engine could not use the file of one of the
+-- slot's loads (missing, unreadable, unsupported, empty or damaged). value =
+-- (load number * 2 + emptied) * NUM_BUFFERS + slot index; the engine and
+-- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
+-- left the slot as it was (cancelling a recording in it), 1 when it left it
+-- empty (the server's read failed after the slot was zeroed). The failed
+-- load is undone only while the slot still tracks it (pending_loads): the
+-- newest load gives the slot the state the failed load left (the state it
+-- replaced: name, path, the file param, settled or not, from
+-- buffer_state_before_load; or an empty slot), so the bad path is never
+-- remembered in buffers.data. A load sent after it (before the report
+-- arrived) stays and inherits that state, to put back if it fails too.
+-- Reports can arrive out of load order (a failed server read is reported
+-- after the fade and the read, a missing file at once), and the splice
+-- handles either order. A clear or a new recording forgets every tracked
+-- load, so it wins; a repeated report finds nothing. The BUFFER page
+-- flashes the failure.
+function buffer_load_failed(value)
+  if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
+    or value ~= math.floor(value) then return end
+  local slot = math.floor(value % NUM_BUFFERS) + 1
+  local load_and_emptied = math.floor(value / NUM_BUFFERS)
+  local emptied = load_and_emptied % 2 == 1
+  local load_number = math.floor(load_and_emptied / 2)
+  if not valid_buffer_slot(slot) then return end
+  local buffer = buffers[slot]
+  local pending = buffer.pending_loads
+  local found = nil
+  for index, load in ipairs(pending) do
+    if load.number == load_number then
+      found = index
+      break
+    end
+  end
+  if not found then return end
+  local failed = table.remove(pending, found)
+  local left = emptied and empty_buffer_state(false) or failed.previous
+  if found <= #pending then
+    pending[found].previous = left
+  else
+    buffer.name = left.name
+    buffer.loaded = left.loaded
+    -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
+    buffer.restoring = left.restoring
+    buffer.settled_empty = left.settled_empty
+    buffer.confirm_since = left.confirm_since
+    buffer.path = left.path
+    buffer.missing_path = left.missing_path
+    set_buffer_file_param(slot, left.file_param)
+  end
+  print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
+    .. (emptied and "; the buffer is now empty" or ""))
+  buffer_page_flash("buf " .. slot .. " load failed")
+  buffer_display_changed()
 end
 
 -- Param -> engine. A param action stores its value and calls
@@ -1406,12 +1497,18 @@ function init()
   mutation_metro.event = gentle_mutate
   -- Don't start automatically - controlled by mutation_enabled param
 
-  -- Valid seconds per buffer slot, from the engine
-  buffer_state_poll = poll.set("bufferState", buffer_state_changed)
-  if buffer_state_poll then
-    buffer_state_poll:start()
+  -- Valid seconds per buffer slot, and failed loads, from the engine
+  buffer_polls.state = poll.set("bufferState", buffer_state_changed)
+  if buffer_polls.state then
+    buffer_polls.state:start()
   else
     print("bufferState poll not found")
+  end
+  buffer_polls.load_failed = poll.set("bufferLoadFailed", buffer_load_failed)
+  if buffer_polls.load_failed then
+    buffer_polls.load_failed:start()
+  else
+    print("bufferLoadFailed poll not found")
   end
 
   -- Connect arc
@@ -4731,9 +4828,10 @@ function cleanup()
     restore_lfo_destination(n)
   end
 
-  -- Stop the buffer poll and recording timers (the engine finishes or
+  -- Stop the buffer polls and recording timers (the engine finishes or
   -- frees any recording itself)
-  if buffer_state_poll then buffer_state_poll:stop() end
+  if buffer_polls.state then buffer_polls.state:stop() end
+  if buffer_polls.load_failed then buffer_polls.load_failed:stop() end
   for slot = 1, NUM_BUFFERS do
     cancel_buffer_recording_timer(slot)
   end
