@@ -1293,6 +1293,9 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   params:set_action("v1_freq", function() error("fade failed") end)
   local ok, message = pcall(recall_scene, 1, 4)                  -- the first step runs at once
   assert_true(not ok and tostring(message):find("fade failed", 1, true), "the error is raised")
+  -- with the traceback of where the param action failed (maiden shows it)
+  local traceback = tostring(message):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "the raised error keeps its traceback: " .. tostring(message))
   assert_equal(local_value("scene_transition_active"), false, "flag cleared")
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared")
   -- an error in a later step
@@ -1301,8 +1304,38 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   params:set_action("v1_freq", function() error("fade failed") end)
   ok, message = pcall(context.clock.advance)
   assert_true(not ok and tostring(message):find("fade failed", 1, true), "the later error is raised")
+  traceback = tostring(message):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "a later step's error keeps its traceback")
   assert_equal(local_value("scene_transition_active"), false, "flag cleared after a later step")
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared after a later step")
+end)
+
+-- An error in a sequenced recall (here the first step of its fade, which
+-- runs inside the sequencer's own clock) is reported and the sequencer
+-- keeps going: the recall has already cleared its transition state
+test("an error in a sequenced recall is reported and the scene sequencer keeps going", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v1_freq", 1000); capture_scene(1)
+  params:set("v1_freq", 400); capture_scene(2)
+  params:set("v1_freq", 200); params:set("scene_sequence_length", 2)
+  local freq_param = params:lookup_param("v1_freq")
+  local real_action, failures = freq_param.action, 1
+  freq_param.action = function(value)
+    if failures > 0 then failures = failures - 1; error("fade failed") end
+    return real_action(value)
+  end
+  local ran, run_error = pcall(run_scene_sequencer, context, 2, 4, 1)  -- scene 1's first step fails
+  assert_true(ran, "the error did not escape the sequencer: " .. tostring(run_error))
+  local printed = table.concat(context.printed, "\n")
+  assert_true(printed:find("fade failed", 1, true), "the error is printed")
+  assert_true(printed:find("stack traceback:", 1, true), "with its traceback")
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "the sequencer param stays on")
+  assert_true(context.clock.threads[local_value("scene_sequencer_clock")] ~= nil, "its clock is still running")
+  assert_true(not local_value("scene_transition_active"), "no transition left flagged")
+  ran, run_error = pcall(context.clock.run_for, 6, 0.001)
+  assert_true(ran, "the sequencer runs on: " .. tostring(run_error))
+  assert_equal(local_value("current_scene"), 2, "it recalled scene 2 after scene 1's duration")
+  assert_near(params:get("v1_freq"), 400, 1.0, "and scene 2's transition ended")
 end)
 
 test("a manual recall still interrupts a transition the scene sequencer started", function()
@@ -1485,6 +1518,8 @@ test("an error during a scene recall clears scene_recall_in_progress and is rais
   local ok, recall_error = pcall(recall_scene, 1, 0)
   assert_true(not ok, "the error reaches the caller")
   assert_true(tostring(recall_error):find("mod speed action failed", 1, true), "the original error: " .. tostring(recall_error))
+  local traceback = tostring(recall_error):match("stack traceback:.*")
+  assert_true(traceback and traceback:find("run.lua:%d+"), "the raised error keeps its traceback")
   assert_equal(local_value("scene_recall_in_progress"), false, "flag cleared after the error")
   assert_equal(local_value("voices")[1].source, 3, "voice 1's source switched before the error")
   assert_equal(voice1_full_syncs(), 1, "the switched running voice still gets its end-of-recall sync")

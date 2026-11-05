@@ -2266,6 +2266,14 @@ function capture_scene(scene_num)
   print("captured scene " .. scene_num)
 end
 
+-- xpcall handler: add the traceback of where the error was raised, unless
+-- an inner handler already did, so a re-raised error still shows in maiden
+-- where the param action failed
+function with_traceback(message)
+  if tostring(message):find("stack traceback:", 1, true) then return message end
+  return debug.traceback(tostring(message), 2)
+end
+
 function cancel_scene_transition()
   if scene_transition_clock then
     clock.cancel(scene_transition_clock)
@@ -2344,8 +2352,9 @@ function recall_scene(scene_num, transition_time)
       for step = 1, SCENE_TRANSITION.steps do
         local mix = step / SCENE_TRANSITION.steps
         -- the flag must not outlive an error in a param action (the
-        -- sequencer waits for it): clear it, then raise the error again
-        local stepped, step_error = pcall(function()
+        -- sequencer waits for it): clear it, then raise the error again,
+        -- with its traceback
+        local stepped, step_error = xpcall(function()
           for _, target in ipairs(targets) do
             local value = util.linlin(0, 1, target.start, target.target, mix)
             if target.step then value = util.round(value, target.step) end
@@ -2353,7 +2362,7 @@ function recall_scene(scene_num, transition_time)
           end
           request_redraw()
           grid_redraw()  -- keep the parameter faders moving with the fade
-        end)
+        end, with_traceback)
         if not stepped then
           scene_transition_clock = nil
           scene_transition_active = false
@@ -2385,8 +2394,8 @@ function recall_scene_instant(scene_num)
   local source_changed = {}
   scene_recall_in_progress = true
   -- the flag must not outlive an error in a param action: clear it, then
-  -- raise the error again
-  local recalled, recall_error = pcall(function()
+  -- raise the error again, with its traceback
+  local recalled, recall_error = xpcall(function()
     -- Restore global parameters
     for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
       params:set(global.id, scene_data[global.id])
@@ -2426,7 +2435,7 @@ function recall_scene_instant(scene_num)
         source_changed[i] = false
       end
     end
-  end)
+  end, with_traceback)
   scene_recall_in_progress = false
 
   -- even after an error: a running voice whose source switched gets its sync
@@ -2501,7 +2510,17 @@ function scene_sequencer_start()
       local own_transition = nil  -- the clock of the transition this recall started
       if scenes[scene_sequencer_position].populated then
         transition_time = params:get("scene_transition_time")
-        recall_scene(scene_sequencer_position, transition_time)
+        -- An error in a param action (in the first fade step or an instant
+        -- recall) must not end this clock while the param shows the
+        -- sequencer on. The recall has cleared its transition and recall
+        -- flags, so the sequencer reports it and keeps going: the next
+        -- scene may well recall fine
+        local recalled, recall_error = xpcall(function()
+          recall_scene(scene_sequencer_position, transition_time)
+        end, with_traceback)
+        if not recalled then
+          print("scene sequencer: scene " .. scene_sequencer_position .. " failed: " .. tostring(recall_error))
+        end
         own_transition = scene_transition_clock
       else
         print("skipping empty scene " .. scene_sequencer_position)
