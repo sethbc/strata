@@ -567,6 +567,7 @@ The arc follows the screen page (`ui_page`). `ARC_PAGE_DELTA` and `ARC_PAGE_REDR
   - 3 = inactive voice secondary parameters
 - FX rings at 12; BUFFER rings 1-2 at 15 (buffer source) or 4, rings 3-4 at 12; LFO depth rings at 15 (running) or 4, ring 4 at 12
 - Uses `arc_device:segment(ring, from, to, level)` for smooth arc visualizations
+- Every ring is filled through `arc_ring_fill(arc_port, ring, fraction, level)`, never a bare `segment`: norns' `Arc:segment` reduces both angles modulo 2*pi, so a full turn (0 to 2*pi) lights nothing. The helper clamps the fraction to 0-1 and ends the fill `UI_PAGES.ARC_FULL_TURN_MARGIN` below a full turn, so a ring at its maximum lights all 64 LEDs and one at its minimum none. The test stub ports the real `Arc:segment` maths and stores the per-LED levels in `device.segments[ring].leds`; tests assert LED counts, not angles
 
 #### Key Implementation Details
 - Continuous rings sweep their param's range in `UI_PAGES.ARC_TICKS_PER_SWEEP` ticks through `arc_sweep_param` (see the ring speed rule above); never give a ring its own delta scale
