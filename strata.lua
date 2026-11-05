@@ -2499,8 +2499,8 @@ function scene_sequencer_start()
     clock.sleep(0)
 
     while scene_sequencer_enabled do
-      -- the advance below wraps with the current length; this only guards
-      -- the index
+      -- Defensive index guard: the position is always in range here (it
+      -- starts at 1 and the advance below wraps with the current length)
       if scene_sequencer_position > params:get("scene_sequence_length") then
         scene_sequencer_position = 1
       end
