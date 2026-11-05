@@ -510,42 +510,54 @@ var checkGrainMemorySizes = {
     });
 };
 
-// The worst case the engine allows (inside the check routine): every voice
-// at the largest grain size and density Lua sends, switched synth -> buffer
-// -> input -> synth with each switch processed before the next (0.2 s apart,
-// well past switchCutTime, as E3 detents and scene recalls arrive), then
-// stopped and started. At the last switch each voice holds its live synths,
-// the input grain synth releasing and the buffer grain synth in its kill
-// fade. At that moment, on norns' 8192 KB pool (memSize, set before boot), four 256 KB
-// probes (1 MB) must still allocate. run_engine_check.sh also fails on any
-// "alloc failed" the server prints.
+// The worst cases (inside the check routine): every voice at the largest
+// grain size and density Lua sends, switched synth -> buffer -> input ->
+// synth. Spaced: each switch processed before the next (0.2 s apart, well
+// past switchCutTime, as E3 detents arrive), then stopped and started; at
+// the last switch each voice holds its live synths, the input grain synth
+// releasing and the buffer grain synth in its kill fade. Burst: the three
+// switches at once on every voice (a chord of grid scene buttons, or
+// PMAP-mapped source params), where each switch frees the synths the
+// previous one left in their kill fade, so the voice holds no more. Each
+// time, on norns' 8192 KB pool (memSize, set before boot), four 256 KB probes
+// (1 MB) started at that moment must still allocate. The probe bus is zeroed
+// first, so a probe whose /s_new fails reads 0. run_engine_check.sh also
+// fails on any "alloc failed" the server prints.
 var checkMemoryWorstCase = {
-    var probeCount = 4, probeBus = Bus.control(server, probeCount), probes, values;
+    var probeCount = 4, probeBus = Bus.control(server, probeCount);
     var startAll = { engine.numVoices.do({ arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) }) };
+    var switchAll = { arg sourceOf; engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, sourceOf.(voice)) }) };
+    var sourceSteps = [{ arg voice; voice + 1 }, { engine.numBuffers + 1 }, { 0 }];
+    // started at once after the last command, while the cut synths still fade
+    var probeHeadroom = { arg label;
+        var probes = probeCount.collect({ arg index;
+            Synth(\strataCheckMemProbe, [\out, probeBus.index + index], engine.processGroup, \addToTail)
+        }), values;
+        server.sync; 0.1.wait;
+        values = {
+            var condition = Condition(false), result;
+            probeBus.getn(probeCount, { arg each; result = each; condition.test = true; condition.signal });
+            awaitReply.(condition);
+            result ? []
+        }.value;
+        check.((values.size == probeCount) and: { values.every({ arg value; value > 0.5 }) },
+            "% leave at least % KB of norns' real-time pool free (probes %)".format(label, probeCount * 256, values));
+        probes.do(_.free);
+        2.5.wait; server.sync;
+    };
     startAll.value;
-    server.sync; 0.2.wait;
-    [{ arg voice; voice + 1 }, { engine.numBuffers + 1 }, { 0 }].do({ arg sourceOf, step;
+    probeBus.setAll(0); server.sync; 0.2.wait;
+    sourceSteps.do({ arg sourceOf, step;
         if (step > 0) { 0.2.wait; server.sync };
-        engine.numVoices.do({ arg voice; command.(\setGrainSource, voice, sourceOf.(voice)) });
+        switchAll.(sourceOf);
     });
     engine.numVoices.do({ arg voice; command.(\voiceOff, voice) });
     startAll.value;
-    // no wait: the buffer grain synths are still in their 50 ms cut
-    probes = probeCount.collect({ arg index;
-        Synth(\strataCheckMemProbe, [\out, probeBus.index + index], engine.processGroup, \addToTail)
-    });
-    server.sync; 0.1.wait;
-    values = {
-        var condition = Condition(false), result;
-        probeBus.getn(probeCount, { arg each; result = each; condition.test = true; condition.signal });
-        awaitReply.(condition);
-        result ? []
-    }.value;
-    check.((values.size == probeCount) and: { values.every({ arg value; value > 0.5 }) },
-        "seven voices at grain size 0.5, switched and restarted, leave at least % KB of norns' real-time pool free (probes %)".format(
-            probeCount * 256, values));
-    probes.do(_.free); probeBus.free;
-    2.5.wait; server.sync;
+    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted,");
+    probeBus.setAll(0); server.sync;
+    sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
+    probeHeadroom.("seven voices at grain size 0.5, each switched three times at once,");
+    probeBus.free;
 };
 
 server.options.numInputBusChannels = 2;

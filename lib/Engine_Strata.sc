@@ -37,6 +37,7 @@ Engine_Strata : CroneEngine {
     var <releasedGrainSource; // Per voice: the source its releasing grain synth was built for
     var controlNameSets;      // Per voice and grain SynthDef: its control names (IdentitySet), for controlPairs
     var <fadingSynths;        // Per voice: grain and voice synths a source switch gated off, still releasing
+    var <cuttingSynths;       // Per voice: grain and voice synths in their kill fade (cutSynth), freed by the next switch
     var <bufferStatePoll;
     var bufferStateCursor = 0;
     var <bufferStateStride = 100; // bufferState value = slot index * stride + valid seconds
@@ -116,6 +117,7 @@ Engine_Strata : CroneEngine {
         releasingSynths = Array.fill(numVoices, { Dictionary.new });
         releasedGrainSource = Array.fill(numVoices, 0);
         fadingSynths = Array.fill(numVoices, { IdentitySet.new });
+        cuttingSynths = Array.fill(numVoices, { IdentitySet.new });
 
         // SynthDefs
 
@@ -1110,6 +1112,7 @@ Engine_Strata : CroneEngine {
         synth.onFree({
             if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
             fadingSynths[voice].remove(synth);
+            cuttingSynths[voice].remove(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case
@@ -1164,14 +1167,40 @@ Engine_Strata : CroneEngine {
     // releasing and no longer used: those a source switch gated off, and
     // those voiceOff released that voiceOn did not re-gate (built for
     // another source). The running voice's synths are never among them.
+    // Synths an earlier cut left in their kill fade are freed first, so a
+    // burst of switches (several inside one switchCutTime: a chord of scene
+    // buttons) never piles them up: a voice holds at most one live, one
+    // releasing and one cutting set of synths (see Real-time memory in
+    // docs/notes/engine.md).
     cutFadingSynths { arg voice;
         var releasing = releasingSynths[voice];
+        this.freeCuttingSynths(voice);
         [this.voiceKey(voice), this.grainKey(voice)].do({ arg key;
             var synth = releasing.removeAt(key);
             if (synth.notNil) { fadingSynths[voice].add(synth) };
         });
-        fadingSynths[voice].do({ arg synth; this.cutSynth(synth) });
+        fadingSynths[voice].do({ arg synth; this.cutVoiceSynth(voice, synth) });
         fadingSynths[voice].clear;
+    }
+
+    // cutSynth, remembering the synth until it frees so the next switch can
+    // free it at once if its fade has not ended
+    cutVoiceSynth { arg voice, synth;
+        if (synth.isPlaying) {
+            this.cutSynth(synth);
+            cuttingSynths[voice].add(synth);
+        };
+    }
+
+    // Free the voice's synths still in their kill fade, at once. One may
+    // have ended its fade on the server already (its /n_end not yet in
+    // sclang): /error -1 keeps that /n_free from being reported. onFree
+    // forgets them; they are never in synths or releasingSynths.
+    freeCuttingSynths { arg voice;
+        cuttingSynths[voice].do({ arg synth;
+            if (synth.isPlaying) { context.server.sendBundle(nil, ['/error', -1], ['/n_free', synth.nodeID]) };
+        });
+        cuttingSynths[voice].clear;
     }
 
     // End a voice or grain synth within switchCutTime through its kill
@@ -1557,7 +1586,7 @@ Engine_Strata : CroneEngine {
             var synth = synths.removeAt(key), superseded = releasingSynths[voice][key];
             if (synth.notNil) {
                 if (superseded.notNil and: { superseded !== synth } and: { key != this.modKey(voice) }) {
-                    this.cutSynth(superseded)
+                    this.cutVoiceSynth(voice, superseded)
                 };
                 synth.set(\gate, 0);
                 releasingSynths[voice][key] = synth;
