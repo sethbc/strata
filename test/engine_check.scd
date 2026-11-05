@@ -220,6 +220,270 @@ var getControl = { arg synth, control;
     value
 };
 
+// Buffer and file checks in functions of their own, called from the check
+// routine: its function is near sclang's per-function selector table limit
+// (a function that exceeds it does not compile, and the check never ends).
+
+// A missing, unreadable or empty file loaded into a slot that is recording
+// cancels the recording (Lua's load_buffer assumes so): the take never
+// completes, the slot stays empty and no scratch take is written
+var checkBadLoadsDuringRecording = { arg textPath;
+    var emptyPath = scratchRoot +/+ "no-frames.wav", file, info;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(1).sampleRate_(44100);
+    file.openWrite(emptyPath); file.close;
+    [[scratchRoot +/+ "missing.wav", "missing", 0.1], [textPath, "unreadable", 0.1], [emptyPath, "empty", 0.1],
+        [emptyPath, "empty (recording not started yet)", 0]].do({ arg bad;
+        File.delete(engine.scratchDir +/+ "buf7.wav");
+        command.(\recordBuffer, 6, 0.3, 1.0);
+        bad[2].wait; server.sync;
+        info = engine.recordSynths[6].notNil;
+        command.(\loadBuffer, 6, bad[0]); 0.6.wait; server.sync;
+        check.(info and: { engine.recordSynths[6].isNil } and: { engine.bufferFrames[6] == 0 }
+            and: { synthNames.(context.xg).includes(\strataRecord).not }
+            and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
+            "a % file loaded during a recording cancels it: no take, nothing written (% frames)".format(
+                bad[1], engine.bufferFrames[6]));
+    });
+    // ... also one stopped early whose frame count has not arrived yet: the
+    // late reply keeps nothing
+    File.delete(engine.scratchDir +/+ "buf7.wav");
+    command.(\recordBuffer, 6, 1.0, 1.0); 0.3.wait; server.sync;
+    info = engine.recordSynths[6].notNil;
+    command.(\stopRecord, 6);
+    command.(\loadBuffer, 6, scratchRoot +/+ "missing.wav");
+    1.0.wait; server.sync;
+    check.(info and: { engine.bufferFrames[6] == 0 } and: { engine.stopReplies[6].isNil }
+        and: { File.exists(engine.scratchDir +/+ "buf7.wav").not },
+        "a missing file loaded right after stopRecord cancels the stopped take: no take, nothing written (% frames)".format(
+            engine.bufferFrames[6]));
+};
+
+// A take recorded above level 1 holds samples beyond ±1 (the buffers are
+// float; a float file loads them too): saving clips them symmetrically to
+// the int16 range and never wraps
+var checkLoudSave = {
+    var loudPath = scratchRoot +/+ "loud.wav", savePath, file, data;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(server.sampleRate);
+    file.openWrite(loudPath);
+    file.writeData(FloatArray.fill(2 * 1000, { arg i; [1.5, -1.7][i % 2] }));
+    file.close;
+    command.(\loadBuffer, 6, loudPath); 0.5.wait; server.sync;
+    check.(((bufferSample.(engine.buffersL[6], 10) - 1.5).abs < 0.001)
+        and: { (bufferSample.(engine.buffersR[6], 10) + 1.7).abs < 0.001 }, "a slot holds samples beyond ±1 unclipped");
+    savePath = scratchRoot +/+ "saved/loud.wav";
+    command.(\saveBuffer, 6, savePath);
+    check.(waitFor.({ File.exists(savePath) }), "a slot beyond ±1 is saved");
+    0.5.wait;
+    file = SoundFile.openRead(savePath);
+    if (file.notNil) {
+        data = FloatArray.newClear(2 * 1000);
+        file.readData(data);
+        file.close;
+        check.(data.size == 2000 and: { data[0] > 0.999 } and: { (0..999).every({ arg frame;
+                (data[frame * 2] == data[0]) and: { data[(frame * 2) + 1] == data[0].neg } }) },
+            "saving clips beyond ±1 symmetrically to the int16 range, never wraps (read back % / %)".format(
+                data[0], data[1]));
+    } {
+        check.(false, "the saved loud file can be read");
+    };
+    command.(\clearBuffer, 6); server.sync;
+};
+
+// .part files a crash left in scratchDir (scratch takes) and its parent
+// (saveBuffer's dated files) are deleted at alloc. alloc runs before the
+// check can point scratchDir away from ~/dust, so the deletion is checked
+// through deleteStaleParts (the check routine checks alloc calls it). Only
+// .part files older than stalePartAge go: a fresh one may be a write still
+// running in another engine instance (a script reload in the same sclang
+// session runs alloc while the old engine writes).
+var checkStaleParts = {
+    var info, data, savePath, file;
+    info = [engine.scratchDir, engine.scratchDir.withoutTrailingSlash.dirname];
+    info.do({ arg dir;
+        File.mkdir(dir);
+        File.use(dir +/+ "buf2.wav.17.part", "w", { arg text; text.write("stale") });
+        ("touch -t 202001010000 " ++ (dir +/+ "buf2.wav.17.part").shellQuote).systemCmd;  // a crash long ago
+        File.use(dir +/+ "buf3.wav.5.part", "w", { arg text; text.write("running") });
+        File.use(dir +/+ "keep.txt", "w", { arg text; text.write("keep") });
+    });
+    engine.tryPerform(\deleteStaleParts);
+    check.(info.every({ arg dir; File.exists(dir +/+ "buf2.wav.17.part").not and: { File.exists(dir +/+ "keep.txt") } }),
+        "deleteStaleParts deletes old .part files in scratchDir and its parent, and nothing else");
+    check.(info.every({ arg dir; File.exists(dir +/+ "buf3.wav.5.part") }),
+        "deleteStaleParts keeps a fresh .part file (a write that may still be running)");
+    check.(engine.respondsTo(\stalePartAge) and: { engine.stalePartAge >= 60 },
+        "stalePartAge is at least a minute (%)".format(engine.tryPerform(\stalePartAge)));
+    info.do({ arg dir; ["keep.txt", "buf2.wav.17.part", "buf3.wav.5.part"].do({ arg name; File.delete(dir +/+ name) }) });
+    // A write still interleaving survives deleteStaleParts, and its .part
+    // name carries this engine instance's tag, so two instances' writes
+    // to one path never share a .part file
+    engine.writeChunkWait = 0.02;          // the 16 s interleave now takes about 2 s
+    savePath = engine.scratchDir +/+ "running.wav";
+    command.(\saveBuffer, 7, savePath);
+    0.5.wait;
+    data = PathName(engine.scratchDir).files.collect(_.fileName).select({ arg name; name.endsWith(".part") });
+    check.(engine.respondsTo(\instanceTag) and: { data.size == 1 }
+        and: { data[0].beginsWith("running.wav." ++ engine.instanceTag ++ "-") },
+        "a .part name carries the engine instance's tag (got %)".format(data));
+    engine.tryPerform(\deleteStaleParts);
+    check.(waitFor.({ File.exists(savePath) }, 10), "a write in progress survives deleteStaleParts");
+    engine.writeChunkWait = 0.001;
+    file = SoundFile.openRead(savePath);
+    check.(file.notNil and: { file.numFrames == engine.bufferFrames[7] }, "and holds every frame");
+    file !? { file.close };
+    File.delete(savePath);
+};
+
+// A file at another rate plays at its own pitch: a 1 kHz sine written at
+// 44.1 kHz, played by voice 7 (engine voice 6, reading slot 4) through
+// strataGrainBuf (every grain from one position, so overlapping grains stay
+// in phase) and measured by Pitch on the voice's bus mirror. 919 Hz would
+// mean the rate scale is applied twice (by the engine and by GrainBuf),
+// 1088 Hz not at all. Then a take recorded into the same slot (the server
+// keeps the buffer's 44.1 kHz rate) plays at the recorded tone's pitch.
+var checkFilePitch = {
+    var sinePath = scratchRoot +/+ "sine-44100.wav", file, pitchBus, probe, tone, readPitch, pitches;
+    SynthDef(\strataCheckPitch, { arg in, out;
+        Out.kr(out, Pitch.kr(In.ar(in, 2)[0], minFreq: 200, maxFreq: 4000)[0]);
+    }).add;
+    server.sync;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(44100);
+    file.openWrite(sinePath);
+    file.writeData(FloatArray.fill(44100 * 2 * 2, { arg i; sin(2pi * 1000 * (i div: 2) / 44100) * 0.5 }));
+    file.close;
+    command.(\loadBuffer, 3, sinePath); 0.5.wait; server.sync;
+    [[\bufPos, 0.25], [\bufScan, 0], [\posSpread, 0], [\bufRate, 1], [\pitchShift, 1],
+        [\grainSize, 0.2], [\grainDensity, 20], [\grainMode, 0]].do({ arg pair;
+        command.(\setGrainParam, 6, pair[0], pair[1]);
+    });
+    command.(\setVoiceParam, 6, \bend, 1);
+    pitchBus = Bus.control(server, 1);
+    probe = Synth(\strataCheckPitch, [\in, engine.granBuses[6], \out, pitchBus], engine.processGroup, \addToTail);
+    // eleven readings over a second, sorted: the middle one is the median
+    readPitch = {
+        1.0.wait;
+        11.collect({
+            var condition = Condition(false), value;
+            0.1.wait;
+            pitchBus.get({ arg result; value = result; condition.test = true; condition.signal });
+            awaitReply.(condition);
+            value
+        }).sort
+    };
+    pitches = readPitch.value;
+    check.((pitches[5] - 1000).abs < 10,
+        "a 44.1 kHz file plays at its own pitch (a 1 kHz sine measures % Hz; readings %)".format(
+            pitches[5].round(0.1), pitches.round(0.1)));
+    tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
+    command.(\recordBuffer, 3, 1.0, 1.0); 1.5.wait; server.sync;
+    tone.free;
+    pitches = readPitch.value;
+    check.(engine.bufferFrames[3] > 0 and: { (pitches[5] - 440).abs < 5 },
+        "a take recorded over a 44.1 kHz file plays at its pitch (a 440 Hz tone measures % Hz; readings %)".format(
+            pitches[5].round(0.1), pitches.round(0.1)));
+    probe.free; pitchBus.free;
+};
+
+// Clearing, loading or recording into a slot a voice plays fades it first:
+// the grain synth gets bufFrames 0 at once (strataGrainBuf's hasAudio lag
+// fades it) and the buffers are zeroed or overwritten only bufferFadeWait
+// later, so the sound never cuts off. Voice 2 (engine voice 1) reads slot 3
+// (index 2).
+var checkBufferFades = { arg stereoPath, monoPath, longPath;
+    var fadeLags, defaultFadeWait, steadyStep, cutStep, steadyLevel, stepBus, stepProbe, peakBus, peakProbe;
+    var readBus = { arg bus;
+        var condition = Condition(false), value;
+        bus.get({ arg result; value = result; condition.test = true; condition.signal });
+        awaitReply.(condition);
+        value
+    };
+    fadeLags = SynthDescLib.global.at(\strataGrainBuf).def.children.select({ arg ugen;
+        ugen.isKindOf(Lag) and: { ugen.inputs[0].isKindOf(BinaryOpUGen) } and: { ugen.inputs[0].operator == '>' }
+    }).collect({ arg ugen; ugen.inputs[1] });
+    check.(engine.respondsTo(\bufferFadeWait) and: { fadeLags.size == 1 }
+        and: { fadeLags[0].isNumber } and: { engine.bufferFadeWait > fadeLags[0] }
+        and: { engine.bufferFadeWait < 0.2 },
+        "bufferFadeWait (%) is slightly longer than strataGrainBuf's hasAudio lag (%)".format(
+            engine.tryPerform(\bufferFadeWait), fadeLags));
+    // The constant stereo file through overlapping Hann grains from one
+    // position: a steady level with tiny sample-to-sample steps, so an
+    // abrupt cut steps by about the level and a fade by far less
+    [[\bufPos, 0.5], [\bufScan, 0], [\posSpread, 0], [\bufRate, 1], [\pitchShift, 1],
+        [\grainSize, 0.2], [\grainDensity, 20], [\grainMode, 0], [\envShape, 0]].do({ arg pair;
+        command.(\setGrainParam, 1, pair[0], pair[1]);
+    });
+    command.(\setVoiceParam, 1, \amp, 1);
+    command.(\loadBuffer, 2, stereoPath); 0.5.wait; server.sync;
+    stepBus = Bus.control(server, 1); peakBus = Bus.control(server, 1);
+    stepProbe = Synth(\strataCheckStep, [\in, engine.granBuses[1], \out, stepBus], engine.processGroup, \addToTail);
+    peakProbe = Synth(\strataCheckPeak, [\in, engine.granBuses[1], \out, peakBus], engine.processGroup, \addToTail);
+    1.0.wait;
+    stepProbe.set(\t_reset, 1); peakProbe.set(\t_reset, 1); 0.5.wait;
+    steadyStep = readBus.(stepBus); steadyLevel = readBus.(peakBus);
+    stepProbe.set(\t_reset, 1); 0.05.wait;
+    command.(\clearBuffer, 2); 0.3.wait;
+    cutStep = readBus.(stepBus);
+    check.(bufferSample.(engine.buffersL[2], 100) == 0, "the cleared slot is zeroed after the fade");
+    // measured: a fade steps by about 0.1 % of the level, an abrupt cut by about 4 %
+    check.(steadyLevel > 0.05 and: { cutStep < (steadyLevel * 0.01) },
+        "clearing a slot a voice plays fades it out (largest step % while clearing; level %, largest step % playing)".format(
+            cutStep.round(0.000001), steadyLevel.round(0.0001), steadyStep.round(0.000001)));
+    stepProbe.free; peakProbe.free; stepBus.free; peakBus.free;
+    // Inside the wait (lengthened so the check can look): faded at once, zeroed or overwritten after
+    defaultFadeWait = engine.bufferFadeWait;
+    engine.bufferFadeWait = 0.5;
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    command.(\clearBuffer, 2); 0.1.wait; server.sync;
+    check.(getControl.(engine.synths[\grain1], \bufFrames) == 0 and: { engine.bufferFrames[2] == 0 }
+        and: { (bufferSample.(engine.buffersL[2], 100) - 0.5).abs < 0.001 },
+        "clearBuffer fades the voice at once and leaves the buffers until the fade is over");
+    0.6.wait; server.sync;
+    check.(bufferSample.(engine.buffersL[2], 100) == 0, "then clearBuffer zeroes the slot");
+    command.(\loadBuffer, 2, stereoPath); 0.8.wait; server.sync;
+    command.(\loadBuffer, 2, monoPath); 0.1.wait; server.sync;
+    check.(getControl.(engine.synths[\grain1], \bufFrames) == 0 and: { engine.bufferFrames[2] == 0 }
+        and: { (bufferSample.(engine.buffersL[2], 100) - 0.5).abs < 0.001 },
+        "loadBuffer fades the voice at once and reads the file only after the fade");
+    0.7.wait; server.sync;
+    check.(engine.bufferFrames[2] == 4410 and: { getControl.(engine.synths[\grain1], \bufFrames) == 4410 }
+        and: { (bufferSample.(engine.buffersL[2], 100) - 0.4).abs < 0.001 }, "then loadBuffer reads the file");
+    File.delete(engine.scratchDir +/+ "buf3.wav");
+    command.(\recordBuffer, 2, 0.2, 1.0); 0.1.wait; server.sync;
+    check.(synthNames.(engine.voiceGroup).includes(\strataRecord).not
+        and: { (bufferSample.(engine.buffersL[2], 100) - 0.4).abs < 0.001 },
+        "recordBuffer leaves the buffers and starts no recording until the fade is over");
+    1.0.wait; server.sync;
+    check.(engine.recordSynths[2].isNil and: { engine.bufferFrames[2] == (0.2 * server.sampleRate).round.asInteger }
+        and: { File.exists(engine.scratchDir +/+ "buf3.wav") }, "then recordBuffer records the take");
+    // Every interleaving inside the wait: the later command wins
+    [
+        ["a clear after a load", { command.(\loadBuffer, 2, stereoPath); command.(\clearBuffer, 2) }, 0, 0],
+        ["a load after a clear", { command.(\clearBuffer, 2); command.(\loadBuffer, 2, stereoPath) }, 11025, 0.5],
+        ["a load after a load", { command.(\loadBuffer, 2, stereoPath); command.(\loadBuffer, 2, monoPath) }, 4410, 0.4],
+        ["a clear after a recording", { command.(\recordBuffer, 2, 0.2, 1.0); command.(\clearBuffer, 2) }, 0, 0],
+        ["a load after a recording", { command.(\recordBuffer, 2, 0.2, 1.0); command.(\loadBuffer, 2, monoPath) }, 4410, 0.4],
+        ["a recording after a load", { command.(\loadBuffer, 2, stereoPath); command.(\recordBuffer, 2, 0.2, 1.0) },
+            (0.2 * server.sampleRate).round.asInteger, nil]
+    ].do({ arg case;
+        command.(\loadBuffer, 2, longPath); 0.8.wait; server.sync;   // audio in the slot, so the voice fades
+        File.delete(engine.scratchDir +/+ "buf3.wav");
+        case[1].value;
+        1.5.wait; server.sync;
+        check.(engine.bufferFrames[2] == case[2] and: { getControl.(engine.synths[\grain1], \bufFrames) == case[2] }
+            and: { engine.recordSynths[2].isNil }
+            and: { case[3].isNil or: { (bufferSample.(engine.buffersL[2], 100) - case[3]).abs < 0.001 } }
+            and: { File.exists(engine.scratchDir +/+ "buf3.wav") == case[3].isNil },
+            "% inside the fade wins (% frames)".format(case[0], engine.bufferFrames[2]));
+    });
+    // A slot no voice plays changes without the wait
+    command.(\loadBuffer, 5, stereoPath); 0.2.wait; server.sync;
+    check.(engine.bufferFrames[5] == 11025, "a slot no voice plays loads without the fade wait");
+    command.(\clearBuffer, 5); server.sync;
+    check.(engine.bufferFrames[5] == 0 and: { bufferSample.(engine.buffersL[5], 100) == 0 },
+        "and clears without it");
+    engine.bufferFadeWait = defaultFadeWait;
+};
+
 server.options.numInputBusChannels = 2;
 // Whatever hangs (a server.sync to a server that went away), the check ends:
 // a failed run after 540 s, inside CI's 600 s timeout
@@ -684,14 +948,14 @@ server.waitForBoot({
         command.(\setGrainSource, 1, 3);            // voice 1 reads slot 3 (index 2)
         2.5.wait; server.sync;
         before = synthNames.(context.xg).size;
-        command.(\recordBuffer, 2, 0.1, 1.0); 0.05.wait; server.sync;   // starts after the zeroing syncs
+        command.(\recordBuffer, 2, 0.3, 1.0); 0.15.wait; server.sync;   // starts after the fade and the zeroing syncs
         check.(synthNames.(engine.voiceGroup).includes(\strataRecord), "recordBuffer runs a record synth");
-        0.3.wait; server.sync;
-        check.(engine.bufferFrames[2] == (0.1 * server.sampleRate).round.asInteger, "recordBuffer sets the valid length");
+        0.5.wait; server.sync;
+        check.(engine.bufferFrames[2] == (0.3 * server.sampleRate).round.asInteger, "recordBuffer sets the valid length");
         check.(getControl.(engine.synths[\grain1], \bufFrames) == engine.bufferFrames[2],
             "a voice reading the slot gets the new valid length");
         check.(synthNames.(context.xg).size == before, "recording into a slot a voice is reading adds no lasting nodes");
-        check.(waitFor.({ bufferStateSeen.(2, 0.1) }), "the bufferState poll reports the recorded seconds");
+        check.(waitFor.({ bufferStateSeen.(2, 0.3) }), "the bufferState poll reports the recorded seconds");
         check.(pollMessages.notEmpty and: { pollMessages.every({ arg msg;
             (msg[1] == engine.bufferStatePoll.index) and: { msg[2].isKindOf(Float) } }) },
             "bufferState is sent as a float value poll (matron's /poll/value is typed if)");
@@ -707,7 +971,7 @@ server.waitForBoot({
         file !? { file.close };
 
         // Recording replaces and clearBuffer cancels
-        command.(\recordBuffer, 3, 1.0, 1.0); 0.05.wait; server.sync;
+        command.(\recordBuffer, 3, 1.0, 1.0); 0.15.wait; server.sync;   // a voice reads slot 4: after the fade
         check.(synthNames.(context.xg).includes(\strataRecord), "a 1 s recording is running");
         command.(\clearBuffer, 3); 0.5.wait; server.sync;
         check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.bufferFrames[3] == 0 },
@@ -726,7 +990,7 @@ server.waitForBoot({
         command.(\stopRecord, 3); 0.1.wait; server.sync;
         check.(synthNames.(context.xg).size == before and: { engine.bufferFrames[3] == 0 }
             and: { File.exists(engine.scratchDir +/+ "buf4.wav").not }, "stopRecord on an idle slot is a no-op");
-        command.(\recordBuffer, 3, 1.0, 1.0); 0.05.wait; server.sync;
+        command.(\recordBuffer, 3, 1.0, 1.0); 0.15.wait; server.sync;   // a voice reads slot 4: after the fade
         check.(synthNames.(context.xg).includes(\strataRecord), "a 1 s recording is running before stopRecord");
         0.15.wait;
         command.(\stopRecord, 3); 0.3.wait; server.sync;
@@ -751,7 +1015,7 @@ server.waitForBoot({
         // stopRecord then clearBuffer before the frame count arrives: the
         // clear wins (slotChanges), nothing is restored and nothing written
         File.delete(scratchFile);
-        command.(\recordBuffer, 3, 1.0, 1.0); 0.05.wait; server.sync;
+        command.(\recordBuffer, 3, 1.0, 1.0); 0.15.wait; server.sync;   // a voice reads slot 4: after the fade
         0.15.wait;
         check.(engine.recordSynths[3].notNil, "a recording runs before stopRecord + clearBuffer");
         command.(\stopRecord, 3);
@@ -775,8 +1039,7 @@ server.waitForBoot({
         command.(\loadBuffer, 4, longPath); 0.5.wait; server.sync;
         check.(engine.bufferFrames[4] == (22050 * 16), "loadBuffer reads at most 16 s");
         command.(\loadBuffer, 4, stereoPath);
-        check.(engine.bufferFrames[4] == (22050 * 16) and: { engine.bufferSampleRates[4] == 22050 },
-            "loadBuffer keeps the old length until the file has been read");
+        check.(engine.bufferFrames[4] == 0, "loadBuffer empties the slot (the voices reading it fade) until the file has been read");
         0.3.wait; server.sync;
         check.(engine.bufferFrames[4] == 11025, "loadBuffer sets the valid length from the file");
         check.([engine.buffersL[4].bufnum, engine.buffersR[4].bufnum] == info, "loadBuffer keeps the slot's bufnums");
@@ -788,6 +1051,7 @@ server.waitForBoot({
         command.(\loadBuffer, 4, textPath); 0.2.wait; server.sync;
         check.(engine.bufferFrames[4] == 11025 and: { (bufferSample.(engine.buffersL[4], 100) - 0.5).abs < 0.001 },
             "a missing or unreadable file leaves the slot unchanged");
+        checkBadLoadsDuringRecording.(textPath);
         command.(\loadBuffer, 5, monoPath); 0.3.wait; server.sync;
         check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001
             and: { (bufferSample.(engine.buffersR[5], 10) - 0.4).abs < 0.001 }, "a mono file fills both channels");
@@ -814,6 +1078,7 @@ server.waitForBoot({
             check.(((data[200] - 0.5).abs < 0.001) and: { (data[201] + 0.25).abs < 0.001 },
                 "the saved file interleaves left and right");
         };
+        checkLoudSave.value;
         // Two writes to one path back to back: the newer one wins, the file is never mixed
         command.(\loadBuffer, 7, longPath); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
         savePath = scratchRoot +/+ "race/same.wav";
@@ -856,8 +1121,11 @@ server.waitForBoot({
         file.openWrite(longWritePath);
         file.writeData(FloatArray.fill(frames * 2, { arg i; var value = rampValue.(i div: 2); if (i.odd) { value.neg } { value } }));
         file.close;
+        info = pollMessages.size;   // slot 8 reported 716 before (16 s at 22.05 kHz): only later reports count
         command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
         check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
+        check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 716 }) }),
+            "slot 8 holding 16 s reports 716 through bufferState (the encoding's maximum)");
         savePath = scratchRoot +/+ "long/saved.wav";
         writeStart = Main.elapsedTime;
         command.(\saveBuffer, 7, savePath);
@@ -885,20 +1153,7 @@ server.waitForBoot({
             "a failed newest write removes its writeGenerations entry");
         info = tempFloatFiles.value - tempFilesBefore;
         check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
-        // .part files a crash left in scratchDir (scratch takes) and its parent
-        // (saveBuffer's dated files) are deleted at alloc. alloc runs before the
-        // check can point scratchDir away from ~/dust, so the deletion is checked
-        // through deleteStaleParts and alloc's own source is checked to call it.
-        info = [engine.scratchDir, engine.scratchDir.withoutTrailingSlash.dirname];
-        info.do({ arg dir;
-            File.mkdir(dir);
-            File.use(dir +/+ "buf2.wav.17.part", "w", { arg text; text.write("stale") });
-            File.use(dir +/+ "keep.txt", "w", { arg text; text.write("keep") });
-        });
-        engine.tryPerform(\deleteStaleParts);
-        check.(info.every({ arg dir; File.exists(dir +/+ "buf2.wav.17.part").not and: { File.exists(dir +/+ "keep.txt") } }),
-            "deleteStaleParts deletes stale .part files in scratchDir and its parent, and nothing else");
-        info.do({ arg dir; File.delete(dir +/+ "keep.txt"); File.delete(dir +/+ "buf2.wav.17.part") });
+        checkStaleParts.value;
         file = Engine_Strata.findMethod(\alloc);
         data = File.readAllString(file.filenameSymbol.asString);
         data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
@@ -933,10 +1188,11 @@ server.waitForBoot({
         check.(getControl.(engine.synths[\grain6], \bufRateScale).equalWithPrecision(22050 / server.sampleRate)
             and: { getControl.(engine.synths[\grain6], \bufFrames) == 11025 },
             "a voice reading a loaded slot plays it at the file's rate");
+        checkFilePitch.value;
         command.(\recordBuffer, 3, 0.1, 1.0); 0.4.wait; server.sync;
         check.(getControl.(engine.synths[\grain6], \bufRateScale) == 1, "recording resets the slot to the server's rate");
 
-        command.(\clearBuffer, 2); server.sync;
+        command.(\clearBuffer, 2); 0.2.wait; server.sync;   // after the fade (a voice reads the slot)
         check.(engine.bufferFrames[2] == 0, "clearBuffer resets it");
         check.(getControl.(engine.synths[\grain1], \bufFrames) == 0, "clearBuffer reaches a voice reading the slot");
         check.(bufferSample.(engine.buffersL[2], 10) == 0, "clearBuffer zeroes the slot");
@@ -970,6 +1226,7 @@ server.waitForBoot({
         afterPeak = readPeak.value;
         check.(afterPeak > 0.01, "after the take completes the voice plays it (peak %)".format(afterPeak));
         tone.free; probe.free; peakBus.free;
+        checkBufferFades.(stereoPath, monoPath, longPath);
         command.(\clearBuffer, 2);
         command.(\setGrainSource, 1, 0);
         2.5.wait; server.sync;

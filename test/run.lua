@@ -3555,6 +3555,25 @@ test("recording again stops early; clear and load cancel the timer", function()
   assert_true(not context.polls.polls.bufferState.running, "bufferState poll stopped")
 end)
 
+test("a file the engine cannot read, loaded during a recording, leaves a cancelled recording", function()
+  local context = load_strata(); context.clock.advance()
+  local buffers = local_value("buffers")
+  params:set("record_duration", 4)
+  local pending = context.clock.pending_count()
+  record_buffer(3)
+  load_buffer(3, "/tmp/missing.wav")   -- the engine cancels the recording, then cannot read the file
+  assert_true(not buffers[3].recording and not buffers[3].finishing, "the load ends the recording state")
+  assert_equal(context.clock.pending_count(), pending, "no recording timer or fallback is left to finish a take")
+  -- the cancelled recording left the slot empty: the engine reports 0 s
+  context.polls.fire("bufferState", 200)
+  context.set_time(5); context.polls.fire("bufferState", 200)
+  assert_true(not buffers[3].loaded, "not loaded"); assert_equal(buffers[3].settled_empty, "load")
+  assert_equal(buffers[3].name, "missing.wav", "a failed load, never take 3")
+  assert_equal(buffers[3].path, "/tmp/missing.wav")
+  context.clock.advance()              -- nothing pending turns it into a take later
+  assert_equal(buffers[3].name, "missing.wav"); assert_true(not buffers[3].loaded)
+end)
+
 test("a take or a load is confirmed by the engine's bufferState report", function()
   local context = load_strata(); context.clock.advance()
   local buffers = local_value("buffers")

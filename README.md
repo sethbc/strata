@@ -33,7 +33,7 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 ### Audio Sources (buffers and live input)
 
 Every voice can grain something other than its own synth. Its **source** (the BUFFER screen page, grid page 4, or PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
-- **Buffers** hold up to 16 seconds of stereo audio each. Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
+- **Buffers** hold up to 16 seconds of stereo audio each (16 seconds at the norns sample rate of 48 kHz: a file at a higher rate keeps fewer seconds, 8 for a 96 kHz file). Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
 - While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
 - Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
@@ -523,10 +523,10 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 ### Buffers (group)
 - Record duration (0.5-16 s, default 8) and record level (0-2, default 1)
 - For each buffer 1-8:
-  - File: load a sound file (up to 16 s; stereo files keep both channels, mono files fill both). Loading never copies the file
+  - File: load a sound file (up to 16 s at 48 kHz, so a 96 kHz file keeps 8 s; stereo files keep both channels, mono files fill both). Loading never copies the file. A file that cannot be read leaves the buffer as it was, but stops a recording in it (nothing is kept). A voice playing the buffer fades out before a load, recording or clear replaces what it plays
   - Record: record the live input for the record duration, replacing what was there. Trigger it again while recording to stop early and keep what was captured. The finished take is also written to `~/dust/audio/strata/scratch/buf<n>.wav` (overwritten by the next take)
   - Clear: empty the buffer
-  - Save: write the buffer as a stereo WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved)
+  - Save: write the buffer as a stereo 16-bit WAV to `~/dust/audio/strata/<date-time>-buf<n>.wav`, so it can be loaded again later (an empty buffer is not saved). A take recorded at a level above 1 can go past full scale: saved takes (and the scratch take) are clipped to full scale
 
 #### Saving and restoring buffers
 
