@@ -307,7 +307,8 @@ UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by
 -- param's whole range in this many ticks: half a turn of the arc's 1024
 -- ticks per revolution (monome arc spec; matron passes the deltas through)
 UI_PAGES.ARC_TICKS_PER_SWEEP = 512
-UI_PAGES.ARC_PORT = 1  -- the one arc vport the script uses (arc.connect's default)
+UI_PAGES.ARC_PORT = 1   -- preferred arc vport (arc.connect's default)
+UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- norns' Arc:segment reduces angles modulo 2*pi, so a full turn lights nothing;
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
@@ -3532,31 +3533,49 @@ local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_lfo_redraw, arc_buf
 -- device.delta/key and vports[port].delta/key, so setting them on the device
 -- as well would run every turn twice.
 local function attach_arc(port)
+  if arc_device and arc_device ~= arc.connect(port) then
+    -- following another vport now: the old one (e.g. the empty port-1
+    -- fallback from init) must not keep handlers for a later arc
+    arc_device.delta = nil
+    arc_device.key = nil
+  end
   arc_device = arc.connect(port)
   arc_device.delta = arc_delta
   arc_device.key = arc_key
   arc_connected = arc_device.device ~= nil
 end
 
+-- Strata follows one arc: at init the first vport holding a device (port 1
+-- preferred by being first); later, a hot-plugged arc connects only while none
+-- is connected, and only removing the connected arc disconnects.
 function arc_init()
-  attach_arc(UI_PAGES.ARC_PORT)
+  local port = UI_PAGES.ARC_PORT
+  for candidate = 1, UI_PAGES.ARC_PORTS do
+    if arc.connect(candidate).device then
+      port = candidate
+      break
+    end
+  end
+  attach_arc(port)
   if arc_connected then
     arc_redraw()
   end
 end
 
--- Only the script's own vport counts: a device that lands on another port is
--- ignored, as is its removal
 function arc.add(device)
-  if device.port ~= UI_PAGES.ARC_PORT then return end
-  attach_arc(UI_PAGES.ARC_PORT)
+  local port = device.port or UI_PAGES.ARC_PORT
+  if port < 1 or port > UI_PAGES.ARC_PORTS then return end
+  if arc_connected and arc_device ~= arc.connect(port) then return end  -- already following another arc
+  attach_arc(port)
   arc_redraw()
   redraw()  -- SETUP shows the arc state
   print("arc connected")
 end
 
 function arc.remove(device)
-  if device.port ~= UI_PAGES.ARC_PORT then return end
+  local port = device.port or UI_PAGES.ARC_PORT
+  if port < 1 or port > UI_PAGES.ARC_PORTS then return end
+  if arc_device ~= arc.connect(port) then return end  -- not the arc Strata follows
   arc_connected = false
   redraw()
   print("arc disconnected")

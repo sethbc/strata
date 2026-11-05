@@ -1262,25 +1262,62 @@ test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings"
   end
 end)
 
-test("an arc on another port neither attaches handlers nor disconnects Strata's arc", function()
-  local context = load_strata(); context.clock.advance()
-  local function screen_has(text)
+test("Strata follows one arc: any port, the first one plugged, removal of that one disconnects", function()
+  local function screen_has(context, text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return true end
     end
     return false
   end
+  local function setup_text(context)
+    local page = local_value("ui_page")
+    show_page(5); redraw()
+    local result = screen_has(context, "arc: connected") and "connected" or (screen_has(context, "arc: none") and "none" or "?")
+    show_page(page)
+    return result
+  end
+  -- the only arc is on port 2
+  local context = load_strata(); context.clock.advance()
+  context.arc.plug(2)
+  assert_equal(setup_text(context), "connected", "arc on port 2 connects")
+  local density = params:lookup_param("master_density")
+  local before = density.raw
+  context.arc.turn(2, 1, 20)
+  assert_near(density.raw - before, 20 / 512, 1e-9, "arc on port 2 works")
+  context.arc.unplug(2)
+  assert_equal(setup_text(context), "none", "removing it disconnects")
+
+  -- already plugged at start: found on its port
+  context = load_strata(); context.clock.advance()
+  context.arc.plug(3)
+  context.arc.unplug(3)
+  context.arc.vports[4].device = {port = 4, segments = {}, all = function() end, refresh = function() end, segment = function() end, led = function() end}
+  arc_init()
+  assert_true(context.arc.vports[4].delta ~= nil, "init attaches the vport holding a device")
+
+  -- port 2 first, then port 1: Strata stays on 2
+  context = load_strata(); context.clock.advance()
+  density = params:lookup_param("master_density")
+  context.arc.plug(2)
+  context.arc.plug(1)
+  assert_equal(context.arc.vports[1].delta, nil, "a second arc gets no handler")
+  context.arc.unplug(1)
+  assert_equal(setup_text(context), "connected", "removing the other arc keeps Strata's")
+  before = density.raw
+  context.arc.turn(2, 1, 20)
+  assert_near(density.raw - before, 20 / 512, 1e-9, "still handled on port 2")
+  context.arc.unplug(2)
+  assert_equal(setup_text(context), "none", "removing Strata's arc disconnects")
+
+  -- port 1 first, then 2
+  context = load_strata(); context.clock.advance()
   context.arc.plug(1)
   context.arc.plug(2)
-  assert_equal(context.arc.vports[2].delta, nil, "no handler on a foreign port")
-  assert_equal(context.arc.vports[2].key, nil, "no key handler on a foreign port")
+  assert_equal(context.arc.vports[2].delta, nil, "no handler on the second arc")
   context.arc.unplug(2)
-  show_page(5); redraw()
-  assert_true(screen_has("arc: connected"), "removing another port's arc keeps Strata's arc connected")
-  context.arc.turn(1, 1, 20)  -- still handled
+  assert_equal(setup_text(context), "connected", "removing another port's arc keeps Strata's arc")
   context.arc.unplug(1)
-  redraw()
-  assert_true(screen_has("arc: none"), "removing Strata's arc disconnects it")
+  assert_equal(setup_text(context), "none", "removing Strata's arc disconnects it")
 end)
 
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
