@@ -34,13 +34,17 @@
 --     timeline that runs at the clock tempo and keeps its beat when the
 --     tempo changes. A resumed coroutine gets the clock time (sleep) or beat
 --     (sync); one that cancels itself and then waits errors when it wakes,
---     as on norns. Each coroutine holds a matron event slot (the lowest
---     free one when it first waits, until it is cancelled or ends): events
---     due at the same time fire in slot order, a sleep before a sync (matron
---     fires a sleep when the time reaches it, a sync once the beat is past
---     it). util.time() moves with the clocks: clock.advance() is one
---     scheduler step (util.time() moves to the next wake-up, and everything
---     due then resumes, in slot order); clock.advance_until(id) runs it event
+--     as on norns. Each coroutine holds one of matron's 100 event slots
+--     (the lowest free one when it first waits, until it is cancelled or
+--     ends; all 100 in use is an error, where matron would never wake the
+--     coroutine): events due at the same time fire in slot order, a sleep
+--     before a sync (matron fires a sleep when the time reaches it, a sync
+--     once the beat is past it, so a stub step at a sleep's time leaves a
+--     sync due then to the next step, at the same time). util.time() moves
+--     with the clocks: clock.advance() is one scheduler step, a matron tick
+--     (util.time() moves to the next wake-up, and the events due then are
+--     fixed and resume in slot order, not wake order, as matron's tick
+--     posts them); clock.advance_until(id) runs it event
 --     by event until coroutine id wakes once, and fails at once if id is not
 --     waiting or is cancelled first; clock.run_for(seconds[, latency]) runs the
 --     scheduler for `seconds`, each coroutine `latency` (default 0) after
