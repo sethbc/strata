@@ -7,7 +7,7 @@ Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between m
 - **Released on `main`:**
   - 3.0 (sample and input sources, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, paged screen) through PR #3, and CI through PR #4.
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
-  - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45 and #53-#58, then the ones for #47 and #52). CHANGELOG.md lists each fix with its pull request.
+  - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
 - **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never cancelled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
@@ -42,7 +42,7 @@ Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between m
 ## What 3.0.2 changed
 
 CHANGELOG.md has every fix. In short:
-- **Engine:** a fixed 0.1 s `PitchShift` window and 128-grain tables, and at most one live, one fading and one cutting grain synth per voice on every path, so seven voices at large grain sizes fit norns' 8 MB real-time pool (about 6.9 MB at the peak). The Resonator's level (it peaked about 23 and drove the master limiter), the 44.1 kHz buffer pitch, fades before a played buffer slot changes, pan for buffer and input voices, a NaN guard before the effects, and engine-side reports of failed loads (`bufferLoadFailed`).
+- **Engine:** a fixed 0.1 s `PitchShift` window and 128-grain tables, and at most one live, one fading and one cutting grain synth per voice on every path, so seven voices at large grain sizes fit norns' 8 MB real-time pool (about 6.9 MB at the peak). The Resonator's level (it peaked about 23 and drove the master limiter), the 44.1 kHz buffer pitch, fades before a played buffer slot changes, pan for buffer and input voices, NaN guards before the effects and in cross-modulation, fades for release tails before their slot changes, and engine-side reports of failed loads (`bufferLoadFailed`).
 - **Lua:** `fileselect` required (BUFFER K2 crashed on norns), a 15 fps frame clock for every screen and arc redraw, arc rings at their maximum and on any port, an ASCII MAIN voice list, grid LEDs, sequenced transitions that finish, the tempo param following the clock, randomize and mutations on each param's curve, start-up and scene edge cases.
 - **Tests:** the stubs follow norns' and matron's own code (arc, list, fileselect, clock scheduler, tabutil, params, menu routing); the engine stub range-checks every argument and param name from the engine source; the engine check runs with norns' memory and measures pitch and level. 210 Lua tests.
 
@@ -53,7 +53,6 @@ CHANGELOG.md has every fix. In short:
   - from 3.0.2: the Resonator in the mix and as a cross-modulation source, pitch-shifted voices with the fixed window, clicks from rapid source switches and scene chords (a synth already fading is cut), real-time memory and CPU at the peak on norns' own scsynth (armhf, and that the engine compiles there), the pitch of a 44.1 kHz file, how long a load's decode check and a take's write take on the CM3, the `/fail /b_readChannel` message format on norns' scsynth, a scene-fade step's real duration against the 1 s overrun bound, frame-clock CPU with the arc spinning, tempo following under Link and MIDI clock, the font's real glyph widths against the harness estimate, arc LEDs at a ring's maximum and minimum, and brief "not loaded" or file-list flashes after a slow reload or a file choice.
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
-  - A failed `moveBefore` during grain synth placement (the voice's mod synth has just freed) makes scsynth print one `FAILURE /n_before` line. It is harmless.
   - A buffer slot's internal `restoring` flag can stay set after a restore that never gets audio. Nothing reads it except when audio is confirmed.
   - Pressing a sequence-length key on the grid repaints the grid twice (one extra 128-LED refresh).
   - The arc keeps redrawing while the norns menu is open (the screen does not), so a param changed from PARAMS, a CC map or an LFO moves the rings at once.
@@ -102,6 +101,7 @@ Each was taken during development without asking Seth, and lists what it costs i
 - **Group-size check:** a group must be followed by exactly its size in params and then a group, a separator or the end. If wrong: a future layout with ungrouped params right after a group needs a separator first.
 - **Engine-check script fails fast:** a compile error or a hang ends the run (its own 570 s timeout, below CI's 600 s) instead of holding the machine's scsynth port. If wrong: a very slow machine needs `$ENGINE_CHECK_TIMEOUT` raised.
 - **Rapid switches cut hard:** a new source switch (or stop/start) frees at once the voice's synths still in their 50 ms kill fade, so a voice never holds more than one live, one fading and one cutting grain synth. If wrong: a click from a synth cut within 50 ms of silence; listen on #6.
+- **Quiet messages to synths that can end on their own:** messages to voice, grain and mod synths (and record synths) that may free before they arrive go in `/error -1` bundles (`sendToSynth`), so neither the console nor the engine check sees a `FAILURE` for them; messages to the persistent filter, delay, reverb and master nodes stay plain. If wrong: a real error in one of those voice-synth messages is no longer printed; the engine check's synth-count and level checks still catch its effects.
 - **Fixed `PitchShift` window and 128-grain tables:** the window is 0.1 s whatever the grain size, and `maxGrains` 128 still covers Lua's largest overlap (0.5 s × 200 grains/s; a Lua test keeps it so). If wrong: pitch-shifted voices at large grain sizes sound different; the window is one engine variable (`pitchShiftWindow`).
 - **Resonator gain and limiter:** a fixed gain cut plus a limiter on that voice only, with no make-up gain elsewhere; voice 1 as a crossmod source became much weaker. If wrong: patches that relied on the old strength modulate less; listen on #6.
 - **Pan on the 256 fader pages** for buffer- and input-sourced voices, now that their grain synths pan. If wrong: one more fader page entry.
