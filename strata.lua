@@ -2055,7 +2055,11 @@ local GRAIN_PARAM_IDS = {
   buf_scan = "buf_scan"
 }
 
-local SCENE_TRANSITION_STEPS = 20
+-- A smooth transition fades in `steps` steps. The scene sequencer holds a
+-- scene for max(scene duration, transition time), then, while the fade is
+-- still running (its steps run late by their scheduling delay), checks
+-- again every `settle_seconds`, so it never cuts a fade short
+local SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01}
 
 local function is_number(value)
   return type(value) == "number" and value == value  -- rejects NaN
@@ -2239,10 +2243,10 @@ function recall_scene(scene_num, transition_time)
 
     scene_transition_active = true
     scene_transition_clock = clock.run(function()
-      local step_time = transition_time / SCENE_TRANSITION_STEPS
+      local step_time = transition_time / SCENE_TRANSITION.steps
 
-      for step = 1, SCENE_TRANSITION_STEPS do
-        local mix = step / SCENE_TRANSITION_STEPS
+      for step = 1, SCENE_TRANSITION.steps do
+        local mix = step / SCENE_TRANSITION.steps
         for _, target in ipairs(targets) do
           params:set(target.id, util.linlin(0, 1, target.start, target.target, mix))
         end
@@ -2353,14 +2357,21 @@ function scene_sequencer_start()
       scene_sequencer_position = util.clamp(scene_sequencer_position, 1, seq_length)
 
       -- Recall next scene in sequence (skip empty scenes)
+      local transition_time = 0
       if scenes[scene_sequencer_position].populated then
-        recall_scene(scene_sequencer_position, params:get("scene_transition_time"))
+        transition_time = params:get("scene_transition_time")
+        recall_scene(scene_sequencer_position, transition_time)
       else
         print("skipping empty scene " .. scene_sequencer_position)
       end
 
-      -- Wait for scene duration
-      clock.sleep(params:get("scene_duration"))
+      -- Hold the scene for its duration, and at least until its transition
+      -- ends: the next recall would cancel the fade before it applies the
+      -- scene's discrete state (voices, sources, patterns, ...)
+      clock.sleep(math.max(params:get("scene_duration"), transition_time))
+      while scene_transition_active do
+        clock.sleep(SCENE_TRANSITION.settle_seconds)
+      end
 
       -- Advance to next scene with proper wraparound
       scene_sequencer_position = scene_sequencer_position + 1

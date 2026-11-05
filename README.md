@@ -484,6 +484,7 @@ Scene LED feedback:
 - Set scene sequence length (how many scenes to cycle through)
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
+- Each scene plays for the scene duration or the transition time, whichever is longer: the sequencer never moves on before a transition has ended, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. Recalling a scene by hand still interrupts a running transition
 - Press row 5, column 1 to start/stop the sequencer
 - Watch `S1`-`S8` indicator on screen (bright = sequencer active)
 
@@ -547,7 +548,7 @@ Strata writes audio to disk only when a recording finishes and when you save a b
 ### Scenes
 - Scene sequencer (on/off)
 - Scene transition time (0-30 seconds)
-- Scene duration (4-120 seconds)
+- Scene duration (4-120 seconds; a scene plays at least as long as its transition)
 - Scene sequence length (1-8 scenes)
 - Save scenes to disk (manual trigger)
 - Load scenes from disk (manual trigger; a damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to `scenes.data.bak` so it is not overwritten when the script exits)

@@ -877,6 +877,87 @@ test("a smooth scene transition holds filter_type until the fade ends", function
   assert_near(params:get("filter_freq"), 8000, 1.0, "the filter freq faded to its target")
 end)
 
+-- Two scenes for the sequencer: scene 2 starts voice 3 in triggered grain
+-- mode (both switch only when a transition ends), scene 1 has it stopped
+local function capture_sequencer_scenes()
+  local voices = local_value("voices")
+  if voices[3].active then toggle_voice(3) end
+  params:set("v3_grain_mode", 1); capture_scene(1)
+  toggle_voice(3); params:set("v3_grain_mode", 2); capture_scene(2)
+  toggle_voice(3); params:set("v3_grain_mode", 1)
+  params:set("scene_sequence_length", 2)
+  return voices
+end
+
+-- Run the scene sequencer time-ordered with a 1 ms scheduling delay per
+-- wake-up (so the fade's 20 sleeps fall behind one long sleep, as on norns).
+-- Returns the list of recalls (it keeps growing while the test runs the
+-- clocks on; the next load_strata defines recall_scene afresh): scene,
+-- util.time() and whether a transition was still running (the recall
+-- would cancel it)
+local function run_scene_sequencer(context, transition, duration, seconds)
+  local recalls = {}
+  local real_recall = recall_scene
+  recall_scene = function(scene_num, transition_time)
+    table.insert(recalls, { scene = scene_num, time = util.time(),
+      interrupts = local_value("scene_transition_active") })
+    return real_recall(scene_num, transition_time)
+  end
+  params:set("scene_transition_time", transition); params:set("scene_duration", duration)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(seconds, 0.001)
+  return recalls
+end
+
+for _, case in ipairs({ { transition = 20, duration = 16 }, { transition = 16, duration = 16 } }) do
+  test(string.format("the scene sequencer lets a %d s transition finish with a %d s scene duration",
+    case.transition, case.duration), function()
+    local context = load_strata(); context.clock.advance()
+    local voices = capture_sequencer_scenes()
+    local period = math.max(case.transition, case.duration)
+    local recalls = run_scene_sequencer(context, case.transition, case.duration, period + 1)
+    assert_equal(#recalls, 2, "scene 2 recalled once scene 1's transition ended")
+    assert_equal(recalls[2].scene, 2, "the sequencer moved on to scene 2")
+    assert_true(not recalls[2].interrupts, "scene 1's transition was not cut short")
+    assert_true(recalls[2].time >= case.transition, "scene 2 recalled after scene 1's transition")
+    assert_true(recalls[2].time < period + 0.1, "the sequencer moved on as soon as it ended")
+    assert_true(not voices[3].active, "voice 3 waits for the end of scene 2's transition")
+    context.clock.run_for(period, 0.001)                   -- scene 2's transition ends
+    assert_true(voices[3].active, "voice 3 started at the end of scene 2's transition")
+    assert_equal(params:get("v3_grain_mode"), 2, "grain mode switched at the end of the transition")
+    assert_equal(#recalls, 3, "then the sequencer moved on to scene 1")
+    context.clock.run_for(period, 0.001)                   -- back to scene 1, which ends too
+    assert_true(not voices[3].active, "scene 1 stopped voice 3 again")
+    for index, recall in ipairs(recalls) do
+      assert_true(not recall.interrupts, "recall " .. index .. " cut no transition short")
+    end
+    assert_equal(params:get("v3_grain_mode"), 1, "scene 1's grain mode")
+  end)
+end
+
+test("the scene sequencer holds a scene for its duration when the transition is shorter", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = capture_sequencer_scenes()
+  local recalls = run_scene_sequencer(context, 10, 16, 43)
+  assert_equal(#recalls, 3, "a recall every 16 s")
+  assert_near(recalls[2].time, 16, 0.01, "scene 2 after the scene duration")
+  assert_near(recalls[3].time, 32, 0.02, "scene 1 after another scene duration")
+  assert_true(not voices[3].active, "scene 1's transition has ended")
+end)
+
+test("a manual recall still interrupts a transition the scene sequencer started", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = capture_sequencer_scenes()
+  local recalls = run_scene_sequencer(context, 20, 16, 25)       -- scene 2's transition is running
+  assert_equal(recalls[#recalls].scene, 2, "the sequencer recalled scene 2")
+  assert_true(local_value("scene_transition_active"), "scene 2's transition is running")
+  recall_scene(2, 0)                                             -- a manual instant recall
+  assert_true(not local_value("scene_transition_active"), "the manual recall cancelled the transition")
+  assert_true(voices[3].active, "and applied scene 2 at once")
+  context.clock.run_for(16, 0.001)                               -- the sequencer keeps going
+  assert_equal(local_value("current_scene"), 1, "the sequencer moved on to scene 1")
+end)
+
 test("scene recall: one full sync per voice whose source changed, after its params", function()
   -- every engine call since the script loaded, for each running voice, must
   -- leave the engine with the voice's Lua state
@@ -1889,6 +1970,36 @@ test("stub params store norns' numeric type constants in param.t", function()
   for param_id, code in pairs(expected_types) do
     assert_equal(params:lookup_param(param_id).t, code, param_id .. " type code")
   end
+end)
+
+test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves util.time", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("clock_tempo", 120)                 -- 0.5 s per beat
+  local events = {}
+  local function log(name) table.insert(events, string.format("%s@%.3f", name, util.time())) end
+  clock.run(function() while true do clock.sleep(0.3); log("short") end end)
+  clock.run(function() clock.sleep(1); log("long") end)
+  clock.run(function() for _ = 1, 3 do clock.sync(1/4); log("sync") end end)
+  local cancelled = clock.run(function() clock.sleep(0.1); log("cancelled") end)
+  clock.cancel(cancelled)
+  context.clock.run_for(1)
+  assert_equal(table.concat(events, " "),
+    "sync@0.125 sync@0.250 short@0.300 sync@0.375 short@0.600 short@0.900 long@1.000",
+    "wake-time order")
+  assert_near(util.time(), 1, 1e-12, "util.time() ends at the start plus the run time")
+  -- a scheduling delay on every wake-up: twenty short sleeps fall behind one long one
+  events = {}
+  clock.run(function() for _ = 1, 20 do clock.sleep(0.5) end; log("steps") end)
+  clock.run(function() clock.sleep(10); log("once") end)
+  local before = #events
+  context.clock.run_for(11, 0.001)
+  local order = {}
+  for _, event in ipairs(events) do
+    local name = event:match("^(%a+)@")
+    if name == "steps" or name == "once" then table.insert(order, event) end
+  end
+  assert_equal(table.concat(order, " "), "once@11.001 steps@11.020", "latency accumulates per sleep")
+  assert_true(#events > before, "the clocks ran")
 end)
 
 test("stub param type codes come from one table; an unknown type is an error", function()
