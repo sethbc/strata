@@ -22,7 +22,8 @@
 --     due (earliest first, ties in the order they yielded), moving
 --     util.time() to that moment, until `seconds` have passed. `latency`
 --     (default 0) is a scheduling delay added to every wake-up, so a clock
---     that sleeps many short steps falls behind one that sleeps once
+--     that sleeps many short steps falls behind one that sleeps once.
+--     A coroutine that raises an error is dropped (norns never resumes it)
 --   * util.time stands still until a test calls context.set_time(seconds)
 --   * the screen records texts, lines and rects (for layout checks)
 --   * grid/arc device events fire both device.key and vports[port].key
@@ -493,7 +494,8 @@ local function make_clock(util)
     if not coro then return end
     clock.wake_at[coro_id] = nil
     local ok, mode, amount = coroutine.resume(coro, ...)
-    if not ok then error(mode, 0) end
+    -- a coroutine that raised is dead: norns never schedules it again
+    if not ok then clock.threads[coro_id] = nil; error(mode, 0) end
     if coroutine.status(coro) == "dead" then
       clock.threads[coro_id] = nil
     else

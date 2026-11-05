@@ -945,6 +945,66 @@ test("the scene sequencer holds a scene for its duration when the transition is 
   assert_true(not voices[3].active, "scene 1's transition has ended")
 end)
 
+test("the scene sequencer moves on when a transition never finishes", function()
+  local context = load_strata(); context.clock.advance()
+  capture_sequencer_scenes()
+  local overrun = local_value("SCENE_TRANSITION").overrun_seconds
+  assert_true(type(overrun) == "number" and overrun > 0, "SCENE_TRANSITION.overrun_seconds")
+  local recalls = run_scene_sequencer(context, 4, 4, 1)          -- scene 1's 4 s transition is running
+  assert_true(local_value("scene_transition_active"), "scene 1's transition is running")
+  clock.cancel(local_value("scene_transition_clock"))            -- its clock is lost: the flag stays set
+  context.clock.run_for(4 + overrun + 0.5, 0.001)
+  assert_equal(#recalls, 2, "the sequencer moved on")
+  assert_equal(recalls[2].scene, 2, "to scene 2")
+  assert_near(recalls[2].time, 4 + overrun, 0.05, "after the transition time plus the overrun margin")
+  assert_true(not recalls[2].interrupts, "the stuck transition was cleared first")
+  assert_true(table.concat(context.printed, "\n"):find("scene transition overran", 1, true), "reported")
+  context.clock.run_for(4.5, 0.001)
+  assert_true(local_value("voices")[3].active, "scene 2's transition ended normally")
+end)
+
+test("the scene sequencer waits for a manual transition it did not start, within a bound", function()
+  local context = load_strata(); context.clock.advance()
+  local voices = capture_sequencer_scenes()
+  local overrun = local_value("SCENE_TRANSITION").overrun_seconds
+  local recalls = run_scene_sequencer(context, 0, 4, 1)           -- instant recalls every 4 s
+  recall_scene(2, 25)                                              -- a manual 25 s transition
+  context.clock.run_for(24, 0.001)
+  assert_equal(#recalls, 2, "the sequencer waits for the manual transition")
+  context.clock.run_for(1.5, 0.001)
+  assert_true(voices[3].active, "the manual transition ended and applied scene 2")
+  assert_equal(#recalls, 3, "then the sequencer moved on")
+  assert_true(not recalls[3].interrupts, "without cutting it short")
+  -- a stuck manual transition is cancelled after the longest transition time
+  recall_scene(2, 25)
+  clock.cancel(local_value("scene_transition_clock"))
+  context.clock.run_for(30 + overrun + 4.5, 0.001)
+  assert_equal(#recalls, 5, "the sequencer moved on after the bound")
+  local _, longest = param_range("scene_transition_time")
+  -- timed from the sequencer's wake-up 4 s after its last recall
+  assert_near(recalls[5].time, recalls[3].time + 4 + longest + overrun, 0.05,
+    "after the longest transition time plus the margin")
+  assert_true(not recalls[5].interrupts, "the stuck transition was cleared first")
+end)
+
+test("an error inside a scene transition's fade clears the transition flag", function()
+  local context = load_strata(); context.clock.advance()
+  params:set("v1_freq", 1000); capture_scene(1); params:set("v1_freq", 200)
+  params:set_action("v1_freq", function() error("fade failed") end)
+  local ok, message = pcall(recall_scene, 1, 4)                  -- the first step runs at once
+  assert_true(not ok and tostring(message):find("fade failed", 1, true), "the error is raised")
+  assert_equal(local_value("scene_transition_active"), false, "flag cleared")
+  assert_equal(local_value("scene_transition_clock"), nil, "clock cleared")
+  -- an error in a later step
+  params:set_action("v1_freq", function() end)
+  recall_scene(1, 4)
+  params:set_action("v1_freq", function() error("fade failed") end)
+  ok, message = pcall(context.clock.advance)
+  assert_true(not ok and tostring(message):find("fade failed", 1, true), "the later error is raised")
+  assert_equal(local_value("scene_transition_active"), false, "flag cleared after a later step")
+  assert_equal(local_value("scene_transition_clock"), nil, "clock cleared after a later step")
+end)
+
 test("a manual recall still interrupts a transition the scene sequencer started", function()
   local context = load_strata(); context.clock.advance()
   local voices = capture_sequencer_scenes()
