@@ -30,7 +30,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file or in README.md may name a command the engine no longer has. Behaviour details are in `docs/notes/engine.md`.
+**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md or `docs/notes/` may name a command the engine no longer has. Behaviour details are in `docs/notes/engine.md`.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|

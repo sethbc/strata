@@ -5,9 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request cancels its superseded run. Runs on main are
+# never cancelled: each gets a group of its own (in a shared group a pending
+# run would still be replaced by the next one, even without cancel-in-progress)
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lua:
@@ -44,7 +47,12 @@ jobs:
       # norns ships SuperCollider 3.13.0 (SUPERCOLLIDER_VERSION in norns'
       # Dockerfile; the norns repo records no other version), so this is the
       # same upstream release; only Ubuntu's packaging differs. Bump both
-      # packages together, and re-check against norns' Dockerfile.
+      # packages together, and re-check against norns' Dockerfile. To find a
+      # version string, run `apt-cache madison supercollider-language` on the
+      # runner image (ubuntu-24.04): it lists every version apt can install.
+      # supercollider-common is not named below, but it is pinned all the
+      # same: supercollider-language depends on exactly its own version of
+      # it (see `apt-cache show supercollider-language`).
       SC_APT_VERSION: 1:3.13.0+repack-1ubuntu3
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

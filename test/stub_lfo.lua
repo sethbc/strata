@@ -2,11 +2,14 @@
 -- Stand-in for norns' lua/lib/lfo.lua, returned by require("lfo") in the
 -- harness. The PARAMS it adds (ids, types, ranges, defaults, group size) and
 -- their actions mirror LFO:add_params; LFO.new/add/set/get/start/stop keep
--- the library's fields. There is no lattice: nothing advances on its own.
+-- the library's fields, and reset_phase and set("period") reset and rescale
+-- phase_counter as the library does (compared line by line with
+-- lib/lfo.lua). There is no lattice: nothing advances on its own, and
+-- phase_counter only moves through those two.
 -- The test helper lfo_context.tick(instance, raw) runs the value part of the
 -- library's process_lfo with `raw` (0..1) as the shape output, so the action
 -- receives exactly what the library would send for that point of the cycle.
--- Uses the params/controlspec/util/tab globals installed by norns_stubs.
+-- Uses the params/controlspec/util/clock globals installed by norns_stubs.
 
 local lfo_rates = {1/16,1/8,1/4,5/16,1/3,3/8,1/2,3/4,1,1.5,2,3,4,6,8,16,32,64,128,256,512,1024}
 local lfo_rates_as_strings = {"1/16","1/8","1/4","5/16","1/3","3/8","1/2","3/4","1","1.5","2","3","4","6","8",
@@ -100,8 +103,48 @@ return function(lfo_context)
     end
   end
 
+  -- lib/lfo.lua's LFO:reset_phase (the stub also counts the resets)
   function LFO:reset_phase()
     self.reset_count = self.reset_count + 1
+    if self.mode == "free" then
+      local baseline = clock.get_beat_sec() / self.period
+      if self.reset_target == "floor" then
+        self.phase_counter = 0.75 / baseline
+      elseif self.reset_target == "ceiling" then
+        self.phase_counter = 0.25 / baseline
+      elseif self.reset_target == "mid: falling" then
+        self.phase_counter = 0.5 / baseline
+      elseif self.reset_target == "mid: rising" then
+        self.phase_counter = baseline
+      end
+    else
+      if self.reset_target == "floor" then
+        self.phase_counter = 0.75 * self.period
+      elseif self.reset_target == "ceiling" then
+        self.phase_counter = 0.25 * self.period
+      elseif self.reset_target == "mid: falling" then
+        self.phase_counter = 0.5 * self.period
+      elseif self.reset_target == "mid: rising" then
+        self.phase_counter = self.period
+      end
+    end
+  end
+
+  -- lib/lfo.lua's change_period: a new period keeps the phase, so the
+  -- phase counter is rescaled
+  local function change_period(target, new_period)
+    local new_phase_counter = target.phase_counter + (1 / target.ppqn)
+    local new_phase
+    local adjusted_phase_counter
+    if target.mode == "clocked" then
+      new_phase = new_phase_counter / target.period
+      adjusted_phase_counter = (new_phase * new_period) - 1 / target.ppqn
+    else
+      new_phase = new_phase_counter * clock.get_beat_sec() / target.period
+      adjusted_phase_counter = (new_phase * new_period / clock.get_beat_sec()) - 1 / target.ppqn
+    end
+    target.period = new_period
+    target.phase_counter = adjusted_phase_counter
   end
 
   function LFO:set(var, arg)
@@ -118,9 +161,11 @@ return function(lfo_context)
     elseif var == "baseline" then
       self.baseline = arg
       scale_lfo(self)
-    elseif var == "ppqn" or var == "period" then
-      -- the library also rescales its phase counter here; the stub has no phase
-      self[var] = arg
+    elseif var == "ppqn" then
+      -- change_ppqn (the library also sets its sprocket's division; the stub has none)
+      self.ppqn = arg
+    elseif var == "period" then
+      change_period(self, arg)
     elseif arg == nil then
       error("scripted LFO argument required")
     elseif not self[var] then

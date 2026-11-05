@@ -9,7 +9,8 @@
 -- call (local f = engine.voiceOn), engine:method(), a call without
 -- parentheses (engine.loadBuffer "x") or the engine table itself used as a
 -- value (local e = engine). Only engine.name (the engine the script loads)
--- may be read or set.
+-- may be read or set; a table key or function parameter named engine
+-- ({ engine = 1 }, function(engine)) and #engine name no command and pass.
 --
 -- Standalone:  lua test/sync_check.lua   (exit status 1 on mismatch)
 -- As a module: require("sync_check").run(repo_root) -> ok, problems, summary
@@ -135,8 +136,36 @@ function sync_check.lua_calls(lua_source)
   return calls
 end
 
--- Every use of the global `engine` that is not an engine.<name>(...) call
--- or engine.name: { line = n, text = description }
+-- The innermost bracket ("{", "(" or "[") still open at `offset`, or nil
+local function innermost_open_bracket(sanitized, offset)
+  local depth = 0
+  for index = offset - 1, 1, -1 do
+    local char = sanitized:sub(index, index)
+    if char == ")" or char == "}" or char == "]" then
+      depth = depth + 1
+    elseif char == "(" or char == "{" or char == "[" then
+      if depth == 0 then return char end
+      depth = depth - 1
+    end
+  end
+  return nil
+end
+
+-- Whether the `engine` token from `start` to `finish` names no global
+-- value: a table constructor key ({ engine = 1 }), a function parameter
+-- (function(a, engine)) or the operand of # (#engine reads no command)
+local function names_no_global(sanitized, start, finish)
+  local before = sanitized:sub(math.max(1, start - 300), start - 1)
+  local after = sanitized:sub(finish + 1, finish + 40)
+  if before:match("#%s*$") then return true end
+  if before:match("%f[%w_]function%f[^%w_]%s*[%w_%.:]*%s*%([%w_,%s%.]*$") then return true end
+  local is_key = before:match("[{,;]%s*$") and after:match("^%s*=") and not after:match("^%s*==")
+  return is_key and innermost_open_bracket(sanitized, start) == "{" or false
+end
+
+-- Every use of the global `engine` that is not an engine.<name>(...) call,
+-- engine.name, a table key or parameter named engine, or #engine:
+-- { line = n, text = description }
 function sync_check.lua_reference_problems(lua_source)
   local sanitized = sanitize_lua(lua_source)
   local problems = {}
@@ -160,7 +189,7 @@ function sync_check.lua_reference_problems(lua_source)
         problem(start, "engine[...] names a command the check cannot see")
       elseif after:match("^%s*:") then
         problem(start, "engine:method() is not an engine command call")
-      else
+      elseif not names_no_global(sanitized, start, finish) then
         problem(start, "the engine table is used as a value, so the check cannot see what it calls")
       end
     end

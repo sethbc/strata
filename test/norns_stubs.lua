@@ -7,10 +7,11 @@
 --     when the stored value changes
 --   * number params clamp (but do not round) and fire on change
 --   * option params store a floored, clamped index; file params a path
---     string, text params any value; triggers (and trigger binaries) fire on
---     every set; groups count the params that follow them and cannot nest,
---     and must be followed by exactly n params (then a separator, a group or
---     the end of the list, context.check_param_groups)
+--     string, text params any value; triggers fire on every set, trigger
+--     binaries only on a set above 0 (nil counts as 1); groups count the
+--     params that follow them and cannot nest, and must be followed by
+--     exactly n params (then a separator, a group or the end of the list,
+--     context.check_param_groups)
 --   * param.t holds norns' numeric type codes (params.tOPTION etc.); the
 --     param list starts with norns' system params (LEVELS ... CLOCK, see
 --     add_system_params), so a script id colliding with one fails
@@ -33,10 +34,19 @@
 --     timeline that runs at the clock tempo and keeps its beat when the
 --     tempo changes. A resumed coroutine gets the clock time (sleep) or beat
 --     (sync); one that cancels itself and then waits errors when it wakes,
---     as on norns. util.time() moves with the clocks: clock.advance() is one
---     scheduler step (util.time() moves to the next wake-up, and everything
---     due then resumes); clock.advance_until(id) runs it event by event
---     until coroutine id wakes once; clock.run_for(seconds[, latency]) runs the
+--     as on norns. Each coroutine holds one of matron's 100 event slots
+--     (the lowest free one when it first waits, until it is cancelled or
+--     ends; all 100 in use is an error, where matron would never wake the
+--     coroutine): events due at the same time fire in slot order, a sleep
+--     before a sync (matron fires a sleep when the time reaches it, a sync
+--     once the beat is past it, so a stub step at a sleep's time leaves a
+--     sync due then to the next step, at the same time). util.time() moves
+--     with the clocks: clock.advance() is one scheduler step, a matron tick
+--     (util.time() moves to the next wake-up, and the events due then are
+--     fixed and resume in slot order, not wake order, as matron's tick
+--     posts them); clock.advance_until(id) runs it event
+--     by event until coroutine id wakes once, and fails at once if id is not
+--     waiting or is cancelled first; clock.run_for(seconds[, latency]) runs the
 --     scheduler for `seconds`, each coroutine `latency` (default 0) after
 --     its wake-up, so a clock that sleeps many short steps falls behind one
 --     that sleeps once. An error raised in a scheduler resume is not raised:
@@ -47,12 +57,16 @@
 --   * clock_tempo starts at 120 BPM, not norns' factory 90 (core/state.lua):
 --     the tests assume 120, and on norns it is the user's saved tempo anyway
 --   * the screen records texts, lines and rects (for layout checks)
---   * grid/arc device events fire both device.key and vports[port].key
+--   * grid/arc device events fire both device.key and vports[port].key; the
+--     arc device keeps matron's LED levels (led/all with rel, segment as
+--     lua/core/arc.lua, through led)
 --   * tab.save/tab.load are lib/tabutil.lua's, ported unchanged
 -- The engine stub validates every engine.* call against the addCommand
 -- signatures parsed from lib/Engine_Strata.sc, and range-checks indices,
--- enumerated values and setVoiceParam/setGrainParam names against the limits
--- and SynthDef controls parsed from the same file (stubs.parse_engine_spec).
+-- enumerated values, setVoiceParam/setGrainParam names and continuous values
+-- against the limits and SynthDef controls parsed from the same file
+-- (stubs.parse_engine_spec), plus the ranges CLAUDE.md documents for
+-- arguments the engine does not clip (DOCUMENTED_LIMITS).
 
 local stubs = {}
 
@@ -81,6 +95,8 @@ end
 -- (which nest in SC) replaced by spaces, newlines kept, so a commented-out
 -- command, SynthDef argument or Env is never parsed. Strings ("..."),
 -- quoted symbols ('...') and character literals ($x) are copied unchanged.
+-- An unterminated string, symbol or block comment is an error (it would
+-- swallow the rest of the file, and sclang would not compile it either).
 -- Every parser of the engine source goes through it: the ones below,
 -- engine_spec_from_source, sync_check.lua (which uses
 -- engine_signatures_from_source) and the CLAUDE.md table check (which uses
@@ -89,6 +105,10 @@ function stubs.strip_sc_comments(source)
   local output = {}
   local index, length = 1, #source
   local function blank(text) return (text:gsub("[^\n]", " ")) end
+  local function unterminated(what, start)
+    local _, newlines = source:sub(1, start):gsub("\n", "")
+    error(string.format("engine source: unterminated %s from line %d", what, newlines + 1), 0)
+  end
   while index <= length do
     local char, two = source:sub(index, index), source:sub(index, index + 1)
     if two == "//" then
@@ -103,6 +123,7 @@ function stubs.strip_sc_comments(source)
         elseif pair == "*/" then depth, cursor = depth - 1, cursor + 2
         else cursor = cursor + 1 end
       end
+      if depth > 0 then unterminated("block comment", index) end
       table.insert(output, blank(source:sub(index, cursor - 1)))
       index = cursor
     elseif char == '"' or char == "'" then
@@ -110,6 +131,7 @@ function stubs.strip_sc_comments(source)
       while cursor <= length and source:sub(cursor, cursor) ~= char do
         cursor = cursor + (source:sub(cursor, cursor) == "\\" and 2 or 1)
       end
+      if cursor > length then unterminated(char == '"' and "string" or "symbol", index) end
       table.insert(output, source:sub(index, cursor))
       index = cursor + 1
     elseif char == "$" then
@@ -158,10 +180,19 @@ end
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
---   fx_commands[command]      {synthdef, controls}: a command that sets an FX
---                             synth (synths[\key] = Synth(\def, ...)) with
---                             this.setSynth(\key, \control, msg[i], ...);
---                             controls[i] is the control argument i sets
+--   control_limits[def][c]    {low, high}: a control the SynthDef body clips
+--                             as it is (c.clip(low, high), or after a lag:
+--                             c.lag(t).clip(low, high))
+--   fx_commands[command]      a list of {argument, synthdef, control}: a
+--                             command whose body sets an FX synth
+--                             (synths[\key] = Synth(\def, ...)) with
+--                             this.setSynth(\key, \control, msg[i], ...),
+--                             every such setSynth call and pair read
+--   argument_limits[command][i]  {low, high, name}: argument i's limits where
+--                             the engine enforces them: the control_limits
+--                             of the FX controls it sets, or the command's
+--                             own msg[i].clip(low, high) (name: the var it is
+--                             assigned to, else "argument i")
 --   voice_synthdefs[i]        voiceSynthDefs = [...], i = engine voice + 1
 --   mod_slots                 modBus1..N on every voice SynthDef
 --   grain_params              setGrainParam names: every control of the
@@ -191,6 +222,62 @@ local function engine_special_params(source, name, into)
   return into
 end
 
+-- The text of the { ... } block whose "{" is at open_index (strings, quoted
+-- symbols and $x characters skipped; comments are already stripped, and
+-- strip_sc_comments has checked that every string ends)
+local function engine_block(source, open_index)
+  local depth, cursor = 0, open_index
+  while cursor <= #source do
+    local char = source:sub(cursor, cursor)
+    if char == '"' or char == "'" then
+      cursor = cursor + 1
+      while cursor <= #source and source:sub(cursor, cursor) ~= char do
+        cursor = cursor + (source:sub(cursor, cursor) == "\\" and 2 or 1)
+      end
+    elseif char == "$" then
+      cursor = cursor + (source:sub(cursor + 1, cursor + 1) == "\\" and 2 or 1)
+    elseif char == "{" then
+      depth = depth + 1
+    elseif char == "}" then
+      depth = depth - 1
+      if depth == 0 then return source:sub(open_index, cursor) end
+    end
+    cursor = cursor + 1
+  end
+  local _, newlines = source:sub(1, open_index):gsub("\n", "")
+  error(string.format("engine source: unbalanced { from line %d", newlines + 1), 0)
+end
+
+-- `.clip(low, high)` with two literal numbers
+local CLIP_LIMITS = "%.clip%(%s*(%-?%d+%.?%d*)%s*,%s*(%-?%d+%.?%d*)%s*%)"
+
+-- Merge {low, high} into limits[key]: an argument limited twice keeps both limits
+local function add_limit(limits, key, low, high, name)
+  local known = limits[key]
+  if known then
+    known.low, known.high = math.max(known.low, low), math.min(known.high, high)
+  else
+    limits[key] = { low = low, high = high, name = name }
+  end
+end
+
+-- control_limits[def]: the controls a SynthDef body clips as they are
+local function synthdef_control_limits(body, controls)
+  local limits = {}
+  for _, pattern in ipairs({ "()([%a_][%w_]*)%.lag%d?%b()" .. CLIP_LIMITS, "()([%a_][%w_]*)" .. CLIP_LIMITS }) do
+    for position, name, low, high in body:gmatch(pattern) do
+      local before = body:sub(position - 1, position - 1)
+      if controls[name] and not before:match("[%w_%.\\]") then
+        local known = limits[name]
+        low, high = tonumber(low), tonumber(high)
+        assert(not known or (known.low == low and known.high == high), "engine source: " .. name .. " is clipped to two ranges")
+        limits[name] = { low = low, high = high }
+      end
+    end
+  end
+  return limits
+end
+
 function stubs.engine_spec_from_source(source)
   source = stubs.strip_sc_comments(source)
   local spec = {
@@ -200,7 +287,9 @@ function stubs.engine_spec_from_source(source)
     buffer_state_stride = engine_number(source, "var%s+<?bufferStateStride%s*=%s*(%d+)", "bufferStateStride"),
     synthdef_controls = {},
     synthdef_defaults = {},
+    control_limits = {},
     fx_commands = {},
+    argument_limits = {},
     voice_synthdefs = {},
     grain_params = {},
     voice_params = {},
@@ -221,6 +310,7 @@ function stubs.engine_spec_from_source(source)
     end
     spec.synthdef_controls[name] = controls
     spec.synthdef_defaults[name] = defaults
+    spec.control_limits[name] = synthdef_control_limits(engine_block(source, position - 1), controls)
   end
 
   local fx_synthdefs = {}
@@ -229,12 +319,26 @@ function stubs.engine_spec_from_source(source)
     fx_synthdefs[key] = name
   end
   for command in pairs(stubs.engine_signatures_from_source(source)) do
-    local key, settings = engine_command_body(source, command):match("this%.setSynth%(%s*\\([%w_]+)%s*,([^;]*)%)%s*;")
-    if fx_synthdefs[key] then
-      local controls = {}
-      for control, index in settings:gmatch("\\([%w_]+)%s*,%s*msg%[(%d+)%]") do controls[tonumber(index)] = control end
-      spec.fx_commands[command] = { synthdef = fx_synthdefs[key], controls = controls }
+    local body = engine_command_body(source, command)
+    local limits = {}
+    for key, settings in body:gmatch("this%.setSynth%(%s*\\([%w_]+)%s*,([^;]*)%)%s*;") do
+      local synthdef = fx_synthdefs[key]
+      if synthdef then
+        spec.fx_commands[command] = spec.fx_commands[command] or {}
+        for control, index in settings:gmatch("\\([%w_]+)%s*,%s*msg%[(%d+)%]") do
+          index = tonumber(index)
+          table.insert(spec.fx_commands[command], { argument = index, synthdef = synthdef, control = control })
+          local limit = spec.control_limits[synthdef][control]
+          if limit then add_limit(limits, index, limit.low, limit.high, control) end
+        end
+      end
     end
+    for assigned, index, low, high in body:gmatch("()msg%[(%d+)%]" .. CLIP_LIMITS) do
+      index = tonumber(index)
+      local name = body:sub(1, assigned - 1):match("([%a_][%w_]*)%s*=%s*$") or ("argument " .. index)
+      add_limit(limits, index, tonumber(low), tonumber(high), name)
+    end
+    if next(limits) then spec.argument_limits[command] = limits end
   end
 
   local voice_list = assert(source:match("voiceSynthDefs%s*=%s*%[(.-)%]"), "engine source: no voiceSynthDefs")
@@ -281,14 +385,54 @@ function stubs.parse_engine_spec(sc_path)
   return stubs.engine_spec_from_source(read_engine_source(sc_path))
 end
 
+-- Limits CLAUDE.md's command table documents for arguments the engine does
+-- not clip itself: the crossmod depths ("-2 to 2") and the mod speed
+-- ("0.1-50"). The numbers are not copied here: each check reads, when the
+-- command is called, the controlspec of the Lua param that sends the
+-- argument (param_id(args) names it).
+local DOCUMENTED_LIMITS = {
+  setModAmpAmt = { argument = 3, name = "amount",
+    param_id = function(args) return ("v%d_mod_amp_amt_%d"):format(args[1] + 1, args[2]) end },
+  setModFreqAmt = { argument = 3, name = "amount",
+    param_id = function(args) return ("v%d_mod_freq_amt_%d"):format(args[1] + 1, args[2]) end },
+  setModSpeed = { argument = 2, name = "speed", param_id = function(args) return ("v%d_mod_speed"):format(args[1] + 1) end },
+}
+
 -- Per-command checks of argument values (after the type checks): each
 -- returns an error message, or nil when the arguments are valid. Every
 -- engine command needs an entry, so a new command gets its limits checked.
-local function engine_argument_checks(spec)
+-- Each entry checks indices and enumerated values; every command's
+-- continuous arguments are then checked against spec.argument_limits (the
+-- limits the engine enforces) and DOCUMENTED_LIMITS (lookup_param(id) finds
+-- the Lua param).
+local function engine_argument_checks(spec, lookup_param)
   local last_voice = spec.num_voices - 1
   local function range(what, value, low, high)
     if value < low or value > high then
-      return string.format("%s %s is outside %d..%d", what, tostring(value), low, high)
+      return string.format("%s %s is outside %g..%g", what, tostring(value), low, high)
+    end
+  end
+  -- continuous values may miss a limit by a rounding error: a 0.01 step
+  -- quantizes 0.95 to 95 * 0.01 = 0.9500000000000001
+  local function float_range(what, value, low, high)
+    local slack = 1e-12 * math.max(1, math.abs(low), math.abs(high))
+    return range(what, value, low - slack, high + slack) and range(what, value, low, high)
+  end
+  local function continuous(command, args)
+    for index, limit in pairs(spec.argument_limits[command] or {}) do
+      local problem = float_range(limit.name, args[index], limit.low, limit.high)
+      if problem then return problem .. " (the engine clips it there)" end
+    end
+    local documented = DOCUMENTED_LIMITS[command]
+    if documented then
+      local param_id = documented.param_id(args)
+      local param = lookup_param(param_id)
+      if not (param and param.controlspec) then
+        return "the stub reads this command's documented limit from param " .. param_id .. ", which is not a control"
+      end
+      local spec_range = param.controlspec
+      local problem = float_range(documented.name, args[documented.argument], spec_range.minval, spec_range.maxval)
+      if problem then return problem .. " (" .. param_id .. "'s range, which CLAUDE.md documents)" end
     end
   end
   local function enumerated(name, value)
@@ -305,7 +449,7 @@ local function engine_argument_checks(spec)
     if not accepted[args[2]] then return string.format("param \"%s\" is not a control of %s", args[2], what) end
     return enumerated(args[2], args[3])
   end
-  return {
+  local checks = {
     voiceOn = voice, voiceOff = voice, retrigger = voice, setModSpeed = voice,
     setVoiceParam = function(args)
       return voice(args)
@@ -321,6 +465,10 @@ local function engine_argument_checks(spec)
     setFilter = function(args) return enumerated("filterType", args[3]) end,
     setMasterDrift = none, setReverb = none, setDelay = none,
   }
+  for command, check in pairs(checks) do
+    checks[command] = function(args) return check(args) or continuous(command, args) end
+  end
+  return checks
 end
 
 ---------------------------------------------------------------------------
@@ -937,6 +1085,9 @@ local FLT_EPSILON = 2 ^ -23
 -- lua/core/clock.lua's scheduler modes, as clock.sleep and clock.sync yield them
 local SCHEDULE_SLEEP, SCHEDULE_SYNC = 0, 1
 
+-- matron's scheduler has NUM_CLOCK_SCHEDULER_EVENTS (clock_scheduler.h) event slots
+local SCHEDULER_SLOTS = 100
+
 -- Errors raised while the scheduler resumed a coroutine. On norns
 -- w_handle_clock_resume reports them on the console (l_report) and every
 -- other clock keeps running, so the stub does not raise them either: it
@@ -964,10 +1115,16 @@ local function make_clock(util)
   -- events[coro_id] is the coroutine's scheduler event, as matron keeps it:
   -- type (SCHEDULE_SLEEP or SCHEDULE_SYNC), ready (waiting to fire),
   -- sleep_time (seconds) or sync_beat (on the beat timeline), scheduled_at
-  -- (util.time() when it was scheduled) and order (for ties: first scheduled
-  -- fires first). It outlives the wake-up, so a repeated sync counts on from
-  -- its beat, and goes when the coroutine is cancelled or ends
-  local clock = { threads = {}, sleep_log = {}, events = {}, tempo = 120 }
+  -- and scheduled_beat (util.time() and the beat when it was scheduled),
+  -- slot (its matron event slot) and order (a count of schedulings, so a
+  -- step can tell a rescheduled event from the one it found). It outlives
+  -- the wake-up, so a repeated sync counts on from its beat, and goes, with
+  -- its slot, when the coroutine is cancelled or ends.
+  -- slots[n] is the coroutine holding event slot n: clock_scheduler_find_event
+  -- gives a coroutine's first wait the lowest free slot, which it keeps until
+  -- clock_scheduler_clear (clock.cancel). Each scheduler tick posts the due
+  -- events in slot order, so slots order the events due at the same moment
+  local clock = { threads = {}, sleep_log = {}, events = {}, slots = {}, tempo = 120 }
   local next_id, schedule_order = 1, 0
   -- the internal clock's beat timeline: beat_reference.beat at
   -- beat_reference.time, then one beat per 60 / clock.tempo seconds. A tempo
@@ -986,10 +1143,23 @@ local function make_clock(util)
     return math.max(next_beat, 0)
   end
 
+  local function free_slot()
+    for slot = 1, SCHEDULER_SLOTS do
+      if clock.slots[slot] == nil then return slot end
+    end
+    -- matron returns false and the coroutine never wakes; the stub fails loudly
+    error("clock: all " .. SCHEDULER_SLOTS .. " of matron's scheduler event slots are in use", 0)
+  end
+
   local function ready_event(coro_id, event_type)
-    local event = clock.events[coro_id] or {}
+    local event = clock.events[coro_id]
+    if not event then
+      event = { slot = free_slot() }
+      clock.slots[event.slot] = coro_id
+    end
     schedule_order = schedule_order + 1
-    event.type, event.ready, event.scheduled_at, event.order = event_type, true, util.time(), schedule_order
+    event.type, event.ready, event.order = event_type, true, schedule_order
+    event.scheduled_at, event.scheduled_beat = util.time(), beats_at(util.time())
     clock.events[coro_id] = event
     return event
   end
@@ -1049,6 +1219,8 @@ local function make_clock(util)
     if check_number(coro_id, 1, "clock_cancel") % 1 ~= 0 then
       error("bad argument #1 to 'clock_cancel' (number has no integer representation)", 0)
     end
+    local event = clock.events[coro_id]
+    if event then clock.slots[event.slot] = nil end
     clock.events[coro_id] = nil
     clock.threads[coro_id] = nil
   end
@@ -1083,25 +1255,57 @@ local function make_clock(util)
     return math.max(due, event.scheduled_at)
   end
 
-  -- the ready events in the order the scheduler fires them
+  -- At its fire time a sleep is due (clock_time >= sleep time), but a sync
+  -- only once the beat is past its beat (clock_beat > sync beat), so at an
+  -- equal time a sync comes after a sleep: rank 1. A sync whose beat had
+  -- already passed when it was scheduled is due at once: rank 0
+  local function fire_rank(event)
+    return (event.type == SCHEDULE_SYNC and event.sync_beat >= event.scheduled_beat) and 1 or 0
+  end
+
+  -- the ready events in the order the scheduler fires them: by fire time,
+  -- a sleep before a sync at the same time, then by event slot
   local function ready_events()
     local list = {}
     for coro_id, event in pairs(clock.events) do
-      if event.ready then table.insert(list, { id = coro_id, event = event, order = event.order, time = fire_time(event) }) end
+      if event.ready then
+        table.insert(list, { id = coro_id, event = event, order = event.order, time = fire_time(event),
+          rank = fire_rank(event), slot = event.slot })
+      end
     end
     table.sort(list, function(left, right)
       if left.time ~= right.time then return left.time < right.time end
-      return left.order < right.order
+      if left.rank ~= right.rank then return left.rank < right.rank end
+      return left.slot < right.slot
     end)
     return list
   end
 
+  -- Whether the event an entry found is still the one waiting (not
+  -- cancelled, fired or rescheduled since)
+  local function still_waiting(entry)
+    return clock.events[entry.id] == entry.event and entry.event.ready and entry.event.order == entry.order
+  end
+
   -- The scheduler fires an event: w_handle_clock_resume calls clock.resume
-  -- with the clock's time in seconds (a sleep) or in beats (a sync) at the
-  -- moment it fired; an error is reported, not raised
-  local function fire(entry)
-    entry.event.ready = false
-    local value = entry.event.type == SCHEDULE_SYNC and beats_at(entry.time) or entry.time
+  -- with the clock's time in seconds (a sleep) or in beats (a sync) that the
+  -- tick posted it with: clock_time and clock_beat, sampled once per tick
+  -- before any coroutine runs (clock_scheduler_tick_thread_run). advance()
+  -- passes its step's `tick` ({time, beat}, sampled at the step's start, so
+  -- a tempo change by an earlier resume in the step cannot move it).
+  -- run_for and advance_until fire each event at its own wake-up, so their
+  -- tick is the event's: the time or beat it waited for, or the one it was
+  -- scheduled at if that was later (taken from the event, not from a fire
+  -- time worked out earlier). An error is reported, not raised
+  local function fire(entry, tick)
+    local event = entry.event
+    event.ready = false
+    local value
+    if event.type == SCHEDULE_SYNC then
+      value = tick and tick.beat or math.max(event.sync_beat, event.scheduled_beat)
+    else
+      value = tick and tick.time or math.max(event.sleep_time, event.scheduled_at)
+    end
     local ok, message = pcall(resume, entry.id, value)
     if not ok then table.insert(stubs.clock_errors, tostring(message)) end
   end
@@ -1110,36 +1314,54 @@ local function make_clock(util)
   -- installed clock), so the harness does not fail the test for them
   clock.take_errors = stubs.take_clock_errors
 
-  -- Test helper: one scheduler step. util.time() moves to the moment the
-  -- first pending event fires (never back), and every event due by then
-  -- fires, in order (events scheduled during the step wait for the next one)
+  -- Test helper: one scheduler step, a matron tick at the first pending
+  -- event's fire time. util.time() moves there (never back); the events due
+  -- then are fixed before any of them runs, as the tick posts them all at
+  -- once with the time and beat it sampled (an overdue event resumes with
+  -- the step's, not its own), and fire in slot order: every one whose fire
+  -- time has passed, and those at the step's time of the first one's rank (a sleep at the step's
+  -- time leaves a sync at that time to the next step, at the same time).
+  -- Events scheduled during the step wait for the next one; one cancelled or
+  -- rescheduled by an earlier one in the step is skipped
   function clock.advance()
-    local due = ready_events()
-    if #due == 0 then return end
-    util.stub_now = math.max(util.time(), due[1].time)
-    for _, entry in ipairs(due) do
-      if entry.time > util.time() then break end
-      -- skip an event cancelled or rescheduled by an earlier one in this step
-      if clock.events[entry.id] == entry.event and entry.event.ready and entry.event.order == entry.order then
-        fire(entry)
+    local pending = ready_events()
+    local first = pending[1]
+    if not first then return end
+    local step_time = math.max(util.time(), first.time)
+    local rank_limit = first.time == step_time and first.rank or 0
+    util.stub_now = step_time
+    local due = {}
+    for _, entry in ipairs(pending) do
+      if entry.time < step_time or (entry.time == step_time and entry.rank <= rank_limit) then
+        table.insert(due, entry)
       end
+    end
+    table.sort(due, function(left, right) return left.slot < right.slot end)
+    local tick = { time = step_time, beat = beats_at(step_time) }
+    for _, entry in ipairs(due) do
+      if still_waiting(entry) then fire(entry, tick) end
     end
   end
 
   -- Test helper: run the scheduler, one event at a time in firing order,
   -- until the coroutine coro_id has been resumed once (every clock due
-  -- before it runs first, as on norns). It must be waiting
+  -- before it runs first, as on norns). It must be waiting; it stops with
+  -- an error as soon as another clock cancels it
   function clock.advance_until(coro_id)
+    local function failure(why) error("clock.advance_until: coroutine " .. tostring(coro_id) .. " " .. why, 3) end
     local target = clock.events[coro_id]
-    assert(target and target.ready, "clock.advance_until: coroutine " .. tostring(coro_id) .. " is not waiting")
-    local order = target.order
+    if not (target and target.ready) then
+      failure(next(ready_events()) and "is not waiting" or "is not waiting: nothing is pending")
+    end
+    local waiting = { id = coro_id, event = target, order = target.order }
     for _ = 1, 1e6 do
       local entry = ready_events()[1]
       util.stub_now = math.max(util.time(), entry.time)
       fire(entry)
-      if entry.id == coro_id and entry.order == order then return end
+      if entry.id == coro_id and entry.order == waiting.order then return end
+      if not still_waiting(waiting) then failure("was cancelled (or rescheduled) before it woke") end
     end
-    error("clock.advance_until: coroutine " .. tostring(coro_id) .. " never woke", 2)
+    failure("never woke")
   end
 
   -- Test helper: run the scheduler for `seconds`. Each event fires in turn,
@@ -1289,16 +1511,55 @@ local function make_arc()
   function arc.remove(device) end
 
   function arc.plug(port)
-    local device = { port = port, segments = {}, refresh_count = 0, cleared = 0 }
-    function device:all(level)
+    -- rings[ring][x] is matron's LED buffer (md->data), 4 rings of 64 LEDs;
+    -- segments[ring] records the ring's last segment() call (from, to,
+    -- level, rel and the 64 levels it computed) for the ring tests
+    local device = { port = port, rings = {}, segments = {}, refresh_count = 0, cleared = 0 }
+    for ring = 1, 4 do
+      device.rings[ring] = {}
+      for x = 1, 64 do device.rings[ring][x] = 0 end
+    end
+    local function check_integer(value, what)
+      if not is_integer(value) then error("arc " .. what .. " must be an integer, got " .. tostring(value), 3) end
+    end
+    -- Arc:led -> _arc_set_led (luaL_checkinteger) -> dev_monome_arc_set_led:
+    -- rel adds to the LED's level, clamped to 0..15; an absolute level is
+    -- stored as it is. matron masks a ring or LED outside 1..4 / 1..64 into
+    -- range; the stub fails instead, and like the grid stub rejects an
+    -- absolute level outside 0..15
+    function device:led(ring, x, level, rel)
+      check_integer(ring, "ring"); check_integer(x, "LED"); check_integer(level, "level")
+      if ring < 1 or ring > 4 or x < 1 or x > 64 then
+        error(string.format("arc led out of bounds: ring %d, LED %d", ring, x), 2)
+      end
+      if rel then
+        self.rings[ring][x] = math.min(15, math.max(0, self.rings[ring][x] + level))
+      elseif level < 0 or level > 15 then
+        error("arc led level out of range: " .. tostring(level), 2)
+      else
+        self.rings[ring][x] = level
+      end
+    end
+    -- Arc:all -> dev_monome_all_led: rel adds to every level, clamped to
+    -- 0..15; an absolute level outside 0..15 fails, as in led()
+    function device:all(level, rel)
+      check_integer(level, "level")
+      if not rel and (level < 0 or level > 15) then error("arc all level out of range: " .. tostring(level), 2) end
       self.cleared = self.cleared + 1
       self.segments = {}
+      for ring = 1, 4 do
+        for x = 1, 64 do
+          self.rings[ring][x] = rel and math.min(15, math.max(0, self.rings[ring][x] + level)) or level
+        end
+      end
     end
-    -- Port of norns' Arc:segment (lua/core/arc.lua): angles reduce modulo 2*pi and
-    -- each of the 64 LEDs gets round(overlap / LED width * level), so a full
-    -- turn (0 -> 2*pi) lights nothing, as on a real arc. `leds` holds the levels
-    function device:segment(ring, from, to, level)
+    function device:get_led(ring, x) return self.rings[ring][x] end
+    -- lua/core/arc.lua's Arc:segment, line for line: angles reduce modulo
+    -- 2*pi, each of the 64 LEDs gets round(overlap / LED width * level) and
+    -- is set through led() with rel, so a full turn (0 -> 2*pi) lights nothing
+    function device:segment(ring, from, to, level, rel)
       local tau = math.pi * 2
+
       local function overlap(a, b, c, d)
         if a > b then
           return overlap(a, tau, c, d) + overlap(0, b, c, d)
@@ -1308,15 +1569,29 @@ local function make_arc()
           return math.max(0, math.min(b, d) - math.max(a, c))
         end
       end
-      local leds = {}
-      local led_width = tau / 64
-      for i = 1, 64 do
-        local o = overlap(from % tau, to % tau, led_width * (i - 1) % tau, led_width * i % tau)
-        leds[i] = util.round(o / led_width * level)
+
+      local function overlap_segments(a, b, c, d)
+        a = a % tau
+        b = b % tau
+        c = c % tau
+        d = d % tau
+
+        return overlap(a, b, c, d)
       end
-      self.segments[ring] = { from = from, to = to, level = level, leds = leds }
+
+      local m = {}
+      local sl = tau / 64
+
+      for i = 1, 64 do
+        local sa = tau / 64 * (i - 1)
+        local sb = tau / 64 * i
+
+        local o = overlap_segments(from, to, sa, sb)
+        m[i] = util.round(o / sl * level)
+        self:led(ring, i, m[i], rel)
+      end
+      self.segments[ring] = { from = from, to = to, level = level, rel = rel, leds = m }
     end
-    function device:led() end
     function device:refresh() self.refresh_count = self.refresh_count + 1 end
     arc.devices[port] = device
     arc.vports[port].device = device
@@ -1699,7 +1974,8 @@ function stubs.install(options)
     printed = {},
   }
 
-  local argument_checks = engine_argument_checks(assert(options.engine_spec, "stubs.install needs engine_spec"))
+  local argument_checks = engine_argument_checks(assert(options.engine_spec, "stubs.install needs engine_spec"),
+    function(param_id) return context.params.lookup[param_id] end)
   for command_name in pairs(context.signatures) do
     assert(argument_checks[command_name], "the engine stub has no argument check for engine." .. command_name)
   end
