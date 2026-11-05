@@ -1365,7 +1365,8 @@ function init()
   clock.run(function()
     toggle_voice(1)
     clock.sleep(0.5)
-    toggle_voice(2)
+    -- toggle_voice toggles: leave voice 2 alone if a MIDI note or grid press started it meanwhile
+    if not voices[2].active then toggle_voice(2) end
   end)
 
   redraw()

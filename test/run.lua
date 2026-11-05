@@ -640,6 +640,15 @@ test("grid_redraw draws every layout (I2) and a hot-plugged grid (I3)", function
   end
 end)
 
+test("the startup clock leaves a voice 2 started within 0.5 s running", function()
+  local context = load_strata()
+  local voices = local_value("voices")
+  assert_true(not voices[2].active, "voice 2 starts stopped")
+  toggle_voice(2)  -- a MIDI note or grid press starts it before the startup sleep ends
+  context.clock.advance()
+  assert_true(voices[2].active, "voice 2 is still running after the startup clock")
+end)
+
 test("scene capture -> change -> recall restores every voice", function()
   local context = load_strata()
   context.clock.advance()  -- let init start voice 2
