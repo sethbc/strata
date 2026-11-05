@@ -3753,12 +3753,28 @@ test("buffer faders replace synth faders for a buffer-sourced voice", function()
   local ids = fader_param_ids(1)
   assert_equal(ids[1], "v1_buf_pos"); assert_equal(ids[2], "v1_buf_rate")
   assert_equal(ids[3], "v1_buf_scan"); assert_equal(ids[4], "v1_amp")
-  assert_equal(ids[5], "v1_grain_size", "grain faders follow")
-  assert_equal(#ids, 4 + 6 + 9); assert_equal(fader_page_count(1), 5)
+  assert_equal(ids[5], "v1_pan", "pan follows the level (the engine pans buffer voices)")
+  assert_equal(ids[6], "v1_grain_size", "grain faders follow")
+  assert_equal(#ids, 5 + 6 + 9); assert_equal(fader_page_count(1), 5)
   assert_equal(local_value("param_page"), 5, "fader page clamped when the source shrinks the list")
   press(1, 13); press(16, 10)           -- page 1, row 2 = buf_rate max
   assert_near(params:get("v1_buf_rate"), 4, 1e-6, "buf_rate fader")
   assert_equal(device:get_led(16, 10), 15)
+  -- page 2, row 1 = pan: column 1 pans hard left, and a running voice's engine gets it
+  context.clock.advance()   -- voice 1 running
+  context.clear_engine_calls()
+  press(2, 13); press(1, 9)
+  assert_near(params:get("v1_pan"), -1, 1e-6, "pan fader column 1 = hard left")
+  assert_equal(device:get_led(1, 9), 15, "the pan fader shows its value")
+  local sent
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "pan" then sent = call.args[3] end
+  end
+  assert_near(sent, -1, 1e-6, "a buffer-sourced voice's pan reaches the engine")
+  -- sub has no pan param: its buffer faders end at the level
+  params:set("v4_source", 2)
+  ids = fader_param_ids(4)
+  assert_equal(ids[4], "v4_amp"); assert_equal(ids[5], "v4_grain_size", "sub has no pan fader")
   params:set("v1_source", 1)
   assert_equal(fader_param_ids(1)[1], "v1_freq", "synth faders return")
 end)
@@ -4862,6 +4878,11 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   for _, id in ipairs(fader_param_ids(1)) do
     assert_true(not id:find("_buf_"), id .. ": no buffer faders for input")
   end
+  -- the grain faders, then level and pan (the engine pans input voices), then crossmod
+  assert_equal(fader_param_ids(1)[7], "v1_amp"); assert_equal(fader_param_ids(1)[8], "v1_pan")
+  assert_equal(fader_param_ids(1)[9], "v1_mod_source_1")
+  params:set("v4_source", 10)
+  assert_equal(fader_param_ids(4)[7], "v4_amp"); assert_equal(fader_param_ids(4)[8], "v4_mod_source_1", "sub has no pan fader")
   params:set("v1_grain_size", 0.2)
   enc(3, 2); assert_true(params:get("v1_grain_size") > 0.2, "E3 on MAIN moves grain size")
   local size = params:get("v1_grain_size")

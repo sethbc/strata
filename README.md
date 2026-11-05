@@ -35,9 +35,9 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 Every voice can grain something other than its own synth. Its **source** (the BUFFER screen page, grid page 4, or PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
 - **Buffers** hold up to 16 seconds of stereo audio each (16 seconds at the norns sample rate of 48 kHz: a file at a higher rate keeps fewer seconds, 8 for a 96 kHz file). Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
-- While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan and level instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
+- While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan, level and pan instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
 - Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
-- While a voice's source is the input, neither its synthesis nor its buffer parameters do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level), and K2, mutations and the drift change only the grain parameters
+- While a voice's source is the input, neither its buffer parameters nor its synthesis parameters (except level and pan) do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level and pan), and K2, mutations and the drift change only the grain parameters
 - The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
 
@@ -314,7 +314,7 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 - The row lights up to the current value (dim bar, bright value position)
 - The grain envelope fader steps through its five shapes (column 1 = hann, column 16 = trap); the grain mode fader is continuous on columns 1-8 and triggered on columns 9-16
 - Faders run through the voice's synthesis parameters (amp and pan last), then grain size, density, pitch, spread, envelope and mode, then source / amp mod / freq mod for cross-modulation slots 1-3
-- For a voice whose source is a buffer, the first faders are buffer position, rate, scan and level instead of the synthesis parameters; for an input-sourced voice the faders start with grain size (the grain parameters, then level)
+- For a voice whose source is a buffer, the first faders are buffer position, rate, scan, level and pan instead of the synthesis parameters; for an input-sourced voice the faders start with grain size (the grain parameters, then level and pan). The sub voice has no pan, so it has no pan fader
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
