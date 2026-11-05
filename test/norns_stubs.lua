@@ -909,13 +909,40 @@ local function make_poll(engine_polls)
 end
 
 ---------------------------------------------------------------------------
--- fileselect (lib/fileselect.lua): records the request instead of a menu
+-- fileselect (lib/fileselect.lua): records the request instead of a menu.
+-- A module, not a global: scripts get it from require "fileselect", as
+-- norns' own files do. From play mode the real fs.enter calls
+-- norns.menu.init(), whose _menu.set_mode(false) puts the script's redraw
+-- back in the global `redraw` and calls it; fs.exit does the same before it
+-- calls the callback with the chosen path or "cancel". The stub makes those
+-- redraw() calls too, but does not reroute key/enc (tests keep pressing the
+-- script's keys while the selector is "open"). fs.redraw draws the file
+-- list; the stub counts the calls in `redraws` and draws nothing.
 ---------------------------------------------------------------------------
 
 local function make_fileselect()
-  local fileselect = { last = nil }
+  local fileselect = { last = nil, redraws = 0 }
+  local entered = false  -- tests reset `last`; the real module keeps its list
+  local function menu_init_redraw()
+    if not norns.menu.status() and type(redraw) == "function" then redraw() end
+  end
+  function fileselect.redraw()
+    -- the real one draws fs.list, which fs.enter sets up
+    assert(entered, "fileselect.redraw before fileselect.enter")
+    fileselect.redraws = fileselect.redraws + 1
+  end
   function fileselect.enter(folder, callback, filter)
+    entered = true
     fileselect.last = { folder = folder, callback = callback, filter = filter }
+    menu_init_redraw()
+    fileselect.redraw()
+  end
+  -- Test helper: close the selector the way fs.exit does, with `path`
+  -- chosen, or cancelled when path is nil
+  function fileselect.close(path)
+    local request = assert(fileselect.last, "the file selector is not open")
+    menu_init_redraw()
+    request.callback(path or "cancel")
   end
   return fileselect
 end
@@ -1006,7 +1033,7 @@ function stubs.install(options)
   _G.screen = context.screen
   _G.tab = context.tab
   _G.midi = context.midi
-  _G.fileselect = context.fileselect
+  _G.fileselect = nil  -- lib/fileselect.lua is a module (package.preload below)
   _G.poll = context.polls
   _G._menu = context.menu
   _G.norns = { state = {}, enc = context.encoders.api,
@@ -1020,6 +1047,8 @@ function stubs.install(options)
   package.preload["musicutil"] = function() return context.musicutil end
   package.loaded["lfo"] = nil
   package.preload["lfo"] = function() return context.lfo.library end
+  package.loaded["fileselect"] = nil
+  package.preload["fileselect"] = function() return context.fileselect end
 
   if options.quiet then
     _G.print = function(...)

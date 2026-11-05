@@ -2222,6 +2222,9 @@ end)
 test("stub fileselect, musicutil, polls and audio path", function()
   local context = load_strata()
   local picked
+  assert_equal(rawget(_G, "fileselect"), nil, "fileselect is a module, not a global")
+  local fileselect = require("fileselect")
+  assert_equal(fileselect, context.fileselect)
   fileselect.enter(_path.audio, function(path) picked = path end, "audio")
   assert_equal(fileselect.last.folder, _path.audio); assert_equal(fileselect.last.filter, "audio")
   fileselect.last.callback("/x.wav"); assert_equal(picked, "/x.wav")
@@ -3225,6 +3228,61 @@ test("BUFFER K2's release forgets every held key as the file selector opens", fu
   assert_true(held_at_enter ~= nil and next(held_at_enter) == nil, "no key is held when the selector opens")
   assert_equal(next(local_value("key_press_page")), nil, "and none afterwards")
   assert_equal(local_value("buffer_saved_during_k2"), false, "the K2-save flag is clear")
+end)
+
+test("BUFFER K2 loads a file with no fileselect global: the script requires it (issue #10)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  assert_equal(rawget(_G, "fileselect"), nil, "norns has no fileselect global")
+  params:set("v1_source", 2)  -- voice 1 reads buffer 1
+  context.clear_engine_calls()
+  tap(2); assert_true(context.fileselect.last ~= nil, "K2's release opens the selector")
+  context.fileselect.close("/tmp/picked.wav")
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the chosen file loads")
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], "/tmp/picked.wav")
+end)
+
+test("Strata's page never draws over the open file selector; redraws draw the selector (issue #10)", function()
+  local context = load_strata(); context.clock.advance(); show_page(4)
+  params:set("v1_source", 2)
+  local draws = 0  -- Strata's page draws (the stub's fileselect.redraw draws nothing)
+  local update = screen.update
+  screen.update = function() draws = draws + 1; return update() end
+  local selector = context.fileselect
+  -- opening it on K2's release: fs.enter's redraw() (from norns.menu.init)
+  -- and key()'s redraw draw the selector, not the page
+  key(2, 1); draws = 0
+  key(2, 0); assert_true(selector.last ~= nil, "K2's release opens the selector")
+  assert_equal(draws, 0, "the page does not draw over the selector as it opens")
+  assert_equal(selector.redraws, 3, "menu.init's redraw, fs.enter's own and key()'s draw the selector")
+  -- the norns menu opened and closed over it (K1 twice): set_mode(false)
+  -- clears the screen and calls redraw(), which must show the selector again
+  selector.redraws = 0
+  _menu.set_mode(true); _menu.set_mode(false); redraw()
+  assert_equal(selector.redraws, 1, "norns' redraw() as the menu closes draws the selector")
+  assert_equal(draws, 0, "and not Strata's page")
+  -- Strata's own redraws (a buffer report, page turns, a load) while it is open
+  selector.redraws = 0
+  context.polls.fire("bufferState", 305)
+  enc(1, -1); enc(1, 1)
+  load_buffer(5, "/tmp/other.wav")
+  assert_equal(draws, 0, "the page does not draw over the selector while it is open")
+  assert_true(selector.redraws > 0, "they draw the selector instead")
+  -- cancelled: fs.exit's redraw() comes before the callback; then one redraw
+  context.clear_engine_calls()
+  context.fileselect.close()
+  assert_equal(draws, 1, "a cancel redraws once")
+  assert_equal(#context.calls_named("loadBuffer"), 0, "a cancel loads nothing")
+  assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
+  redraw(); assert_equal(draws, 2, "the script draws again after a cancel")
+  -- a chosen file: loads it, then one redraw
+  tap(2); assert_equal(draws, 3, "only K2's press draws as the selector opens again")
+  draws = 0
+  context.fileselect.close("/tmp/chosen.wav")
+  assert_equal(draws, 1, "a chosen file redraws once")
+  assert_equal(#context.calls_named("loadBuffer"), 1, "and loads")
+  redraw(); assert_equal(draws, 2, "the script draws again after a choice")
+  screen.update = update
 end)
 
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()
