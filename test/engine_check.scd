@@ -1244,7 +1244,7 @@ var checkModSlots = { arg voice;
 // voiceOn after a source change in the release: the previous source's
 // releasing grain synth and the voice synth (now forced to release) are
 // tracked as the voice's fadingSynths, not left releasing beside the new
-// one, and the next start for another source cuts them (F4, #46). The voice
+// one, and the next start for another source cuts them (#46). The voice
 // runs on its synth source.
 var checkSupersededAtStart = { arg voice, before;
     var oldTrio = voiceTrio.(voice), fading = engine.fadingSynths[voice];
@@ -1598,7 +1598,7 @@ server.waitForBoot({
             }), "% scales its accent envelope by velocity through levelScale".format(name));
         });
         // The engine's cut (cutSynth) triggers a freeing fade on the kill
-        // control, independent of whatever release the gate envelope is in (F4)
+        // control, independent of whatever release the gate envelope is in
         (voiceDefs ++ grainDefs).do({ arg name;
             check.(controlTriggersFreeingEnvGen.(name, \kill), "% has a kill fade (kill triggers a freeing EnvGen)".format(name));
         });
@@ -1650,7 +1650,7 @@ server.waitForBoot({
             "strataGrainBuf selects between Impulse and T2A(t_trig) grain triggers");
         // strataGrain mirrors strataGrainBuf: one mono GrainIn per input
         // channel panned as a pair, so pan spread works for synth and input
-        // sources and nothing is doubled (F1)
+        // sources and nothing is doubled
         grainInUGens = SynthDescLib.global.at(\strataGrain).def.children;
         check.(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) }) == 2
             and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.channels.size == 1 }) },
@@ -1934,7 +1934,7 @@ server.waitForBoot({
         check.(engine.synths[\grain0] === grainBuf and: { synthNames.(context.xg).size == after },
             "setGrainSource with the current source changes nothing");
         command.(\retrigger, 0, 0.5); server.sync;
-        check.(getControl.(grainBuf, \velocity) == 0.5, "retrigger carries velocity to strataGrainBuf (R7)");
+        check.(getControl.(grainBuf, \velocity) == 0.5, "retrigger carries velocity to strataGrainBuf (for its accent)");
         command.(\setModSource, 0, 1, 2);
         command.(\setModAmpAmt, 0, 1, 0.5);
         command.(\setModFreqAmt, 0, 2, 0.25);
@@ -1954,8 +1954,8 @@ server.waitForBoot({
             and: { getControl.(engine.synths[\grain0], \in) == engine.inputBus.index }, "input source: strataGrain reads inputBus");
         check.(getControl.(engine.synths[\grain0], \mirrorLevel) == 1
             and: { getControl.(engine.synths[\grain0], \mirrorOut) == engine.granBuses[0].index },
-            "input source mirrors into the voice bus (R8)");
-        check.(getControl.(engine.synths[\grain0], \accentAmt) == 1, "input source carries the accent (R7)");
+            "input source mirrors into the voice bus (so its mod synth keeps feeding crossmod)");
+        check.(getControl.(engine.synths[\grain0], \accentAmt) == 1, "input source carries the accent (accentAmt 1: no voice synth accents it)");
         check.(getControl.(engine.synths[\grain0], \amp).equalWithPrecision(0.3), "the voice's amp sets the input grain level");
         check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "grain controls carry over to the input source");
         command.(\retrigger, 0, 0.75); server.sync;
@@ -2253,7 +2253,7 @@ server.waitForBoot({
         2.5.wait; server.sync;
 
         // A voice reading a slot that is being recorded stays silent until
-        // the take completes, instead of looping the take's first grain (F3).
+        // the take completes, instead of looping the take's first grain.
         // A test tone in the input bus is recorded; a peak meter on voice 1's
         // bus hears the strataGrainBuf mirror.
         command.(\setGrainSource, 1, 3);           // slot 3 (index 2), empty
@@ -2320,7 +2320,7 @@ server.waitForBoot({
 
         // A burst of source switches (E3 scrolling) keeps at most one
         // releasing grain synth per voice: each switch cuts the one an
-        // earlier switch left releasing, and the voice synths it released (F4)
+        // earlier switch left releasing, and the voice synths it released
         before = synthNames.(context.xg).size;
         names = synthNames.(context.xg);
         grainBefore = names.count({ arg name; grainDefs.includes(name) });
@@ -2344,7 +2344,7 @@ server.waitForBoot({
 
         // The same switches spread over many control blocks (real E3 detents):
         // a cut must also end a synth that is already in its forced release,
-        // which a second, shorter forced release (gate -1 - time) cannot (F4)
+        // which a second, shorter forced release (gate -1 - time) cannot
         countVoiceAndGrain = {
             var list = synthNames.(context.xg);
             [list.count({ arg name; grainDefs.includes(name) }), list.count({ arg name; voiceDefs.includes(name) })]
@@ -2446,7 +2446,7 @@ server.waitForBoot({
         // voiceOn and voiceOff in one control block (a MIDI note-on and
         // note-off in one bundle): the trio created in that block still
         // releases and frees, instead of waiting forever on an envelope that
-        // never started (F4)
+        // never started
         // (inside makeBundle, sendToSynth's bundle is flattened into the
         // outer one: its /error -1 then silences the rest of that bundle)
         command.(\voiceOff, 5); 2.5.wait; server.sync;

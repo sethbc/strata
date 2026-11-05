@@ -6,7 +6,7 @@ An ambient granular soundscape generator for monome norns.
 
 Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
-Version 3.0 brings in the Confluence script's feature set (buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, a paged screen); see [CHANGELOG.md](CHANGELOG.md).
+This is version 3.0.2. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -87,7 +87,7 @@ Three LFOs, built on norns' own LFO library, can each modulate one parameter:
 - **Destinations** - none, master density, tape drift, filter freq / res / mix, delay time / feedback / mix, reverb mix / size / damp, and for each voice: its main parameter (the one E3 adjusts: the synthesis parameter, or buffer position for a buffer-sourced voice, grain size for an input-sourced one), grain size, density, pitch, spread, buffer position, rate and scan
 - **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
 
-The fastest free rate is 10 Hz (the library's 0.1 s free period). Clocked rates follow the tempo: 1/16 bar is a quarter beat, so it is 8 Hz at 120 BPM and 20 Hz at 300 BPM. Confluence promised 20 Hz at any tempo, which would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
+The fastest free rate is 10 Hz (the library's 0.1 s free period). Clocked rates follow the tempo: 1/16 bar is a quarter beat, so it is 8 Hz at 120 BPM and 20 Hz at 300 BPM. 20 Hz at any tempo would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
 ### MIDI Input
 
@@ -220,19 +220,19 @@ Any Strata parameter can follow a MIDI CC through norns' built-in mapping:
 3. With **learn** selected press K3 and move the knob or fader on your controller (or set the device, channel and CC by hand with E2/E3); the remaining fields set the CC and output ranges
 4. K2 leaves the mapping and saves it. norns keeps Strata's mappings in `~/dust/data/strata/strata.pmap` and loads them every time the script starts
 
-Confluence (the norns script Strata's buffers, FX, LFOs and MIDI input come from) suggested these CCs; they make a good starting point:
+These CCs make a good starting point (they follow the usual General MIDI meanings):
 
 | CC | Controller | Strata parameter |
 |----|------------|------------------|
 | 1 | Mod wheel | master density |
 | 7 | Volume | a voice's amp (for example voice 1 amp) |
-| 10 | Pan | a voice's position spread (grain spread) |
+| 10 | Pan | a voice's pan (for example voice 1 pan; the Sub, voice 4, has no pan) |
 | 74 | Brightness | filter freq |
 | 71 | Resonance | filter res |
 | 91 | Reverb | reverb mix |
 | 93 | Chorus | delay mix |
 
-Confluence mapped CC 7 to the global grain amplitude and CC 10 to position spread; Strata has neither as a single global parameter, so map them to the voices you play.
+On most controllers CC 7 and CC 10 are an overall volume and pan. Strata has no single global amplitude or pan parameter, so map them to the voices you play: each voice's `v<n>_amp` and `v<n>_pan` (shown as amp and pan in its PARAMETERS section) work for synth-, buffer- and input-sourced voices alike.
 
 ### Monome Arc (optional)
 
@@ -485,7 +485,7 @@ Scene LED feedback:
 - Set scene sequence length (how many scenes to cycle through). Shortened while a scene past the new end plays, the sequence wraps to scene 1
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
-- Each scene plays for the scene duration or the transition time, whichever is longer: the sequencer never moves on before a transition has ended, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. Recalling a scene by hand still interrupts a running transition
+- Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is cancelled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
 - Press row 5, column 1 to start/stop the sequencer
 - Loading a PSET saved with the sequencer on, while the sequencer is off, starts it once the whole PSET has loaded, from scene 1, with the PSET's transition time, duration and length. A sequencer that is already running keeps its place
 - Loading scenes from disk stops a running transition where it is
@@ -630,7 +630,7 @@ QT_QPA_PLATFORM=offscreen test/run_engine_check.sh ~/src/norns
 
 Run only one engine check at a time per machine (it uses scsynth's port 57110).
 
-`test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands.
+`test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands, and that the docs name no engine command or repository file that no longer exists.
 
 GitHub Actions (`.github/workflows/test.yml`) runs all three on every pull request and on pushes to `main`: the Lua tests under Lua 5.3 (the version norns runs) and LuaJIT, and the engine check on Ubuntu with SuperCollider, a dummy JACK server and `monome/norns` at a pinned commit. Both jobs (`lua`, `engine`) are required to pass before a pull request can merge into `main`.
 
