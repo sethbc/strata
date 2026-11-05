@@ -1872,13 +1872,21 @@ test("a scene recall stops a voice before switching its source (#46)", function(
     local where = transition_time == 0 and "instant recalls" or "smooth transitions"
     local context = load_strata(); finish_startup(context)   -- voices 1 and 2 running
     params:set("v1_source", 1); capture_scene(1)
-    toggle_voice(1); params:set("v1_source", 10); capture_scene(2)
-    toggle_voice(1); params:set("v1_source", 2); capture_scene(3)
+    toggle_voice(1); params:set("v1_source", 10); params:set("v1_amp", 0.123); capture_scene(2)
+    toggle_voice(1); params:set("v1_source", 2); params:set("v1_amp", 0.3); capture_scene(3)
     recall_scene(1, 0)
     context.clear_engine_calls()
+    local scene_b_calls = {}
     for _, scene in ipairs({ 2, 1, 3 }) do
+      local first_call = #context.engine_calls + 1
       recall_scene(scene, transition_time)
       context.clock.run_for(transition_time + 1)
+      if scene == 2 then
+        for index = first_call, #context.engine_calls do
+          local call = context.engine_calls[index]
+          if call.args[1] == 0 then table.insert(scene_b_calls, call.name) end
+        end
+      end
     end
     -- replay voice 1's calls on a model of the engine (running, on its synth)
     local running, source, replacements, order = true, 0, 0, {}
@@ -1896,6 +1904,12 @@ test("a scene recall stops a voice before switching its source (#46)", function(
     assert_equal(table.concat(order, ", "), "off, source 9, source 0, on, source 1",
       where .. ": B stops voice 1 before its source switch, A switches it before starting it")
     assert_equal(replacements, 1, where .. ": only C's switch replaces a running voice's grain synth")
+    -- an instant B stops voice 1 before setting its params (B's amp), so its
+    -- release tail keeps A's values (a smooth one fades them in first)
+    if transition_time == 0 then
+      assert_equal(table.concat(scene_b_calls, ", "), "voiceOff, setGrainSource",
+        where .. ": B sends voice 1 only its stop and its source")
+    end
     assert_equal(local_value("voices")[1].active, true, where .. ": voice 1 ends running")
     assert_equal(local_value("voices")[1].source, 2, where .. ": on buffer 1")
   end

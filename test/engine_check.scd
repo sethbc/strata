@@ -900,23 +900,30 @@ var checkSupersededAtStart = { arg voice, before;
 // switch does (cutting the fading ones, freeing the cutting ones), so after
 // every step the voice holds at most its live grain synth, one fading and
 // one cutting (#46), and as many voice synths. The cycles visit the synth
-// source too, so voice synths are released, re-gated and superseded
+// source too, so voice synths are released, superseded and replaced: [9, 0]
+// from the synth source hands the released voice synth to fadingSynths at
+// voiceOn and cuts it as the switch back to the synth starts a new one, so
+// two voice synths run at once there (the count measures something)
 var checkStopStartCycles = { arg voice;
     var before = synthNames.(context.xg).size, worstGrains = 0, worstVoices = 0;
+    // one tree query right after the sync, so a synth in its 50 ms kill
+    // fade is still counted (each round trip waits for a server period)
     var countStep = {
+        var nodes;
         server.sync;
-        worstGrains = max(worstGrains, voiceGrainNodes.(synthNodes.(engine.processGroup), voice).size);
-        worstVoices = max(worstVoices, synthNodes.(engine.voiceGroup).count({ arg node; node.def == engine.voiceSynthDefs[voice] }));
+        nodes = synthNodes.(context.xg);
+        worstGrains = max(worstGrains, voiceGrainNodes.(nodes, voice).size);
+        worstVoices = max(worstVoices, nodes.count({ arg node; node.def == engine.voiceSynthDefs[voice] }));
     };
     // [stopped source, running source]: each differs from the one before
-    [[9, 3], [0, 9], [4, 0], [9, 4], [0, 3], [4, 9]].do({ arg sources;
+    [[9, 3], [0, 9], [4, 0], [9, 0], [4, 3], [0, 9]].do({ arg sources;
         command.(\voiceOff, voice); countStep.value;
         command.(\setGrainSource, voice, sources[0]); countStep.value;
         command.(\voiceOn, voice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); countStep.value;
         command.(\setGrainSource, voice, sources[1]); countStep.value;
     });
     check.(worstGrains <= 3, "six fast stop / source / start / switch cycles keep at most three grain synths after every step (worst %)".format(worstGrains));
-    check.(worstVoices <= 3, "and at most three voice synths (worst %)".format(worstVoices));
+    check.((worstVoices <= 3) and: { worstVoices >= 2 }, "and at most three voice synths, two at once after [9, 0] (worst %)".format(worstVoices));
     command.(\setGrainSource, voice, 0);
     2.5.wait; server.sync;
     check.(synthNames.(context.xg).size == before, "the fast cycles leave no extra nodes");

@@ -2594,7 +2594,8 @@ function recall_scene_instant(scene_num, scene_data)
       local prefix = "v" .. i .. "_"
 
       -- A voice the scene stops is stopped first, so the engine only records
-      -- its source switch instead of building a grain synth to release at once
+      -- its source switch instead of building a grain synth to release at
+      -- once, and its release tail keeps the outgoing scene's values
       if voices[i].active and not voice_data.active then toggle_voice(i) end
 
       local previous_source = voices[i].source
