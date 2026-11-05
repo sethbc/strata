@@ -4214,9 +4214,10 @@ function randomize_pattern(voice_idx)
   end
 end
 
--- A buffer-sourced voice's first faders: its buffer params and its level
--- (the other synthesis params do nothing while the synth is off)
-local BUFFER_FADER_KEYS = {"buf_pos", "buf_rate", "buf_scan", "amp"}
+-- A buffer-sourced voice's first faders: its buffer params, then its level
+-- and pan (voice_level_fader_keys; the other synthesis params do nothing
+-- while the synth is off)
+local BUFFER_FADER_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
 -- The six grain params (envelope shape and grain mode are option params,
 -- shown as index faders)
 local GRAIN_FADER_KEYS = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}
@@ -4227,11 +4228,20 @@ local function append_fader_ids(ids, prefix, keys)
   end
 end
 
+-- The synthesis params every source applies: level, and pan for the voices
+-- that have it (sub has none). The engine pans buffer and input grains too.
+function voice_level_fader_keys(voice_idx)
+  local keys = {"amp"}
+  if voices[voice_idx].params.pan ~= nil then table.insert(keys, "pan") end
+  return keys
+end
+
 -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
--- params (param_order), or BUFFER_FADER_KEYS for a buffer source, then the
--- grain params, then the nine crossmod slot values (source, amp mod, freq
--- mod for each slot). An input source has neither synth nor buffer params
--- that do anything: its faders start with the grain params, then its level.
+-- params (param_order), or BUFFER_FADER_KEYS and the level and pan for a
+-- buffer source, then the grain params, then the nine crossmod slot values
+-- (source, amp mod, freq mod for each slot). An input source has no buffer
+-- params, and of its synth params only the level and pan do anything: its
+-- faders start with the grain params, then the level and pan.
 function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
@@ -4240,10 +4250,11 @@ function fader_param_ids(voice_idx)
     append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
   elseif voice_uses_buffer(voice_idx) then
     append_fader_ids(ids, prefix, BUFFER_FADER_KEYS)
+    append_fader_ids(ids, prefix, voice_level_fader_keys(voice_idx))
     append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
   else
     append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
-    append_fader_ids(ids, prefix, {"amp"})
+    append_fader_ids(ids, prefix, voice_level_fader_keys(voice_idx))
   end
   for slot = 1, NUM_MOD_SLOTS do
     table.insert(ids, prefix .. "mod_source_" .. slot)
