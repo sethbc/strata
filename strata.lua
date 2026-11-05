@@ -330,12 +330,35 @@ function request_redraw()
   UI_PAGES.arc_dirty = true
 end
 
--- Run one draw of a frame. An error is printed with its traceback instead
--- of ending the frame clock, so one failing frame never freezes the display:
--- the next request draws again.
-function draw_frame_part(draw)
-  local drawn, draw_error = xpcall(draw, debug.traceback)
-  if not drawn then print("strata: frame draw failed: " .. tostring(draw_error)) end
+-- Run one draw of a frame (`part` names it: "screen" or "arc"). An error is
+-- printed with its traceback instead of ending the frame clock, so one
+-- failing frame never freezes the display: the next request draws again. A
+-- draw that keeps failing with the same error prints it once, not on every
+-- frame; another error, or the same one after a good draw, prints again.
+UI_PAGES.draw_errors = {}  -- per part: the error message it last printed
+
+-- xpcall handler for a frame draw: a key that stays the same while the
+-- error does, and the error with its traceback. A string error is its own
+-- key. A table error is a new table each time, so its key is its `message`
+-- field (also what is printed) or, without one, its type.
+function draw_error_report(message)
+  local text, key = tostring(message), type(message)
+  if type(message) == "string" then
+    key = message
+  elseif type(message) == "table" and type(message.message) == "string" then
+    text, key = message.message, message.message
+  end
+  return {message = key, traceback = debug.traceback(text, 2)}
+end
+
+function draw_frame_part(part, draw)
+  local drawn, report = xpcall(draw, draw_error_report)
+  if drawn then
+    UI_PAGES.draw_errors[part] = nil
+  elseif report.message ~= UI_PAGES.draw_errors[part] then
+    UI_PAGES.draw_errors[part] = report.message
+    print("strata: frame draw failed: " .. report.traceback)
+  end
 end
 
 -- One frame. It calls the global redraw(), so norns' swaps apply: nothing
@@ -347,11 +370,11 @@ function draw_frame()
   if UI_PAGES[ui_page] == "LFO" then UI_PAGES.screen_dirty = true end
   if UI_PAGES.screen_dirty then
     UI_PAGES.screen_dirty = false
-    draw_frame_part(redraw)
+    draw_frame_part("screen", redraw)
   end
   if UI_PAGES.arc_dirty then
     UI_PAGES.arc_dirty = false
-    draw_frame_part(arc_redraw)
+    draw_frame_part("arc", arc_redraw)
   end
 end
 
@@ -1293,7 +1316,8 @@ function init()
     max = NUM_SCENES,
     default = 4,
     action = function(x)
-      -- How many scenes to cycle through
+      -- How many scenes to cycle through; the grid's scene page shows it
+      grid_redraw()
     end
   }
 
@@ -2117,7 +2141,8 @@ function drift_update()
         local position = mean_reverting_step(voices[i].grain.buf_pos, buf_pos_base[i],
           DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
         set_drifted_param("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
-        request_redraw()  -- MAIN and the BUFFER arc ring show the position
+        -- MAIN and the BUFFER arc ring show the selected voice's position only
+        if i == selected_voice then request_redraw() end
       end
     end
   end
@@ -2539,6 +2564,9 @@ function recall_scene(scene_num, transition_time)
 
   current_scene = scene_num
   request_redraw()
+  -- a fade's first step redrew the grid before current_scene was set; an
+  -- instant recall sets it and redraws the grid itself
+  if transition_time > 0 then grid_redraw() end
 end
 
 -- Apply a scene immediately: scene_data, or the slot's data when nil. The
@@ -2611,6 +2639,8 @@ function recall_scene_instant(scene_num, scene_data)
     end
   end
 
+  -- the scene is applied: the grid's scene page lights it in this redraw
+  current_scene = scene_num
   update_voice_list()
   request_redraw()  -- freeze and running states, and the end of a fade
   grid_redraw()
@@ -2640,6 +2670,7 @@ function scene_sequencer_start()
 
   scene_sequencer_enabled = true
   scene_sequencer_position = 1
+  grid_redraw()  -- the scene page shows the sequencer on
 
   scene_sequencer_clock = clock.run(function()
     -- Begin on the next scheduler tick: a PSET load sets this param partway
@@ -2965,8 +2996,9 @@ end
 -- Per voice type, on MAIN: the synthesis param E3 and arc ring 2 adjust
 -- (param id suffix, screen label and screen value format; the arc ring sweeps
 -- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
--- and the short name the voice list shows (at most 5 characters, so the
--- widest entry, "+ pulse [F]", ends well left of the divider at x 62)
+-- and the short name the voice list shows (at most 5 characters, which a
+-- test asserts, so the widest entry, "+ pulse [F]", ends well left of the
+-- divider at x 62)
 local MAIN_PARAMS = {
   resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},
   fm = {key = "index", label = "index", format = "%.1f", list_name = "fm"},
@@ -3391,7 +3423,10 @@ local BUFFER_PAGE = {
   flash_text = nil,       -- the transient hint, drawn instead of the key hints
   flash_until = 0,        -- util.time() when it ends
   flash_clock = nil,      -- asks for a redraw when it ends
-  file_selector_open = false  -- K2's file selector owns the screen: redraw() draws it
+  file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
+  file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
+  script_key = nil,               -- Strata's key and enc as K2 opened the selector
+  script_enc = nil
 }
 
 -- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
@@ -3549,16 +3584,62 @@ local function buffer_key_release(n)
   -- open (fs.enter calls norns.menu.init), so Strata's redraws would draw
   -- over the file list: until the callback, which norns calls on a choice
   -- and on a cancel alike, they draw the selector instead
-  BUFFER_PAGE.file_selector_open = true
-  fileselect.enter(_path.audio, function(path)
+  local function file_chosen(path)
     -- loaded directly (it also shows the path in buf<n>_file): setting the
     -- param would do nothing when it already holds this path
     if path ~= "cancel" then
       load_buffer(slot, path)
     end
-    BUFFER_PAGE.file_selector_open = false
-    request_redraw()
-  end)
+    close_buffer_file_selector()
+  end
+  BUFFER_PAGE.file_selector_open = true
+  BUFFER_PAGE.file_selector_callback = file_chosen
+  BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc = key, enc
+  local entered, enter_error = xpcall(function()
+    fileselect.enter(_path.audio, file_chosen)
+  end, with_traceback)
+  if not entered then
+    -- no selector is open, so no callback will come: Strata's page, key and
+    -- enc come back. fs.enter fails after norns.menu.init() has routed
+    -- play mode's keys and encoders to fs.key/fs.enc (_menu.key and
+    -- norns.encoders.callback are copied from the globals only in
+    -- set_mode(false)), so restoring the globals is not enough: route them
+    -- again, as fs.exit does
+    key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
+    close_buffer_file_selector()
+    if not norns.menu.status() then pcall(norns.menu.init) end
+    error(enter_error, 0)
+  end
+end
+
+-- The BUFFER K2 selector is closed (its callback ran) or will never call back
+function close_buffer_file_selector()
+  BUFFER_PAGE.file_selector_open = false
+  BUFFER_PAGE.file_selector_callback = nil
+  BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc = nil, nil
+  request_redraw()
+end
+
+-- norns has one file selector. Opened from play mode (BUFFER K2), fs.enter
+-- puts its own key and enc in the globals and keeps Strata's to restore in
+-- fs.exit. A PARAMS file param (or TAPE) opening a selector from the menu
+-- over it replaces its callback and restore list with the menu's: that
+-- exit gives the menu its handlers back, Strata's callback never comes, and
+-- the globals keep the selector's handlers, which norns hands back to play
+-- mode as the menu closes. So when the menu closes (menu_watch.wrapper,
+-- before norns' set_mode(false) reads the globals) and fs.callback is no
+-- longer Strata's, the selector state is cleared and Strata's key and enc
+-- are put back. Only a real menu-to-play change counts (the menu still
+-- open as set_mode(false) starts; fs.enter's and fs.exit's own
+-- norns.menu.init() run in play mode), and a fileselect without a
+-- `callback` field (other norns internals) releases nothing, so a change
+-- there leaves the selector state set rather than breaking BUFFER K2.
+function release_superseded_file_selector()
+  if not BUFFER_PAGE.file_selector_open or not norns.menu.status() then return end
+  if fileselect.callback == nil then return end
+  if fileselect.callback == BUFFER_PAGE.file_selector_callback then return end
+  key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
+  close_buffer_file_selector()
 end
 
 -- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP. PAGE_KEY gets key
@@ -3607,8 +3688,14 @@ function watch_menu_opening()
   -- it cannot break the system menu even if one is gone
   local original_set_mode = _menu.set_mode
   local forget_keys = forget_keys_held_through_menu
+  local release_selector = release_superseded_file_selector
   menu_watch.original_set_mode = original_set_mode
   menu_watch.wrapper = function(mode)
+    if mode == false and menu_watch.active then
+      -- never let it stop the menu closing
+      local released, release_error = pcall(release_selector)
+      if not released then print("strata: file selector release failed: " .. tostring(release_error)) end
+    end
     original_set_mode(mode)
     if mode == true and menu_watch.active then forget_keys() end
   end
@@ -3847,18 +3934,23 @@ local function attach_arc(port)
   arc_connected = arc_device.device ~= nil
 end
 
--- Strata follows one arc: at init the first vport holding a device (port 1
--- preferred by being first); later, a hot-plugged arc connects only while none
--- is connected, and only removing the connected arc disconnects.
-function arc_init()
-  local port = UI_PAGES.ARC_PORT
+-- The first arc vport (in port order) holding a device, other than
+-- skipped_port; nil when there is none
+function first_arc_port(skipped_port)
   for candidate = 1, UI_PAGES.ARC_PORTS do
-    if arc.connect(candidate).device then
-      port = candidate
-      break
+    if candidate ~= skipped_port and arc.connect(candidate).device then
+      return candidate
     end
   end
-  attach_arc(port)  -- the first frame draws its rings
+  return nil
+end
+
+-- Strata follows one arc: at init the first vport holding a device (port 1
+-- preferred by being first); later, a hot-plugged arc connects only while none
+-- is connected, and removing the connected arc moves to the first other
+-- vport holding one, or disconnects.
+function arc_init()
+  attach_arc(first_arc_port() or UI_PAGES.ARC_PORT)  -- the first frame draws its rings
 end
 
 function arc.add(device)
@@ -3874,9 +3966,16 @@ function arc.remove(device)
   local port = device.port or UI_PAGES.ARC_PORT
   if port < 1 or port > UI_PAGES.ARC_PORTS then return end
   if arc_device ~= arc.connect(port) then return end  -- not the arc Strata follows
-  arc_connected = false
-  request_redraw()
-  print("arc disconnected")
+  -- norns clears the removed vport only after arc.remove returns: skip it
+  local next_port = first_arc_port(port)
+  if next_port then
+    attach_arc(next_port)
+    print("arc disconnected; following the arc on port " .. next_port)
+  else
+    arc_connected = false
+    print("arc disconnected")
+  end
+  request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
 end
 
 function arc_delta(n, delta)
@@ -4015,10 +4114,10 @@ end
 
 -- Pitchbend over +/-2 semitones as a frequency (or buffer rate) ratio. The
 -- engine applies it to the voice synth and to strataGrainBuf; a stopped
--- voice gets it when it starts (sync_voice_values_to_engine).
+-- voice gets it when it starts (sync_voice_values_to_engine). Nothing on
+-- the screen or arc shows the bend, so it asks for no redraw.
 function midi_pitchbend(voice_idx, value)
   midi_set_bend(voice_idx, 2 ^ (((value - MIDI.bend_center) / MIDI.bend_center) * MIDI.bend_semitones / 12))
-  request_redraw()  -- the voice changed, like a note's (the frame clock coalesces a wheel's stream)
 end
 
 function midi_set_bend(voice_idx, ratio)
@@ -4428,29 +4527,65 @@ function param_range(param_id)
   return param.min, param.max
 end
 
--- A param's current value as a fraction (0-1) of its range. Control params
--- follow their controlspec warp (exp for freq, cutoff, mod speed); number
--- params (mod sources) and option params (grain envelope) are linear.
-function param_fraction(param_id)
+-- A value as a fraction (0-1) of a param's range. Control params follow
+-- their controlspec warp (exp for freq, cutoff, mod speed); number params
+-- (mod sources) and option params (grain envelope) are linear.
+function param_value_fraction(param_id, value)
   local spec = params:lookup_param(param_id).controlspec
   if spec then
-    return spec:unmap(params:get(param_id))
+    return spec:unmap(value)
   end
   local minval, maxval = param_range(param_id)
-  return util.linlin(minval, maxval, 0, 1, params:get(param_id))
+  return util.linlin(minval, maxval, 0, 1, value)
+end
+
+-- A param's current value as a fraction (0-1) of its range
+function param_fraction(param_id)
+  return param_value_fraction(param_id, params:get(param_id))
+end
+
+-- A fader whose range spans 0 (pan, buffer scan, the crossmod amounts) has
+-- a zero column: the column nearest 0's place on the range, never an end
+-- one. 16 columns have no centre, so a plain sweep would give +/-0.07 for
+-- pan there and never 0. nil for any other range.
+function fader_zero_column(param_id)
+  local minval, maxval = param_range(param_id)
+  if not (minval < 0 and maxval > 0) then return nil end
+  local last_column = GRID_LAYOUT.fader_width
+  local column = util.round(param_value_fraction(param_id, 0) * (last_column - 1) + 1)
+  return util.clamp(column, 2, last_column - 1)
+end
+
+-- The fraction of its range (in the warp's terms) column x (1-16) sets.
+-- Columns sweep the range evenly; a fader with a zero column sweeps each
+-- side of 0 evenly over its own columns instead, so column 1 is still the
+-- minimum, the zero column 0 and column 16 the maximum.
+function fader_column_fraction(param_id, x)
+  local last_column = GRID_LAYOUT.fader_width
+  local zero_column = fader_zero_column(param_id)
+  if not zero_column then return (x - 1) / (last_column - 1) end
+  local zero_fraction = param_value_fraction(param_id, 0)
+  if x <= zero_column then
+    return util.linlin(1, zero_column, 0, zero_fraction, x)
+  end
+  return util.linlin(zero_column, last_column, zero_fraction, 1, x)
 end
 
 -- Grid column x (1-16) sets a param across its range. Control params follow
 -- their controlspec warp; number params (mod sources) and option params
--- (grain envelope, as an option index) map linearly to integers.
+-- (grain envelope, as an option index) map linearly to integers. A zero
+-- column sets exactly 0.
 function set_param_from_column(param_id, x)
   local spec = params:lookup_param(param_id).controlspec
-  local value
-  if spec then
-    value = spec:map((x - 1) / (GRID_LAYOUT.fader_width - 1))
-  else
-    local minval, maxval = param_range(param_id)
-    value = util.round(util.linlin(1, GRID_LAYOUT.fader_width, minval, maxval, x))
+  local value = 0
+  if x ~= fader_zero_column(param_id) then
+    local fraction = fader_column_fraction(param_id, x)
+    if spec then
+      value = spec:map(fraction)
+    else
+      local minval, maxval = param_range(param_id)
+      value = util.round(util.linlin(0, 1, minval, maxval, fraction))
+    end
   end
   params:set(param_id, value)
 end
@@ -4462,9 +4597,20 @@ function set_fader_param(voice_idx, fader_index, x)
   set_param_from_column(param_id, x)
 end
 
--- Grid column (1-16) that shows a fader param's current value
+-- Grid column (1-16) that shows a fader param's current value: the inverse
+-- of fader_column_fraction, so 0 shows at a zero column
 function fader_position(param_id)
-  return util.round(param_fraction(param_id) * (GRID_LAYOUT.fader_width - 1) + 1)
+  local last_column = GRID_LAYOUT.fader_width
+  local fraction = param_fraction(param_id)
+  local zero_column = fader_zero_column(param_id)
+  if not zero_column then
+    return util.round(fraction * (last_column - 1) + 1)
+  end
+  local zero_fraction = param_value_fraction(param_id, 0)
+  if fraction <= zero_fraction then
+    return util.round(util.linlin(0, zero_fraction, 1, zero_column, fraction))
+  end
+  return util.round(util.linlin(zero_fraction, 1, zero_column, last_column, fraction))
 end
 
 function select_grid_voice(voice_idx)
