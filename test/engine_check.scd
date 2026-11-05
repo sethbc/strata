@@ -136,7 +136,12 @@ var waitFor = { arg condition, timeout = 3;
 };
 
 // true when the velocity control feeds nothing but EnvGen levelScale inputs
-// (a per-trigger accent depth), never a bare multiplier on a running signal
+// (a per-trigger accent depth), never a bare multiplier on a running signal.
+// One narrow allowance: \strataKarplus may multiply velocity into a T2A of
+// t_trig (a single-sample pluck impulse, so only that trigger's excitation
+// is scaled). sclang fuses `T2A * velocity + Impulse` into a MulAdd, so the
+// allowed user is either a '*' BinaryOpUGen or a MulAdd, and in both the
+// velocity is multiplied with a T2A (never added or used elsewhere).
 var velocityOnlyScalesAccents = { arg defName;
     var desc = SynthDescLib.global.at(defName);
     var control = desc.controls.detect({ arg each; each.name == \velocity });
@@ -144,11 +149,21 @@ var velocityOnlyScalesAccents = { arg defName;
         input.isKindOf(OutputProxy) and: { input.source.isKindOf(Control) }
             and: { (input.source.specialIndex + input.outputIndex) == control.index }
     };
+    var isPluckImpulseProduct = { arg ugen;
+        (defName == \strataKarplus) and: { ugen.inputs.select(isVelocity).size == 1 }
+            and: {
+                (ugen.isKindOf(BinaryOpUGen) and: { ugen.operator == '*' }
+                    and: { ugen.inputs.any({ arg input; input.isKindOf(T2A) }) })
+                or: { ugen.isKindOf(MulAdd) and: { ugen.inputs[0].isKindOf(T2A) } and: { isVelocity.(ugen.inputs[1]) } }
+            }
+    };
     var users;
     if (control.isNil) { false } {
         users = desc.def.children.select({ arg ugen; (ugen.inputs ? []).any(isVelocity) });
         users.notEmpty and: { users.every({ arg ugen;
-            ugen.isKindOf(EnvGen) and: { ugen.inputs.every({ arg input, index; isVelocity.(input).not or: { index == 1 } }) }
+            isPluckImpulseProduct.(ugen) or: {
+                ugen.isKindOf(EnvGen) and: { ugen.inputs.every({ arg input, index; isVelocity.(input).not or: { index == 1 } }) }
+            }
         }) }
     }
 };
@@ -646,9 +661,11 @@ server.waitForBoot({
         (voiceDefs ++ grainDefs).do({ arg name;
             check.(controlTriggersFreeingEnvGen.(name, \kill), "% has a kill fade (kill triggers a freeing EnvGen)".format(name));
         });
-        grainDefs.do({ arg name;
+        (voiceDefs ++ grainDefs).do({ arg name;
             check.(velocityOnlyScalesAccents.(name),
                 "% uses velocity only as its accent's levelScale (no bare velocity multiplier)".format(name));
+        });
+        grainDefs.do({ arg name;
             [\grainMode, \t_trig, \velocity, \bend, \envBuf].do({ arg control;
                 check.(SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).includes(control),
                     "% has a % control".format(name, control));

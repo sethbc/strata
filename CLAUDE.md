@@ -62,7 +62,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### Invariants that are easy to break (details in `docs/notes/engine.md`)
 
-- **Pattern steps and MIDI notes never create nodes.** They call `retrigger`. Velocity only scales the accent envelope's `levelScale` (sampled at trigger time), never a running signal. The engine check asserts this.
+- **Pattern steps and MIDI notes never create nodes.** They call `retrigger`. Velocity only scales the accent envelope's `levelScale` (sampled at trigger time), never a running signal. The engine check asserts that in every voice and grain SynthDef `velocity` feeds only `EnvGen` `levelScale` inputs; the one allowance is `\strataKarplus`, where it may multiply `T2A.ar(t_trig)` (a single-sample pluck impulse) and nothing else.
 - **Replace, never stack.** A source switch replaces the grain synth. Earlier fading synths are cut with `cutSynth` (the `kill` fade), never a second `release` (EnvGen ignores it). New grain synths are placed with `startPlacedGrainSynth`, never relative to a releasing synth.
 - **`openedGate(gate)`** wraps every ASR gate, so a synth gated off in its first block still starts and frees. Never use `gate.max(...)`: it breaks forced releases.
 - **Silent bus**: unrouted mod slots read `silentBus`, never control bus 0 (norns allocates the input follower there).
