@@ -85,7 +85,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 **On norns:** copy the project to `~/dust/code/`, then restart norns or run `;restart` in maiden. SuperCollider changes need a script restart. Watch the maiden console for errors.
 
 **Off-device checks** (run from the repo root before committing; CI runs all three, see status.md):
-- `lua test/run.lua` and `luajit test/run.lua`: behaviour tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. The run also includes the sync check and the CLAUDE.md table check.
+- `lua test/run.lua` and `luajit test/run.lua`: behaviour tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds` and `bufferStateStride` equal their `strata.lua` constants.
 - `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand` with the same argument count, and every command is used.
 - `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` (default `~/src/norns`, or `$NORNS_DIR`) and runs `test/engine_check.scd` on a silent local scsynth. It needs SuperCollider (`$SCLANG` overrides the path). Run only one at a time per machine (port 57110).
 - Add a test to `test/run.lua` for every behaviour change. Script locals are reached through `find_upvalue()`/`local_value()`.
@@ -96,7 +96,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - `UI.List` has no `set_items()`: recreate the list. `UI.List.new(x, y, index, items)` needs every argument.
 - `clock.sleep()` works only inside `clock.run(...)`. Never call it in `init()`.
 - Param IDs must be unique, and norns has built-ins such as `reverb`. Use prefixed ids (`strata_fx`, ...).
-- A group's size `n` must equal the number of params that follow it. Groups cannot nest (the stub errors).
+- A group's size `n` must equal the number of params that follow it. Groups cannot nest. The stub errors when a group gets fewer than `n` params before the next group or the end of the list, or when the param after its last one is not a separator or a group.
 
 ## Code Style Guidelines
 

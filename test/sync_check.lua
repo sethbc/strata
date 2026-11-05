@@ -1,14 +1,20 @@
 -- test/sync_check.lua
 -- Static Lua <-> SuperCollider command sync check.
 -- Extracts every engine.<name>(...) call from strata.lua and every
--- this.addCommand(\<name>, "<sig>", ...) from lib/Engine_Strata.sc, then
--- checks that the two name sets are equal and that every Lua call passes
--- exactly as many arguments as its signature declares.
+-- this.addCommand(\<name>, "<sig>", ...) from lib/Engine_Strata.sc (skipping
+-- commented-out ones), then checks that the two name sets are equal and that
+-- every Lua call passes exactly as many arguments as its signature declares.
 --
 -- Standalone:  lua test/sync_check.lua   (exit status 1 on mismatch)
 -- As a module: require("sync_check").run(repo_root) -> ok, report_lines
 
 local sync_check = {}
+
+-- The engine source is parsed by the engine stub's parser, which skips
+-- SuperCollider comments (norns_stubs.lua sits next to this file)
+local script_dir = debug.getinfo(1, "S").source:match("^@(.*)[/\\]") or "."
+package.path = script_dir .. "/?.lua;" .. package.path
+local stubs = require("norns_stubs")
 
 local function read_file(path)
   local file = assert(io.open(path, "r"))
@@ -113,12 +119,9 @@ function sync_check.lua_calls(lua_source)
   return calls
 end
 
+-- name -> signature of every addCommand that is not commented out
 function sync_check.sc_commands(sc_source)
-  local commands = {}
-  for name, signature in sc_source:gmatch('addCommand%(%s*\\(%w+)%s*,%s*"([^"]*)"') do
-    commands[name] = signature
-  end
-  return commands
+  return stubs.engine_signatures_from_source(sc_source)
 end
 
 function sync_check.run(repo_root)

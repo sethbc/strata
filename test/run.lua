@@ -47,7 +47,9 @@ local function assert_near(actual, expected, tolerance, message)
   end
 end
 
--- Load strata.lua into fresh stubs and run init().
+-- Load strata.lua (or options.source, a patched copy of it) into fresh
+-- stubs and run init(). init() has added every param: each group must have
+-- all of its params.
 local function load_strata(options)
   options = options or {}
   local data_dir = data_root .. (options.data_subdir or tostring(math.random(1, 1e9))) .. "/"
@@ -55,10 +57,11 @@ local function load_strata(options)
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
   if options.before_load then options.before_load(context) end
-  local chunk = assert(loadfile(LUA_PATH))
+  local chunk = options.source and assert(load(options.source, "@" .. LUA_PATH)) or assert(loadfile(LUA_PATH))
   chunk()
   if options.before_init then options.before_init(context) end
   init()
+  context.check_param_groups()
   return context
 end
 
@@ -154,6 +157,44 @@ test("Lua engine calls and SC addCommand signatures are in sync (T3)", function(
   assert_equal(calls[2].arg_count, 0, "empty call")
 end)
 
+test("the engine source parsers skip // and /* */ comments (#25)", function()
+  local stripped = stubs.strip_sc_comments('a = "x // y /* z"; b = \'s//\'; c = $"; // gone\nd /* e /* f */ g */ h')
+  assert_equal(stripped, 'a = "x // y /* z"; b = \'s//\'; c = $"; ' .. string.rep(" ", #"// gone")
+    .. "\nd " .. string.rep(" ", #"/* e /* f */ g */") .. " h",
+    "comments become spaces (newlines kept); strings, symbols and characters are not comments")
+  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  -- the 3.0.1 review's mutation: \stopRecord wrapped in a block comment
+  local start = assert(source:find("this.addCommand(\\stopRecord", 1, true), "stopRecord found")
+  local finish = assert(source:find("this.addCommand(", start + 1, true), "next command found")
+  local commented = source:sub(1, start - 1) .. "/* " .. source:sub(start, finish - 1) .. "*/ " .. source:sub(finish)
+    .. '\n// this.addCommand(\\ghostLine, "i", { arg msg; });'
+    .. '\n/* outer /* nested */ this.addCommand(\\ghostNested, "i", { arg msg; }); */'
+    .. '\n// this.addPoll(\\ghostPoll, { 0 });'
+  -- the engine stub's (which the CLAUDE.md table check uses) and sync_check's
+  for parser_name, parse in pairs({ stub = stubs.engine_signatures_from_source, sync_check = sync_check.sc_commands }) do
+    local commands = parse(commented)
+    for _, name in ipairs({"stopRecord", "ghostLine", "ghostNested"}) do
+      assert_true(commands[name] == nil, parser_name .. " skips the commented-out \\" .. name)
+    end
+    assert_equal(commands.clearBuffer, signatures.clearBuffer, parser_name .. " reads the command before it")
+    assert_equal(commands.saveBuffer, signatures.saveBuffer, parser_name .. " reads the command after it")
+  end
+  assert_true(signatures.stopRecord ~= nil, "the real engine has \\stopRecord")
+  for _, name in ipairs(stubs.engine_polls_from_source(commented)) do
+    assert_true(name ~= "ghostPoll", "a commented-out poll is skipped")
+  end
+  -- #24's SynthDef and envelope parsers: a commented-out SynthDef, argument or Env
+  local patched, count = source:gsub("SynthDef%(\\strataGrain, {%s*arg ", "%0/* ghostControl=0, */ ")
+  assert_equal(count, 1, "argument patch applies")
+  patched, count = patched:gsub("envBuffers%s*=%s*%[", "%0\n            // Env.ghost,")
+  assert_equal(count, 1, "envelope patch applies")
+  local spec = stubs.engine_spec_from_source(patched .. "\n// SynthDef(\\ghostDef, { arg ghost; });")
+  assert_true(spec.synthdef_controls.ghostDef == nil, "a commented-out SynthDef is skipped")
+  assert_true(not spec.synthdef_controls.strataGrain.ghostControl, "a commented-out argument is skipped")
+  assert_true(spec.synthdef_controls.strataGrain.grainSize, "the arguments around it are read")
+  assert_equal(spec.enumerations.envShape[2], engine_spec.enumerations.envShape[2], "a commented-out Env is not counted")
+end)
+
 -- Expects engine.<name>(...) to be rejected by the engine stub with an error
 -- containing `expected_text`
 local function assert_engine_rejects(expected_text, name, ...)
@@ -189,6 +230,51 @@ test("the engine stub reads its limits and controls from the engine source (#24)
   local extended, count = source:gsub("SynthDef%(\\strataGrain, {%s*arg ", "%0newGrainControl=0, ")
   assert_equal(count, 1, "test patch applies")
   assert_true(stubs.engine_spec_from_source(extended).grain_params.newGrainControl, "new grain control accepted")
+end)
+
+test("the engine's shared constants equal strata.lua's (#25)", function()
+  load_strata()
+  assert_equal(engine_spec.num_voices, local_value("NUM_VOICES"), "numVoices = NUM_VOICES")
+  assert_equal(engine_spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers = NUM_BUFFERS")
+  assert_equal(engine_spec.buffer_seconds, local_value("BUFFER_SECONDS"), "bufferSeconds = BUFFER_SECONDS")
+  -- only buffer_state_changed, a local function, reads BUFFER_STATE_STRIDE
+  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
+  local stride = tonumber(source:match("\nlocal BUFFER_STATE_STRIDE%s*=%s*(%d+)"))
+  assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
+end)
+
+-- The script never bangs its params, so until a param changes the engine
+-- plays the FX SynthDef's own default: it must be the Lua param's default.
+-- Each FX command sets controls of one FX synth from its arguments (parsed
+-- from the command bodies); sending every fx param's default must send
+-- exactly those SynthDef defaults.
+test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
+  local context = load_strata()
+  local fx_commands = engine_spec.fx_commands
+  for _, name in ipairs({"setFilter", "setDelay", "setReverb", "setMasterDrift"}) do
+    assert_true(fx_commands[name] ~= nil, "engine." .. name .. " sets an FX synth")
+  end
+  local group_index
+  for index, param in ipairs(params.params) do
+    if param.id == "strata_fx" then group_index = index end
+  end
+  assert_true(group_index ~= nil, "the fx group exists")
+  context.clear_engine_calls()
+  for index = group_index + 1, group_index + params:get("strata_fx") do
+    local param_id = params.params[index].id
+    send_param_to_engine(param_id, params:get(param_id))
+  end
+  for name, fx in pairs(fx_commands) do
+    local calls = context.calls_named(name)
+    assert_true(#calls > 0, "an fx param sends engine." .. name)
+    assert_equal(#fx.controls, #signatures[name], "every engine." .. name .. " argument sets a control")
+    local defaults = engine_spec.synthdef_defaults[fx.synthdef]
+    for index, control in ipairs(fx.controls) do
+      assert_true(defaults[control] ~= nil, "\\" .. fx.synthdef .. " has a numeric default for " .. control)
+      assert_near(calls[#calls].args[index], defaults[control], 1e-6,
+        "engine." .. name .. " argument " .. index .. " (Lua default) vs \\" .. fx.synthdef .. " " .. control)
+    end
+  end
 end)
 
 test("the engine stub rejects out-of-range engine arguments (#24)", function()
@@ -2156,6 +2242,47 @@ test("stub params support option, group, trigger, binary, file and set_action", 
   params:hide("stub_file"); assert_true(not params:visible("stub_file"), "hidden param is not visible")
   params:add_text("stub_text", "text", ""); params:set("stub_text", "hello")
   assert_equal(params:string("stub_text"), "hello")
+end)
+
+-- norns cannot see where a group ends: it takes the next n params. The
+-- stub requires each group's n params to end where its section does, at
+-- the next group or separator, or at the end of the list after init()
+test("stub params: each group is followed by exactly n params (#25)", function()
+  -- the 3.0.1 review's mutation: the strata_midi group one param short or long
+  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
+  for _, size in ipairs({2, 4}) do
+    local mutated, count = source:gsub('params:add_group%("strata_midi", "midi", 3%)',
+      'params:add_group("strata_midi", "midi", ' .. size .. ')')
+    assert_equal(count, 1, "test patch applies")
+    local ok, message = pcall(load_strata, { source = mutated })
+    assert_true(not ok, "a strata_midi group of " .. size .. " is rejected")
+    assert_true(tostring(message):find("strata_midi", 1, true) ~= nil, "the error names the group: " .. tostring(message))
+  end
+  local function assert_group_error(expected_text, func)
+    local ok, message = pcall(func)
+    assert_true(not ok, "expected a group size error (" .. expected_text .. ")")
+    assert_true(tostring(message):find(expected_text, 1, true) ~= nil,
+      "group error mentions " .. expected_text .. ": " .. tostring(message))
+  end
+  -- too few: the next group (or the end of the list) arrives first
+  load_strata()
+  params:add_separator("stub_sep"); params:add_group("stub_short", "short", 2); params:add_number("stub_a", "a")
+  assert_group_error("stub_short", function() params:add_group("stub_next", "next", 1) end)
+  local context = load_strata()
+  params:add_separator("stub_sep"); params:add_group("stub_end", "end", 2); params:add_number("stub_a", "a")
+  assert_group_error("stub_end", context.check_param_groups)
+  -- too many: a param after the group's last that starts no new section
+  load_strata()
+  params:add_separator("stub_sep"); params:add_group("stub_long", "long", 1); params:add_number("stub_a", "a")
+  assert_group_error("stub_long", function() params:add_number("stub_b", "b") end)
+  -- exact groups, followed by a group, a separator or the end
+  context = load_strata()
+  params:add_separator("stub_sep")
+  params:add_group("stub_one", "one", 1); params:add_number("stub_a", "a")
+  params:add_group("stub_two", "two", 2); params:add_separator("stub_inner"); params:add_number("stub_b", "b")
+  params:add_separator("stub_after"); params:add_number("stub_c", "c")
+  params:add_group("stub_last", "last", 1); params:add_number("stub_d", "d")
+  context.check_param_groups()
 end)
 
 test("stub params store norns' numeric type constants in param.t", function()

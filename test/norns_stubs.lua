@@ -8,7 +8,9 @@
 --   * number params clamp (but do not round) and fire on change
 --   * option params store a floored, clamped index; file params a path
 --     string, text params any value; triggers (and trigger binaries) fire on
---     every set; groups count the params that follow them and cannot nest
+--     every set; groups count the params that follow them and cannot nest,
+--     and must be followed by exactly n params (then a separator, a group or
+--     the end of the list, context.check_param_groups)
 --   * param.t holds norns' numeric type codes (params.tOPTION etc.)
 --   * lfo (stub_lfo.lua), midi (stub_midi.lua), poll, fileselect and musicutil
 --     follow lib/lfo.lua, core/midi.lua, core/poll.lua, lib/fileselect.lua and
@@ -56,30 +58,91 @@ local function read_engine_source(sc_path)
   return source
 end
 
-function stubs.parse_engine_signatures(sc_path)
-  local source = read_engine_source(sc_path)
+-- SuperCollider source with its // line comments and /* */ block comments
+-- (which nest in SC) replaced by spaces, newlines kept, so a commented-out
+-- command, SynthDef argument or Env is never parsed. Strings ("..."),
+-- quoted symbols ('...') and character literals ($x) are copied unchanged.
+-- Every parser of the engine source goes through it: the ones below,
+-- engine_spec_from_source, sync_check.lua (which uses
+-- engine_signatures_from_source) and the CLAUDE.md table check (which uses
+-- parse_engine_signatures).
+function stubs.strip_sc_comments(source)
+  local output = {}
+  local index, length = 1, #source
+  local function blank(text) return (text:gsub("[^\n]", " ")) end
+  while index <= length do
+    local char, two = source:sub(index, index), source:sub(index, index + 1)
+    if two == "//" then
+      local finish = (source:find("\n", index, true) or (length + 1)) - 1
+      table.insert(output, blank(source:sub(index, finish)))
+      index = finish + 1
+    elseif two == "/*" then
+      local depth, cursor = 1, index + 2
+      while depth > 0 and cursor <= length do
+        local pair = source:sub(cursor, cursor + 1)
+        if pair == "/*" then depth, cursor = depth + 1, cursor + 2
+        elseif pair == "*/" then depth, cursor = depth - 1, cursor + 2
+        else cursor = cursor + 1 end
+      end
+      table.insert(output, blank(source:sub(index, cursor - 1)))
+      index = cursor
+    elseif char == '"' or char == "'" then
+      local cursor = index + 1
+      while cursor <= length and source:sub(cursor, cursor) ~= char do
+        cursor = cursor + (source:sub(cursor, cursor) == "\\" and 2 or 1)
+      end
+      table.insert(output, source:sub(index, cursor))
+      index = cursor + 1
+    elseif char == "$" then
+      local finish = index + (source:sub(index + 1, index + 1) == "\\" and 2 or 1)
+      table.insert(output, source:sub(index, finish))
+      index = finish + 1
+    else
+      table.insert(output, char)
+      index = index + 1
+    end
+  end
+  return table.concat(output)
+end
+
+function stubs.engine_signatures_from_source(source)
   local signatures = {}
-  for name, signature in source:gmatch('addCommand%(%s*\\(%w+)%s*,%s*"([^"]*)"') do
+  for name, signature in stubs.strip_sc_comments(source):gmatch('addCommand%(%s*\\(%w+)%s*,%s*"([^"]*)"') do
     signatures[name] = signature
   end
   return signatures
 end
 
+function stubs.parse_engine_signatures(sc_path)
+  return stubs.engine_signatures_from_source(read_engine_source(sc_path))
+end
+
 -- engine polls (this.addPoll(\name, ...) in the SC engine)
-function stubs.parse_engine_polls(sc_path)
-  local source = read_engine_source(sc_path)
+function stubs.engine_polls_from_source(source)
+  source = stubs.strip_sc_comments(source)
   local names = {}
   for name in source:gmatch('addPoll%(%s*\\(%w+)') do table.insert(names, name) end
   for name in source:gmatch('addPoll%(%s*"([^"]+)"') do table.insert(names, name) end
   return names
 end
 
+function stubs.parse_engine_polls(sc_path)
+  return stubs.engine_polls_from_source(read_engine_source(sc_path))
+end
+
 -- The engine's limits and SynthDef controls, for the engine stub's range and
 -- name checks. Everything is read from the SC source, so a limit or control
 -- changed there needs no stub change:
---   num_voices, num_buffers   var <numVoices = N; var <numBuffers = N;
+--   num_voices, num_buffers,  var <numVoices = N; var <numBuffers = N;
+--   buffer_seconds,           var <bufferSeconds = N;
+--   buffer_state_stride       var <bufferStateStride = N;
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
+--   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
+--   fx_commands[command]      {synthdef, controls}: a command that sets an FX
+--                             synth (synths[\key] = Synth(\def, ...)) with
+--                             this.setSynth(\key, \control, msg[i], ...);
+--                             controls[i] is the control argument i sets
 --   voice_synthdefs[i]        voiceSynthDefs = [...], i = engine voice + 1
 --   mod_slots                 modBus1..N on every voice SynthDef
 --   grain_params              setGrainParam names: every control of the
@@ -92,6 +155,7 @@ end
 --   enumerations[name]        {low, high}: whole-number controls the engine
 --                             rounds (name.round.clip(low, high)), and envShape
 --                             (0 = Hann, 1..envBuffers.size, envBufnumFor)
+-- Comments are stripped first (strip_sc_comments).
 local function engine_number(source, pattern, what)
   return tonumber((assert(source:match(pattern), "engine source: cannot find " .. what)))
 end
@@ -109,10 +173,15 @@ local function engine_special_params(source, name, into)
 end
 
 function stubs.engine_spec_from_source(source)
+  source = stubs.strip_sc_comments(source)
   local spec = {
     num_voices = engine_number(source, "var%s+<?numVoices%s*=%s*(%d+)", "numVoices"),
     num_buffers = engine_number(source, "var%s+<?numBuffers%s*=%s*(%d+)", "numBuffers"),
+    buffer_seconds = engine_number(source, "var%s+<?bufferSeconds%s*=%s*(%d+)", "bufferSeconds"),
+    buffer_state_stride = engine_number(source, "var%s+<?bufferStateStride%s*=%s*(%d+)", "bufferStateStride"),
     synthdef_controls = {},
+    synthdef_defaults = {},
+    fx_commands = {},
     voice_synthdefs = {},
     grain_params = {},
     voice_params = {},
@@ -125,11 +194,28 @@ function stubs.engine_spec_from_source(source)
     local rest = source:sub(position)
     local arg_list = rest:match("^%s*arg%s+([^;]*);") or rest:match("^%s*|([^|]*)|")
     assert(arg_list, "engine source: SynthDef \\" .. name .. " has no argument list the stub can read")
-    local controls = {}
+    local controls, defaults = {}, {}
     for item in arg_list:gmatch("[^,]+") do
-      controls[assert(item:match("^%s*([%a_][%w_]*)"), "SynthDef \\" .. name .. ": bad argument " .. item)] = true
+      local control = assert(item:match("^%s*([%a_][%w_]*)"), "SynthDef \\" .. name .. ": bad argument " .. item)
+      controls[control] = true
+      defaults[control] = tonumber(item:match("^%s*[%a_][%w_]*%s*=%s*(%-?[%d%.]+)%s*$"))
     end
     spec.synthdef_controls[name] = controls
+    spec.synthdef_defaults[name] = defaults
+  end
+
+  local fx_synthdefs = {}
+  for key, name in source:gmatch("synths%[%s*\\([%w_]+)%s*%]%s*=%s*Synth%(%s*\\([%w_]+)") do
+    assert(spec.synthdef_controls[name], "engine source: synths[\\" .. key .. "] plays unknown SynthDef \\" .. name)
+    fx_synthdefs[key] = name
+  end
+  for command in pairs(stubs.engine_signatures_from_source(source)) do
+    local key, settings = engine_command_body(source, command):match("this%.setSynth%(%s*\\([%w_]+)%s*,([^;]*)%)%s*;")
+    if fx_synthdefs[key] then
+      local controls = {}
+      for control, index in settings:gmatch("\\([%w_]+)%s*,%s*msg%[(%d+)%]") do controls[tonumber(index)] = control end
+      spec.fx_commands[command] = { synthdef = fx_synthdefs[key], controls = controls }
+    end
   end
 
   local voice_list = assert(source:match("voiceSynthDefs%s*=%s*%[(.-)%]"), "engine source: no voiceSynthDefs")
@@ -346,7 +432,8 @@ local function make_params(util, controlspec)
   ParamSet.__index = ParamSet
 
   -- open_group counts the params still to come in the current group, like
-  -- norns' ParamSet.group (groups cannot nest)
+  -- norns' ParamSet.group (groups cannot nest); last_group is that group,
+  -- kept after its last param until the next param shows where it ended
   local paramset = setmetatable({ params = {}, lookup = {}, action_log = {}, open_group = 0 }, ParamSet)
 
   local bang
@@ -404,8 +491,35 @@ local function make_params(util, controlspec)
     return param
   end
 
+  -- Group sizes. norns cannot see where a group ends (it takes the next n
+  -- params), so a wrong n silently moves params in or out of it. The stub
+  -- requires a group to get all n params before the next group or the end
+  -- of the list (check_groups), and the param after its last one to start a
+  -- new section, a separator or a group: anything else means n is too small.
+  local function check_group_size(param)
+    local group = paramset.last_group
+    if not group then return end
+    local missing = paramset.open_group
+    if param.t == tGROUP and missing >= 1 then
+      error(string.format("stub params: group %s has only %d of its %d params before group %s (groups cannot nest)",
+        group.id, group.n - missing, group.n, param.id), 0)
+    elseif missing < 1 and param.t ~= tSEPARATOR and param.t ~= tGROUP then
+      error(string.format("stub params: group %s ends after %d params, but %s follows with no separator or group "
+        .. "(is the group's size too small?)", group.id, group.n, tostring(param.id)), 0)
+    end
+  end
+
+  local function check_groups()
+    local group = paramset.last_group
+    if group and paramset.open_group >= 1 then
+      error(string.format("stub params: group %s has only %d of its %d params at the end of the list",
+        group.id, group.n - paramset.open_group, group.n), 0)
+    end
+  end
+
   -- separators and groups may reuse their own kind's id; any other collision is an error
   local function register(param)
+    check_group_size(param)
     local existing = paramset.lookup[param.id]
     if existing then
       if param.t == tSEPARATOR or param.t == tGROUP then
@@ -418,7 +532,13 @@ local function make_params(util, controlspec)
     end
     table.insert(paramset.params, param)
     paramset.lookup[param.id] = param
-    paramset.open_group = paramset.open_group - 1
+    if param.t == tGROUP then
+      paramset.last_group, paramset.open_group = param, param.n
+    elseif paramset.open_group >= 1 then
+      paramset.open_group = paramset.open_group - 1
+    else
+      paramset.last_group = nil
+    end
     return param
   end
 
@@ -437,12 +557,8 @@ local function make_params(util, controlspec)
   function ParamSet:add_group(id, name, n)
     id = id or "group"
     local count = type(name) == "number" and name or (n or 1)
-    if self.open_group >= 1 then
-      error("stub params: paramset cannot nest GROUPs (" .. id .. " inside an open group)")
-    end
     local group_name = type(name) ~= "number" and name or id
     register(new_param({ id = id, name = group_name, type = "group", n = count }))
-    self.open_group = count
   end
 
   function ParamSet:add_number(id, name, min, max, default, formatter, wrap)
@@ -614,7 +730,7 @@ local function make_params(util, controlspec)
   end)
   paramset:add { type = "control", id = "reverb", name = "reverb", controlspec = controlspec.new(0, 1, "lin", 1, 1) }
 
-  return paramset
+  return paramset, check_groups
 end
 
 ---------------------------------------------------------------------------
@@ -1223,7 +1339,9 @@ function stubs.install(options)
 
   context.util = util
   context.controlspec = controlspec
-  context.params = make_params(util, controlspec)
+  -- context.check_param_groups(): every group has all of its params (the
+  -- harness calls it after init())
+  context.params, context.check_param_groups = make_params(util, controlspec)
   context.clock = make_clock(util)
   function context.set_time(seconds) util.stub_now = seconds end
   context.metro = make_metro()
