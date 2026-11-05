@@ -222,7 +222,7 @@ test("each load gets its own data directory, even after the same random seed (#5
   assert_true(first.data_dir ~= second.data_dir, "two loads share " .. first.data_dir)
 end)
 
-test("Lua engine calls and SC addCommand signatures are in sync (T3)", function()
+test("Lua engine calls and SC addCommand signatures are in sync (sync_check)", function()
   local ok, problems, summary = sync_check.run(repo_root)
   assert_true(ok, summary .. "\n" .. table.concat(problems, "\n"))
   -- the scanner itself: nested calls, strings and comments
@@ -4567,7 +4567,7 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   params:set("v1_source", 10); calls = context.calls_named("setGrainSource"); assert_equal(calls[#calls].args[2], 9)
   assert_equal(main_param_id(1), "v1_grain_size", "input source shows grain size (a 3.0 decision: its buffer params are dead too)")
   params:set("v1_source", 1); assert_equal(main_param_id(1), "v1_freq")
-  -- a stopped voice's source is sent at once (R11) and nothing else is
+  -- a stopped voice's source is sent at once (so voiceOn builds the right synths) and nothing else is
   context.clear_engine_calls(); params:set("v3_source", 5)
   assert_equal(#context.engine_calls, 1, "stopped voice: only the source is sent")
   assert_equal(context.engine_calls[1].name, "setGrainSource")
@@ -5374,7 +5374,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(buffers[3].name, "loop.wav"); assert_equal(buffers[3].path, loaded_file)
   assert_equal(buffers[5].name, "take 5", "a restored scratch take keeps its take name")
   assert_equal(buffers[5].path, scratch_take_path(5))
-  assert_equal(params:get("buf3_file"), loaded_file, "a restored slot's file param shows its path (F2)")
+  assert_equal(params:get("buf3_file"), loaded_file, "a restored slot's file param shows its path")
   assert_equal(params:get("buf5_file"), scratch_take_path(5), "a restored take's file param shows the take")
   assert_equal(params:get("buf1_file"), _path.audio, "a slot with nothing restored stays at its starting folder")
   assert_equal(local_value("buffers_restored"), 0, "restored once the engine reports audio")
@@ -5593,7 +5593,7 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
   params:set("v1_source", 10); assert_equal(voice_buffer_slot(1), nil, "input has no buffer slot")
 end)
 
-test("the same file loads again after a record or clear, from the BUFFER page and PARAMS (F2)", function()
+test("the same file loads again after a record or clear, from the BUFFER page and PARAMS", function()
   local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 2)  -- voice 1 reads buffer 1
   context.clear_engine_calls()
@@ -5643,7 +5643,7 @@ test("the BUFFER page caches each slot's cut name (M3)", function()
   assert_equal(names[14], "empty", "a cleared slot shows empty")
 end)
 
-test("BUFFER page: K2+K3 saves, K2 release then does not open the selector (R12)", function()
+test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", function()
   local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
