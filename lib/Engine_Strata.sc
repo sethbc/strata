@@ -67,6 +67,10 @@ Engine_Strata : CroneEngine {
     // Wait after fading a slot's grain synths (bufFrames 0; strataGrainBuf's
     // hasAudio lag is 0.05 s) before zeroing or overwriting it. The engine check lengthens it.
     var <>bufferFadeWait = 0.06;
+    // nil: warnInvariant posts its line with String.warn. A function takes
+    // the line instead (the engine check captures the lines it provokes, so
+    // they do not fail the run)
+    var <>postInvariantWarning;
 
     *new { arg context, doneCallback;
         ^super.new(context, doneCallback);
@@ -1276,7 +1280,8 @@ Engine_Strata : CroneEngine {
     // A lifecycle invariant that should always hold did not: one line in
     // maiden (and a failure in test/run_engine_check.sh), never an error
     warnInvariant { arg message;
-        ("Strata invariant broken: " ++ message).warn;
+        var line = "Strata invariant broken: " ++ message;
+        if (postInvariantWarning.notNil) { postInvariantWarning.value(line) } { line.warn };
     }
 
     // Synths the voice stopped using while they still release (gateVoice:
