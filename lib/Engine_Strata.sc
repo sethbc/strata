@@ -51,6 +51,8 @@ Engine_Strata : CroneEngine {
     // Built into the SynthDefs in alloc too (see Signal safety in docs/notes/engine.md)
     var <filterCeiling = 0.45;    // Highest Resonator cutoff, as a fraction of the sample rate: below Nyquist, so RLPF stays stable
     var <grainEndMargin = 4;      // Frames a buffer grain stops short of the valid region's end (interpolation, rounding)
+    var <resonatorGain = 0.02;    // DynKlank on noise rings ~50x hotter than the other voices: brings the Resonator's default level (peak ~0.5) in line
+    var <voiceCeiling = 1;        // The Resonator's voice limiter level: its reachable extremes (low freq, noise 1, full crossmod) peak far higher
     var <>scratchDir;             // Where completed recordings are written (buf<n>.wav)
     var writeCount = 0;
     var <writeGenerations;        // Per output path: the newest write's number; older writes abandon
@@ -212,9 +214,16 @@ Engine_Strata : CroneEngine {
             // the unit circle (high freq, frequency crossmod, bend and the
             // noise factor can get there) and the NaN would kill the output
             sig = RLPF.ar(sig, (modFreq * LFNoise1.kr(0.1).range(1, 4)).min(SampleRate.ir * filterCeiling), rq);
+            // The resonator bank driven by noise peaks about 50x higher
+            // than the other voices (at 20 Hz with noise 1, thousands):
+            // resonatorGain brings its defaults into their range, and a
+            // limiter at voiceCeiling (mono, before the pan) bounds the
+            // reachable extremes, accents and crossmod included; it never
+            // acts at the defaults
+            sig = Limiter.ar(sig * resonatorGain * modAmp, voiceCeiling);
             sig = Pan2.ar(sig, pan);
 
-            Out.ar(out, sig * env * modAmp);
+            Out.ar(out, sig * env);
         }).add;
         
         SynthDef(\strataFM, {

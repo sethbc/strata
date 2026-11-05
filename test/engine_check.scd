@@ -633,6 +633,46 @@ var checkResonatorCeiling = {
     server.sync;
 };
 
+// The Resonator's level: DynKlank's resonators driven by noise ring far
+// hotter than the other voices (at its defaults it peaked about 23 before
+// the master limiter, at reachable extremes in the thousands, so it crushed
+// every other voice). At its defaults (amp 0.3) it peaks in the other voices'
+// range, and at the extremes Lua allows (freq 20-2000, rq 0.01 or 1, noise 1,
+// amp 1, amplitude and frequency crossmod at full, accents at velocity 1
+// every 0.25 s) it never goes past its voice limiter's 1 (+5% overshoot).
+var checkResonatorLevel = {
+    var group = Group.tail(server), modBus = Bus.control(server, 1), cases, buses, peakBus, synths, peaks, defaultPeak, extremePeak;
+    var silent = engine.silentBus.index;
+    modBus.set(1);
+    cases = [[\freq, 100, \rq, 0.1, \noise, 0.5, \amp, 0.3]]
+        ++ [20, 100, 400, 2000].collect({ arg freq; [0.01, 1].collect({ arg rq;
+            [\freq, freq, \rq, rq, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2]
+        }) }).flatten(1);
+    buses = cases.collect({ Bus.audio(server, 2) });
+    peakBus = Bus.control(server, 2 * cases.size);
+    synths = cases.collect({ arg args, index;
+        Synth(\strataResonator, [\out, buses[index], \modBus1, modBus.index, \modBus2, modBus.index, \modBus3, silent] ++ args, group)
+    });
+    cases.do({ arg args, index;
+        Synth(\strataCheckChannelPeaks, [\in, buses[index], \out, peakBus.index + (2 * index)], group, \addToTail)
+    });
+    // the default case reads no crossmod
+    synths[0].set(\modBus1, silent, \modBus2, silent);
+    server.sync; 4.5.wait;                     // past the 4 s attack
+    group.set(\t_reset, 1);
+    8.do({ synths.do({ arg synth; synth.set(\velocity, 1, \t_trig, 1) }); 0.25.wait });
+    peaks = readBus.(peakBus);
+    defaultPeak = peaks.copyRange(0, 1).maxItem;
+    extremePeak = peaks.copyRange(2, peaks.size - 1).maxItem;
+    check.(defaultPeak.notNil and: { defaultPeak > 0.05 } and: { defaultPeak < 1 },
+        "the Resonator at its defaults peaks in the other voices' range (got %)".format(defaultPeak));
+    check.(extremePeak.notNil and: { extremePeak <= 1.05 },
+        "the Resonator at reachable extremes never peaks past 1 (got %; per case %)".format(extremePeak,
+            peaks.clump(2).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
+    group.free; modBus.free; peakBus.free; buses.do(_.free);
+    server.sync;
+};
+
 // A NaN or inf reaching mainBus (a voice blowing up) becomes silence before
 // the effects: with the delay feeding back and the reverb on, 50 ms of inf
 // and NaN on mainBus leave the master output free of bad values once they
@@ -1149,6 +1189,7 @@ server.waitForBoot({
                 switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
         filterGroup.free; filterIn.free; filterOut.free; stepBus.free;
         checkResonatorCeiling.value;
+        checkResonatorLevel.value;
         checkEffectsGuard.value;
         check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 

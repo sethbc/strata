@@ -12,7 +12,7 @@ Version 3.0 brings in the Confluence script's feature set (buffers and live inpu
 
 ### Seven Synthesis Voices
 
-1. **Resonator** - Filtered noise through resonant filter banks with slow modulation
+1. **Resonator** - Filtered noise through resonant filter banks with slow modulation (level-matched to the other voices and limited, so even its loudest settings never push the rest of the mix down)
 2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
 3. **Folder** - Sine wave through wavefolder with dynamic folding amount
 4. **Sub** - Ultra-low frequency sine wave for grounding the mix
