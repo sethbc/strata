@@ -1617,6 +1617,25 @@ test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", 
   assert_equal(params:get("master_density"), density, "density is not on the FX rings")
 end)
 
+test("play/stop columns 1-4 on row 8 all light with the state (256 and 16x8)", function()
+  for _, size in ipairs({ { 16, 16 }, { 16, 8 } }) do
+    local context = load_strata()
+    local device = context.grid.plug(1, size[1], size[2])
+    for x = 1, 4 do
+      assert_equal(device:get_led(x, 8), 4, size[2] .. " rows: play column " .. x .. " dim when stopped")
+    end
+    context.grid.press(1, 4, 8, 1)  -- column 4 starts the pattern
+    assert_true(local_value("pattern_playing"), "column 4 plays")
+    for x = 1, 4 do
+      assert_equal(device:get_led(x, 8), 15, size[2] .. " rows: play column " .. x .. " lit while playing")
+    end
+    context.grid.press(1, 3, 8, 1)  -- column 3 stops it
+    for x = 1, 4 do
+      assert_equal(device:get_led(x, 8), 4, size[2] .. " rows: play column " .. x .. " dim after stop")
+    end
+  end
+end)
+
 test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
   local context = load_strata(); context.clock.advance()
   local device = context.grid.plug(1, 16, 16)
