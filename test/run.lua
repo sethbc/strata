@@ -92,10 +92,11 @@ local function next_frame(context)
   context.clock.advance_until(local_value("UI_PAGES").frame_clock)
 end
 
--- Run the clocks through init's start-up coroutine, which sleeps 0.5 s and
--- then starts voice 2 (the frame clock ticks meanwhile)
+-- Run the clocks through init's start-up coroutine, which sleeps
+-- STARTUP.voice_delay_seconds and then starts voice 2 (the frame clock
+-- ticks meanwhile)
 local function finish_startup(context)
-  context.clock.run_for(0.5)
+  context.clock.run_for(STARTUP.voice_delay_seconds)
 end
 
 -- Run the clocks until the clock held in the script local `name` wakes once
@@ -780,6 +781,27 @@ test("grain pitch drift wanders subtly around the user-set pitch (C4)", function
   assert_equal(params:get("v1_grain_pitch"), frozen_pitch, "frozen voice pitch unchanged")
 end)
 
+-- drift_writing tells the param actions a write is the drift's: left set
+-- after an error, every later edit would stop re-centring the walk
+test("drift_update clears drift_writing when a param action raises (#48)", function()
+  load_strata()                                                 -- voice 1 starts at once
+  local centres = { v1_grain_pitch = "grain_pitch_base", v1_buf_pos = "buf_pos_base" }
+  for _, id in ipairs({ "v1_grain_pitch", "v1_buf_pos" }) do
+    params:set("v1_source", id == "v1_buf_pos" and 2 or 1)     -- buffer 1: its position drifts too
+    params:set(id, 0.5)                                          -- clear of the rails: every step moves it
+    local param = params:lookup_param(id)
+    local real_action = param.action
+    param.action = function() error(id .. " failed") end
+    local ok, message = pcall(drift_update)
+    assert_true(not ok and tostring(message):find(id .. " failed", 1, true), id .. ": the error is raised")
+    assert_true(tostring(message):find("stack traceback:", 1, true), id .. ": with its traceback")
+    assert_equal(local_value("drift_writing"), false, id .. ": drift_writing cleared")
+    param.action = real_action
+    params:set(id, 0.6)
+    assert_equal(local_value(centres[id])[1], 0.6, id .. ": a later edit is the drift's new centre")
+  end
+end)
+
 test("tempo param drives clock_tempo and grid tempo buttons (I1)", function()
   local context = load_strata({ before_init = function() params:set("clock_tempo", 97) end })
   assert_equal(params:get("tempo"), 97, "tempo initialised from clock_tempo")
@@ -814,13 +836,56 @@ test("tempo param follows a clock_tempo change made elsewhere (#15)", function()
   recall_scene(1)
   assert_equal(params:get("clock_tempo"), 150, "recall sets clock_tempo")
   assert_equal(params:get("tempo"), 150, "recall sets the tempo param")
-  -- out-of-range clock tempo clamps the param, not the clock
-  params:set("clock_tempo", 20)
-  assert_equal(params:get("tempo"), 40, "tempo param clamps to its range")
-  assert_equal(params:get("clock_tempo"), 20, "clock_tempo is left alone")
   assert_true(clock.tempo_change_handler ~= nil, "handler installed")
   cleanup()
   assert_equal(clock.tempo_change_handler, nil, "cleanup restores the previous handler")
+end)
+
+test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48)", function()
+  local context = load_strata({ before_init = function() params:set("clock_tempo", 30) end })
+  local clock_min, clock_max = param_range("clock_tempo")
+  local tempo_min, tempo_max = param_range("tempo")
+  assert_equal(tempo_min, clock_min, "tempo minimum is clock_tempo's")
+  assert_equal(tempo_max, clock_max, "tempo maximum is clock_tempo's")
+  assert_equal(params:get("tempo"), 30, "tempo initialised from a 30 BPM clock")
+  capture_scene(1)
+  assert_equal(local_value("scenes")[1].data.tempo, 30, "the scene captured 30 BPM")
+  params:set("tempo", 100)
+  recall_scene(1)
+  assert_equal(params:get("clock_tempo"), 30, "recall sets the clock to 30 BPM")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 13, 8, 1)  -- page 1
+  context.grid.press(1, 7, 8, 1)   -- +1 BPM
+  assert_equal(params:get("clock_tempo"), 31, "grid +1 steps from 30 BPM")
+  params:set("clock_tempo", clock_min)
+  assert_equal(params:get("tempo"), clock_min, "the param follows the clock down to its minimum")
+  context.grid.press(1, 6, 8, 1)   -- -1 BPM
+  assert_equal(params:get("tempo"), clock_min, "grid -1 at the minimum keeps the tempo param there")
+  assert_equal(params:get("clock_tempo"), clock_min, "and the clock")
+  -- an external source's tempo reaches the handler unclamped
+  clock.tempo_change_handler(clock_max + 100)
+  assert_equal(params:get("tempo"), clock_max, "the param clamps to the clock's maximum")
+end)
+
+test("the tempo handler is installed once and cleanup restores only its own (#48)", function()
+  local previous_calls = 0
+  local function previous_handler() previous_calls = previous_calls + 1 end
+  load_strata({ before_init = function() clock.tempo_change_handler = previous_handler end })
+  local strata_handler = clock.tempo_change_handler
+  assert_true(strata_handler ~= previous_handler, "the script's handler is installed")
+  install_tempo_change_handler()                               -- installed again (init run twice)
+  assert_equal(clock.tempo_change_handler, strata_handler, "a second install changes nothing")
+  params:set("clock_tempo", 90)
+  assert_equal(params:get("tempo"), 90, "the param follows the clock")
+  assert_equal(previous_calls, 1, "the previous handler is still called, once per change")
+  cleanup()
+  assert_equal(clock.tempo_change_handler, previous_handler, "cleanup restores the handler found at init")
+  -- a handler installed after the script's (another library's) is left alone
+  load_strata()
+  local later_handler = function() end
+  clock.tempo_change_handler = later_handler
+  cleanup()
+  assert_equal(clock.tempo_change_handler, later_handler, "cleanup keeps a handler installed after the script's")
 end)
 
 test("256-grid parameter page faders set values and show them (I8)", function()
@@ -954,13 +1019,31 @@ test("grid_redraw draws every layout (I2) and a hot-plugged grid (I3)", function
   end
 end)
 
-test("the startup clock leaves a voice 2 started within 0.5 s running", function()
+test("the startup clock leaves a voice 2 started within STARTUP.voice_delay_seconds running", function()
   local context = load_strata()
   local voices = local_value("voices")
   assert_true(not voices[2].active, "voice 2 starts stopped")
   toggle_voice(2)  -- a MIDI note or grid press starts it before the startup sleep ends
   finish_startup(context)
   assert_true(voices[2].active, "voice 2 is still running after the startup clock")
+end)
+
+test("init's start-up clock is stored, ends after starting voice 2 and is cancelled by cleanup (#48)", function()
+  local context = load_strata()
+  assert_true(type(STARTUP.voice_delay_seconds) == "number" and STARTUP.voice_delay_seconds > 0,
+    "STARTUP.voice_delay_seconds")
+  assert_true(context.clock.threads[STARTUP.clock] ~= nil, "the start-up clock is stored and running")
+  finish_startup(context)
+  assert_true(local_value("voices")[2].active, "voice 2 started")
+  assert_equal(STARTUP.clock, nil, "the clock is forgotten once it has ended")
+  -- a script stopped before the delay ends starts nothing afterwards
+  context = load_strata()
+  cleanup()
+  assert_equal(STARTUP.clock, nil, "cleanup forgets the start-up clock")
+  local voice_ons = #context.calls_named("voiceOn")
+  context.clock.run_for(STARTUP.voice_delay_seconds + 0.1)
+  assert_true(not local_value("voices")[2].active, "voice 2 not started after cleanup")
+  assert_equal(#context.calls_named("voiceOn"), voice_ons, "no voiceOn after cleanup")
 end)
 
 test("scene capture -> change -> recall restores every voice", function()
@@ -1252,6 +1335,22 @@ for _, slot_on_disk in ipairs({ "empty", "other" }) do
   end)
 end
 
+test("capturing the scene a transition fades to keeps the fade's target (#48)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("filter_freq", 8000); params:set("v4_grain_mode", 2); capture_scene(2)
+  params:set("filter_freq", 200); params:set("v4_grain_mode", 1)
+  recall_scene(2, 10)
+  context.clock.run_for(5, 0.001)
+  local halfway = params:get("filter_freq")
+  assert_true(halfway > 200 and halfway < 8000, "the fade is under way")
+  capture_scene(2)                                    -- the half-faded state, into scene 2
+  assert_equal(local_value("scenes")[2].data.filter_freq, halfway, "scene 2 holds the half-faded state")
+  context.clock.run_for(6, 0.001)
+  assert_equal(local_value("scene_transition_active"), false, "the transition ended")
+  assert_near(params:get("filter_freq"), 8000, 1.0, "it ended on the scene it was recalled with")
+  assert_equal(params:get("v4_grain_mode"), 2, "with that scene's discrete state")
+end)
+
 -- Two scenes for the sequencer: scene 2 starts voice 3 in triggered grain
 -- mode (both switch only when a transition ends), scene 1 has it stopped
 local function capture_sequencer_scenes()
@@ -1264,13 +1363,14 @@ local function capture_sequencer_scenes()
   return voices
 end
 
--- Run the scene sequencer time-ordered with a 1 ms scheduling delay per
--- wake-up (so the fade's 20 sleeps fall behind one long sleep, as on norns).
+-- Run the scene sequencer time-ordered with a scheduling delay per wake-up
+-- (`latency`, 1 ms unless given: the fade's 20 sleeps fall behind one long
+-- sleep, as on norns).
 -- Returns the list of recalls (it keeps growing while the test runs the
 -- clocks on; the next load_strata defines recall_scene afresh): scene,
 -- seconds since the sequencer started and whether a transition was still
 -- running (the recall would cancel it)
-local function run_scene_sequencer(context, transition, duration, seconds)
+local function run_scene_sequencer(context, transition, duration, seconds, latency)
   local recalls = {}
   local real_recall = recall_scene
   local start = util.time()
@@ -1281,7 +1381,7 @@ local function run_scene_sequencer(context, transition, duration, seconds)
   end
   params:set("scene_transition_time", transition); params:set("scene_duration", duration)
   params:set("scene_sequencer_enabled", 1)
-  context.clock.run_for(seconds, 0.001)
+  context.clock.run_for(seconds, latency or 0.001)
   return recalls
 end
 
@@ -1311,6 +1411,24 @@ for _, case in ipairs({ { transition = 20, duration = 16 }, { transition = 16, d
   end)
 end
 
+-- Under load every wake-up runs late: a fade's 21 wake-ups add 60 ms each,
+-- so it ends well over a second after its transition time. It is still
+-- progressing, so the sequencer must wait for it, not cancel it
+test("the scene sequencer lets a 16 s transition finish when every wake-up runs 60 ms late (#48)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = capture_sequencer_scenes()
+  local latency = 0.06
+  local recalls = run_scene_sequencer(context, 16, 16, 18, latency)
+  assert_equal(#recalls, 2, "scene 2 recalled once scene 1's transition ended")
+  assert_true(recalls[2].time > 16 + local_value("SCENE_TRANSITION").overrun_seconds,
+    "scene 1's transition ran past the overrun margin")
+  assert_true(not recalls[2].interrupts, "scene 1's transition was not cut short")
+  context.clock.run_for(18, latency)
+  assert_true(voices[3].active, "voice 3 started at the end of scene 2's transition")
+  assert_equal(params:get("v3_grain_mode"), 2, "scene 2's grain mode")
+  assert_true(not table.concat(context.printed, "\n"):find("overran", 1, true), "no transition reported as overrun")
+end)
+
 test("the scene sequencer holds a scene for its duration when the transition is shorter", function()
   local context = load_strata(); finish_startup(context)
   local voices = capture_sequencer_scenes()
@@ -1321,22 +1439,38 @@ test("the scene sequencer holds a scene for its duration when the transition is 
   assert_true(not voices[3].active, "scene 1's transition has ended")
 end)
 
+-- A transition is stuck once its next step is SCENE_TRANSITION.overrun_seconds
+-- late (SCENE_TRANSITION.next_step_due: util.time() when it is due)
 test("the scene sequencer moves on when a transition never finishes", function()
   local context = load_strata(); finish_startup(context)
   capture_sequencer_scenes()
   local overrun = local_value("SCENE_TRANSITION").overrun_seconds
   assert_true(type(overrun) == "number" and overrun > 0, "SCENE_TRANSITION.overrun_seconds")
+  -- stuck early on: the sequencer moves on as soon as the scene's hold ends
   local recalls = run_scene_sequencer(context, 4, 4, 1)          -- scene 1's 4 s transition is running
   assert_true(local_value("scene_transition_active"), "scene 1's transition is running")
   clock.cancel(local_value("scene_transition_clock"))            -- its clock is lost: the flag stays set
-  context.clock.run_for(4 + overrun + 0.5, 0.001)
+  context.clock.run_for(3.5, 0.001)
   assert_equal(#recalls, 2, "the sequencer moved on")
   assert_equal(recalls[2].scene, 2, "to scene 2")
-  assert_near(recalls[2].time, 4 + overrun, 0.05, "after the transition time plus the overrun margin")
+  assert_near(recalls[2].time, 4, 0.05, "when the scene's hold ended")
   assert_true(not recalls[2].interrupts, "the stuck transition was cleared first")
   assert_true(table.concat(context.printed, "\n"):find("scene transition overran", 1, true), "reported")
   context.clock.run_for(4.5, 0.001)
   assert_true(local_value("voices")[3].active, "scene 2's transition ended normally")
+
+  -- stuck just before its end: the sequencer waits until its next step is overrun_seconds late
+  context = load_strata(); finish_startup(context)
+  capture_sequencer_scenes()
+  recalls = run_scene_sequencer(context, 4, 4, 3.9)              -- scene 1's last step has run
+  local started = util.time() - 3.9                              -- recall times count from here
+  local due = local_value("SCENE_TRANSITION").next_step_due - started
+  assert_true(due > 4, "the transition's end is due after the scene's hold")
+  clock.cancel(local_value("scene_transition_clock"))
+  context.clock.run_for(overrun + 0.5, 0.001)
+  assert_equal(#recalls, 2, "the sequencer moved on")
+  assert_near(recalls[2].time, due + overrun, 0.05, "once the transition's end was overrun_seconds late")
+  assert_true(not recalls[2].interrupts, "the stuck transition was cleared first")
 end)
 
 test("the scene sequencer waits for a manual transition it did not start, within a bound", function()
@@ -1351,16 +1485,36 @@ test("the scene sequencer waits for a manual transition it did not start, within
   assert_true(voices[3].active, "the manual transition ended and applied scene 2")
   assert_equal(#recalls, 3, "then the sequencer moved on")
   assert_true(not recalls[3].interrupts, "without cutting it short")
-  -- a stuck manual transition is cancelled after the longest transition time
+  -- a manual transition that gets stuck is cancelled once its next step is overrun_seconds late
   recall_scene(2, 25)
+  local started = util.time() - recalls[#recalls].time           -- recall times count from here
+  context.clock.run_for(10, 0.001)                                 -- the sequencer is waiting for it
+  assert_equal(#recalls, 4, "the sequencer waits for the second manual transition")
+  local due = local_value("SCENE_TRANSITION").next_step_due - started
   clock.cancel(local_value("scene_transition_clock"))
-  context.clock.run_for(30 + overrun + 4.5, 0.001)
+  context.clock.run_for(overrun + 2, 0.001)
   assert_equal(#recalls, 5, "the sequencer moved on after the bound")
-  local _, longest = param_range("scene_transition_time")
-  -- timed from the sequencer's wake-up 4 s after its last recall
-  assert_near(recalls[5].time, recalls[3].time + 4 + longest + overrun, 0.05,
-    "after the longest transition time plus the margin")
+  assert_near(recalls[5].time, due + overrun, 0.05, "once its next step was overrun_seconds late")
   assert_true(not recalls[5].interrupts, "the stuck transition was cleared first")
+end)
+
+-- A sequenced recall that fails validation starts no transition: a manual
+-- transition still running is not the sequencer's, and is not cut short
+test("a sequenced scene that fails validation leaves a manual transition running (#48)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = capture_sequencer_scenes()
+  local_value("scenes")[1].data.patterns = nil                    -- scene 1 no longer validates
+  recall_scene(2, 25)                                              -- a manual 25 s transition
+  local recalls = run_scene_sequencer(context, 2, 4, 24)           -- scene 1 (invalid), held 4 s
+  assert_equal(recalls[1].scene, 1, "the sequencer tried scene 1")
+  assert_true(table.concat(context.printed, "\n"):find("scene 1 has invalid data", 1, true), "reported invalid")
+  assert_equal(#recalls, 1, "the sequencer waits for the manual transition")
+  assert_true(local_value("scene_transition_active"), "the manual transition is still running")
+  context.clock.run_for(1.5, 0.001)
+  assert_true(voices[3].active, "the manual transition ended and applied scene 2")
+  assert_equal(#recalls, 2, "then the sequencer moved on")
+  assert_true(not recalls[2].interrupts, "without cutting it short")
+  assert_true(not table.concat(context.printed, "\n"):find("overran", 1, true), "nothing reported as overrun")
 end)
 
 test("an error inside a scene transition's fade clears the transition flag", function()
@@ -2809,7 +2963,9 @@ end)
 test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves util.time", function()
   local context = load_strata(); finish_startup(context)
   params:set("clock_tempo", 120)                 -- 0.5 s per beat
-  local start = util.time()                      -- on a beat: init's start-up clock slept 0.5 s
+  -- start on a beat, whatever init's start-up clock slept (STARTUP.voice_delay_seconds)
+  context.clock.run_for((math.ceil(clock.get_beats() - 1e-9) - clock.get_beats()) * clock.get_beat_sec())
+  local start = util.time()
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.3f", name, util.time() - start)) end
   clock.run(function() while true do clock.sleep(0.3); log("short") end end)
@@ -2838,15 +2994,16 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
 end)
 
 test("stub clock.advance is one time-ordered scheduler step and moves util.time (#27)", function()
-  local context = load_strata()                  -- init's start-up clock sleeps 0.5 s
+  local context = load_strata()                  -- init's start-up clock sleeps STARTUP.voice_delay_seconds
   stop_frame_clock()                             -- (its 1/15 s ticks would come first)
+  assert_true(STARTUP.voice_delay_seconds < 1, "this test needs the start-up clock to wake before the 1 s sleeps")
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
   clock.run(function() clock.sleep(2); log("two") end)
   clock.run(function() clock.sleep(1); log("one-a") end)
   clock.run(function() clock.sleep(1); log("one-b") end)
   context.clock.advance()
-  assert_near(util.time(), 0.5, 1e-12, "the first step is the start-up clock's wake-up")
+  assert_near(util.time(), STARTUP.voice_delay_seconds, 1e-12, "the first step is the start-up clock's wake-up")
   assert_true(local_value("voices")[2].active, "which started voice 2")
   assert_equal(#events, 0, "nothing else was due")
   context.clock.advance()
@@ -2862,7 +3019,9 @@ test("stub clock.advance is one time-ordered scheduler step and moves util.time 
 end)
 
 test("stub clock follows matron's scheduler: sync beats, offsets, FLT_EPSILON, tempo, resume values (#27)", function()
-  local context = load_strata(); finish_startup(context)   -- util.time() 0.5 s: beat 1 at 120 BPM
+  local context = load_strata(); finish_startup(context)   -- util.time() STARTUP.voice_delay_seconds
+  -- the beats below count from beat 1: the start-up delay must be one beat at 120 BPM
+  assert_equal(STARTUP.voice_delay_seconds, 0.5, "this test assumes a 0.5 s start-up delay (beat 1 at 120 BPM)")
   assert_near(clock.get_beats(), 1, 1e-12, "the beat timeline runs at the clock tempo")
   -- a repeated sync counts from the sync's own beat (clock_scheduler.cc), so a
   -- coroutine that wakes a whole period late never skips a beat
