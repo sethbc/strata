@@ -2594,6 +2594,16 @@ test("a draw that keeps failing prints its error once, until the error changes (
   redraw = function() error(screen_message) end
   request_redraw(); next_frame(context)
   assert_equal(failures_printed("another screen failure"), 2, "the error after a good frame prints")
+  -- a non-string error is a new table on every frame: keyed by its message
+  -- field, or by its type when it has none, it still prints once
+  context.printed = {}
+  redraw = function() error({ message = "table draw failure" }) end
+  for _ = 1, 15 do request_redraw(); next_frame(context) end
+  assert_equal(failures_printed("frame draw failed"), 1, "a table error with a message prints once")
+  assert_equal(failures_printed("table draw failure"), 1, "and shows its message")
+  redraw = function() error({}) end
+  for _ = 1, 15 do request_redraw(); next_frame(context) end
+  assert_equal(failures_printed("frame draw failed"), 2, "a table error without one prints once too")
   redraw, arc_redraw = real_redraw, real_arc_redraw
 end)
 
@@ -2854,6 +2864,18 @@ test("grid scene LEDs light the scene a sequenced instant recall loaded at once 
   assert_equal(device:get_led(2, 1), 15, "scene 2 is lit")
   assert_equal(device:get_led(1, 1), 8, "scene 1 shows as populated, no longer as the current scene")
   params:set("scene_sequencer_enabled", 0)
+  -- recalls from outside the grid (MIDI-mapped, the sequencer): an instant
+  -- one repaints the grid once, a smooth one lights its scene at once
+  local refreshes = device.refresh_count
+  recall_scene(1, 0)
+  assert_equal(device.refresh_count, refreshes + 1, "an instant recall repaints the grid once")
+  assert_equal(device:get_led(1, 1), 15, "scene 1 lit")
+  assert_equal(device:get_led(2, 1), 8, "scene 2 no longer")
+  recall_scene(2, 2)
+  assert_equal(device:get_led(2, 1), 15, "a smooth recall lights its scene as it starts")
+  assert_equal(device:get_led(1, 1), 8, "and dims the previous one")
+  context.clock.run_for(3, 0.001)
+  assert_equal(device:get_led(2, 1), 15, "scene 2 still lit after the fade")
 end)
 
 test("grid sequencer LEDs follow a length or start set outside the grid (#49)", function()
@@ -5300,18 +5322,22 @@ test("a file selector that fails to open leaves the BUFFER page drawing (#49)", 
   params:set("v1_source", 2)
   local stub_enter = context.fileselect.enter
   local script_key, script_enc = key, enc
-  -- fails after it has put its own handlers in the globals, as fs.enter does
+  -- fails after it has routed its own handlers to play mode, as fs.enter
+  -- would if its redraw raised: globals swapped, then norns.menu.init()
   context.fileselect.enter = function()
     key, enc = function() end, function() end
+    norns.menu.init()
     error("no audio folder")
   end
   key(2, 1)
   local released, release_error = pcall(key, 2, 0)
   context.fileselect.enter = stub_enter
-  assert_equal(key, script_key, "Strata's key handler is back")
-  assert_equal(enc, script_enc, "and its encoder handler")
   assert_true(not released, "K2's release raises the selector's error")
   assert_true(tostring(release_error):find("no audio folder", 1, true), "the same error: " .. tostring(release_error))
+  assert_equal(_menu.key, script_key, "play mode routes the keys to Strata again")
+  assert_equal(norns.encoders.callback, script_enc, "and the encoders")
+  assert_equal(key, script_key, "the key global is Strata's")
+  assert_equal(enc, script_enc, "and the enc global")
   assert_equal(local_value("BUFFER_PAGE").file_selector_open, false, "the selector state is cleared")
   local draws = 0
   local update = screen.update
@@ -5330,15 +5356,28 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
   local page = local_value("BUFFER_PAGE")
   local selector = context.fileselect
   local script_key, script_enc = key, enc
-  tap(2); assert_true(page.file_selector_open, "K2 opens the selector")
   -- norns' fs.enter, from play mode, puts its own key and enc handlers in
-  -- the globals (the stub does not): only fs.exit for this selector restores them
+  -- the globals before norns.menu.init() routes them (the stub does not):
+  -- only fs.exit for this selector restores them
   local selector_key, selector_enc = function() end, function() end
-  key, enc = selector_key, selector_enc
+  local function open_strata_selector()
+    tap(2); assert_true(page.file_selector_open, "K2 opens the selector")
+    key, enc = selector_key, selector_enc
+    norns.menu.init()
+    assert_equal(_menu.key, selector_key, "the selector has the keys")
+  end
+  local function assert_strata_routed(where)
+    assert_equal(page.file_selector_open, false, where .. ": the superseded selector state is cleared")
+    assert_equal(_menu.key, script_key, where .. ": play mode routes the keys to Strata")
+    assert_equal(norns.encoders.callback, script_enc, where .. ": and the encoders")
+    assert_equal(key, script_key, where .. ": the key global is Strata's")
+    assert_equal(enc, script_enc, where .. ": and the enc global")
+  end
+  open_strata_selector()
   -- K1 opens and closes the menu over it: the selector is still Strata's
   _menu.set_mode(true); _menu.set_mode(false)
   assert_true(page.file_selector_open, "the menu alone leaves the selector open")
-  assert_equal(key, selector_key, "and its keys with it")
+  assert_equal(_menu.key, selector_key, "and its keys with it")
   -- K1, PARAMS, a file param: norns has one selector, now the menu's (Strata's
   -- callback is gone); fs.exit gives the menu its handlers back, not Strata's
   _menu.set_mode(true)
@@ -5347,9 +5386,7 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
   selector.close("/tmp/param.wav")
   assert_equal(picked, "/tmp/param.wav", "the PARAMS selector's choice")
   _menu.set_mode(false)  -- K1 back to play mode
-  assert_equal(page.file_selector_open, false, "the superseded selector state is cleared")
-  assert_equal(key, script_key, "Strata's key handler is back")
-  assert_equal(enc, script_enc, "and its encoder handler")
+  assert_strata_routed("a chosen PARAMS file")
   local draws, selector_redraws = 0, selector.redraws
   local update = screen.update
   screen.update = function() draws = draws + 1; return update() end
@@ -5357,19 +5394,70 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
   screen.update = update
   assert_equal(draws, 1, "redraw() draws the page again")
   assert_equal(selector.redraws, selector_redraws, "not the file list")
-  -- the same, with the menu closed while the PARAMS selector is still open
-  tap(2); assert_true(page.file_selector_open, "K2 opens Strata's selector again")
-  key, enc = selector_key, selector_enc
+  -- the PARAMS selector cancelled (K2 in it) instead of a choice
+  open_strata_selector()
+  _menu.set_mode(true)
+  selector.enter(_path.audio, function(path) picked = path end)
+  selector.close()
+  assert_equal(picked, "cancel", "the PARAMS selector was cancelled")
+  _menu.set_mode(false)
+  assert_strata_routed("a cancelled PARAMS selector")
+  -- the menu closed while the PARAMS selector is still open
+  open_strata_selector()
   _menu.set_mode(true)
   selector.enter(_path.audio, function() end)
   _menu.set_mode(false)
-  assert_equal(page.file_selector_open, false, "cleared")
-  assert_equal(key, script_key, "and the keys are Strata's")
+  assert_strata_routed("a PARAMS selector left open")
   -- Strata's own selector still works
   context.clear_engine_calls()
   tap(2); selector.close("/tmp/b.wav")
   assert_equal(#context.calls_named("loadBuffer"), 1, "K2's selector loads its choice")
   assert_equal(page.file_selector_open, false)
+end)
+
+test("the superseded-selector release acts only as the menu closes, and never breaks BUFFER K2 (#49)", function()
+  local context = load_strata(); finish_startup(context); show_page(4)
+  params:set("v1_source", 2)
+  local page = local_value("BUFFER_PAGE")
+  local selector = context.fileselect
+  -- play mode to play mode (norns.menu.init in fs.enter and fs.exit) is
+  -- no menu closing: a callback that is not Strata's changes nothing then
+  tap(2)
+  local strata_callback = selector.callback
+  selector.callback = function() end
+  norns.menu.init()
+  assert_true(page.file_selector_open, "a set_mode(false) from play mode releases nothing")
+  selector.callback = strata_callback
+  selector.close("/tmp/a.wav")
+  assert_equal(page.file_selector_open, false, "the selector's own callback closes it")
+  -- a norns whose fileselect keeps no `callback`: no release ever (the
+  -- selector state may stay set, as before #49), and K2 still works
+  local stub_enter = selector.enter
+  selector.enter = function(...)
+    stub_enter(...)
+    selector.callback = nil
+  end
+  context.clear_engine_calls()
+  tap(2); assert_true(page.file_selector_open, "K2 opens the selector")
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_true(page.file_selector_open, "no fileselect.callback: the menu closing releases nothing")
+  selector.close("/tmp/b.wav")
+  assert_equal(#context.calls_named("loadBuffer"), 1, "the choice loads")
+  assert_equal(page.file_selector_open, false, "and the callback closes it")
+  selector.enter = stub_enter
+  -- an error in the release never stops the menu closing
+  tap(2)
+  key, enc = function() end, function() end
+  _menu.set_mode(true)
+  selector.enter(_path.audio, function() end)
+  local real_request_redraw = request_redraw
+  request_redraw = function() error("release failed") end
+  context.printed = {}
+  local closed = pcall(_menu.set_mode, false)
+  request_redraw = real_request_redraw
+  assert_true(closed, "set_mode(false) does not raise")
+  assert_equal(norns.menu.status(), false, "the menu closed")
+  assert_true(table.concat(context.printed, "\n"):find("release failed", 1, true), "the error is printed")
 end)
 
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()

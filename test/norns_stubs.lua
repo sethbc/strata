@@ -1643,9 +1643,12 @@ end
 -- norns' own files do. From play mode the real fs.enter calls
 -- norns.menu.init(), whose _menu.set_mode(false) puts the script's redraw
 -- back in the global `redraw` and calls it; fs.exit does the same before it
--- calls the callback with the chosen path or "cancel". The stub makes those
--- redraw() calls too, but does not reroute key/enc (tests keep pressing the
--- script's keys while the selector is "open"). fs.redraw draws the file
+-- calls the callback with the chosen path or "cancel". The stub calls
+-- norns.menu.init() there too (so a script's _menu.set_mode wrapper runs)
+-- and makes those redraw() calls, but does not reroute key/enc (tests keep
+-- pressing the script's keys while the selector is "open"). From the menu
+-- (a PARAMS file param) neither calls init, as norns.menu.set is used
+-- instead. fs.redraw draws the file
 -- list; the stub counts the calls in `redraws` and draws nothing. Like
 -- fs.enter, enter stores the callback in `callback`: norns has one selector,
 -- so a second enter (from a PARAMS file param) replaces the first's.
@@ -1655,7 +1658,9 @@ local function make_fileselect()
   local fileselect = { last = nil, redraws = 0 }
   local entered = false  -- tests reset `last`; the real module keeps its list
   local function menu_init_redraw()
-    if not norns.menu.status() and type(redraw) == "function" then redraw() end
+    if norns.menu.status() then return end
+    norns.menu.init()
+    if type(redraw) == "function" then redraw() end
   end
   function fileselect.redraw()
     -- the real one draws fs.list, which fs.enter sets up
@@ -1754,14 +1759,24 @@ function stubs.install(options)
     -- same formula as lib/musicutil.lua
     note_num_to_freq = function(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end,
   }
-  -- _menu.mode is true while the norns menu (K1) owns the keys and screen
-  context.menu = { rebuilds = 0, mode = false }
+  -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
+  -- in play mode _menu.key and norns.encoders.callback route the hardware
+  -- keys and encoders to the script (set_mode(false) copies them from the
+  -- globals key and enc)
+  context.menu = { rebuilds = 0, mode = false, key = nil }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
   -- lua/core/menu.lua: _menu.set_mode(true) opens the menu (K1, a script
   -- error), set_mode(false) returns to the script. The real one also swaps
-  -- the key/enc/redraw handlers; the stub only tracks the mode
-  function context.menu.set_mode(mode) context.menu.mode = mode end
+  -- the key/enc/redraw handlers; the stub tracks the mode and, as play mode
+  -- starts, records the routed handlers (_menu.key, norns.encoders.callback)
+  function context.menu.set_mode(mode)
+    context.menu.mode = mode
+    if mode == false then
+      context.menu.key = rawget(_G, "key")
+      norns.encoders.callback = rawget(_G, "enc")
+    end
+  end
 
   _G.engine = engine
   _G.util = util
@@ -1777,9 +1792,11 @@ function stubs.install(options)
   _G.fileselect = nil  -- lib/fileselect.lua is a module (package.preload below)
   _G.poll = context.polls
   _G._menu = context.menu
-  _G.norns = { state = {}, enc = context.encoders.api,
-    -- lua/core/menu.lua: norns.menu.status() returns _menu.mode
-    menu = { status = function() return context.menu.mode end } }
+  _G.norns = { state = {}, enc = context.encoders.api, encoders = { callback = nil },
+    -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
+    -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
+    menu = { status = function() return context.menu.mode end,
+      init = function() _menu.set_mode(_menu.mode) end } }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
   util.make_dir(_G._path.audio)
   package.loaded["ui"] = context.UI

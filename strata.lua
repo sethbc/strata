@@ -337,10 +337,18 @@ end
 -- frame; another error, or the same one after a good draw, prints again.
 UI_PAGES.draw_errors = {}  -- per part: the error message it last printed
 
--- xpcall handler for a frame draw: the message, and the message with its traceback
+-- xpcall handler for a frame draw: a key that stays the same while the
+-- error does, and the error with its traceback. A string error is its own
+-- key. A table error is a new table each time, so its key is its `message`
+-- field (also what is printed) or, without one, its type.
 function draw_error_report(message)
-  local text = tostring(message)
-  return {message = text, traceback = debug.traceback(text, 2)}
+  local text, key = tostring(message), type(message)
+  if type(message) == "string" then
+    key = message
+  elseif type(message) == "table" and type(message.message) == "string" then
+    text, key = message.message, message.message
+  end
+  return {message = key, traceback = debug.traceback(text, 2)}
 end
 
 function draw_frame_part(part, draw)
@@ -2556,7 +2564,9 @@ function recall_scene(scene_num, transition_time)
 
   current_scene = scene_num
   request_redraw()
-  grid_redraw()  -- the scene page lights the current scene (an instant recall redrew before it was set)
+  -- a fade's first step redrew the grid before current_scene was set; an
+  -- instant recall sets it and redraws the grid itself
+  if transition_time > 0 then grid_redraw() end
 end
 
 -- Apply a scene immediately: scene_data, or the slot's data when nil. The
@@ -2629,6 +2639,8 @@ function recall_scene_instant(scene_num, scene_data)
     end
   end
 
+  -- the scene is applied: the grid's scene page lights it in this redraw
+  current_scene = scene_num
   update_voice_list()
   request_redraw()  -- freeze and running states, and the end of a fade
   grid_redraw()
@@ -3587,10 +3599,15 @@ local function buffer_key_release(n)
     fileselect.enter(_path.audio, file_chosen)
   end, with_traceback)
   if not entered then
-    -- no selector is open, so no callback will come: Strata's key and enc
-    -- (should fs.enter have swapped them already) and its page come back
+    -- no selector is open, so no callback will come: Strata's page, key and
+    -- enc come back. fs.enter fails after norns.menu.init() has routed
+    -- play mode's keys and encoders to fs.key/fs.enc (_menu.key and
+    -- norns.encoders.callback are copied from the globals only in
+    -- set_mode(false)), so restoring the globals is not enough: route them
+    -- again, as fs.exit does
     key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
     close_buffer_file_selector()
+    if not norns.menu.status() then pcall(norns.menu.init) end
     error(enter_error, 0)
   end
 end
@@ -3612,9 +3629,14 @@ end
 -- mode as the menu closes. So when the menu closes (menu_watch.wrapper,
 -- before norns' set_mode(false) reads the globals) and fs.callback is no
 -- longer Strata's, the selector state is cleared and Strata's key and enc
--- are put back.
+-- are put back. Only a real menu-to-play change counts (the menu still
+-- open as set_mode(false) starts; fs.enter's and fs.exit's own
+-- norns.menu.init() run in play mode), and a fileselect without a
+-- `callback` field (other norns internals) releases nothing, so a change
+-- there leaves the selector state set rather than breaking BUFFER K2.
 function release_superseded_file_selector()
-  if not BUFFER_PAGE.file_selector_open then return end
+  if not BUFFER_PAGE.file_selector_open or not norns.menu.status() then return end
+  if fileselect.callback == nil then return end
   if fileselect.callback == BUFFER_PAGE.file_selector_callback then return end
   key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
   close_buffer_file_selector()
@@ -3669,7 +3691,11 @@ function watch_menu_opening()
   local release_selector = release_superseded_file_selector
   menu_watch.original_set_mode = original_set_mode
   menu_watch.wrapper = function(mode)
-    if mode == false and menu_watch.active then release_selector() end
+    if mode == false and menu_watch.active then
+      -- never let it stop the menu closing
+      local released, release_error = pcall(release_selector)
+      if not released then print("strata: file selector release failed: " .. tostring(release_error)) end
+    end
     original_set_mode(mode)
     if mode == true and menu_watch.active then forget_keys() end
   end
