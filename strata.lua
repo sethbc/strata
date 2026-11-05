@@ -306,6 +306,9 @@ UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by
 -- param's whole range in this many ticks: half a turn of the arc's 1024
 -- ticks per revolution (monome arc spec; matron passes the deltas through)
 UI_PAGES.ARC_TICKS_PER_SWEEP = 512
+-- norns' Arc:segment reduces angles modulo 2*pi, so a full turn lights nothing;
+-- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
+UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 local ui_page = 1  -- index into UI_PAGES
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local master_density = 1.0
@@ -3362,24 +3365,33 @@ local function arc_main_delta(n, delta)
   end
 end
 
+-- Fill ring n from 0 to fraction (0-1) of a turn. Every ring draws through
+-- here: the end angle stays just below a full turn, so a ring at its maximum
+-- lights all 64 LEDs instead of none
+function arc_ring_fill(arc_port, ring, fraction, level)
+  local turn = math.pi * 2
+  local clamped = math.max(0, math.min(1, fraction))
+  arc_port:segment(ring, 0, math.min(clamped * turn, turn - UI_PAGES.ARC_FULL_TURN_MARGIN), level)
+end
+
 local function arc_main_redraw(arc_port)
   -- Ring 1: Master density (0.1 to 2.0)
   local density_pos = util.linlin(0.1, 2.0, 0, 64, master_density)
-  arc_port:segment(1, 0, density_pos / 64 * math.pi * 2, 15)
+  arc_ring_fill(arc_port, 1, density_pos / 64, 15)
 
   -- Ring 2: Selected voice's main parameter, across its controlspec range
   -- following the warp (as the sweep does: exp freq's midpoint at half a turn)
   local v = voices[selected_voice]
   local param_pos = param_fraction(main_param_id(selected_voice)) * 64
-  arc_port:segment(2, 0, param_pos / 64 * math.pi * 2, v.active and 15 or 4)
+  arc_ring_fill(arc_port, 2, param_pos / 64, v.active and 15 or 4)
 
   -- Ring 3: Grain size (0.01 to 0.5)
   local grain_size_pos = util.linlin(0.01, 0.5, 0, 64, v.grain.size)
-  arc_port:segment(3, 0, grain_size_pos / 64 * math.pi * 2, v.active and 12 or 3)
+  arc_ring_fill(arc_port, 3, grain_size_pos / 64, v.active and 12 or 3)
 
   -- Ring 4: Grain density (1 to 100)
   local grain_density_pos = util.linlin(1, 100, 0, 64, v.grain.density)
-  arc_port:segment(4, 0, grain_density_pos / 64 * math.pi * 2, v.active and 12 or 3)
+  arc_ring_fill(arc_port, 4, grain_density_pos / 64, v.active and 12 or 3)
 end
 
 -- FX page rings: the param each ring adjusts (each sweeps its range in
@@ -3402,7 +3414,7 @@ end
 -- so exp params such as filter freq and delay time sweep evenly)
 local function arc_fx_redraw(arc_port)
   for n, ring in ipairs(ARC_FX_RINGS) do
-    arc_port:segment(n, 0, param_fraction(ring.param_id) * math.pi * 2, 12)
+    arc_ring_fill(arc_port, n, param_fraction(ring.param_id), 12)
   end
 end
 
@@ -3438,7 +3450,7 @@ local function arc_buffer_redraw(arc_port)
     if ring.voice_key then
       level = uses_buffer and 15 or 4
     end
-    arc_port:segment(n, 0, param_fraction(arc_buffer_ring_param(ring)) * math.pi * 2, level)
+    arc_ring_fill(arc_port, n, param_fraction(arc_buffer_ring_param(ring)), level)
   end
 end
 
@@ -3492,9 +3504,9 @@ end
 -- Depth rings are bright while their LFO runs
 local function arc_lfo_redraw(arc_port)
   for n = 1, NUM_LFOS do
-    arc_port:segment(n, 0, param_fraction("lfo_depth_" .. n) * math.pi * 2, lfo_running(n) and 15 or 4)
+    arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), lfo_running(n) and 15 or 4)
   end
-  arc_port:segment(ARC_LFO.period_ring, 0, param_fraction(lfo_period_param_id(selected_lfo)) * math.pi * 2, 12)
+  arc_ring_fill(arc_port, ARC_LFO.period_ring, param_fraction(lfo_period_param_id(selected_lfo)), 12)
 end
 
 local function arc_ignore_delta() end

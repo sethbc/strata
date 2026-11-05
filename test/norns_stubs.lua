@@ -619,6 +619,7 @@ local function make_grid()
 end
 
 local function make_arc()
+  local util = make_util()
   local arc = { vports = {}, devices = {} }
   for port = 1, 4 do
     arc.vports[port] = {
@@ -637,7 +638,28 @@ local function make_arc()
       self.cleared = self.cleared + 1
       self.segments = {}
     end
-    function device:segment(ring, from, to, level) self.segments[ring] = { from = from, to = to, level = level } end
+    -- Port of norns' Arc:segment (lua/core/arc.lua): angles reduce modulo 2*pi and
+    -- each of the 64 LEDs gets round(overlap / LED width * level), so a full
+    -- turn (0 -> 2*pi) lights nothing, as on a real arc. `leds` holds the levels
+    function device:segment(ring, from, to, level)
+      local tau = math.pi * 2
+      local function overlap(a, b, c, d)
+        if a > b then
+          return overlap(a, tau, c, d) + overlap(0, b, c, d)
+        elseif c > d then
+          return overlap(a, b, c, tau) + overlap(a, b, 0, d)
+        else
+          return math.max(0, math.min(b, d) - math.max(a, c))
+        end
+      end
+      local leds = {}
+      local led_width = tau / 64
+      for i = 1, 64 do
+        local o = overlap(from % tau, to % tau, led_width * (i - 1) % tau, led_width * i % tau)
+        leds[i] = util.round(o / led_width * level)
+      end
+      self.segments[ring] = { from = from, to = to, level = level, leds = leds }
+    end
     function device:led() end
     function device:refresh() self.refresh_count = self.refresh_count + 1 end
     arc.devices[port] = device

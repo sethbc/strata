@@ -1129,6 +1129,48 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   end
 end)
 
+test("every arc ring lights all 64 LEDs at its maximum, about half at half, none at its minimum", function()
+  local context = load_strata(); context.clock.advance()
+  local device = context.arc.plug(1)
+  local function set_fraction(param_id, fraction)
+    local spec = params:lookup_param(param_id).controlspec
+    if spec then
+      params:set(param_id, spec:map(fraction))
+    else
+      local minval, maxval = param_range(param_id)
+      params:set(param_id, util.linlin(0, 1, minval, maxval, fraction))
+    end
+  end
+  local function lit(ring)
+    local count = 0
+    for _, level in ipairs(device.segments[ring].leds) do
+      if level > 0 then count = count + 1 end
+    end
+    return count
+  end
+  local function check(page, ring_params, where)
+    show_page(page)
+    for ring, param_id in pairs(ring_params) do
+      local label = where .. " ring " .. ring .. " (" .. param_id .. ")"
+      set_fraction(param_id, 1); arc_redraw()
+      assert_equal(lit(ring), 64, label .. " at maximum")
+      set_fraction(param_id, 0.5); arc_redraw()
+      assert_true(math.abs(lit(ring) - 32) <= 1, label .. " at half lights about 32, got " .. lit(ring))
+      set_fraction(param_id, 0); arc_redraw()
+      assert_equal(lit(ring), 0, label .. " at minimum")
+    end
+  end
+  local voice = local_value("selected_voice")
+  check(1, { "master_density", main_param_id(voice),
+             "v" .. voice .. "_grain_size", "v" .. voice .. "_grain_density" }, "MAIN")
+  check(2, { "filter_freq", "filter_res", "delay_time", "delay_mix" }, "FX")
+  local lfo = {}
+  for n = 1, local_value("NUM_LFOS") do lfo[n] = "lfo_depth_" .. n end
+  lfo[4] = "lfo_free_" .. local_value("selected_lfo")
+  check(3, lfo, "LFO")
+  check(4, { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
+end)
+
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
   local context = load_strata(); context.clock.advance()
   context.arc.plug(1)
