@@ -12,7 +12,7 @@ Version 3.0 brings in the Confluence script's feature set (buffers and live inpu
 
 ### Seven Synthesis Voices
 
-1. **Resonator** - Filtered noise through resonant filter banks with slow modulation (level-matched to the other voices and limited, so even its loudest settings never push the rest of the mix down)
+1. **Resonator** - Filtered noise through resonant filter banks with slow modulation (level-matched to the other voices and limited, so at its normal settings it no longer pushes the rest of the mix down; as a cross-modulation source it is now as strong as the other voices, where before it drove what it modulated to the limit at almost any depth)
 2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
 3. **Folder** - Sine wave through wavefolder with dynamic folding amount
 4. **Sub** - Ultra-low frequency sine wave for grounding the mix
@@ -35,7 +35,7 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 Every voice can grain something other than its own synth. Its **source** (the BUFFER screen page, grid page 4, or PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), or the live stereo input:
 - **Buffers** hold up to 16 seconds of stereo audio each (16 seconds at the norns sample rate of 48 kHz: a file at a higher rate keeps fewer seconds, 8 for a 96 kHz file). Load a sound file, record the input, clear or save a buffer from the BUFFER screen page, grid page 4 (record and clear) or the PARAMETERS **buffers** group
 - **Buffer position** (0-1 of the buffer's recorded or loaded length), **buffer rate** (0.25x-4x playback speed) and **buffer scan** (moves the position through the buffer, in buffer lengths per second, backwards when negative; 0 = static) shape a buffer-sourced voice. Grain size, density, pitch, spread, envelope and mode work as for synth voices
-- While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan, level and pan instead of the synthesis parameters, K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
+- While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan, level and pan instead of the synthesis parameters (when a grain is as long as the sample at its rate, every grain plays the whole sample, so position and scan do nothing), K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
 - Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
 - While a voice's source is the input, neither its buffer parameters nor its synthesis parameters (except level and pan) do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level and pan), and K2, mutations and the drift change only the grain parameters
 - The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
@@ -318,7 +318,7 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 
 **Row 13: Fader Page Selection** (Page 2)
 - Each fader page shows the next four parameters (rows 9-12)
-- Columns 1-4, 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6; a buffer-sourced voice has 5, an input-sourced one 4); the selected page is bright
+- Columns 1-4, 1-5 or 1-6 select the page, depending on how many parameters the voice has (Folder and Sub have 5 pages, the other voices 6; a buffer- or input-sourced voice has 5, except an input-sourced Sub, which has 4); the selected page is bright
 
 **Row 14: Voice Selection & Status**
 - Columns 1-7: Select voice for parameter editing

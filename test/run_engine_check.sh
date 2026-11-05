@@ -46,8 +46,10 @@ YAML
 # seconds: a normal run takes about 2 minutes, the check's own deadline is
 # 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
-# included. stdbuf makes sclang's output line-buffered, so an error is in
-# the output file while sclang waits (block-buffered, it never would be).
+# included; the script's own stop (and its limit, when there is no timeout
+# command) signals every descendant, so no scsynth is left holding port
+# 57110. stdbuf makes sclang's output line-buffered, so an error is in the
+# output file while sclang waits (block-buffered, it never would be).
 sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
 compile_error='^ERROR: (syntax error|Command line parse failed|file .* parse failed)|Library has not been compiled successfully'
 timeout_cmd=$(command -v timeout || command -v gtimeout || true)
@@ -55,6 +57,13 @@ stdbuf_cmd=$(command -v stdbuf || command -v gstdbuf || true)
 set --
 [ -n "$timeout_cmd" ] && set -- "$timeout_cmd" --kill-after=10 "$sclang_timeout"
 [ -n "$stdbuf_cmd" ] && set -- "$@" "$stdbuf_cmd" -oL -eL
+
+# Signal a process and all its descendants, children first (once the
+# parent is gone they would be re-parented out of reach)
+kill_tree() (
+  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  kill "$1" 2>/dev/null
+)
 
 output="$work_dir/output.txt"
 set +e
@@ -72,7 +81,7 @@ while kill -0 "$sclang_pid" 2>/dev/null; do
     stopped="no result within $sclang_timeout s"
   fi
   if [ -n "$stopped" ]; then
-    kill "$sclang_pid" 2>/dev/null
+    kill_tree "$sclang_pid"
     break
   fi
   sleep 1
@@ -81,7 +90,10 @@ done
 wait "$sclang_pid"
 status=$?
 set -e
-if [ -z "$stopped" ] && [ "$status" -eq 124 ]; then stopped="no result within $sclang_timeout s"; fi
+# 124: timeout stopped it; 137: timeout's --kill-after SIGKILL
+if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; }; then
+  stopped="no result within $sclang_timeout s"
+fi
 if [ -n "$stopped" ]; then
   echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2
 fi

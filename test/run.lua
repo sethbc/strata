@@ -4883,6 +4883,8 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   assert_equal(fader_param_ids(1)[9], "v1_mod_source_1")
   params:set("v4_source", 10)
   assert_equal(fader_param_ids(4)[7], "v4_amp"); assert_equal(fader_param_ids(4)[8], "v4_mod_source_1", "sub has no pan fader")
+  assert_equal(#fader_param_ids(1), 6 + 2 + 9); assert_equal(fader_page_count(1), 5, "an input voice has 5 fader pages")
+  assert_equal(fader_page_count(4), 4, "an input-sourced sub has 4 fader pages")
   params:set("v1_grain_size", 0.2)
   enc(3, 2); assert_true(params:get("v1_grain_size") > 0.2, "E3 on MAIN moves grain size")
   local size = params:get("v1_grain_size")

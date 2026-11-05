@@ -590,6 +590,10 @@ var addAudioCheckDefs = {
         var codes = CheckBadValues.ar(In.ar(in, 2), 0, 0);
         Out.kr(out, A2K.kr(Peak.ar(((codes > 0.5) * (codes < 2.5)).sum, t_reset)));
     }).add;
+    // the RMS of a stereo bus over about the last 1.5 s (a 10 s 60 dB lag of the mean square)
+    SynthDef(\strataCheckRms, { arg in, out;
+        Out.kr(out, A2K.kr(Lag.ar(In.ar(in, 2).squared.sum * 0.5, 10).sqrt));
+    }).add;
     SynthDef(\strataCheckBadSource, { arg out, big = 1e30;
         var infinite = DC.ar(big) * big;
         Line.kr(0, 0, 0.05, doneAction: 2);
@@ -636,40 +640,57 @@ var checkResonatorCeiling = {
 // The Resonator's level: DynKlank's resonators driven by noise ring far
 // hotter than the other voices (at its defaults it peaked about 23 before
 // the master limiter, at reachable extremes in the thousands, so it crushed
-// every other voice). At its defaults (amp 0.3) it peaks in the other voices'
-// range, and at the extremes Lua allows (freq 20-2000, rq 0.01 or 1, noise 1,
-// amp 1, amplitude and frequency crossmod at full, accents at velocity 1
-// every 0.25 s) it never goes past its voice limiter's 1 (+5% overshoot).
+// every other voice). resonatorGain and a mono limiter at voiceCeiling (1,
+// before the pan) fix it:
+// - eight Resonators at their defaults (amp 0.3, no accents) have a median
+//   RMS of 0.045-0.2 (measured about 0.1; a gain left 3x too high gives
+//   about 0.29, which the limiter does not hide the way it hides peaks)
+//   and peak at most 0.75 per channel;
+// - at the extremes Lua allows (freq 20-2000, rq 0.01 or 1, noise 1, amp 1,
+//   amplitude and frequency crossmod at full, accents at velocity 1 every
+//   0.25 s), centred, no channel passes 0.75 (the limiter's 1 x Pan2's
+//   0.707 at the centre);
+// - one extreme panned hard right reaches the limiter's own level: its right
+//   channel peaks at 0.9-1.05 and its left stays silent.
 var checkResonatorLevel = {
-    var group = Group.tail(server), modBus = Bus.control(server, 1), cases, buses, peakBus, synths, peaks, defaultPeak, extremePeak;
-    var silent = engine.silentBus.index;
+    var group = Group.tail(server), modBus = Bus.control(server, 1), silent = engine.silentBus.index;
+    var defaults = [\freq, 100, \rq, 0.1, \noise, 0.5, \amp, 0.3, \modBus1, silent, \modBus2, silent];
+    var extremes = [20, 100, 400, 2000].collect({ arg freq; [0.01, 1].collect({ arg rq;
+        [\freq, freq, \rq, rq, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2]
+    }) }).flatten(1);
+    var panned = [\freq, 20, \rq, 0.01, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2, \pan, 1];
+    var defaultCount = 8, cases = (defaultCount.collect({ defaults }) ++ extremes ++ [panned]);
+    var buses = cases.collect({ Bus.audio(server, 2) }), peakBus = Bus.control(server, 2 * cases.size);
+    var rmsBus = Bus.control(server, defaultCount), synths, peaks, rms, defaultPeak, extremePeak, pannedPeaks;
     modBus.set(1);
-    cases = [[\freq, 100, \rq, 0.1, \noise, 0.5, \amp, 0.3]]
-        ++ [20, 100, 400, 2000].collect({ arg freq; [0.01, 1].collect({ arg rq;
-            [\freq, freq, \rq, rq, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2]
-        }) }).flatten(1);
-    buses = cases.collect({ Bus.audio(server, 2) });
-    peakBus = Bus.control(server, 2 * cases.size);
     synths = cases.collect({ arg args, index;
         Synth(\strataResonator, [\out, buses[index], \modBus1, modBus.index, \modBus2, modBus.index, \modBus3, silent] ++ args, group)
     });
     cases.do({ arg args, index;
-        Synth(\strataCheckChannelPeaks, [\in, buses[index], \out, peakBus.index + (2 * index)], group, \addToTail)
+        Synth(\strataCheckChannelPeaks, [\in, buses[index], \out, peakBus.index + (2 * index)], group, \addToTail);
+        if (index < defaultCount) { Synth(\strataCheckRms, [\in, buses[index], \out, rmsBus.index + index], group, \addToTail) };
     });
-    // the default case reads no crossmod
-    synths[0].set(\modBus1, silent, \modBus2, silent);
     server.sync; 4.5.wait;                     // past the 4 s attack
     group.set(\t_reset, 1);
+    4.wait;                                    // the RMS meters have forgotten the attack
+    rms = readBus.(rmsBus).sort;
+    defaultPeak = readBus.(peakBus).copyRange(0, (2 * defaultCount) - 1).maxItem;
+    group.set(\t_reset, 1);
     8.do({ synths.do({ arg synth; synth.set(\velocity, 1, \t_trig, 1) }); 0.25.wait });
-    peaks = readBus.(peakBus);
-    defaultPeak = peaks.copyRange(0, 1).maxItem;
-    extremePeak = peaks.copyRange(2, peaks.size - 1).maxItem;
-    check.(defaultPeak.notNil and: { defaultPeak > 0.05 } and: { defaultPeak < 1 },
-        "the Resonator at its defaults peaks in the other voices' range (got %)".format(defaultPeak));
-    check.(extremePeak.notNil and: { extremePeak <= 1.05 },
-        "the Resonator at reachable extremes never peaks past 1 (got %; per case %)".format(extremePeak,
-            peaks.clump(2).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
-    group.free; modBus.free; peakBus.free; buses.do(_.free);
+    peaks = readBus.(peakBus).clump(2);
+    extremePeak = peaks.copyRange(defaultCount, defaultCount + extremes.size - 1).flatten.maxItem;
+    pannedPeaks = peaks.last;
+    check.((rms.size == defaultCount) and: { rms[defaultCount div: 2] >= 0.045 } and: { rms[defaultCount div: 2] <= 0.2 },
+        "the Resonator at its defaults has a median RMS of 0.045-0.2 (got %, all %)".format(
+            rms[defaultCount div: 2], rms.collect({ arg value; value.round(0.001) })));
+    check.(defaultPeak.notNil and: { defaultPeak > 0.05 } and: { defaultPeak <= 0.75 },
+        "the Resonator at its defaults peaks at most 0.75 per channel (got %)".format(defaultPeak));
+    check.(extremePeak.notNil and: { extremePeak <= 0.75 },
+        "the Resonator at reachable extremes, centred, never peaks past 0.75 per channel (got %; per case %)".format(extremePeak,
+            peaks.copyRange(defaultCount, defaultCount + extremes.size - 1).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
+    check.(pannedPeaks.notNil and: { pannedPeaks[1] >= 0.9 } and: { pannedPeaks[1] <= 1.05 } and: { pannedPeaks[0] < 0.001 },
+        "a Resonator extreme panned hard right peaks at its limiter's level, 0.9-1.05 (got %)".format(pannedPeaks));
+    group.free; modBus.free; peakBus.free; rmsBus.free; buses.do(_.free);
     server.sync;
 };
 
@@ -679,15 +700,20 @@ var checkResonatorLevel = {
 // have passed. Unguarded, they circulate in the delay feedback and the
 // reverb combs for good.
 var checkEffectsGuard = {
-    var badBus = Bus.control(server, 1), probe, bad;
+    var badBus = Bus.control(server, 1), mainBadBus = Bus.control(server, 1), probe, mainProbe, bad, mainBad;
     command.(\setDelay, 0.25, 0.5, 0.5);
     command.(\setReverb, 0.5, 0.8, 0.5);
     probe = Synth(\strataCheckBadValues, [\in, context.out_b, \out, badBus], context.xg, \addAfter);
+    // positive control: on mainBus itself (after the grain synths, before the filter) the burst is seen
+    mainProbe = Synth(\strataCheckBadValues, [\in, engine.mainBus, \out, mainBadBus], engine.processGroup, \addAfter);
+    server.sync;
     Synth(\strataCheckBadSource, [\out, engine.mainBus], engine.processGroup, \addToTail);
     server.sync; 0.3.wait;
+    mainBad = readBus.(mainBadBus);
+    check.(mainBad.notEmpty and: { mainBad[0] > 0 }, "the check's burst puts NaN and inf on mainBus (seen: %)".format(mainBad));
     bad = measure.(probe, badBus, 0.5);
     check.(bad == [0], "NaN and inf on mainBus never reach the master output after they pass (bad values seen: %)".format(bad));
-    probe.free; badBus.free;
+    probe.free; mainProbe.free; badBus.free; mainBadBus.free;
 };
 
 // A mod synth the engine restarts (its release ended just as voiceOn
@@ -785,10 +811,12 @@ var checkSourceGrains = { arg voice, slot;
     // (set by hand after the load, which zeroes them). Grains scanning up to
     // the region's end, at a rate and size that read far past it unless
     // limited, must read silence only: at the server rate, at 22050 Hz and
-    // rate 2, and with a region shorter than a grain. [file rate, seconds, grain size, rate]
+    // rate 2, at 96 kHz (GrainBuf reads two frames per sample there: a limit
+    // that left out the buffer's rate scale would read past the end), and
+    // with a region shorter than a grain. [file rate, seconds, grain size, rate]
     command.(\setGrainSource, voice, slot + 1); server.sync;
     toPrivate.value;
-    [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
+    [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [96000, 0.25, 0.2, 1], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
         var validFrames;
         writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
         command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
