@@ -49,10 +49,14 @@ end
 
 -- Load strata.lua (or options.source, a patched copy of it) into fresh
 -- stubs and run init(). init() has added every param: each group must have
--- all of its params.
+-- all of its params. Each load gets its own data directory (unless
+-- options.data_subdir names a shared one): a counter, since tests reseed
+-- math.random and two loads after one seed would draw the same name.
+local loads = 0
 local function load_strata(options)
   options = options or {}
-  local data_dir = data_root .. (options.data_subdir or tostring(math.random(1, 1e9))) .. "/"
+  loads = loads + 1
+  local data_dir = data_root .. (options.data_subdir or ("load" .. loads)) .. "/"
   local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec, data_dir = data_dir, quiet = true }
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
@@ -180,6 +184,12 @@ end
 test("strata.lua loads and init() runs", function()
   local context = load_strata()
   assert_true(#context.engine_calls > 0, "init should talk to the engine")
+end)
+
+test("each load gets its own data directory, even after the same random seed (#50)", function()
+  math.randomseed(1); local first = load_strata()
+  math.randomseed(1); local second = load_strata()
+  assert_true(first.data_dir ~= second.data_dir, "two loads share " .. first.data_dir)
 end)
 
 test("Lua engine calls and SC addCommand signatures are in sync (T3)", function()
@@ -868,8 +878,8 @@ test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48
 end)
 
 test("the tempo handler is installed once and cleanup restores only its own (#48)", function()
-  local previous_calls = 0
-  local function previous_handler() previous_calls = previous_calls + 1 end
+  local previous_calls, previous_bpm = 0, nil
+  local function previous_handler(bpm) previous_calls = previous_calls + 1; previous_bpm = bpm end
   load_strata({ before_init = function() clock.tempo_change_handler = previous_handler end })
   local strata_handler = clock.tempo_change_handler
   assert_true(strata_handler ~= previous_handler, "the script's handler is installed")
@@ -878,6 +888,7 @@ test("the tempo handler is installed once and cleanup restores only its own (#48
   params:set("clock_tempo", 90)
   assert_equal(params:get("tempo"), 90, "the param follows the clock")
   assert_equal(previous_calls, 1, "the previous handler is still called, once per change")
+  assert_equal(previous_bpm, 90, "with the bpm")
   cleanup()
   assert_equal(clock.tempo_change_handler, previous_handler, "cleanup restores the handler found at init")
   -- a handler installed after the script's (another library's) is left alone
@@ -1019,13 +1030,30 @@ test("grid_redraw draws every layout (I2) and a hot-plugged grid (I3)", function
   end
 end)
 
+-- Voice 1 needs no such guard: clock.run resumes the startup clock at once,
+-- so it starts voice 1 inside init(), before any MIDI note, grid press or
+-- key can reach the script
 test("the startup clock leaves a voice 2 started within STARTUP.voice_delay_seconds running", function()
-  local context = load_strata()
-  local voices = local_value("voices")
-  assert_true(not voices[2].active, "voice 2 starts stopped")
-  toggle_voice(2)  -- a MIDI note or grid press starts it before the startup sleep ends
-  finish_startup(context)
-  assert_true(voices[2].active, "voice 2 is still running after the startup clock")
+  local starters = {
+    { name = "toggle_voice (a grid press)", start = function() toggle_voice(2) end },
+    { name = "a MIDI note on channel 2 (midi_note_on)", start = function(context)
+      context.midi.plug(1, "keys")
+      context.midi.send(1, { type = "note_on", ch = 2, note = 60, vel = 100 })
+    end },
+  }
+  for _, starter in ipairs(starters) do
+    local context = load_strata()
+    local voices = local_value("voices")
+    assert_true(voices[1].active, starter.name .. ": init started voice 1")
+    assert_true(not voices[2].active, starter.name .. ": voice 2 starts stopped")
+    starter.start(context)  -- before the startup sleep ends
+    assert_true(voices[2].active, starter.name .. ": started voice 2")
+    finish_startup(context)
+    assert_true(voices[2].active, starter.name .. ": voice 2 is still running after the startup clock")
+    for _, call in ipairs(context.calls_named("voiceOff")) do
+      assert_true(call.args[1] ~= 1, starter.name .. ": the startup clock sent no voiceOff for voice 2")
+    end
+  end
 end)
 
 test("init's start-up clock is stored, ends after starting voice 2 and is cancelled by cleanup (#48)", function()
@@ -1110,6 +1138,10 @@ test("validate_scene_data rejects malformed scenes and accepts captured ones", f
   rejects(function(data) data.patterns[2][16] = nil end, "short pattern")
   rejects(function(data) data.patterns[7] = nil end, "missing pattern row")
   rejects(function(data) data.patterns[1][1] = "x" end, "non-numeric step")
+  -- a step is a whole level 0..MAX_STEP_LEVEL
+  rejects(function(data) data.patterns[1][1] = local_value("MAX_STEP_LEVEL") + 1 end, "step level past MAX_STEP_LEVEL")
+  rejects(function(data) data.patterns[1][1] = 2.5 end, "fractional step level")
+  rejects(function(data) data.patterns[1][1] = -1 end, "negative step level")
   rejects(function(data) data.master_density = "loud" end, "non-numeric master_density")
   rejects(function(data) data.tempo = nil end, "missing tempo")
   rejects(function(data) data.reverb_damp = {} end, "non-numeric reverb_damp")
@@ -1569,6 +1601,38 @@ test("an error in a sequenced recall is reported and the scene sequencer keeps g
   assert_near(params:get("v1_freq"), 400, 1.0, "and scene 2's transition ended")
 end)
 
+test("a failing instant sequenced recall is reported and the scene sequencer holds the scene, then goes on (#50)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_freq", 1000); capture_scene(1)
+  params:set("v1_freq", 400); capture_scene(2)
+  params:set("v1_freq", 200); params:set("scene_sequence_length", 2)
+  local freq_param = params:lookup_param("v1_freq")
+  local real_action, failures = freq_param.action, 1
+  freq_param.action = function(value)
+    if failures > 0 then failures = failures - 1; error("recall failed") end
+    return real_action(value)
+  end
+  local ran, recalls = pcall(run_scene_sequencer, context, 0, 4, 1)  -- scene 1's instant recall fails
+  assert_true(ran, "the error did not escape the sequencer: " .. tostring(recalls))
+  assert_equal(#recalls, 1, "one recall so far")
+  local printed = table.concat(context.printed, "\n")
+  assert_true(printed:find("scene sequencer: scene 1 failed", 1, true), "the failure is printed")
+  assert_true(printed:find("recall failed", 1, true) and printed:find("stack traceback:", 1, true),
+    "with the error and its traceback")
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "the sequencer param stays on")
+  assert_true(context.clock.threads[local_value("scene_sequencer_clock")] ~= nil, "its clock is still running")
+  assert_true(not local_value("scene_recall_in_progress"), "no recall left flagged")
+  assert_true(not local_value("scene_transition_active"), "no transition left flagged")
+  local run_error
+  ran, run_error = pcall(context.clock.run_for, 4, 0.001)
+  assert_true(ran, "the sequencer runs on: " .. tostring(run_error))
+  assert_equal(#recalls, 2, "it recalled once more")
+  assert_equal(recalls[2].scene, 2, "scene 2")
+  assert_near(recalls[2].time, 4, 0.01, "after holding the failed scene for its duration")
+  assert_equal(local_value("current_scene"), 2, "scene 2 recalled")
+  assert_near(params:get("v1_freq"), 400, 1.0, "and applied at once")
+end)
+
 test("a manual recall still interrupts a transition the scene sequencer started", function()
   local context = load_strata(); finish_startup(context)
   local voices = capture_sequencer_scenes()
@@ -1608,6 +1672,29 @@ test("restarting the scene sequencer leaves one sequencer clock running", functi
   assert_near(recalls[3].time, 5, 0.01, "scene 2 4 s after the restart")
   assert_near(recalls[4].time, 9, 0.01, "scene 1 4 s later")
   assert_equal(recalls[3].scene, 2); assert_equal(recalls[4].scene, 1)
+end)
+
+test("stopping and restarting the scene sequencer while it waits for a transition leaves one clock (#50)", function()
+  local context = load_strata(); finish_startup(context)
+  capture_sequencer_scenes()
+  local recalls = run_scene_sequencer(context, 0, 4, 1)           -- instant recalls every 4 s
+  recall_scene(2, 25)                                              -- a manual 25 s transition
+  context.clock.run_for(4, 0.001)                                  -- the sequencer waits for it
+  assert_equal(#recalls, 2, "the sequencer is waiting inside wait_for_scene_transition")
+  local waiting_clock = local_value("scene_sequencer_clock")
+  params:set("scene_sequencer_enabled", 0)
+  assert_true(context.clock.threads[waiting_clock] == nil, "stopping cancels the waiting clock")
+  context.clock.run_for(1, 0.001)
+  assert_equal(#recalls, 2, "a stopped sequencer recalls nothing")
+  params:set("scene_sequencer_enabled", 1)                         -- restart at 6 s: scene 1 again
+  context.clock.run_for(8.5, 0.001)
+  assert_equal(#recalls, 5, "one recall every 4 s from the restart, from one clock")
+  for index, expected in ipairs({ { scene = 1, time = 6 }, { scene = 2, time = 10 }, { scene = 1, time = 14 } }) do
+    local recall = recalls[2 + index]
+    assert_equal(recall.scene, expected.scene, "recall " .. (2 + index) .. " scene")
+    assert_near(recall.time, expected.time, 0.01, "recall " .. (2 + index) .. " time")
+  end
+  assert_true(not table.concat(context.printed, "\n"):find("overran", 1, true), "the old wait never resumed")
 end)
 
 -- A PSET load (norns' params:read, from the PARAMS menu) sets params in file
@@ -2001,8 +2088,18 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
   check(2, { "filter_freq", "filter_res", "delay_time", "delay_mix" }, "FX")
   local lfo = {}
   for n = 1, local_value("NUM_LFOS") do lfo[n] = "lfo_depth_" .. n end
-  lfo[4] = "lfo_free_" .. local_value("selected_lfo")
+  local selected_lfo = local_value("selected_lfo")
+  lfo[4] = "lfo_free_" .. selected_lfo
   check(3, lfo, "LFO")
+  -- in clocked mode ring 4 shows the rate: an option param with an even
+  -- number of rates has no middle index, so only its ends are checked
+  params:set("lfo_mode_" .. selected_lfo, 1)
+  local clocked_id = "lfo_clocked_" .. selected_lfo
+  local _, slowest_rate = param_range(clocked_id)
+  params:set(clocked_id, slowest_rate); arc_redraw()
+  assert_equal(lit(4), 64, "LFO ring 4 (" .. clocked_id .. ") at maximum")
+  params:set(clocked_id, 1); arc_redraw()
+  assert_equal(lit(4), 0, "LFO ring 4 (" .. clocked_id .. ") at minimum")
   check(4, { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
 end)
 
@@ -2236,20 +2333,23 @@ local function screen_shows(context, text)
 end
 
 -- change() must only ask for a redraw: nothing draws until the next frame,
--- which draws the screen and the arc once each
+-- which draws the screen and the arc once each (only the screen when
+-- arc_hardware is nil: no arc is connected after the change)
 local function assert_drawn_on_next_frame(context, arc_hardware, where, change)
   next_frame(context)  -- start from a frame with nothing left to draw
   local counter = count_screen_draws()
-  local arc_refreshes = arc_hardware.refresh_count
+  local arc_refreshes = arc_hardware and arc_hardware.refresh_count
   change()
   local drawn_before_frame = counter.screen
-  local arc_before_frame = arc_hardware.refresh_count - arc_refreshes
+  local arc_before_frame = arc_hardware and arc_hardware.refresh_count - arc_refreshes
   next_frame(context)
   counter.restore()
   assert_equal(drawn_before_frame, 0, where .. ": the screen waits for the frame")
-  assert_equal(arc_before_frame, 0, where .. ": the arc waits for the frame")
   assert_equal(counter.screen, 1, where .. ": the next frame draws the screen once")
-  assert_equal(arc_hardware.refresh_count - arc_refreshes, 1, where .. ": and the arc once")
+  if arc_hardware then
+    assert_equal(arc_before_frame, 0, where .. ": the arc waits for the frame")
+    assert_equal(arc_hardware.refresh_count - arc_refreshes, 1, where .. ": and the arc once")
+  end
 end
 
 test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)", function()
@@ -2328,13 +2428,20 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
 end)
 
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
-  local context = load_strata(); finish_startup(context)
+  local context = load_strata()
   local arc_hardware = context.arc.plug(1)
   local grid_device = context.grid.plug(1, 16, 16)
   context.midi.plug(1, "keys")
   local voices = local_value("voices")
   show_page(1)
 
+  assert_drawn_on_next_frame(context, arc_hardware, "the startup clock starting voice 2", function()
+    for _ = 1, 100 do  -- one scheduler step at a time: frames tick until the clock wakes
+      if voices[2].active then break end
+      context.clock.advance()
+    end
+  end)
+  assert_true(voices[2].active, "the startup clock started voice 2")
   assert_drawn_on_next_frame(context, arc_hardware, "MIDI note", function()
     context.midi.send(1, { type = "note_on", ch = 1, note = 69, vel = 100 })
   end)
@@ -2346,6 +2453,11 @@ test("displayed changes from every source reach the screen and arc on the next f
     context.midi.send(1, { type = "note_on", ch = 4, note = 40, vel = 100 })
   end)
   assert_true(voices[4].active, "the note started voice 4")
+  params:set("midi_note_off", 2)   -- voice off
+  assert_drawn_on_next_frame(context, arc_hardware, "MIDI note off stopping a voice", function()
+    context.midi.send(1, { type = "note_off", ch = 4, note = 40, vel = 0 })
+  end)
+  assert_true(not voices[4].active, "the note off stopped voice 4")
 
   params:set("mutation_probability", 1)
   assert_drawn_on_next_frame(context, arc_hardware, "gentle_mutate", gentle_mutate)
@@ -2362,6 +2474,8 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_true(voices[5].active, "the grid started voice 5")
   assert_drawn_on_next_frame(context, arc_hardware, "arc turn", function() context.arc.turn(1, 2, 8) end)
   assert_drawn_on_next_frame(context, arc_hardware, "E3", function() enc(3, 1) end)
+  assert_drawn_on_next_frame(context, arc_hardware, "E1 page change", function() enc(1, 1) end)
+  assert_true(screen_shows(context, "FX"), "E1 moved to the FX page")
 
   show_page(2)
   assert_drawn_on_next_frame(context, arc_hardware, "params:set of an FX param", function()
@@ -2378,7 +2492,37 @@ test("displayed changes from every source reach the screen and arc on the next f
     context.polls.fire("bufferState", 305)
   end)
   assert_true(screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
+  -- voice 1 records into slot 1; no report comes, so the take settles empty
+  params:set("v1_source", 2)
+  record_buffer(1)
+  assert_drawn_on_next_frame(context, arc_hardware, "recording timer end", function()
+    wake_buffer_clock(context, 1)
+  end)
+  assert_true(screen_shows(context, "K2:load K3:... K2+3:save"), "BUFFER shows the take finishing")
+  assert_drawn_on_next_frame(context, arc_hardware, "fallback settle", function()
+    wake_buffer_clock(context, 1)
+  end)
+  assert_true(screen_shows(context, "K2:load K3:rec K2+3:save"), "BUFFER shows the take settled")
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
+
+  -- hot-plugged devices: SETUP shows them
+  show_page(5)
+  context.midi.unplug(1)
+  assert_drawn_on_next_frame(context, arc_hardware, "midi.add", function() context.midi.plug(1, "pads") end)
+  assert_true(screen_shows(context, "midi 1: pads"), "SETUP shows the new MIDI device")
+  assert_drawn_on_next_frame(context, arc_hardware, "grid.add", function() context.grid.plug(2, 8, 8) end)
+  assert_true(screen_shows(context, "grid: 2 connected"), "SETUP shows the second grid")
+  assert_drawn_on_next_frame(context, arc_hardware, "grid.remove", function() context.grid.unplug(2) end)
+  assert_true(screen_shows(context, "grid: 1 connected"), "SETUP shows the grid gone")
+  assert_drawn_on_next_frame(context, nil, "arc.remove", function() context.arc.unplug(1) end)
+  assert_true(screen_shows(context, "arc: none"), "SETUP shows the arc gone")
+  local new_arc, arc_before_frame
+  assert_drawn_on_next_frame(context, nil, "arc.add", function()
+    new_arc = context.arc.plug(1); arc_before_frame = new_arc.refresh_count
+  end)
+  assert_true(screen_shows(context, "arc: connected"), "SETUP shows the new arc")
+  assert_equal(arc_before_frame, 0, "arc.add: the new arc waits for the frame")
+  assert_equal(new_arc.refresh_count, 1, "arc.add: the next frame draws the new arc once")
 end)
 
 test("a smooth scene transition reaches the screen and arc on every step and at its end (#11)", function()
@@ -2557,7 +2701,7 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   recall_scene(1, 5)
   local voices = local_value("voices")
   local expected_off = {}
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("NUM_VOICES") do
     if voices[voice_idx].active then table.insert(expected_off, voice_idx - 1) end
   end
   assert_true(#expected_off >= 2 and expected_off[1] == 0, "voice 1 and others are running before cleanup")
@@ -5316,6 +5460,44 @@ test("LFO restores the stored value when its depth reaches 0 or its destination 
   context.lfo.tick(lfos[1], 1.0)
   assert_near(context.calls_named("setReverb")[1].args[1], params:get("reverb_mix"), 1e-9, "none restores")
   assert_equal(#context.calls_named("setReverb"), 1, "and then sends nothing")
+end)
+
+test("a full-depth LFO clamps its destination to both ends of the range (#50)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("strata_lfo1_dest", 8)   -- dly fdbk, 0-0.95
+  params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
+  -- each tick moves the sent value well past the send threshold
+  params:set("delay_feedback", 0.95); context.lfo.tick(lfo, 0.0)    -- scaled -1: 0.475 sent
+  context.clear_engine_calls(); context.lfo.tick(lfo, 1.0)          -- scaled +1: 0.95 + 0.475
+  assert_near(context.calls_named("setDelay")[1].args[2], 0.95, 1e-9, "clamped at the top of the range")
+  params:set("delay_feedback", 0)                                   -- 0 + 0.475 sent
+  context.clear_engine_calls(); context.lfo.tick(lfo, 0.0)          -- scaled -1: 0 - 0.475
+  assert_near(context.calls_named("setDelay")[1].args[2], 0, 1e-9, "clamped at the bottom of the range")
+  assert_near(params:get("delay_feedback"), 0, 1e-9, "param value untouched")
+end)
+
+-- sync_voice_values_to_engine sends the stored density, so the modulated
+-- value sent before the restart must be forgotten: master density scales
+-- what the engine has
+test("a restarted voice's grain density scales from its stored value until the next LFO step (#50)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  assert_true(voices[1].active, "voice 1 is running")
+  params:set("v1_grain_density", 20); params:set("master_density", 1)
+  params:set("strata_lfo1_dest", 15)   -- v1 dens
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  context.lfo.tick(local_value("lfos")[1], 1.0)   -- scaled +0.5: the engine gets a modulated density
+  assert_equal(voices[1].grain.density, 20, "the stored density is untouched")
+  toggle_voice(1); toggle_voice(1)                -- restart: the sync sends the stored density
+  context.clear_engine_calls()
+  params:set("master_density", 1.5)               -- before the LFO's next step
+  local density_calls = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "grainDensity" then table.insert(density_calls, call) end
+  end
+  assert_equal(#density_calls, 1, "master density resends voice 1's grain density")
+  assert_near(density_calls[1].args[3], 20 * 1.5, 1e-6, "from the stored density, not the modulated one")
 end)
 
 test("LFOs on params of one command, or on one param, do not undo each other", function()
