@@ -101,6 +101,9 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- How long a randomize can be undone (lib/mutation.lua, S.undo)
+local UNDO_SECONDS = 5
+
 -- cleanup()'s steps in the order it runs them: each module registers its
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
 -- The files are saved before anything stops, with the stored values (the
@@ -116,6 +119,7 @@ local CLEANUP_ORDER = {
   frame_clock = 60,         -- lib/ui/frame.lua
   drift_metro = 70,         -- lib/mutation.lua
   mutation_metro = 80,      -- lib/mutation.lua (and its param)
+  undo_clock = 85,          -- lib/mutation.lua: the randomize undo's expiry clock
   pattern_clock = 90,       -- lib/sequencer.lua
   scene_sequencer = 100,    -- lib/scenes.lua (and its param)
   scene_transition = 110,   -- lib/scenes.lua
@@ -153,5 +157,6 @@ return {
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  UNDO_SECONDS = UNDO_SECONDS,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }

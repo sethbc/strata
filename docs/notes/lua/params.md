@@ -4,6 +4,7 @@
 - A group's size `n` equals the number of params that follow it. Groups cannot nest; the test stub errors on a group opened inside another, or one left short.
 - The PARAMS menu order is the order of the `S.registry.params` records, and `init` runs each record's `add` in that order.
 - A control param that reaches the engine stores its value and calls `send_param_to_engine` from its action, with a sender in `S.engine_senders` (`docs/notes/lua/engine-sync.md`).
+- The actions of the voice params `randomize_voice` sets (the synthesis params, `buf_pos`, `buf_rate`, `buf_scan`, `grain_size`, `grain_pitch`) call `note_param_edit(param_id)`, so an edit ends the randomize undo (`docs/notes/lua/mutation.md`).
 - `redraw_on_param_changes()` runs once, after the last param is added. A param added, or an action set with `params:set_action`, after it runs requests no redraws.
 - The tempo handler is installed once (never chaining to itself) and given back only while the script's is still installed.
 - The script never bangs its params, so Lua defaults are what the engine plays, and the filter and delay SynthDef defaults must equal the Lua param defaults (a test checks).

@@ -3,6 +3,7 @@
 - A new captured field needs `validate_scene` coverage (and a `SCENE_GLOBAL_PARAMS` entry for a global param) and a migration default (`SCENE_GLOBAL_PARAMS.default`, `S.VOICE_SCENE_DEFAULTS` or `S.SCENE_BLOCK_DEFAULTS`), or older files stop loading.
 - Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, freeze and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
 - A recall stops the voices it stops before setting their sources and params, starts the voices it starts after their params, and sends at most one full sync per running voice whose source changed (`S.scene_recall_in_progress`).
+- Every recall clears the randomize undo (`clear_undo`, `lib/mutation.lua`): `recall_scene` after validation, `recall_scene_instant` at its start.
 - Every recall cancels a running transition first. The transition clock clears `S.scene_transition_active` and `S.scene_transition_clock` on every exit (end, cancel, error).
 - The sequencer never cuts a transition short. It waits for the transition's end, bounded by `SCENE_TRANSITION.overrun_seconds` measured from the fade's progress, never from its start.
 - `load_scenes_from_disk` runs `tab.load` through `pcall`. On any failure it keeps the current scenes and moves the file aside, or blocks the autosave (`S.scene_autosave_blocked`), so a bad file is never overwritten.

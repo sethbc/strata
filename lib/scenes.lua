@@ -304,8 +304,10 @@ return function(S)
 
     transition_time = transition_time or 0
 
-    -- Any new recall supersedes a transition that is still running
+    -- Any new recall supersedes a transition that is still running, and
+    -- ends the randomize undo
     cancel_scene_transition()
+    clear_undo()
 
     if transition_time > 0 then
       -- the fade's end applies the scene as it was recalled: a capture into
@@ -373,6 +375,7 @@ return function(S)
   -- started after them.
   function recall_scene_instant(scene_num, scene_data)
     scene_data = scene_data or S.scenes[scene_num].data
+    clear_undo()  -- a recall ends the randomize undo (a fade's end too)
     local source_changed = {}
     S.scene_recall_in_progress = true
     -- the flag must not outlive an error in a param action: clear it, then
