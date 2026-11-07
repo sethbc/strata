@@ -533,7 +533,7 @@ test("every repo path the maintained docs name exists (#52)", function()
   local checked = 0
   for _, doc_name in ipairs(maintained_docs()) do
     local file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
-    local missing, count = doc_paths_missing(text)
+    local missing, count = doc_paths_missing(text, doc_name:match("^(.*)/[^/]*$") or "")
     checked = checked + count
     if #missing > 0 then fail(doc_name .. " names " .. missing[1] .. ", which does not exist") end
   end
@@ -544,6 +544,52 @@ test("the docs path check covers lib/ paths", function()
   local missing, checked = doc_paths_missing("see `lib/missing.lua`, `lib/Engine_Strata.sc` and `lib/x`, not lib/bare.lua")
   assert_equal(table.concat(missing, " "), "lib/missing.lua lib/x", "the missing lib/ paths are reported")
   assert_equal(checked, 3, "every backticked lib/ path is checked")
+end)
+
+-- Each fragment in changes/ (README.md aside) must hold a ### Added,
+-- ### Changed or ### Fixed heading with a bullet under it. Returns the
+-- problem, or nil when the text is a valid fragment
+local function fragment_problem(text)
+  local under_heading, found = false, false
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^### ") then
+      under_heading = line:match("^### Added%s*$") or line:match("^### Changed%s*$") or line:match("^### Fixed%s*$")
+    elseif under_heading and line:match("^%s*[-*] %S") then
+      found = true
+    end
+  end
+  if not found then return "no bullet under ### Added, ### Changed or ### Fixed" end
+end
+
+test("every changelog fragment has a heading and a bullet under it", function()
+  local listing = io.popen('ls -1 "' .. repo_root .. '/changes" 2>/dev/null')
+  local count = 0
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    if name ~= "README.md" then
+      count = count + 1
+      local file = assert(io.open(repo_root .. "/changes/" .. name, "r")); local text = file:read("*a"); file:close()
+      local problem = fragment_problem(text)
+      if problem then fail("changes/" .. name .. ": " .. problem) end
+    end
+  end
+  listing:close()
+  assert_true(count > 0, "changes/ holds a fragment")
+  assert_true(fragment_problem("### Added\n- one\n") == nil, "a valid fragment passes")
+  assert_true(fragment_problem("Added some things\n- one\n") ~= nil, "no heading fails")
+  assert_true(fragment_problem("### Added\nno bullet\n") ~= nil, "no bullet fails")
+  assert_true(fragment_problem("### Other\n- one\n") ~= nil, "another heading fails")
+end)
+
+test("every docs/notes/lua file opens with a Must not break section", function()
+  local listing = io.popen('ls -1 "' .. repo_root .. '/docs/notes/lua" 2>/dev/null')
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    if name:match("%.md$") then
+      local file = assert(io.open(repo_root .. "/docs/notes/lua/" .. name, "r")); local text = file:read("*a"); file:close()
+      local heading = text:match("^(#+ [^\n]*)") or text:match("\n(#+ [^\n]*)")
+      assert_equal(heading, "## Must not break", "docs/notes/lua/" .. name .. " first heading")
+    end
+  end
+  listing:close()
 end)
 
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
