@@ -16,11 +16,16 @@ local real_print = print
 local harness_globals = {}
 for name in pairs(_G) do harness_globals[name] = true end
 
-local SC_PATH = repo_root .. "/lib/Engine_Strata.sc"
 local LUA_PATH = repo_root .. "/strata.lua"
-local signatures = stubs.parse_engine_signatures(SC_PATH)
-local engine_polls = stubs.parse_engine_polls(SC_PATH)
-local engine_spec = stubs.parse_engine_spec(SC_PATH)
+-- The engine's source: lib/Engine_Strata.sc, then lib/engine/*.sc sorted,
+-- each after a "// file: <path>" line. Every test that reads the engine
+-- reads this, never one file.
+local function engine_sources() return stubs.engine_sources(repo_root) end
+local signatures = stubs.parse_engine_signatures(engine_sources())
+local engine_polls = stubs.parse_engine_polls(engine_sources())
+local engine_spec = stubs.parse_engine_spec(engine_sources())
+local engine_spec_problems = stubs.engine_spec_problems(engine_spec)
+assert(#engine_spec_problems == 0, table.concat(engine_spec_problems, "\n"))
 
 local data_root = os.tmpname()
 os.remove(data_root)
@@ -519,7 +524,7 @@ return {
   sync_check = sync_check,
   real_print = real_print,
   harness_globals = harness_globals,
-  SC_PATH = SC_PATH,
+  engine_sources = engine_sources,
   LUA_PATH = LUA_PATH,
   signatures = signatures,
   engine_polls = engine_polls,

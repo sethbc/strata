@@ -4,7 +4,7 @@
 -- Run alone: lua test/run.lua engine_sync
 
 return function(h)
-local test, SC_PATH, assert_true, assert_equal = h.test, h.SC_PATH, h.assert_true, h.assert_equal
+local test, engine_sources, assert_true, assert_equal = h.test, h.engine_sources, h.assert_true, h.assert_equal
 local assert_near, load_strata, local_value = h.assert_near, h.load_strata, h.local_value
 local finish_startup, wake, scramble_state = h.finish_startup, h.wake, h.scramble_state
 local engine_state_for_voice = h.engine_state_for_voice
@@ -73,9 +73,9 @@ end)
 
 test("the largest grain overlap Lua can send fits the engine's maxGrains", function()
   load_strata()
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
-  local max_grains = tonumber(source:match("var <maxGrains = (%d+);"))
-  assert_true(max_grains ~= nil, "the engine declares var <maxGrains = <n>;")
+  local source = engine_sources()
+  local max_grains = tonumber(source:match("var <>maxGrains = (%d+);"))
+  assert_true(max_grains ~= nil, "the engine declares var <>maxGrains = <n>;")
   local master_max = params:lookup_param("master_density").controlspec.maxval
   for voice_idx = 1, 7 do
     local size_max = params:lookup_param("v" .. voice_idx .. "_grain_size").controlspec.maxval

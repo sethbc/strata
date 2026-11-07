@@ -805,6 +805,109 @@ local function param_type_string_comparison(source)
   return nil
 end
 
+-- The engine's SuperCollider files: Engine_Strata.sc and lib/engine/*.sc,
+-- as { path = "lib/...", text = source }
+local function engine_files()
+  local text, files = "\n" .. h.engine_sources(), {}
+  local markers = {}
+  for start, path, body_start in text:gmatch("\n()// file: (%S+)\n()") do markers[#markers + 1] = { start, path, body_start } end
+  for index, marker in ipairs(markers) do
+    local finish = markers[index + 1] and (markers[index + 1][1] - 1) or #text
+    files[#files + 1] = { path = marker[2], text = text:sub(marker[3], finish) }
+  end
+  return files
+end
+
+-- The top-level blocks of SuperCollider source (a class or a class
+-- extension), each with the methods defined directly inside it:
+-- { head = "Engine_Strata : CroneEngine", methods = { { name = "*new", body = "{...}" }, ... } }.
+-- Comments are stripped first; strings, symbols and $x characters are skipped.
+local function sc_blocks(source)
+  source = stubs.strip_sc_comments(source)
+  local blocks, depth, cursor, block, start_of_head = {}, 0, 1, nil, 1
+  local method_start, method_name
+  while cursor <= #source do
+    local char = source:sub(cursor, cursor)
+    if char == '"' or char == "'" then
+      cursor = cursor + 1
+      while cursor <= #source and source:sub(cursor, cursor) ~= char do
+        cursor = cursor + (source:sub(cursor, cursor) == "\\" and 2 or 1)
+      end
+    elseif char == "$" then
+      cursor = cursor + (source:sub(cursor + 1, cursor + 1) == "\\" and 2 or 1)
+    elseif char == "{" then
+      if depth == 0 then
+        block = { head = source:sub(start_of_head, cursor - 1):match("([^;{}]-)%s*$"):match("^%s*(.-)$"), methods = {} }
+        table.insert(blocks, block)
+      elseif depth == 1 then
+        method_name = source:sub(1, cursor - 1):match("(%*?[%a_][%w_]*)%s*$")
+        method_start = cursor
+      end
+      depth = depth + 1
+    elseif char == "}" then
+      depth = depth - 1
+      if depth == 1 and method_start then
+        table.insert(block.methods, { name = method_name, body = source:sub(method_start, cursor) })
+        method_start = nil
+      elseif depth == 0 then
+        start_of_head = cursor + 1
+      end
+    end
+    cursor = cursor + 1
+  end
+  return blocks
+end
+
+test("Engine_Strata.sc defines only *new, alloc and free", function()
+  local files = engine_files()
+  assert_equal(files[1].path, "lib/Engine_Strata.sc")
+  local blocks = sc_blocks(files[1].text)
+  assert_equal(#blocks, 1, "one class")
+  assert_equal(blocks[1].head, "Engine_Strata : CroneEngine", "the class")
+  local names = {}
+  for _, method in ipairs(blocks[1].methods) do names[#names + 1] = method.name end
+  assert_equal(table.concat(names, " "), "*new alloc free", "its methods")
+  -- the parser sees a method in a class extension too
+  local probe = sc_blocks('+ Engine_Strata {\n    a { ^"}" }\n    b { arg x; ^{ x } }\n}\n')
+  assert_equal(probe[1].head, "+ Engine_Strata", "an extension's head")
+  assert_equal(#probe[1].methods, 2, "both methods, nested braces and strings skipped")
+end)
+
+-- The engine areas and their orders (the 3.2 design, §0)
+local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70 }
+
+test("every engine file is named Strata*.sc and defines each strataArea method once", function()
+  local files, areas, orders = engine_files(), {}, {}
+  assert_true(#files > 1, "lib/engine holds the engine's areas")
+  for index = 2, #files do
+    local path = files[index].path
+    assert_true(path:match("^lib/engine/Strata%u[%w]*%.sc$"), path .. " is named lib/engine/Strata<Name>.sc")
+    for _, block in ipairs(sc_blocks(files[index].text)) do
+      local class = block.head:match("^%+%s*([%w_]+)$") or block.head:match("^([%w_]+)")
+      assert_true(class == "Engine_Strata" or block.head:match("^Strata"),
+        path .. ": an extension of Engine_Strata or a Strata* class, not " .. block.head)
+      for _, method in ipairs(block.methods) do
+        local area = method.name:match("^strataArea(%u[%w_]*)$")
+        if area then
+          area = area:sub(1, 1):lower() .. area:sub(2)
+          assert_true(areas[area] == nil, "strataArea" .. method.name:sub(11) .. " is defined in " .. tostring(areas[area]) .. " and " .. path)
+          areas[area] = path
+          local order = tonumber(method.body:match("order:%s*(%d+)"))
+          assert_true(order ~= nil, method.name .. " has an order")
+          assert_true(orders[order] == nil, method.name .. " shares order " .. tostring(order) .. " with " .. tostring(orders[order]))
+          orders[order] = method.name
+          if ENGINE_AREAS[area] then assert_equal(order, ENGINE_AREAS[area], method.name .. "'s order") end
+        end
+      end
+    end
+  end
+  for area in pairs(ENGINE_AREAS) do assert_true(areas[area], "the " .. area .. " area is registered") end
+  -- Engine_Strata.sc registers no area of its own
+  for _, block in ipairs(sc_blocks(files[1].text)) do
+    for _, method in ipairs(block.methods) do assert_true(not method.name:match("^strataArea"), "no area in Engine_Strata.sc") end
+  end
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',

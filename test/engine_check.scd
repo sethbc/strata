@@ -2220,7 +2220,8 @@ server.waitForBoot({
         info = tempFloatFiles.value - tempFilesBefore;
         check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
         checkStaleParts.value;
-        file = Engine_Strata.findMethod(\alloc);
+        // alloc runs every area's allocState: the files area's calls it
+        file = Engine_Strata.findMethod(\strataAreaFiles);
         data = File.readAllString(file.filenameSymbol.asString);
         data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
         check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");
@@ -2566,7 +2567,10 @@ server.waitForBoot({
         check.(synthNames.(context.xg).size == 0, "free removes every engine node");
         check.(engine.envBuffers.every({ arg buffer; buffer.bufnum.isNil }), "free frees the envelope buffers");
         check.((engine.buffersL ++ engine.buffersR).every({ arg buffer; buffer.bufnum.isNil }), "free frees the buffer slots");
-        check.(engine.inputBus.index.isNil, "free frees the input bus");
+        // the input bus and every other bus the areas allocated
+        check.(([engine.inputBus, engine.silentBus, engine.mainBus, engine.filterBus, engine.delayBus, engine.reverbBus]
+            ++ engine.granBuses ++ engine.modBuses ++ engine.recordFrameBuses).every({ arg bus; bus.index.isNil }),
+            "free frees the input bus");
         engine.bufferStatePoll.stop;
     } { arg error;
         error.reportError;
