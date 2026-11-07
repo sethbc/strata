@@ -581,6 +581,20 @@ test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
   assert_true(hint_text(context) ~= "K3 again: overwrite S1", "the hint row no longer asks")
 end)
 
+test("SCENES ring 1 moves the cursor through the page's move_cursor", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  show_page("SCENES")
+  local real = S.lib.pages_scenes.move_cursor
+  local targets = {}
+  S.lib.pages_scenes.move_cursor = function(slot) table.insert(targets, slot); real(slot) end
+  context.arc.turn(1, 1, 20)
+  S.lib.pages_scenes.move_cursor = real
+  assert_equal(table.concat(targets, ","), "3", "two stops from slot 1: move_cursor(3)")
+  assert_equal(S.cursors.scene, 3, "the cursor moved")
+end)
+
 test("page and arc files keep to their record fields", function()
   local ARC_FIELDS = { arc_delta = true, arc_redraw = true, arc_alt_delta = true, arc_alt_redraw = true }
   local PAGE_FIELDS = { "name", "draw", "hints", "enc", "key", "alt_enc", "alt_key", "key_release",

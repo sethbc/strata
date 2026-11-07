@@ -44,4 +44,4 @@ Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a 
 
 ## Center Detents
 
-A value whose range runs through 0 (pan, buffer scan, the cross-modulation amounts) stops at exactly 0 when a turn reaches or crosses it, even on a fast turn, and stays there for the next 3 encoder detents or 24 arc ticks; turning on past them leaves 0.
+A value whose range runs through 0 (pan, buffer scan, the cross-modulation amounts) stops at exactly 0 when a turn reaches or crosses it, even on a fast turn, and holds there for up to a second: the next 3 encoder detents or 24 arc ticks in that second stay at 0, and turning on past them, or after the second, leaves 0.
