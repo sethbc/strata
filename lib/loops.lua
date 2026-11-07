@@ -23,7 +23,10 @@ return function(S)
     max_start = 0.999, min_length = 0.001,
     -- a length within this of 1 - start fits (float rounding of the warp)
     tolerance = 1e-9,
-    format = "%.3f",
+    -- three decimals, five below fine_below (three significant digits):
+    -- near 0.001 one detent of the exponential length moves it about 7%
+    -- (0.00007), which three or four decimals would hide
+    format = "%.3f", fine_format = "%.5f", fine_below = 0.01,
   }
   local LOOP = M.LOOP
 
@@ -70,7 +73,10 @@ return function(S)
     if params:get(id) > limit + LOOP.tolerance then params:set(id, limit) end
   end
 
-  local function fraction_text(param) return string.format(LOOP.format, param:get()) end
+  local function fraction_text(param)
+    local value = param:get()
+    return string.format(value < LOOP.fine_below and LOOP.fine_format or LOOP.format, value)
+  end
 
   -- VOICE's layout tests and page renders: every voice on buffer 1, a loop
   -- at the slot's end, the cursor on each loop row

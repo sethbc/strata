@@ -114,12 +114,34 @@ test("loop start 1 clamps to 0.999 and the length to 0.001", function()
     assert_true(each.value <= 0.001 + 1e-9, "no length past 1 - start is sent (got " .. each.value .. ")")
   end
   assert_equal(params:string("v1_loop_start"), "0.999")
-  assert_equal(params:string("v1_loop_length"), "0.001")
+  assert_equal(params:string("v1_loop_length"), "0.00100", "five decimals below 0.01")
   -- a start of 1 from a PSET clamps the same way
   params:set("v2_loop_length", 0.5)
   params:set("v2_loop_start", 1.5)
   start, length = loop_of(2)
   assert_near(start, 0.999, 1e-12); assert_near(length, 0.001, 1e-9)
+end)
+
+test("every E3 detent of a short loop length shows a new value", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_source", 2)
+  params:set("v1_loop_length", 0.001)
+  h.show_page("VOICE")
+  S.selected_voice = 1
+  S.lib.pages_voice.sync_cursor()
+  S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of("v1_loop_length"))
+  local shown = params:string("v1_loop_length")
+  assert_equal(shown, "0.00100", "0.001 with five decimals")
+  while params:get("v1_loop_length") < 0.02 do
+    enc(3, 1)
+    local now = params:string("v1_loop_length")
+    assert_true(now ~= shown, "one detent from " .. shown .. " shows a new value")
+    shown = now
+  end
+  assert_equal(params:string("v1_loop_length"):match("^0%.%d%d%d$") ~= nil, true,
+    "three decimals from 0.01 (" .. params:string("v1_loop_length") .. ")")
 end)
 
 test("moving loop start past 1 - length clamps the length", function()
