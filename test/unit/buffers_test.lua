@@ -11,6 +11,13 @@ local wake_buffer_clock, deep_copy, tabutil_text = h.wake_buffer_clock, h.deep_c
 local HINT_ROW_Y, show_page, assert_screen_layout = h.HINT_ROW_Y, h.show_page, h.assert_screen_layout
 local tap = h.tap
 
+-- The BUFFER page record's own hint row (its exact keys are tested in
+-- pages_buffer_test.lua)
+local function buffer_record_hints()
+  local S = h.local_value("S")
+  return S.registry.pages[S.constants.UI_PAGES.index.BUFFER].hints(false)
+end
+
 test("buffer triggers call the engine and track recording state", function()
   local context = load_strata(); finish_startup(context)  -- finish init's start-up coroutine
   params:set("record_duration", 2); params:set("buf3_record", 1)
@@ -104,7 +111,8 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   assert_true(not buffers[3].loaded, "not loaded before the engine reports it")
   assert_equal(buffers[3].name, "empty", "no take name yet")
   params:set("v1_source", 4); show_page("BUFFER")      -- voice 1 reads buf 3
-  assert_equal(hint(), "K2:load K3:... K2+3:save", "BUFFER hint while finishing")
+  assert_equal(hint(), buffer_record_hints(), "BUFFER hint while finishing")
+  assert_true(hint():find("K3:...", 1, true), "K3 waits while the take finishes")
   context.clear_engine_calls(); record_buffer(3)
   assert_equal(#context.engine_calls, 0, "a press while finishing sends nothing (no new take, no stop)")
   assert_true(buffers[3].recording, "and changes nothing")
@@ -114,7 +122,8 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   assert_true(not buffers[3].recording, "finished"); assert_true(buffers[3].loaded, "loaded")
   assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
   show_page("BUFFER")
-  assert_equal(hint(), "K2:load K3:rec K2+3:save", "hint back to rec")
+  assert_equal(hint(), buffer_record_hints(), "hint back to rec")
+  assert_true(hint():find("K3:rec", 1, true), "K3 records again")
 
   -- stopped within the start-up window: the engine captured nothing
   record_buffer(4); record_buffer(4)
@@ -287,7 +296,7 @@ test("a failed load over audio puts the slot's file back and is never remembered
   assert_equal(buffer_hint(context), "buf 2 load failed", "the BUFFER page says so")
   assert_screen_layout(context, "BUFFER page load failed flash")
   context.clock.run_for(2); next_frame(context)
-  assert_equal(buffer_hint(context), "K2:load K3:rec K2+3:save", "briefly")
+  assert_equal(buffer_hint(context), buffer_record_hints(), "briefly: then the page's own hints")
   -- a duplicate report changes nothing
   context.polls.fire("bufferLoadFailed", load_failed_value(2, 2))
   assert_equal(buffers[2].name, "good.wav"); assert_true(buffers[2].loaded)

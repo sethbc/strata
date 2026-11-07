@@ -147,13 +147,12 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   assert_equal(device:get_led(13, 14), 12, "voice 5 on lights row 14")
   toggle_voice(5)
   assert_equal(device:get_led(13, 14), 2, "voice 5 off dims row 14")
-  local _, set_selected = find_upvalue("selected_voice")
-  set_selected(1)
-  key(3, 1)  -- voice 1 is active: K3 freezes it
-  assert_equal(device:get_led(1, 16), 12, "K3 freeze lights row 16")
-  context.arc.plug(1)
-  context.arc.push(1, 1, 1)
-  assert_equal(device:get_led(1, 16), 2, "arc button unfreeze dims row 16")
+  -- a lock from anywhere (MAIN's K3, the arc button, MIDI, a scene) goes
+  -- through toggle_lock, which redraws the grid
+  toggle_lock(1)
+  assert_equal(device:get_led(1, 16), 12, "a lock lights row 16")
+  toggle_lock(1)
+  assert_equal(device:get_led(1, 16), 2, "an unlock dims row 16")
 
   -- the highlighted step is the one that just played
   toggle_pattern_step(1, 1)

@@ -486,4 +486,99 @@ test("the BUFFER hint flash still shows on the hint row for 1.5 s", function()
   assert_equal(slot.clock, nil)
 end)
 
+test("BUFFER changes reach the screen and arc on the next frame (#11)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  local grid_device = context.grid.plug(1, 16, 16)
+  show_page("BUFFER")
+  h.assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
+    context.polls.fire("bufferState", 305)
+  end)
+  assert_true(h.screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
+  -- voice 1 records into slot 1; no report comes, so the take settles empty
+  params:set("v1_source", 2)
+  record_buffer(1)
+  h.assert_drawn_on_next_frame(context, arc_hardware, "recording timer end", function()
+    h.wake_buffer_clock(context, 1)
+  end)
+  assert_true(h.screen_shows(context, "K2:load K3:... K2+3:save"), "BUFFER shows the take finishing")
+  h.assert_drawn_on_next_frame(context, arc_hardware, "fallback settle", function()
+    h.wake_buffer_clock(context, 1)
+  end)
+  assert_true(h.screen_shows(context, "K2:load K3:rec K2+3:save"), "BUFFER shows the take settled")
+  assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
+end)
+
+test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  local drift_metro = local_value("drift_metro")
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- K2 down, then K1 opens the menu: the K2 release goes to the menu
+  key(2, 1)
+  context.menu.mode = true; drift_metro.event()   -- a 10 Hz tick while the menu is open
+  context.menu.mode = false                       -- K1 again: back to the script
+  tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after K2 was released in the menu")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  assert_equal(context.fileselect.last, nil, "nothing opened the file selector")
+  -- a save made with K2 held, then the menu: the next K2 tap opens the selector
+  tap(3)  -- stop the recording
+  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
+  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 still saves")
+  context.menu.mode = true; drift_metro.event(); context.menu.mode = false
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector after the menu")
+  -- ticks with the menu closed keep a held K2
+  context.fileselect.last = nil; context.clear_engine_calls()
+  key(2, 1); drift_metro.event(); tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
+  key(2, 0); assert_equal(context.fileselect.last, nil)
+  assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
+end)
+
+test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()
+  local stub_set_mode
+  local context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
+  finish_startup(context); show_page("BUFFER")
+  assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- K2 down, then K1 opens and closes the menu between two 10 Hz ticks
+  key(2, 1)
+  _menu.set_mode(true)
+  assert_equal(norns.menu.status(), true, "the wrapped set_mode still opens the menu")
+  assert_equal(local_value("key_press_page")[2], nil, "the held K2 is forgotten as the menu opens")
+  _menu.set_mode(false)
+  tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  -- a K2+K3 save, then the menu: the next K2 tap opens the selector
+  tap(3)  -- stop the recording
+  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
+  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1)
+  _menu.set_mode(true); _menu.set_mode(false)
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
+  -- closing the menu forgets nothing (only an opening does)
+  key(2, 1); _menu.set_mode(false)
+  assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "set_mode(false) keeps a held key")
+  key(2, 0)
+  -- cleanup gives norns its own set_mode back
+  cleanup()
+  assert_equal(_menu.set_mode, stub_set_mode, "cleanup restores set_mode")
+  -- something that wrapped set_mode after Strata keeps its wrapper; Strata's goes inert
+  stub_set_mode = nil
+  context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
+  local strata_set_mode = _menu.set_mode
+  local mod_set_mode = function(mode) strata_set_mode(mode) end
+  _menu.set_mode = mod_set_mode
+  cleanup()
+  assert_equal(_menu.set_mode, mod_set_mode, "a later wrapper is left in place")
+  show_page("BUFFER"); key(2, 1)
+  _menu.set_mode(true)
+  assert_equal(norns.menu.status(), true, "the inert wrapper still passes the call on")
+  assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "and no longer touches the script's keys")
+  _menu.set_mode(false)
+end)
+
 end

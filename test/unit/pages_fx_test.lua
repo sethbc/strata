@@ -84,4 +84,22 @@ test("ALT+E3 on FX is fine", function()
   assert_near(params:get_raw("filter_freq") - r0, 0.01, 1e-9, "E3 on FX is a whole step")
 end)
 
+test("FX changes reach the screen and arc on the next frame (#11)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  show_page("FX")
+  h.assert_drawn_on_next_frame(context, arc_hardware, "params:set of an FX param", function()
+    params:set("filter_freq", 1234)
+  end)
+  assert_true(h.screen_shows(context, "1234 Hz"), "FX shows the new filter freq")
+end)
+
+test("FX acts once per K3 press; the release does nothing", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  local mix = params:get("filter_mix")
+  key(3, 1); key(3, 0)
+  assert_true(params:get("filter_mix") ~= mix, "FX K3 press bypasses once, the release does not undo it")
+end)
+
 end

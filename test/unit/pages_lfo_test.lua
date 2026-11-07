@@ -118,4 +118,12 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
   params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1, "cleanup stops LFO 3")
 end)
 
+test("LFO K3 reaches the screen and arc on the next frame (#11)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  show_page("LFO")
+  h.assert_drawn_on_next_frame(context, arc_hardware, "LFO page K3", function() key(3, 1); key(3, 0) end)
+  assert_equal(params:string("lfo_1"), "on", "K3 started LFO 1")
+end)
+
 end
