@@ -57,246 +57,11 @@ local function engine_mod_source(source)
   return source - 1
 end
 
--- State
-local voices = {
-  {
-    name = "resonator",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "rq", "noise", "mod1", "mod2", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 100,
-      amp = 0.3,
-      pan = 0,
-      rq = 0.1,
-      noise = 0.5,
-      mod1 = 0.1,
-      mod2 = 0.15
-    },
-    grain = {
-      size = 0.1,
-      density = 20,
-      pitch = 1,
-      spread = 0.5,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "fm",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "ratio", "index", "modFreq", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 80,
-      amp = 0.25,
-      pan = 0,
-      ratio = 1.5,
-      index = 2,
-      modFreq = 0.05
-    },
-    grain = {
-      size = 0.15,
-      density = 15,
-      pitch = 1,
-      spread = 0.3,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "folder",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "fold", "mod", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 60,
-      amp = 0.3,
-      pan = 0,
-      fold = 1,
-      mod = 0.2
-    },
-    grain = {
-      size = 0.08,
-      density = 25,
-      pitch = 1,
-      spread = 0.4,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "sub",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "drift", "amp"},  -- display / grid order of params
-    params = {
-      freq = 40,
-      amp = 0.4,
-      drift = 0.02
-    },
-    grain = {
-      size = 0.2,
-      density = 10,
-      pitch = 1,
-      spread = 0.2,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "pulse",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "width", "cutoff", "res", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 120,
-      amp = 0.3,
-      pan = 0,
-      width = 0.5,
-      cutoff = 2000,
-      res = 0.3
-    },
-    grain = {
-      size = 0.12,
-      density = 18,
-      pitch = 1,
-      spread = 0.35,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "karplus",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "decay", "damping", "excite", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 200,
-      amp = 0.35,
-      pan = 0,
-      decay = 4,
-      damping = 0.5,
-      excite = 0.3
-    },
-    grain = {
-      size = 0.08,
-      density = 22,
-      pitch = 1,
-      spread = 0.25,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  },
-  {
-    name = "ring",
-    active = false,
-    source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-    param_order = {"freq", "ratio", "mod", "brightness", "amp", "pan"},  -- display / grid order of params
-    params = {
-      freq = 300,
-      amp = 0.25,
-      pan = 0,
-      ratio = 1.618,
-      mod = 0.2,
-      brightness = 0.5
-    },
-    grain = {
-      size = 0.1,
-      density = 20,
-      pitch = 1,
-      spread = 0.4,
-      env = 1,  -- GRAIN_ENV_OPTIONS index
-      mode = 1,  -- GRAIN_MODE_OPTIONS index
-      buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-      buf_rate = 1,
-      buf_scan = 0
-    },
-    crossmod = {
-      slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-      slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-      speed = 10
-    }
-  }
-}
+-- Voices: S.voices (the voice definitions), S.frozen, S.master_density,
+-- S.selected_voice and the voice source helpers (lib/voices.lua). The
+-- module sets its S fields itself: S.voices is the voices table
+include("lib/voices")(S)
 
--- A voice's grain source: its synth, a buffer slot, or the live input
-function voice_uses_synth(voice_idx)
-  return voices[voice_idx].source == SOURCE_SYNTH
-end
-
-function voice_uses_buffer(voice_idx)
-  local source = voices[voice_idx].source
-  return source > SOURCE_SYNTH and source < SOURCE_INPUT
-end
-
-function voice_source_label(voice_idx)
-  return SOURCE_OPTIONS[voices[voice_idx].source]
-end
-
--- The buffer slot (1..NUM_BUFFERS) a buffer-sourced voice reads, or nil for
--- the synth and input sources
-function voice_buffer_slot(voice_idx)
-  if not voice_uses_buffer(voice_idx) then return nil end
-  return voices[voice_idx].source - SOURCE_SYNTH
-end
-
-local selected_voice = 1
 local ui_page = 1  -- index into UI_PAGES
 
 -- Screen and arc redraws. Anything that changes what they show calls
@@ -381,11 +146,6 @@ function stop_frame_clock()
 end
 
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
-local master_density = 1.0
-local frozen = {}
-for i = 1, NUM_VOICES do
-  frozen[i] = false
-end
 
 -- UI
 local voice_list
@@ -401,8 +161,8 @@ local DRIFT_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base pos
 local buf_pos_base = {}              -- last non-drift buffer position per voice
 local drift_writing = false          -- true while drift_update sets params
 for i = 1, NUM_VOICES do
-  grain_pitch_base[i] = voices[i].grain.pitch
-  buf_pos_base[i] = voices[i].grain.buf_pos
+  grain_pitch_base[i] = S.voices[i].grain.pitch
+  buf_pos_base[i] = S.voices[i].grain.buf_pos
 end
 
 -- Mutation system
@@ -910,7 +670,7 @@ end
 -- Master density scales every running voice's grain density
 local function send_master_density_to_engine(density)
   for i = 1, NUM_VOICES do
-    if voices[i].active then
+    if S.voices[i].active then
       engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)
     end
   end
@@ -1187,7 +947,7 @@ function init()
     name = "master density",
     controlspec = controlspec.new(0.1, 2.0, "lin", 0.01, 1.0),
     action = function(x)
-      master_density = x
+      S.master_density = x
       send_param_to_engine("master_density", x)
     end
   }
@@ -1580,7 +1340,7 @@ function init()
     clock.sleep(STARTUP.voice_delay_seconds)
     STARTUP.clock = nil
     -- toggle_voice toggles: leave voice 2 alone if a MIDI note or grid press started it meanwhile
-    if not voices[2].active then toggle_voice(2) end
+    if not S.voices[2].active then toggle_voice(2) end
   end)
 
   start_frame_clock()
@@ -1606,7 +1366,7 @@ function redraw_on_param_changes()
 end
 
 function add_voice_params(voice_idx)
-  local v = voices[voice_idx]
+  local v = S.voices[voice_idx]
   local prefix = "v" .. voice_idx .. "_"
   local engine_voice = voice_idx - 1
 
@@ -1614,7 +1374,7 @@ function add_voice_params(voice_idx)
   -- (sync_voice_to_engine sends everything when it starts)
   local function add_voice_sender(param_id, send)
     engine_senders[param_id] = function(value)
-      if voices[voice_idx].active then send(value) end
+      if S.voices[voice_idx].active then send(value) end
     end
   end
 
@@ -1631,7 +1391,7 @@ function add_voice_params(voice_idx)
       name = key,
       controlspec = spec,
       action = function(x)
-        voices[voice_idx].params[key] = x
+        S.voices[voice_idx].params[key] = x
         send_param_to_engine(param_id, x)
       end
     }
@@ -1650,10 +1410,10 @@ function add_voice_params(voice_idx)
     options = SOURCE_OPTIONS,
     default = v.source,
     action = function(x)
-      voices[voice_idx].source = x
+      S.voices[voice_idx].source = x
       engine.setGrainSource(voice_idx - 1, x - 1)
       -- a scene recall syncs once, after it has set every param
-      if voices[voice_idx].active and not scene_recall_in_progress then
+      if S.voices[voice_idx].active and not scene_recall_in_progress then
         sync_voice_values_to_engine(voice_idx)
       end
       -- the grid fader list follows the source (buffer or synth params)
@@ -1671,7 +1431,7 @@ function add_voice_params(voice_idx)
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
     action = function(x)
-      voices[voice_idx].grain.buf_pos = x
+      S.voices[voice_idx].grain.buf_pos = x
       if not drift_writing then
         buf_pos_base[voice_idx] = x
       end
@@ -1688,7 +1448,7 @@ function add_voice_params(voice_idx)
     name = "buffer rate",
     controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
     action = function(x)
-      voices[voice_idx].grain.buf_rate = x
+      S.voices[voice_idx].grain.buf_rate = x
       send_param_to_engine(prefix .. "buf_rate", x)
     end
   }
@@ -1702,7 +1462,7 @@ function add_voice_params(voice_idx)
     name = "buffer scan",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
     action = function(x)
-      voices[voice_idx].grain.buf_scan = x
+      S.voices[voice_idx].grain.buf_scan = x
       send_param_to_engine(prefix .. "buf_scan", x)
     end
   }
@@ -1716,7 +1476,7 @@ function add_voice_params(voice_idx)
     name = "grain size",
     controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
     action = function(x)
-      voices[voice_idx].grain.size = x
+      S.voices[voice_idx].grain.size = x
       send_param_to_engine(prefix .. "grain_size", x)
     end
   }
@@ -1730,7 +1490,7 @@ function add_voice_params(voice_idx)
     name = "grain density",
     controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density),
     action = function(x)
-      voices[voice_idx].grain.density = x
+      S.voices[voice_idx].grain.density = x
       send_param_to_engine(prefix .. "grain_density", x)
     end
   }
@@ -1745,7 +1505,7 @@ function add_voice_params(voice_idx)
     -- step 0: the drift moves in steps far smaller than 0.01
     controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
     action = function(x)
-      voices[voice_idx].grain.pitch = x
+      S.voices[voice_idx].grain.pitch = x
       if not drift_writing then
         grain_pitch_base[voice_idx] = x
       end
@@ -1762,7 +1522,7 @@ function add_voice_params(voice_idx)
     name = "position spread",
     controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
     action = function(x)
-      voices[voice_idx].grain.spread = x
+      S.voices[voice_idx].grain.spread = x
       send_param_to_engine(prefix .. "grain_spread", x)
     end
   }
@@ -1777,8 +1537,8 @@ function add_voice_params(voice_idx)
     options = GRAIN_ENV_OPTIONS,
     default = v.grain.env,
     action = function(x)
-      voices[voice_idx].grain.env = x
-      if voices[voice_idx].active then
+      S.voices[voice_idx].grain.env = x
+      if S.voices[voice_idx].active then
         engine.setGrainParam(voice_idx - 1, "envShape", x - 1)
       end
     end
@@ -1791,8 +1551,8 @@ function add_voice_params(voice_idx)
     options = GRAIN_MODE_OPTIONS,
     default = v.grain.mode,
     action = function(x)
-      voices[voice_idx].grain.mode = x
-      if voices[voice_idx].active then
+      S.voices[voice_idx].grain.mode = x
+      if S.voices[voice_idx].active then
         engine.setGrainParam(voice_idx - 1, "grainMode", x - 1)
       end
     end
@@ -1817,8 +1577,8 @@ function add_voice_params(voice_idx)
       end
     end,
     action = function(x)
-      voices[voice_idx].crossmod.slot1.source = x
-      if voices[voice_idx].active then
+      S.voices[voice_idx].crossmod.slot1.source = x
+      if S.voices[voice_idx].active then
         engine.setModSource(voice_idx - 1, 1, engine_mod_source(x))
       end
     end
@@ -1830,7 +1590,7 @@ function add_voice_params(voice_idx)
     name = "amp mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot1.amp_amt = x
+      S.voices[voice_idx].crossmod.slot1.amp_amt = x
       send_param_to_engine(prefix .. "mod_amp_amt_1", x)
     end
   }
@@ -1842,7 +1602,7 @@ function add_voice_params(voice_idx)
     name = "freq mod 1",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot1.freq_amt = x
+      S.voices[voice_idx].crossmod.slot1.freq_amt = x
       send_param_to_engine(prefix .. "mod_freq_amt_1", x)
     end
   }
@@ -1864,8 +1624,8 @@ function add_voice_params(voice_idx)
       end
     end,
     action = function(x)
-      voices[voice_idx].crossmod.slot2.source = x
-      if voices[voice_idx].active then
+      S.voices[voice_idx].crossmod.slot2.source = x
+      if S.voices[voice_idx].active then
         engine.setModSource(voice_idx - 1, 2, engine_mod_source(x))
       end
     end
@@ -1877,7 +1637,7 @@ function add_voice_params(voice_idx)
     name = "amp mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot2.amp_amt = x
+      S.voices[voice_idx].crossmod.slot2.amp_amt = x
       send_param_to_engine(prefix .. "mod_amp_amt_2", x)
     end
   }
@@ -1889,7 +1649,7 @@ function add_voice_params(voice_idx)
     name = "freq mod 2",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot2.freq_amt = x
+      S.voices[voice_idx].crossmod.slot2.freq_amt = x
       send_param_to_engine(prefix .. "mod_freq_amt_2", x)
     end
   }
@@ -1911,8 +1671,8 @@ function add_voice_params(voice_idx)
       end
     end,
     action = function(x)
-      voices[voice_idx].crossmod.slot3.source = x
-      if voices[voice_idx].active then
+      S.voices[voice_idx].crossmod.slot3.source = x
+      if S.voices[voice_idx].active then
         engine.setModSource(voice_idx - 1, 3, engine_mod_source(x))
       end
     end
@@ -1924,7 +1684,7 @@ function add_voice_params(voice_idx)
     name = "amp mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot3.amp_amt = x
+      S.voices[voice_idx].crossmod.slot3.amp_amt = x
       send_param_to_engine(prefix .. "mod_amp_amt_3", x)
     end
   }
@@ -1936,7 +1696,7 @@ function add_voice_params(voice_idx)
     name = "freq mod 3",
     controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
     action = function(x)
-      voices[voice_idx].crossmod.slot3.freq_amt = x
+      S.voices[voice_idx].crossmod.slot3.freq_amt = x
       send_param_to_engine(prefix .. "mod_freq_amt_3", x)
     end
   }
@@ -1949,7 +1709,7 @@ function add_voice_params(voice_idx)
     name = "mod speed",
     controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
     action = function(x)
-      voices[voice_idx].crossmod.speed = x
+      S.voices[voice_idx].crossmod.speed = x
       send_param_to_engine(prefix .. "mod_speed", x)
     end
   }
@@ -1984,7 +1744,7 @@ end
 
 function toggle_voice(voice_idx)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-  local voice = voices[voice_idx]
+  local voice = S.voices[voice_idx]
   
   if voice.active then
     engine.voiceOff(voice_idx - 1)
@@ -2011,7 +1771,7 @@ end
 
 function toggle_freeze(voice_idx)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-  frozen[voice_idx] = not frozen[voice_idx]
+  S.frozen[voice_idx] = not S.frozen[voice_idx]
   update_voice_list()
   request_redraw()
   grid_redraw()
@@ -2023,14 +1783,14 @@ end
 -- edits made while a voice was off (and scene recalls) would be lost. The
 -- source goes first (the engine ignores it when unchanged).
 function sync_voice_to_engine(voice_idx)
-  engine.setGrainSource(voice_idx - 1, voices[voice_idx].source - 1)
+  engine.setGrainSource(voice_idx - 1, S.voices[voice_idx].source - 1)
   sync_voice_values_to_engine(voice_idx)
 end
 
 -- Everything sync_voice_to_engine sends after the source: synthesis, grain
 -- (including the buffer params) and crossmod values
 function sync_voice_values_to_engine(voice_idx)
-  local voice = voices[voice_idx]
+  local voice = S.voices[voice_idx]
   local engine_voice = voice_idx - 1
   local engine_master_density = engine_param_value("master_density")
   -- the engine now gets this voice's stored values (LFOs re-apply theirs
@@ -2064,9 +1824,9 @@ function sync_voice_values_to_engine(voice_idx)
 end
 
 function randomize_voice(voice_idx)
-  if frozen[voice_idx] then return end
+  if S.frozen[voice_idx] then return end
   
-  local voice = voices[voice_idx]
+  local voice = S.voices[voice_idx]
   local prefix = "v" .. voice_idx .. "_"
 
   if voice_uses_synth(voice_idx) then
@@ -2119,18 +1879,18 @@ function drift_update()
   -- step plus a pull back toward the last user/scene/mutation-set pitch, so
   -- the walk stays a subtle detune instead of wandering to the rails
   for i = 1, NUM_VOICES do
-    if voices[i].active and not frozen[i] then
-      local pitch = mean_reverting_step(voices[i].grain.pitch, grain_pitch_base[i],
+    if S.voices[i].active and not S.frozen[i] then
+      local pitch = mean_reverting_step(S.voices[i].grain.pitch, grain_pitch_base[i],
         DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
       set_drifted_param("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
 
       -- Buffer sources also drift their position the same way
       if voice_uses_buffer(i) then
-        local position = mean_reverting_step(voices[i].grain.buf_pos, buf_pos_base[i],
+        local position = mean_reverting_step(S.voices[i].grain.buf_pos, buf_pos_base[i],
           DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
         set_drifted_param("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
         -- MAIN and the BUFFER arc ring show the selected voice's position only
-        if i == selected_voice then request_redraw() end
+        if i == S.selected_voice then request_redraw() end
       end
     end
   end
@@ -2158,8 +1918,8 @@ function gentle_mutate()
 
   for i = 1, NUM_VOICES do
     -- Only mutate active, non-frozen voices
-    if voices[i].active and not frozen[i] then
-      local v = voices[i]
+    if S.voices[i].active and not S.frozen[i] then
+      local v = S.voices[i]
 
       if voice_uses_synth(i) then
         -- Iterate through synthesis parameters
@@ -2357,24 +2117,24 @@ function capture_scene(scene_num)
   -- Capture voice states
   for i = 1, NUM_VOICES do
     scene_data.voices[i] = {
-      active = voices[i].active,
-      source = voices[i].source,  -- the buffer's contents are not captured
+      active = S.voices[i].active,
+      source = S.voices[i].source,  -- the buffer's contents are not captured
       params = {},
       grain = {},
       crossmod = {}
     }
 
     -- Copy all parameters
-    for key, value in pairs(voices[i].params) do
+    for key, value in pairs(S.voices[i].params) do
       scene_data.voices[i].params[key] = value
     end
-    for key, value in pairs(voices[i].grain) do
+    for key, value in pairs(S.voices[i].grain) do
       scene_data.voices[i].grain[key] = value
     end
     -- Copy crossmod structure (including nested slots)
-    scene_data.voices[i].crossmod = {speed = voices[i].crossmod.speed}
+    scene_data.voices[i].crossmod = {speed = S.voices[i].crossmod.speed}
     for slot = 1, NUM_MOD_SLOTS do
-      local slot_state = voices[i].crossmod["slot" .. slot]
+      local slot_state = S.voices[i].crossmod["slot" .. slot]
       scene_data.voices[i].crossmod["slot" .. slot] = {
         source = slot_state.source,
         amp_amt = slot_state.amp_amt,
@@ -2382,7 +2142,7 @@ function capture_scene(scene_num)
       }
     end
 
-    scene_data.frozen[i] = frozen[i]
+    scene_data.frozen[i] = S.frozen[i]
   end
 
   -- Capture patterns
@@ -2559,11 +2319,11 @@ function recall_scene_instant(scene_num, scene_data)
       -- A voice the scene stops is stopped first, so the engine only records
       -- its source switch instead of building a grain synth to release at
       -- once, and its release tail keeps the outgoing scene's values
-      if voices[i].active and not voice_data.active then toggle_voice(i) end
+      if S.voices[i].active and not voice_data.active then toggle_voice(i) end
 
-      local previous_source = voices[i].source
+      local previous_source = S.voices[i].source
       params:set(prefix .. "source", voice_data.source)
-      source_changed[i] = voices[i].source ~= previous_source
+      source_changed[i] = S.voices[i].source ~= previous_source
 
       for key, value in pairs(voice_data.params) do
         params:set(prefix .. key, value)
@@ -2582,10 +2342,10 @@ function recall_scene_instant(scene_num, scene_data)
       end
       params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
 
-      frozen[i] = scene_data.frozen[i]
+      S.frozen[i] = scene_data.frozen[i]
 
       -- Start voices last: toggle_voice syncs the restored state
-      if voice_data.active and not voices[i].active then
+      if voice_data.active and not S.voices[i].active then
         toggle_voice(i)
         source_changed[i] = false
       end
@@ -2596,7 +2356,7 @@ function recall_scene_instant(scene_num, scene_data)
   -- even after an error: a running voice whose source switched gets its sync
   -- (of whatever was applied), so the engine never lags the Lua state
   for i = 1, NUM_VOICES do
-    if source_changed[i] and voices[i].active then
+    if source_changed[i] and S.voices[i].active then
       sync_voice_values_to_engine(i)
     end
   end
@@ -2921,7 +2681,7 @@ function validate_scene(scene)
     if type(voice_data.crossmod) ~= "table" then return false end
 
     for key, value in pairs(voice_data.params) do
-      if voices[i].params[key] == nil or not is_number(value) then return false end
+      if S.voices[i].params[key] == nil or not is_number(value) then return false end
     end
     for key, value in pairs(voice_data.grain) do
       if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
@@ -2970,20 +2730,20 @@ end
 function update_voice_list()
   local items = {}
   for i = 1, NUM_VOICES do
-    local status = voices[i].active and "+" or "-"
-    local freeze = frozen[i] and " [F]" or ""
-    items[i] = status .. " " .. MAIN_PARAMS[voices[i].name].list_name .. freeze
+    local status = S.voices[i].active and "+" or "-"
+    local freeze = S.frozen[i] and " [F]" or ""
+    items[i] = status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. freeze
   end
   voice_list = UI.ScrollingList.new(0, 10, 1, items)
   voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
   voice_list.num_above_selected = 1
   voice_list.active = true
-  voice_list.index = selected_voice
+  voice_list.index = S.selected_voice
 end
 
 function main_param_entry(voice_idx)
   if voice_uses_synth(voice_idx) then
-    return MAIN_PARAMS[voices[voice_idx].name]
+    return MAIN_PARAMS[S.voices[voice_idx].name]
   elseif voice_uses_buffer(voice_idx) then
     return BUFFER_MAIN_PARAM
   end
@@ -3012,7 +2772,7 @@ function draw_header()
   -- Master density (after the page title; "BUFFER" ends near x=36)
   screen.move(40, 8)
   screen.level(4)
-  screen.text("dens:" .. string.format("%.2f", master_density))
+  screen.text("dens:" .. string.format("%.2f", S.master_density))
 
   -- Mutation indicator (between density and scene)
   if params:get("mutation_enabled") == 1 then
@@ -3046,7 +2806,7 @@ function redraw_main()
   screen.stroke()
 
   -- Selected voice info (right column, 65-128px)
-  local v = voices[selected_voice]
+  local v = S.voices[S.selected_voice]
   screen.level(15)
   screen.move(65, 18)
   screen.text(string.upper(v.name))
@@ -3056,7 +2816,7 @@ function redraw_main()
   screen.move(65, 26)
   local status = v.active and "ON" or "OFF"
   screen.text(status)
-  if frozen[selected_voice] then
+  if S.frozen[S.selected_voice] then
     screen.move(127, 26)
     screen.level(8)
     screen.text_right("[FREEZE]")
@@ -3075,17 +2835,17 @@ function redraw_main()
   end
 
   -- Main parameter
-  screen.level(frozen[selected_voice] and 3 or 10)
+  screen.level(S.frozen[S.selected_voice] and 3 or 10)
   screen.move(65, 42)
-  screen.text(main_param_label(selected_voice))
+  screen.text(main_param_label(S.selected_voice))
   if GRAIN_MODE_OPTIONS[v.grain.mode] == "triggered" then
     screen.move(127, 42)
     screen.level(8)
     screen.text_right("[TRIG]")
-    screen.level(frozen[selected_voice] and 3 or 10)
+    screen.level(S.frozen[S.selected_voice] and 3 or 10)
   end
   screen.move(65, 50)
-  screen.text(string.format(main_param_entry(selected_voice).format, params:get(main_param_id(selected_voice))))
+  screen.text(string.format(main_param_entry(S.selected_voice).format, params:get(main_param_id(S.selected_voice))))
 
   draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
 end
@@ -3309,9 +3069,9 @@ local function ignore_page_input() end
 -- E2 on MAIN and BUFFER: step the shared selected voice (an omni MIDI
 -- pitchbend moves with it)
 local function select_voice_by(d)
-  local previous_voice = selected_voice
-  selected_voice = util.clamp(selected_voice + d, 1, NUM_VOICES)
-  if selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
+  local previous_voice = S.selected_voice
+  S.selected_voice = util.clamp(S.selected_voice + d, 1, NUM_VOICES)
+  if S.selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
   update_voice_list()
 end
 
@@ -3319,22 +3079,22 @@ local function main_enc(n, d)
   if n == 2 then
     select_voice_by(d)
   elseif n == 3 then
-    params:delta(main_param_id(selected_voice), d)
+    params:delta(main_param_id(S.selected_voice), d)
   end
 end
 
 -- K3 on MAIN (and the arc button): start the selected voice, or freeze it
 local function start_or_freeze_selected_voice()
-  if not voices[selected_voice].active then
-    toggle_voice(selected_voice)
+  if not S.voices[S.selected_voice].active then
+    toggle_voice(S.selected_voice)
   else
-    toggle_freeze(selected_voice)
+    toggle_freeze(S.selected_voice)
   end
 end
 
 local function main_key(n)
   if n == 2 then
-    randomize_voice(selected_voice)
+    randomize_voice(S.selected_voice)
   elseif n == 3 then
     start_or_freeze_selected_voice()
   end
@@ -3415,8 +3175,8 @@ local function buffer_display_name(slot)
 end
 
 function redraw_buffer()
-  local v = voices[selected_voice]
-  local voice_slot = voice_buffer_slot(selected_voice)
+  local v = S.voices[S.selected_voice]
+  local voice_slot = voice_buffer_slot(S.selected_voice)
 
   -- Left column (0-60px): voice, source, recording settings
   screen.level(15)
@@ -3424,7 +3184,7 @@ function redraw_buffer()
   screen.text(string.upper(v.name))
   screen.level(10)
   screen.move(0, 26)
-  screen.text("src: " .. voice_source_label(selected_voice))
+  screen.text("src: " .. voice_source_label(S.selected_voice))
   screen.level(4)
   screen.move(0, 42)
   screen.text("dur: " .. string.format("%.1f", params:get("record_duration")) .. "s")
@@ -3473,7 +3233,7 @@ local function buffer_enc(n, d)
   if n == 2 then
     select_voice_by(d)
   elseif n == 3 then
-    params:delta("v" .. selected_voice .. "_source", d)
+    params:delta("v" .. S.selected_voice .. "_source", d)
   end
 end
 
@@ -3487,7 +3247,7 @@ local function buffer_key(n)
   if n == 2 then
     buffer_saved_during_k2 = false
   elseif n == 3 then
-    local slot = voice_buffer_slot(selected_voice)
+    local slot = voice_buffer_slot(S.selected_voice)
     if not slot then return end
     if key_press_page[2] == ui_page then
       -- a slot recording or awaiting its take is busy: nothing to save yet.
@@ -3524,7 +3284,7 @@ local function buffer_key_release(n)
     buffer_saved_during_k2 = false
     return
   end
-  local slot = voice_buffer_slot(selected_voice)
+  local slot = voice_buffer_slot(S.selected_voice)
   if not slot then return end
   -- the selector takes every key while open, so keys held now are released
   -- there, never reaching key(): forget them
@@ -3715,13 +3475,13 @@ local function arc_main_delta(n, delta)
     arc_sweep_param("master_density", delta)
   elseif n == 2 then
     -- Ring 2: Selected voice's main parameter
-    arc_sweep_param(main_param_id(selected_voice), delta)
+    arc_sweep_param(main_param_id(S.selected_voice), delta)
   elseif n == 3 then
     -- Ring 3: Grain size
-    arc_sweep_param("v" .. selected_voice .. "_grain_size", delta)
+    arc_sweep_param("v" .. S.selected_voice .. "_grain_size", delta)
   elseif n == 4 then
     -- Ring 4: Grain density
-    arc_sweep_param("v" .. selected_voice .. "_grain_density", delta)
+    arc_sweep_param("v" .. S.selected_voice .. "_grain_density", delta)
   end
 end
 
@@ -3737,10 +3497,10 @@ end
 local function arc_main_redraw(arc_port)
   -- Every ring is drawn across its param's controlspec range (as the sweep
   -- moves it): density, the selected voice's main param, grain size, grain density
-  local v = voices[selected_voice]
-  local prefix = "v" .. selected_voice .. "_"
+  local v = S.voices[S.selected_voice]
+  local prefix = "v" .. S.selected_voice .. "_"
   arc_ring_fill(arc_port, 1, param_fraction("master_density"), 15)
-  arc_ring_fill(arc_port, 2, param_fraction(main_param_id(selected_voice)), v.active and 15 or 4)
+  arc_ring_fill(arc_port, 2, param_fraction(main_param_id(S.selected_voice)), v.active and 15 or 4)
   arc_ring_fill(arc_port, 3, param_fraction(prefix .. "grain_size"), v.active and 12 or 3)
   arc_ring_fill(arc_port, 4, param_fraction(prefix .. "grain_density"), v.active and 12 or 3)
 end
@@ -3780,7 +3540,7 @@ local ARC_BUFFER_RINGS = {
 }
 
 local function arc_buffer_ring_param(ring)
-  return ring.param_id or ("v" .. selected_voice .. "_" .. ring.voice_key)
+  return ring.param_id or ("v" .. S.selected_voice .. "_" .. ring.voice_key)
 end
 
 -- Rings 1-2 adjust the voice's buffer params whatever its source (they are
@@ -3795,7 +3555,7 @@ end
 -- Rings 1-2 are bright for a buffer-sourced voice and dim otherwise (the
 -- buffer params do nothing then); the recording rings are always lit
 local function arc_buffer_redraw(arc_port)
-  local uses_buffer = voice_uses_buffer(selected_voice)
+  local uses_buffer = voice_uses_buffer(S.selected_voice)
   for n, ring in ipairs(ARC_BUFFER_RINGS) do
     local level = 12
     if ring.voice_key then
@@ -3996,7 +3756,7 @@ function reset_midi_input()
     midi_state.held[i] = {}
     if midi_state.bend[i] ~= 1 then
       midi_state.bend[i] = 1
-      if voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
+      if S.voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
     end
   end
   midi_state.note_voice = {}
@@ -4004,7 +3764,7 @@ end
 
 -- The voice a MIDI channel addresses, or nil
 function midi_target_voice(channel)
-  if params:get("midi_channel_mode") == 2 then return selected_voice end
+  if params:get("midi_channel_mode") == 2 then return S.selected_voice end
   if channel and channel >= 1 and channel <= NUM_VOICES then return channel end
   return nil
 end
@@ -4048,7 +3808,7 @@ function midi_note_on(voice_idx, note, velocity)
     local min_rate, max_rate = param_range(prefix .. "buf_rate")
     params:set(prefix .. "buf_rate", util.clamp(2 ^ ((note - MIDI.rate_root_note) / 12), min_rate, max_rate))
   end
-  if not voices[voice_idx].active then toggle_voice(voice_idx) end
+  if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
   engine.retrigger(voice_idx - 1, velocity / MIDI.velocity_max)
 end
 
@@ -4056,7 +3816,7 @@ end
 -- note during its release starts it again (the engine re-gates the
 -- releasing synths).
 function midi_note_off_for(voice_idx)
-  if params:get("midi_note_off") ~= 2 or not voices[voice_idx].active then return end
+  if params:get("midi_note_off") ~= 2 or not S.voices[voice_idx].active then return end
   if next(midi_state.held[voice_idx]) ~= nil then return end
   toggle_voice(voice_idx)
 end
@@ -4071,7 +3831,7 @@ end
 
 function midi_set_bend(voice_idx, ratio)
   midi_state.bend[voice_idx] = ratio
-  if voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
+  if S.voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
 end
 
 -- Omni mode bends whichever voice is selected. When the selection moves with
@@ -4083,7 +3843,7 @@ function midi_bend_follow_selection(previous_voice)
   local ratio = midi_state.bend[previous_voice]
   if ratio == 1 then return end
   midi_set_bend(previous_voice, 1)
-  midi_set_bend(selected_voice, ratio)
+  midi_set_bend(S.selected_voice, ratio)
 end
 
 -- Grid functions
@@ -4427,7 +4187,7 @@ end
 -- that have it (sub has none). The engine pans buffer and input grains too.
 function voice_level_fader_keys(voice_idx)
   local keys = {"amp"}
-  if voices[voice_idx].params.pan ~= nil then table.insert(keys, "pan") end
+  if S.voices[voice_idx].params.pan ~= nil then table.insert(keys, "pan") end
   return keys
 end
 
@@ -4441,7 +4201,7 @@ function fader_param_ids(voice_idx)
   local prefix = "v" .. voice_idx .. "_"
   local ids = {}
   if voice_uses_synth(voice_idx) then
-    append_fader_ids(ids, prefix, voices[voice_idx].param_order)
+    append_fader_ids(ids, prefix, S.voices[voice_idx].param_order)
     append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
   elseif voice_uses_buffer(voice_idx) then
     append_fader_ids(ids, prefix, BUFFER_FADER_KEYS)
@@ -4589,7 +4349,7 @@ function pattern_clock_start()
       -- Trigger voices that have active steps
       for voice_idx = 1, NUM_VOICES do
         if patterns[voice_idx][pattern_position] > 0 then
-          if voices[voice_idx].active then
+          if S.voices[voice_idx].active then
             -- Voice is already running: accent it in place, at the step's
             -- level (1-15) as velocity. A step must never create new synth
             -- nodes (toggling would stack whole voice/grain/mod chains
@@ -4724,7 +4484,7 @@ function grid_redraw_256(grid_device)
     -- Row 14: Voice status
     for i = 1, NUM_VOICES do
       grid_device:led(i, 14, i == grid_voice_select and 15 or 4)
-      grid_device:led(i + 8, 14, voices[i].active and 12 or 2)
+      grid_device:led(i + 8, 14, S.voices[i].active and 12 or 2)
     end
 
     grid_redraw_256_freeze(grid_device)
@@ -4755,7 +4515,7 @@ function grid_redraw_256_sources(grid_device)
     for source = 1, #SOURCE_OPTIONS do
       local level = 4
       local slot = source - SOURCE_SYNTH
-      if source == voices[voice_idx].source then
+      if source == S.voices[voice_idx].source then
         level = 15
       elseif valid_buffer_slot(slot) and not (buffers[slot].loaded or buffers[slot].recording) then
         level = 2
@@ -4791,7 +4551,7 @@ end
 -- 256 row 16: freeze status
 function grid_redraw_256_freeze(grid_device)
   for i = 1, NUM_VOICES do
-    grid_device:led(i, 16, frozen[i] and 12 or 2)
+    grid_device:led(i, 16, S.frozen[i] and 12 or 2)
   end
 end
 
@@ -4877,7 +4637,7 @@ function grid_redraw_128h(grid_device)
 
   -- Voice status
   for i = 1, NUM_VOICES do
-    grid_device:led(i + 8, 8, voices[i].active and 12 or 2)
+    grid_device:led(i + 8, 8, S.voices[i].active and 12 or 2)
   end
 
   -- Voice selection indicator
@@ -4895,7 +4655,7 @@ function grid_redraw_128v(grid_device)
 
   -- Column 8: Controls
   for i = 1, NUM_VOICES do
-    grid_device:led(8, i, voices[i].active and 12 or 4)
+    grid_device:led(8, i, S.voices[i].active and 12 or 4)
   end
   grid_device:led(8, 9, pattern_playing and 15 or 4)
 
@@ -4919,7 +4679,7 @@ function grid_redraw_64(grid_device)
   -- Row 8: Controls
   grid_device:led(1, 8, pattern_playing and 15 or 4)
   for i = 1, 5 do
-    grid_device:led(i + 2, 8, voices[i].active and 12 or 4)
+    grid_device:led(i + 2, 8, S.voices[i].active and 12 or 4)
   end
 end
 
@@ -4988,7 +4748,7 @@ function cleanup()
 
   -- Turn off all voices
   for i = 1, NUM_VOICES do
-    if voices[i].active then
+    if S.voices[i].active then
       engine.voiceOff(i - 1)
     end
   end

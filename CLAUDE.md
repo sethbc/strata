@@ -108,7 +108,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of `strata.lua`): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (2), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (5), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `BUFFER_SECONDS` (16), `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers`, `bufferSeconds` and `numModSlots`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
-**Lua's 200-local limit**: `strata.lua`'s main chunk uses 185 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
+**Lua's 200-local limit**: `strata.lua`'s main chunk uses 181 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
 
 **Descriptive names**: `selected_voice`, not `sv`; `master_density`, not `md`.
 

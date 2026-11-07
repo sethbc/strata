@@ -552,7 +552,9 @@ end)
 
 -- Module path -> the global functions defined there. Later moves add a
 -- module's entry before moving its functions
-local MODULE_HOMES = {}
+local MODULE_HOMES = {
+  ["lib/voices.lua"] = { "voice_uses_synth", "voice_uses_buffer", "voice_source_label", "voice_buffer_slot" },
+}
 
 test("functions live in their module", function()
   load_strata()
