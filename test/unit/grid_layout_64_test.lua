@@ -140,9 +140,9 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(4, 2), 15, "the playhead on an active step")
   assert_equal(device:get_led(4, 1), 4, "the playhead on an empty step")
   assert_equal(device:get_led(5, 1), 0, "no playhead past it")
-  -- the other half plays: column 1 blinks 12 / 3 on successive steps
+  -- the other half plays: column 1 blinks 12 / 3 with the beat (four steps)
   local levels = {}
-  for position = 11, 14 do
+  for position = 9, 16 do
     S.pattern_position = position
     grid_redraw()
     levels[#levels + 1] = device:get_led(1, 8)
@@ -150,7 +150,7 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
       assert_true(device:get_led(x, 1) ~= 4, "no playhead in the shown half at step " .. position)
     end
   end
-  assert_equal(table.concat(levels, " "), "12 3 12 3", "column 1 blinks with the steps")
+  assert_equal(table.concat(levels, " "), "12 12 12 12 3 3 3 3", "column 1 blinks with the beat")
   -- half 2 shows steps 9-16: the playhead lights there, and half 1's steps blink
   S.pattern_playing = false
   switch_half(context, 1)
@@ -161,7 +161,10 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(1, 8), 15)
   S.pattern_position = 3
   grid_redraw()
-  assert_equal(device:get_led(1, 8), 12, "half 1 plays: column 1 blinks")
+  assert_equal(device:get_led(1, 8), 12, "half 1 plays: column 1 blinks (beat 1 lit)")
+  S.pattern_position = 6
+  grid_redraw()
+  assert_equal(device:get_led(1, 8), 3, "beat 2 dim")
   S.pattern_playing = false
   grid_redraw()
   assert_equal(device:get_led(1, 8), 4)

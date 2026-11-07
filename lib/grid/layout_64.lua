@@ -16,7 +16,8 @@ return function(S)
     play_column = 1,          -- tap: play / stop on release; hold: switch the half
     first_voice_column = 2,   -- columns 2-8: voices 1-7
     play_level = 15,          -- playing in the shown half
-    blink_levels = {12, 3},   -- playing in the other half: odd / even steps
+    blink_levels = {12, 3},   -- playing in the other half: odd / even beats
+    steps_per_beat = 4,       -- a step is a sixteenth note: the blink follows quarter notes
     stopped_level = 4,
   }
   M.LAYOUT = LAYOUT_64
@@ -81,12 +82,14 @@ return function(S)
   end
 
   -- Column 1 of row 8: stopped dim; playing in the shown half bright; playing
-  -- in the other half, a blink that alternates with the steps
+  -- in the other half, a blink that alternates with the beat (every four
+  -- steps)
   local function play_level(port, cols)
     if not S.pattern_playing then return LAYOUT_64.stopped_level end
     local playing_half = math.ceil(S.pattern_position / visible_steps(cols))
     if playing_half == M.shown_half(port) then return LAYOUT_64.play_level end
-    return LAYOUT_64.blink_levels[(S.pattern_position + 1) % 2 + 1]
+    local beat = math.ceil(S.pattern_position / LAYOUT_64.steps_per_beat)
+    return LAYOUT_64.blink_levels[(beat + 1) % 2 + 1]
   end
 
   function grid_redraw_64(port, grid_device)
