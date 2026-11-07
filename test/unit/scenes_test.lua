@@ -17,7 +17,7 @@ test("scene capture -> change -> recall restores every voice", function()
   finish_startup(context)  -- let init start voice 2
   scramble_state(11)
   toggle_voice(3)
-  toggle_freeze(1)
+  toggle_lock(1)
   toggle_pattern_step(4, 5)
   params:set("reverb_mix", 0.71)
   capture_scene(2)
@@ -28,7 +28,7 @@ test("scene capture -> change -> recall restores every voice", function()
   scramble_state(99)
   toggle_voice(3)   -- off again
   toggle_voice(6)   -- on
-  toggle_freeze(1)
+  toggle_lock(1)
   toggle_pattern_step(4, 5)
   params:set("reverb_mix", 0.1)
 
@@ -886,7 +886,7 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
   local arc_hardware = context.arc.plug(1)
   show_page("MAIN")
   -- the scene: voice 1 frozen at 100 Hz; now it plays 1000 Hz, unfrozen
-  toggle_freeze(1); capture_scene(1); toggle_freeze(1)
+  toggle_lock(1); capture_scene(1); toggle_lock(1)
   params:set("v1_freq", 1000)
   assert_drawn_on_next_frame(context, arc_hardware, "transition start (step 1)", function()
     recall_scene(1, 2)
@@ -912,7 +912,7 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
   end
   assert_equal(steps, local_value("SCENE_TRANSITION").steps + 1, "every step, then the end")
   assert_true(screen_shows(context, "100 Hz"), "the end shows the scene's freq")
-  assert_true(screen_shows(context, "[FREEZE]"), "and its freeze")
+  assert_true(screen_shows(context, "[LOCK]"), "and its lock")
 end)
 
 test("v1 scene file migrates to v2 with fx defaults", function()

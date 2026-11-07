@@ -104,7 +104,7 @@ local GRAIN_PARAM_IDS = {
 -- (param id suffix, screen label and screen value format; the arc ring sweeps
 -- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
 -- and the short name the voice list shows (at most 5 characters, which a
--- test asserts, so the widest entry, "+ pulse [F]", ends well left of the
+-- test asserts, so the widest entry, "+ pulse [L]", ends well left of the
 -- divider at x 62)
 local MAIN_PARAMS = {
   resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},

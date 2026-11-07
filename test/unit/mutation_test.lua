@@ -25,7 +25,7 @@ test("grain pitch drift wanders subtly around the user-set pitch (C4)", function
   for _ = 1, 2000 do drift_metro.event() end
   assert_near(params:get("v1_grain_pitch"), 0.5, 0.06, "walk re-centers on the new value")
   -- frozen voices do not drift
-  toggle_freeze(1)
+  toggle_lock(1)
   local frozen_pitch = params:get("v1_grain_pitch")
   for _ = 1, 100 do drift_metro.event() end
   assert_equal(params:get("v1_grain_pitch"), frozen_pitch, "frozen voice pitch unchanged")
@@ -79,7 +79,7 @@ test("randomize and mutate touch buffer params, never source", function()
   for _ = 1, 20 do randomize_voice(1); gentle_mutate() end
   assert_equal(params:get("v1_source"), 1, "source never randomized or mutated")
   -- freeze covers buffer params
-  params:set("v1_source", 5); toggle_freeze(1)
+  params:set("v1_source", 5); toggle_lock(1)
   local frozen_state = deep_copy(local_value("voices")[1].grain)
   randomize_voice(1); gentle_mutate(); for _ = 1, 10 do drift_update() end
   for key, value in pairs(frozen_state) do
@@ -315,10 +315,10 @@ test("a randomize of another voice, a recall or a mutation of the voice clears t
   end
   -- a mutation step on another voice keeps it; one on the undo's voice clears it
   params:set("mutation_probability", 1); params:set("mutation_amount", 0.5)
-  randomize_voice(2); toggle_freeze(2)                 -- voice 2 locked: only voice 1 mutates
+  randomize_voice(2); toggle_lock(2)   -- voice 2 locked: only voice 1 mutates
   gentle_mutate()
   assert_true(undo_available(2), "a mutation of another voice keeps the undo")
-  toggle_freeze(2)
+  toggle_lock(2)
   gentle_mutate()
   assert_equal(local_value("undo"), nil, "a mutation step on the undo's voice clears it")
   -- a mutation step that changes only an unstored param of the voice clears it too
@@ -341,7 +341,7 @@ test("a locked voice is not randomized and keeps an earlier undo", function()
   local context = load_strata(); finish_startup(context)
   randomize_voice(1)
   local undo = local_value("undo")
-  toggle_freeze(2)
+  toggle_lock(2)
   local size = params:get("v2_grain_size")
   randomize_voice(2)
   assert_equal(params:get("v2_grain_size"), size, "locked voice unchanged")

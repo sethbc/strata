@@ -4,7 +4,7 @@
 -- E1: page (MAIN VOICE SEQ FX LFO
 --     BUFFER SCENES SETUP)
 -- MAIN: E2 select voice, E3 main param,
---       K2 randomize, K3 start/freeze
+--       K2 randomize, K3 start/lock
 -- FX: E2 select row, E3 adjust,
 --     K3 filter bypass/on
 -- LFO: E2 select LFO, E3 depth,

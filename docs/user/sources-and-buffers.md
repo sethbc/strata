@@ -8,7 +8,7 @@ Every voice can grain something other than its own synth. Its **source** (the BU
 - While a voice's source is a buffer, E3, arc ring 2 and the MAIN screen show its buffer position (`pos`), the grid fader page shows its buffer position, rate, scan, level and pan instead of the synthesis parameters (when a grain is as long as the sample at its rate, every grain plays the whole sample, so position and scan do nothing), K2 randomizes the buffer parameters (and grain size and pitch) instead of the synthesis parameters, mutations change the buffer parameters, and the position drifts subtly around the value you set
 - Cross-modulation works for every source: a buffer-sourced voice takes amplitude and rate (frequency) modulation; an input-sourced voice takes amplitude modulation only (frequency modulation means nothing for live input and is ignored)
 - While a voice's source is the input, neither its buffer parameters nor its synthesis parameters (except level and pan) do anything, so E3, arc ring 2 and the MAIN screen show its grain size (`size`), the grid fader page starts with the grain parameters (then level and pan), and K2, mutations and the drift change only the grain parameters
-- The source itself is never randomized or mutated, and freeze keeps the buffer parameters still
+- The source itself is never randomized or mutated, and lock keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
 
 ## Saving and restoring buffers

@@ -43,7 +43,7 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
   for voice_idx = 1, 7 do
     set_selected(voice_idx)
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
-    if not local_value("frozen")[voice_idx] then toggle_freeze(voice_idx) end
+    if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
     params:set("v" .. voice_idx .. "_grain_mode", 2)  -- MAIN shows [TRIG]
     for page = 1, #PAGE_TITLES do
       show_page(page)
@@ -69,7 +69,7 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
   for state_idx, state in ipairs(states) do
     for voice_idx = 1, 7 do
       if voices[voice_idx].active ~= state.active then toggle_voice(voice_idx) end
-      if (frozen[voice_idx] or false) ~= state.frozen then toggle_freeze(voice_idx) end
+      if (frozen[voice_idx] or false) ~= state.frozen then toggle_lock(voice_idx) end
     end
     for voice_idx = 1, 7 do
       set_selected(voice_idx)
@@ -97,9 +97,9 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
     local stopped, stopped_frozen = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
     local running, running_frozen = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
     assert_true(stopped ~= running, "running and stopped entries differ: " .. stopped)
-    assert_true(not stopped:find("[F]", 1, true) and not running:find("[F]", 1, true), "[F] only when frozen")
-    assert_true(stopped_frozen:find("[F]", 1, true) and running_frozen:find("[F]", 1, true),
-      "frozen entries show [F]: " .. running_frozen)
+    assert_true(not stopped:find("[L]", 1, true) and not running:find("[L]", 1, true), "[L] only when locked")
+    assert_true(stopped_frozen:find("[L]", 1, true) and running_frozen:find("[L]", 1, true),
+      "locked entries show [L]: " .. running_frozen)
     -- every entry is plain ASCII, so its width does not depend on how the
     -- norns font draws other glyphs
     for _, entry in ipairs({ stopped, stopped_frozen, running, running_frozen }) do
@@ -297,7 +297,7 @@ test("MAIN layout holds for buffer- and input-sourced voices", function()
       params:set("v" .. voice_idx .. "_source", source)
       params:set("v" .. voice_idx .. "_buf_pos", 1)
       params:set("v" .. voice_idx .. "_grain_mode", 2)
-      if not local_value("frozen")[voice_idx] then toggle_freeze(voice_idx) end
+      if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
       show_page("MAIN")
       assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
     end

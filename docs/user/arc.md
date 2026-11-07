@@ -38,7 +38,7 @@ On the **SETUP** page, and for now on the placeholder **VOICE**, **SEQ** and **S
 
 ## Arc Button (2025 model)
 
-- **Button** - On the MAIN page, same as K3 (start the voice if it is off, otherwise freeze/unfreeze it); does nothing on the other pages
+- **Button** - On the MAIN page, same as K3 (start the voice if it is off, otherwise lock/unlock it); does nothing on the other pages
 
 ## LED Feedback
 

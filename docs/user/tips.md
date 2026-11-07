@@ -6,7 +6,7 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 
 - Start with 2-3 voices active
 - Use K2 to randomize individual voices until you find interesting combinations
-- Freeze voices you like with K3
+- Lock voices you like with K3
 - Adjust master density (arc ring 1 or PARAMETERS) to create movement
 - Add reverb or delay on the FX page for more space
 
@@ -29,7 +29,7 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 1. Build up layers by activating voices one at a time
 2. Randomize unfrozen voices to create variation
 3. Use master density for dynamic swells and fades
-4. Freeze/unfreeze voices to create structural changes
+4. Lock/unlock voices to create structural changes
 5. Set up cross-modulation for interdependent voice relationships
 
 ## Using Probability-Based Mutations
@@ -39,7 +39,7 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
   - Mutation rate: 2-3 seconds (how often mutations occur)
   - Mutation probability: 0.10-0.15 (chance each parameter will change)
   - Mutation amount: 0.20-0.30 (size of changes relative to parameter range)
-- Freeze voices you want to keep stable while others evolve
+- Lock voices you want to keep stable while others evolve
 - Combine with cross-modulation for complex, interdependent evolution
 - Watch the `[M]` indicator on screen to confirm mutations are active
 - For dramatic changes, increase probability to 0.25+ and amount to 0.40+

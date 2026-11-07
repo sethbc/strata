@@ -64,7 +64,7 @@ return function(S)
   -- K3 on FX: bypass the filter (mix 0), or bring back its last non-zero mix
   local function fx_key(n)
     if n == 3 then
-      params:set("filter_mix", params:get("filter_mix") > 0 and 0 or S.fx_filter_last_mix)
+      params:set("filter_mix", params:get("filter_mix") > 0 and 0 or S.fx_last_mix.filter)
     end
   end
 

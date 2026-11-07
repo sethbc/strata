@@ -150,7 +150,7 @@ return function(S)
     grid_redraw()
   end
 
-  function toggle_freeze(voice_idx)
+  function toggle_lock(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     S.frozen[voice_idx] = not S.frozen[voice_idx]
     update_voice_list()
