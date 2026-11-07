@@ -3,8 +3,7 @@
 -- details and main param, E2 voice, E3 main param, K2 randomize, K3
 -- start/freeze. Registers its S.registry.pages record. The functions that
 -- were global stay global; start_or_freeze_selected_voice is a field of
--- this module's table (S.lib.pages_main) for the arc button
--- (lib/arc/core.lua).
+-- this module's table (S.lib.pages_main) and the record's arc_button.
 
 return function(S)
   local M = {}
@@ -141,7 +140,7 @@ return function(S)
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/main.lua's
   S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
-    enc = main_enc, key = main_key}
+    enc = main_enc, key = main_key, arc_button = start_or_freeze_selected_voice}
 
   return M
 end

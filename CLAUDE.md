@@ -122,7 +122,7 @@ The Lua side's, across modules (each module's own list opens its notes file):
 - **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`S.scene_recall_in_progress`).
 - **Source tests**: use `voice_uses_synth(i)` / `voice_uses_buffer(i)`. Never use `not voice_uses_synth` (that includes input).
 - **Grid, arc and MIDI handlers live on the vport only** (`grid.connect(port)`, `arc.connect`, `midi.connect`). Never store or attach to the raw device passed to `grid.add`.
-- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param` and are drawn through `arc_ring_fill` from `param_fraction`. Strata follows one arc. The exceptions and details are in `docs/notes/lua/arc.md`.
+- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param` and are drawn through `arc_ring_fill` from `param_fraction`, or `arc_ring_fill_bipolar` for a range through 0 (`arc_ring_fill_param` picks). Strata follows one arc. The exceptions and details are in `docs/notes/lua/arc.md`.
 
 ## Working in parallel
 
