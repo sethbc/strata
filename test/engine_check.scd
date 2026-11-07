@@ -15,7 +15,15 @@ var grainDefs = [\strataGrain, \strataGrainBuf];
 var pollMessages = List.new;
 // scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different
 // worktrees can run side by side on one machine
-var scPort = if("STRATA_SC_PORT".getenv.isNil or: { "STRATA_SC_PORT".getenv.size == 0 }, 57110, { "STRATA_SC_PORT".getenv.asInteger });
+var scPortText = "STRATA_SC_PORT".getenv;
+var scPort = if(scPortText.isNil or: { scPortText.size == 0 }, 57110, {
+    // asInteger turns "abc" into 0, so accept digits only
+    if(scPortText.every({ arg char; char.isDecDigit }).not or: { scPortText.asInteger.inclusivelyBetween(1, 65535).not }) {
+        ("ENGINE CHECK FAILED: STRATA_SC_PORT must be a port number from 1 to 65535, got \"" ++ scPortText ++ "\"").postln;
+        1.exit;
+    };
+    scPortText.asInteger
+});
 var scratchRoot = Platform.defaultTempDir +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ "-" ++ scPort);
 var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 

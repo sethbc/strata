@@ -1,0 +1,12 @@
+// Added by run_engine_check.sh on macOS only: see StrataTestNoBoot.sc.in.
++ OSXPlatform {
+    defaultTempDir {
+        var dir = "STRATA_CHECK_TMPDIR".getenv;
+        ^if(dir.notNil and: { dir.size > 0 }, { dir +/+ "" }, {
+            // OSXPlatform's own default
+            var default = Platform.userAppSupportDir +/+ "tmp/";
+            if(File.exists(default).not) { default.mkdir };
+            default
+        })
+    }
+}
