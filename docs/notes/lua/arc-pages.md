@@ -8,7 +8,7 @@
   - SCENES ring 1: `(S.cursors.scene - 1) / (NUM_SCENES + #SCENES_FIELDS - 1)`.
 - Every continuous ring sweeps its control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions step whole values through `arc_whole_steps(key, delta, ticks)` and then `delta_with_detent(id, steps)` (or move a cursor):
   - LFO: depth 10 ticks per percent, clocked rate 20 ticks per rate (`"lfo:<ring>"`);
-  - VOICE: option and number rows 20 ticks per step (`"voice:<ring>"`);
+  - VOICE: option and number rows 20 ticks per step (`"voice:<ring>"`); a binary row (a registered param, kind `"binary"`) steps the same way as a two-value option, set with `params:set` (a step up on, a step down off), and its ring is drawn with `arc_ring_fill` from its value (dark off, whole ring on);
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
 - Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
@@ -35,7 +35,8 @@ MAIN (`arc_main_delta`/`arc_main_redraw`, with ALT `arc_main_alt_delta`/`arc_mai
 
 VOICE (`arc_voice_delta`/`arc_voice_redraw`):
 - `voice_page_group(voice_page_rows(S.selected_voice), S.cursors.voice)` gives up to four row indices; ring n edits the n-th. Control rows sweep (`arc_sweep_param`), option and number rows (grain envelope and mode, the mod sources, the source) step one whole value per `ARC_VOICE.ticks_per_step` (20) ticks, under `"voice:<n>"`. A local `carried_param[n]` remembers the param ring n's ticks were turned on and forgets them (`forget_arc_ticks`) when the row is another param (the cursor's group or the selected voice changed).
-- Drawn through `arc_ring_fill_param`: the cursor row's ring at 15, the others at 12; rings past the group's rows dark.
+- Drawn through `arc_ring_fill_param`: the cursor row's ring at 15, the others at 12; rings past the group's rows dark. A binary row's ring is `arc_ring_fill(port, n, value, level)`: a binary param has no range for `param_fraction`.
+- Registered rows (`S.registry.voice_params`, `docs/notes/lua/ui-core.md`) reach the rings through `voice_page_rows`, with nothing to add here.
 
 SEQ (`arc_seq_delta`/`arc_seq_redraw`, `ARC_SEQ`):
 - Ring 1: the step cursor, `S.lib.ui_cursors.move("seq_step", steps)` (clamped at 1 and `PATTERN_LENGTH`).

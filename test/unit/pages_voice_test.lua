@@ -53,30 +53,140 @@ end
 
 local function trimmed(text) return (text:gsub("%s+$", "")) end
 
+-- The "<section> <k>/<n>" text VOICE shows for param_id, from the selected
+-- voice's voice_page_rows (registered sections and rows included)
+local function section_text(S, param_id)
+  local sections, cursor_section, position = 0, nil, nil
+  for _, row in ipairs(voice_page_rows(S.selected_voice)) do
+    if row.selectable == false then sections = sections + 1 end
+    if row.param_id == param_id then cursor_section, position = row.section, sections end
+  end
+  assert_true(cursor_section, "no VOICE row " .. param_id)
+  return cursor_section .. " " .. position .. "/" .. sections
+end
+
+-- The selected voice's sections in order, each with its first and last
+-- field's param id
+local function voice_sections(S)
+  local sections = {}
+  for _, row in ipairs(voice_page_rows(S.selected_voice)) do
+    if row.selectable == false then
+      table.insert(sections, { name = row.section })
+    else
+      local section = sections[#sections]
+      section.first = section.first or row.param_id
+      section.last = row.param_id
+    end
+  end
+  return sections
+end
+
+-- Register a record with one binary row, "v<i>_probe_switch", in the mix
+-- section (run before init)
+local function register_binary_row(S)
+  local record = { name = "probe", count = 1, grain_keys = {}, scene_defaults = { probe_switch = 0 },
+    discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } }, fader = false }
+  function record.add(voice_idx)
+    S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+      { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
+  end
+  S.register_voice_params(record)
+end
+
 test("VOICE draws the section and its position at the top right", function()
   local context, S = started_voice_page()
   put_cursor(S, "v1_grain_density")
   local found
+  local expected = section_text(S, "v1_grain_density")
   for _, entry in ipairs(texts_on_row(context, SECTION_Y)) do
-    if entry.text == "grain 2/4" then found = entry end
+    if entry.text == expected then found = entry end
   end
-  assert_true(found, "a synth voice's grain section is the second of four")
+  assert_true(found, "VOICE shows " .. expected)
+  assert_true(expected:find("^grain 2/"), "a synth voice's grain section is the second")
   assert_equal(found.align, "right", "right-aligned")
   assert_equal(found.x, VALUE_RIGHT, "at the values' right edge")
   local voice_text = texts_on_row(context, SECTION_Y)[1]
   assert_equal(voice_text.x, 0, "the selected voice at the left")
   assert_equal(voice_text.text, "1+ reso", "number, running mark and short name")
-  -- an input voice has no synth section: grain is the first of three
+  -- an input voice has no synth section: one section fewer, grain first
+  local synth_sections = #voice_sections(S)
   params:set("v1_source", S.constants.SOURCE_INPUT)
   redraw()
-  assert_true(h.screen_shows(context, "grain 1/3"), "an input voice's grain section is the first of three")
+  assert_equal(#voice_sections(S), synth_sections - 1, "an input voice has no synth section")
+  expected = section_text(S, "v1_grain_density")
+  assert_true(expected:find("^grain 1/"), "an input voice's grain section is the first")
+  assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
   -- crossmod and mix, and a locked, stopped voice
   put_cursor(S, "v1_mod_speed")
-  assert_true(h.screen_shows(context, "crossmod 2/3"), "crossmod")
+  assert_true(h.screen_shows(context, section_text(S, "v1_mod_speed")), "crossmod")
   put_cursor(S, "v1_amp")
-  assert_true(h.screen_shows(context, "mix 3/3"), "mix")
+  assert_true(h.screen_shows(context, section_text(S, "v1_amp")), "mix")
   toggle_lock(1); toggle_voice(1); redraw()
   assert_equal(texts_on_row(context, SECTION_Y)[1].text, "1- reso [L]", "stopped and locked")
+end)
+
+test("VOICE's section position counts come from voice_page_rows", function()
+  -- a registered row in grain and a registered section: the counts follow
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    local record = { name = "probe", count = 1, scene_defaults = { probe = 0 },
+      voice_rows = { section = "grain", rows = { "probe" } }, fader = false }
+    function record.add(voice_idx)
+      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe",
+        { type = "control", name = "probe", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    S.register_voice_params(record)
+    local section = { name = "probe sect", count = 1, scene_defaults = { probe_level = 0 },
+      voice_rows = { section = "probe sect", rows = { "probe_level" } }, fader = false }
+    function section.add(voice_idx)
+      S.lib.params_setup.add_voice_extra(voice_idx, section, "probe_level",
+        { type = "control", name = "probe level", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    S.register_voice_params(section)
+  end })
+  finish_startup(context)
+  show_page("VOICE")
+  local S = local_value("S")
+  local synth_sections = #voice_sections(S)
+  assert_equal(voice_sections(S)[synth_sections].name, "probe sect", "the registered section, after mix")
+  put_cursor(S, "v1_grain_density")
+  local expected = section_text(S, "v1_grain_density")
+  assert_equal(expected, "grain 2/" .. synth_sections, "from the rows")
+  assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
+  put_cursor(S, "v1_probe")
+  assert_true(h.screen_shows(context, section_text(S, "v1_probe")), "the registered row's section")
+  put_cursor(S, "v1_probe_level")
+  assert_true(h.screen_shows(context, "probe sect " .. synth_sections .. "/" .. synth_sections), "the registered section")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  put_cursor(S, "v1_grain_density")
+  expected = section_text(S, "v1_grain_density")
+  assert_equal(expected, "grain 1/" .. (synth_sections - 1), "an input voice's grain is first")
+  assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
+end)
+
+test("E3 on a binary VOICE row sets it on and off", function()
+  local context = load_strata({ before_init = function() register_binary_row(local_value("S")) end })
+  finish_startup(context)
+  show_page("VOICE")
+  local S = local_value("S")
+  put_cursor(S, "v1_probe_switch")
+  assert_equal(voice_page_rows(1)[S.cursors.voice].kind, "binary", "a binary row")
+  assert_equal(params:get("v1_probe_switch"), 0)
+  local _, value = drawn_row(context, "probe switch")
+  assert_equal(value.text, "off", "shown as off")
+  enc(3, 1); assert_equal(params:get("v1_probe_switch"), 1, "+ turns it on")
+  enc(3, 3); assert_equal(params:get("v1_probe_switch"), 1, "more + keeps it on")
+  redraw()
+  _, value = drawn_row(context, "probe switch")
+  assert_equal(value.text, "on", "shown as on")
+  enc(3, -1); assert_equal(params:get("v1_probe_switch"), 0, "- turns it off")
+  enc(3, -2); assert_equal(params:get("v1_probe_switch"), 0, "more - keeps it off")
+  key(1, 1); enc(3, 1); key(1, 0)
+  assert_equal(params:get("v1_probe_switch"), 1, "ALT+E3 too")
+  key(1, 1); tap(2); key(1, 0)
+  assert_equal(params:get("v1_probe_switch"), 0, "ALT+K2 resets it to its default")
+  redraw()
+  h.assert_screen_layout(context, "VOICE on a binary row")
 end)
 
 test("E2 moves through fields and on into the next section", function()
@@ -91,10 +201,10 @@ test("E2 moves through fields and on into the next section", function()
   enc(2, -50)
   assert_equal(cursor_param(S), "v1_freq", "stops at the first field")
   enc(2, 100)
-  assert_equal(cursor_param(S), "v1_pan", "stops at the last field")
+  local sections = voice_sections(S)
+  assert_equal(cursor_param(S), sections[#sections].last, "stops at the last field")
   -- E3 edits the field under the cursor, ALT+E3 a tenth as far
-  enc(2, -1)
-  assert_equal(cursor_param(S), "v1_amp")
+  put_cursor(S, "v1_amp")
   local amp = params:get("v1_amp")
   enc(3, 1)
   local step = params:get("v1_amp") - amp
@@ -119,7 +229,11 @@ test("K2 and K3 jump to the previous and next section's first field", function()
   tap(3); assert_equal(cursor_param(S), "v1_grain_size", "K3: grain")
   tap(3); assert_equal(cursor_param(S), "v1_mod_speed", "K3: crossmod")
   tap(3); assert_equal(cursor_param(S), "v1_source", "K3: mix")
-  tap(3); assert_equal(cursor_param(S), "v1_source", "K3 in the last section stays")
+  -- on through any later sections to the last, where K3 stays
+  local sections = voice_sections(S)
+  for _ = 1, #sections do tap(3) end
+  assert_equal(cursor_param(S), sections[#sections].first, "K3 in the last section stays")
+  put_cursor(S, "v1_source")
   enc(2, 1)
   assert_equal(cursor_param(S), "v1_amp")
   tap(2); assert_equal(cursor_param(S), "v1_mod_speed", "K2: crossmod")
@@ -382,7 +496,11 @@ test("VOICE's layout states cover every voice and source at each section's ends"
   end
   redraw()
   assert_equal(S.selected_voice, 4)
-  assert_equal(cursor_param(S), "v4_amp", "Sub on input: the mix section ends with amp")
+  local last_of_mix
+  for _, row in ipairs(voice_page_rows(4)) do
+    if row.section == "mix" and row.param_id then last_of_mix = row.param_id end
+  end
+  assert_equal(cursor_param(S), last_of_mix, "Sub on input: the mix section's last field")
 end)
 
 end

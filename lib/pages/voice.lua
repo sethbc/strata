@@ -1,7 +1,8 @@
 -- lib/pages/voice.lua
 -- The VOICE page: every param of the selected voice, in the sections of
--- voice_page_rows (synth, grain, crossmod, mix), through field_list. E2
--- moves the cursor (S.cursors.voice), E3 edits its param, K2/K3 jump to the
+-- voice_page_rows (synth, grain, crossmod, mix, and the registered voice
+-- params' rows and sections), through field_list. E2 moves the cursor
+-- (S.cursors.voice), E3 edits its param (a binary row: on up, off down), K2/K3 jump to the
 -- previous/next section, ALT+K2 resets the field to its default, ALT+K3
 -- locks the voice; the arc button starts and stops it. Registers its
 -- S.registry.pages record (every field but the arc fields, which are
@@ -128,6 +129,8 @@ return function(S)
     if param_key(row):match("^mod_source_%d+$") then
       return mod_source_text(params:get(row.param_id))
     end
+    -- a binary param's own string is its number (norns' Binary:string)
+    if row.kind == "binary" then return params:get(row.param_id) == 1 and "on" or "off" end
     return (params:string(row.param_id):gsub("%s+$", ""))
   end
 
@@ -202,7 +205,14 @@ return function(S)
       S.lib.ui_cursors.move("voice", d)
       M.place_cursor(S.cursors.voice)
     elseif n == 3 then
-      enc_param_delta(n, rows[cursor].param_id, d)
+      local row = rows[cursor]
+      if row.kind == "binary" then
+        -- on with a turn up, off with a turn down (a toggle's delta would
+        -- flip it either way)
+        params:set(row.param_id, d > 0 and 1 or 0)
+      else
+        enc_param_delta(n, row.param_id, d)
+      end
     end
   end
 
@@ -299,6 +309,18 @@ return function(S)
   S.registry.pages[UI_PAGES.index.VOICE] = {name = "VOICE", draw = redraw_voice, hints = voice_hints,
     enc = voice_enc, key = voice_key, alt_key = voice_alt_key, arc_button = start_or_stop_selected_voice,
     layout_states = layout_states}
+
+  -- init's start step: every registered voice-param record's layout_states
+  -- (S.registry.voice_params) after VOICE's own, so its rows are drawn by
+  -- the layout tests and the page renders. Registries are read at init, so
+  -- a record registered by a module included after this one counts too
+  local own_layout_states = #layout_states
+  S.register_start(S.constants.START_ORDER.voice_layout_states, function()
+    for index = #layout_states, own_layout_states + 1, -1 do layout_states[index] = nil end
+    for _, record in ipairs(S.registry.voice_params) do
+      for _, state in ipairs(record.layout_states or {}) do table.insert(layout_states, state) end
+    end
+  end)
 
   return M
 end

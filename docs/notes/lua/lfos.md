@@ -6,6 +6,7 @@
 - Every resolved destination is a control param, and every destination label fits the LFO page's right column (49 px).
 - `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them.
 - The offset survives on/off (#103): the library's `lfo_<n>` action re-bangs `lfo_baseline_<n>`, whose `change_offset` sets `lfo_offset_<n>` to 0, so the `lfo_<n>` wrapper's `before` saves the offset and its `after` sets it back when it changed (`params:set`, so the library's offset follows; the number param clamps it to the baseline's range). A baseline change itself still zeroes the offset, as the library intends. This covers every way the state is set: the LFO page, PARAMS, scene recalls, cleanup.
+- Destination indices are stored in PSETs and scenes (`strata_lfo<n>_dest`), so the 68 built-in destinations never move. Registered destinations (`S.registry.lfo_destinations`) go after all of them, by registration and then voice 1-7, so a later registration only appends. The list is built at init (`add_lfo_params`), never at include time.
 - `LFO_PPQN` (48) and the send dedupe bound the message rate. The ceiling is the library's 10 Hz: anything faster belongs in the engine.
 
 ## Owns
@@ -46,7 +47,8 @@ The library owns the params:
 `S.LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, resolve}`:
 - `none`, `density`, `drift`, `filt freq`, `filt res`, `filt mix`, `dly time`, `dly fdbk`, `dly mix`, `rev mix`, `rev size`, `rev damp`;
 - then per voice (`VOICE_LFO_DESTINATIONS`): `v<i> main` (`main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan`.
-- 12 + 8 per voice = 68 entries.
+- 12 + 8 per voice = 68 entries (`BUILT_IN_LFO_DESTINATIONS`).
+- then, built at init by `add_lfo_params` (`lfo_destination_labels`), the registered ones: for each `S.register_lfo_destination(label, suffix)` in registration order, `v1 <label>` ... `v7 <label>`, modulating `v<i>_<suffix>` (a control param). A label that repeats a built-in or earlier label is an error. Keep `v7 <label>` within the LFO page's right column (3.2's: `hist`, `vfilt`, `dsend`, `rsend`). 3.2's registration order is the include order: the history module before the voice-mix module.
 - `lfo_destination_id(n)` returns the resolved id or nil.
 
 ## Modulating around the stored value

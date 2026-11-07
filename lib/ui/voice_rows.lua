@@ -1,7 +1,8 @@
 -- lib/ui/voice_rows.lua
 -- The VOICE page's rows (S.lib.ui_voice_rows): every param of a voice in
--- four sections (synth, grain, crossmod, mix), as field_list rows, and the
--- group of four rows the arc's rings edit. voice_page_rows and
+-- four sections (synth, grain, crossmod, mix), plus the registered voice
+-- params' rows and sections (S.registry.voice_params' voice_rows), as
+-- field_list rows, and the group of four rows the arc's rings edit. voice_page_rows and
 -- voice_page_group are global; the rows are built from the voice's source
 -- each call, so they follow a source change at once.
 
@@ -45,11 +46,51 @@ return function(S)
     }
   end
 
+  -- The sections with the registered rows (S.registry.voice_params'
+  -- voice_rows, in registration order) added: each record's rows for which
+  -- its when(voice_idx, key) holds (all of them without when) go at the end
+  -- of its section; a section not there yet is added before the section
+  -- named by before (if there is one), else at the end. A section with no
+  -- rows for this voice is left out (an input voice's synth section)
+  local function sections_with_registered_rows(voice_idx)
+    local sections = section_keys(voice_idx)
+    for _, record in ipairs(S.registry.voice_params) do
+      local voice_rows = record.voice_rows
+      if voice_rows then
+        local keys = {}
+        for _, key in ipairs(voice_rows.rows) do
+          if not voice_rows.when or voice_rows.when(voice_idx, key) then table.insert(keys, key) end
+        end
+        if #keys > 0 then
+          local section
+          for _, candidate in ipairs(sections) do
+            if candidate.name == voice_rows.section then section = candidate end
+          end
+          if not section then
+            section = {name = voice_rows.section}
+            local position = #sections + 1
+            for index, candidate in ipairs(sections) do
+              if candidate.name == voice_rows.before then position = index end
+            end
+            table.insert(sections, position, section)
+          end
+          -- a copy: the built-in key lists are shared tables
+          local section_rows = {}
+          for _, key in ipairs(section.keys or {}) do table.insert(section_rows, key) end
+          for _, key in ipairs(keys) do table.insert(section_rows, key) end
+          section.keys = section_rows
+        end
+      end
+    end
+    return sections
+  end
+
   -- A param's kind for the page and the arc: how its value moves
   local function param_kind(param_id, param)
     if param.t == params.tCONTROL then return "control" end
     if param.t == params.tOPTION then return "option" end
     if param.t == params.tNUMBER then return "number" end
+    if param.t == params.tBINARY then return "binary" end
     error("VOICE row " .. param_id .. " has an unexpected param type " .. tostring(param.t))
   end
 
@@ -62,12 +103,13 @@ return function(S)
   -- The rows of voice voice_idx: per section a label row
   -- {label = <section>, section = <section>, selectable = false}, then one
   -- row per param {label = <param name>, param_id, section, selectable =
-  -- true, kind = "control"|"number"|"option"}
+  -- true, kind = "control"|"number"|"option"|"binary"}. The registered rows
+  -- are included (sections_with_registered_rows)
   function voice_page_rows(voice_idx)
     check_voice(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
     local rows = {}
-    for _, section in ipairs(section_keys(voice_idx)) do
+    for _, section in ipairs(sections_with_registered_rows(voice_idx)) do
       if section.keys then
         table.insert(rows, {label = section.name, section = section.name, selectable = false})
         for _, key in ipairs(section.keys) do
@@ -82,8 +124,9 @@ return function(S)
   end
 
   -- The index of the first selectable row of voice_page_rows(voice_idx),
-  -- from the sections alone: it needs no params, so S.cursors can start on
-  -- it before init adds them
+  -- from the built-in sections alone: it needs no params or registered
+  -- records, so S.cursors can start on it before init. (A registered row
+  -- never changes it: the first section's first field is row 2 either way)
   function M.first_field_row(voice_idx)
     check_voice(voice_idx)
     local index = 0

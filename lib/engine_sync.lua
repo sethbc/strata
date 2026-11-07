@@ -2,12 +2,13 @@
 -- Param -> engine: send_param_to_engine and the engine senders
 -- (S.engine_senders), the values the engine last got (S.engine_param_values),
 -- the LFO offsets they add (S.lfo_last_dest, S.lfo_scaled), and starting,
--- stopping, freezing and syncing a voice. The functions that were global stay
--- global, as does engine_param_value; engine_mod_source, with_lfo_offsets and
--- send_engine_value are fields of this module's table (S.lib.engine_sync) for
--- the code that calls them: engine_mod_source in lib/params_setup.lua, the
--- other two in lib/lfos.lua (apply_lfo). Registers the cleanup step that
--- turns the voices off.
+-- stopping, freezing and syncing a voice (the registered voice params'
+-- grain keys and syncs included). The functions that were global stay
+-- global, as does engine_param_value; engine_mod_source, with_lfo_offsets,
+-- send_engine_value and grain_key_message are fields of this module's table
+-- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
+-- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
+-- (apply_lfo). Registers the cleanup step that turns the voices off.
 
 return function(S)
   local M = {}
@@ -158,6 +159,33 @@ return function(S)
     grid_redraw()
   end
 
+  -- A registered record's grain key (S.registry.voice_params' grain_keys:
+  -- an engine name, or {name, value = fn}) and a stored value: the
+  -- setGrainParam name and the value to send
+  local function grain_key_message(grain_key, value)
+    if type(grain_key) == "table" then
+      return grain_key.name, grain_key.value and grain_key.value(value) or value
+    end
+    return grain_key, value
+  end
+
+  -- The registered voice params' part of the sync (S.registry.voice_params):
+  -- per record, in registration order, its grain keys' stored values (by key
+  -- name, so the order is fixed), then its sync
+  local function send_registered_voice_values(voice_idx)
+    local voice = S.voices[voice_idx]
+    for _, record in ipairs(S.registry.voice_params) do
+      local keys = {}
+      for key in pairs(record.grain_keys or {}) do table.insert(keys, key) end
+      table.sort(keys)
+      for _, key in ipairs(keys) do
+        local name, value = grain_key_message(record.grain_keys[key], voice.extras[key])
+        engine.setGrainParam(voice_idx - 1, name, value)
+      end
+      if record.sync then record.sync(voice_idx) end
+    end
+  end
+
   -- Push the complete Lua-side state of a voice to its freshly started engine
   -- synths. voiceOn only carries the initial freq/amp/pan and grain values, and
   -- param actions only reach the engine while a voice is active, so without this
@@ -202,6 +230,8 @@ return function(S)
     engine.setModSpeed(engine_voice, voice.crossmod.speed)
     -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
     engine.setVoiceParam(engine_voice, "bend", S.midi_state.bend[voice_idx])
+
+    send_registered_voice_values(voice_idx)
   end
 
   -- Turn off every running voice (after MIDI is detached, so no note can
@@ -217,6 +247,7 @@ return function(S)
   M.engine_mod_source = engine_mod_source
   M.with_lfo_offsets = with_lfo_offsets
   M.send_engine_value = send_engine_value
+  M.grain_key_message = grain_key_message
 
   return M
 end

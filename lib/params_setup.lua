@@ -5,17 +5,27 @@
 -- the voice params (add_voice_params, get_param_spec), the redraw-on-param
 -- wrapper (redraw_on_param_changes, called by init after the records) and
 -- the tempo-follow handlers; these stay global. S.fx_last_mix is
--- read by the FX page's K3.
+-- read by the FX page's K3. Reads, at init, the registered voice params
+-- (added through S.lib.params_setup.add_voice_extra), fx params, param
+-- filters and source change hooks (lib/state.lua), and sets S.performance
+-- (the standard tier's values until 3.2's performance setting fills it).
 
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_SCENES = S.constants.NUM_SCENES
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
-  local BUFFER_SECONDS = S.constants.BUFFER_SECONDS
   local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
   local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
+  local FX_GROUP_PARAMS = 11  -- the fx group's own params; registered fx params follow them
+
+  -- The performance tier's values (tier, buffer_seconds, max_grains,
+  -- history_seconds): the standard tier's, a copy so nothing changes the
+  -- constant. 3.2's performance setting fills it at init, before any param
+  -- is added; every tier-dependent spec reads it as its params are added
+  S.performance = {}
+  for key, value in pairs(S.constants.STANDARD_PERFORMANCE) do S.performance[key] = value end
 
   -- Last non-zero mix of each effect (set by its mix action): the FX page's K3
   -- restores it after a bypass. The delay's 0.3 is a starting value (its
@@ -67,6 +77,18 @@ return function(S)
   -- in the order they are registered here, which is the menu's order
   local function register_params(name, add)
     S.registry.params[#S.registry.params + 1] = {name = name, add = add}
+  end
+
+  -- Run a registered record's add(...) and check it added exactly
+  -- record.count params (kind names the registry in the error)
+  local function add_counted(kind, record, ...)
+    local before = #params.params
+    record.add(...)
+    local added = #params.params - before
+    if added ~= record.count then
+      error(string.format("%s %s: add added %d params, but its count is %d", kind, record.name, added,
+        record.count), 0)
+    end
   end
 
   register_params("master", function()
@@ -225,9 +247,12 @@ return function(S)
   end)
 
   register_params("fx", function()
-    -- Effects chain: filter, delay, reverb and tape drift in one group. The
-    -- group size must match the params below exactly.
-    params:add_group("strata_fx", "fx", 11)
+    -- Effects chain: filter, delay, reverb and tape drift in one group, then
+    -- the registered fx params (S.registry.fx_params). The group size must
+    -- match the params below exactly.
+    local fx_group_size = FX_GROUP_PARAMS
+    for _, record in ipairs(S.registry.fx_params) do fx_group_size = fx_group_size + record.count end
+    params:add_group("strata_fx", "fx", fx_group_size)
 
     params:add{
       type = "option",
@@ -348,6 +373,10 @@ return function(S)
         send_param_to_engine("drift_amount", x)
       end
     }
+
+    for _, record in ipairs(S.registry.fx_params) do
+      add_counted("fx params", record)
+    end
   end)
 
   register_params("lfos", function()
@@ -364,7 +393,7 @@ return function(S)
       type = "control",
       id = "record_duration",
       name = "record duration",
-      controlspec = controlspec.new(0.5, BUFFER_SECONDS, "lin", 0.5, 8, "s")
+      controlspec = controlspec.new(0.5, S.performance.buffer_seconds, "lin", 0.5, 8, "s")
     }
 
     params:add{
@@ -450,18 +479,108 @@ return function(S)
     end
   end
 
+  -- A voice param's engine call runs only while the voice is running
+  -- (sync_voice_to_engine sends everything when it starts)
+  local function add_voice_sender(voice_idx, param_id, send)
+    S.engine_senders[param_id] = function(value)
+      if S.voices[voice_idx].active then send(value) end
+    end
+  end
+
+  -- A voice param's value through its key's registered filter
+  -- (S.registry.param_filters[key]), given the value stored before. A value
+  -- the filter changes is written back to the param silently, so the param
+  -- shows what is stored. The filter's result is what is stored, exactly,
+  -- so a filter can recognize it as the next call's previous
+  local function filtered_value(voice_idx, key, param_id, value, previous)
+    local filter = S.registry.param_filters[key]
+    if not filter then return value end
+    local result = filter(voice_idx, value, previous)
+    if result ~= value then params:set(param_id, result, true) end
+    return result
+  end
+
+  -- Per record name: the keys its add added through add_voice_extra (for
+  -- the checks after each add)
+  local extra_keys = {}
+
+  -- Add one param of a registered voice-param record (S.registry.voice_params)
+  -- for voice voice_idx: param is a params:add table without an id; the id
+  -- is v<i>_<key>. Its action runs the key's param filter, stores the value
+  -- in S.voices[i].extras[key], ends a randomize's undo, sends it through
+  -- send_param_to_engine and then runs param.action, if any. A key in
+  -- record.grain_keys gets the engine sender: setGrainParam with its engine
+  -- name (and value conversion), only while the voice runs. Called by the
+  -- record's add, at init
+  function M.add_voice_extra(voice_idx, record, key, param)
+    if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
+      error("add_voice_extra: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
+    end
+    if type(record) ~= "table" or type(record.name) ~= "string" then
+      error("add_voice_extra: a registered record is needed", 2)
+    end
+    if type(key) ~= "string" or not key:match("^[%w_]+$") then
+      error("add_voice_extra " .. record.name .. ": key " .. tostring(key) .. " is not a param id suffix", 2)
+    end
+    if type(param) ~= "table" or param.id ~= nil then
+      error("add_voice_extra " .. record.name .. ": a params:add table without an id", 2)
+    end
+    local param_id = "v" .. voice_idx .. "_" .. key
+    local own_action = param.action
+    local args = {}
+    for field, value in pairs(param) do args[field] = value end
+    args.id = param_id
+    args.action = function(x)
+      local extras = S.voices[voice_idx].extras
+      x = filtered_value(voice_idx, key, param_id, x, extras[key])
+      extras[key] = x
+      note_param_edit(param_id)  -- an edit ends a randomize's undo
+      send_param_to_engine(param_id, x)
+      if own_action then own_action(x) end
+    end
+    params:add(args)
+    S.voices[voice_idx].extras[key] = params:get(param_id)
+
+    local grain_key = record.grain_keys and record.grain_keys[key]
+    if grain_key then
+      add_voice_sender(voice_idx, param_id, function(value)
+        local name, sent = S.lib.engine_sync.grain_key_message(grain_key, value)
+        engine.setGrainParam(voice_idx - 1, name, sent)
+      end)
+    end
+    extra_keys[record.name] = extra_keys[record.name] or {}
+    extra_keys[record.name][key] = true
+  end
+
+  -- Each record's add for voice voice_idx, counted, then a check that every
+  -- key it names (grain keys, scene keys, rows) is one of its params
+  local function add_registered_voice_params(voice_idx)
+    for _, record in ipairs(S.registry.voice_params) do
+      extra_keys[record.name] = {}
+      add_counted("voice params", record, voice_idx)
+      for _, keys in ipairs({record.grain_keys or {}, record.scene_defaults or {}}) do
+        for key in pairs(keys) do
+          if not extra_keys[record.name][key] then
+            error("voice params " .. record.name .. ": " .. key .. " is not a param its add added", 0)
+          end
+        end
+      end
+      for _, key in ipairs(record.voice_rows and record.voice_rows.rows or {}) do
+        if not extra_keys[record.name][key] then
+          error("voice params " .. record.name .. ": row " .. key .. " is not a param its add added", 0)
+        end
+      end
+    end
+  end
+
   function add_voice_params(voice_idx)
     local v = S.voices[voice_idx]
     local prefix = "v" .. voice_idx .. "_"
     local engine_voice = voice_idx - 1
+    -- the registered voice params' values (add_voice_extra), fresh each init
+    v.extras = {}
 
-    -- A voice param's engine call runs only while the voice is running
-    -- (sync_voice_to_engine sends everything when it starts)
-    local function add_voice_sender(param_id, send)
-      S.engine_senders[param_id] = function(value)
-        if S.voices[voice_idx].active then send(value) end
-      end
-    end
+    local function add_sender(param_id, send) add_voice_sender(voice_idx, param_id, send) end
 
     params:add_separator("voice " .. voice_idx .. ": " .. v.name)
 
@@ -476,12 +595,13 @@ return function(S)
         name = key,
         controlspec = spec,
         action = function(x)
+          x = filtered_value(voice_idx, key, param_id, x, S.voices[voice_idx].params[key])
           S.voices[voice_idx].params[key] = x
           note_param_edit(param_id)  -- randomize sets it: an edit ends its undo
           send_param_to_engine(param_id, x)
         end
       }
-      add_voice_sender(param_id, function(value) engine.setVoiceParam(engine_voice, key, value) end)
+      add_sender(param_id, function(value) engine.setVoiceParam(engine_voice, key, value) end)
     end
 
     -- Grain params
@@ -507,6 +627,11 @@ return function(S)
           S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
         end
         grid_redraw()
+        -- the registered hooks (S.registry.source_change); a scene recall
+        -- sets every value itself, so they never run during one
+        if not S.scene_recall_in_progress then
+          for _, hook in ipairs(S.registry.source_change) do hook(voice_idx, x) end
+        end
       end
     }
 
@@ -525,7 +650,7 @@ return function(S)
         send_param_to_engine(prefix .. "buf_pos", x)
       end
     }
-    add_voice_sender(prefix .. "buf_pos", function(value)
+    add_sender(prefix .. "buf_pos", function(value)
       engine.setGrainParam(engine_voice, "bufPos", value)
     end)
 
@@ -540,7 +665,7 @@ return function(S)
         send_param_to_engine(prefix .. "buf_rate", x)
       end
     }
-    add_voice_sender(prefix .. "buf_rate", function(value)
+    add_sender(prefix .. "buf_rate", function(value)
       engine.setGrainParam(engine_voice, "bufRate", value)
     end)
 
@@ -555,7 +680,7 @@ return function(S)
         send_param_to_engine(prefix .. "buf_scan", x)
       end
     }
-    add_voice_sender(prefix .. "buf_scan", function(value)
+    add_sender(prefix .. "buf_scan", function(value)
       engine.setGrainParam(engine_voice, "bufScan", value)
     end)
 
@@ -570,7 +695,7 @@ return function(S)
         send_param_to_engine(prefix .. "grain_size", x)
       end
     }
-    add_voice_sender(prefix .. "grain_size", function(value)
+    add_sender(prefix .. "grain_size", function(value)
       engine.setGrainParam(engine_voice, "grainSize", value)
     end)
 
@@ -584,7 +709,7 @@ return function(S)
         send_param_to_engine(prefix .. "grain_density", x)
       end
     }
-    add_voice_sender(prefix .. "grain_density", function(value)
+    add_sender(prefix .. "grain_density", function(value)
       engine.setGrainParam(engine_voice, "grainDensity", value * engine_param_value("master_density"))
     end)
 
@@ -603,7 +728,7 @@ return function(S)
         send_param_to_engine(prefix .. "grain_pitch", x)
       end
     }
-    add_voice_sender(prefix .. "grain_pitch", function(value)
+    add_sender(prefix .. "grain_pitch", function(value)
       engine.setGrainParam(engine_voice, "pitchShift", value)
     end)
 
@@ -617,7 +742,7 @@ return function(S)
         send_param_to_engine(prefix .. "grain_spread", x)
       end
     }
-    add_voice_sender(prefix .. "grain_spread", function(value)
+    add_sender(prefix .. "grain_spread", function(value)
       engine.setGrainParam(engine_voice, "posSpread", value)
     end)
 
@@ -685,7 +810,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_amp_amt_1", x)
       end
     }
-    add_voice_sender(prefix .. "mod_amp_amt_1", function(value) engine.setModAmpAmt(engine_voice, 1, value) end)
+    add_sender(prefix .. "mod_amp_amt_1", function(value) engine.setModAmpAmt(engine_voice, 1, value) end)
 
     params:add{
       type = "control",
@@ -697,7 +822,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_freq_amt_1", x)
       end
     }
-    add_voice_sender(prefix .. "mod_freq_amt_1", function(value) engine.setModFreqAmt(engine_voice, 1, value) end)
+    add_sender(prefix .. "mod_freq_amt_1", function(value) engine.setModFreqAmt(engine_voice, 1, value) end)
 
     -- Slot 2
     params:add{
@@ -732,7 +857,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_amp_amt_2", x)
       end
     }
-    add_voice_sender(prefix .. "mod_amp_amt_2", function(value) engine.setModAmpAmt(engine_voice, 2, value) end)
+    add_sender(prefix .. "mod_amp_amt_2", function(value) engine.setModAmpAmt(engine_voice, 2, value) end)
 
     params:add{
       type = "control",
@@ -744,7 +869,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_freq_amt_2", x)
       end
     }
-    add_voice_sender(prefix .. "mod_freq_amt_2", function(value) engine.setModFreqAmt(engine_voice, 2, value) end)
+    add_sender(prefix .. "mod_freq_amt_2", function(value) engine.setModFreqAmt(engine_voice, 2, value) end)
 
     -- Slot 3
     params:add{
@@ -779,7 +904,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_amp_amt_3", x)
       end
     }
-    add_voice_sender(prefix .. "mod_amp_amt_3", function(value) engine.setModAmpAmt(engine_voice, 3, value) end)
+    add_sender(prefix .. "mod_amp_amt_3", function(value) engine.setModAmpAmt(engine_voice, 3, value) end)
 
     params:add{
       type = "control",
@@ -791,7 +916,7 @@ return function(S)
         send_param_to_engine(prefix .. "mod_freq_amt_3", x)
       end
     }
-    add_voice_sender(prefix .. "mod_freq_amt_3", function(value) engine.setModFreqAmt(engine_voice, 3, value) end)
+    add_sender(prefix .. "mod_freq_amt_3", function(value) engine.setModFreqAmt(engine_voice, 3, value) end)
 
     -- Global mod speed (shared across all slots)
     params:add{
@@ -804,7 +929,13 @@ return function(S)
         send_param_to_engine(prefix .. "mod_speed", x)
       end
     }
-    add_voice_sender(prefix .. "mod_speed", function(value) engine.setModSpeed(engine_voice, value) end)
+    add_sender(prefix .. "mod_speed", function(value) engine.setModSpeed(engine_voice, value) end)
+
+    -- The registered voice params (S.registry.voice_params), under one separator
+    if #S.registry.voice_params > 0 then
+      params:add_separator("voice " .. voice_idx .. " extras")
+      add_registered_voice_params(voice_idx)
+    end
   end
 
   function get_param_spec(param_name)

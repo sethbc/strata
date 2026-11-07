@@ -415,6 +415,50 @@ test("VOICE rings follow the cursor's group of four", function()
   assert_equal(params:get("v2_mod_source_1"), other + 1, "20 of its own ticks do")
 end)
 
+test("an arc ring on a binary VOICE row toggles it once per whole step", function()
+  -- a registered binary row, "v<i>_probe_switch", at the end of the mix section
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    local record = { name = "probe", count = 1, scene_defaults = { probe_switch = 0 },
+      discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } },
+      fader = false }
+    function record.add(voice_idx)
+      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+        { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
+    end
+    S.register_voice_params(record)
+  end })
+  finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("VOICE")
+  local rows = voice_page_rows(1)
+  local index = S.lib.pages_voice.row_of("v1_probe_switch")
+  assert_equal(rows[index].kind, "binary")
+  place_voice_cursor(index)
+  local ring
+  local _, row_indices = voice_page_group(rows, S.cursors.voice)
+  for n, row_index in ipairs(row_indices) do
+    if row_index == index then ring = n end
+  end
+  assert_true(ring, "the binary row has a ring")
+  arc_redraw()
+  assert_ring_fraction(device, ring, 0, "off: dark")
+  context.arc.turn(1, ring, 19)
+  assert_equal(params:get("v1_probe_switch"), 0, "19 ticks do not switch it")
+  context.arc.turn(1, ring, 1)
+  assert_equal(params:get("v1_probe_switch"), 1, "the 20th turns it on")
+  context.arc.turn(1, ring, 60)
+  assert_equal(params:get("v1_probe_switch"), 1, "more steps up keep it on")
+  arc_redraw()
+  assert_ring_fraction(device, ring, 1, "on: the whole ring")
+  context.arc.turn(1, ring, -20)
+  assert_equal(params:get("v1_probe_switch"), 0, "a step down turns it off")
+  context.arc.turn(1, ring, -40)
+  assert_equal(params:get("v1_probe_switch"), 0, "and keeps it off")
+end)
+
 test("VOICE rings past the last row are dark and ignored", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)

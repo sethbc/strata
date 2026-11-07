@@ -934,13 +934,13 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   assert_near(params:get("filter_freq"), 5000, 1); assert_equal(params:get("delay_mix"), 0)
   assert_true(table.concat(context.printed, "\n"):find("migrated scenes file from version 1"),
     "migration message printed")
-  -- a versioned version-1 file migrates too, and the next save writes version 2
+  -- a versioned version-1 file migrates too, and the next save writes the current version
   tab.save({ version = 1, scenes = scenes }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v1" })
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 2, "scenes are saved as version 2")
+  assert_equal(saved.version, 3, "scenes are saved as version 3")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
 

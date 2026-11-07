@@ -1,6 +1,7 @@
 -- lib/lfos.lua
 -- The three global LFOs (S.lfos), built on norns' lib/lfo.lua: their
--- destinations (S.LFO_DESTINATIONS), the action that modulates a
+-- destinations (S.LFO_DESTINATIONS: the built-in ones, then, from init, the
+-- registered ones, S.registry.lfo_destinations), the action that modulates a
 -- destination's engine value (apply_lfo), restoring it, the LFO page dot's
 -- phase estimate (S.lfo_last_raw, lfo_phase_estimate) and the LFO params
 -- (add_lfo_params, which lib/params_setup.lua's lfos record calls).
@@ -75,9 +76,30 @@ return function(S)
     end
   end
 
-  local LFO_DESTINATION_LABELS = {}
-  for index, destination in ipairs(S.LFO_DESTINATIONS) do
-    LFO_DESTINATION_LABELS[index] = destination.label
+  -- The built-in destinations end here. Their indices are stored in PSETs
+  -- and scenes (strata_lfo<n>_dest), so they never move: the registered
+  -- destinations (S.registry.lfo_destinations) follow them, by registration
+  -- and then voice, so a later registration only appends
+  local BUILT_IN_LFO_DESTINATIONS = #S.LFO_DESTINATIONS
+
+  -- At init (add_lfo_params): the registered destinations after the
+  -- built-in ones, and the option labels of the whole list
+  local function lfo_destination_labels()
+    for index = #S.LFO_DESTINATIONS, BUILT_IN_LFO_DESTINATIONS + 1, -1 do S.LFO_DESTINATIONS[index] = nil end
+    local labels = {}
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do labels[index] = destination.label end
+    local taken = {}
+    for _, label in ipairs(labels) do taken[label] = true end
+    for _, entry in ipairs(S.registry.lfo_destinations) do
+      for i = 1, NUM_VOICES do
+        local label = "v" .. i .. " " .. entry.label
+        if taken[label] then error("register_lfo_destination: the label " .. label .. " is taken", 0) end
+        taken[label] = true
+        table.insert(S.LFO_DESTINATIONS, fixed_destination(label, "v" .. i .. "_" .. entry.suffix))
+        table.insert(labels, label)
+      end
+    end
+    return labels
   end
 
   -- The param id LFO n modulates now, or nil
@@ -166,13 +188,14 @@ return function(S)
   -- group per LFO, so the three destinations get a group of their own
   -- (strata_lfos) ahead of the library's groups lfo_group_1..3 ("LFO 1".."LFO 3")
   function add_lfo_params()
+    local destination_labels = lfo_destination_labels()
     params:add_group("strata_lfos", "lfo destinations", NUM_LFOS)
     for n = 1, NUM_LFOS do
       params:add{
         type = "option",
         id = "strata_lfo" .. n .. "_dest",
         name = "LFO " .. n .. " dest",
-        options = LFO_DESTINATION_LABELS,
+        options = destination_labels,
         default = 1,
         action = function()
           restore_lfo_destination(n)
