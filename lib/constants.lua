@@ -180,6 +180,7 @@ local CLEANUP_ORDER = {
   scene_transition = 110,   -- lib/scenes.lua
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
+  input_meter = 135,        -- lib/pages/buffer.lua: the BUFFER page's amp_in_l/amp_in_r polls
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
   midi_handler = 150,       -- lib/midi_in.lua
   voices_off = 160,         -- lib/engine_sync.lua

@@ -97,7 +97,11 @@ test("every page lays out with every voice, source, ALT state and flash", functi
       { name = "probe", setup = function() probed = probed + 1; params:set("filter_mix", 0) end } }
     return probe_context
   end)
-  assert_equal(drawn, 1, "the probe state is drawn")
+  local other_states = 0  -- the other pages' own states are drawn too
+  for index, record in ipairs(local_value("S").registry.pages) do
+    if record.name ~= "FX" then other_states = other_states + #(record.layout_states or {}) end
+  end
+  assert_equal(drawn, other_states + 1, "the probe state is drawn")
   assert_equal(probed, 2, "with ALT up and down, each on a fresh script")
 end)
 

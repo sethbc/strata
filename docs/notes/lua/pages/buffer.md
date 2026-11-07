@@ -2,41 +2,61 @@
 
 - While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector (`fileselect.redraw()`), never the page, so no frame-clock redraw draws over the file list.
 - `buffer_key_release` calls `forget_held_keys()` just before `fileselect.enter`: the selector takes the keys, so a key held then would never be released to the script.
-- A K2 pressed with ALT releases through `alt_key_release`, never `key_release`, so it never opens the file selector, even when K1 comes up first.
+- ALT+K2 (clear) releases through `alt_key_release` (BUFFER has none), never `key_release`, so it never opens the file selector, even when K1 comes up first (K1 down, K2 down, K1 up, K2 up). BUFFER never reads `S.key_press_page[2]` to change what K3 does: the K2+K3 save gesture is gone (ALT+K3 saves), and a K2 pressed with ALT is still in `S.key_press_page`.
+- Every key and the arc button act on the slot cursor (`S.buffer_page.slot`), never on the selected voice's buffer: K3 records into it whether or not a voice reads it.
 - BUFFER's flashes go through `buffer_page_flash` (the shared "hints" flash, owned by BUFFER), never a clock of the page's own; they show only while BUFFER is up.
 - A save while the slot is `recording` or `finishing` saves nothing (`buf <n> busy`).
 - `fileselect` is required (`require "fileselect"`), never read as a global.
+- The input meter's polls (`amp_in_l`, `amp_in_r`) run only while BUFFER shows: the record's `enter` starts them, `leave` and cleanup step `input_meter` (135) stop them. They are looked up with `poll.set` at each `enter`, never kept from an earlier one or from load time (norns replaces its poll objects when it re-registers the polls). A norns without them leaves the meter dark.
+- A poll value asks for a redraw only when the drawn level or held peak changes. The peak's expiry is checked at draw time, so it goes out even with no new poll value.
+- The slot list scrolls (six of eight rows visible). Rows and the scroll marker go through `S.lib.ui_field_list.draw`; no slot text reaches x 127 (the marker), and nothing in the left column crosses the divider.
+- A redraw measures no text it measured before: slot names are cut once per name and width, the voice name once, and the seconds and voices texts' widths are memoized.
 
 ## Owns
 
-- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (with `key_release`), `redraw_buffer`, `buffer_enc`, `buffer_key`, `buffer_key_release`, `buffer_hints`, `buffer_display_name`; `S.BUFFER_PAGE`, the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash).
-- The buffers themselves (`S.buffers`, `record_buffer`, `load_buffer`, `save_buffer`, `buffer_load_failed`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`).
+- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key`, `enter`, `leave`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)` and the meter state `S.lib.pages_buffer.meter` (`amps`, `peak`, `peak_at`, `shown`, `polls`); cleanup step `input_meter`.
+- The buffers themselves (`S.buffers`, `record_buffer`, `load_buffer`, `clear_buffer`, `save_buffer`, `buffer_load_failed`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`).
 - Its unit tests: `test/unit/pages_buffer_test.lua`. Its rings: `lib/arc/buffer.lua` (`docs/notes/lua/arc-pages.md`).
+
+## Cursors
+
+`S.buffer_page = {slot = 1, field = 1}`: `slot` 1..`NUM_BUFFERS` (E2), `field` 1..3 (ALT+E2): source (`v<selected>_source`), duration (`record_duration`), level (`record_level`). Both clamp at their ends and are put back in range before use. They persist across page changes; the slot cursor does not follow the selected voice.
 
 ## Layout
 
-`redraw_buffer`, `buffer_enc`, `buffer_key`, `buffer_key_release`.
-- Left column (x 0-60): the selected voice's name (y 18), `src: <voice_source_label>` (y 26), `dur:` record duration (y 42) and `lvl:` record level (y 50).
-- Divider at x 62.
-- Right column, eight rows (`S.BUFFER_PAGE.row_first_y` 14, `row_spacing` 6, so y 14-56):
-  - slot number at x 65 (`slot_x`);
-  - name at x 71 (`name_x`): the file name without extension, cut by `fit_text` with `screen.text_extents` to `S.BUFFER_PAGE.name_max_width` 31 px, whole UTF-8 characters at a time. `buffer_display_name` caches the cut name in `S.buffers[slot].display_name` until `name` changes, so a redraw measures nothing;
-  - seconds (`%.1fs`) or `REC`, right-aligned at x 127.
-- Row level: the selected voice's buffer (`voice_buffer_slot`) 15, loaded or recording 8, empty 2.
+`S.BUFFER_PAGE` holds every position.
+- Left column (x 0-54): the selected voice's name in capitals at y 16 (cut to the column with `fit_text`); the three fields at y 24, 32, 40 (`field_first_y`, `field_spacing` 8): `>` at x 0 on the field cursor's row, the label (`src`, `dur`, `lvl`) at x 5, the value right-aligned at x 54 (`voice_source_label`, `%.1fs`, `%.2f`). The cursor's row at level 15, the others 4.
+- Input meter on y 49: `in` at x 5, then eight 3x5 px filled segments from x 17, 1 px apart (x 17-48): lit segments at level 10, the held peak segment (when above the level) at 15, the rest at 1.
+- Divider at x 56, y 10-52 (level 1).
+- Right column: `S.lib.ui_field_list.draw` with six visible rows from y 16, 7 px apart (y 16-51), one row above the cursor kept in view, the scroll marker at x 127 (y 10 to 52). Each row:
+  - slot number at x 59;
+  - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name (`name == "empty"`);
+  - seconds (`%.1fs`) or `REC`, right-aligned at x 124; none for an empty slot (no name, no reported audio, not recording);
+  - names in other rows end 3 px before the widest seconds column (`16.0s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`), dropping whole voices from the end with `+` when they do not fit, and the name gets what is left (possibly nothing).
+- Row level: the cursor row 15, a loaded or recording slot 6, others 2.
+- `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), each field, long names with every voice on one slot, every slot recording, the saved, busy, empty and load-failed flashes, the meter with a held peak.
 
 ## Controls
 
-- E2 is `select_voice_by` (shared with MAIN), E3 `enc_param_delta(3, "v<i>_source", d)`.
-- K3 press: `record_buffer(slot)` (toggles: stops early while recording), or `save_buffer(slot)` when K2 is held on this page (`S.buffer_saved_during_k2` then makes the K2 release do nothing).
-- The save is confirmed by `buffer_page_flash(text)`:
+- E2 moves the slot cursor; ALT+E2 the field cursor (`alt_enc` returns true for E2 only). E3 is `enc_param_delta(3, <field param>, d)`, so ALT+E3 is fine adjustment (it only shows on the level: the duration's 0.5 s step and the source's options keep whole steps).
+- K3 press and the arc button (`arc_button`): `record_buffer(slot)` (toggles: stops early while recording; does nothing while `finishing`).
+- K2 release: the file selector for the cursor slot (below). K2's press does nothing; K3 while K2 is held just records.
+- ALT+K2 (`alt_key(2)`): `clear_buffer(slot)`.
+- ALT+K3 (`alt_key(3)`): saves, confirmed by `buffer_page_flash(text)`:
   - `buf <n> busy` (and no `save_buffer` call) while the slot is `recording` or `finishing`;
   - else `saved buf <n>` when the slot reports audio (`seconds > 0`, the rule `save_buffer` saves by);
   - else `buf <n> empty`.
 - `buffer_load_failed` flashes `buf <n> load failed` when the engine reports a failed load (see the buffers table in `docs/notes/engine.md`).
-- With no buffer source (synth, input) K2 and K3 do nothing.
-- Hints: `K2:load K3:rec K2+3:save` (`K3:stop` while the slot records, `K3:...` while it is `finishing`), or `K2:- K3:- E3:source`. No ALT keys yet (an ALT+K2 does nothing, and its release opens nothing).
+- Hints: `K2:load K3:rec` (`K3:stop` while the cursor slot records, `K3:...` while it is `finishing`); with ALT `K2:clear K3:save`.
 
 The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5, UI_PAGES.index.BUFFER)`. `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s); its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it (`docs/notes/lua/ui-core.md`).
+
+## Input meter
+
+- `S.lib.pages_buffer.INPUT_METER = {poll_seconds = 0.05, segments = 8, floor_db = -48, db_per_segment = 6, peak_hold_seconds = 1}`.
+- `input_meter_segments(amp)` = `clamp(ceil((20 * log10(amp) - floor_db) / db_per_segment), 0, 8)`; 0 for `amp <= 0`, NaN or a non-number. So 0.5 (-6 dB) lights 7, 1 (0 dB) and above 8, 0.001 (-60 dB) none.
+- `enter` resets the meter (levels 0, no peak), then for each poll `poll.set(name, callback)`, sets its `time` to `poll_seconds` and starts it. `leave` and cleanup stop them.
+- Each value sets that channel's amplitude; the level is the louder channel's segments. When the level reaches or passes the held peak (or the hold has run out), the peak becomes the level and `peak_at` the time. The draw shows the level, plus the peak segment while `util.time() - peak_at < peak_hold_seconds` and the peak is above the level.
 
 ## The file selector (K2 release)
 

@@ -1,6 +1,6 @@
 -- test/unit/pages_buffer_test.lua
--- The BUFFER page (lib/pages/buffer.lua): its rows, keys, flashes and the
--- file selector
+-- The BUFFER page (lib/pages/buffer.lua): the slot and field cursors, its
+-- rows, keys, flashes, the input meter and the file selector
 -- Run alone: lua test/run.lua pages_buffer
 
 return function(h)
@@ -19,32 +19,417 @@ local function page_dots(context)
   return dots
 end
 
-test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens the file selector", function()
+-- ALT (K1 held) around a call
+local function with_alt(fn)
+  key(1, 1); fn(); key(1, 0)
+end
+
+-- The slot rows drawn: slot number -> the row's y (the slot numbers at
+-- BUFFER_PAGE.slot_x, between the header and the hint row)
+local function slot_rows(context)
+  local page = local_value("BUFFER_PAGE")
+  local rows = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == page.slot_x and entry.align == "left" and entry.y > 8 and entry.y < HINT_ROW_Y then
+      rows[tonumber(entry.text)] = entry.y
+    end
+  end
+  return rows
+end
+
+-- The right column's strings on row y, left to right, joined by spaces
+local function slot_row_text(context, y)
+  local page = local_value("BUFFER_PAGE")
+  local parts = {}
+  for _, entry in ipairs(texts_on_row(context, y)) do
+    if select(1, text_span(entry)) >= page.slot_x then table.insert(parts, entry.text) end
+  end
+  return table.concat(parts, " ")
+end
+
+-- The left column's field rows: label -> {value, level, cursor}
+local function field_rows(context)
+  local page = local_value("BUFFER_PAGE")
+  local fields = {}
+  for index, label in ipairs({ "src", "dur", "lvl" }) do
+    local y = page.field_first_y + (index - 1) * page.field_spacing
+    local row = {}
+    for _, entry in ipairs(texts_on_row(context, y)) do
+      if entry.x < page.divider_x then
+        if entry.text == ">" then row.cursor = true
+        elseif entry.text == label then row.level = entry.level
+        else row.value = entry.text end
+      end
+    end
+    fields[label] = row
+  end
+  return fields
+end
+
+-- The input meter's segments: the count drawn at the lit level and the
+-- segment index drawn at the peak level (nil when none)
+local function meter_state(context)
+  local page = local_value("BUFFER_PAGE")
+  local lit, peak, segments = 0, nil, 0
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.y == page.meter_y - page.segment_height and rect.w == page.segment_width and rect.filled then
+      segments = segments + 1
+      local index = (rect.x - page.meter_x) / (page.segment_width + page.segment_gap) + 1
+      if rect.level == page.meter_on_level then lit = lit + 1 end
+      if rect.level == page.meter_peak_level then peak = index end
+    end
+  end
+  return lit, peak, segments
+end
+
+test("E2 picks a slot and leaves the selected voice", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
-  enc(3, 2); assert_equal(params:get("v1_source"), 3)
-  key(3, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 1)
-  key(3, 0)
-  -- K2 acts on release (a 3.0 review fix), so the K2 press is a press and release
-  tap(2); assert_true(context.fileselect.last ~= nil, "fileselect opened")
-  assert_equal(context.fileselect.last.folder, _path.audio, "file selector starts in the audio folder")
-  context.fileselect.last.callback("/tmp/b.wav"); assert_equal(params:get("buf2_file"), "/tmp/b.wav")
-  params:set("v1_source", 1); context.clear_engine_calls(); context.fileselect.last = nil
-  tap(3); tap(2)
-  assert_equal(#context.calls_named("recordBuffer"), 0, "K3 does nothing for a synth voice")
-  assert_equal(context.fileselect.last, nil, "K2 does nothing for a synth voice")
-  redraw(); for _, entry in ipairs(context.screen.texts) do local l, r = text_span(entry); assert_true(r <= 128) end
-  -- E2 selects the voice (shared with MAIN); a canceled selection loads nothing
-  enc(2, 3); assert_equal(local_value("selected_voice"), 4)
-  params:set("v4_source", 7); tap(2); context.clear_engine_calls()
+  local cursor = local_value("buffer_page")
+  assert_equal(cursor.slot, 1, "the slot cursor starts on slot 1")
+  assert_equal(cursor.field, 1, "the field cursor starts on the source")
+  enc(2, 2)
+  assert_equal(cursor.slot, 3, "E2 moves the slot cursor")
+  assert_equal(local_value("selected_voice"), 1, "and leaves the selected voice")
+  enc(2, 20); assert_equal(cursor.slot, 8, "it stops at slot 8")
+  enc(2, -20); assert_equal(cursor.slot, 1, "and at slot 1")
+  -- the cursor stays where it was across pages
+  enc(2, 4); show_page("MAIN"); enc(2, 2); show_page("BUFFER")
+  assert_equal(cursor.slot, 5, "the slot cursor stays across a page change")
+  assert_equal(local_value("selected_voice"), 3, "MAIN's E2 still picks the voice BUFFER shows")
+  redraw()
+  assert_true(h.screen_shows(context, "FOLDER"), "BUFFER shows the selected voice")
+end)
+
+test("ALT+E2 moves the field cursor and E3 edits that field", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local cursor = local_value("buffer_page")
+  local _, set_selected = find_upvalue("selected_voice")
+  set_selected(4)
+  -- field 1: the selected voice's source
+  enc(3, 2); assert_equal(params:get("v4_source"), 3, "E3 on field 1 steps v<sel>_source")
+  assert_equal(cursor.slot, 1, "E3 leaves the slot cursor")
+  redraw()
+  local fields = field_rows(context)
+  assert_equal(fields.src.value, "buf 2", "the source field shows the voice's source")
+  assert_true(fields.src.cursor, "the cursor marks the source field")
+  assert_equal(fields.src.level, 15, "the field under the cursor is bright")
+  assert_equal(fields.dur.level, 4, "the others dim")
+  -- ALT+E2 moves the field cursor, not the slot cursor
+  with_alt(function() enc(2, 1) end)
+  assert_equal(cursor.field, 2, "ALT+E2 moves to field 2")
+  assert_equal(cursor.slot, 1, "and leaves the slot cursor")
+  -- field 2: record_duration
+  local duration = params:get("record_duration")
+  enc(3, 2); assert_true(params:get("record_duration") > duration, "E3 on field 2 sets the duration")
+  redraw(); fields = field_rows(context)
+  assert_true(fields.dur.cursor and not fields.src.cursor, "the cursor marks the duration")
+  assert_equal(fields.dur.value, string.format("%.1fs", params:get("record_duration")))
+  -- field 3: record_level
+  with_alt(function() enc(2, 5) end)
+  assert_equal(cursor.field, 3, "the field cursor stops at field 3")
+  params:set("record_level", 1)
+  enc(3, -10); assert_near(params:get("record_level"), 0.8, 1e-6, "E3 on field 3 sets the record level")
+  -- ALT+E3 is fine adjustment: a tenth as far
+  with_alt(function() enc(3, 10) end)
+  assert_near(params:get("record_level"), 0.82, 1e-6, "ALT+E3 moves a tenth as far")
+  redraw(); fields = field_rows(context)
+  assert_equal(fields.lvl.value, string.format("%.2f", params:get("record_level")))
+  with_alt(function() enc(2, -5) end)
+  assert_equal(cursor.field, 1, "and at field 1")
+  assert_equal(params:get("v4_source"), 3, "the source was left alone meanwhile")
+end)
+
+test("K3 records into the slot under the cursor whatever the voices use", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local buffers = local_value("buffers")
+  for voice = 1, 7 do assert_equal(params:get("v" .. voice .. "_source"), 1, "voice " .. voice .. " on its synth") end
+  enc(2, 2)
+  context.clear_engine_calls()
+  tap(3)
+  assert_true(buffers[3].recording, "K3 records into slot 3")
+  assert_equal(context.calls_named("recordBuffer")[1].args[1], 2, "engine slot 2")
+  tap(3)
+  assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
+  -- a voice reading another slot changes nothing
+  params:set("v1_source", 6)  -- buf 5
+  context.polls.fire("bufferState", 205)
+  enc(2, 3); context.clear_engine_calls(); tap(3)
+  assert_equal(context.calls_named("recordBuffer")[1].args[1], 5, "slot 6, the cursor's, not the voice's 5")
+  -- the arc's button records or stops the cursor slot, as K3 does
+  local arc_device = context.arc.plug(1)
+  assert_true(arc_device ~= nil)
+  context.clear_engine_calls()
+  context.arc.push(1, 1, 1)
+  assert_equal(#context.calls_named("stopRecord"), 1, "the arc button stops the cursor slot's recording")
+  assert_equal(context.calls_named("stopRecord")[1].args[1], 5)
+end)
+
+test("K2 released loads into the cursor slot", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  enc(2, 3)  -- slot 4; every voice still on its synth
+  context.clear_engine_calls(); context.fileselect.last = nil
+  key(2, 1)
+  assert_equal(context.fileselect.last, nil, "K2's press opens nothing")
+  key(2, 0)
+  assert_true(context.fileselect.last ~= nil, "K2's release opens the file browser")
+  assert_equal(context.fileselect.last.folder, _path.audio, "in the audio folder")
+  context.fileselect.last.callback("/tmp/b.wav")
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the choice loads")
+  assert_equal(loads[1].args[1], 3, "into slot 4 (engine slot 3)")
+  assert_equal(params:get("buf4_file"), "/tmp/b.wav")
+  -- a canceled choice loads nothing
+  tap(2); context.clear_engine_calls()
   context.fileselect.last.callback("cancel")
   assert_equal(#context.calls_named("loadBuffer"), 0, "cancel loads nothing")
-  assert_equal(voice_buffer_slot(4), 6); assert_equal(voice_buffer_slot(1), nil)
-  params:set("v1_source", 10); assert_equal(voice_buffer_slot(1), nil, "input has no buffer slot")
+  -- K3 while K2 is held records and does not stop K2's release opening the browser
+  context.fileselect.last = nil
+  key(2, 1); tap(3); key(2, 0)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 with K2 held records")
+  assert_equal(#context.calls_named("saveBuffer"), 0, "and saves nothing (ALT+K3 saves)")
+  assert_true(context.fileselect.last ~= nil, "K2's release still opens the browser")
+  context.fileselect.close()
+end)
+
+test("ALT+K2 clear never opens the file browser", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local buffers = local_value("buffers")
+  enc(2, 1)   -- slot 2
+  load_buffer(2, "/tmp/keep.wav"); load_buffer(1, "/tmp/other.wav")
+  context.polls.fire("bufferState", 104); context.polls.fire("bufferState", 4)
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- K1 down, K2 down, K1 up, K2 up
+  key(1, 1); key(2, 1); key(1, 0); key(2, 0)
+  local clears = context.calls_named("clearBuffer")
+  assert_equal(#clears, 1, "ALT+K2 clears")
+  assert_equal(clears[1].args[1], 1, "the cursor slot (engine slot 1)")
+  assert_equal(buffers[2].name, "empty", "slot 2 is empty")
+  assert_true(buffers[1].loaded, "slot 1 is left alone")
+  assert_equal(context.fileselect.last, nil, "the ALT press's release opened no file browser")
+  assert_true(not local_value("BUFFER_PAGE").file_selector_open, "and the page still shows")
+  -- K2 down, K1 up and down meanwhile: still one clear, no browser
+  key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+  assert_equal(#context.calls_named("clearBuffer"), 2, "a second ALT+K2 clears again")
+  assert_equal(context.fileselect.last, nil, "and opens nothing")
+  -- a plain K2 still opens it on release
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the browser")
+  context.fileselect.close()
+  assert_equal(#context.calls_named("clearBuffer"), 2, "and clears nothing")
+end)
+
+test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local buffers = local_value("buffers")
+  enc(2, 2)   -- slot 3; no voice reads it
+  load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
+  context.clear_engine_calls(); context.fileselect.last = nil
+  context.set_time(100)
+  with_alt(function() tap(3) end); next_frame(context)
+  local saves = context.calls_named("saveBuffer")
+  assert_equal(#saves, 1, "ALT+K3 saves")
+  assert_equal(saves[1].args[1], 2, "the cursor slot (engine slot 2)")
+  assert_equal(#context.calls_named("recordBuffer"), 0, "and does not record")
+  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
+  assert_screen_layout(context, "BUFFER with the saved flash")
+  assert_equal(#page_dots(context), 8, "the hint flash leaves the header alone")
+  context.set_time(101.4); redraw()
+  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
+  context.set_time(101.5); redraw()
+  assert_equal(hint_text(context), "K2:load K3:rec", "the normal hint after 1.5 s")
+  -- an empty slot: nothing saved, the hint says so
+  enc(2, 1)   -- slot 4, empty
+  context.clear_engine_calls()
+  with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty slot is not saved")
+  assert_equal(hint_text(context), "buf 4 empty", "the hint says the slot is empty")
+  assert_screen_layout(context, "BUFFER with the empty flash")
+  -- a recording slot is busy: nothing saved, the recording goes on
+  tap(3); assert_true(buffers[4].recording, "K3 records into slot 4")
+  context.clear_engine_calls()
+  with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
+  assert_equal(#context.calls_named("stopRecord"), 0, "ALT+K3 does not stop the recording")
+  assert_equal(hint_text(context), "buf 4 busy", "the hint says the slot is busy")
+  assert_screen_layout(context, "BUFFER with the busy flash while recording")
+  -- stopped early: the take waits for the engine (finishing), still busy
+  tap(3); assert_true(buffers[4].finishing, "the stopped take is finishing")
+  context.clear_engine_calls()
+  with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
+  assert_equal(hint_text(context), "buf 4 busy", "still busy while finishing")
+  -- once the engine reports the take, ALT+K3 saves it
+  context.polls.fire("bufferState", 305)
+  assert_true(not buffers[4].finishing, "the take settled")
+  with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
+  assert_equal(hint_text(context), "saved buf 4")
+  -- K2 held, then K3: records, never saves (the old K2+K3 gesture is gone)
+  context.clear_engine_calls()
+  key(2, 1); tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K2+K3 saves nothing")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  key(2, 0); context.fileselect.close()
+end)
+
+test("slots sit 7 px apart, six at a time, with a scroll marker", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local page = local_value("BUFFER_PAGE")
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
+  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 202.5)
+  params:set("v2_source", 4); params:set("v6_source", 4)   -- voices 2 and 6 read slot 3
+  params:set("v1_source", 3)                               -- voice 1 reads slot 2
+  redraw()
+  local function shown_slots()
+    local rows, slots = slot_rows(context), {}
+    for slot = 1, 8 do if rows[slot] then table.insert(slots, slot) end end
+    return slots, rows
+  end
+  local slots, rows = shown_slots()
+  assert_equal(table.concat(slots, " "), "1 2 3 4 5 6", "six slots show")
+  for index = 2, #slots do
+    assert_equal(rows[slots[index]] - rows[slots[index - 1]], 7, "rows 7 px apart")
+  end
+  assert_true(rows[1] > 8 + TEXT_HEIGHT - 1, "the first row below the header")
+  assert_true(rows[6] < HINT_ROW_Y - TEXT_HEIGHT + 1, "the last row above the hint row")
+  local function marker()
+    for _, line in ipairs(context.screen.lines) do
+      if line.x1 == 127 and line.x2 == 127 then return line end
+    end
+  end
+  local top_marker = marker()
+  assert_true(top_marker ~= nil, "a scroll marker at x 127")
+  -- the rows' contents: empty slots show "-" and no seconds
+  assert_equal(slot_row_text(context, rows[1]), "1 -", "an empty slot shows -")
+  assert_equal(slot_row_text(context, rows[2]), "2 drone 16.0s", "a loaded slot: name and seconds")
+  assert_true(not h.screen_shows(context, "0.0s"), "no 0.0s anywhere")
+  assert_true(not h.screen_shows(context, "v1"), "only the cursor row lists its voices")
+  -- the cursor row is bright and lists the voices reading it
+  enc(2, 2); redraw()
+  slots, rows = shown_slots()
+  assert_equal(table.concat(slots, " "), "2 3 4 5 6 7", "one row above the cursor stays in view")
+  assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows v2 v6")
+  for _, entry in ipairs(texts_on_row(context, rows[3])) do
+    if entry.x >= page.slot_x then assert_equal(entry.level, 15, "the cursor row is bright") end
+  end
+  for _, entry in ipairs(texts_on_row(context, rows[4])) do
+    if entry.x >= page.slot_x then assert_true(entry.level < 15, "other rows are dimmer") end
+  end
+  assert_screen_layout(context, "BUFFER cursor on slot 3")
+  -- the end of the list
+  enc(2, 5); redraw()
+  slots = shown_slots()
+  assert_equal(table.concat(slots, " "), "3 4 5 6 7 8", "slot 8 shows at the bottom")
+  local bottom_marker = marker()
+  assert_true(bottom_marker.y1 > top_marker.y1, "the marker moves down")
+  -- a recording slot shows REC
+  record_buffer(8); redraw()
+  slots, rows = shown_slots()
+  assert_equal(slot_row_text(context, rows[8]), "8 - REC", "REC while recording")
+  -- every voice on the cursor slot: the voices are cut to fit, the row stays inside its column
+  for voice = 1, 7 do params:set("v" .. voice .. "_source", 9) end   -- buf 8
+  redraw()
+  assert_true(slot_row_text(context, rows[8]):find("v1", 1, true), "the first voices show")
+  assert_screen_layout(context, "BUFFER with every voice on the cursor slot")
+end)
+
+test("the input meter shows the louder channel with a 1 s peak hold", function()
+  local context = load_strata(); finish_startup(context)
+  local meter = local_value("S").lib.pages_buffer
+  local INPUT_METER = meter.INPUT_METER
+  assert_equal(INPUT_METER.poll_seconds, 0.05); assert_equal(INPUT_METER.segments, 8)
+  assert_equal(INPUT_METER.floor_db, -48); assert_equal(INPUT_METER.db_per_segment, 6)
+  assert_equal(INPUT_METER.peak_hold_seconds, 1)
+  assert_equal(meter.input_meter_segments(1), 8, "0 dB lights every segment")
+  assert_equal(meter.input_meter_segments(0.5), 7, "-6 dB: seven")
+  assert_equal(meter.input_meter_segments(0.001), 0, "-60 dB: none")
+  assert_equal(meter.input_meter_segments(0), 0, "silence: none")
+  assert_equal(meter.input_meter_segments(-1), 0, "a negative value: none")
+  assert_equal(meter.input_meter_segments(0 / 0), 0, "NaN: none")
+  assert_equal(meter.input_meter_segments(4), 8, "above 0 dB: all eight")
+  local left, right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
+  assert_true(not left.running and not right.running, "the input polls wait for BUFFER")
+  show_page("BUFFER")
+  assert_true(left.running and right.running, "BUFFER starts amp_in_l and amp_in_r")
+  assert_near(left.time, 0.05, 1e-9, "every 0.05 s"); assert_near(right.time, 0.05, 1e-9)
+  redraw()
+  local lit, peak, segments = meter_state(context)
+  assert_equal(segments, 8, "eight segments"); assert_equal(lit, 0, "silent at first"); assert_equal(peak, nil)
+  context.polls.fire("amp_in_l", 0.5); context.polls.fire("amp_in_r", 0.1)
+  next_frame(context)
+  lit, peak = meter_state(context)
+  assert_equal(lit, 7, "the louder channel: 7 segments")
+  assert_equal(peak, nil, "no peak above the level")
+  assert_screen_layout(context, "BUFFER with the meter lit")
+  context.clock.run_for(0.5)
+  context.polls.fire("amp_in_l", 0); context.polls.fire("amp_in_r", 0)
+  next_frame(context)
+  lit, peak = meter_state(context)
+  assert_equal(lit, 0, "the level falls at once")
+  assert_equal(peak, 7, "the peak segment is held")
+  context.clock.run_for(1.01); redraw()
+  lit, peak = meter_state(context)
+  assert_equal(peak, nil, "the peak is gone after 1 s")
+  -- a louder right channel
+  context.polls.fire("amp_in_r", 1); next_frame(context)
+  assert_equal((meter_state(context)), 8, "the right channel at 0 dB lights all eight")
+end)
+
+test("the input polls stop when BUFFER is left and in cleanup", function()
+  local context = load_strata(); finish_startup(context)
+  local left, right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
+  show_page("BUFFER")
+  assert_true(left.running and right.running, "running on BUFFER")
+  context.polls.fire("amp_in_l", 1); next_frame(context)
+  assert_equal((meter_state(context)), 8)
+  show_page("SCENES")
+  assert_true(not left.running and not right.running, "stopped when BUFFER is left")
+  show_page("BUFFER")
+  assert_true(left.running and right.running, "running again on BUFFER")
+  redraw()
+  local lit, peak = meter_state(context)
+  assert_equal(lit, 0, "a new visit starts silent")
+  assert_equal(peak, nil, "with no held peak")
+  cleanup()
+  assert_true(not left.running and not right.running, "cleanup stops them")
+  -- cleanup on another page (polls never started) is fine
+  context = load_strata(); finish_startup(context)
+  local ok, problem = pcall(cleanup)
+  assert_true(ok, tostring(problem))
+  -- a norns without the input polls: BUFFER still draws
+  context = load_strata(); finish_startup(context)
+  context.polls.polls.amp_in_l, context.polls.polls.amp_in_r = nil, nil
+  show_page("BUFFER")
+  assert_screen_layout(context, "BUFFER with no input polls")
+  show_page("MAIN"); cleanup()
+end)
+
+test("BUFFER hints", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  enc(2, 2)
+  redraw(); assert_equal(hint_text(context), "K2:load K3:rec", "a slot that is not recording")
+  record_buffer(3); redraw()
+  assert_equal(hint_text(context), "K2:load K3:stop", "the cursor slot records")
+  enc(2, 1); redraw()
+  assert_equal(hint_text(context), "K2:load K3:rec", "another slot's recording is not the cursor's")
+  enc(2, -1)
+  record_buffer(3); redraw()
+  assert_equal(hint_text(context), "K2:load K3:...", "the take waits for the engine")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:clear K3:save", "with ALT")
+  assert_screen_layout(context, "BUFFER with ALT")
+  key(1, 0); redraw()
+  assert_equal(hint_text(context), "K2:load K3:...")
+  -- the same whatever the selected voice's source
+  for _, source in ipairs({ 1, 4, 10 }) do
+    params:set("v1_source", source); context.polls.fire("bufferState", 203); redraw()
+    assert_equal(hint_text(context), "K2:load K3:rec", "source " .. source)
+  end
 end)
 
 test("the BUFFER page caches each slot's cut name (M3)", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local page = local_value("BUFFER_PAGE")
   local measured = 0
   local text_extents = screen.text_extents
   screen.text_extents = function(text) measured = measured + 1; return text_extents(text) end
@@ -54,73 +439,23 @@ test("the BUFFER page caches each slot's cut name (M3)", function()
   assert_true(measured > 0, "a new name is measured")
   measured = 0
   redraw(); redraw()
-  screen.text_extents = text_extents
   assert_equal(measured, 0, "later draws reuse the cut names")
-  local names = {}
-  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
-  assert_true(names[14] ~= nil and #names[14] < 20, "the cached name is the cut one")
+  enc(2, 1); redraw(); enc(2, -1)
+  measured = 0
+  redraw(); redraw()
+  screen.text_extents = text_extents
+  assert_equal(measured, 0, "moving the cursor and back measures nothing new")
+  local function names()
+    local found = {}
+    for _, entry in ipairs(context.screen.texts) do if entry.x == page.name_x then found[entry.y] = entry.text end end
+    return found
+  end
+  local first_y = page.row_first_y
+  assert_true(names()[first_y] ~= nil and #names()[first_y] < 20, "the cached name is the cut one")
   load_buffer(1, "/tmp/b.wav"); redraw()
-  names = {}
-  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
-  assert_equal(names[14], "b", "a new name is cut and shown")
+  assert_equal(names()[first_y], "b", "a new name is cut and shown")
   clear_buffer(1); redraw()
-  names = {}
-  for _, entry in ipairs(context.screen.texts) do if entry.x == 71 then names[entry.y] = entry.text end end
-  assert_equal(names[14], "empty", "a cleared slot shows empty")
-end)
-
-test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
-  context.clear_engine_calls(); context.fileselect.last = nil
-  key(2, 1); tap(3)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "K3 with K2 held saves")
-  assert_equal(context.calls_named("saveBuffer")[1].args[1], 2, "the voice's buffer")
-  assert_equal(#context.calls_named("recordBuffer"), 0, "and does not record")
-  tap(3); assert_equal(#context.calls_named("saveBuffer"), 2, "each K3 while K2 is held saves")
-  key(2, 0); assert_equal(context.fileselect.last, nil, "K2 release after a save opens nothing")
-  -- the next plain K2 opens the selector again, and a plain K3 records
-  tap(2); assert_true(context.fileselect.last ~= nil, "K2 alone opens the selector")
-  tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 alone records")
-  tap(3); assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
-  context.polls.fire("bufferState", 205)  -- the engine reports the stopped take
-  -- a K2 held across a page change is released elsewhere: no selector, and
-  -- back on BUFFER K3 records
-  context.fileselect.last = nil; context.clear_engine_calls()
-  key(2, 1); show_page("MAIN"); key(2, 0); show_page("BUFFER")
-  assert_equal(context.fileselect.last, nil, "K2 released on another page opens nothing")
-  tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records once K2 is up")
-  assert_equal(#context.calls_named("saveBuffer"), 0)
-end)
-
--- The save confirmation's 1.5 s flash: "the BUFFER hint flash still shows on
--- the hint row for 1.5 s" below
-
-test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  params:set("v1_source", 4)
-  local buffers = local_value("buffers")
-  tap(3); assert_true(buffers[3].recording, "K3 records into buffer 3")
-  context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
-  assert_equal(#context.calls_named("stopRecord"), 0, "K2+K3 does not stop the recording")
-  assert_equal(hint_text(context), "buf 3 busy", "the hint says the buffer is busy")
-  assert_screen_layout(context, "BUFFER with the busy flash while recording")
-  -- stopped early: the take waits for the engine (finishing)
-  tap(3); assert_true(buffers[3].finishing, "the stopped take is finishing")
-  context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
-  assert_equal(hint_text(context), "buf 3 busy", "still busy while finishing")
-  assert_screen_layout(context, "BUFFER with the busy flash while finishing")
-  -- once the engine reports the take, K2+K3 saves it
-  context.polls.fire("bufferState", 205)
-  assert_true(not buffers[3].finishing, "the take settled")
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
-  assert_equal(hint_text(context), "saved buf 3")
+  assert_equal(names()[first_y], "-", "a cleared slot shows -")
 end)
 
 test("BUFFER K2's release forgets every held key as the file selector opens", function()
@@ -139,7 +474,6 @@ test("BUFFER K2's release forgets every held key as the file selector opens", fu
   assert_true(context.fileselect.last ~= nil, "K2's release opens the selector")
   assert_true(held_at_enter ~= nil and next(held_at_enter) == nil, "no key is held when the selector opens")
   assert_equal(next(local_value("key_press_page")), nil, "and none afterward")
-  assert_equal(local_value("buffer_saved_during_k2"), false, "the K2-save flag is clear")
 end)
 
 test("BUFFER K2 loads a file with no fileselect global: the script requires it (issue #10)", function()
@@ -348,68 +682,64 @@ test("the superseded-selector release acts only as the menu closes, and never br
   assert_true(table.concat(context.printed, "\n"):find("release failed", 1, true), "the error is printed")
 end)
 
-test("BUFFER page draws the voice, its source and eight buffer rows", function()
+test("BUFFER page draws the voice, its fields, the meter and the slot rows", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local page = local_value("BUFFER_PAGE")
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
   load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
   load_buffer(5, "/tmp/x.wav"); context.polls.fire("bufferState", 402.5)
-  params:set("record_duration", 2); record_buffer(7)
+  params:set("record_duration", 2); record_buffer(6)
   redraw()
-  local left_name, left_source
+  local left_name
   for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 0 and entry.y == 18 then left_name = entry.text end
-    if entry.x == 0 and entry.y == 26 then left_source = entry.text end
+    if entry.x == 0 and entry.y == page.name_y then left_name = entry.text end
   end
-  assert_equal(left_name, "KARPLUS"); assert_equal(left_source, "src: buf 2")
-  local rows = {}
+  assert_equal(left_name, "KARPLUS")
+  local fields = field_rows(context)
+  assert_equal(fields.src.value, "buf 2"); assert_equal(fields.dur.value, "2.0s"); assert_equal(fields.lvl.value, "1.00")
+  local divider
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == page.divider_x and line.x2 == page.divider_x then divider = line end
+  end
+  assert_true(divider ~= nil, "a divider between the columns")
   for _, entry in ipairs(context.screen.texts) do
-    if entry.x >= 65 and entry.y > 8 then   -- below the header (its REC: slot 7 records)
-      rows[entry.y] = rows[entry.y] or {}
-      table.insert(rows[entry.y], entry)
+    if entry.y > 8 and entry.y < HINT_ROW_Y then
+      local left, right = text_span(entry)
+      assert_true(right <= page.divider_x - 1 or left >= page.divider_x + 2,
+        string.format("'%s' at %d,%d crosses the divider", entry.text, entry.x, entry.y))
     end
   end
-  local row_ys = {}
-  for y in pairs(rows) do table.insert(row_ys, y) end
-  table.sort(row_ys)
-  assert_equal(#row_ys, 8, "eight buffer rows")
-  assert_true(row_ys[1] > 8 and row_ys[8] < HINT_ROW_Y - TEXT_HEIGHT + 1, "rows between header and hints")
-  local function row_text(slot)
-    local parts = {}
-    for _, entry in ipairs(texts_on_row(context, row_ys[slot])) do
-      if entry.x >= 65 then table.insert(parts, entry.text) end
-    end
-    return table.concat(parts, " ")
-  end
+  local rows = slot_rows(context)
   local function row_level(slot)
     local level
-    for _, entry in ipairs(rows[row_ys[slot]]) do
-      assert_true(level == nil or level == entry.level, "one level per row")
-      level = entry.level
+    for _, entry in ipairs(texts_on_row(context, rows[slot])) do
+      if entry.x >= page.slot_x then
+        assert_true(level == nil or level == entry.level, "one level per row")
+        level = entry.level
+      end
     end
     return level
   end
-  assert_equal(row_text(1), "1 empty 0.0s"); assert_equal(row_level(1), 2, "empty buffer dim")
-  assert_equal(row_text(2), "2 drone 16.0s"); assert_equal(row_level(2), 15, "the voice's buffer bright")
-  assert_equal(row_text(5), "5 x 2.5s"); assert_equal(row_level(5), 8, "loaded buffer")
-  assert_equal(row_text(7), "7 empty REC", "REC while recording"); assert_equal(row_level(7), 8)
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save")
-  -- the voice's buffer recording: the hint says K3 stops
-  record_buffer(2); redraw()
-  assert_equal(hint_text(context), "K2:load K3:stop K2+3:save")
-  -- not a buffer: the hint says K2 and K3 do nothing
-  params:set("v6_source", 1); redraw()
-  assert_equal(hint_text(context), "K2:- K3:- E3:source")
+  assert_equal(slot_row_text(context, rows[1]), "1 -"); assert_equal(row_level(1), 15, "the cursor row bright")
+  assert_equal(slot_row_text(context, rows[2]), "2 drone 16.0s"); assert_equal(row_level(2), 6, "a loaded slot")
+  assert_equal(row_level(3), 2, "an empty slot dim")
+  assert_equal(slot_row_text(context, rows[5]), "5 x 2.5s")
+  assert_equal(slot_row_text(context, rows[6]), "6 - REC", "REC while recording"); assert_equal(row_level(6), 6)
+  -- the input source: the field says so
   params:set("v6_source", 10); redraw()
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 0 and entry.y == 26 then assert_equal(entry.text, "src: input") end
-  end
+  assert_equal(field_rows(context).src.value, "input")
+  params:set("v6_source", 1); redraw()
+  assert_equal(field_rows(context).src.value, "synth")
+  local _, _, segments = meter_state(context)
+  assert_equal(segments, 8, "the meter's eight segments")
 end)
 
-test("BUFFER page layout holds for every voice, source and buffer state", function()
+test("BUFFER page layout holds for every voice, source, buffer state and cursor", function()
   local context = load_strata(); finish_startup(context)
   params:set("mutation_enabled", 1); params:set("master_density", 2.0)
   capture_scene(8); recall_scene(8, 0)
+  local cursor = local_value("buffer_page")
   local _, set_selected = find_upvalue("selected_voice")
   local long_names = { "WWWWWWWWWWWWWWWWWWWW.wav", "a_very_long_field_recording_name.aiff", "MMMM", "x",
     "café_crème_très_longue.wav", "no_extension_but_long" }
@@ -430,60 +760,18 @@ test("BUFFER page layout holds for every voice, source and buffer state", functi
       set_selected(voice_idx)
       for source = 1, 10 do
         params:set("v" .. voice_idx .. "_source", source)
-        show_page("BUFFER")
-        assert_screen_layout(context, "BUFFER, " .. state .. ", voice " .. voice_idx .. " source " .. source)
+        for _, slot in ipairs({ 1, 4, 8 }) do
+          cursor.slot = slot
+          for field = 1, 3 do
+            cursor.field = field
+            show_page("BUFFER")
+            assert_screen_layout(context, string.format("BUFFER, %s, voice %d source %d, slot %d field %d",
+              state, voice_idx, source, slot, field))
+          end
+        end
       end
     end
   end
-end)
-
-test("the BUFFER hint flash still shows on the hint row for 1.5 s", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  local S = local_value("S")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
-  context.set_time(100)
-  key(2, 1); tap(3); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
-  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
-  assert_screen_layout(context, "BUFFER with the save confirmation")
-  key(2, 0); next_frame(context); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
-  context.set_time(101.4); redraw()
-  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
-  context.set_time(101.5); redraw()
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the normal hint after 1.5 s")
-  -- an empty buffer: nothing saved, the hint says so
-  context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
-  context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
-  assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
-  assert_screen_layout(context, "BUFFER with the empty-buffer flash")
-  -- one clock ends the flash: it sleeps 1.5 s, clears the flash (even if it
-  -- woke a little early) and asks for a redraw
-  local slot = S.lib.ui_flash.slots.hints
-  local flash_clock = slot.clock
-  assert_true(flash_clock ~= nil, "the flash has a clock")
-  local flash_sleep
-  for _, entry in ipairs(context.clock.sleep_log) do
-    if entry.id == flash_clock then flash_sleep = entry.amount end
-  end
-  assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
-  key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
-  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is canceled")
-  flash_clock = slot.clock
-  context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
-  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
-  assert_equal(slot.clock, nil)
-  next_frame(context)
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the next frame shows the normal hint")
-  assert_true(#page_dots(context) == 8, "the hint flash leaves the header alone")
-  -- cleanup cancels a pending flash clock
-  key(2, 1); tap(3); key(2, 0)
-  flash_clock = slot.clock
-  cleanup()
-  assert_equal(context.clock.threads[flash_clock], nil, "cleanup cancels the flash clock")
-  assert_equal(slot.clock, nil)
 end)
 
 test("BUFFER changes reach the screen and arc on the next frame (#11)", function()
@@ -495,44 +783,62 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
     context.polls.fire("bufferState", 305)
   end)
   assert_true(h.screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
-  -- voice 1 records into slot 1; no report comes, so the take settles empty
-  params:set("v1_source", 2)
+  -- the cursor slot records; no report comes, so the take settles empty
   record_buffer(1)
   h.assert_drawn_on_next_frame(context, arc_hardware, "recording timer end", function()
     h.wake_buffer_clock(context, 1)
   end)
-  assert_true(h.screen_shows(context, "K2:load K3:... K2+3:save"), "BUFFER shows the take finishing")
+  assert_true(h.screen_shows(context, "K2:load K3:..."), "BUFFER shows the take finishing")
   h.assert_drawn_on_next_frame(context, arc_hardware, "fallback settle", function()
     h.wake_buffer_clock(context, 1)
   end)
-  assert_true(h.screen_shows(context, "K2:load K3:rec K2+3:save"), "BUFFER shows the take settled")
+  assert_true(h.screen_shows(context, "K2:load K3:rec"), "BUFFER shows the take settled")
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
 end)
 
-test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
+test("BUFFER's layout states draw clear of each other", function()
+  local context = load_strata(); finish_startup(context)
+  local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]
+  assert_true(type(record.layout_states) == "table" and #record.layout_states > 0, "BUFFER lists layout states")
+  local names = {}
+  for _, state in ipairs(record.layout_states) do names[state.name] = true end
+  for _, name in ipairs({ "slot 1", "slot 8", "field dur", "field lvl", "long names", "every slot recording",
+    "saved flash", "busy flash", "empty flash", "load failed flash", "meter peak" }) do
+    assert_true(names[name], "a layout state " .. name)
+  end
+end)
+
+test("a K2 or ALT released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  enc(2, 2); load_buffer(3, "/tmp/take.wav")
   local drift_metro = local_value("drift_metro")
   context.clear_engine_calls(); context.fileselect.last = nil
   -- K2 down, then K1 opens the menu: the K2 release goes to the menu
   key(2, 1)
   context.menu.mode = true; drift_metro.event()   -- a 10 Hz tick while the menu is open
   context.menu.mode = false                       -- K1 again: back to the script
+  assert_equal(local_value("key_press_page")[2], nil, "the K2 held into the menu is forgotten")
   tap(3)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after K2 was released in the menu")
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save")
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
   assert_equal(context.fileselect.last, nil, "nothing opened the file selector")
-  -- a save made with K2 held, then the menu: the next K2 tap opens the selector
   tap(3)  -- stop the recording
   context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
-  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 still saves")
+  -- ALT held into the menu: forgotten, so K3 records rather than saves
+  context.clear_engine_calls()
+  key(1, 1)
   context.menu.mode = true; drift_metro.event(); context.menu.mode = false
-  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector after the menu")
-  -- ticks with the menu closed keep a held K2
-  context.fileselect.last = nil; context.clear_engine_calls()
-  key(2, 1); drift_metro.event(); tap(3)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "K2 still held across a tick with the menu closed")
-  key(2, 0); assert_equal(context.fileselect.last, nil)
+  assert_true(not local_value("alt_held"), "ALT is forgotten")
+  tap(3)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after ALT was released in the menu")
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  tap(3); context.polls.fire("bufferState", 202)
+  -- ticks with the menu closed keep a held ALT
+  context.clear_engine_calls()
+  key(1, 1); drift_metro.event(); tap(3); key(1, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "ALT still held across a tick with the menu closed")
+  tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
+  context.fileselect.close()
   assert_equal(norns.menu.status(), false, "stub norns.menu.status mirrors _menu.mode")
 end)
 
@@ -541,28 +847,28 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   local context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
   finish_startup(context); show_page("BUFFER")
   assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  enc(2, 2); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)
   context.clear_engine_calls(); context.fileselect.last = nil
-  -- K2 down, then K1 opens and closes the menu between two 10 Hz ticks
-  key(2, 1)
+  -- ALT and K2 down, then K1 opens and closes the menu between two 10 Hz ticks
+  key(1, 1); key(2, 1)
   _menu.set_mode(true)
   assert_equal(norns.menu.status(), true, "the wrapped set_mode still opens the menu")
   assert_equal(local_value("key_press_page")[2], nil, "the held K2 is forgotten as the menu opens")
+  assert_true(not local_value("alt_held"), "and ALT")
   _menu.set_mode(false)
   tap(3)
   assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save")
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
-  -- a K2+K3 save, then the menu: the next K2 tap opens the selector
   tap(3)  -- stop the recording
   context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
-  key(2, 1); tap(3); assert_equal(#context.calls_named("saveBuffer"), 1)
   _menu.set_mode(true); _menu.set_mode(false)
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
+  context.fileselect.close()
   -- closing the menu forgets nothing (only an opening does)
   key(2, 1); _menu.set_mode(false)
   assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "set_mode(false) keeps a held key")
-  key(2, 0)
+  key(2, 0); context.fileselect.close()
   -- cleanup gives norns its own set_mode back
   cleanup()
   assert_equal(_menu.set_mode, stub_set_mode, "cleanup restores set_mode")
