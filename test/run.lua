@@ -557,6 +557,10 @@ local MODULE_HOMES = {
   ["lib/ui/frame.lua"] = { "request_redraw", "draw_frame", "start_frame_clock", "stop_frame_clock" },
   ["lib/engine_sync.lua"] = { "send_param_to_engine", "engine_param_value", "toggle_voice", "toggle_freeze",
     "sync_voice_to_engine", "sync_voice_values_to_engine" },
+  ["lib/buffers.lua"] = { "scratch_take_path", "confirm_buffer_audio", "settle_buffer_slot",
+    "set_buffer_file_param", "empty_buffer_state", "buffer_state_before_load", "load_buffer", "record_buffer",
+    "clear_buffer", "buffer_save_path", "save_buffer", "buffer_load_failed", "save_buffers_to_disk",
+    "load_buffers_from_disk" },
 }
 
 test("functions live in their module", function()

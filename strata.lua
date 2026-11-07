@@ -35,7 +35,6 @@ local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
 local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
 local NUM_BUFFERS = S.constants.NUM_BUFFERS
 local BUFFER_SECONDS = S.constants.BUFFER_SECONDS
-local BUFFER_DATA_VERSION = S.constants.BUFFER_DATA_VERSION
 local NUM_LFOS = S.constants.NUM_LFOS
 local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
 local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
@@ -65,6 +64,11 @@ S.lib.frame = include("lib/ui/frame")(S)
 -- sync_voice_values_to_engine; S.engine_senders, S.engine_param_values,
 -- S.lfo_last_dest, S.lfo_scaled (lib/engine_sync.lua)
 S.lib.engine_sync = include("lib/engine_sync")(S)
+
+-- Sample buffers: S.buffers, recording, loading, clearing and saving, the
+-- bufferState and bufferLoadFailed poll handlers (init starts the polls in
+-- S.buffer_polls) and buffers.data (lib/buffers.lua)
+S.lib.buffers = include("lib/buffers")(S)
 
 local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
@@ -138,7 +142,7 @@ local pattern_playing = false
 local pattern_clock = nil
 
 -- Grid UI state
-local grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes, 4=buffers/fx (256 only)
+S.grid_page = 1  -- 1=patterns, 2=parameters, 3=scenes, 4=buffers/fx (256 only)
 local param_page = 1
 local grid_voice_select = 1
 
@@ -161,352 +165,6 @@ end
 
 for i = 1, NUM_SCENES do
   scenes[i] = empty_scene(i)
-end
-
--- Sample buffers. The engine holds the audio; Lua tracks what each slot
--- holds for the screen and scenes. path is the loaded file, or the scratch
--- take the engine writes when a recording completes (or stops early).
--- The bufferState poll settles what the slot holds: a take is loaded only
--- once the engine reports its seconds (recording stays set, finishing
--- marks it, until then), and a file load, shown at once, stays loaded only
--- if the engine reports audio. confirm_since is the util.time() of the
--- change awaiting that report (nil = settled); restoring marks a load from
--- load_buffers_from_disk (until the engine reports its audio);
--- settled_empty is "take" or "load" when that settled without audio (a later
--- report of audio adopts it: a slow take or file read), else false;
--- missing_path is a remembered file that was not found on start (kept in
--- buffers.data). loads_sent counts the slot's loadBuffer commands (the
--- engine counts them too and names one in its bufferLoadFailed report);
--- pending_loads holds the newest of them, oldest first, each with the state
--- it replaced, so a failed load can be undone (buffer_load_failed).
-local buffers = {}
-for slot = 1, NUM_BUFFERS do
-  buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
-    settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
-    loads_sent = 0, pending_loads = {}}
-end
--- per slot: clock that ends the recording state, then the finishing fallback
-local buffer_record_clocks = {}
--- the engine's bufferState and bufferLoadFailed polls (nil if missing)
-local buffer_polls = {state = nil, load_failed = nil}
-local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
--- confirm_seconds: a report of 0 s settles a take or load only this long
--- after the change (the periodic poll can carry a value read before the
--- engine finished: the recording timer ends just before the engine's take
--- completes). fallback_seconds: a finishing take with no report at all
--- (no bufferState poll) settles this long after it ended, from the slot's
--- last known seconds. tracked_loads: a slot's newest loads a bufferLoadFailed
--- report can still undo (a report arrives within a fade wait and a read, so
--- more than one is only ever pending for loads sent back to back).
-local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4}
-local buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
-local buffer_audio_dir = _path.audio .. "strata/"
-local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
-
-local function valid_buffer_slot(slot)
-  return slot >= 1 and slot <= NUM_BUFFERS
-end
-
--- Buffer state is shown on the BUFFER page and the 256 grid's page 4
-local function buffer_display_changed()
-  request_redraw()
-  grid_redraw()
-end
-
-local function cancel_buffer_recording_timer(slot)
-  if buffer_record_clocks[slot] then
-    clock.cancel(buffer_record_clocks[slot])
-    buffer_record_clocks[slot] = nil
-  end
-end
-
--- The engine writes each completed (or early-stopped) take here,
--- overwriting the slot's previous take
-function scratch_take_path(slot)
-  return buffer_scratch_dir .. "buf" .. slot .. ".wav"
-end
-
--- A take or load in the slot holds audio: loaded (a take named take <n>,
--- its path the scratch take; a load keeps its name), and a restored slot
--- counts in buffers_restored
-function confirm_buffer_audio(slot, is_take)
-  local buffer = buffers[slot]
-  buffer.loaded = true
-  buffer.settled_empty = false
-  if is_take then
-    buffer.name = "take " .. slot
-    buffer.path = scratch_take_path(slot)
-  end
-  if buffer.restoring then
-    buffer.restoring = false
-    buffers_restored = buffers_restored + 1
-  end
-end
-
--- Settle a take or load awaiting the engine (confirm_since set) from the
--- slot's seconds (confirm_buffer_audio). Without audio a take leaves the slot
--- empty and a load is not loaded (keeping its name); settled_empty records
--- which, so a later report of audio still adopts it. Cancels the finishing
--- fallback.
-function settle_buffer_slot(slot)
-  local buffer = buffers[slot]
-  local is_take = buffer.finishing
-  buffer.confirm_since = nil
-  if is_take then
-    cancel_buffer_recording_timer(slot)
-    buffer.finishing = false
-    buffer.recording = false
-  end
-  if buffer.seconds > 0 then
-    confirm_buffer_audio(slot, is_take)
-  else
-    buffer.loaded = false
-    buffer.settled_empty = is_take and "take" or "load"
-    if is_take then
-      buffer.name = "empty"
-      buffer.path = nil
-    end
-  end
-end
-
--- The recording ended (its timer ran out or it was stopped early): the slot
--- stays recording, finishing, until the engine reports what it captured, or
--- BUFFER_SETTLE.fallback_seconds pass without a report. The fallback only
--- matters when the bufferState poll is missing: with the poll, its periodic
--- report settles a take within about 2 s. Without it the last known seconds
--- is 0, so the take settles empty: the fallback exists so K3 is never
--- ignored forever, not to recover audio.
-local function finish_buffer_take(slot)
-  local buffer = buffers[slot]
-  buffer.finishing = true
-  buffer.confirm_since = util.time()
-  buffer_record_clocks[slot] = clock.run(function()
-    clock.sleep(BUFFER_SETTLE.fallback_seconds)
-    buffer_record_clocks[slot] = nil
-    if buffer.finishing then
-      settle_buffer_slot(slot)
-      buffer_display_changed()
-    end
-  end)
-end
-
--- A usable sound file path: not empty, not norns' "-" (no file chosen) and
--- not a directory (the file param's starting folder)
-local function is_sound_file_path(path)
-  return type(path) == "string" and path ~= "" and path ~= "-" and path:sub(-1) ~= "/"
-end
-
--- Show path in the slot's buf<n>_file param without running its action.
--- norns' file param runs the action only when the path changes, so a
--- record or clear puts it back at its starting folder (_path.audio, which
--- loads nothing): picking the same file again then loads it.
-function set_buffer_file_param(slot, path)
-  params:set("buf" .. slot .. "_file", path, true)
-end
-
--- An empty slot's shown state and file param, for buffer_load_failed.
--- settled_empty is "take" after a canceled recording whose take may have
--- completed (a later report of audio adopts it), else false.
-function empty_buffer_state(settled_empty)
-  return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
-    confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio}
-end
-
--- What a load replaces in the slot, for buffer_load_failed to put back: the
--- shown state and the buf<n>_file param. A recording (or a take waiting for
--- the engine) has nothing to put back: the engine cancels it when the load
--- fails, so the slot becomes empty, settled_empty "take" so that a take
--- that had already completed is still adopted from the engine's report.
-function buffer_state_before_load(slot)
-  local buffer = buffers[slot]
-  if buffer.recording or buffer.finishing then return empty_buffer_state("take") end
-  return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
-    settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
-    missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file")}
-end
-
-function load_buffer(slot, path)
-  if not valid_buffer_slot(slot) or not is_sound_file_path(path) then return end
-  local buffer = buffers[slot]
-  -- remembered (with what it replaces) until a clear or recording, or
-  -- tracked_loads newer loads, in case the engine reports it failed
-  buffer.loads_sent = buffer.loads_sent + 1
-  if #buffer.pending_loads >= BUFFER_SETTLE.tracked_loads then table.remove(buffer.pending_loads, 1) end
-  table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
-  -- loading cancels a recording in progress in the engine
-  cancel_buffer_recording_timer(slot)
-  engine.loadBuffer(slot - 1, path)
-  -- the BUFFER page's file selector and a restore on start load directly
-  set_buffer_file_param(slot, path)
-  -- a scratch take restored on start keeps its take name
-  buffer.name = path == scratch_take_path(slot) and ("take " .. slot) or path:match("[^/]*$")
-  -- shown at once; the engine's report settles loaded (buffer_state_changed)
-  buffer.loaded = true
-  buffer.recording = false
-  buffer.finishing = false
-  buffer.restoring = false
-  buffer.settled_empty = false
-  buffer.confirm_since = util.time()
-  buffer.path = path
-  buffer.missing_path = nil
-  buffer_display_changed()
-end
-
--- Record the live input into a slot for record_duration seconds, or, if the
--- slot is already recording, stop early and keep what was captured. A take
--- that has ended and waits for the engine (finishing) ignores the press.
-function record_buffer(slot)
-  if not valid_buffer_slot(slot) then return end
-  local buffer = buffers[slot]
-  if buffer.finishing then return end
-  cancel_buffer_recording_timer(slot)
-  if buffer.recording then
-    engine.stopRecord(slot - 1)
-    finish_buffer_take(slot)
-  else
-    local duration = params:get("record_duration")
-    engine.recordBuffer(slot - 1, duration, params:get("record_level"))
-    set_buffer_file_param(slot, _path.audio)
-    buffer.recording = true
-    buffer.seconds = 0  -- the engine reports 0 s until the take completes
-    buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
-    buffer.restoring = false
-    buffer.settled_empty = false
-    buffer.confirm_since = nil
-    buffer.missing_path = nil
-    buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(duration)
-      buffer_record_clocks[slot] = nil
-      finish_buffer_take(slot)
-      buffer_display_changed()
-    end)
-  end
-  buffer_display_changed()
-end
-
-function clear_buffer(slot)
-  if not valid_buffer_slot(slot) then return end
-  cancel_buffer_recording_timer(slot)
-  engine.clearBuffer(slot - 1)
-  set_buffer_file_param(slot, _path.audio)
-  local buffer = buffers[slot]
-  buffer.name = "empty"
-  buffer.loaded = false
-  buffer.recording = false
-  buffer.finishing = false
-  buffer.restoring = false
-  buffer.settled_empty = false
-  buffer.seconds = 0
-  buffer.confirm_since = nil
-  buffer.path = nil
-  buffer.missing_path = nil
-  buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
-  buffer_display_changed()
-end
-
--- Timestamped stereo WAV in audio/strata/, so it shows in the file browser
-function buffer_save_path(slot)
-  return buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. ".wav"
-end
-
-function save_buffer(slot)
-  if not valid_buffer_slot(slot) then return end
-  -- seconds comes from the engine's poll: a load is loaded optimistically
-  -- until the poll settles it, and a recording reads 0 s until it completes
-  if buffers[slot].seconds <= 0 then
-    print("buffer " .. slot .. " is empty, nothing to save")
-    return
-  end
-  util.make_dir(buffer_audio_dir)
-  local path = buffer_save_path(slot)
-  engine.saveBuffer(slot - 1, path)
-  print("buffer " .. slot .. " saved to " .. path)
-end
-
--- bufferState poll: one slot per message, slot index * 100 + seconds. It
--- also settles a take or load awaiting the engine (confirm_since set,
--- settle_buffer_slot), on any report, repeated or not: audio settles it at
--- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or
--- load that settled empty (a periodic 0 before a slow take or file read
--- completed) is adopted when audio is reported later, as long as nothing
--- else (load, clear, a new recording) happened in the slot since.
-local function buffer_state_changed(value)
-  local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
-  local slot = slot_index + 1
-  if not valid_buffer_slot(slot) then return end
-  local seconds = value - slot_index * BUFFER_STATE_STRIDE
-  local buffer = buffers[slot]
-  local changed = buffer.seconds ~= seconds
-  buffer.seconds = seconds
-  local has_audio = seconds > 0
-  if buffer.confirm_since ~= nil
-    and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
-    settle_buffer_slot(slot)
-    changed = true
-  elseif has_audio and buffer.settled_empty then
-    confirm_buffer_audio(slot, buffer.settled_empty == "take")
-    changed = true
-  end
-  -- the periodic poll repeats unchanged values: redraw only on a change
-  if not changed then return end
-  request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
-  if grid_page == 4 then grid_redraw() end
-end
-
--- bufferLoadFailed poll: the engine could not use the file of one of the
--- slot's loads (missing, unreadable, unsupported, empty or damaged). value =
--- (load number * 2 + emptied) * NUM_BUFFERS + slot index; the engine and
--- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
--- left the slot as it was (canceling a recording in it), 1 when it left it
--- empty (the server's read failed after the slot was zeroed). The failed
--- load is undone only while the slot still tracks it (pending_loads): the
--- newest load gives the slot the state the failed load left (the state it
--- replaced: name, path, the file param, settled or not, from
--- buffer_state_before_load; or an empty slot), so the bad path is never
--- remembered in buffers.data. A load sent after it (before the report
--- arrived) stays and inherits that state, to put back if it fails too.
--- Reports can arrive out of load order (a failed server read is reported
--- after the fade and the read, a missing file at once), and the splice
--- handles either order. A clear or a new recording forgets every tracked
--- load, so it wins; a repeated report finds nothing. The BUFFER page
--- flashes the failure.
-function buffer_load_failed(value)
-  if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
-    or value ~= math.floor(value) then return end
-  local slot = math.floor(value % NUM_BUFFERS) + 1
-  local load_and_emptied = math.floor(value / NUM_BUFFERS)
-  local emptied = load_and_emptied % 2 == 1
-  local load_number = math.floor(load_and_emptied / 2)
-  if not valid_buffer_slot(slot) then return end
-  local buffer = buffers[slot]
-  local pending = buffer.pending_loads
-  local found = nil
-  for index, load in ipairs(pending) do
-    if load.number == load_number then
-      found = index
-      break
-    end
-  end
-  if not found then return end
-  local failed = table.remove(pending, found)
-  local left = emptied and empty_buffer_state(false) or failed.previous
-  if found <= #pending then
-    pending[found].previous = left
-  else
-    buffer.name = left.name
-    buffer.loaded = left.loaded
-    -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
-    buffer.restoring = left.restoring
-    buffer.settled_empty = left.settled_empty
-    buffer.confirm_since = left.confirm_since
-    buffer.path = left.path
-    buffer.missing_path = left.missing_path
-    set_buffer_file_param(slot, left.file_param)
-  end
-  print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
-    .. (emptied and "; the buffer is now empty" or ""))
-  buffer_page_flash("buf " .. slot .. " load failed")
-  buffer_display_changed()
 end
 
 -- Global LFOs, built on norns' lib/lfo.lua. Each LFO runs from -1 to 1
@@ -710,7 +368,7 @@ local fx_filter_last_mix = 1
 -- transition sets them on every step and redraws the grid once per step
 -- itself.
 local function fx_fader_changed()
-  if grid_page == 4 and not scene_transition_active then grid_redraw() end
+  if S.grid_page == 4 and not scene_transition_active then grid_redraw() end
 end
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
@@ -1126,15 +784,15 @@ function init()
   -- Don't start automatically - controlled by mutation_enabled param
 
   -- Valid seconds per buffer slot, and failed loads, from the engine
-  buffer_polls.state = poll.set("bufferState", buffer_state_changed)
-  if buffer_polls.state then
-    buffer_polls.state:start()
+  S.buffer_polls.state = poll.set("bufferState", S.lib.buffers.buffer_state_changed)
+  if S.buffer_polls.state then
+    S.buffer_polls.state:start()
   else
     print("bufferState poll not found")
   end
-  buffer_polls.load_failed = poll.set("bufferLoadFailed", buffer_load_failed)
-  if buffer_polls.load_failed then
-    buffer_polls.load_failed:start()
+  S.buffer_polls.load_failed = poll.set("bufferLoadFailed", buffer_load_failed)
+  if S.buffer_polls.load_failed then
+    S.buffer_polls.load_failed:start()
   else
     print("bufferLoadFailed poll not found")
   end
@@ -1637,7 +1295,7 @@ function drift_update()
 
   -- Grain pitch is shown on the parameter fader page; this runs 10x/s, so
   -- only redraw when a grid is actually showing that page
-  if next(grids) ~= nil and grid_page == 2 then
+  if next(grids) ~= nil and S.grid_page == 2 then
     grid_redraw()
   end
 
@@ -2224,8 +1882,8 @@ end
 
 -- A data file that failed to load must survive the save in cleanup():
 -- move it to <file>.bak. Returns false if that failed, and the caller then
--- blocks its auto-save.
-local function move_aside_unloadable_file(data_file, label)
+-- blocks its auto-save. A field of S: lib/buffers.lua uses it for buffers.data.
+function S.move_aside_unloadable_file(data_file, label)
   local backup_file = data_file .. ".bak"
   local moved, move_error = os.rename(data_file, backup_file)
   if moved then
@@ -2238,7 +1896,7 @@ local function move_aside_unloadable_file(data_file, label)
 end
 
 local function preserve_unloadable_scene_file()
-  if not move_aside_unloadable_file(scene_data_file, "scenes") then
+  if not S.move_aside_unloadable_file(scene_data_file, "scenes") then
     scene_autosave_blocked = true
   end
 end
@@ -2312,83 +1970,6 @@ function load_scenes_from_disk()
 
   -- Update grid display if grids are connected
   grid_redraw()
-end
-
--- Buffer disk persistence: buffers.data remembers, per slot, the loaded file
--- or the scratch take, so buffer-sourced voices and scenes are not silent
--- after a restart. It holds only paths; the audio stays in its own files.
-local buffer_data_file = scene_data_dir .. "buffers.data"
--- Set when a buffers file could not be loaded and could not be moved aside
-local buffer_autosave_blocked = false
-
-function save_buffers_to_disk()
-  if util.file_exists(scene_data_dir) == false then
-    util.make_dir(scene_data_dir)
-  end
-  -- a remembered file that was missing on start is kept (it may be on a
-  -- drive that is mounted again later)
-  local paths = {}
-  for slot = 1, NUM_BUFFERS do
-    paths[slot] = buffers[slot].path or buffers[slot].missing_path or ""
-  end
-  tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file)
-  print("buffer paths saved to " .. buffer_data_file)
-end
-
-local function preserve_unloadable_buffer_file()
-  if not move_aside_unloadable_file(buffer_data_file, "buffers") then
-    buffer_autosave_blocked = true
-  end
-end
-
--- Reload each remembered path that still exists through load_buffer. A
--- missing or damaged file loads nothing and never stops init. A slot counts
--- in buffers_restored once the engine reports audio in it
--- (buffer_state_changed); a missing file's path is kept for the next save.
-function load_buffers_from_disk()
-  buffers_restored = 0
-  buffer_autosave_blocked = false
-  if not util.file_exists(buffer_data_file) then
-    print("no saved buffers file found")
-    return
-  end
-
-  -- tab.load runs the file as Lua without protection
-  local ok, loaded, load_error = pcall(tab.load, buffer_data_file)
-  if not ok then
-    print("error: buffers file could not be read (" .. tostring(loaded) .. ")")
-    preserve_unloadable_buffer_file()
-    return
-  end
-  if type(loaded) ~= "table" then
-    print("error loading buffers file: " .. tostring(load_error))
-    preserve_unloadable_buffer_file()
-    return
-  end
-  if loaded.version ~= BUFFER_DATA_VERSION or type(loaded.paths) ~= "table" then
-    print("error: buffers file has version " .. tostring(loaded.version) ..
-      " or no path list, expected version " .. BUFFER_DATA_VERSION)
-    preserve_unloadable_buffer_file()
-    return
-  end
-
-  local reloading = 0
-  for slot = 1, NUM_BUFFERS do
-    local path = loaded.paths[slot]
-    if is_sound_file_path(path) then
-      -- the file may have been deleted or be on an unmounted drive, or a
-      -- take was never written
-      if util.file_exists(path) then
-        load_buffer(slot, path)
-        buffers[slot].restoring = true
-        reloading = reloading + 1
-      else
-        buffers[slot].missing_path = path
-        print("buffer " .. slot .. ": " .. path .. " not found, not restored (kept for the next start)")
-      end
-    end
-  end
-  print(reloading .. " buffers reloading from " .. buffer_data_file)
 end
 
 -- Check that one scene slot holds everything recall_scene_instant reads
@@ -2631,13 +2212,13 @@ function redraw_setup()
   -- not found on start ("restored" becomes "ok" to fit beside them)
   local buffers_missing = 0
   for slot = 1, NUM_BUFFERS do
-    if buffers[slot].missing_path then buffers_missing = buffers_missing + 1 end
+    if S.buffers[slot].missing_path then buffers_missing = buffers_missing + 1 end
   end
   screen.move(0, 42)
   if buffers_missing > 0 then
-    screen.text("buffers: " .. buffers_restored .. " ok, " .. buffers_missing .. " missing")
+    screen.text("buffers: " .. S.buffers_restored .. " ok, " .. buffers_missing .. " missing")
   else
-    screen.text("buffers: " .. buffers_restored .. " restored")
+    screen.text("buffers: " .. S.buffers_restored .. " restored")
   end
   -- the selected MIDI port and its device (cut to the screen width), then the channel mode
   local midi_prefix = "midi " .. params:get("midi_device") .. ": "
@@ -2904,7 +2485,7 @@ end
 -- to fit. Cached per slot until the name changes (load, take, clear), so a
 -- redraw does not measure eight names a character at a time.
 local function buffer_display_name(slot)
-  local buffer = buffers[slot]
+  local buffer = S.buffers[slot]
   if buffer.display_name_of ~= buffer.name then
     local name = buffer.name:gsub("%.[^.]*$", "")
     if name == "" then name = buffer.name end
@@ -2939,7 +2520,7 @@ function redraw_buffer()
   -- Right column (65-127px): one row per buffer slot. The voice's buffer is
   -- brightest, loaded (or recording) slots mid, empty slots dim.
   for slot = 1, NUM_BUFFERS do
-    local buffer = buffers[slot]
+    local buffer = S.buffers[slot]
     local y = BUFFER_PAGE.row_first_y + (slot - 1) * BUFFER_PAGE.row_spacing
     local level = 2
     if slot == voice_slot then
@@ -2960,7 +2541,7 @@ function redraw_buffer()
     draw_hints(BUFFER_PAGE.flash_text)
   elseif voice_slot then
     -- "..." while a take that ended waits for the engine (K3 does nothing)
-    local voice_buffer = buffers[voice_slot]
+    local voice_buffer = S.buffers[voice_slot]
     local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
     draw_hints("K2:load K3:" .. record_hint .. " K2+3:save")
   else
@@ -2992,7 +2573,7 @@ local function buffer_key(n)
     if key_press_page[2] == S.ui_page then
       -- a slot recording or awaiting its take is busy: nothing to save yet.
       -- Otherwise save_buffer saves only a slot the engine reports holding audio
-      local buffer = buffers[slot]
+      local buffer = S.buffers[slot]
       if buffer.recording or buffer.finishing then
         buffer_page_flash("buf " .. slot .. " busy")
       else
@@ -3688,11 +3269,11 @@ function grid_key_256(x, y, z)
   -- Handle page navigation first (always accessible from row 8)
   if y == 8 and x >= 13 and x <= 16 then
     -- Page selection (always accessible)
-    grid_page = x - 12
+    S.grid_page = x - 12
     return
   end
 
-  if grid_page == 3 then
+  if S.grid_page == 3 then
     -- Scene page
     if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
@@ -3714,7 +3295,7 @@ function grid_key_256(x, y, z)
         params:set("scene_sequence_length", x - 2)
       end
     end
-  elseif grid_page == 4 then
+  elseif S.grid_page == 4 then
     -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
     -- sources on rows 9-15; rows 8 and 16 work as on page 1
     local fx_param_id = GRID_LAYOUT.fx_fader_ids[y - GRID_LAYOUT.fx_first_row + 1]
@@ -3742,13 +3323,13 @@ function grid_key_256(x, y, z)
     grid_key_256_transport(x)
   elseif y >= GRID_LAYOUT.fader_first_row and y < GRID_LAYOUT.fader_first_row + GRID_LAYOUT.fader_rows then
     -- Rows 9-12 (parameter page): one fader per row for the selected voice
-    if grid_page == 2 then
+    if S.grid_page == 2 then
       local fader_index = (param_page - 1) * GRID_LAYOUT.fader_rows + (y - GRID_LAYOUT.fader_first_row + 1)
       set_fader_param(grid_voice_select, fader_index, x)
     end
   elseif y == GRID_LAYOUT.param_page_row then
     -- Row 13 (parameter page): choose which group of four faders is shown
-    if grid_page == 2 and x <= fader_page_count(grid_voice_select) then
+    if S.grid_page == 2 and x <= fader_page_count(grid_voice_select) then
       param_page = x
     end
   elseif y == 14 then
@@ -3800,7 +3381,7 @@ end
 
 -- 16x8 grid layout (128 buttons horizontal)
 function grid_key_128h(x, y, z)
-  if grid_page == 3 then
+  if S.grid_page == 3 then
     -- Scene page
     if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
@@ -3829,11 +3410,11 @@ function grid_key_128h(x, y, z)
     if x <= 4 then
       pattern_toggle()
     elseif x == 5 then
-      grid_page = 1  -- Patterns
+      S.grid_page = 1  -- Patterns
     elseif x == 6 then
-      grid_page = 2  -- Parameters
+      S.grid_page = 2  -- Parameters
     elseif x == 7 then
-      grid_page = 3  -- Scenes
+      S.grid_page = 3  -- Scenes
     elseif x >= 9 and x <= 8 + NUM_VOICES then
       -- Voice toggle
       toggle_voice(x - 8)
@@ -4156,7 +3737,7 @@ function grid_redraw()
 end
 
 function grid_redraw_256(grid_device)
-  if grid_page == 3 then
+  if S.grid_page == 3 then
     -- Scene page
     -- Row 1: Scene recall (instant)
     for i = 1, NUM_SCENES do
@@ -4194,7 +3775,7 @@ function grid_redraw_256(grid_device)
     end
 
     grid_redraw_256_page_row(grid_device)
-  elseif grid_page == 4 then
+  elseif S.grid_page == 4 then
     -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
     -- sources on rows 9-15, rows 8 and 16 as on page 1
     grid_redraw_256_buffers(grid_device)
@@ -4217,7 +3798,7 @@ function grid_redraw_256(grid_device)
     grid_redraw_256_transport(grid_device)
 
     -- Rows 9-13 (parameter page): faders and fader page selection
-    if grid_page == 2 then
+    if S.grid_page == 2 then
       grid_redraw_faders(grid_device)
     end
 
@@ -4235,7 +3816,7 @@ end
 -- above each slot's clear key
 function grid_redraw_256_buffers(grid_device)
   for slot = 1, NUM_BUFFERS do
-    local buffer = buffers[slot]
+    local buffer = S.buffers[slot]
     local level = 2
     if buffer.recording then
       level = 15
@@ -4257,7 +3838,7 @@ function grid_redraw_256_sources(grid_device)
       local slot = source - SOURCE_SYNTH
       if source == S.voices[voice_idx].source then
         level = 15
-      elseif valid_buffer_slot(slot) and not (buffers[slot].loaded or buffers[slot].recording) then
+      elseif S.lib.buffers.valid_buffer_slot(slot) and not (S.buffers[slot].loaded or S.buffers[slot].recording) then
         level = 2
       end
       grid_device:led(source, y, level)
@@ -4268,7 +3849,7 @@ end
 -- 256 row 8, columns 13-16: page indicators
 function grid_redraw_256_page_row(grid_device)
   for i = 1, 4 do
-    grid_device:led(12 + i, 8, i == grid_page and 15 or 2)
+    grid_device:led(12 + i, 8, i == S.grid_page and 15 or 2)
   end
 end
 
@@ -4321,7 +3902,7 @@ function grid_redraw_faders(grid_device)
 end
 
 function grid_redraw_128h(grid_device)
-  if grid_page == 3 then
+  if S.grid_page == 3 then
     -- Scene page (simplified for 128h layout)
     -- Row 1: Scene recall (instant)
     for i = 1, NUM_SCENES do
@@ -4371,9 +3952,9 @@ function grid_redraw_128h(grid_device)
   end
 
   -- Page indicators (3 pages now)
-  grid_device:led(5, 8, grid_page == 1 and 15 or 4)
-  grid_device:led(6, 8, grid_page == 2 and 15 or 4)
-  grid_device:led(7, 8, grid_page == 3 and 15 or 4)
+  grid_device:led(5, 8, S.grid_page == 1 and 15 or 4)
+  grid_device:led(6, 8, S.grid_page == 2 and 15 or 4)
+  grid_device:led(7, 8, S.grid_page == 3 and 15 or 4)
 
   -- Voice status
   for i = 1, NUM_VOICES do
@@ -4439,8 +4020,8 @@ function cleanup()
   end
 
   -- Remember each buffer's file or scratch take for the next start
-  if buffer_autosave_blocked then
-    print("buffer paths not auto-saved: " .. buffer_data_file .. " could not be loaded")
+  if S.buffer_autosave_blocked then
+    print("buffer paths not auto-saved: " .. S.lib.buffers.buffer_data_file .. " could not be loaded")
   else
     save_buffers_to_disk()
   end
@@ -4476,10 +4057,10 @@ function cleanup()
 
   -- Stop the buffer polls and recording timers (the engine finishes or
   -- frees any recording itself)
-  if buffer_polls.state then buffer_polls.state:stop() end
-  if buffer_polls.load_failed then buffer_polls.load_failed:stop() end
+  if S.buffer_polls.state then S.buffer_polls.state:stop() end
+  if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
   for slot = 1, NUM_BUFFERS do
-    cancel_buffer_recording_timer(slot)
+    S.lib.buffers.cancel_buffer_recording_timer(slot)
   end
   cancel_buffer_page_flash_clock()
 
