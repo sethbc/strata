@@ -2164,22 +2164,21 @@ end
 -- The slot length the engine runs, as the engine stub sees it: the
 -- engine writes performance_active.data (in data_dir's strata/) at alloc,
 -- before the script starts, and allocates what it wrote, so the test's file
--- (h.write_performance_active) is the engine's tier. A high tier's
--- buffer_seconds 16/60/120/300; anything else (no file, standard, a garbled
--- file) the standard tier's length
-local HIGH_BUFFER_SECONDS = { [16] = true, [60] = true, [120] = true, [300] = true }
+-- (h.write_performance_active) is the engine's tier. The file is validated
+-- by the script's own parser (lib/performance.lua's parse_active_text, run
+-- on lib/constants.lua), so a file Lua rejects runs standard here too; no
+-- file, or an invalid one, gives the standard tier's length
+local performance_parser
 function stubs.active_buffer_seconds(spec, data_dir)
-  local file = io.open((data_dir or "") .. "strata/performance_active.data", "r")
-  local text = file and file:read("*a") or ""
-  if file then file:close() end
-  local fields = {}
-  for line in text:gmatch("[^\n]+") do
-    local key, value = line:match("^%s*([%w_]+)%s*(.-)%s*$")
-    if key then fields[key] = value end
+  if not performance_parser then
+    local constants = dofile(script_folder .. "/lib/constants.lua")
+    performance_parser = dofile(script_folder .. "/lib/performance.lua")({ constants = constants })
   end
-  local seconds = (fields.buffer_seconds or ""):match("^%d+$") and tonumber(fields.buffer_seconds)
-  if fields.tier == "high" and HIGH_BUFFER_SECONDS[seconds] then return seconds end
-  return spec.standard_buffer_seconds
+  local file = io.open((data_dir or "") .. "strata/performance_active.data", "r")
+  local text = file and file:read("*a")
+  if file then file:close() end
+  local active = performance_parser.parse_active_text(text)
+  return active and active.buffer_seconds or spec.standard_buffer_seconds
 end
 
 ---------------------------------------------------------------------------

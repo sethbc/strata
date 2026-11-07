@@ -46,19 +46,25 @@ return function(S)
     return false
   end
 
-  -- "key value" lines into a table (value: the rest of the line, trimmed);
-  -- nil when the file cannot be read. Blank lines are skipped; a line with
-  -- no value gives that key an empty string
-  local function read_key_values(path)
+  -- A file's text, or nil when it cannot be read
+  local function read_text(path)
     local file = io.open(path, "r")
     if not file then return nil end
     local text = file:read("*a")
     file:close()
-    if type(text) ~= "string" then return nil end
+    return type(text) == "string" and text or nil
+  end
+
+  -- "key value" lines into a table (value: the rest of the line, trimmed).
+  -- Blank lines are skipped; a line with no value gives that key an empty
+  -- string. accept(key, value), when given, drops the lines it refuses, so
+  -- a repeated key keeps its last accepted value (as the engine reads
+  -- performance.data); otherwise the last line of a key wins
+  local function key_values(text, accept)
     local fields = {}
     for line in text:gmatch("[^\n]+") do
       local key, value = line:match("^%s*([%w_]+)%s*(.-)%s*$")
-      if key then fields[key] = value end
+      if key and (not accept or accept(key, value)) then fields[key] = value end
     end
     return fields
   end
@@ -68,10 +74,13 @@ return function(S)
     return tonumber(text)
   end
 
-  -- The active file's values, or nil when any is missing or not one the
-  -- tier allows (a garbled, truncated or foreign file)
-  local function parse_active(fields)
-    if not fields then return nil end
+  -- The active file's values from its text, or nil when any is missing or
+  -- not one the tier allows (a garbled, truncated or foreign file). The
+  -- engine stub validates the test's active file with this too
+  -- (stubs.active_buffer_seconds), so the stub and Lua never disagree
+  function M.parse_active_text(text)
+    if type(text) ~= "string" then return nil end
+    local fields = key_values(text)
     local allowed = PERFORMANCE.tiers[fields.tier]
     if not allowed then return nil end
     local buffer_seconds = whole_number(fields.buffer_seconds)
@@ -90,7 +99,7 @@ return function(S)
   -- reads it). Anything missing or invalid gives the standard tier and one
   -- console line. Also reads the setting this start used
   function M.read_active()
-    local active = parse_active(read_key_values(data_dir() .. PERFORMANCE.active_file))
+    local active = M.parse_active_text(read_text(data_dir() .. PERFORMANCE.active_file))
     if not active then
       print(PERFORMANCE.unreadable_line)
       active = {reason = ""}
@@ -101,18 +110,22 @@ return function(S)
     S.performance_start_setting = M.setting()
   end
 
+  -- A valid performance.data line
+  local function valid_setting_line(key, value)
+    if key == "performance" then return includes(PERFORMANCE.choices, value) end
+    if key == "buffer_seconds" then return includes(PERFORMANCE.buffer_choices, whole_number(value)) end
+    return false
+  end
+
   -- The setting in performance.data: {performance, buffer_seconds}. Each
-  -- key is read on its own, as the engine reads it: a missing file, key or
-  -- value outside its choices gives that key's default (auto, 60 s);
-  -- other keys are ignored
+  -- key is read on its own, as the engine reads it: invalid lines are
+  -- skipped, so a key keeps its last valid value, and a missing file or a
+  -- key with no valid line gives that key's default (auto, 60 s); other
+  -- keys are ignored
   local function read_setting()
-    local fields = read_key_values(data_dir() .. PERFORMANCE.setting_file) or {}
-    local setting = {performance = PERFORMANCE.default_setting.performance,
-      buffer_seconds = PERFORMANCE.default_setting.buffer_seconds}
-    if includes(PERFORMANCE.choices, fields.performance) then setting.performance = fields.performance end
-    local seconds = whole_number(fields.buffer_seconds)
-    if includes(PERFORMANCE.buffer_choices, seconds) then setting.buffer_seconds = seconds end
-    return setting
+    local fields = key_values(read_text(data_dir() .. PERFORMANCE.setting_file) or "", valid_setting_line)
+    return {performance = fields.performance or PERFORMANCE.default_setting.performance,
+      buffer_seconds = whole_number(fields.buffer_seconds) or PERFORMANCE.default_setting.buffer_seconds}
   end
 
   -- A copy of the setting (read from the file the first time)

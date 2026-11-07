@@ -57,7 +57,7 @@ The spec also holds:
 Tests built on it:
 - One sends every `strata_fx` param's default through `send_param_to_engine` and checks that each FX command then carries its SynthDef's defaults (the script never bangs its params, so until a param changes the engine plays those).
 - Another checks that `numVoices`, `numBuffers`, `bufferStateStride` and `numModSlots` equal `NUM_VOICES`, `NUM_BUFFERS`, `BUFFER_STATE_STRIDE` and `NUM_MOD_SLOTS` (and `numModSlots` the `modBus1..N` count), and a third that `standardBufferSeconds` equals `STANDARD_BUFFER_SECONDS` (the running length is a tier value, `S.performance.buffer_seconds`).
-- The engine stub reads the tier from the test's `performance_active.data` (`stubs.active_buffer_seconds`): `recordBuffer` may not ask for more seconds than a slot holds on it. `h.write_performance_active(fields)` writes that file for the next `load_strata` (fields as the engine writes them, or a string as it is; none: no file, so Lua runs standard and prints its one line). `norns.platform` is 0 (unknown) unless a test sets it.
+- The engine stub reads the tier from the test's `performance_active.data` (`stubs.active_buffer_seconds`, which validates it with the script's own `parse_active_text` from `lib/performance.lua`, so a file Lua rejects runs standard in the stub too): `recordBuffer` may not ask for more seconds than a slot holds on it. `h.write_performance_active(fields)` writes that file for the next `load_strata` (fields as the engine writes them, or a string as it is; none: no file, so Lua runs standard and prints its one line). `norns.platform` is 0 (unknown) unless a test sets it.
 
 ### Param types
 

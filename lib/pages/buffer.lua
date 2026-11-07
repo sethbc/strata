@@ -183,7 +183,8 @@ return function(S)
     screen.level(level)
     screen.move(PAGE.slot_x, y)
     screen.text(tostring(slot))
-    -- names end before the seconds column (the widest seconds, "16.0s")
+    -- names end before the seconds column (the widest seconds: the tier's
+    -- buffer length, "16.0s" on standard)
     local name_right = value_right - text_width(string.format("%.1fs", S.performance.buffer_seconds)) - PAGE.column_gap
     if not empty then
       local seconds = buffer.recording and "REC" or string.format("%.1fs", buffer.seconds)

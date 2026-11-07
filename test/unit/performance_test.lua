@@ -128,6 +128,11 @@ test("the setting file: missing or garbled values give auto and 60 s", function(
     { "one key garbled", "performance high\nbuffer_seconds 61\n", "high", 60 },
     { "valid", "performance standard\nbuffer_seconds 300\n", "standard", 300 },
     { "valid, CRLF", "performance high\r\nbuffer_seconds 120\r\n", "high", 120 },
+    -- a repeated key keeps its last valid value, as the engine reads it
+    { "a later invalid line", "performance high\nperformance turbo\nbuffer_seconds 120\nbuffer_seconds 999\n",
+      "high", 120 },
+    { "a later valid line", "performance high\nperformance standard\nbuffer_seconds 120\nbuffer_seconds 300\n",
+      "standard", 300 },
   }
   for _, case in ipairs(cases) do
     load_strata({ before_init = function(context)
@@ -176,6 +181,12 @@ test("the engine stub's recordBuffer limit follows the active file", function()
   local calls = context.calls_named("recordBuffer")
   assert_equal(#calls, 1, "one take")
   assert_equal(calls[1].args[2], 120, "the whole 120 s")
+  -- a high file Lua rejects (no max_grains or history_seconds) runs standard in the stub too
+  h.write_performance_active("tier high\nbuffer_seconds 120\n")
+  load_strata()
+  assert_equal(local_value("S").performance.tier, "standard", "Lua rejects it")
+  assert_true(not pcall(engine.recordBuffer, 0, 60.0, 1.0), "the stub holds 16 s, as Lua")
+  assert_true(pcall(engine.recordBuffer, 0, 16.0, 1.0), "16 s is fine")
 end)
 
 end
