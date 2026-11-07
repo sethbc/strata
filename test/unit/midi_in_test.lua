@@ -126,16 +126,16 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
     local channel_notes = midi_state.note_voice[channel]
     assert_equal(channel_notes and channel_notes[note], nil, where .. ": note " .. note .. " not mapped")
   end
-  -- K3 (and the arc button) never stop a running voice: on a held voice K3
-  -- freezes it, and the note off then stops it as voice off mode says
+  -- locking a held voice never stops it, and the note off then stops it as
+  -- voice off mode says (MAIN's K3 and the arc button lock through toggle_lock)
   local _, set_selected = find_upvalue("selected_voice"); set_selected(2)
   show_page("MAIN")
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
-  key(3, 1); key(3, 0)
-  assert_true(voices[2].active and local_value("frozen")[2], "K3 freezes the held voice, it does not stop it")
+  toggle_lock(2)
+  assert_true(voices[2].active and local_value("frozen")[2], "a lock keeps the held voice running")
   context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
-  assert_true(not voices[2].active, "K3: the note off stops the frozen voice")
-  assert_nothing_held(2, 2, 62, "K3")
+  assert_true(not voices[2].active, "lock: the note off stops the locked voice")
+  assert_nothing_held(2, 2, 62, "lock")
   toggle_lock(2)
   local stoppers = {
     { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 8 + 4, 14, 1) end },

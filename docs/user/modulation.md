@@ -16,7 +16,7 @@ Strata includes an optional mutation system for creating organic, evolving textu
 - **Probabilistic Evolution** - Each parameter has a chance to mutate at regular intervals
 - **Adjustable Behavior** - Control mutation rate, probability, and amount via PARAMETERS menu
 - **Smart Mutations** - Uses gaussian-like distribution for natural-sounding changes
-- **Selective Application** - Only affects active, non-frozen voices
+- **Selective Application** - Only affects active, unlocked voices
 - **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance
 - **Visual Feedback** - `[M]` indicator appears on screen when mutations are enabled
 
