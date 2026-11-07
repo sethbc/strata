@@ -653,6 +653,86 @@ test("the user docs say lock, not freeze", function()
   end
 end)
 
+-- The names (without extension) of the files in a repo folder that end in
+-- `extension`, sorted
+local function names_in(dir, extension)
+  local names = {}
+  local listing = io.popen('ls -1 "' .. repo_root .. "/" .. dir .. '" 2>/dev/null')
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    local base = name:match("^(.+)%." .. extension .. "$")
+    if base then table.insert(names, base) end
+  end
+  listing:close()
+  table.sort(names)
+  return names
+end
+
+-- The engine check's runner and its area files (3.2 Wave 0b)
+local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
+  "effects", "performance", "rings", "freeze", "variation", "loops" }
+
+test("every engine notes file opens with Must not break", function()
+  local files = markdown_files("docs/notes/engine")
+  for _, path in ipairs(files) do
+    local heading, in_fence = nil, false
+    for line in (read_repo_file(path) .. "\n"):gmatch("([^\n]*)\n") do
+      if line:match("^%s*```") then in_fence = not in_fence
+      elseif not in_fence and line:match("^#+ ") then heading = line; break end
+    end
+    assert_equal(heading, "## Must not break", path .. " first heading")
+  end
+  assert_true(#files >= 9, "docs/notes/engine holds the area notes (found " .. #files .. ")")
+end)
+
+test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names the area files", function()
+  local index = read_repo_file("docs/notes/engine.md")
+  local linked = {}
+  for line in (index .. "\n"):gmatch("([^\n]*)\n") do
+    assert_true(not line:match("^##"), "docs/notes/engine.md holds no sections, only the index: " .. line)
+    if line:match("^%s*[-*] ") then
+      local name, target = line:match("^%- %[([%w%-]+)%]%(engine/([%w%-]+)%.md%):? ")
+      assert_true(name ~= nil and name == target, "each index line links one area file: " .. line)
+      assert_true(linked[name] == nil, "docs/notes/engine.md links " .. tostring(name) .. " once")
+      linked[name] = true
+    end
+  end
+  for target in index:gmatch("%]%(([^)]+)%)") do
+    assert_true(target:match("^engine/[%w%-]+%.md$") ~= nil, "docs/notes/engine.md links only area files, not " .. target)
+  end
+  local claude = read_repo_file("CLAUDE.md")
+  for _, name in ipairs(names_in("docs/notes/engine", "md")) do
+    assert_true(linked[name], "docs/notes/engine.md links docs/notes/engine/" .. name .. ".md")
+    assert_true(claude:find("`docs/notes/engine/" .. name .. ".md`", 1, true) ~= nil,
+      "CLAUDE.md names docs/notes/engine/" .. name .. ".md")
+  end
+  assert_true(claude:find("STRATA_ENGINE_CHECK_AREAS", 1, true) ~= nil, "CLAUDE.md names STRATA_ENGINE_CHECK_AREAS")
+end)
+
+test("every engine check area has a notes file of the same name", function()
+  local notes = {}
+  for _, name in ipairs(names_in("docs/notes/engine", "md")) do notes[name] = true end
+  local areas = names_in("test/engine_check", "scd")
+  assert_true(#areas >= 9, "test/engine_check holds the area files (found " .. #areas .. ")")
+  for _, name in ipairs(areas) do
+    assert_true(notes[name], "test/engine_check/" .. name .. ".scd has docs/notes/engine/" .. name .. ".md")
+  end
+end)
+
+test("the runner's area order names every area file", function()
+  local runner = stubs.strip_sc_comments(read_repo_file("test/engine_check.scd"))
+  local list = runner:match("var%s+areaOrder%s*=%s*(%b[])")
+  assert_true(list ~= nil, "test/engine_check.scd declares areaOrder")
+  local order, position = {}, {}
+  for name in list:gmatch("\\(%w+)") do
+    table.insert(order, name)
+    position[name] = #order
+  end
+  assert_equal(table.concat(order, " "), table.concat(ENGINE_CHECK_AREA_ORDER, " "), "the fixed area order")
+  for _, name in ipairs(names_in("test/engine_check", "scd")) do
+    assert_true(position[name] ~= nil, "areaOrder names test/engine_check/" .. name .. ".scd")
+  end
+end)
+
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
   local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
   local setting = workflow:match("\n%s*cancel%-in%-progress:%s*([^\n]-)%s*\n")

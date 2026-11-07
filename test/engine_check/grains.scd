@@ -1,0 +1,283 @@
+// test/engine_check/grains.scd
+// The grain stage: both grain SynthDefs' controls and UGens, a stopped
+// voice's source choice, voiceOn for a buffer source, the grain params
+// (pitch, mode, envelope shapes), triggered grains on a synth voice, and
+// buffer- and input-sourced grains (pan, triggered mode, the grain end).
+{ arg h;
+var engine = h.engine, server = h.server, context = h.context;
+var check = { arg condition, message; h.check(condition, message) };
+var command = { arg name ... args; h.command(name, *args) };
+var awaitReply = { arg condition, timeout = 5; h.awaitReply(condition, timeout) };
+var synthNames = { arg group; h.synthNames(group) };
+var getControl = { arg synth, control; h.getControl(synth, control) };
+var controlFeedsAUGen = { arg defName, controlName; h.controlFeedsAUGen(defName, controlName) };
+var readBus = { arg bus; h.readBus(bus) };
+var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
+var writeTestFile = { arg path, sampleRate, frames, values; h.writeTestFile(path, sampleRate, frames, values) };
+var grainDefs = h.grainDefs, scratchRoot = h.tempDir;
+var before, envSamples, grainBuf, grainInUGens, voicesStarted;
+var probe, peakBus, readPeak, triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
+
+var controlDefault = { arg defName, controlName;
+    var control = SynthDescLib.global.at(defName).controls.detect({ arg each; each.name == controlName });
+    control !? { control.defaultValue }
+};
+
+// Buffer- and input-sourced voices, on a running voice on its synth source
+// and an empty slot: the voice's pan places their grains (pan -1 left only,
+// 1 right only), triggered grain mode fires one grain per retrigger and
+// nothing without one (as for a synth voice), and a buffer grain never reads
+// past the end of the slot's valid region. The grain synth writes to a
+// private bus for the measurements.
+var checkSourceGrains = { arg voice, slot;
+    var grainKey = engine.grainKey(voice), privateBus = Bus.audio(server, 2), peakBus = Bus.control(server, 2);
+    var group = Group.after(engine.processGroup), path = scratchRoot +/+ "source-grains.wav";
+    var tone, probe, peaks, file, frames = server.sampleRate.asInteger;
+    var toPrivate = { engine.synths[grainKey].set(\out, privateBus.index); server.sync };
+    var toMain = { engine.synths[grainKey].set(\out, engine.mainBus.index) };
+
+    grainDefs.do({ arg name;
+        check.(controlFeedsAUGen.(name, \pan), "% has a pan control that reaches a UGen".format(name));
+    });
+    // the synth source's grain synth never pans again (the voice synth does)
+    command.(\setVoiceParam, voice, \pan, -1.0); server.sync;
+    check.((getControl.(engine.synths[engine.voiceKey(voice)], \pan) == -1) and: { getControl.(engine.synths[grainKey], \pan) == 0 },
+        "a synth-sourced voice's pan reaches its voice synth, never its grain synth");
+
+    // a 1 s stereo 440 Hz sine at 0.5, at the server rate
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
+    file.openWrite(path);
+    file.writeData(FloatArray.fill(frames * 2, { arg i; sin(2pi * 440 * (i div: 2) / server.sampleRate) * 0.5 }));
+    file.close;
+    command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+    tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
+    probe = Synth(\strataCheckChannelPeaks, [\in, privateBus, \out, peakBus], group);
+
+    [[slot + 1, "a buffer"], [engine.numBuffers + 1, "an input"]].do({ arg pair;
+        var label = pair[1];
+        command.(\setVoiceParam, voice, \pan, -1.0);
+        command.(\setGrainSource, voice, pair[0]); server.sync;
+        toPrivate.value;
+        check.(getControl.(engine.synths[grainKey], \pan) == -1, "%-sourced voice's grain synth starts at the voice's pan".format(label));
+        [[-1.0, [true, false]], [1.0, [false, true]], [0.0, [true, true]]].do({ arg panCase;
+            command.(\setVoiceParam, voice, \pan, panCase[0]); server.sync;
+            peaks = measure.(probe, peakBus, 0.3);
+            check.((peaks.size == 2) and: { [0, 1].every({ arg channel;
+                    if (panCase[1][channel]) { peaks[channel] > 0.01 } { peaks[channel] < 0.001 } }) },
+                "%-sourced voice at pan % sounds % (peaks %)".format(label, panCase[0],
+                    ["left only", "right only", "on both sides"][[[true, false], [false, true], [true, true]].indexOfEqual(panCase[1])], peaks));
+        });
+        // triggered grain mode
+        command.(\setGrainParam, voice, \grainMode, 1);
+        0.5.wait; server.sync;                 // grains in flight and the PitchShift window have ended
+        peaks = measure.(probe, peakBus, 0.3);
+        check.(peaks.sum < 0.001, "%-sourced voice in triggered mode is silent without a trigger (peaks %)".format(label, peaks));
+        probe.set(\t_reset, 1); server.sync;
+        command.(\retrigger, voice, 1.0);
+        0.3.wait;
+        peaks = readBus.(peakBus);
+        check.(peaks.sum > 0.01, "a retrigger fires a grain on %-sourced voice in triggered mode (peaks %)".format(label, peaks));
+        command.(\setGrainParam, voice, \grainMode, 0);
+        toMain.value;
+    });
+
+    // Grain end: a slot of silence whose frames past the valid region hold 1
+    // (set by hand after the load, which zeroes them). Grains scanning up to
+    // the region's end, at a rate and size that read far past it unless
+    // limited, must read silence only: at the server rate, at 22050 Hz and
+    // rate 2, at 96 kHz (GrainBuf reads two frames per sample there: a limit
+    // that left out the buffer's rate scale would read past the end), and
+    // with a region shorter than a grain. [file rate, seconds, grain size, rate]
+    command.(\setGrainSource, voice, slot + 1); server.sync;
+    toPrivate.value;
+    [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [96000, 0.25, 0.2, 1], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
+        var validFrames;
+        writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
+        command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+        validFrames = engine.bufferFrames[slot];
+        [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(validFrames, buffer.numFrames - validFrames, 1) });
+        command.(\setGrainParam, voice, \grainSize, grainCase[2]);
+        command.(\setGrainParam, voice, \bufRate, grainCase[3]);
+        command.(\setGrainParam, voice, \bufPos, 0.9);
+        command.(\setGrainParam, voice, \bufScan, 0.5);
+        server.sync; 0.3.wait;                 // grains started before the fill have ended
+        peaks = measure.(probe, peakBus, 0.6);
+        check.((peaks.size == 2) and: { peaks.maxItem < 0.001 },
+            "grains never read past the valid region (% s at % Hz, grain % s, rate %; peaks %)".format(
+                grainCase[1], grainCase[0], grainCase[2], grainCase[3], peaks));
+    });
+    toMain.value;
+    [[\grainSize, 0.1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    command.(\setVoiceParam, voice, \pan, 0.0);
+    command.(\clearBuffer, slot);
+    command.(\setGrainSource, voice, 0);
+    tone.free; group.free;
+    2.5.wait; server.sync;
+    privateBus.free; peakBus.free;
+    File.delete(path);
+};
+
+// SynthDefs
+grainDefs.do({ arg name;
+    [\grainMode, \t_trig, \velocity, \bend, \envBuf].do({ arg control;
+        check.(SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).includes(control),
+            "% has a % control".format(name, control));
+    });
+});
+[\accentAmt, \mirrorOut, \mirrorLevel].do({ arg control;
+    check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(control),
+        "strataGrain has a % control (input-source accent and mirror)".format(control));
+});
+// mirrorOut defaults to bus 0, so a mirror is off unless the engine
+// turns it on: mirrorLevel defaults to 0 in both grain SynthDefs
+grainDefs.do({ arg name;
+    check.(controlDefault.(name, \mirrorLevel) == 0, "% has mirrorLevel, default 0 (got %)".format(name, controlDefault.(name, \mirrorLevel)));
+});
+// Amplitude crossmod for input-sourced voices, off (modLevel 0) by default
+[\modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \modLevel].do({ arg control;
+    check.(controlFeedsAUGen.(\strataGrain, control), "strataGrain has a % control that reaches a UGen".format(control));
+});
+check.(controlDefault.(\strataGrain, \modLevel) == 0, "strataGrain's modLevel defaults to 0 (crossmod off)");
+check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(\modFreqAmt1).not,
+    "strataGrain has no frequency crossmod (meaningless for live input)");
+[\out, \gate, \bufnumL, \bufnumR, \bufFrames, \bufPos, \bufRate, \bufScan, \grainSize, \grainDensity,
+    \pitchShift, \posSpread, \panSpread, \amp, \modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2,
+    \modAmpAmt3, \modFreqAmt1, \modFreqAmt2, \modFreqAmt3, \mirrorOut].do({ arg control;
+    check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).includes(control),
+        "strataGrainBuf has a % control".format(control));
+});
+check.(controlFeedsAUGen.(\strataGrainBuf, \bend), "strataGrainBuf's bend control reaches its rate");
+grainBuf = SynthDescLib.global.at(\strataGrainBuf).def.children;
+check.(grainBuf.count({ arg ugen; ugen.isKindOf(GrainBuf) }) == 2, "strataGrainBuf runs two mono GrainBufs (L/R)");
+check.(grainBuf.select({ arg ugen; ugen.isKindOf(GrainBuf) }).every({ arg ugen; ugen.numChannels == 1 }),
+    "strataGrainBuf's GrainBufs are mono");
+// one PitchShift per channel of the panned pair (not one per GrainBuf path)
+check.(grainBuf.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
+    "strataGrainBuf pitch-shifts the stereo pair once (two mono PitchShifts)");
+check.(grainBuf.any({ arg ugen; ugen.isKindOf(Balance2) }), "strataGrainBuf pans with Balance2");
+check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).includes(\bufRateScale),
+    "strataGrainBuf has a bufRateScale control (content rate / server rate)");
+check.(grainBuf.any({ arg ugen; ugen.isKindOf(Select) }) and: { grainBuf.any({ arg ugen; ugen.isKindOf(T2A) }) },
+    "strataGrainBuf selects between Impulse and T2A(t_trig) grain triggers");
+// strataGrain mirrors strataGrainBuf: one mono GrainIn per input
+// channel panned as a pair, so pan spread works for synth and input
+// sources and nothing is doubled
+grainInUGens = SynthDescLib.global.at(\strataGrain).def.children;
+check.(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) }) == 2
+    and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.channels.size == 1 }) },
+    "strataGrain runs two mono GrainIns (L/R; got %)".format(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) })));
+check.(grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
+    "strataGrain pitch-shifts the stereo pair once (two mono PitchShifts; got %)".format(
+        grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) })));
+check.(grainInUGens.any({ arg ugen; ugen.isKindOf(Balance2) }), "strataGrain pans with Balance2");
+check.(grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2],
+    "strataGrain has one stereo Out to mainBus and one to the mirror (got %)".format(
+        grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 })));
+check.(SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(Select) })
+    and: { SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(T2A) }) },
+    "strataGrain selects between Impulse and T2A(t_trig) grain triggers");
+
+// setGrainSource on a stopped voice only records the source
+before = synthNames.(context.xg).size;
+command.(\setGrainSource, 6, 4);
+server.sync;
+check.(synthNames.(context.xg).size == before and: { engine.grainSource[6] == 4 },
+    "setGrainSource on a stopped voice records the source and creates no nodes");
+
+// Start every voice
+h.startAllVoices;
+voicesStarted = Main.elapsedTime;
+check.(engine.synths[\voice6].isNil and: { engine.synths[\grain6].defName == \strataGrainBuf },
+    "voiceOn for a buffer-sourced voice builds strataGrainBuf and no voice synth");
+check.(getControl.(engine.synths[\grain6], \bufnumL) == engine.buffersL[3].bufnum
+    and: { getControl.(engine.synths[\grain6], \bufnumR) == engine.buffersR[3].bufnum },
+    "source 4 reads slot 4 (index 3)");
+check.(getControl.(engine.synths[\grain6], \grainSize).equalWithPrecision(0.1), "voiceOn grain args reach strataGrainBuf");
+
+command.(\setGrainParam, 0, \pitchShift, 2.0);
+command.(\setGrainParam, 0, \posSpread, 0.7);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "setGrainParam pitchShift reaches the grain synth");
+
+// Grain mode: 0 = continuous (Impulse), 1 = triggered (one grain per t_trig)
+check.(getControl.(engine.synths[\grain0], \grainMode) == 0, "grain synths start continuous");
+command.(\setGrainParam, 0, \grainMode, 1);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \grainMode) == 1, "setGrainParam grainMode reaches the grain synth");
+command.(\setGrainParam, 0, \grainMode, 0);
+
+// Grain envelope shapes: envShape 0 = built-in Hann (-1), 1-4 = envBuffers
+check.(engine.envBuffers.size == 4, "four grain envelope buffers");
+check.(engine.envBuffers.every({ arg buffer; buffer.numFrames == 1024 }),
+    "envelope buffers hold 1024 frames");
+envSamples = { var condition = Condition(false), values;
+    engine.envBuffers[3].loadToFloatArray(action: { arg array;
+        values = array; condition.test = true; condition.signal });
+    awaitReply.(condition);
+    values
+}.value;
+check.((envSamples[0].abs < 0.01) and: { (envSamples[512] - 1).abs < 0.01 },
+    "trapezoid envelope buffer is loaded on the server (0 at the start, 1 in the middle)");
+check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "grain synths start with the Hann envelope");
+command.(\setGrainParam, 0, \envShape, 2);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[1].bufnum,
+    "envShape 2 selects the second envelope buffer");
+command.(\setGrainParam, 0, \envShape, 4);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[3].bufnum,
+    "envShape 4 selects the last envelope buffer");
+command.(\setGrainParam, 0, \envShape, 0);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "envShape 0 returns to the Hann envelope");
+command.(\setGrainParam, 0, \envShape, 1);
+command.(\setGrainParam, 0, \envShape, 9);
+command.(\setGrainParam, 0, \envShape, -1);
+server.sync;
+check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[0].bufnum,
+    "an out-of-range envShape is ignored");
+
+// Triggered grain mode on a running synth voice (voice 0, its
+// resonator long past its attack): no grain and no position-spread
+// sound without a trigger, one grain after a retrigger. Its grain
+// synth writes to a private bus for the measurement.
+max(4.5 - (Main.elapsedTime - voicesStarted), 0).wait;   // past the Resonator's 4 s attack
+triggeredBus = Bus.audio(server, 2);
+peakBus = Bus.control(server, 1);
+engine.synths[\grain0].set(\out, triggeredBus.index);
+probe = Synth(\strataCheckPeak, [\in, triggeredBus, \out, peakBus], engine.processGroup, \addToTail);
+readPeak = {
+    var condition = Condition(false), value;
+    probe.set(\t_reset, 1);
+    0.3.wait;
+    peakBus.get({ arg result; value = result; condition.test = true; condition.signal });
+    awaitReply.(condition);
+    value
+};
+server.sync;
+0.1.wait;                                  // let the grains reach the private bus
+continuousPeak = readPeak.value;
+check.(continuousPeak > 0.01, "a running synth voice's continuous grains sound (peak %)".format(continuousPeak));
+command.(\setGrainParam, 0, \grainMode, 1);
+0.5.wait; server.sync;                     // grains in flight and the PitchShift window have ended
+untriggeredPeak = readPeak.value;
+check.(untriggeredPeak < 0.001,
+    "a triggered-mode synth voice is silent without a trigger (peak %)".format(untriggeredPeak));
+probe.set(\t_reset, 1); server.sync;
+command.(\retrigger, 0, 1.0);
+0.3.wait;
+triggeredPeak = {
+    var condition = Condition(false), value;
+    peakBus.get({ arg result; value = result; condition.test = true; condition.signal });
+    awaitReply.(condition);
+    value
+}.value;
+check.(triggeredPeak > 0.01, "a retrigger fires a grain in triggered mode (peak %)".format(triggeredPeak));
+command.(\setGrainParam, 0, \grainMode, 0);
+engine.synths[\grain0].set(\out, engine.mainBus.index);
+server.sync;
+probe.free; peakBus.free; triggeredBus.free;
+server.sync;
+checkSourceGrains.(1, 2);
+h.stopAllVoices;
+}

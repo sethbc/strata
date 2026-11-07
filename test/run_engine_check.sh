@@ -1,9 +1,16 @@
 #!/bin/sh
 # Compile lib/Engine_Strata.sc against the real norns CroneEngine classes and
 # run test/engine_check.scd, which boots a local scsynth (output routed to a
-# private bus, so it is silent) and exercises every engine command.
+# private bus, so it is silent) and runs the check's areas
+# (test/engine_check/<area>.scd), which exercise every engine command.
 #
-# usage: [STRATA_SC_PORT=57141] test/run_engine_check.sh [path/to/norns]
+# usage: [STRATA_SC_PORT=57141] [STRATA_ENGINE_CHECK_AREAS=memory,buffers] test/run_engine_check.sh [path/to/norns]
+#   STRATA_ENGINE_CHECK_AREAS names the areas to run, comma- or
+#   space-separated (structure, voices, grains, lifecycle, memory, buffers,
+#   files, effects, performance); unset or empty runs every area. They run in
+#   the check's fixed order whatever order they are named in, and a name with
+#   no area file fails the run ("ENGINE CHECK FAILED: no area <name>"). Each
+#   area's time is printed as "area <name>: <seconds> s".
 #   STRATA_SC_PORT is the UDP port scsynth boots on (default 57110). Give each
 #   run its own port to run checks side by side (one per worktree); avoid
 #   sclang's own language port (57120, and the few above it when several
@@ -59,7 +66,7 @@ YAML
 # sclang never exits by itself when engine_check.scd or the class library
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
-# seconds: a normal run takes about 2 minutes, the check's own deadline is
+# seconds: a normal run takes about 3.5 minutes, the check's own deadline is
 # 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
@@ -114,8 +121,9 @@ if [ -n "$stopped" ]; then
   echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2
 fi
 
-# keep the interesting lines: class-library errors and the check results
-grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled)|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
+# keep the interesting lines: class-library errors, the check results and
+# each area's time
+grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled|area )|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
