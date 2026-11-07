@@ -33,7 +33,7 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
     util.linlin(param_min, param_max, 0, 64, params:get("v1_grain_size")) / 64 * math.pi * 2, 1e-9, "ring 2 shows grain size")
   redraw()
   local value
-  for _, entry in ipairs(context.screen.texts) do if entry.x == 65 and entry.y == 50 then value = entry.text end end
+  for _, entry in ipairs(context.screen.texts) do if entry.x == 127 and entry.y == 34 then value = entry.text end end
   assert_equal(value, string.format("%.2f s", params:get("v1_grain_size")), "MAIN shows grain size")
   -- randomize, mutate and drift leave the synth and buffer params alone
   local synth_before = deep_copy(local_value("voices")[1].params)

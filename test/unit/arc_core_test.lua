@@ -178,7 +178,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   end
   local function setup_text(context)
     local page = local_value("ui_page")
-    show_page("SETUP"); redraw()
+    show_page("SETUP"); enc(2, 20); redraw()
     local result = screen_has(context, "arc: connected") and "connected" or (screen_has(context, "arc: none") and "none" or "?")
     show_page(page)
     return result

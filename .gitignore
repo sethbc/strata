@@ -13,3 +13,6 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+
+# Agent task reports (kept untracked)
+TASK-*-REPORT.md
