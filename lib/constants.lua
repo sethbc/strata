@@ -121,6 +121,10 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- Grid holds (lib/grid/core.lua): a scene save key must be held this long
+-- to save; the 64's half toggle (column 1) switches halves after this hold
+local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
+
 -- init()'s start steps in the order it runs them, after the params are
 -- added and their actions wrapped: each module registers its own with
 -- S.register_start(START_ORDER.<step>, fn) (lib/state.lua). The UI first,
@@ -211,6 +215,7 @@ return {
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  GRID_HOLD = GRID_HOLD,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
   DETENT = DETENT,

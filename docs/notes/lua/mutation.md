@@ -24,7 +24,7 @@
 
 Elsewhere:
 - Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
-- `drift_update` reads `S.grids` and `S.grid_page` (`lib/grid/core.lua`).
+- `drift_update` redraws the grid only while a grid shows page 2 (`S.lib.grid_core.any_page(2)`, `lib/grid/core.lua`).
 - `DISCRETE_GRAIN_KEYS`, `BUFFER_MUTATION_KEYS` and `UNDO_SECONDS` are in `lib/constants.lua`, aliased at the top of the constructor.
 - The voice param actions that randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
 - MAIN's ALT+K2 (randomize, or undo while `undo_available`) and its hint are MAIN's (`lib/pages/main.lua`, Wave 2).

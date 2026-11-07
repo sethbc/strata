@@ -6,12 +6,16 @@ return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local grid_core = S.lib.grid_core
 
   -- 8x8 grid layout (64 buttons)
-  function grid_key_64(x, y, z)
+  function grid_key_64(port, x, y, z)
+    if z == 0 then return end  -- presses only
     if y >= 1 and y <= NUM_VOICES then
-      -- Rows 1-7: Pattern triggers (only steps 1-8 fit on this grid)
-      toggle_pattern_step(y, x)
+      -- Rows 1-7: Pattern triggers (only steps 1-8 fit on this grid; levels
+      -- follow its columns)
+      local visible_steps = math.min(PATTERN_LENGTH, S.grids[port].cols)
+      grid_core.step_key(port, x, y, z, y, x, x, visible_steps)
     elseif y == 8 then
       -- Row 8: Controls
       if x == 1 then
@@ -22,7 +26,7 @@ return function(S)
     end
   end
 
-  function grid_redraw_64(grid_device)
+  function grid_redraw_64(port, grid_device)
     -- Draw patterns (rows 1-7). Only the first 8 steps of each 16-step
     -- pattern fit; the sequencer still plays all PATTERN_LENGTH steps.
     local visible_steps = math.min(PATTERN_LENGTH, grid_device.cols)

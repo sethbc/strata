@@ -8,14 +8,18 @@
 - The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
 - Faders follow each controlspec's warp (`set_param_from_column`), and a range that spans 0 has a zero column that sets exactly 0.
 - The pattern clock only syncs (`clock.sync`), so external clock sources keep working. `pattern_clock_start` cancels a running clock before starting a new one.
+- Pages are per port (`S.lib.grid_core.page(port)`, `set_page`); a check for a page shown anywhere uses `any_page(n)`. There is no global grid page.
+- A delayed key action goes through `on_hold`, never a clock of its own: release, `grid.remove` and cleanup cancel it, so a grid unplugged mid-hold never saves a scene and no clock errors.
+- Pattern keys go through `step_key` and scene save keys through `scene_save_key` on every layout, so the step-level gesture and the save hold work the same everywhere.
 
 ## Owns
 
 - `lib/grid/core.lua` (`S.lib.grid_core`): the device lifecycle and what every layout shares.
-  - State on `S`: `S.grids`, `S.MAX_GRID_PORTS`, the grid UI state (`S.grid_page`, `S.param_page`, `S.grid_voice_select`).
+  - State on `S`: `S.grids`, `S.MAX_GRID_PORTS`, the grid UI state (`S.grid_pages[port]`, read through `page(port)`; `S.param_page`, `S.grid_voice_select`), the held keys `S.grid_held[port][x][y]` (press time).
   - `GRID_LAYOUT`, exported as `S.lib.grid_core.GRID_LAYOUT`, which `lib/grid/faders.lua` and `lib/grid/layout_256.lua` alias.
-  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid.add`/`grid.remove` are fields of norns' `grid` table. `grid_layout` and `attach_grid` are locals of the constructor.
-  - Cleanup step 170: every connected grid left dark.
+  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid.add`/`grid.remove` are fields of norns' `grid` table. `grid_layout`, `attach_grid` and `forget_port` are locals of the constructor.
+  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `set_page`, `any_page`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `level_for_position`, `step_key`, `scene_save_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`.
+  - Cleanup step 170: every pending hold canceled and every port's keys forgotten, then every connected grid left dark.
 - `lib/grid/faders.lua` (`S.lib.grid_faders`): the 256's fader maths and fader rows: `fader_param_ids`, `fader_page_count`, `fader_zero_column`, `fader_column_fraction`, `set_param_from_column`, `set_fader_param`, `fader_position`, `voice_level_fader_keys`, `grid_redraw_fader_row`, `grid_redraw_faders`. `BUFFER_FADER_KEYS`, `GRAIN_FADER_KEYS` and `append_fader_ids` are local to it.
 - `lib/grid/layout_256.lua` (the 256's four pages), `lib/grid/layout_128h.lua`, `lib/grid/layout_128v.lua`, `lib/grid/layout_64.lua` (`S.lib.grid_layout_256`, ...): one layout each. Each defines its global key and redraw functions and registers `S.registry.grid_layouts["256"|"128h"|"128v"|"64"] = {key = ..., redraw = ...}`.
 - `lib/sequencer.lua` (`S.lib.sequencer`):
@@ -29,7 +33,7 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 
 - `grid_init()`: connects up to 4 grid ports at init (start step `START_ORDER.grids`).
 - `grid.add(device)`: norns' callback when a grid connects (hot-plug).
-- `grid.remove(device)`: norns' callback when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot.
+- `grid.remove(device)`: norns' callback when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot, and forgets the port (`forget_port`): its pending holds are canceled, its held, consumed and step keys, its `port_state` and its page are dropped. `grid.add` forgets the port too, so a grid plugged in starts with no held keys, on page 1.
 - `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`.
 - Why never the raw device: devices have no `.device` field (so `grid_redraw` would skip them), and norns fires both `device.key` and `vports[port].key`, so handlers on both would run every press twice. The arc uses the same vport-only pattern (`attach_arc`).
 
@@ -42,10 +46,20 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 - **8×8 (64 buttons)**: `grid_key_64()` and `grid_redraw_64()`, the compact layout.
 
 Several grids:
-- All grids show the same interface at once.
-- `grid_redraw()` iterates over `S.grids` and updates each grid.
-- Shared state (patterns, voice status, pages) keeps them consistent.
-- Each grid can trigger the same functions independently.
+- Each grid shows and changes its own page; everything else (patterns, voice status, the fader page and voice) is shared.
+- `grid_redraw()` iterates over `S.grids` and calls each grid's layout with its port: `redraw(port, grid_device)`.
+- Held keys, holds and the step-level gesture are per port: a step held on one grid never sets levels from another.
+
+## Pages, held keys and holds
+
+- `grid_key(port, x, y, z)` ignores events outside the grid's size. A press sets `S.grid_held[port][x][y] = util.time()` (and forgets any earlier state of that key, for a press with no release before it), then calls the layout's `key(port, x, y, 1)`. A release cancels the key's pending hold, calls `key(port, x, y, 0)` unless the key was consumed, then clears the key (held, consumed, step key). Either way it redraws the grid and requests a screen redraw. Layouts return on `z == 0` unless they handle releases.
+- `page(port)` is 1 until `set_page(port, page)` (port 1..`MAX_GRID_PORTS`, page 1-4; anything else is ignored). `any_page(page)` is true while a connected grid shows it: `drift_update` (page 2), `fx_fader_changed` and `buffer_state_changed` (page 4) redraw only then.
+- `on_hold(port, x, y, seconds, fn)`: for a held key, a `clock.run` that sleeps `seconds` and runs `fn` once if the hold is still the pending one. A new press or the release of the key, `grid.remove` of the port and cleanup cancel it. `hold_pending(port, x, y)` is true while it waits.
+- `consume(port, x, y)` marks a held key so its release does nothing; `consumed` reads it. The mark goes with the release.
+- `port_state(port)`: a table for a layout's per-port state, created on demand and dropped when the port's grid is removed.
+- **Step level** (`step_key(port, x, y, z, voice, step, position, positions)`): on press, if another step key of the same voice is held on the same port (one pressed through `step_key`, not one that itself set a level), the most recently pressed of them gets `level_for_position(position, positions)` = `max(1, round(position * MAX_STEP_LEVEL / positions))`, and both keys are consumed; the pressed key does not toggle and stays out of the gesture while held. Otherwise the step toggles at press. A voice, step or position out of range (not a whole number in 1..`NUM_VOICES`, 1..`PATTERN_LENGTH`, 1..`positions`) does nothing. `position` runs along the voice's shown steps: the column on 256 and 128h (16 positions) and 64 (8, its column count), the row of the voice's column on 128v (16).
+- **Scene save** (`scene_save_key(port, x, y, z, scene)`): a press arms `on_hold` for `GRID_HOLD.scene_save_seconds` (0.5 s); then `capture_scene(scene)`, `grid_redraw()` and `request_redraw()` (SETUP counts the saved scenes). Layouts light the key at 15 while `hold_pending` (4 otherwise). A shorter press saves nothing.
+- **Source and slot keys**: `source_key(voice, option)` sets `v<voice>_source` for option 1..`#SOURCE_OPTIONS` (anything else, or a voice outside 1..`NUM_VOICES`, is ignored); `source_level(voice, option)` is 15 for the selected source, 2 for an empty buffer, 4 otherwise. `record_key(slot)`/`clear_key(slot)` call `record_buffer`/`clear_buffer` for slots 1..`NUM_BUFFERS`; `record_level(slot)` is 15 recording, 8 holding audio, 2 empty; `CLEAR_LEVEL` is 4. Out-of-range levels are 0.
 
 ## Pattern sequencer
 
@@ -86,7 +100,7 @@ end
 
 ## Keys
 
-- The key handler checks `z == 0` and ignores releases: it acts on presses only. Only the norns keys have release handling (`docs/notes/lua/ui-and-pages.md`).
+- Every layout acts on presses only today (`z == 0` returns at once); `grid_key` passes releases on so a layout can handle them, and it tracks held keys for holds and two-key gestures (above).
 - Grid pages switch between pattern sequencing and parameter control.
 
 ## 256 parameter page (page 2)
@@ -120,7 +134,7 @@ Columns:
 Keys:
 - **Row 1**: scene recall (instant): press to load scene 1-8 at once.
 - **Row 2**: scene recall with transition: press to crossfade into scene 1-8.
-- **Row 3**: scene save: press to capture the current state to scene 1-8.
+- **Row 3**: scene save: hold 0.5 s to capture the current state to scene 1-8 (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
 - **Row 5, column 1**: scene sequencer on/off.
 - **Row 5, columns 3-10**: sequence length (1-8 scenes).
 
@@ -139,15 +153,15 @@ It follows changes made anywhere (issue #49):
 
 ## 256 buffers / FX page (page 4)
 
-`grid_key_256` has an explicit `S.grid_page == 4` branch, so page 4 never falls through to the pattern page.
-- Row 1 (`GRID_LAYOUT.buffer_record_row`), columns 1-`NUM_BUFFERS`: `record_buffer(x)` (a second press stops early).
-- Row 2 (`GRID_LAYOUT.buffer_clear_row`): `clear_buffer(x)`.
-- `grid_redraw_256_buffers`: row 1 at 15 recording, 8 loaded, 2 empty; row 2 at 4.
+`grid_key_256` has an explicit page 4 branch (`page(port) == 4`), so page 4 never falls through to the pattern page.
+- Row 1 (`GRID_LAYOUT.buffer_record_row`), columns 1-`NUM_BUFFERS`: `record_key(x)` (`record_buffer`; a second press stops early).
+- Row 2 (`GRID_LAYOUT.buffer_clear_row`): `clear_key(x)` (`clear_buffer`).
+- `grid_redraw_256_buffers`: row 1 at `record_level` (15 recording, 8 loaded, 2 empty); row 2 at `CLEAR_LEVEL` (4).
 - Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`).
   - The filter/delay param actions call `fx_fader_changed()` (`lib/params_setup.lua`), which redraws the grid while page 4 is shown, so the faders follow the screen, the arc and scene recalls.
   - During a smooth scene transition (`S.scene_transition_active`) it does not redraw: the transition loop redraws once per step.
-- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x (1..`#SOURCE_OPTIONS`) is `params:set("v<voice>_source", x)` (1 synth, 2-9 buffer 1-8, 10 input). Columns 11-16 do nothing.
-  - `grid_redraw_256_sources`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
+- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input). Columns 11-16 do nothing.
+  - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
   - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.
 - Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`).
 - Smaller grids have no buffers / FX page: buffers and sources are on the BUFFER screen page and in params.

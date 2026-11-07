@@ -7,10 +7,12 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_SCENES = S.constants.NUM_SCENES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local grid_core = S.lib.grid_core
 
   -- 16x8 grid layout (128 buttons horizontal)
-  function grid_key_128h(x, y, z)
-    if S.grid_page == 3 then
+  function grid_key_128h(port, x, y, z)
+    if z == 0 then return end  -- presses only
+    if grid_core.page(port) == 3 then
       -- Scene page
       if y == 1 and x <= NUM_SCENES then
         -- Row 1: Scene recall (instant)
@@ -19,8 +21,8 @@ return function(S)
         -- Row 2: Scene recall (with transition)
         recall_scene(x, params:get("scene_transition_time"))
       elseif y == 3 and x <= NUM_SCENES then
-        -- Row 3: Scene save
-        capture_scene(x)
+        -- Row 3: Scene save, once held
+        grid_core.scene_save_key(port, x, y, z, x)
       elseif y == 5 and x == 1 then
         -- Toggle scene sequencer
         local enabled = params:get("scene_sequencer_enabled")
@@ -31,7 +33,7 @@ return function(S)
       end
     elseif y >= 1 and y <= NUM_VOICES then
       -- Rows 1-7: Pattern triggers
-      toggle_pattern_step(y, x)
+      grid_core.step_key(port, x, y, z, y, x, x, PATTERN_LENGTH)
     end
 
     -- Row 8: Always accessible (multi-function)
@@ -39,11 +41,11 @@ return function(S)
       if x <= 4 then
         pattern_toggle()
       elseif x == 5 then
-        S.grid_page = 1  -- Patterns
+        grid_core.set_page(port, 1)  -- Patterns
       elseif x == 6 then
-        S.grid_page = 2  -- Parameters
+        grid_core.set_page(port, 2)  -- Parameters
       elseif x == 7 then
-        S.grid_page = 3  -- Scenes
+        grid_core.set_page(port, 3)  -- Scenes
       elseif x >= 9 and x <= 8 + NUM_VOICES then
         -- Voice toggle
         toggle_voice(x - 8)
@@ -54,8 +56,9 @@ return function(S)
     end
   end
 
-  function grid_redraw_128h(grid_device)
-    if S.grid_page == 3 then
+  function grid_redraw_128h(port, grid_device)
+    local page = grid_core.page(port)
+    if page == 3 then
       -- Scene page (simplified for 128h layout)
       -- Row 1: Scene recall (instant)
       for i = 1, NUM_SCENES do
@@ -70,9 +73,9 @@ return function(S)
         grid_device:led(i, 2, brightness)
       end
 
-      -- Row 3: Scene save
+      -- Row 3: Scene save (15 while a save is held)
       for i = 1, NUM_SCENES do
-        grid_device:led(i, 3, 4)
+        grid_device:led(i, 3, grid_core.hold_pending(port, i, 3) and 15 or 4)
       end
 
       -- Row 5: Scene sequencer controls
@@ -105,9 +108,9 @@ return function(S)
     end
 
     -- Page indicators (3 pages now)
-    grid_device:led(5, 8, S.grid_page == 1 and 15 or 4)
-    grid_device:led(6, 8, S.grid_page == 2 and 15 or 4)
-    grid_device:led(7, 8, S.grid_page == 3 and 15 or 4)
+    grid_device:led(5, 8, page == 1 and 15 or 4)
+    grid_device:led(6, 8, page == 2 and 15 or 4)
+    grid_device:led(7, 8, page == 3 and 15 or 4)
 
     -- Voice status
     for i = 1, NUM_VOICES do

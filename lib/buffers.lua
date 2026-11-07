@@ -304,7 +304,7 @@ return function(S)
     -- the periodic poll repeats unchanged values: redraw only on a change
     if not changed then return end
     request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
-    if S.grid_page == 4 then grid_redraw() end
+    if S.lib.grid_core.any_page(4) then grid_redraw() end
   end
 
   -- bufferLoadFailed poll: the engine could not use the file of one of the

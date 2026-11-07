@@ -188,7 +188,7 @@ return function(S)
 
     -- Grain pitch is shown on the parameter fader page; this runs 10x/s, so
     -- only redraw when a grid is actually showing that page
-    if next(S.grids) ~= nil and S.grid_page == 2 then
+    if S.lib.grid_core.any_page(2) then
       grid_redraw()
     end
 
