@@ -1,0 +1,64 @@
+## Must not break
+
+- **Writers run last in `voiceGroup`** (after the voice, input and record synths), so a voice writer records only its voice synth: mirroring grain synths write the voice bus later, in `processGroup`. They are persistent (started in the rings area's `start`, never released) and their keys (`ringWrite0`..`ringWrite6`, `ringWriteInput`) are `effectKeys`, so they get plain messages.
+- **A writer's input goes through `zeroBadValues`** before its `BufWr`s: a voice that blows up never writes NaN into a ring that frozen or later grains replay.
+- **Rings only ever append.** Any other write into a voice ring (3.2's freeze copy) fades the voice's ring readers first (`ringLevel 0`, waiting `bufferFadeWait` when one plays) and runs only if `ringChanges[voice]` is unchanged, as `slotChanges` guards the slots.
+- **`ringReaders`** holds every `\strataGrainRing` with its voice until it frees (set in `startGrainSynth`, cleared in `watchVoiceSynth`'s `onFree`).
+- **The lookback bound.** Ring rates are clipped to ±`ringMaxRate` (4) and grains are at most `grainMaxSeconds` (0.5 s), so no grain reads further back than margin + history + spread + 2.5 s: inside a 4 s voice ring, and inside the input ring's `ringGuardSeconds` (4) + 1 s past `historySeconds`. A forward grain never overtakes the write head.
+- **Bufnums never change.** The rings are allocated once in `allocState` (not in the real-time pool) and freed in `free`.
+
+## The rings
+
+The rings area (`lib/engine/StrataRings.sc`, order 70) gives every synth- and input-sourced grain synth a buffer to read, so all three sources share one grain path (`\strataGrainRing`, `\strataGrainBuf`: `docs/notes/engine/grains.md`).
+
+`areaState[\rings]`:
+
+| Key | What |
+|-----|------|
+| `\voiceL`, `\voiceR` | Arrays of `numVoices` mono buffers, `ringSeconds` (4 s) at the server rate: each voice's ring |
+| `\inputL`, `\inputR` | the input ring, `historySeconds + ringGuardSeconds + 1` s (16 + 4 + 1 = 21 s standard, 65 s high) |
+| `\phaseBuses` | `numVoices + 1` control buses, each writer's frame position (the last is the input's) |
+| `\writers` | the `numVoices + 1` `\strataRingWrite` synths, voices first |
+| `\readers` | `ringReaders`: `\strataGrainRing` synth → voice |
+| `\changes` | `ringChanges`: per voice, a count a source switch (here) and freeze/unfreeze (the freeze area) bump |
+
+RAM (ordinary, not the real-time pool): 7 × 2 × 4 s × 192 KB/s = 10.8 MB of voice rings and 8.1 MB of input ring on standard (25 MB on high).
+
+Methods: `ringSeconds` (4), `ringGuardSeconds` (4), `ringReadMargin` (0.005 s), `ringSpreadSeconds` (0.5 s), `ringMaxRate` (4), `ringWriterKeys`, `ringReaders`, `ringChanges`, `ringBuffersFor(voice, source)` → `[left buffer, right buffer, phase bus]` (the voice's ring for source 0, the input ring for `inputSource`, nil for a slot).
+
+### Writers
+
+`\strataRingWrite` (`in`, `bufL`, `bufR`, `phaseOut`): a `Phasor.ar` over the ring's frames drives two `BufWr`s and reports its position with `Out.kr(phaseOut, A2K.kr(phase))`. The `Phasor` starts from the frame on `phaseOut` (an `Impulse.ar(0)` reset to `In.kr(phaseOut)`), so a writer that replaces another (3.2's spectral freeze, `Synth.replace`) carries on where it was; the phase buses start at 0. One writer per voice reads `granBuses[i]`, and the input writer reads `inputBus`. They start at the tail of `voiceGroup` in the rings area's `start` (after the voices area's groups and the buffers area's input synth), stop in its `stop` (before the voices area frees the groups) and the rings and phase buses are freed in its `free`.
+
+`In.ar` reads a bus not yet written in this cycle as silence, so a voice writer, running before `processGroup`, never records a mirroring grain synth's output: returning to the synth source never re-grains a fading buffer voice's mirror, with no gating.
+
+### Where a ring grain starts
+
+`ringGrainReader` (in `lib/engine/StrataGrainDefs.sc`) reads the write head from the phase bus (`In.kr`, the frame the writer reported at the start of the block) and starts each grain a lookback `D` behind it, at the rate `r` (clipped to ±4) and duration `dur` that `grainBody` passed:
+
+```
+continuous: D = margin + history + spread + max(r - 1, 0) * dur
+triggered:  dur' = min(dur, dur / (r - 1)),  D = margin + history + max(r - 1, 0) * dur'
+```
+
+- `margin` is `ringReadMargin`. A grain triggered later in a block finds the head up to a block further on than it was told, which only adds lookback: the engine check measures one block (1.3 ms at 48 kHz) more than `D`.
+- `history` (seconds, clipped to `historySeconds`) is the input voices' history (`lib/history.lua`). The grains area's `history` handler stores it for every voice but sends it only to an input voice's grain synth, and `grainControlPairs` gives a synth-source grain synth `history 0`: its voice ring holds 4 s.
+- `spread` is a per-grain draw of 0 to `posSpread × ringSpreadSeconds`, backward only (forward of the head is the future). It is 0 in triggered mode, as 3.1's position spread did nothing there for synth and input voices.
+- Triggered grains above rate 2 are shortened, so their lookback is never more than one grain (plus margin and history): rate 4 and 0.5 s grains last 0.167 s and start 0.505 s back, where a continuous grain keeps its 0.5 s and starts 1.505 s back.
+- Reverse grains (negative rates, from 3.2's variation area) need no lookback: they read older audio.
+- `GrainBuf` wraps: a grain crossing the ring's end continues from frame 0 (and a reverse one crossing frame 0 continues from the end), so the ring needs no special case.
+
+## The engine check (`test/engine_check/rings.scd`)
+
+Most of it reads a timecode: a check synth writes the seconds since it started (left) and 1 (right) into voice 1's bus and the input bus, and the same seconds to a private bus. A grain synth with a rectangular envelope (`envBuf`) and no pan wander or spread then plays left/right = the time its audio was written, so "now minus that" is how far back it reads, sample by sample, whatever its level. It checks:
+- the area's state, sizes and constants; `ringBuffersFor`;
+- one writer per voice plus the input writer at the tail of `voiceGroup` (with a voice and a recording running), each reading its bus into its ring, their keys among `effectKeys`;
+- a writer starts from the frame on its phase bus;
+- a NaN input writes zeros (the ring stays finite);
+- `GrainBuf` wraps forward across a buffer end and backward across frame 0 (on CI's SuperCollider 3.13, the recheck §2.1 of the design asked for);
+- no `PitchShift`, `DelayC` or other delay line in either grain SynthDef; `\strataGrainRing` runs two stereo `GrainBuf`s;
+- pitch is the rate: `pitchShift` 0.5, 1 and 2 on a 440 Hz sine play 220, 440 and 880 Hz (`Pitch`, within 1%); a synth voice's bend (2, on an FM voice at index 0) is applied once (880 Hz, not 1760);
+- at rate 4 and 0.5 s grains no grain reads ahead of the write head; a continuous grain keeps its 0.5 s length; a triggered one lasts 0.167 s and starts at most 0.505 s back (plus a block);
+- grains crossing the ring's end read on without a jump or a gap (rate 1, grains back to back for longer than the ring);
+- history never reaches a synth-sourced voice's grain synth; history 2 on an input voice reads from 2 s back (plus the margin and a block);
+- `free` frees a second engine's writers, rings and phase buses.

@@ -24,7 +24,7 @@ var voiceGrainNodes = { arg nodes, voice;
     var voiceBus = engine.granBuses[voice].index;
     nodes.collect({ arg node, position;
         if (grainDefs.includes(node.def) and: { node.controls[\mirrorOut] == voiceBus }) {
-            [position, (node.def == \strataGrain) and: { node.controls[\in] == voiceBus }]
+            [position, (node.def == \strataGrainRing) and: { node.controls[\bufL] == engine.ringBuffersFor(voice, 0)[0].bufnum }]
         }
     }).reject(_.isNil)
 };
@@ -302,10 +302,12 @@ check.(getControl.(grainBuf, \modAmpAmt1) == 0.5 and: { getControl.(grainBuf, \m
 check.(getControl.(grainBuf, \amp).equalWithPrecision(0.3), "the voice's amp sets strataGrainBuf's level");
 check.(getControl.(grainBuf, \bufRate) == 0.5, "setGrainParam bufRate reaches strataGrainBuf");
 command.(\setGrainSource, 0, 9); server.sync;
-check.(synthNames.(context.xg).count({ arg n; n == \strataGrainBuf }) == 2, "input source uses strataGrain (old GrainBuf only releasing)");
+check.(synthNames.(context.xg).count({ arg n; n == \strataGrainBuf }) == 2, "input source uses strataGrainRing (old GrainBuf only releasing)");
 check.(getControl.(grainBuf, \gate) < 0, "switching away releases the GrainBuf synth (forced release)");
-check.(engine.synths[\grain0].defName == \strataGrain
-    and: { getControl.(engine.synths[\grain0], \in) == engine.inputBus.index }, "input source: strataGrain reads inputBus");
+check.(engine.synths[\grain0].defName == \strataGrainRing
+    and: { getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, engine.inputSource)[0].bufnum }
+    and: { getControl.(engine.synths[\grain0], \phaseBus) == engine.ringBuffersFor(0, engine.inputSource)[2].index },
+    "input source: strataGrainRing reads the input ring");
 check.(getControl.(engine.synths[\grain0], \mirrorLevel) == 1
     and: { getControl.(engine.synths[\grain0], \mirrorOut) == engine.granBuses[0].index },
     "input source mirrors into the voice bus (so its mod synth keeps feeding crossmod)");
@@ -332,11 +334,11 @@ check.(getControl.(engine.synths[\voice0], \rq).equalWithPrecision(0.2)
 check.(getControl.(engine.synths[\voice0], \modBus1) == engine.modBuses[2].index
     and: { getControl.(engine.synths[\voice0], \modAmpAmt1) == 0.5 },
     "the restarted voice synth keeps its crossmod routing");
-check.(getControl.(engine.synths[\grain0], \in) == engine.granBuses[0].index
+check.(getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, 0)[0].bufnum
     and: { getControl.(engine.synths[\grain0], \mirrorLevel) == 0 }
     and: { getControl.(engine.synths[\grain0], \accentAmt) == 0 }
     and: { getControl.(engine.synths[\grain0], \amp) == 1 },
-    "synth source: grain reads the voice bus, no mirror, no grain accent, unity level");
+    "synth source: grain reads the voice ring, no mirror, no grain accent, unity level");
 check.(getControl.(engine.synths[\grain0], \modLevel) == 0,
     "synth source: the grain synth's crossmod is off (the voice synth applies it)");
 check.([\modBus1, \modBus2, \modBus3].every({ arg control; getControl.(engine.synths[\grain0], control) == silentIndex }),
@@ -533,8 +535,8 @@ check.((getControl.(after[1], \grainMode) == 1) and: { getControl.(after[1], \en
     "a grain synth built by voiceOn keeps the voice's grain mode and envelope, with voiceOn's size");
 command.(\setGrainParam, 3, \grainMode, 0);
 command.(\setGrainParam, 3, \envShape, 0);
-check.(after[0].isNil and: { after[1].defName == \strataGrain } and: { after[1] !== oldTrio[1] }
-    and: { getControl.(after[1], \in) == engine.inputBus.index }
+check.(after[0].isNil and: { after[1].defName == \strataGrainRing } and: { after[1] !== oldTrio[1] }
+    and: { getControl.(after[1], \bufL) == engine.ringBuffersFor(3, engine.inputSource)[0].bufnum }
     and: { after[2] === oldTrio[2] }, "voiceOn after a source switch in the release builds the new grain synth, re-gates the mod synth");
 check.(grainsBeforeOwnMods.value, "the new mirroring grain synth runs before the re-gated mod synth");
 2.5.wait; server.sync;
@@ -564,5 +566,17 @@ after = voiceTrio.(2);
 check.(after[1].notNil and: { after[1] !== oldTrio[1] } and: { after[1].isPlaying }
     and: { synthNames.(context.xg).size == before }, "a running voice's synth that ends unexpectedly is started again");
 checkModSpeedRestart.(2);
+
+// ringReaders holds every strataGrainRing (live, releasing, fading or
+// cutting) with its voice until it frees, then forgets it
+command.(\setGrainSource, 4, 9); server.sync;     // voice 4's synth-source grain synth now fades
+check.((0..(engine.numVoices - 1)).every({ arg voice;
+        var synth = engine.synths[engine.grainKey(voice)];
+        synth.isNil or: { synth.defName.asSymbol != \strataGrainRing } or: { engine.ringReaders[synth] == voice } })
+    and: { engine.fadingSynths[4].select({ arg synth; synth.defName.asSymbol == \strataGrainRing })
+        .every({ arg synth; engine.ringReaders[synth] == 4 }) }
+    and: { engine.ringReaders.keys.every({ arg synth; synth.defName.asSymbol == \strataGrainRing }) },
+    "lifecycle: ringReaders maps every ring grain synth to its voice (% readers)".format(engine.ringReaders.size));
 h.stopAllVoices;
+check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders empties as ring grain synths free");
 }

@@ -15,7 +15,7 @@ var readBus = { arg bus; h.readBus(bus) };
 var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
 var writeTestFile = { arg path, sampleRate, frames, values; h.writeTestFile(path, sampleRate, frames, values) };
 var grainDefs = h.grainDefs, scratchRoot = h.tempDir;
-var before, envSamples, grainBuf, grainInUGens, voicesStarted;
+var before, envSamples, voicesStarted;
 var probe, peakBus, readPeak, triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
 
 var controlDefault = { arg defName, controlName;
@@ -69,7 +69,7 @@ var checkSourceGrains = { arg voice, slot;
         });
         // triggered grain mode
         command.(\setGrainParam, voice, \grainMode, 1);
-        0.5.wait; server.sync;                 // grains in flight and the PitchShift window have ended
+        0.5.wait; server.sync;                 // the grains in flight have ended
         peaks = measure.(probe, peakBus, 0.3);
         check.(peaks.sum < 0.001, "%-sourced voice in triggered mode is silent without a trigger (peaks %)".format(label, peaks));
         probe.set(\t_reset, 1); server.sync;
@@ -124,58 +124,76 @@ grainDefs.do({ arg name;
             "% has a % control".format(name, control));
     });
 });
-[\accentAmt, \mirrorOut, \mirrorLevel].do({ arg control;
-    check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(control),
-        "strataGrain has a % control (input-source accent and mirror)".format(control));
+// Both grain SynthDefs take the input-source accent, the mirror and the
+// crossmod switches
+grainDefs.do({ arg name;
+    [\accentAmt, \mirrorOut, \mirrorLevel, \modLevel, \rateLevel].do({ arg control;
+        check.(SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).includes(control),
+            "% has a % control (accent, mirror and crossmod switches)".format(name, control));
+    });
 });
 // mirrorOut defaults to bus 0, so a mirror is off unless the engine
 // turns it on: mirrorLevel defaults to 0 in both grain SynthDefs
 grainDefs.do({ arg name;
     check.(controlDefault.(name, \mirrorLevel) == 0, "% has mirrorLevel, default 0 (got %)".format(name, controlDefault.(name, \mirrorLevel)));
 });
-// Amplitude crossmod for input-sourced voices, off (modLevel 0) by default
-[\modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \modLevel].do({ arg control;
-    check.(controlFeedsAUGen.(\strataGrain, control), "strataGrain has a % control that reaches a UGen".format(control));
+// Amplitude crossmod (off, modLevel 0, by default) and frequency crossmod
+// (through the rate, by rateLevel) on both: input voices follow both now
+grainDefs.do({ arg name;
+    [\modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \modLevel,
+        \modFreqAmt1, \modFreqAmt2, \modFreqAmt3, \bend, \rateLevel].do({ arg control;
+        check.(controlFeedsAUGen.(name, control), "% has a % control that reaches a UGen".format(name, control));
+    });
+    check.(controlDefault.(name, \modLevel) == 0, "%'s modLevel defaults to 0 (crossmod off)".format(name));
 });
-check.(controlDefault.(\strataGrain, \modLevel) == 0, "strataGrain's modLevel defaults to 0 (crossmod off)");
-check.(SynthDescLib.global.at(\strataGrain).controlNames.collect(_.asSymbol).includes(\modFreqAmt1).not,
-    "strataGrain has no frequency crossmod (meaningless for live input)");
 [\out, \gate, \bufnumL, \bufnumR, \bufFrames, \bufPos, \bufRate, \bufScan, \grainSize, \grainDensity,
     \pitchShift, \posSpread, \panSpread, \amp, \modBus1, \modBus2, \modBus3, \modAmpAmt1, \modAmpAmt2,
     \modAmpAmt3, \modFreqAmt1, \modFreqAmt2, \modFreqAmt3, \mirrorOut].do({ arg control;
     check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).includes(control),
         "strataGrainBuf has a % control".format(control));
 });
-check.(controlFeedsAUGen.(\strataGrainBuf, \bend), "strataGrainBuf's bend control reaches its rate");
-grainBuf = SynthDescLib.global.at(\strataGrainBuf).def.children;
-check.(grainBuf.count({ arg ugen; ugen.isKindOf(GrainBuf) }) == 2, "strataGrainBuf runs two mono GrainBufs (L/R)");
-check.(grainBuf.select({ arg ugen; ugen.isKindOf(GrainBuf) }).every({ arg ugen; ugen.numChannels == 1 }),
-    "strataGrainBuf's GrainBufs are mono");
-// one PitchShift per channel of the panned pair (not one per GrainBuf path)
-check.(grainBuf.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
-    "strataGrainBuf pitch-shifts the stereo pair once (two mono PitchShifts)");
-check.(grainBuf.any({ arg ugen; ugen.isKindOf(Balance2) }), "strataGrainBuf pans with Balance2");
 check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).includes(\bufRateScale),
     "strataGrainBuf has a bufRateScale control (content rate / server rate)");
-check.(grainBuf.any({ arg ugen; ugen.isKindOf(Select) }) and: { grainBuf.any({ arg ugen; ugen.isKindOf(T2A) }) },
-    "strataGrainBuf selects between Impulse and T2A(t_trig) grain triggers");
-// strataGrain mirrors strataGrainBuf: one mono GrainIn per input
-// channel panned as a pair, so pan spread works for synth and input
-// sources and nothing is doubled
-grainInUGens = SynthDescLib.global.at(\strataGrain).def.children;
-check.(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) }) == 2
-    and: { grainInUGens.select({ arg ugen; ugen.isKindOf(GrainIn) }).every({ arg ugen; ugen.channels.size == 1 }) },
-    "strataGrain runs two mono GrainIns (L/R; got %)".format(grainInUGens.count({ arg ugen; ugen.isKindOf(GrainIn) })));
-check.(grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) }) == 2,
-    "strataGrain pitch-shifts the stereo pair once (two mono PitchShifts; got %)".format(
-        grainInUGens.count({ arg ugen; ugen.isKindOf(PitchShift) })));
-check.(grainInUGens.any({ arg ugen; ugen.isKindOf(Balance2) }), "strataGrain pans with Balance2");
-check.(grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2],
-    "strataGrain has one stereo Out to mainBus and one to the mirror (got %)".format(
-        grainInUGens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 })));
-check.(SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(Select) })
-    and: { SynthDescLib.global.at(\strataGrain).def.children.any({ arg ugen; ugen.isKindOf(T2A) }) },
-    "strataGrain selects between Impulse and T2A(t_trig) grain triggers");
+[\bufL, \bufR, \phaseBus, \history].do({ arg control;
+    check.(controlFeedsAUGen.(\strataGrainRing, control), "strataGrainRing has a % control that reaches a UGen".format(control));
+});
+// "grains: both grain defs declare every 3.2 control", with defaults that
+// keep 3.1's sound (the ring def adds bufL, bufR and phaseBus, above)
+check.(grainDefs.every({ arg name;
+    var defaults = [[\history, 0], [\ringLevel, 1], [\rateLevel, 1], [\freeze, 0], [\freezeMode, 0], [\reverseProb, 0],
+        [\pitchJitter, 0], [\panJitter, 0], [\sizeJitter, 0]]
+    ++ (1..8).collect({ arg index; [("interval" ++ index).asSymbol, 0] })
+    ++ [[\intervalCount, 0], [\intervalProb, 1], [\quantize, 0], [\scaleNote, 60], [\loopStart, 0], [\loopLength, 1],
+        [\filterType, 0], [\filterFreq, 5000], [\filterRes, 0.5], [\filterMix, 0], [\delaySend, 1], [\reverbSend, 1]];
+    defaults.every({ arg pair; controlDefault.(name, pair[0]) == pair[1] })
+}), "grains: both grain defs declare every 3.2 control");
+// "grains: the hook methods exist": the areas that fill them later
+// (variation, loop, freeze, mix) keep these names
+check.([\grainRate, \grainPan, \grainDur, \slotGrainPos, \scanRate, \freezeVoice, \unfreezeVoice, \voiceOutput, \voiceFilter]
+    .every({ arg method; engine.respondsTo(method) }), "grains: the hook methods exist");
+// Both: two stereo GrainBufs (one per channel buffer, panned -1 and +1, so
+// the pair stays sample-aligned), Balance2 for the pan wander, the trigger
+// selected by grainMode, and one stereo Out to mainBus and one to the mirror
+grainDefs.do({ arg name;
+    var ugens = SynthDescLib.global.at(name).def.children;
+    var grainBufs = ugens.select({ arg ugen; ugen.isKindOf(GrainBuf) });
+    check.((grainBufs.size == 2) and: { grainBufs.every({ arg ugen; ugen.channels.size == 2 }) },
+        "% runs two stereo GrainBufs, one per channel buffer (got %)".format(name, grainBufs.size));
+    check.(ugens.any({ arg ugen; ugen.isKindOf(Balance2) }), "% pans with Balance2".format(name));
+    check.(ugens.any({ arg ugen; ugen.isKindOf(Select) }) and: { ugens.any({ arg ugen; ugen.isKindOf(T2A) }) },
+        "% selects between Impulse and T2A(t_trig) grain triggers".format(name));
+    check.(ugens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2],
+        "% has one stereo Out to mainBus and one to the mirror (got %)".format(name,
+            ugens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 })));
+});
+// "grains: sources 0 and 9 build strataGrainRing, 1-8 strataGrainBuf" (a stopped voice)
+check.((0..engine.inputSource).every({ arg source;
+    var expected = if (source.inclusivelyBetween(1, engine.numBuffers)) { \strataGrainBuf } { \strataGrainRing };
+    command.(\setGrainSource, 5, source);
+    engine.grainDefFor(5) == expected
+}), "grains: sources 0 and 9 build strataGrainRing, 1-8 strataGrainBuf");
+command.(\setGrainSource, 5, 0);
+
 
 // setGrainSource on a stopped voice only records the source
 before = synthNames.(context.xg).size;
@@ -193,6 +211,12 @@ check.(getControl.(engine.synths[\grain6], \bufnumL) == engine.buffersL[3].bufnu
     and: { getControl.(engine.synths[\grain6], \bufnumR) == engine.buffersR[3].bufnum },
     "source 4 reads slot 4 (index 3)");
 check.(getControl.(engine.synths[\grain6], \grainSize).equalWithPrecision(0.1), "voiceOn grain args reach strataGrainBuf");
+check.((engine.synths[\grain0].defName == \strataGrainRing)
+    and: { [[\mirrorLevel, 0], [\pan, 0], [\rateLevel, 0], [\accentAmt, 0], [\modLevel, 0]].every({ arg pair;
+        getControl.(engine.synths[\grain0], pair[0]) == pair[1] }) }
+    and: { getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, 0)[0].bufnum }
+    and: { getControl.(engine.synths[\grain0], \phaseBus) == engine.ringBuffersFor(0, 0)[2].index },
+    "grains: the synth-source grain synth keeps mirrorLevel 0, pan 0 and rateLevel 0 (and reads its voice's ring)");
 
 command.(\setGrainParam, 0, \pitchShift, 2.0);
 command.(\setGrainParam, 0, \posSpread, 0.7);
@@ -259,7 +283,7 @@ server.sync;
 continuousPeak = readPeak.value;
 check.(continuousPeak > 0.01, "a running synth voice's continuous grains sound (peak %)".format(continuousPeak));
 command.(\setGrainParam, 0, \grainMode, 1);
-0.5.wait; server.sync;                     // grains in flight and the PitchShift window have ended
+0.5.wait; server.sync;                     // the grains in flight have ended
 untriggeredPeak = readPeak.value;
 check.(untriggeredPeak < 0.001,
     "a triggered-mode synth voice is silent without a trigger (peak %)".format(untriggeredPeak));

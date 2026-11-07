@@ -34,9 +34,9 @@ var areas = if (missingAreas.notEmpty) {
 var context, engine, h;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
-var allDefs = voiceDefs ++ [\strataMod, \strataGrain, \strataGrainBuf, \strataInput, \strataRecord,
+var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataInput, \strataRecord, \strataRingWrite,
     \strataFilter, \strataDelay, \strataReverb, \strataMaster];
-var grainDefs = [\strataGrain, \strataGrainBuf];
+var grainDefs = [\strataGrainRing, \strataGrainBuf];
 var engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
 var pollMessages = List.new;
 // scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different

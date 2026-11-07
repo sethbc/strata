@@ -75,7 +75,9 @@ check.(engine.grainSource == Array.fill(engine.numVoices, 0), "every voice start
 check.(engine.inputBus.numChannels == 2 and: { engine.inputBus.rate == \audio }, "inputBus is a stereo audio bus");
 check.(engine.inputSynth.defName == \strataInput
     and: { getControl.(engine.inputSynth, \out) == engine.inputBus.index }, "strataInput writes inputBus");
-check.(synthNames.(engine.voiceGroup) == List[\strataInput], "strataInput runs in the voice group");
+names = synthNames.(engine.voiceGroup);
+check.(names.asArray == ([\strataInput] ++ (\strataRingWrite ! (engine.numVoices + 1))),
+    "strataInput and the ring writers run in the voice group (got %)".format(names));
 
 // Commands on never-started voices must not throw (M6)
 command.(\voiceOff, 2);
@@ -96,8 +98,8 @@ names = synthNames.(context.xg);
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;
-check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + 4),
-    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, filter, delay, reverb and master (got %)".format(
+check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + 4),
+    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, filter, delay, reverb and master (got %)".format(
         engine.numVoices - 1, names.size));
 check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
 check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");

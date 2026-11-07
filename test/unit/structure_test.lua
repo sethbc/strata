@@ -657,8 +657,11 @@ local function start_steps()
       table.insert(voice_sync, command)
     end
   end
-  for _, effect in ipairs({ "engine.setModSpeed", "engine.setVoiceParam", "voice list built", "redraw requested",
-      "grid redrawn" }) do
+  table.insert(voice_sync, "engine.setModSpeed")
+  table.insert(voice_sync, "engine.setVoiceParam")
+  -- the registered voice params' grain keys (lib/history.lua's history)
+  if #local_value("S").registry.voice_params > 0 then table.insert(voice_sync, "engine.setGrainParam") end
+  for _, effect in ipairs({ "voice list built", "redraw requested", "grid redrawn" }) do
     table.insert(voice_sync, effect)
   end
   table.insert(voice_sync, 1, "clock started")

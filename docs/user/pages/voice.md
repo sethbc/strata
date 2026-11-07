@@ -6,6 +6,7 @@ The selected voice is the one picked on MAIN (or from the grid). The line under 
 
 Below it, five rows at a time, the voice's parameters in four sections, each under a dim section name:
 - **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead; an input-sourced voice has no synth section (its sections are then counted out of three)
+- **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
 - **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp) and pan (the Sub has no pan)
