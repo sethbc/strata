@@ -8,7 +8,7 @@ Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between
   - 3.0 (sample and input sources, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, paged screen) through PR #3, and CI through PR #4.
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
   - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
-  - 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes and the release.
+  - 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes (#115) and the release.
 - **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
@@ -50,7 +50,7 @@ CHANGELOG.md has every change. In short:
 - **Keys:** K1 held as ALT through `alt_action`; ALT+E3 fine adjustment; center detents for ranges through 0; lock (stored as `frozen`) on ALT+K3; randomize on MAIN's ALT+K2 with a 5 s undo.
 - **Grid and arc:** pages and holds per grid, step levels from a second key, half-second scene saves, fader and sources pages on the 16×8 and 8×16, pattern halves on the 8×8, copy/paste on the 16×16; arc rings on every page but SETUP, ALT rings on MAIN, bipolar fills and a per-page button.
 - **Code:** `strata.lua` split into `lib/` modules with registries (pages, params, grid layouts, start, cleanup), so features own disjoint files. No engine change; the one default change is LFO depth 25%.
-- **Tests:** 457 Lua tests, in one unit file per module, page, grid layout and the arc's page rings.
+- **Tests:** 462 Lua tests, in one unit file per module, page, grid layout and the arc's page rings.
 
 ## Open items
 
@@ -137,7 +137,7 @@ From the 3.1 design's "Cost if wrong" and the calls made while building it:
 - **The only default change is LFO depth 25%:** new LFOs are audible when turned on; scenes keep their stored depth, and scene files without LFO settings recall silent LFOs. If wrong: one constant.
 - **No new scene fields in 3.1:** the LFO offset is kept across on/off (`wrap_param_action` in `lib/lfos.lua`, #103 step 1), but scenes don't store it until 3.2. If wrong: recalls keep whatever offset is set.
 - **Fine adjustment is a tenth of the raw step, on ALT+E3 only;** a param's own `controlspec.step` still limits it, number and option params keep whole steps, and the arc has no fine mode. If wrong: `FINE_DIVISOR`, one constant.
-- **Center detents hold for 3 encoder detents or 24 arc ticks** after a change reaches or crosses 0. If wrong: `DETENT`'s two values.
+- **Center detents hold for 3 encoder detents or 24 arc ticks** after a change reaches or crosses 0, and for at most 1 s, so a hold left from an old turn never swallows a later one. If wrong: `DETENT`'s three values.
 - **The arc button acts per page** (start/stop, play/stop, record/stop, recall, LFO on/off; nothing on FX and SETUP), not always as K3: on LFO, K3 selects the next LFO. If wrong: one `arc_button` field per page.
 - **VOICE's whole-step rings step one value per 20 ticks** (choices and numbers), like the LFO page's clocked rate. If wrong: retune on #6.
 - **Grid scene saves need a half-second hold**, so a stray press never overwrites a scene. If wrong: `GRID_HOLD`, one constant.

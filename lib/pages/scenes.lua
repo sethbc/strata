@@ -19,12 +19,13 @@ return function(S)
   local SCENES_PAGE = {
     column_x = {2, 66},          -- left edge of each column
     rows_per_column = 4,
-    first_row_y = 17,            -- text baseline of slot 1
-    row_spacing = 7,
+    first_row_y = 16,            -- text baseline of slot 1
+    row_spacing = 8,             -- room for the cursor box between rows
     box_offset = 8,              -- the box's x from the column edge
     box_size = 5,
     mark_offset = 22,            -- the sequencer mark's x from the column edge
-    cursor_width = 20,
+    cursor_left = 2,             -- the cursor box's left edge, left of the column edge
+    cursor_width = 21,
     fields_y = {48, 55},         -- the 2x2 block's text baselines
     arm_seconds = 2,             -- the second ALT+K3 must come within this
   }
@@ -81,7 +82,8 @@ return function(S)
       end
       if slot == cursor then
         screen.level(15)
-        screen.rect(x - 1, y - SCENES_PAGE.box_size - 2, SCENES_PAGE.cursor_width, SCENES_PAGE.row_spacing + 1)
+        -- one clear pixel around the number and box, inside and out
+        screen.rect(x - SCENES_PAGE.cursor_left, y - SCENES_PAGE.box_size - 2, SCENES_PAGE.cursor_width, SCENES_PAGE.box_size + 4)
         screen.stroke()
       end
     end

@@ -41,7 +41,7 @@ Playable from the norns alone (design: `docs/design/3.1-design.md`). No engine, 
 - Grid: pages and held keys per port (`S.lib.grid_core.page`, `S.grid_held`), `step_key` step levels, `scene_save_key` half-second holds through `on_hold`; fader and sources pages on the 16×8 and 8×16, pattern halves on the 8×8, copy/paste on the 16×16.
 - LFOs keep their offset across on/off (`wrap_param_action`, part of #103).
 - Process: changelog fragments in `changes/`, one notes file, user page and unit test file per page and grid layout, the US-spelling test, page renders (`test/render_pages.lua`).
-- Tests: 457 Lua tests.
+- Tests: 462 Lua tests.
 
 See CHANGELOG.md and `docs/status.md`.
 

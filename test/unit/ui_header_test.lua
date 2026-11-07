@@ -75,7 +75,7 @@ test("the header constants are the plan's", function()
   load_strata()
   local HEADER = local_value("S").constants.HEADER
   local expected = { dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
-    mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 74,
+    mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 73,
     flash_x = 40, flash_width = 74, flash_seconds = 1.5 }
   for name, value in pairs(expected) do
     assert_equal(HEADER[name], value, "HEADER." .. name)
@@ -163,7 +163,7 @@ test("a page's header_status replaces [M], the play mark and REC", function()
   pattern_toggle(); redraw()
   local mark = play_mark(context)
   assert_true(mark, "the play mark while playing")
-  assert_equal(mark.left, 74, "at x 74"); assert_equal(mark.right, 77)
+  assert_equal(mark.left, 73, "at x 73"); assert_equal(mark.right, 76)
   status = "300 bpm"; redraw(); assert_screen_layout(context, "SEQ at 300 bpm")
   -- a status too wide is cut before the scene indicator
   status = string.rep("w", 20); redraw()
