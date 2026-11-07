@@ -19,36 +19,18 @@ return function(S)
     slot_x = 65,
     name_x = 71,
     name_max_width = 31,    -- the name ends before the widest seconds ("16.0s" from x 103)
-    flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
-    flash_text = nil,       -- the transient hint, drawn instead of the key hints
-    flash_until = 0,        -- util.time() when it ends
-    flash_clock = nil,      -- asks for a redraw when it ends
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
     script_enc = nil
   }
 
-  -- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
-  -- redraw_buffer stops drawing it at flash_until; the clock clears it (even
-  -- if it wakes a little early) and asks for a redraw so it goes away untouched.
+  -- Show `text` (the K2+K3 save result, a failed load) in the hint row for
+  -- HEADER.flash_seconds (1.5 s), through the shared "hints" flash
+  -- (lib/ui/flash.lua): redraw() draws it there instead of the page's key
+  -- hints, and its clock asks for a redraw when it ends
   function buffer_page_flash(text)
-    S.BUFFER_PAGE.flash_text = text
-    S.BUFFER_PAGE.flash_until = util.time() + S.BUFFER_PAGE.flash_seconds
-    cancel_buffer_page_flash_clock()
-    S.BUFFER_PAGE.flash_clock = clock.run(function()
-      clock.sleep(S.BUFFER_PAGE.flash_seconds)
-      S.BUFFER_PAGE.flash_clock = nil
-      S.BUFFER_PAGE.flash_text = nil
-      request_redraw()
-    end)
-  end
-
-  function cancel_buffer_page_flash_clock()
-    if S.BUFFER_PAGE.flash_clock then
-      clock.cancel(S.BUFFER_PAGE.flash_clock)
-      S.BUFFER_PAGE.flash_clock = nil
-    end
+    S.lib.ui_flash.start("hints", text, S.constants.HEADER.flash_seconds)
   end
 
   -- A buffer's name for the screen: the file name without its extension, cut
@@ -108,13 +90,11 @@ return function(S)
     end
   end
 
-  -- The hint row (redraw() draws it after the page): the flash while it
-  -- shows, else the keys
+  -- The hint row's keys (redraw() draws the "hints" flash instead while
+  -- one shows)
   local function buffer_hints(alt_held)
     local voice_slot = voice_buffer_slot(S.selected_voice)
-    if S.BUFFER_PAGE.flash_text and util.time() < S.BUFFER_PAGE.flash_until then
-      return S.BUFFER_PAGE.flash_text
-    elseif voice_slot then
+    if voice_slot then
       -- "..." while a take that ended waits for the engine (K3 does nothing)
       local voice_buffer = S.buffers[voice_slot]
       local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
@@ -242,10 +222,6 @@ return function(S)
   -- acts on key releases. Its arc fields are lib/arc/buffer.lua's
   S.registry.pages[UI_PAGES.index.BUFFER] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, key = buffer_key, key_release = buffer_key_release}
-
-  S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_page_flash, function()
-    cancel_buffer_page_flash_clock()
-  end)
 
   return M
 end

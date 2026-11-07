@@ -76,7 +76,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
-| 140 | cancel the BUFFER page's flash clock | `lib/pages/buffer.lua` |
+| 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
 | 160 | `engine.voiceOff` for every running voice | `lib/engine_sync.lua` |
 | 170 | leave every connected grid dark | `lib/grid/core.lua` |

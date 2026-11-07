@@ -55,6 +55,21 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
+-- The header every page shares (lib/ui/header.lua, y 8): the eight 2x2 px
+-- page dots from dots_x, dot_spacing apart (the current page's at
+-- current_dot_level, the rest at dot_level), [M] at mutation_x, the play
+-- mark (a filled 3x5 triangle, top row play_y) at play_x, REC at rec_x and
+-- the scene right-aligned at scene_right. A page's header_status text
+-- replaces the three indicators: the text at status_x, the play mark at
+-- status_play_x. A header flash (lib/ui/flash.lua) replaces the dots and
+-- indicators for flash_seconds, its text at flash_x cut to flash_width px,
+-- so it ends before a right-aligned S8. (The 3.1 design's x 80/94/100 put
+-- REC over S8 under the layout test's width estimate; these keep the same
+-- order and spacing and fit.)
+local HEADER = {dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
+  dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
+  status_play_x = 74, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
+
 -- voices[i].grain keys holding an option index rather than a continuous
 -- value, mapped to their option count: smooth transitions switch them at the
 -- end instead of crossfading, mutation never touches them, and scenes must
@@ -121,7 +136,7 @@ local CLEANUP_ORDER = {
   scene_transition = 110,   -- lib/scenes.lua
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
-  buffer_page_flash = 140,  -- lib/pages/buffer.lua: the hint row's flash clock
+  ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
   midi_handler = 150,       -- lib/midi_in.lua
   voices_off = 160,         -- lib/engine_sync.lua
   grids_dark = 170,         -- lib/grid/core.lua
@@ -147,6 +162,7 @@ return {
   SOURCE_INPUT = SOURCE_INPUT,
   SOURCE_OPTIONS = SOURCE_OPTIONS,
   UI_PAGES = UI_PAGES,
+  HEADER = HEADER,
   DISCRETE_GRAIN_KEYS = DISCRETE_GRAIN_KEYS,
   BUFFER_MUTATION_KEYS = BUFFER_MUTATION_KEYS,
   GRAIN_PARAM_IDS = GRAIN_PARAM_IDS,
