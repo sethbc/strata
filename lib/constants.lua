@@ -69,7 +69,7 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 -- order and spacing and fit.)
 local HEADER = {dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
   dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
-  status_play_x = 74, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
+  status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
 
 -- The params the SCENES page lists after the eight slots: its cursor's stops
 -- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)

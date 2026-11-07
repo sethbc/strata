@@ -64,8 +64,8 @@ return function(S)
   -- mark the screen only: the arc shows nothing that moves with them.
   -- Each flag clears before its draw, so a failed draw is not retried.
   function draw_frame()
-    local page = UI_PAGES[S.ui_page]
-    if page == "LFO" or (page == "SEQ" and S.pattern_playing) then UI_PAGES.screen_dirty = true end
+    local page = S.ui_page
+    if page == UI_PAGES.index.LFO or (page == UI_PAGES.index.SEQ and S.pattern_playing) then UI_PAGES.screen_dirty = true end
     if UI_PAGES.screen_dirty then
       UI_PAGES.screen_dirty = false
       draw_frame_part("screen", redraw)
