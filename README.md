@@ -75,7 +75,7 @@ After installation with either method, restart norns or run `;restart` in maiden
 
 ## Credits
 
-Created for experimental ambient electronic music production.
+Strata runs on [monome norns](https://monome.org/docs/norns/) and synthesizes with [SuperCollider](https://supercollider.github.io/). Its global LFOs use norns' `lfo` library.
 
 ## License
 
