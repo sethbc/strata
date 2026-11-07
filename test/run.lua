@@ -788,6 +788,60 @@ test("every global read is defined", function()
   assert_true(reads.missing_late and reads.defined_b, "reads with a constant key in a nested function are seen")
 end)
 
+-- Globals more than one script file may write: lib/pages/buffer.lua puts
+-- back the script's own key and enc when the file selector fails
+local GLOBALS_WRITTEN_IN_TWO_FILES = { key = true, enc = true }
+
+-- Every global (a global function or any other value) that more than one
+-- of a list of { path, text } files writes, as "<name>: <path>:<line>,
+-- <path>:<line>, ..."
+local function globals_written_twice(root, sources, allowed)
+  local homes, problems = {}, {}
+  for _, source in ipairs(sources) do
+    local _, writes = global_accesses(root .. "/" .. source.path, source.path)
+    for name, where in next, writes do
+      homes[name] = homes[name] or {}
+      table.insert(homes[name], where)
+    end
+  end
+  for name, places in next, homes do
+    if #places > 1 and not allowed[name] then
+      table.sort(places)
+      table.insert(problems, name .. ": " .. table.concat(places, ", "))
+    end
+  end
+  table.sort(problems)
+  return problems
+end
+
+test("no global is defined in two files", function()
+  if not GLOBAL_CHECK_RUNS then
+    real_print("     (skipped: the global-reference check runs under Lua 5.3 only; " .. _VERSION
+      .. (rawget(_G, "jit") and ", LuaJIT" or "") .. " has no luac)")
+    return
+  end
+  assert_true(LUAC, "the duplicate-global check needs Lua 5.3's luac on PATH (`luac` or `luac5.3`, reporting 5.3)")
+  local problems = globals_written_twice(repo_root, read_lua_sources(), GLOBALS_WRITTEN_IN_TWO_FILES)
+  assert_equal(#problems, 0, "globals defined in more than one file (a later include replaces the earlier one):\n  "
+    .. table.concat(problems, "\n  "))
+  -- the scanner: a function or value defined in two files is found, one
+  -- written twice in the same file or allowed is not
+  local scratch = data_root .. "duplicate_global_check"
+  os.execute("mkdir -p '" .. scratch .. "/lib'")
+  local files = {
+    { path = "strata.lua", text = "function twice() end\nvalue_twice = 1\nonce = 1\nonce = 2\nfunction allowed() end\n" },
+    { path = "lib/x.lua", text = "return function() function twice() end value_twice = 2 allowed = nil end\n" },
+  }
+  for _, source in ipairs(files) do
+    local out = assert(io.open(scratch .. "/" .. source.path, "w")); out:write(source.text); out:close()
+  end
+  local found = globals_written_twice(scratch, files, { allowed = true })
+  local names = {}
+  for _, entry in ipairs(found) do table.insert(names, entry:match("^([^:]*)")) end
+  assert_equal(table.concat(names, " "), "twice value_twice", "each global defined in two files is found:\n  "
+    .. table.concat(found, "\n  "))
+end)
+
 -- The number of locals that can still be declared at a point of a file:
 -- insert(text, probe) puts `local p1, ..., pN` there, and the largest N
 -- that still loads is the answer (nil and the error when the text does not

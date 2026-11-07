@@ -9,7 +9,6 @@ return function(S)
 
   S.ui_page = 1  -- index into UI_PAGES
 
-
   -- Screen and arc redraws. Anything that changes what they show calls
   -- request_redraw(); the frame clock (started by init, canceled by cleanup)
   -- then draws whichever is dirty, at most FRAMES_PER_SECOND times a second,

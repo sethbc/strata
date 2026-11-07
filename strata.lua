@@ -27,82 +27,28 @@ local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
 local UI_PAGES = S.constants.UI_PAGES
 local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
--- The modules, in dependency order. Each constructor's table is
--- S.lib.<name> (lib/<dir>/<file>.lua: S.lib.<dir>_<file>); a module adds
--- its records to S.registry (pages, params, grid layouts, cleanup steps) as
--- it loads.
-
--- Voices: S.voices (the voice definitions), S.frozen, S.master_density,
--- S.selected_voice and the voice source helpers (lib/voices.lua). The
--- module sets its S fields itself: S.voices is the voices table
-include("lib/voices")(S)
-
--- Screen and arc redraws and the frame clock: request_redraw, draw_frame,
--- start_frame_clock, stop_frame_clock; S.ui_page (lib/ui/frame.lua)
+-- The modules, in dependency order (docs/notes/lua.md, Modules, lists what
+-- each owns). Each constructor's table is S.lib.<name> (lib/<dir>/<file>.lua:
+-- S.lib.<dir>_<file>); a module adds its records to S.registry (pages,
+-- params, grid layouts, cleanup steps) as it loads.
+S.lib.voices = include("lib/voices")(S)
 S.lib.ui_frame = include("lib/ui/frame")(S)
-
--- Param -> engine and voice start/sync: send_param_to_engine,
--- engine_param_value, toggle_voice, toggle_freeze, sync_voice_to_engine,
--- sync_voice_values_to_engine; S.engine_senders, S.engine_param_values,
--- S.lfo_last_dest, S.lfo_scaled (lib/engine_sync.lua)
 S.lib.engine_sync = include("lib/engine_sync")(S)
-
--- Sample buffers: S.buffers, recording, loading, clearing and saving, the
--- bufferState and bufferLoadFailed poll handlers (init starts the polls in
--- S.buffer_polls) and buffers.data (lib/buffers.lua)
 S.lib.buffers = include("lib/buffers")(S)
-
--- Global LFOs: S.lfos, S.selected_lfo, S.lfo_last_raw, S.LFO_DESTINATIONS,
--- apply_lfo, restore_lfo_destination, lfo_phase_estimate and their params
--- (add_lfo_params, which lib/params_setup.lua's lfos record calls)
--- (lib/lfos.lua)
 S.lib.lfos = include("lib/lfos")(S)
-
--- Per-voice drift, randomize and mutations: randomize_voice, drift_update,
--- gentle_mutate; S.drift_metro, S.mutation_metro, S.drift_writing,
--- S.grain_pitch_base, S.buf_pos_base (lib/mutation.lua)
 S.lib.mutation = include("lib/mutation")(S)
-
--- Scenes: S.scenes, S.current_scene, capture, recall and smooth
--- transitions, the scene sequencer, migration, validation and scenes.data;
--- S.scene_sequencer_*, S.scene_transition_*, S.scene_recall_in_progress,
--- S.scene_autosave_blocked, S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
--- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION (lib/scenes.lua)
 S.lib.scenes = include("lib/scenes")(S)
-
--- MIDI input: attach_midi, midi_init, midi_event, midi_device_name,
--- midi_bend_follow_selection and the hot-plug handlers; S.midi_device,
--- S.midi_state, S.lib.midi_in.MIDI (lib/midi_in.lua)
 S.lib.midi_in = include("lib/midi_in")(S)
-
--- init's params, in PARAMS menu order (S.registry.params), add_voice_params,
--- get_param_spec, redraw_on_param_changes and the tempo-follow handlers
--- (install_tempo_change_handler, restore_tempo_change_handler);
--- S.fx_filter_last_mix (lib/params_setup.lua)
 S.lib.params_setup = include("lib/params_setup")(S)
-
--- Param ranges and fractions: param_range, param_value_fraction,
--- param_fraction (lib/ui/params.lua)
 S.lib.ui_params = include("lib/ui/params")(S)
-
--- What the screen pages share: the header and hint row (draw_header,
--- draw_hints; lib/ui/header.lua), S.lib.ui_text.fit_text (lib/ui/text.lua),
--- S.key_press_page, forget_held_keys and S.lib.ui_keys.ignore_page_input,
--- select_voice_by, set_ui_page (lib/ui/keys.lua), and the norns menu watch
--- (watch_menu_opening, unwatch_menu_opening, forget_keys_held_through_menu;
--- lib/ui/menu_watch.lua)
 S.lib.ui_header = include("lib/ui/header")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
--- The screen pages. Each registers its record {name, draw, enc, key,
+-- The screen pages: each registers its record {name, draw, enc, key,
 -- key_release} at its UI_PAGES index in S.registry.pages, which enc, key
--- and redraw below dispatch through: MAIN (S.voice_list, update_voice_list,
--- main_param_id, ...; lib/pages/main.lua), FX (S.FX_PAGE, S.fx_row;
--- lib/pages/fx.lua), LFO (lfo_shape_value; lib/pages/lfo.lua), BUFFER
--- (S.BUFFER_PAGE, buffer_page_flash, the K2 file selector;
--- lib/pages/buffer.lua) and SETUP (setup_enc; lib/pages/setup.lua)
+-- and redraw dispatch through
 S.lib.pages_main = include("lib/pages/main")(S)
 S.lib.pages_fx = include("lib/pages/fx")(S)
 S.lib.pages_lfo = include("lib/pages/lfo")(S)
@@ -112,37 +58,22 @@ for index, name in ipairs(UI_PAGES) do
   assert(S.registry.pages[index] and S.registry.pages[index].name == name, "no page record for " .. name)
 end
 
--- The arc: S.arc_device, S.arc_connected, arc_sweep_param, arc_ring_fill,
--- arc_init, first_arc_port, arc.add/arc.remove, forget_arc_lfo_period_ticks
--- and the norns entry points arc_delta, arc_key and arc_redraw, which
--- dispatch through the page records' arc_delta and arc_redraw
--- (lib/arc/core.lua). Each page's rings set those two fields on its record
--- (lib/arc/main.lua, fx.lua, lfo.lua, buffer.lua); SETUP has none
+-- The arc: after the pages, since each page's rings set arc_delta and
+-- arc_redraw on its page record (SETUP has none)
 S.lib.arc_core = include("lib/arc/core")(S)
 S.lib.arc_main = include("lib/arc/main")(S)
 S.lib.arc_fx = include("lib/arc/fx")(S)
 S.lib.arc_lfo = include("lib/arc/lfo")(S)
 S.lib.arc_buffer = include("lib/arc/buffer")(S)
 
--- The grid: S.grids (one vport per port), S.MAX_GRID_PORTS, the grid UI
--- state (S.grid_page, S.param_page, S.grid_voice_select), GRID_LAYOUT
--- (S.lib.grid_core.GRID_LAYOUT), grid_init, grid.add/grid.remove,
--- select_grid_voice and the norns entry points grid_key and grid_redraw,
--- which dispatch by each grid's exact size through S.registry.grid_layouts
--- (lib/grid/core.lua); the 256's faders (fader_param_ids,
--- set_param_from_column, grid_redraw_faders, ...; lib/grid/faders.lua); and
--- one file per layout, each registering its {key, redraw} record
--- (lib/grid/layout_256.lua, layout_128h.lua, layout_128v.lua, layout_64.lua)
+-- The grid: the core first, then the faders and one file per layout, each
+-- registering its {key, redraw} record in S.registry.grid_layouts
 S.lib.grid_core = include("lib/grid/core")(S)
 S.lib.grid_faders = include("lib/grid/faders")(S)
 S.lib.grid_layout_256 = include("lib/grid/layout_256")(S)
 S.lib.grid_layout_128h = include("lib/grid/layout_128h")(S)
 S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)
 S.lib.grid_layout_64 = include("lib/grid/layout_64")(S)
-
--- The pattern sequencer: S.patterns, S.pattern_position, S.pattern_playing,
--- S.pattern_clock, pattern edits, the pattern clock and step_brightness
--- (lib/sequencer.lua)
 S.lib.sequencer = include("lib/sequencer")(S)
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds

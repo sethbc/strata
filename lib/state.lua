@@ -1,7 +1,7 @@
 -- lib/state.lua
--- The table S that strata.lua and its modules share: the registries now,
--- and the script-level state that more than one module uses as it moves out
--- of strata.lua. The one module constructor that takes no argument:
+-- The table S that strata.lua and its modules share: the registries, the
+-- module tables (S.lib) and the script-level state that more than one
+-- module uses. The one module constructor that takes no argument:
 -- strata.lua runs `local S = include("lib/state")()`. Every call builds a
 -- fresh table, so a script reload (which runs strata.lua again) never keeps
 -- state from the previous run

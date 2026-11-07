@@ -158,8 +158,6 @@ return function(S)
     end
   end
 
-
-
   -- K2 released: open the file selector for the voice's buffer, unless K3
   -- saved while K2 was down
   local function buffer_key_release(n)

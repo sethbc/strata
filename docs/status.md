@@ -60,7 +60,7 @@ CHANGELOG.md has every fix. In short:
   - The arc keeps redrawing while the norns menu is open (the screen does not), so a param changed from PARAMS, a CC map or an LFO moves the rings at once.
   - The engine check's timeout kills sclang's child processes through `pgrep`. On a machine without `pgrep` and without `timeout`, a hung scsynth may outlive the check.
 - **Limits to keep in mind:**
-  - Lua's 200-local limit applies per function, so per file: the locals probe in `test/run.lua` requires 30 free locals in every file's main chunk and constructor (`strata.lua`'s main chunk uses 5). Group new constants into tables, and split a module that runs short.
+  - Lua's 200-local limit applies to each function: the locals probe in `test/run.lua` measures the free locals at the end of each file's main chunk and of each module's constructor function, and requires 30 in each (`strata.lua`'s main chunk uses 5). Group new constants into tables, and split a module that runs short.
   - LFOs top out at 10 Hz, the norns `lfo` library's ceiling. Anything faster belongs in the engine.
   - scsynth's real-time pool on norns is 8192 KB and the measured peak is about 6.9 MB (`docs/notes/engine.md`, Real-time memory). A new UGen with a delay line or table in the voice or grain SynthDefs needs that budget re-measured.
 

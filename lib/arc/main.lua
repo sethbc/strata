@@ -35,12 +35,15 @@ return function(S)
 
   -- MAIN's record (lib/pages/main.lua) gains its rings: arc_delta and
   -- arc_redraw in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
+  local found = false
   for _, page in ipairs(S.registry.pages) do
     if page.name == "MAIN" then
       page.arc_delta = arc_main_delta
       page.arc_redraw = arc_main_redraw
+      found = true
     end
   end
+  assert(found, "lib/arc/main.lua: no MAIN page record in S.registry.pages")
 
   return M
 end

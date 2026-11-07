@@ -44,12 +44,15 @@ return function(S)
 
   -- BUFFER's record (lib/pages/buffer.lua) gains its rings: arc_delta and
   -- arc_redraw in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
+  local found = false
   for _, page in ipairs(S.registry.pages) do
     if page.name == "BUFFER" then
       page.arc_delta = arc_buffer_delta
       page.arc_redraw = arc_buffer_redraw
+      found = true
     end
   end
+  assert(found, "lib/arc/buffer.lua: no BUFFER page record in S.registry.pages")
 
   return M
 end

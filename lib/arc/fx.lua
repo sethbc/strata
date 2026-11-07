@@ -31,12 +31,15 @@ return function(S)
 
   -- FX's record (lib/pages/fx.lua) gains its rings: arc_delta and arc_redraw
   -- in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
+  local found = false
   for _, page in ipairs(S.registry.pages) do
     if page.name == "FX" then
       page.arc_delta = arc_fx_delta
       page.arc_redraw = arc_fx_redraw
+      found = true
     end
   end
+  assert(found, "lib/arc/fx.lua: no FX page record in S.registry.pages")
 
   return M
 end

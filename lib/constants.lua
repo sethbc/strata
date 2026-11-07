@@ -99,9 +99,9 @@ local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 -- cleanup()'s steps in the order it runs them: each module registers its
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
--- The files are saved before anything stops (the LFOs, stopped later, give
--- their destinations back first), MIDI is detached before the voices go
--- off, and the controllers go dark last. Spaced by 10, so a new step can go
+-- The files are saved before anything stops, with the stored values (the
+-- LFOs, stopped later, restore their destinations then), MIDI is detached
+-- before the voices go off, and the controllers go dark last. Spaced by 10, so a new step can go
 -- between two others
 local CLEANUP_ORDER = {
   tempo_handler = 10,       -- lib/params_setup.lua: the clock's tempo handler back
