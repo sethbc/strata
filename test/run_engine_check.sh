@@ -3,10 +3,11 @@
 # run test/engine_check.scd, which boots a local scsynth (output routed to a
 # private bus, so it is silent) and exercises every engine command.
 #
-# usage: [STRATA_SC_PORT=57121] test/run_engine_check.sh [path/to/norns]
+# usage: [STRATA_SC_PORT=57141] test/run_engine_check.sh [path/to/norns]
 #   STRATA_SC_PORT is the UDP port scsynth boots on (default 57110). Give each
 #   run its own port to run checks side by side (one per worktree); avoid
-#   sclang's own language port (57120). Two runs on the same port collide.
+#   sclang's own language port (57120, and the few above it when several
+#   sclang processes run). Two runs on the same port collide.
 #   NORNS_DIR / SCLANG environment variables override the defaults. sclang is
 #   $SCLANG if set, else `sclang` on PATH, else the macOS SuperCollider app.
 #   scsynth needs a running JACK server on Linux (see README, Development).

@@ -13,7 +13,10 @@ var allDefs = voiceDefs ++ [\strataMod, \strataGrain, \strataGrainBuf, \strataIn
     \strataFilter, \strataDelay, \strataReverb, \strataMaster];
 var grainDefs = [\strataGrain, \strataGrainBuf];
 var pollMessages = List.new;
-var scratchRoot = Platform.defaultTempDir +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ "-" ++ "STRATA_SC_PORT".getenv);
+// scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different
+// worktrees can run side by side on one machine
+var scPort = if("STRATA_SC_PORT".getenv.isNil or: { "STRATA_SC_PORT".getenv.size == 0 }, 57110, { "STRATA_SC_PORT".getenv.asInteger });
+var scratchRoot = Platform.defaultTempDir +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ "-" ++ scPort);
 var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 
 var check = { arg condition, message;
@@ -1514,12 +1517,8 @@ var checkSourceGrains = { arg voice, slot;
     File.delete(path);
 };
 
-// scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different
-// worktrees can run side by side on one machine
-~strataScPort = "STRATA_SC_PORT".getenv;
-~strataScPort = if(~strataScPort.isNil or: { ~strataScPort.size == 0 }, 57110, { ~strataScPort.asInteger });
-server.addr = NetAddr("127.0.0.1", ~strataScPort);
-("scsynth port: %".format(~strataScPort)).postln;
+server.addr = NetAddr("127.0.0.1", scPort);
+("scsynth port: %".format(scPort)).postln;
 server.options.numInputBusChannels = 2;
 // norns' real-time memory pool: Crone.sc boots Server.local without setting
 // memSize, so scsynth gets the ServerOptions default of 8192 KB. Set it
