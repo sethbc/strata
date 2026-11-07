@@ -144,7 +144,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 - `require("musicutil").note_num_to_freq`, `_path.audio` (`context.audio_dir`), `util.scandir`/`util.os_capture`, `_menu.rebuild_params`.
 - `_menu.set_mode(mode)` tracks `_menu.mode`. `set_mode(false)` records the play-mode routing from the globals, `_menu.key = key` and `norns.encoders.callback = enc`, as norns does. It swaps no handlers and draws nothing.
 - `norns.menu.init()` is `_menu.set_mode(_menu.mode)`.
-- `screen.line`/`screen.rect` are recorded in `context.screen.lines` (`x1, y1, x2, y2, level`) and `context.screen.rects` (`x, y, w, h, level`) beside the texts.
+- `screen.line`/`screen.rect` are recorded in `context.screen.lines` (`x1, y1, x2, y2, level`) and `context.screen.rects` (`x, y, w, h, level`) beside the texts. `screen.fill()` and `screen.stroke()` close the current path as norns does (`lua/core/screen.lua`): they mark every line and rect drawn since the last fill or stroke (or `screen.clear()`) `filled = true` or `false`, so a test can tell a filled cell from an outline; `filled` is nil until then.
 - `norns.enc.accel`/`sens`: state in `context.encoders.accel`/`sens`, starting at norns' script defaults (accel on, sens 2). `context.encoders.deliver(n, delta, interval)` delivers one hardware encoder event the way `encoders.process_with_accel` does, with `interval` seconds since the previous one.
 
 ### Time and the clock

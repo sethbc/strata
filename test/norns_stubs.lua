@@ -56,7 +56,9 @@
 --   * util.time() is the clock's time; context.set_time(seconds) also moves it
 --   * clock_tempo starts at 120 BPM, not norns' factory 90 (core/state.lua):
 --     the tests assume 120, and on norns it is the user's saved tempo anyway
---   * the screen records texts, lines and rects (for layout checks)
+--   * the screen records texts, lines and rects (for layout checks);
+--     screen.fill()/stroke() mark the lines and rects drawn since the last
+--     fill or stroke filled = true/false
 --   * grid/arc device events fire both device.key and vports[port].key; the
 --     arc device keeps matron's LED levels (led/all with rel, segment as
 --     lua/core/arc.lua, through led)
@@ -1695,7 +1697,13 @@ end
 
 local function make_screen()
   local screen = { texts = {}, lines = {}, rects = {}, cursor_x = 0, cursor_y = 0, current_level = 15 }
-  function screen.clear() screen.texts = {}; screen.lines = {}; screen.rects = {} end
+  -- the current path: the first line and rect drawn since the last fill or
+  -- stroke (lua/core/screen.lua: both draw the current path, then clear it)
+  local path_first_line, path_first_rect = 1, 1
+  function screen.clear()
+    screen.texts = {}; screen.lines = {}; screen.rects = {}
+    path_first_line, path_first_rect = 1, 1
+  end
   function screen.level(level) screen.current_level = level end
   function screen.move(x, y) screen.cursor_x = x; screen.cursor_y = y end
   -- each drawn string is recorded with its position, alignment and level
@@ -1709,7 +1717,10 @@ local function make_screen()
   -- lua/core/screen.lua: text_extents(str) returns width, height
   function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
   -- lines and rectangles are recorded too (from/to points, x/y/w/h), so
-  -- tests can check that drawings stay in their area
+  -- tests can check that drawings stay in their area. screen.fill() marks
+  -- the ones drawn since the last fill or stroke `filled = true`,
+  -- screen.stroke() `filled = false` (a filled cell or an outline); nil
+  -- until then
   function screen.line(x, y)
     table.insert(screen.lines, { x1 = screen.cursor_x, y1 = screen.cursor_y, x2 = x, y2 = y,
       level = screen.current_level })
@@ -1718,8 +1729,13 @@ local function make_screen()
   function screen.rect(x, y, w, h)
     table.insert(screen.rects, { x = x, y = y, w = w, h = h, level = screen.current_level })
   end
-  function screen.stroke() end
-  function screen.fill() end
+  local function end_path(filled)
+    for index = path_first_line, #screen.lines do screen.lines[index].filled = filled end
+    for index = path_first_rect, #screen.rects do screen.rects[index].filled = filled end
+    path_first_line, path_first_rect = #screen.lines + 1, #screen.rects + 1
+  end
+  function screen.stroke() end_path(false) end
+  function screen.fill() end_path(true) end
   function screen.update() end
   function screen.font_size() end
   function screen.font_face() end
