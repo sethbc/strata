@@ -375,9 +375,17 @@ local function hint_text(context)
   end
 end
 
+-- The header's page dots (lib/ui/header.lua): eight 2x2 rects from x 40,
+-- 4 px apart
+local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 40, 4, 2
+
+local HEADER_FLASH_X = 40
+
 -- Check the drawn screen: everything inside 128x64, no two strings overlap on
--- a row, the page title at 0,8 with dens: at least 4 px after it, and a hint
--- row at y 62.
+-- a row, the page title at 0,8, then either the eight page dots (at least
+-- 4 px after the title) or, while a header flash shows, its text at 40,8
+-- and no dots; no header rect (dot, play mark) under a header string; and a
+-- hint row at y 62.
 local function assert_screen_layout(context, where)
   local rows = {}
   for _, entry in ipairs(context.screen.texts) do
@@ -397,15 +405,36 @@ local function assert_screen_layout(context, where)
     end
   end
   local title = PAGE_TITLES[local_value("ui_page")]
-  local title_right, density_left, hint_found
+  local title_right, flash_drawn, hint_found
   for _, entry in ipairs(context.screen.texts) do
     if entry.text == title and entry.x == 0 and entry.y == 8 then title_right = select(2, text_span(entry)) end
-    if entry.text:find("^dens:") then density_left = entry.x end
+    if entry.x == HEADER_FLASH_X and entry.y == 8 then flash_drawn = true end
     if entry.x == 0 and entry.y == HINT_ROW_Y then hint_found = true end
   end
   assert_true(title_right, "page title " .. title .. " drawn at 0,8 (" .. where .. ")")
-  assert_true(density_left and density_left - title_right >= 4,
-    "dens: starts at least 4 px after " .. title .. " (" .. where .. ")")
+  -- the header band: rects above y 9
+  local dots = {}
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.y + rect.h <= 9 then
+      for _, text in ipairs(rows[8] or {}) do
+        assert_true(rect.x + rect.w <= text.left or rect.x >= text.right,
+          string.format("a header rect at x %d-%d is under '%s' (%s)", rect.x, rect.x + rect.w - 1, text.text, where))
+      end
+      if rect.w == HEADER_DOT_SIZE and rect.h == HEADER_DOT_SIZE then table.insert(dots, rect) end
+    end
+  end
+  local flash = local_value("S").lib.ui_flash.text("header")
+  if flash then
+    assert_true(flash_drawn, "the header flash drawn at " .. HEADER_FLASH_X .. ",8 (" .. where .. ")")
+    assert_equal(#dots, 0, "no page dots under the header flash (" .. where .. ")")
+  else
+    assert_equal(#dots, 8, "eight page dots (" .. where .. ")")
+    table.sort(dots, function(a, b) return a.x < b.x end)
+    for index, dot in ipairs(dots) do
+      assert_equal(dot.x, HEADER_DOTS_X + (index - 1) * HEADER_DOT_SPACING, "page dot " .. index .. " (" .. where .. ")")
+    end
+    assert_true(dots[1].x - title_right >= 4, "the page dots start at least 4 px after " .. title .. " (" .. where .. ")")
+  end
   assert_true(hint_found, "hint row at y " .. HINT_ROW_Y .. " (" .. where .. ")")
 end
 

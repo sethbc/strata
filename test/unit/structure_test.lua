@@ -157,6 +157,7 @@ local MODULE_HOMES = {
     "follow_clock_tempo", "install_tempo_change_handler", "restore_tempo_change_handler" },
   ["lib/ui/params.lua"] = { "param_range", "param_value_fraction", "param_fraction" },
   ["lib/ui/header.lua"] = { "draw_header", "draw_hints" },
+  ["lib/ui/flash.lua"] = { "header_flash" },
   ["lib/ui/keys.lua"] = { "forget_held_keys" },
   ["lib/ui/alt.lua"] = { "alt_action" },
   ["lib/ui/menu_watch.lua"] = { "forget_keys_held_through_menu", "watch_menu_opening", "unwatch_menu_opening" },
@@ -164,7 +165,7 @@ local MODULE_HOMES = {
     "redraw_main" },
   ["lib/pages/fx.lua"] = { "redraw_fx" },
   ["lib/pages/lfo.lua"] = { "lfo_shape_value", "redraw_lfo" },
-  ["lib/pages/buffer.lua"] = { "buffer_page_flash", "cancel_buffer_page_flash_clock", "redraw_buffer",
+  ["lib/pages/buffer.lua"] = { "buffer_page_flash", "redraw_buffer",
     "close_buffer_file_selector", "release_superseded_file_selector" },
   ["lib/pages/setup.lua"] = { "redraw_setup", "setup_enc" },
   ["lib/arc/core.lua"] = { "arc_sweep_param", "arc_ring_fill", "arc_ring_fill_bipolar", "arc_ring_fill_param",
@@ -529,7 +530,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "buffer polls and timers", "buffer page flash", "midi handler", "voices off", "grids dark", "arc dark" }
+  "lfos", "buffer polls and timers", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -545,6 +546,7 @@ test("cleanup runs every registered step in today's order", function()
   record_buffer(1)
   buffer_page_flash("flash")
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
+  header_flash("flash")
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -572,7 +574,7 @@ test("cleanup runs every registered step in today's order", function()
     { "undo clock", local_value("undo_clock") },
     { "pattern clock", S.pattern_clock }, { "scene sequencer", S.scene_sequencer_clock },
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
-    { "buffer page flash", S.BUFFER_PAGE.flash_clock } }
+    { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")
