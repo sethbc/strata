@@ -128,6 +128,7 @@ return function(S)
     screen.text_right(source)
 
     -- y 26: ON/OFF, [L] when locked (full brightness), [T] in triggered mode
+    screen.level(LAYOUT.dim)
     screen.move(LAYOUT.left, LAYOUT.state_y)
     screen.text(v.active and "ON" or "OFF")
     if S.frozen[voice_idx] then
@@ -229,10 +230,14 @@ return function(S)
   -- voice selected, and a buffer and an input source
   local function layout_state(name, selected, source)
     return {name = name, setup = function()
+      local triggered
+      for option, mode in ipairs(GRAIN_MODE_OPTIONS) do
+        if mode == "triggered" then triggered = option end
+      end
       for i = 1, NUM_VOICES do
         if not S.voices[i].active then toggle_voice(i) end
         if not S.frozen[i] then toggle_lock(i) end
-        params:set("v" .. i .. "_grain_mode", #GRAIN_MODE_OPTIONS)
+        params:set("v" .. i .. "_grain_mode", triggered)
       end
       if source then params:set("v" .. selected .. "_source", source) end
       S.selected_voice = selected
