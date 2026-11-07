@@ -5,8 +5,8 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 ## Creating Evolving Textures
 
 - Start with 2-3 voices active
-- Use K2 to randomize individual voices until you find interesting combinations
-- Lock voices you like with K3
+- Use ALT+K2 (hold K1, press K2) to randomize individual voices until you find interesting combinations; ALT+K2 again within 5 seconds undoes a randomize you don't like
+- Lock voices you like with ALT+K3
 - Adjust master density (arc ring 1 or PARAMETERS) to create movement
 - Add reverb or delay on the FX page for more space
 
@@ -27,9 +27,9 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 ## Performance Workflow
 
 1. Build up layers by activating voices one at a time
-2. Randomize unlocked voices to create variation
+2. Randomize unlocked voices to create variation (ALT+K2 on MAIN)
 3. Use master density for dynamic swells and fades
-4. Lock/unlock voices to create structural changes
+4. Lock/unlock voices to create structural changes (ALT+K3 on MAIN), and stop or start them with K3
 5. Set up cross-modulation for interdependent voice relationships
 
 ## Using Probability-Based Mutations
