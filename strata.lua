@@ -28,7 +28,6 @@ S.constants = include("lib/constants")
 local NUM_VOICES = S.constants.NUM_VOICES
 local NUM_SCENES = S.constants.NUM_SCENES
 local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
-local SCENE_DATA_VERSION = S.constants.SCENE_DATA_VERSION
 local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
 local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
 local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
@@ -41,9 +40,7 @@ local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
 local SOURCE_INPUT = S.constants.SOURCE_INPUT
 local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 local UI_PAGES = S.constants.UI_PAGES
-local DISCRETE_GRAIN_KEYS = S.constants.DISCRETE_GRAIN_KEYS
 local BUFFER_MUTATION_KEYS = S.constants.BUFFER_MUTATION_KEYS
-local GRAIN_PARAM_IDS = S.constants.GRAIN_PARAM_IDS
 local MAIN_PARAMS = S.constants.MAIN_PARAMS
 local BUFFER_MAIN_PARAM = S.constants.BUFFER_MAIN_PARAM
 local INPUT_MAIN_PARAM = S.constants.INPUT_MAIN_PARAM
@@ -84,17 +81,12 @@ local voice_list
 -- S.grain_pitch_base, S.buf_pos_base (lib/mutation.lua)
 S.lib.mutation = include("lib/mutation")(S)
 
--- Scene system
-local scenes = {}
-local current_scene = 0  -- 0 = no scene loaded
-local scene_sequencer_position = 1
-local scene_sequencer_enabled = false
-local scene_sequencer_clock = nil
-local scene_transition_active = false
--- true while recall_scene_instant sets params: the source action then leaves
--- the full sync to the end of the recall
-local scene_recall_in_progress = false
-local scene_transition_clock = nil  -- Track transition clock for cancellation
+-- Scenes: S.scenes, S.current_scene, capture, recall and smooth
+-- transitions, the scene sequencer, migration, validation and scenes.data;
+-- S.scene_sequencer_*, S.scene_transition_*, S.scene_recall_in_progress,
+-- S.scene_autosave_blocked, S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
+-- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION (lib/scenes.lua)
+S.lib.scenes = include("lib/scenes")(S)
 
 -- Arc device (the arc vport from arc.connect)
 local arc_device = nil
@@ -127,7 +119,7 @@ for i = 1, NUM_VOICES do
 end
 
 -- Pattern sequencer
-local patterns = {}
+S.patterns = {}
 local pattern_position = 1
 local pattern_playing = false
 local pattern_clock = nil
@@ -139,23 +131,10 @@ local grid_voice_select = 1
 
 -- Initialize patterns for each voice
 for i = 1, NUM_VOICES do
-  patterns[i] = {}
+  S.patterns[i] = {}
   for step = 1, PATTERN_LENGTH do
-    patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness
+    S.patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness
   end
-end
-
--- Initialize scenes
-local function empty_scene(scene_num)
-  return {
-    name = "scene " .. scene_num,
-    populated = false,
-    data = {}
-  }
-end
-
-for i = 1, NUM_SCENES do
-  scenes[i] = empty_scene(i)
 end
 
 -- Last non-zero filter mix (set by the filter_mix action): FX page K3
@@ -166,7 +145,7 @@ local fx_filter_last_mix = 1
 -- transition sets them on every step and redraws the grid once per step
 -- itself.
 local function fx_fader_changed()
-  if S.grid_page == 4 and not scene_transition_active then grid_redraw() end
+  if S.grid_page == 4 and not S.scene_transition_active then grid_redraw() end
 end
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
@@ -690,7 +669,7 @@ function add_voice_params(voice_idx)
       S.voices[voice_idx].source = x
       engine.setGrainSource(voice_idx - 1, x - 1)
       -- a scene recall syncs once, after it has set every param
-      if S.voices[voice_idx].active and not scene_recall_in_progress then
+      if S.voices[voice_idx].active and not S.scene_recall_in_progress then
         sync_voice_values_to_engine(voice_idx)
       end
       -- the grid fader list follows the source (buffer or synth params)
@@ -1019,675 +998,6 @@ function get_param_spec(param_name)
   return specs[param_name] or controlspec.new(0, 1, "lin", 0.01, 0.5)
 end
 
--- Scene management functions
-
--- Global params stored in every scene, in recall order. Continuous ones are
--- crossfaded by smooth transitions; the others switch when the fade ends.
--- default is the param's default, which migrate_scene gives scenes written
--- before the param existed (tempo's param default follows clock_tempo; every
--- scene file has always stored tempo).
-local SCENE_GLOBAL_PARAMS = {
-  {id = "master_density", continuous = true, default = 1.0},
-  {id = "tempo", continuous = false, default = 120},
-  {id = "mutation_enabled", continuous = false, default = 0},
-  {id = "mutation_rate", continuous = false, default = 2},
-  {id = "mutation_probability", continuous = false, default = 0.15},
-  {id = "mutation_amount", continuous = false, default = 0.25},
-  {id = "filter_type", continuous = false, default = 1},
-  {id = "filter_freq", continuous = true, default = 5000},
-  {id = "filter_res", continuous = true, default = 0.5},
-  {id = "filter_mix", continuous = true, default = 0},
-  {id = "delay_time", continuous = true, default = 0.375},
-  {id = "delay_feedback", continuous = true, default = 0.4},
-  {id = "delay_mix", continuous = true, default = 0},
-  {id = "reverb_mix", continuous = true, default = 0.3},
-  {id = "reverb_size", continuous = true, default = 0.8},
-  {id = "reverb_damp", continuous = true, default = 0.5},
-  {id = "drift_amount", continuous = true, default = 0.01}
-}
-
--- Per LFO: the library's shape, mode, clocked rate, free period and depth
--- (percent), Strata's destination, then the state, so an LFO starts with its
--- settings in place. Depth and free period crossfade.
-for n = 1, NUM_LFOS do
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, default = S.lib.lfos.LFO_DEFAULT_PERIOD})
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, default = 0})
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
-  table.insert(SCENE_GLOBAL_PARAMS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
-end
-
--- Per-voice scene fields added after format 1, filled by migrate_scene in
--- scenes that lack them: {path = keys inside data.voices[i], default = value}.
--- A field is only filled when its parent table exists (a scene missing the
--- parent is left for validate_scene to reject). Each default must equal the
--- param's default.
-local VOICE_SCENE_DEFAULTS = {
-  {path = {"grain", "env"}, default = 1},  -- hann
-  {path = {"grain", "mode"}, default = 1},  -- continuous
-  {path = {"source"}, default = SOURCE_SYNTH},
-  {path = {"grain", "buf_pos"}, default = 0},
-  {path = {"grain", "buf_rate"}, default = 1},
-  {path = {"grain", "buf_scan"}, default = 0}
-}
-
--- Top-level scene blocks added after format 1 (such as LFO or MIDI
--- settings): {key = field of scene data, default = value}
-local SCENE_BLOCK_DEFAULTS = {}
-
--- A smooth transition fades in `steps` steps. The scene sequencer holds a
--- scene for max(scene duration, transition time), then, while the fade is
--- still running (its steps run late by their scheduling delay), checks
--- again every `settle_seconds`, so it never cuts a fade short. A transition
--- whose next step (or end) is `overrun_seconds` late is stuck: the
--- sequencer cancels it and moves on. next_step_due (nil when no fade runs)
--- is the running fade's progress: util.time() when its next step or its end
--- is due. It is set and cleared together with scene_transition_active, as
--- wait_for_scene_transition reads it whenever the flag is set
-local SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
-
-local function is_number(value)
-  return type(value) == "number" and value == value  -- rejects NaN
-end
-
-local function is_integer_between(value, min, max)
-  return is_number(value) and value == math.floor(value) and value >= min and value <= max
-end
-
--- Copy a scene default so filled scenes never share tables
-local function copy_scene_default(value)
-  if type(value) ~= "table" then return value end
-  local copy = {}
-  for key, inner in pairs(value) do copy[key] = copy_scene_default(inner) end
-  return copy
-end
-
--- Set target[path] to default unless it is already present
-local function fill_scene_default(target, path, default)
-  for depth = 1, #path - 1 do
-    target = target[path[depth]]
-    if type(target) ~= "table" then return end
-  end
-  if target[path[#path]] == nil then
-    target[path[#path]] = copy_scene_default(default)
-  end
-end
-
--- Bring a loaded scene up to the current format by filling every field it
--- lacks with its default: globals (SCENE_GLOBAL_PARAMS), top-level blocks
--- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
--- Filling only adds what is missing, so it runs for every file version;
--- from_version is there for changes that must convert a particular format.
--- Malformed scenes are left alone for validate_scene to reject.
-function migrate_scene(scene, from_version)
-  if type(scene) ~= "table" or scene.populated ~= true or type(scene.data) ~= "table" then return end
-  local data = scene.data
-
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    fill_scene_default(data, {global.id}, global.default)
-  end
-
-  for _, block in ipairs(SCENE_BLOCK_DEFAULTS) do
-    fill_scene_default(data, {block.key}, block.default)
-  end
-
-  if type(data.voices) ~= "table" then return end
-  for i = 1, NUM_VOICES do
-    if type(data.voices[i]) == "table" then
-      for _, field in ipairs(VOICE_SCENE_DEFAULTS) do
-        fill_scene_default(data.voices[i], field.path, field.default)
-      end
-    end
-  end
-end
-
-function capture_scene(scene_num)
-  if scene_num < 1 or scene_num > NUM_SCENES then return end
-
-  local scene_data = {
-    voices = {},
-    frozen = {},
-    patterns = {}
-  }
-
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    scene_data[global.id] = params:get(global.id)
-  end
-
-  -- Capture voice states
-  for i = 1, NUM_VOICES do
-    scene_data.voices[i] = {
-      active = S.voices[i].active,
-      source = S.voices[i].source,  -- the buffer's contents are not captured
-      params = {},
-      grain = {},
-      crossmod = {}
-    }
-
-    -- Copy all parameters
-    for key, value in pairs(S.voices[i].params) do
-      scene_data.voices[i].params[key] = value
-    end
-    for key, value in pairs(S.voices[i].grain) do
-      scene_data.voices[i].grain[key] = value
-    end
-    -- Copy crossmod structure (including nested slots)
-    scene_data.voices[i].crossmod = {speed = S.voices[i].crossmod.speed}
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_state = S.voices[i].crossmod["slot" .. slot]
-      scene_data.voices[i].crossmod["slot" .. slot] = {
-        source = slot_state.source,
-        amp_amt = slot_state.amp_amt,
-        freq_amt = slot_state.freq_amt
-      }
-    end
-
-    scene_data.frozen[i] = S.frozen[i]
-  end
-
-  -- Capture patterns
-  for i = 1, NUM_VOICES do
-    scene_data.patterns[i] = {}
-    for step = 1, PATTERN_LENGTH do
-      scene_data.patterns[i][step] = patterns[i][step]
-    end
-  end
-
-  scenes[scene_num].data = scene_data
-  scenes[scene_num].populated = true
-  print("captured scene " .. scene_num)
-end
-
--- xpcall handler: add the traceback of where the error was raised, unless
--- an inner handler already did, so a re-raised error still shows in maiden
--- where the param action failed
-function with_traceback(message)
-  if tostring(message):find("stack traceback:", 1, true) then return message end
-  return debug.traceback(tostring(message), 2)
-end
-
-function cancel_scene_transition()
-  if scene_transition_clock then
-    clock.cancel(scene_transition_clock)
-    scene_transition_clock = nil
-  end
-  scene_transition_active = false
-  SCENE_TRANSITION.next_step_due = nil
-end
-
--- Snapshot {id, start, target, step} for every continuous param a smooth
--- transition crossfades. Start values are read once, before the fade, so
--- the fade moves linearly from start to target over the whole transition.
--- Grain sources, mod sources, discrete grain params (envelope shape, grain
--- mode), freeze and active states switch at the end instead.
-function scene_transition_targets(scene_data)
-  local targets = {}
-  local function add_target(param_id, target_value)
-    -- number params (the LFO depths) step in whole numbers: the fade rounds
-    -- to them (the end applies the scene's exact value)
-    local step = params:lookup_param(param_id).t == params.tNUMBER and 1 or nil
-    table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step})
-  end
-
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    if global.continuous then
-      add_target(global.id, scene_data[global.id])
-    end
-  end
-
-  for i = 1, NUM_VOICES do
-    local voice_data = scene_data.voices[i]
-    local prefix = "v" .. i .. "_"
-    for key, target_value in pairs(voice_data.params) do
-      add_target(prefix .. key, target_value)
-    end
-    for key, target_value in pairs(voice_data.grain) do
-      if not DISCRETE_GRAIN_KEYS[key] then
-        add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
-      end
-    end
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      add_target(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-      add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-    end
-    add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
-  end
-
-  return targets
-end
-
-function recall_scene(scene_num, transition_time)
-  if scene_num < 1 or scene_num > NUM_SCENES then return end
-  if not scenes[scene_num].populated then
-    print("scene " .. scene_num .. " is empty")
-    return
-  end
-
-  -- Validate scene data before recalling
-  if not validate_scene(scenes[scene_num]) then
-    print("error: scene " .. scene_num .. " has invalid data")
-    return
-  end
-
-  transition_time = transition_time or 0
-
-  -- Any new recall supersedes a transition that is still running
-  cancel_scene_transition()
-
-  if transition_time > 0 then
-    -- the fade's end applies the scene as it was recalled: a capture into
-    -- this slot during the fade stores a new table and leaves this one be
-    local scene_data = scenes[scene_num].data
-    local targets = scene_transition_targets(scene_data)
-
-    -- scene_transition_active and SCENE_TRANSITION.next_step_due are always
-    -- set and cleared together (here, at the fade's end or error, and in
-    -- cancel_scene_transition): the sequencer's wait reads the due time
-    -- whenever the flag is set
-    scene_transition_active = true
-    SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
-    scene_transition_clock = clock.run(function()
-      local step_time = transition_time / SCENE_TRANSITION.steps
-
-      for step = 1, SCENE_TRANSITION.steps do
-        local mix = step / SCENE_TRANSITION.steps
-        -- the flag must not outlive an error in a param action (the
-        -- sequencer waits for it): clear it, then raise the error again,
-        -- with its traceback
-        local stepped, step_error = xpcall(function()
-          for _, target in ipairs(targets) do
-            local value = util.linlin(0, 1, target.start, target.target, mix)
-            if target.step then value = util.round(value, target.step) end
-            params:set(target.id, value)
-          end
-          request_redraw()
-          grid_redraw()  -- keep the parameter faders moving with the fade
-        end, with_traceback)
-        if not stepped then
-          scene_transition_clock = nil
-          scene_transition_active = false
-          SCENE_TRANSITION.next_step_due = nil
-          error(step_error, 0)
-        end
-        SCENE_TRANSITION.next_step_due = util.time() + step_time
-        clock.sleep(step_time)
-      end
-
-      -- Final state: exact values plus the non-continuous params
-      scene_transition_clock = nil
-      scene_transition_active = false
-      SCENE_TRANSITION.next_step_due = nil
-      recall_scene_instant(scene_num, scene_data)
-    end)
-  else
-    -- Instant recall
-    recall_scene_instant(scene_num)
-  end
-
-  current_scene = scene_num
-  request_redraw()
-  -- a fade's first step redrew the grid before current_scene was set; an
-  -- instant recall sets it and redraws the grid itself
-  if transition_time > 0 then grid_redraw() end
-end
-
--- Apply a scene immediately: scene_data, or the slot's data when nil. The
--- scene must have passed validate_scene.
--- A voice whose source changes gets one full sync after all its params are
--- set (not the source action's, which would send the old values first); a
--- voice the recall starts is synced by toggle_voice instead. A voice the
--- recall stops is stopped before its params are set, and one it starts is
--- started after them.
-function recall_scene_instant(scene_num, scene_data)
-  scene_data = scene_data or scenes[scene_num].data
-  local source_changed = {}
-  scene_recall_in_progress = true
-  -- the flag must not outlive an error in a param action: clear it, then
-  -- raise the error again, with its traceback
-  local recalled, recall_error = xpcall(function()
-    -- Restore global parameters
-    for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-      params:set(global.id, scene_data[global.id])
-    end
-
-    -- Restore voice states
-    for i = 1, NUM_VOICES do
-      local voice_data = scene_data.voices[i]
-      local prefix = "v" .. i .. "_"
-
-      -- A voice the scene stops is stopped first, so the engine only records
-      -- its source switch instead of building a grain synth to release at
-      -- once, and its release tail keeps the outgoing scene's values
-      if S.voices[i].active and not voice_data.active then toggle_voice(i) end
-
-      local previous_source = S.voices[i].source
-      params:set(prefix .. "source", voice_data.source)
-      source_changed[i] = S.voices[i].source ~= previous_source
-
-      for key, value in pairs(voice_data.params) do
-        params:set(prefix .. key, value)
-      end
-
-      for key, value in pairs(voice_data.grain) do
-        params:set(prefix .. GRAIN_PARAM_IDS[key], value)
-      end
-
-      -- Restore crossmod slots
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_data = voice_data.crossmod["slot" .. slot]
-        params:set(prefix .. "mod_source_" .. slot, slot_data.source)
-        params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-        params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-      end
-      params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-      S.frozen[i] = scene_data.frozen[i]
-
-      -- Start voices last: toggle_voice syncs the restored state
-      if voice_data.active and not S.voices[i].active then
-        toggle_voice(i)
-        source_changed[i] = false
-      end
-    end
-  end, with_traceback)
-  scene_recall_in_progress = false
-
-  -- even after an error: a running voice whose source switched gets its sync
-  -- (of whatever was applied), so the engine never lags the Lua state
-  for i = 1, NUM_VOICES do
-    if source_changed[i] and S.voices[i].active then
-      sync_voice_values_to_engine(i)
-    end
-  end
-  if not recalled then error(recall_error, 0) end
-
-  -- Restore patterns
-  for i = 1, NUM_VOICES do
-    for step = 1, PATTERN_LENGTH do
-      patterns[i][step] = scene_data.patterns[i][step]
-    end
-  end
-
-  -- the scene is applied: the grid's scene page lights it in this redraw
-  current_scene = scene_num
-  update_voice_list()
-  request_redraw()  -- freeze and running states, and the end of a fade
-  grid_redraw()
-end
-
--- Called by the scene sequencer when a scene's hold ends: wait while a
--- transition (the sequencer's or a manual recall's) is flagged, but never
--- for ever. A transition whose next step or end is
--- SCENE_TRANSITION.overrun_seconds late is stuck (its clock is gone) and is
--- canceled. The bound follows the fade's progress, so a healthy fade whose
--- steps each run late under load is never cut short, however late it ends
-function wait_for_scene_transition()
-  while scene_transition_active do
-    if util.time() >= SCENE_TRANSITION.next_step_due + SCENE_TRANSITION.overrun_seconds then
-      print("scene transition overran; canceled")
-      cancel_scene_transition()
-      return
-    end
-    clock.sleep(SCENE_TRANSITION.settle_seconds)
-  end
-end
-
-function scene_sequencer_start()
-  if scene_sequencer_clock then
-    clock.cancel(scene_sequencer_clock)
-  end
-
-  scene_sequencer_enabled = true
-  scene_sequencer_position = 1
-  grid_redraw()  -- the scene page shows the sequencer on
-
-  scene_sequencer_clock = clock.run(function()
-    -- Begin on the next scheduler tick: a PSET load sets this param partway
-    -- through its read, and the params it sets later (transition time,
-    -- duration, length, FX, LFOs, voices) would overwrite scene 1
-    clock.sleep(0)
-
-    while scene_sequencer_enabled do
-      -- Defensive index guard: the position is always in range here (it
-      -- starts at 1 and the advance below wraps with the current length)
-      if scene_sequencer_position > params:get("scene_sequence_length") then
-        scene_sequencer_position = 1
-      end
-
-      -- Recall next scene in sequence (skip empty scenes)
-      local transition_time = 0
-      if scenes[scene_sequencer_position].populated then
-        transition_time = params:get("scene_transition_time")
-        -- An error in a param action (in the first fade step or an instant
-        -- recall) must not end this clock while the param shows the
-        -- sequencer on. The recall has cleared its transition and recall
-        -- flags, so the sequencer reports it and keeps going: the next
-        -- scene may well recall fine
-        local recalled, recall_error = xpcall(function()
-          recall_scene(scene_sequencer_position, transition_time)
-        end, with_traceback)
-        if not recalled then
-          print("scene sequencer: scene " .. scene_sequencer_position .. " failed: " .. tostring(recall_error))
-        end
-      else
-        print("skipping empty scene " .. scene_sequencer_position)
-      end
-
-      -- Hold the scene for its duration, and at least until its transition
-      -- ends: the next recall would cancel the fade before it applies the
-      -- scene's discrete state (voices, sources, patterns, ...)
-      local held = math.max(params:get("scene_duration"), transition_time)
-      clock.sleep(held)
-      wait_for_scene_transition()
-
-      -- Advance, wrapping to scene 1 past the end of the sequence as it is
-      -- now (it may have been shortened during the wait)
-      scene_sequencer_position = scene_sequencer_position + 1
-      if scene_sequencer_position > params:get("scene_sequence_length") then
-        scene_sequencer_position = 1
-      end
-
-      request_redraw()
-      grid_redraw()
-    end
-  end)
-end
-
-function scene_sequencer_stop()
-  scene_sequencer_enabled = false
-  if scene_sequencer_clock then
-    clock.cancel(scene_sequencer_clock)
-    scene_sequencer_clock = nil
-  end
-  request_redraw()
-  grid_redraw()
-end
-
--- Scene disk persistence
-local scene_data_dir = _path.data .. "strata/"
-local scene_data_file = scene_data_dir .. "scenes.data"
--- Set when a scenes file could not be loaded and could not be moved aside:
--- cleanup() must then not overwrite it with the (empty) in-memory scenes
-local scene_autosave_blocked = false
-
-function save_scenes_to_disk()
-  -- Ensure data directory exists
-  if util.file_exists(scene_data_dir) == false then
-    util.make_dir(scene_data_dir)
-  end
-
-  -- Save scenes table to disk, tagged with the format version
-  tab.save({version = SCENE_DATA_VERSION, scenes = scenes}, scene_data_file)
-  print("scenes saved to " .. scene_data_file)
-end
-
--- A data file that failed to load must survive the save in cleanup():
--- move it to <file>.bak. Returns false if that failed, and the caller then
--- blocks its auto-save. A field of S: lib/buffers.lua uses it for buffers.data.
-function S.move_aside_unloadable_file(data_file, label)
-  local backup_file = data_file .. ".bak"
-  local moved, move_error = os.rename(data_file, backup_file)
-  if moved then
-    print("unloadable " .. label .. " file kept as " .. backup_file)
-    return true
-  end
-  print("could not move unloadable " .. label .. " file (" .. tostring(move_error) ..
-    "); " .. label .. " will not be auto-saved on exit")
-  return false
-end
-
-local function preserve_unloadable_scene_file()
-  if not S.move_aside_unloadable_file(scene_data_file, "scenes") then
-    scene_autosave_blocked = true
-  end
-end
-
--- Load scenes from disk. On any problem the current scenes (empty at
--- startup) are kept, a message is printed and the file is preserved; a bad
--- file never stops init.
-function load_scenes_from_disk()
-  if not util.file_exists(scene_data_file) then
-    print("no saved scenes file found")
-    return
-  end
-
-  -- tab.load runs the file as Lua without protection
-  local ok, loaded, load_error = pcall(tab.load, scene_data_file)
-  if not ok then
-    print("error: scenes file could not be read (" .. tostring(loaded) .. "), keeping current scenes")
-    preserve_unloadable_scene_file()
-    return
-  end
-  if type(loaded) ~= "table" then
-    print("error loading scenes file: " .. tostring(load_error))
-    preserve_unloadable_scene_file()
-    return
-  end
-
-  local scene_table, file_version
-  if loaded.version ~= nil then
-    -- Version 1 files are migrated; newer (or invalid) versions are rejected
-    if not is_integer_between(loaded.version, 1, SCENE_DATA_VERSION) then
-      print("error: scenes file has version " .. tostring(loaded.version) ..
-        ", expected 1 to " .. SCENE_DATA_VERSION)
-      preserve_unloadable_scene_file()
-      return
-    end
-    file_version = loaded.version
-    scene_table = loaded.scenes
-  else
-    -- Files written before 2.1 hold the bare scenes array (format version 1)
-    file_version = 1
-    scene_table = loaded
-  end
-
-  -- Fill fields added since the file's format, then validate the result
-  if type(scene_table) == "table" then
-    for i = 1, NUM_SCENES do
-      migrate_scene(scene_table[i], file_version)
-    end
-  end
-
-  if not validate_scene_data(scene_table) then
-    print("error: scene file corrupted or incompatible version")
-    preserve_unloadable_scene_file()
-    return
-  end
-
-  -- Make sure every slot exists, filling gaps with empty scenes
-  local loaded_scenes = {}
-  for i = 1, NUM_SCENES do
-    loaded_scenes[i] = scene_table[i] or empty_scene(i)
-  end
-  -- a running transition ends by applying its slot: after the load that
-  -- would be the file's data for the slot, or nothing if it is now empty
-  cancel_scene_transition()
-  scenes = loaded_scenes
-  scene_autosave_blocked = false
-  if file_version < SCENE_DATA_VERSION then
-    print("migrated scenes file from version " .. file_version)
-  end
-  print("scenes loaded from " .. scene_data_file)
-
-  -- Update grid display if grids are connected
-  grid_redraw()
-end
-
--- Check that one scene slot holds everything recall_scene_instant reads
-function validate_scene(scene)
-  if type(scene) ~= "table" then return false end
-  if type(scene.populated) ~= "boolean" then return false end
-  if not scene.populated then return true end
-
-  local data = scene.data
-  if type(data) ~= "table" then return false end
-
-  for _, global in ipairs(SCENE_GLOBAL_PARAMS) do
-    if not is_number(data[global.id]) then return false end
-    -- option params (filter type, LFO shape, destination, ...) hold an index
-    local param = params:lookup_param(global.id)
-    if param.options and not is_integer_between(data[global.id], 1, param.count) then return false end
-  end
-
-  if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
-  if type(data.frozen) ~= "table" then return false end
-  if type(data.patterns) ~= "table" then return false end
-
-  for i = 1, NUM_VOICES do
-    local voice_data = data.voices[i]
-    if type(voice_data) ~= "table" then return false end
-    if type(voice_data.active) ~= "boolean" then return false end
-    if not is_integer_between(voice_data.source, 1, #SOURCE_OPTIONS) then return false end
-    if type(voice_data.params) ~= "table" then return false end
-    if type(voice_data.grain) ~= "table" then return false end
-    if type(voice_data.crossmod) ~= "table" then return false end
-
-    for key, value in pairs(voice_data.params) do
-      if S.voices[i].params[key] == nil or not is_number(value) then return false end
-    end
-    for key, value in pairs(voice_data.grain) do
-      if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
-      if DISCRETE_GRAIN_KEYS[key] and not is_integer_between(value, 1, DISCRETE_GRAIN_KEYS[key]) then
-        return false
-      end
-    end
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      if type(slot_data) ~= "table" then return false end
-      if not is_integer_between(slot_data.source, 0, NUM_VOICES) then return false end
-      if not is_number(slot_data.amp_amt) or not is_number(slot_data.freq_amt) then return false end
-    end
-    if not is_number(voice_data.crossmod.speed) then return false end
-
-    if type(data.frozen[i]) ~= "boolean" then return false end
-
-    local pattern = data.patterns[i]
-    if type(pattern) ~= "table" then return false end
-    for step = 1, PATTERN_LENGTH do
-      if not is_integer_between(pattern[step], 0, MAX_STEP_LEVEL) then return false end
-    end
-  end
-
-  return true
-end
-
--- Validate a whole scenes table (as loaded from disk). Missing slots are
--- allowed; load_scenes_from_disk fills them with empty scenes.
-function validate_scene_data(scene_table)
-  if type(scene_table) ~= "table" then return false end
-
-  for i = 1, NUM_SCENES do
-    if scene_table[i] ~= nil and not validate_scene(scene_table[i]) then
-      return false
-    end
-  end
-
-  return true
-end
-
 -- MAIN's voice list: "+" for a running voice, "-" for a stopped one, then the
 -- type's short name and [F] when frozen. Plain ASCII, so the entries' width
 -- does not depend on the font drawing other glyphs (the details column shows
@@ -1747,10 +1057,10 @@ function draw_header()
   end
 
   -- Scene indicator (right-aligned to the screen edge)
-  if current_scene > 0 then
+  if S.current_scene > 0 then
     screen.move(127, 8)
-    screen.level(scene_sequencer_enabled and 10 or 6)
-    screen.text_right("S" .. current_scene)
+    screen.level(S.scene_sequencer_enabled and 10 or 6)
+    screen.text_right("S" .. S.current_scene)
   end
 end
 
@@ -1837,7 +1147,7 @@ function redraw_setup()
 
   local scenes_saved = 0
   for scene_num = 1, NUM_SCENES do
-    if scenes[scene_num].populated then scenes_saved = scenes_saved + 1 end
+    if S.scenes[scene_num].populated then scenes_saved = scenes_saved + 1 end
   end
 
   -- rows 6 px apart (like the BUFFER page), leaving y 54 above the hints
@@ -3109,17 +2419,17 @@ function toggle_pattern_step(voice_idx, step)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
   if step < 1 or step > PATTERN_LENGTH then return end
 
-  if patterns[voice_idx][step] == 0 then
-    patterns[voice_idx][step] = 15  -- Full brightness
+  if S.patterns[voice_idx][step] == 0 then
+    S.patterns[voice_idx][step] = 15  -- Full brightness
   else
-    patterns[voice_idx][step] = 0
+    S.patterns[voice_idx][step] = 0
   end
 end
 
 function clear_pattern(voice_idx)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
   for step = 1, PATTERN_LENGTH do
-    patterns[voice_idx][step] = 0
+    S.patterns[voice_idx][step] = 0
   end
 end
 
@@ -3127,9 +2437,9 @@ function randomize_pattern(voice_idx)
   if voice_idx < 1 or voice_idx > NUM_VOICES then return end
   for step = 1, PATTERN_LENGTH do
     if math.random() > 0.5 then
-      patterns[voice_idx][step] = math.random(8, 15)
+      S.patterns[voice_idx][step] = math.random(8, 15)
     else
-      patterns[voice_idx][step] = 0
+      S.patterns[voice_idx][step] = 0
     end
   end
 end
@@ -3313,13 +2623,13 @@ function pattern_clock_start()
     while pattern_playing do
       -- Trigger voices that have active steps
       for voice_idx = 1, NUM_VOICES do
-        if patterns[voice_idx][pattern_position] > 0 then
+        if S.patterns[voice_idx][pattern_position] > 0 then
           if S.voices[voice_idx].active then
             -- Voice is already running: accent it in place, at the step's
             -- level (1-15) as velocity. A step must never create new synth
             -- nodes (toggling would stack whole voice/grain/mod chains
             -- through their long release tails).
-            engine.retrigger(voice_idx - 1, patterns[voice_idx][pattern_position] / MAX_STEP_LEVEL)
+            engine.retrigger(voice_idx - 1, S.patterns[voice_idx][pattern_position] / MAX_STEP_LEVEL)
           else
             -- Voice is off - turn it on
             toggle_voice(voice_idx)
@@ -3349,7 +2659,7 @@ end
 -- LED level for a pattern step: its stored level, or at the playhead 15 for
 -- an active step and 4 for an empty one
 function step_brightness(voice_idx, step)
-  local level = patterns[voice_idx][step]
+  local level = S.patterns[voice_idx][step]
   if pattern_playing and step == pattern_position then
     return level > 0 and 15 or 4
   end
@@ -3385,14 +2695,14 @@ function grid_redraw_256(grid_device)
     -- Scene page
     -- Row 1: Scene recall (instant)
     for i = 1, NUM_SCENES do
-      local brightness = scenes[i].populated and 8 or 2
-      if current_scene == i then brightness = 15 end
+      local brightness = S.scenes[i].populated and 8 or 2
+      if S.current_scene == i then brightness = 15 end
       grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
     for i = 1, NUM_SCENES do
-      local brightness = scenes[i].populated and 6 or 2
+      local brightness = S.scenes[i].populated and 6 or 2
       grid_device:led(i, 2, brightness)
     end
 
@@ -3402,11 +2712,11 @@ function grid_redraw_256(grid_device)
     end
 
     -- Row 5: Scene sequencer controls
-    if scene_sequencer_enabled then
+    if S.scene_sequencer_enabled then
       grid_device:led(1, 5, 15)  -- Sequencer on
       -- Show next scene in sequence
-      if scene_sequencer_position >= 1 and scene_sequencer_position <= NUM_SCENES then
-        grid_device:led(scene_sequencer_position, 1, 15)
+      if S.scene_sequencer_position >= 1 and S.scene_sequencer_position <= NUM_SCENES then
+        grid_device:led(S.scene_sequencer_position, 1, 15)
       end
     else
       grid_device:led(1, 5, 4)  -- Sequencer off
@@ -3550,14 +2860,14 @@ function grid_redraw_128h(grid_device)
     -- Scene page (simplified for 128h layout)
     -- Row 1: Scene recall (instant)
     for i = 1, NUM_SCENES do
-      local brightness = scenes[i].populated and 8 or 2
-      if current_scene == i then brightness = 15 end
+      local brightness = S.scenes[i].populated and 8 or 2
+      if S.current_scene == i then brightness = 15 end
       grid_device:led(i, 1, brightness)
     end
 
     -- Row 2: Scene recall (with transition)
     for i = 1, NUM_SCENES do
-      local brightness = scenes[i].populated and 6 or 2
+      local brightness = S.scenes[i].populated and 6 or 2
       grid_device:led(i, 2, brightness)
     end
 
@@ -3567,7 +2877,7 @@ function grid_redraw_128h(grid_device)
     end
 
     -- Row 5: Scene sequencer controls
-    if scene_sequencer_enabled then
+    if S.scene_sequencer_enabled then
       grid_device:led(1, 5, 15)  -- Sequencer on
     else
       grid_device:led(1, 5, 4)  -- Sequencer off
@@ -3657,15 +2967,15 @@ function cleanup()
 
   -- Save scenes to disk before exiting, unless that would overwrite a scenes
   -- file that failed to load and could not be moved aside
-  if scene_autosave_blocked then
-    print("scenes not auto-saved: " .. scene_data_file .. " could not be loaded")
+  if S.scene_autosave_blocked then
+    print("scenes not auto-saved: " .. S.lib.scenes.scene_data_file .. " could not be loaded")
   else
     save_scenes_to_disk()
   end
 
   -- Remember each buffer's file or scratch take for the next start
   if S.buffer_autosave_blocked then
-    print("buffer paths not auto-saved: " .. S.lib.buffers.buffer_data_file .. " could not be loaded")
+    print("buffer paths not auto-saved: " .. S.lib.buffers.buffer_data_file() .. " could not be loaded")
   else
     save_buffers_to_disk()
   end

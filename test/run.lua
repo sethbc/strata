@@ -565,6 +565,10 @@ local MODULE_HOMES = {
     "add_lfo_params" },
   ["lib/mutation.lua"] = { "randomize_voice", "gentle_mutate", "drift_update", "mean_reverting_step",
     "set_drifted_param", "mutated_value" },
+  ["lib/scenes.lua"] = { "capture_scene", "recall_scene", "recall_scene_instant", "migrate_scene",
+    "validate_scene", "validate_scene_data", "save_scenes_to_disk", "load_scenes_from_disk",
+    "scene_sequencer_start", "scene_sequencer_stop", "cancel_scene_transition", "with_traceback",
+    "scene_transition_targets", "wait_for_scene_transition" },
 }
 
 test("functions live in their module", function()

@@ -4,9 +4,10 @@
 -- polls (S.buffer_polls; init starts them), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
 -- valid_buffer_slot, cancel_buffer_recording_timer, buffer_state_changed
--- and buffer_data_file are fields of this module's table (S.lib.buffers) for
--- the code in strata.lua that uses them. finish_buffer_take is also
--- S.finish_buffer_take, where the tests reach it.
+-- and buffer_data_file (a function: the path is built at call time) are
+-- fields of this module's table (S.lib.buffers) for the code in strata.lua
+-- that uses them. finish_buffer_take is also S.finish_buffer_take, where the
+-- tests reach it.
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride by matching this line in the script's sources
@@ -365,15 +366,18 @@ return function(S)
   -- Buffer disk persistence: buffers.data remembers, per slot, the loaded file
   -- or the scratch take, so buffer-sourced voices and scenes are not silent
   -- after a restart. It holds only paths; the audio stays in its own files.
-  -- buffer_data_dir is Strata's data folder, the scenes file's folder too
-  local buffer_data_dir = _path.data .. "strata/"
-  local buffer_data_file = buffer_data_dir .. "buffers.data"
+  -- It is kept in Strata's data folder, beside scenes.data: the folder is
+  -- the scenes' scene_data_dir, read at call time (lib/scenes.lua loads
+  -- after this module)
+  local function buffer_data_file()
+    return S.lib.scenes.scene_data_dir .. "buffers.data"
+  end
   -- Set when a buffers file could not be loaded and could not be moved aside
   S.buffer_autosave_blocked = false
 
   function save_buffers_to_disk()
-    if util.file_exists(buffer_data_dir) == false then
-      util.make_dir(buffer_data_dir)
+    if util.file_exists(S.lib.scenes.scene_data_dir) == false then
+      util.make_dir(S.lib.scenes.scene_data_dir)
     end
     -- a remembered file that was missing on start is kept (it may be on a
     -- drive that is mounted again later)
@@ -381,12 +385,12 @@ return function(S)
     for slot = 1, NUM_BUFFERS do
       paths[slot] = S.buffers[slot].path or S.buffers[slot].missing_path or ""
     end
-    tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file)
-    print("buffer paths saved to " .. buffer_data_file)
+    tab.save({version = BUFFER_DATA_VERSION, paths = paths}, buffer_data_file())
+    print("buffer paths saved to " .. buffer_data_file())
   end
 
   local function preserve_unloadable_buffer_file()
-    if not S.move_aside_unloadable_file(buffer_data_file, "buffers") then
+    if not S.lib.scenes.move_aside_unloadable_file(buffer_data_file(), "buffers") then
       S.buffer_autosave_blocked = true
     end
   end
@@ -398,13 +402,13 @@ return function(S)
   function load_buffers_from_disk()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
-    if not util.file_exists(buffer_data_file) then
+    if not util.file_exists(buffer_data_file()) then
       print("no saved buffers file found")
       return
     end
 
     -- tab.load runs the file as Lua without protection
-    local ok, loaded, load_error = pcall(tab.load, buffer_data_file)
+    local ok, loaded, load_error = pcall(tab.load, buffer_data_file())
     if not ok then
       print("error: buffers file could not be read (" .. tostring(loaded) .. ")")
       preserve_unloadable_buffer_file()
@@ -438,7 +442,7 @@ return function(S)
         end
       end
     end
-    print(reloading .. " buffers reloading from " .. buffer_data_file)
+    print(reloading .. " buffers reloading from " .. buffer_data_file())
   end
 
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
