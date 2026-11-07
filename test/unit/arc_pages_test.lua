@@ -8,7 +8,7 @@ return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, find_upvalue, local_value, next_frame = h.load_strata, h.find_upvalue, h.local_value, h.next_frame
 local finish_startup, PAGE_TITLES, show_page = h.finish_startup, h.PAGE_TITLES, h.show_page
-local read_lua_sources = h.read_lua_sources
+local read_lua_sources, hint_text = h.read_lua_sources, h.hint_text
 
 test("arc rings follow the page; MAIN mapping unchanged", function()
   local context = load_strata(); finish_startup(context)
@@ -271,6 +271,18 @@ local function assert_ring_dark(device, ring, where)
   assert_equal(lit(device, ring), 0, where .. ": every LED dark")
 end
 
+-- Put the VOICE cursor on row index: through the VOICE page's place_cursor
+-- (which moves its anchor, so sync_cursor keeps it there) when it has one
+local function place_voice_cursor(index)
+  local S = local_value("S")
+  local page = S.lib.pages_voice
+  if page and page.place_cursor then
+    page.place_cursor(index)
+  else
+    S.cursors.voice = index
+  end
+end
+
 test("MAIN's ALT rings are pitch, spread, level and pan", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
@@ -358,7 +370,7 @@ test("VOICE rings follow the cursor's group of four", function()
       if row.param_id == param_id then return index end
     end
   end
-  S.cursors.voice = row_of("v1_grain_density")
+  place_voice_cursor(row_of("v1_grain_density"))
   local group = { "v1_mod2", "v1_grain_size", "v1_grain_density", "v1_grain_pitch" }
   for ring, param_id in ipairs(group) do
     local before = {}
@@ -377,7 +389,7 @@ test("VOICE rings follow the cursor's group of four", function()
     assert_ring_fraction(device, ring, param_fraction(param_id), "VOICE ring " .. ring .. " (" .. param_id .. ")")
   end
   -- an option row in the next group: one whole value per 20 ticks
-  S.cursors.voice = row_of("v1_grain_env")
+  place_voice_cursor(row_of("v1_grain_env"))
   local env = params:get("v1_grain_env")
   context.arc.turn(1, 2, 19)
   assert_equal(params:get("v1_grain_env"), env, "19 ticks do not step the envelope")
@@ -387,7 +399,7 @@ test("VOICE rings follow the cursor's group of four", function()
   assert_equal(params:get("v1_grain_env"), env, "20 back step it back")
   -- a number row (a mod source) steps the same way
   local function ring_of(param_id)
-    S.cursors.voice = row_of(param_id)
+    place_voice_cursor(row_of(param_id))
     local rows = voice_page_rows(S.selected_voice)
     local _, row_indices = voice_page_group(rows, S.cursors.voice)
     for ring, index in ipairs(row_indices) do
@@ -417,7 +429,7 @@ test("VOICE rings past the last row are dark and ignored", function()
   params:set("v1_source", 2)   -- buffer 1: 22 rows, the last group holds two
   show_page("VOICE")
   local rows = voice_page_rows(1)
-  S.cursors.voice = #rows
+  place_voice_cursor(#rows)
   local _, group = voice_page_group(rows, S.cursors.voice)
   assert_equal(#group, 2, "the last group has two rows")
   local before = {}
@@ -567,8 +579,12 @@ test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
   S.scenes_page.armed_until = util.time() + 10
   context.arc.turn(1, 1, 5)
   assert_equal(S.scenes_page.armed_slot, 1, "a part-turn leaves it armed")
+  S.lib.ui_flash.start("hints", "K3 again: overwrite S1", 2, C.UI_PAGES.index.SCENES)
   context.arc.turn(1, 1, 5)
   assert_true(S.scenes_page.armed_slot == nil, "moving the cursor disarms")
+  assert_true(S.lib.ui_flash.text("hints") == nil, "and clears the overwrite prompt")
+  redraw()
+  assert_true(hint_text(context) ~= "K3 again: overwrite S1", "the hint row no longer asks")
 end)
 
 test("page and arc files keep to their record fields", function()

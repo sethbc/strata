@@ -17,8 +17,8 @@ return function(S)
     level = 12,
   }
 
-  -- A cursor move disarms a pending overwrite confirmation, as E2 does
-  -- (S.scenes_page, lib/pages/scenes.lua)
+  -- A cursor move disarms a pending overwrite confirmation and clears its
+  -- hint-row prompt, as E2 does (S.scenes_page, lib/pages/scenes.lua)
   local function move_cursor(steps)
     local before = S.cursors.scene
     S.lib.ui_cursors.move("scene", steps)
@@ -26,6 +26,7 @@ return function(S)
     if S.cursors.scene ~= before and page and page.armed_slot then
       page.armed_slot = nil
       page.armed_until = 0
+      S.lib.ui_flash.start("hints", nil)
     end
   end
 
