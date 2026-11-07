@@ -1,7 +1,8 @@
 -- lib/grid/layout_256.lua
 -- The 16x16 grid: its four pages (1 patterns, 2 parameters, 3 scenes,
 -- 4 buffers / FX), keys and LEDs. Registers S.registry.grid_layouts["256"].
--- The functions stay global.
+-- Row 16 columns 9-15 copy and paste patterns through a clipboard kept per
+-- port (grid_core.port_state(port).clipboard). The functions stay global.
 
 return function(S)
   local M = {}
@@ -12,6 +13,21 @@ return function(S)
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
   local grid_core = S.lib.grid_core
   local GRID_LAYOUT = grid_core.GRID_LAYOUT
+
+  -- Keys and levels: row 8's tempo keys (column -> tempo change), row 16's
+  -- copy/paste keys (columns 9-15 voices 1-7, column 16 clears the
+  -- clipboard) and the scene page's sequencer position
+  local LAYOUT_256 = {
+    tempo_steps = {[5] = -10, [6] = -1, [7] = 1, [8] = 10},
+    tempo_held_level = 15,
+    tempo_level = 4,
+    copy_first_column = 9,
+    clear_column = 16,
+    copied_level = 15,      -- the copied voice's key
+    paste_level = 4,        -- the other voices' keys and column 16 while a pattern is copied
+    empty_level = 2,        -- columns 9-16 with nothing copied
+    sequencer_position_level = 10,
+  }
 
   -- 16x16 grid layout
   function grid_key_256(port, x, y, z)
@@ -63,7 +79,7 @@ return function(S)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
-        grid_key_256_lock(x)
+        grid_key_256_lock(port, x)
       end
     elseif y >= 1 and y <= NUM_VOICES then
       -- Rows 1-NUM_VOICES: Pattern triggers for each voice
@@ -99,7 +115,7 @@ return function(S)
         randomize_pattern(x - 8)
       end
     elseif y == 16 then
-      grid_key_256_lock(x)
+      grid_key_256_lock(port, x)
     end
   end
 
@@ -108,23 +124,38 @@ return function(S)
     if x <= 4 then
       -- Play/stop
       pattern_toggle()
-    elseif x >= 5 and x <= 8 then
-      -- Tempo controls
-      if x == 5 then params:delta("tempo", -10) end
-      if x == 6 then params:delta("tempo", -1) end
-      if x == 7 then params:delta("tempo", 1) end
-      if x == 8 then params:delta("tempo", 10) end
+    elseif LAYOUT_256.tempo_steps[x] then
+      -- Tempo -10, -1, +1, +10; the header shows the tempo it lands on
+      params:delta("tempo", LAYOUT_256.tempo_steps[x])
+      header_flash(string.format("tempo %d", util.round(params:get("tempo"))))
     end
   end
 
-  -- 256 row 16: global functions
-  function grid_key_256_lock(x)
+  -- Row 16, columns 9-15 (voices 1-7): with nothing copied, copy the voice's
+  -- pattern (a snapshot of its levels); with a pattern copied, paste it onto
+  -- the voice (the copied voice itself changes nothing). The clipboard stays
+  -- for further pastes until column 16 clears it
+  local function copy_paste_key(port, voice_idx)
+    if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+    local state = grid_core.port_state(port)
+    local clipboard = state.clipboard
+    if clipboard == nil then
+      local steps = {}
+      for step = 1, PATTERN_LENGTH do steps[step] = S.patterns[voice_idx][step] end
+      state.clipboard = {voice = voice_idx, steps = steps}
+    elseif clipboard.voice ~= voice_idx then
+      for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = clipboard.steps[step] end
+    end
+  end
+
+  -- 256 row 16: lock (columns 1-7), copy/paste (9-15), clear the clipboard (16)
+  function grid_key_256_lock(port, x)
     if x <= NUM_VOICES then
-      -- Lock voice
       toggle_lock(x)
-    elseif x >= 9 and x <= 16 then
-      -- Copy/paste patterns
-      -- (Future expansion)
+    elseif x == LAYOUT_256.clear_column then
+      grid_core.port_state(port).clipboard = nil
+    elseif x >= LAYOUT_256.copy_first_column then
+      copy_paste_key(port, x - LAYOUT_256.copy_first_column + 1)
     end
   end
 
@@ -132,9 +163,13 @@ return function(S)
     local page = grid_core.page(port)
     if page == 3 then
       -- Scene page
-      -- Row 1: Scene recall (instant)
+      -- Row 1: Scene recall (instant). The sequencer's position (the next
+      -- scene it recalls) at 10 while it runs, the current scene at 15
       for i = 1, NUM_SCENES do
         local brightness = S.scenes[i].populated and 8 or 2
+        if S.scene_sequencer_enabled and S.scene_sequencer_position == i then
+          brightness = LAYOUT_256.sequencer_position_level
+        end
         if S.current_scene == i then brightness = 15 end
         grid_device:led(i, 1, brightness)
       end
@@ -151,15 +186,7 @@ return function(S)
       end
 
       -- Row 5: Scene sequencer controls
-      if S.scene_sequencer_enabled then
-        grid_device:led(1, 5, 15)  -- Sequencer on
-        -- Show next scene in sequence
-        if S.scene_sequencer_position >= 1 and S.scene_sequencer_position <= NUM_SCENES then
-          grid_device:led(S.scene_sequencer_position, 1, 15)
-        end
-      else
-        grid_device:led(1, 5, 4)  -- Sequencer off
-      end
+      grid_device:led(1, 5, S.scene_sequencer_enabled and 15 or 4)  -- Sequencer on/off
 
       -- Sequence length indicators
       local seq_length = params:get("scene_sequence_length")
@@ -177,7 +204,7 @@ return function(S)
       end
       grid_redraw_256_sources(grid_device)
       grid_redraw_256_transport(port, grid_device)
-      grid_redraw_256_lock(grid_device)
+      grid_redraw_256_lock(port, grid_device)
     else
       -- Patterns/parameters pages
       -- Draw patterns (rows 1-NUM_VOICES)
@@ -201,7 +228,7 @@ return function(S)
         grid_device:led(i + 8, 14, S.voices[i].active and 12 or 2)
       end
 
-      grid_redraw_256_lock(grid_device)
+      grid_redraw_256_lock(port, grid_device)
     end
   end
 
@@ -240,20 +267,31 @@ return function(S)
       grid_device:led(x, 8, S.pattern_playing and 15 or 4)
     end
 
-    -- Tempo indicators
-    grid_device:led(5, 8, 2)
-    grid_device:led(6, 8, 2)
-    grid_device:led(7, 8, 2)
-    grid_device:led(8, 8, 2)
+    -- Tempo keys: lit while held
+    for x in pairs(LAYOUT_256.tempo_steps) do
+      local held = grid_core.held(port, x, 8) ~= nil
+      grid_device:led(x, 8, held and LAYOUT_256.tempo_held_level or LAYOUT_256.tempo_level)
+    end
 
     grid_redraw_256_page_row(port, grid_device)
   end
 
-  -- 256 row 16: lock status
-  function grid_redraw_256_lock(grid_device)
+  -- 256 row 16: lock status (columns 1-7) and the clipboard (9-16): the
+  -- copied voice 15, the paste targets and the clear key 4, 2 with nothing
+  -- copied
+  function grid_redraw_256_lock(port, grid_device)
     for i = 1, NUM_VOICES do
       grid_device:led(i, 16, S.frozen[i] and 12 or 2)
     end
+    local clipboard = grid_core.port_state(port).clipboard
+    for voice_idx = 1, NUM_VOICES do
+      local level = LAYOUT_256.empty_level
+      if clipboard then
+        level = clipboard.voice == voice_idx and LAYOUT_256.copied_level or LAYOUT_256.paste_level
+      end
+      grid_device:led(LAYOUT_256.copy_first_column + voice_idx - 1, 16, level)
+    end
+    grid_device:led(LAYOUT_256.clear_column, 16, clipboard and LAYOUT_256.paste_level or LAYOUT_256.empty_level)
   end
 
   S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256}
