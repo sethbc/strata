@@ -15,12 +15,11 @@ local LONG_PRESS_SECONDS = 0.6  -- K2/K3 hold for the ALT long-press fallback (l
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standard tier (engine standardBufferSeconds)
-local BUFFER_SECONDS = STANDARD_BUFFER_SECONDS  -- Length of each buffer slot (engine bufferSeconds)
 local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
 local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
 
 -- The standard performance tier's values. S.performance starts as a copy
--- (lib/params_setup.lua); 3.2's performance setting fills it at init, before
+-- (lib/params_setup.lua); lib/performance.lua fills it at init, before
 -- any param is added. Every tier-dependent spec reads S.performance
 -- (record duration, history range), never these
 local STANDARD_PERFORMANCE = {tier = "standard", buffer_seconds = STANDARD_BUFFER_SECONDS, max_grains = 128,
@@ -208,7 +207,6 @@ return {
   LONG_PRESS_SECONDS = LONG_PRESS_SECONDS,
   MAX_STEP_LEVEL = MAX_STEP_LEVEL,
   NUM_BUFFERS = NUM_BUFFERS,
-  BUFFER_SECONDS = BUFFER_SECONDS,
   STANDARD_BUFFER_SECONDS = STANDARD_BUFFER_SECONDS,
   STANDARD_PERFORMANCE = STANDARD_PERFORMANCE,
   BUFFER_DATA_VERSION = BUFFER_DATA_VERSION,

@@ -75,7 +75,7 @@
         // (StrataRings.sc) whose frame position is on phaseBus. Grains start
         // behind the write head (ringGrainReader).
         SynthDef(\strataGrainRing, {
-            arg out, gate=1, bufL=0, bufR=0, phaseBus=0,
+            arg out, gate=1, bufL=0, bufR=0, phaseBus=0, bufScan=0,
             grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
             envBuf = -1, grainMode=0, t_trig=0, velocity=1, amp=1, bend=1, kill=0, pan=0,
             accentAmt=0, mirrorOut=0, mirrorLevel=0, modLevel=0, rateLevel=1,
@@ -104,7 +104,7 @@
                 filterType: filterType, filterFreq: filterFreq, filterRes: filterRes, filterMix: filterMix,
                 delaySend: delaySend, reverbSend: reverbSend
             );
-            this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history));
+            this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
 
         // Granular processor for a buffer slot (bufnumL/R). bufPos (0-1) and
@@ -227,14 +227,17 @@
     //   triggered:  dur' = min(dur, dur / (r - 1)), D = margin + history + max(r - 1, 0) x dur'
     // spread is a per-grain draw of 0 to posSpread x ringSpreadSeconds
     // (backward only: forward of the head is the future), 0 in triggered
-    // mode. history is clipped to historySeconds.
-    ringGrainReader { arg bufL, bufR, phaseBus, posSpread, history;
+    // mode. history is clipped to historySeconds. ringScanOffset (the
+    // freeze area's hook; neutral 0) moves the read point further back by
+    // the voice's scan, for a frozen ring.
+    ringGrainReader { arg bufL, bufR, phaseBus, posSpread, history, bufScan, freeze;
         ^{ arg trig, rate, dur, mode;
             var ringRate = rate.clip2(this.ringMaxRate);
             var ahead = (ringRate - 1).max(0);
             var length = dur + (mode * ((dur / ahead.max(1)) - dur));
             var spread = TRand.ar(0, posSpread * this.ringSpreadSeconds, trig) * (1 - mode);
-            var lookback = this.ringReadMargin + history.clip(0, historySeconds) + spread + (ahead * length);
+            var lookback = this.ringReadMargin + history.clip(0, historySeconds) + spread + (ahead * length)
+                + this.ringScanOffset(bufScan, freeze);
             var frames = BufFrames.kr(bufL);
             var start = (In.kr(phaseBus, 1) - (lookback * SampleRate.ir)).wrap(0, frames);
             (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: start / frames, level: 1)

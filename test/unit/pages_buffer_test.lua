@@ -152,7 +152,7 @@ test("K3 records into the slot under the cursor whatever the voices use", functi
   assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
   -- a voice reading another slot changes nothing
   params:set("v1_source", 6)  -- buf 5
-  context.polls.fire("bufferState", 205)
+  context.polls.fire("bufferState", 2005)
   enc(2, 3); context.clear_engine_calls(); tap(3)
   assert_equal(context.calls_named("recordBuffer")[1].args[1], 5, "slot 6, the cursor's, not the voice's 5")
   -- the arc's button records or stops the cursor slot, as K3 does
@@ -196,7 +196,7 @@ test("ALT+K2 clear never opens the file browser", function()
   local buffers = local_value("buffers")
   enc(2, 1)   -- slot 2
   load_buffer(2, "/tmp/keep.wav"); load_buffer(1, "/tmp/other.wav")
-  context.polls.fire("bufferState", 104); context.polls.fire("bufferState", 4)
+  context.polls.fire("bufferState", 1004); context.polls.fire("bufferState", 4)
   context.clear_engine_calls(); context.fileselect.last = nil
   -- K1 down, K2 down, K1 up, K2 up
   key(1, 1); key(2, 1); key(1, 0); key(2, 0)
@@ -222,7 +222,7 @@ test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", func
   local buffers = local_value("buffers")
   enc(2, 2)   -- slot 3; no voice reads it
   load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
+  context.polls.fire("bufferState", 2004)  -- the engine reports buffer 3's audio
   context.clear_engine_calls(); context.fileselect.last = nil
   context.set_time(100)
   with_alt(function() tap(3) end); next_frame(context)
@@ -259,7 +259,7 @@ test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", func
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
   assert_equal(hint_text(context), "buf 4 busy", "still busy while finishing")
   -- once the engine reports the take, ALT+K3 saves it
-  context.polls.fire("bufferState", 305)
+  context.polls.fire("bufferState", 3005)
   assert_true(not buffers[4].finishing, "the take settled")
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
@@ -275,8 +275,8 @@ end)
 test("slots sit 7 px apart, six at a time, with a scroll marker", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local page = local_value("BUFFER_PAGE")
-  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
-  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 202.5)
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1016)
+  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 2002.5)
   params:set("v2_source", 4); params:set("v6_source", 4)   -- voices 2 and 6 read slot 3
   params:set("v1_source", 3)                               -- voice 1 reads slot 2
   redraw()
@@ -426,7 +426,7 @@ test("BUFFER hints", function()
   assert_equal(hint_text(context), "K2:load K3:...")
   -- the same whatever the selected voice's source
   for _, source in ipairs({ 1, 4, 10 }) do
-    params:set("v1_source", source); context.polls.fire("bufferState", 203); redraw()
+    params:set("v1_source", source); context.polls.fire("bufferState", 2003); redraw()
     assert_equal(hint_text(context), "K2:load K3:rec", "source " .. source)
   end
 end)
@@ -515,7 +515,7 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   -- Strata's own redraws (a buffer report, page turns, a load) while it is
   -- open: the frame clock's redraw() draws the selector
   selector.redraws = 0
-  context.polls.fire("bufferState", 305)
+  context.polls.fire("bufferState", 3005)
   enc(1, -1); enc(1, 1)
   load_buffer(5, "/tmp/other.wav")
   next_frame(context)
@@ -691,8 +691,8 @@ test("BUFFER page draws the voice, its fields, the meter and the slot rows", fun
   local page = local_value("BUFFER_PAGE")
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
-  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
-  load_buffer(5, "/tmp/x.wav"); context.polls.fire("bufferState", 402.5)
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1016)
+  load_buffer(5, "/tmp/x.wav"); context.polls.fire("bufferState", 4002.5)
   params:set("record_duration", 2); record_buffer(6)
   redraw()
   local left_name
@@ -752,7 +752,7 @@ test("BUFFER page layout holds for every voice, source, buffer state and cursor"
       if state == "empty" then clear_buffer(slot)
       elseif state == "loaded" then
         load_buffer(slot, "/tmp/" .. long_names[(slot - 1) % #long_names + 1])
-        context.polls.fire("bufferState", (slot - 1) * 100 + 16)
+        context.polls.fire("bufferState", (slot - 1) * 1000 + 16)
       elseif state == "recording" then
         clear_buffer(slot); record_buffer(slot)
       end
@@ -784,7 +784,7 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
   local grid_device = context.grid.plug(1, 16, 16)
   show_page("BUFFER")
   h.assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
-    context.polls.fire("bufferState", 305)
+    context.polls.fire("bufferState", 3005)
   end)
   assert_true(h.screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
   -- the cursor slot records; no report comes, so the take settles empty
@@ -827,7 +827,7 @@ test("a K2 or ALT released inside the norns menu is forgotten: K3 records again 
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
   assert_equal(context.fileselect.last, nil, "nothing opened the file selector")
   tap(3)  -- stop the recording
-  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
+  context.polls.fire("bufferState", 2002)  -- the engine reports the 2 s take
   -- ALT held into the menu: forgotten, so K3 records rather than saves
   context.clear_engine_calls()
   key(1, 1)
@@ -836,7 +836,7 @@ test("a K2 or ALT released inside the norns menu is forgotten: K3 records again 
   tap(3)
   assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save after ALT was released in the menu")
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
-  tap(3); context.polls.fire("bufferState", 202)
+  tap(3); context.polls.fire("bufferState", 2002)
   -- ticks with the menu closed keep a held ALT
   context.clear_engine_calls()
   key(1, 1); drift_metro.event(); tap(3); key(1, 0)
@@ -852,7 +852,7 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   finish_startup(context); show_page("BUFFER")
   assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
   enc(2, 2); load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)
+  context.polls.fire("bufferState", 2004)
   context.clear_engine_calls(); context.fileselect.last = nil
   -- ALT and K2 down, then K1 opens and closes the menu between two 10 Hz ticks
   key(1, 1); key(2, 1)
@@ -865,7 +865,7 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   assert_equal(#context.calls_named("saveBuffer"), 0, "K3 does not save")
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
   tap(3)  -- stop the recording
-  context.polls.fire("bufferState", 202)  -- the engine reports the 2 s take
+  context.polls.fire("bufferState", 2002)  -- the engine reports the 2 s take
   _menu.set_mode(true); _menu.set_mode(false)
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
   context.fileselect.close()
@@ -899,14 +899,14 @@ test("the cursor row lists the voices in full when they fit, and keeps the name'
   local text_extents = screen.text_extents
   screen.text_extents = function(text) return 4 * #tostring(text), 8 end
   local page = local_value("BUFFER_PAGE")
-  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 202.5)
+  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 2002.5)
   params:set("v2_source", 4); params:set("v6_source", 4)   -- voices 2 and 6 read slot 3
   local_value("buffer_page").slot = 3
   show_page("BUFFER")
   local rows = slot_rows(context)
   assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows v2 v6")
   -- a long name with every voice on the slot: the voices shorten, the name keeps its room
-  load_buffer(3, "/tmp/a_long_name_for_the_slot.wav"); context.polls.fire("bufferState", 216)
+  load_buffer(3, "/tmp/a_long_name_for_the_slot.wav"); context.polls.fire("bufferState", 2016)
   for voice = 1, 7 do params:set("v" .. voice .. "_source", 4) end
   redraw()
   local name, voices

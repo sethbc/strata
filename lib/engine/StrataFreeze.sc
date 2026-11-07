@@ -16,6 +16,14 @@
         ^bufScan
     }
 
+    // How much further back (s) a ring grain synth starts its grains for
+    // the voice's scan and freeze controls: a frozen ring holds valid audio
+    // all round and its reads wrap, so the scan can move the read point back
+    // through it. Neutral: 0 (an unfrozen ring ignores bufScan)
+    ringScanOffset { arg bufScan, freeze;
+        ^0
+    }
+
     // Freeze a voice's source (the freeze grain param). Neutral: nothing
     freezeVoice { arg voice; }
 

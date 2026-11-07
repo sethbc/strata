@@ -18,8 +18,8 @@ var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, monoPath = h.monoPath, longPath = h.longPath, textPath = h.textPath;
 var before, scratchFile, file, frames, info, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
 
-// bufferState poll value: slot index * 100 + valid seconds
-var decodeBufferState = { arg value; var slot = (value / 100).floor; [slot.asInteger, value - (slot * 100)] };
+// bufferState poll value: slot index * 1000 + valid seconds
+var decodeBufferState = { arg value; var slot = (value / 1000).floor; [slot.asInteger, value - (slot * 1000)] };
 var bufferStateSeen = { arg slot, seconds;
     pollMessages.any({ arg msg; var decoded = decodeBufferState.(msg[2]);
         (msg[1] == engine.bufferStatePoll.index) and: { decoded[0] == slot }

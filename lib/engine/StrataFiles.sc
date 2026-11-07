@@ -41,8 +41,9 @@
     }
 
     // Delete the files a write interrupted by a crash or power cut left: the
-    // .part files in scratchDir (scratch takes) and its parent (saveBuffer's
-    // <date>-buf<n>.wav, in _path.audio/strata/ on norns), and writeSlot's
+    // .part files in scratchDir (scratch takes), its parent (saveBuffer's
+    // <date>-buf<n>.wav, in _path.audio/strata/ on norns) and the settings
+    // folder (performance_active.data, performance.data), and writeSlot's
     // temporary float files (strata-buf<n>-<tag>-<n>-<side>.wav) in
     // Platform.defaultTempDir; only files older than stalePartAge. alloc
     // calls this: after a script reload in the same sclang session the
@@ -74,16 +75,23 @@
         ^unreadable.asArray
     }
 
-    // scratchDir and its parent, keeping only absolute directories below the
-    // root: an empty or relative scratchDir ("", ".", "scratch/", whose
-    // dirname is ".") would glob the working directory, and "" or "/" the
-    // root. "~" is expanded; other paths are not standardized, since
-    // standardizePath turns "." into the working directory.
+    // scratchDir and its parent, then the settings folder the performance
+    // area used at alloc (settingsDir, or ~/dust/data/strata/), keeping only
+    // absolute directories below the root: an empty or relative scratchDir
+    // ("", ".", "scratch/", whose dirname is ".") or settingsDir would glob
+    // the working directory, and "" or "/" the root. "~" is expanded; other
+    // paths are not standardized, since standardizePath turns "." into the
+    // working directory. A folder is listed once.
     stalePartDirs {
-        var dir = scratchDir.asString;
+        var dir = scratchDir.asString, dirs, settings;
+        settings = this.allocSettingsDirectory.asString;
         if (dir.beginsWith("~")) { dir = dir.standardizePath };
+        if (settings.beginsWith("~")) { settings = settings.standardizePath };
         dir = dir.withoutTrailingSlash;
-        ^[dir, dir.dirname].select({ arg each;
+        settings = settings.withoutTrailingSlash;
+        dirs = [dir, dir.dirname];
+        if (dirs.includesEqual(settings).not) { dirs = dirs.add(settings) };
+        ^dirs.select({ arg each;
             each.beginsWith("/") and: { each.withoutTrailingSlash.size > 1 }
         })
     }

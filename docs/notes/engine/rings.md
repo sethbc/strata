@@ -46,6 +46,7 @@ triggered:  dur' = min(dur, dur / (r - 1)),  D = margin + history + max(r - 1, 0
 - `spread` is a per-grain draw of 0 to `posSpread × ringSpreadSeconds`, backward only (forward of the head is the future). It is 0 in triggered mode, as 3.1's position spread did nothing there for synth and input voices.
 - Triggered grains above rate 2 are shortened, so their lookback is never more than one grain (plus margin and history): rate 4 and 0.5 s grains last 0.167 s and start 0.505 s back, where a continuous grain keeps its 0.5 s and starts 1.505 s back.
 - Reverse grains (negative rates, from 3.2's variation area) need no lookback: they read older audio.
+- `ringScanOffset(bufScan, freeze)` (the freeze area's hook, in `lib/engine/StrataFreeze.sc`) adds seconds to the lookback: neutral 0, so an unfrozen ring ignores `bufScan`. 3.2's synth hold uses it to move the read point back through the paused ring, which holds valid audio all round (its reads wrap).
 - `GrainBuf` wraps: a grain crossing the ring's end continues from frame 0 (and a reverse one crossing frame 0 continues from the end), so the ring needs no special case.
 
 ## The engine check (`test/engine_check/rings.scd`)
@@ -57,8 +58,8 @@ Most of it reads a timecode: a check synth writes the seconds since it started (
 - a NaN input writes zeros (the ring stays finite);
 - `GrainBuf` wraps forward across a buffer end and backward across frame 0 (on CI's SuperCollider 3.13, the recheck §2.1 of the design asked for);
 - no `PitchShift`, `DelayC` or other delay line in either grain SynthDef; `\strataGrainRing` runs two stereo `GrainBuf`s;
-- pitch is the rate: `pitchShift` 0.5, 1 and 2 on a 440 Hz sine play 220, 440 and 880 Hz (`Pitch`, within 1%); a synth voice's bend (2, on an FM voice at index 0) is applied once (880 Hz, not 1760);
+- pitch is the rate: on the timecode, `pitchShift` 0.5, 1 and 2 read at rates 0.5, 1 and 2 (each grain's read so far over its time played, within 0.2%); on a 440 Hz sine they play 220, 440 and 880 Hz (`Pitch`, a sanity check within 2.5%: a semitone is 5.9%); a synth voice's bend (2, on an FM voice at index 0) is applied once (880 Hz within 2.5%, not 1760);
 - at rate 4 and 0.5 s grains no grain reads ahead of the write head; a continuous grain keeps its 0.5 s length; a triggered one lasts 0.167 s and starts at most 0.505 s back (plus a block);
 - grains crossing the ring's end read on without a jump or a gap (rate 1, grains back to back for longer than the ring);
-- history never reaches a synth-sourced voice's grain synth; history 2 on an input voice reads from 2 s back (plus the margin and a block);
+- history never reaches a synth-sourced voice's grain synth; history 2 on an input voice reads from 2 s back (plus the margin and a block); `bufScan` reaches the ring grain synth but, with the neutral `ringScanOffset`, moves nothing;
 - `free` frees a second engine's writers, rings and phase buses.

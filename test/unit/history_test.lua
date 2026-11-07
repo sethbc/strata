@@ -39,9 +39,20 @@ test("v<i>_history ranges from 0 to the tier's history", function()
     assert_equal(params:lookup_param(id).controlspec.units, "s", id .. " in seconds")
     assert_equal(S.voices[voice_idx].extras.history, 0, "voice " .. voice_idx .. " stores it")
   end
-  -- the range is S.performance's as init finds it (the high tier's 60 s)
-  load_strata({ before_init = function() local_value("S").performance.history_seconds = 60 end })
-  assert_equal(select(2, param_range("v3_history")), 60, "the range follows S.performance.history_seconds")
+end)
+
+test("v<i>_history ranges 0 to 60 with a high active file", function()
+  h.write_performance_active({tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+    reason = "high: setting"})
+  load_strata()
+  local S = local_value("S")
+  assert_equal(S.performance.history_seconds, 60, "the active file's history")
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local low, high = param_range("v" .. voice_idx .. "_history")
+    assert_equal(low, 0); assert_equal(high, 60, "v" .. voice_idx .. "_history to the high tier's 60 s")
+  end
+  params:set("v2_history", 45)
+  assert_equal(params:get("v2_history"), 45, "45 s holds on high")
 end)
 
 test("history reaches the engine as the history grain param only while running", function()
@@ -94,14 +105,26 @@ test("history is a scene field with default 0 that crossfades", function()
 end)
 
 test("a high-tier history recalled on standard plays at most 16 s", function()
-  local context = load_strata()
+  -- a scene saved on the high tier, with history 45 s
+  h.write_performance_active({tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+    reason = "high: setting"})
+  local context = load_strata({data_subdir = "history_high_scene"})
   finish_startup(context)
   local S = local_value("S")
   params:set("v1_source", S.constants.SOURCE_INPUT)
+  params:set("v1_history", 45)
   capture_scene(1)
-  -- as a scene saved on the high tier holds it
-  S.scenes[1].data.voices[1].extras.history = 45
-  assert_true(validate_scene(S.scenes[1]), "such a scene still validates")
+  assert_equal(S.scenes[1].data.voices[1].extras.history, 45, "captured on high")
+  save_scenes_to_disk()
+  -- loaded on standard
+  h.write_performance_active({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
+    reason = "standard: setting"})
+  context = load_strata({data_subdir = "history_high_scene"})
+  finish_startup(context)
+  S = local_value("S")
+  assert_equal(S.performance.history_seconds, 16, "the standard tier")
+  assert_equal(S.scenes[1].data.voices[1].extras.history, 45, "the scene still holds 45")
+  assert_true(validate_scene(S.scenes[1]), "and validates")
   context.clear_engine_calls()
   recall_scene(1, 0)
   assert_equal(params:get("v1_history"), 16, "params:get gives the tier's 16")

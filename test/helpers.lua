@@ -80,6 +80,37 @@ end
 -- counter, since tests reseed math.random and two loads after one seed
 -- would draw the same name.
 local loads = 0
+
+-- The performance_active.data the next load_strata finds, as the engine
+-- would have written it at alloc: fields {tier, buffer_seconds, max_grains,
+-- history_seconds, reason} written as "key value" lines in that order (a
+-- field left out is not written), or a string written as it is (a garbled
+-- or truncated file). nil: no file (the default; Lua then runs standard).
+-- Applies to the next load only
+local pending_performance_active
+local PERFORMANCE_ACTIVE_KEYS = { "tier", "buffer_seconds", "max_grains", "history_seconds", "reason" }
+local function write_performance_active(fields)
+  pending_performance_active = fields
+end
+
+local function write_pending_performance_active(data_dir)
+  local fields = pending_performance_active
+  pending_performance_active = nil
+  if fields == nil then return end
+  local text = fields
+  if type(fields) == "table" then
+    local lines = {}
+    for _, key in ipairs(PERFORMANCE_ACTIVE_KEYS) do
+      if fields[key] ~= nil then table.insert(lines, key .. " " .. tostring(fields[key])) end
+    end
+    text = table.concat(lines, "\n") .. "\n"
+  end
+  os.execute("mkdir -p '" .. data_dir .. "strata'")
+  local file = assert(io.open(data_dir .. "strata/performance_active.data", "w"))
+  file:write(text)
+  file:close()
+end
+
 local function load_strata(options)
   options = options or {}
   loads = loads + 1
@@ -88,6 +119,7 @@ local function load_strata(options)
     data_dir = data_dir, quiet = true, module_sources = options.module_sources }
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
+  write_pending_performance_active(data_dir)
   if options.before_load then options.before_load(context) end
   local chunk = options.source and assert(load(options.source, "@" .. LUA_PATH)) or assert(loadfile(LUA_PATH))
   chunk()
@@ -538,6 +570,7 @@ return {
   assert_equal = assert_equal,
   assert_near = assert_near,
   load_strata = load_strata,
+  write_performance_active = write_performance_active,
   shared_state = shared_state,
   find_upvalue = find_upvalue,
   local_value = local_value,

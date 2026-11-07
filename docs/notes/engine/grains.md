@@ -39,7 +39,7 @@ The buffer slots themselves are in `docs/notes/engine/buffers.md`; replacing a r
 5. **Level**: the ASR (`openedGate`, `grainRelease` 2 s), the kill fade, the reader's level (`hasAudio` for a slot), `ringLevel.lag(0.05)` (a fade the rings area uses before overwriting a ring), and `(amp × (1 + modSig × modLevel) × (1 + accent × accentAmt)).clip(0, 2)`; the accent is `EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity)`, so velocity never rescales a running tail.
 6. **Output**: `voiceOutput(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend)` (the mix area's hook; neutral: `out` plus the mirror).
 
-The 3.2 controls past 3.1's, with the defaults that keep 3.1's sound: `history` 0, `ringLevel` 1, `rateLevel` 1, `freeze` 0, `freezeMode` 0, `reverseProb` 0, `pitchJitter` 0, `panJitter` 0, `sizeJitter` 0, `interval1`..`interval8` 0, `intervalCount` 0, `intervalProb` 1, `quantize` 0, `scaleNote` 60, `loopStart` 0, `loopLength` 1, `filterType` 0, `filterFreq` 5000, `filterRes` 0.5, `filterMix` 0, `delaySend` 1, `reverbSend` 1. Both declare `accentAmt`, `modLevel` (default 0) and `rateLevel`; `startGrainSynth` sets all three for every source. `\strataGrainRing` adds `bufL`, `bufR` and `phaseBus`; `\strataGrainBuf` keeps `bufnumL`, `bufnumR`, `bufFrames`, `bufRateScale`, `bufPos`, `bufRate` and `bufScan`.
+The 3.2 controls past 3.1's, with the defaults that keep 3.1's sound: `history` 0, `ringLevel` 1, `rateLevel` 1, `freeze` 0, `freezeMode` 0, `reverseProb` 0, `pitchJitter` 0, `panJitter` 0, `sizeJitter` 0, `interval1`..`interval8` 0, `intervalCount` 0, `intervalProb` 1, `quantize` 0, `scaleNote` 60, `loopStart` 0, `loopLength` 1, `filterType` 0, `filterFreq` 5000, `filterRes` 0.5, `filterMix` 0, `delaySend` 1, `reverbSend` 1. Both declare `accentAmt`, `modLevel` (default 0) and `rateLevel`; `startGrainSynth` sets all three for every source. `\strataGrainRing` adds `bufL`, `bufR`, `phaseBus` and `bufScan` (for `ringScanOffset`); `\strataGrainBuf` keeps `bufnumL`, `bufnumR`, `bufFrames`, `bufRateScale`, `bufPos`, `bufRate` and `bufScan`.
 
 ### The hooks
 
@@ -52,6 +52,7 @@ Each is a method in its own area file, registered as an area with no state, defs
 | `grainDur(trig, grainSize, sizeJitter)` → seconds | `StrataVariation.sc` | `grainSize` |
 | `slotGrainPos(trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength)` → start, 0-1 of the valid region | `StrataLoop.sc` (loop, 100) | the scanned position wrapped, scaled to the frames a grain can start in and still end inside the region |
 | `scanRate(bufScan, freeze)` → rate | `StrataFreeze.sc` (freeze, 110) | `bufScan` |
+| `ringScanOffset(bufScan, freeze)` → seconds further back a ring grain starts | `StrataFreeze.sc` | 0 (an unfrozen ring ignores `bufScan`) |
 | `freezeVoice(voice)`, `unfreezeVoice(voice)` | `StrataFreeze.sc` | nothing (`replaceGrainSynth` calls `unfreezeVoice` first) |
 | `voiceFilter(sig, filterType, filterFreq, filterRes, filterMix)` → sig | `StrataMix.sc` (mix, 120) | `sig` |
 | `voiceOutput(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend)` | `StrataMix.sc` | `Out.ar(out, sig)` and `Out.ar(mirrorOut, sig × mirrorLevel)` |

@@ -224,11 +224,11 @@ file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2)
 file.openWrite(longWritePath);
 file.writeData(FloatArray.fill(frames * 2, { arg i; var value = rampValue.(i div: 2); if (i.odd) { value.neg } { value } }));
 file.close;
-info = pollMessages.size;   // slot 8 reported 716 before (16 s at 22.05 kHz): only later reports count
+info = pollMessages.size;   // slot 8 reported 7016 before (16 s at 22.05 kHz): only later reports count
 command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
 check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
-check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 716 }) }),
-    "slot 8 holding 16 s reports 716 through bufferState (the encoding's maximum)");
+check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 7016 }) }),
+    "slot 8 holding 16 s reports 7016 through bufferState");
 savePath = scratchRoot +/+ "long/saved.wav";
 writeStart = Main.elapsedTime;
 command.(\saveBuffer, 7, savePath);
@@ -277,7 +277,8 @@ savePath = engine.scratchDir;
 info = [["", []], ["/", []], [".", []], ["./", []], ["x/", []], ["//", []],
     ["/a/", ["/a"]], ["/a/b/", ["/a/b", "/a"]]].reject({ arg pair;
     engine.scratchDir = pair[0];
-    engine.tryPerform(\stalePartDirs) == pair[1]
+    // the settings folder (the performance area's, absolute) always follows
+    engine.tryPerform(\stalePartDirs) == (pair[1] ++ [engine.allocSettingsDirectory.withoutTrailingSlash])
 });
 check.(info.isEmpty, "deleteStaleParts cleans only absolute directories below / (wrong for %)".format(info));
 engine.scratchDir = savePath;

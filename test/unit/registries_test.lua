@@ -618,8 +618,9 @@ test("S.performance starts standard and sets the record duration range", functio
   assert_equal(S.constants.STANDARD_BUFFER_SECONDS, 16)
   assert_true(S.performance ~= S.constants.STANDARD_PERFORMANCE, "a copy, never the constant itself")
   assert_equal(params:lookup_param("record_duration").controlspec.maxval, 16)
-  -- the spec follows S.performance as init finds it
-  load_strata({ before_init = function() local_value("S").performance.buffer_seconds = 60 end })
+  -- the spec follows S.performance as init fills it (lib/performance.lua)
+  h.write_performance_active({ tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60 })
+  load_strata()
   assert_equal(params:lookup_param("record_duration").controlspec.maxval, 60)
   assert_equal(local_value("S").constants.STANDARD_PERFORMANCE.buffer_seconds, 16, "the constant is unchanged")
 end)

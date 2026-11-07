@@ -18,11 +18,13 @@
     }
 
     // bufferState value = slot index * stride + valid seconds (Lua's BUFFER_STATE_STRIDE)
-    bufferStateStride { ^100 }
+    bufferStateStride { ^1000 }
 
     allocBufferState {
-        // Buffer slots: a left/right pair of mono buffers each, 16 s at the
-        // server rate (8 slots x 2 x 16 s x 48 kHz x 4 bytes = about 49 MB)
+        // Buffer slots: a left/right pair of mono buffers each, bufferSeconds
+        // at the server rate (the performance area sets it first: 16 s on
+        // standard, 8 slots x 2 x 16 s x 48 kHz x 4 bytes = about 49 MB; up to
+        // 300 s, about 922 MB, on high)
         buffersL = Array.fill(numBuffers, { Buffer.alloc(context.server, context.server.sampleRate * bufferSeconds, 1) });
         buffersR = Array.fill(numBuffers, { Buffer.alloc(context.server, context.server.sampleRate * bufferSeconds, 1) });
         bufferFrames = Array.fill(numBuffers, 0);
@@ -35,8 +37,6 @@
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
-        instanceTag = UniqueID.next;
-        writeGenerations = Dictionary.new;
     }
 
     addBufferDefs {

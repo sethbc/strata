@@ -24,18 +24,25 @@ var rampBuffer, recordBuffer, wrapRead, other, otherRings, otherWriters, badBus,
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, longest grain, largest step between samples, seconds with no
-// grain]. Reads only while the right channel (1 in the ring) is above 0.05.
+// grain, largest and smallest rate]. Reads only while the right channel (1
+// in the ring) is above 0.05. The rate is a grain's timecode read so far
+// over the time it has played (once it has played 50 ms): exact, where a
+// per-sample slope would drown in float rounding.
 SynthDef(\strataCheckRingRead, { arg in, now, out, t_reset = 0;
     var sig = In.ar(in, 2), reset = T2A.ar(t_reset);
-    var on = sig[1] > 0.05, both = on * Delay1.ar(on);
+    var on = sig[1] > 0.05, both = on * Delay1.ar(on), rise = on * (1 - Delay1.ar(on));
     var read = sig[0] / sig[1].max(0.001);
     var lookback = In.ar(now, 1) - read;
+    var elapsed = Sweep.ar(on, on);
+    var rate = (read - Latch.ar(read, rise)) / (elapsed + SampleDur.ir), timed = on * (elapsed > 0.05);
     Out.kr(out, A2K.kr([
         RunningMax.ar(Select.ar(on, [DC.ar(-1000), lookback]), reset),
         RunningMin.ar(Select.ar(on, [DC.ar(1000), lookback]), reset),
-        RunningMax.ar(Sweep.ar(on, on), reset),
+        RunningMax.ar(elapsed, reset),
         RunningMax.ar((read - Delay1.ar(read)).abs * both, reset),
-        Sweep.ar(reset, 1 - on)
+        Sweep.ar(reset, 1 - on),
+        RunningMax.ar(Select.ar(timed, [DC.ar(-1000), rate]), reset),
+        RunningMin.ar(Select.ar(timed, [DC.ar(1000), rate]), reset)
     ]));
 }).add;
 SynthDef(\strataCheckTimecode, { arg out, out2, now;
@@ -64,7 +71,7 @@ server.sync;
 // A voice's grain synth to readOut, then its reads (timeReads) while
 // action runs and seconds pass
 timeReads = { arg voice, seconds, action;
-    var bus = Bus.control(server, 5), probe, values;
+    var bus = Bus.control(server, 7), probe, values;
     engine.synths[engine.grainKey(voice)].set(\out, readOut.index);
     probe = Synth(\strataCheckRingRead, [\in, readOut, \now, nowBus, \out, bus], probeGroup);
     server.sync; 0.05.wait;
@@ -210,7 +217,22 @@ timecode = Synth(\strataCheckTimecode, [\out, engine.granBuses[0], \out2, engine
     engine.voiceGroup, \addToHead);
 sine = Synth(\strataCheckSine, [\out, engine.granBuses[4], \freq, 440], engine.voiceGroup, \addToHead);
 
-// Pitch is the grain rate (voice 5 on a 440 Hz sine)
+// Pitch is the grain rate. Exactly: voice 1 on the timecode reads it at
+// pitchShift x the time (0.2 s grains, two a second, one at a time). And as
+// heard: voice 5 on a 440 Hz sine, through Pitch (a sanity check within
+// 2.5%; a semitone is 5.9%)
+startTimecodeVoice.(0, 0, 0.2, 2.0, 1.0);
+0.6.wait;
+readings = [0.5, 1, 2].collect({ arg pitch;
+    var reads;
+    command.(\setGrainParam, 0, \pitchShift, pitch);
+    0.4.wait;                              // grains at the old pitch have ended
+    reads = timeReads.(0, 1.2);
+    [reads[5], reads[6]]
+});
+check.([readings, [0.5, 1, 2]].flop.every({ arg pair; pair[0].every({ arg rate; (rate / pair[1] - 1).abs < 0.002 }) }),
+    "rings: pitchShift 0.5, 1 and 2 read at rates 0.5, 1 and 2 (got %)".format(readings.collect(_.round(0.0001))));
+command.(\voiceOff, 0);
 command.(\voiceOn, 4, 100.0, 0.2, 0.0, 0.2, 10.0, 1.0);
 server.sync;
 engine.synths[engine.voiceKey(4)].set(\out, quietBus.index);
@@ -219,8 +241,8 @@ readings = [0.5, 1, 2].collect({ arg pitch;
     0.3.wait;
     pitchOf.(4)
 });
-check.([readings, [220, 440, 880]].flop.every({ arg pair; (pair[0] / pair[1] - 1).abs < 0.01 }),
-    "rings: pitchShift 0.5, 1 and 2 play 220, 440 and 880 Hz (got %)".format(readings.round(0.1)));
+check.([readings, [220, 440, 880]].flop.every({ arg pair; (pair[0] / pair[1] - 1).abs < 0.025 }),
+    "rings: pitchShift 0.5, 1 and 2 play 220, 440 and 880 Hz (Pitch, within 2.5 percent; got %)".format(readings.round(0.1)));
 command.(\voiceOff, 4);
 
 // The synth source's grains never bend again (rateLevel 0): voice 2 (FM, a
@@ -230,7 +252,7 @@ command.(\setVoiceParam, 1, \index, 0.0);
 command.(\setVoiceParam, 1, \bend, 2.0);
 server.sync; 0.6.wait;
 readings = pitchOf.(1);
-check.((readings / 880 - 1).abs < 0.01, "rings: a synth voice's bend is applied once (got % Hz)".format(readings.round(0.1)));
+check.((readings / 880 - 1).abs < 0.025, "rings: a synth voice's bend is applied once (880 Hz within 2.5 percent, not 1760; got % Hz)".format(readings.round(0.1)));
 command.(\voiceOff, 1);
 
 // The lookback (voice 1 on the timecode): rate 4 and 0.5 s grains.
@@ -280,6 +302,16 @@ command.(\setGrainParam, 3, \history, 2.0);
 readings = timeReads.(3, 1.0);
 check.((readings[1] >= 2.004) and: { readings[0] <= (2.005 + (block / sampleRate) + 0.0005) },
     "rings: history 2 reads the tone from 2 s back (lookback % to % s)".format(readings[1].round(0.0001), readings[0].round(0.0001)));
+// bufScan reaches a ring grain synth, but the freeze area's neutral
+// ringScanOffset leaves an unfrozen ring's read point where it was
+command.(\setGrainParam, 3, \bufScan, 2.0); server.sync;
+ringOk = getControl.(engine.synths[engine.grainKey(3)], \bufScan);
+0.3.wait;
+readings = timeReads.(3, 1.0);
+check.((ringOk == 2) and: { readings[1] >= 2.004 } and: { readings[0] <= (2.005 + (block / sampleRate) + 0.0005) },
+    "rings: bufScan with the neutral hook changes nothing (bufScan %, lookback % to % s)".format(
+        ringOk, readings[1].round(0.0001), readings[0].round(0.0001)));
+command.(\setGrainParam, 3, \bufScan, 0.0);
 command.(\setGrainParam, 3, \history, 0.0);
 command.(\voiceOff, 3);
 command.(\setGrainSource, 3, 0);

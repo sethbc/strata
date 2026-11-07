@@ -9,13 +9,32 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Individual audio buses for each voice
 - Per-voice granular processors: two `GrainIn`s (left and right) followed by one `PitchShift` for a synth- or input-sourced voice, two sample-aligned `GrainBuf`s (left and right) followed by one `PitchShift` for a buffer-sourced voice; both pan their grains the same way (the same fixed pan spread), and a buffer- or input-sourced voice's pan places it as it does a synth voice. A buffer grain never reads past the end of the sample, so short samples play at an even level. The `PitchShift` window is a fixed 0.1 s whatever the grain size
 - Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, however fast its source changes or scenes are recalled, so all seven voices fit in norns' 8 MB (about 6.9 MB at the worst moment)
-- Eight stereo buffers (each a pair of 16 s mono buffers, about 49 MB in all) and a live stereo input bus
+- Eight stereo buffers (each a pair of mono buffers: 16 s on the standard tier, about 49 MB in all, up to 300 s on the high tier) and a live stereo input bus
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output (buffer- and input-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
 - Master effects chain: multimode filter, stereo delay, reverb
 - A limiter, then soft saturation, on master output
 - The LFOs and MIDI run in the Lua script and reach the engine as parameter changes
+
+## Performance tiers
+
+Strata runs on one of two tiers, chosen by the engine each time the script starts:
+
+| | standard | high |
+|---|---|---|
+| buffer length (each of the eight) | 16 s | 16, 60, 120 or 300 s (60 by default) |
+| grains per voice (at most) | 128 | 128 |
+| live input history | 16 s | 60 s |
+
+The **performance** field on the SETUP page picks the tier ([SETUP](pages/setup.md)):
+- **auto** (the default) - high on a Pi 4 or Compute Module 4 norns (CM4, CM4S), standard on a CM3, a Pi 3 or anything else
+- **standard** - standard on every norns
+- **high** - high on every norns; on a CM3 or Pi 3 it may cause audio dropouts (xruns), and SETUP says `may xrun`
+
+On the high tier the **buffer length** field sets how long each buffer is. The buffers live in the norns' memory (eight stereo buffers of 300 s take about 922 MB), so the engine checks how much memory is free when it starts: if the chosen length would leave less than 1 GB free, it steps down to 120, 60 or 16 s, and SETUP shows it (`300 s -> 120 s (memory)`).
+
+Both fields are settings of the norns, not of a patch: no PSET or scene holds them. They are saved at once to `performance.data` in Strata's data folder (`~/dust/data/strata/`) and take effect the next time the script starts (restart the script, or norns, to apply them); until then SETUP shows `(next start)`. The status line `running: high, 60 s` or `running: standard` shows what runs now. The engine writes what it chose to `performance_active.data` beside it, which the script reads as it starts. If that file cannot be written, Strata runs standard.
 
 ## Audio Signal Flow
 

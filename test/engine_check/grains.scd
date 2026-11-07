@@ -160,7 +160,7 @@ check.(SynthDescLib.global.at(\strataGrainBuf).controlNames.collect(_.asSymbol).
 // "grains: both grain defs declare every 3.2 control", with defaults that
 // keep 3.1's sound (the ring def adds bufL, bufR and phaseBus, above)
 check.(grainDefs.every({ arg name;
-    var defaults = [[\history, 0], [\ringLevel, 1], [\rateLevel, 1], [\freeze, 0], [\freezeMode, 0], [\reverseProb, 0],
+    var defaults = [[\bufScan, 0], [\history, 0], [\ringLevel, 1], [\rateLevel, 1], [\freeze, 0], [\freezeMode, 0], [\reverseProb, 0],
         [\pitchJitter, 0], [\panJitter, 0], [\sizeJitter, 0]]
     ++ (1..8).collect({ arg index; [("interval" ++ index).asSymbol, 0] })
     ++ [[\intervalCount, 0], [\intervalProb, 1], [\quantize, 0], [\scaleNote, 60], [\loopStart, 0], [\loopLength, 1],
@@ -169,7 +169,7 @@ check.(grainDefs.every({ arg name;
 }), "grains: both grain defs declare every 3.2 control");
 // "grains: the hook methods exist": the areas that fill them later
 // (variation, loop, freeze, mix) keep these names
-check.([\grainRate, \grainPan, \grainDur, \slotGrainPos, \scanRate, \freezeVoice, \unfreezeVoice, \voiceOutput, \voiceFilter]
+check.([\grainRate, \grainPan, \grainDur, \slotGrainPos, \scanRate, \ringScanOffset, \freezeVoice, \unfreezeVoice, \voiceOutput, \voiceFilter]
     .every({ arg method; engine.respondsTo(method) }), "grains: the hook methods exist");
 // Both: two stereo GrainBufs (one per channel buffer, panned -1 and +1, so
 // the pair stays sample-aligned), Balance2 for the pan wander, the trigger
