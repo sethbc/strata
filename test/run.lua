@@ -574,6 +574,17 @@ local MODULE_HOMES = {
     "midi_pitchbend", "midi_set_bend" },
   ["lib/params_setup.lua"] = { "add_voice_params", "get_param_spec", "redraw_on_param_changes",
     "follow_clock_tempo", "install_tempo_change_handler", "restore_tempo_change_handler" },
+  ["lib/ui/params.lua"] = { "param_range", "param_value_fraction", "param_fraction" },
+  ["lib/ui/header.lua"] = { "draw_header", "draw_hints" },
+  ["lib/ui/keys.lua"] = { "forget_held_keys" },
+  ["lib/ui/menu_watch.lua"] = { "forget_keys_held_through_menu", "watch_menu_opening", "unwatch_menu_opening" },
+  ["lib/pages/main.lua"] = { "update_voice_list", "main_param_entry", "main_param_id", "main_param_label",
+    "redraw_main" },
+  ["lib/pages/fx.lua"] = { "redraw_fx" },
+  ["lib/pages/lfo.lua"] = { "lfo_shape_value", "redraw_lfo" },
+  ["lib/pages/buffer.lua"] = { "buffer_page_flash", "cancel_buffer_page_flash_clock", "redraw_buffer",
+    "close_buffer_file_selector", "release_superseded_file_selector" },
+  ["lib/pages/setup.lua"] = { "redraw_setup", "setup_enc" },
 }
 
 test("functions live in their module", function()

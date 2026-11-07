@@ -15,8 +15,7 @@
 
 engine.name = "Strata"
 
-local UI = require "ui"
-local fileselect = require "fileselect"
+local fileselect = require "fileselect"  -- redraw() draws the open BUFFER file selector
 
 -- The table the script and its lib/ modules share (lib/state.lua): one
 -- include per module, by its lib/ path, in this file only
@@ -32,15 +31,11 @@ local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
 local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
 local NUM_BUFFERS = S.constants.NUM_BUFFERS
 local NUM_LFOS = S.constants.NUM_LFOS
-local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
 local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
 local SOURCE_INPUT = S.constants.SOURCE_INPUT
 local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 local UI_PAGES = S.constants.UI_PAGES
 local BUFFER_MUTATION_KEYS = S.constants.BUFFER_MUTATION_KEYS
-local MAIN_PARAMS = S.constants.MAIN_PARAMS
-local BUFFER_MAIN_PARAM = S.constants.BUFFER_MAIN_PARAM
-local INPUT_MAIN_PARAM = S.constants.INPUT_MAIN_PARAM
 
 -- Voices: S.voices (the voice definitions), S.frozen, S.master_density,
 -- S.selected_voice and the voice source helpers (lib/voices.lua). The
@@ -70,9 +65,6 @@ S.lib.lfos = include("lib/lfos")(S)
 
 local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
--- UI
-local voice_list
-
 -- Per-voice drift, randomize and mutations: randomize_voice, drift_update,
 -- gentle_mutate; S.drift_metro, S.mutation_metro, S.drift_writing,
 -- S.grain_pitch_base, S.buf_pos_base (lib/mutation.lua)
@@ -96,12 +88,43 @@ S.lib.midi_in = include("lib/midi_in")(S)
 -- S.fx_filter_last_mix (lib/params_setup.lua)
 S.lib.params_setup = include("lib/params_setup")(S)
 
--- Arc device (the arc vport from arc.connect)
-local arc_device = nil
-local arc_connected = false
+-- Param ranges and fractions: param_range, param_value_fraction,
+-- param_fraction (lib/ui/params.lua)
+S.lib.ui_params = include("lib/ui/params")(S)
 
--- Grid devices (support multiple grids)
-local MAX_GRID_PORTS = 4
+-- What the screen pages share: the header and hint row (draw_header,
+-- draw_hints; lib/ui/header.lua), S.lib.ui_text.fit_text (lib/ui/text.lua),
+-- S.key_press_page, forget_held_keys and S.lib.ui_keys.ignore_page_input,
+-- select_voice_by, set_ui_page (lib/ui/keys.lua), and the norns menu watch
+-- (watch_menu_opening, unwatch_menu_opening, forget_keys_held_through_menu;
+-- lib/ui/menu_watch.lua)
+S.lib.ui_header = include("lib/ui/header")(S)
+S.lib.ui_text = include("lib/ui/text")(S)
+S.lib.ui_keys = include("lib/ui/keys")(S)
+S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
+
+-- The screen pages. Each registers its record {name, draw, enc, key,
+-- key_release} at its UI_PAGES index in S.registry.pages, which enc, key
+-- and redraw below dispatch through: MAIN (S.voice_list, update_voice_list,
+-- main_param_id, ...; lib/pages/main.lua), FX (S.FX_PAGE, S.fx_row;
+-- lib/pages/fx.lua), LFO (lfo_shape_value; lib/pages/lfo.lua), BUFFER
+-- (S.BUFFER_PAGE, buffer_page_flash, the K2 file selector;
+-- lib/pages/buffer.lua) and SETUP (setup_enc; lib/pages/setup.lua)
+S.lib.pages_main = include("lib/pages/main")(S)
+S.lib.pages_fx = include("lib/pages/fx")(S)
+S.lib.pages_lfo = include("lib/pages/lfo")(S)
+S.lib.pages_buffer = include("lib/pages/buffer")(S)
+S.lib.pages_setup = include("lib/pages/setup")(S)
+for index, name in ipairs(UI_PAGES) do
+  assert(S.registry.pages[index] and S.registry.pages[index].name == name, "no page record for " .. name)
+end
+
+-- Arc device (the arc vport from arc.connect); SETUP shows S.arc_connected
+local arc_device = nil
+S.arc_connected = false
+
+-- Grid devices (support multiple grids); SETUP counts S.MAX_GRID_PORTS
+S.MAX_GRID_PORTS = 4
 S.grids = {}
 
 -- MIDI input: see lib/midi_in.lua (S.midi_device, S.midi_state)
@@ -211,716 +234,28 @@ function init()
   start_frame_clock()
 end
 
--- MAIN's voice list: "+" for a running voice, "-" for a stopped one, then the
--- type's short name and [F] when frozen. Plain ASCII, so the entries' width
--- does not depend on the font drawing other glyphs (the details column shows
--- the full name and ON/OFF).
-function update_voice_list()
-  local items = {}
-  for i = 1, NUM_VOICES do
-    local status = S.voices[i].active and "+" or "-"
-    local freeze = S.frozen[i] and " [F]" or ""
-    items[i] = status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. freeze
-  end
-  voice_list = UI.ScrollingList.new(0, 10, 1, items)
-  voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
-  voice_list.num_above_selected = 1
-  voice_list.active = true
-  voice_list.index = S.selected_voice
-end
-
-function main_param_entry(voice_idx)
-  if voice_uses_synth(voice_idx) then
-    return MAIN_PARAMS[S.voices[voice_idx].name]
-  elseif voice_uses_buffer(voice_idx) then
-    return BUFFER_MAIN_PARAM
-  end
-  return INPUT_MAIN_PARAM
-end
-
-function main_param_id(voice_idx)
-  return "v" .. voice_idx .. "_" .. main_param_entry(voice_idx).key
-end
-
-function main_param_label(voice_idx)
-  return main_param_entry(voice_idx).label
-end
-
--- Screen pages. E1 selects the page; E2, E3, K2 and K3 go to the page's
--- handlers in PAGE_ENC / PAGE_KEY, and redraw() draws the shared header,
--- then the page's PAGE_DRAW function, which ends with its hint row.
-
-local HINT_ROW_Y = 62
-
-function draw_header()
-  screen.level(15)
-  screen.move(0, 8)
-  screen.text(UI_PAGES[S.ui_page])
-
-  -- Master density (after the page title; "BUFFER" ends near x=36)
-  screen.move(40, 8)
-  screen.level(4)
-  screen.text("dens:" .. string.format("%.2f", S.master_density))
-
-  -- Mutation indicator (between density and scene)
-  if params:get("mutation_enabled") == 1 then
-    screen.move(98, 8)
-    screen.level(6)
-    screen.text("[M]")
-  end
-
-  -- Scene indicator (right-aligned to the screen edge)
-  if S.current_scene > 0 then
-    screen.move(127, 8)
-    screen.level(S.scene_sequencer_enabled and 10 or 6)
-    screen.text_right("S" .. S.current_scene)
-  end
-end
-
-function draw_hints(text)
-  screen.level(4)
-  screen.move(0, HINT_ROW_Y)
-  screen.text(text)
-end
-
-function redraw_main()
-  -- Voice list (left column, 0-60px)
-  voice_list:redraw()
-
-  -- Right column divider
-  screen.level(1)
-  screen.move(62, 10)
-  screen.line(62, 52)
-  screen.stroke()
-
-  -- Selected voice info (right column, 65-128px)
-  local v = S.voices[S.selected_voice]
-  screen.level(15)
-  screen.move(65, 18)
-  screen.text(string.upper(v.name))
-
-  -- Status indicators
-  screen.level(4)
-  screen.move(65, 26)
-  local status = v.active and "ON" or "OFF"
-  screen.text(status)
-  if S.frozen[S.selected_voice] then
-    screen.move(127, 26)
-    screen.level(8)
-    screen.text_right("[FREEZE]")
-  end
-
-  -- Modulation sources display
-  local mod_sources = {}
-  if v.crossmod.slot1.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot1.source) end
-  if v.crossmod.slot2.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot2.source) end
-  if v.crossmod.slot3.source > 0 then table.insert(mod_sources, "V" .. v.crossmod.slot3.source) end
-
-  if #mod_sources > 0 then
-    screen.level(4)
-    screen.move(65, 32)
-    screen.text("mod:" .. table.concat(mod_sources, " "))
-  end
-
-  -- Main parameter
-  screen.level(S.frozen[S.selected_voice] and 3 or 10)
-  screen.move(65, 42)
-  screen.text(main_param_label(S.selected_voice))
-  if GRAIN_MODE_OPTIONS[v.grain.mode] == "triggered" then
-    screen.move(127, 42)
-    screen.level(8)
-    screen.text_right("[TRIG]")
-    screen.level(S.frozen[S.selected_voice] and 3 or 10)
-  end
-  screen.move(65, 50)
-  screen.text(string.format(main_param_entry(S.selected_voice).format, params:get(main_param_id(S.selected_voice))))
-
-  draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
-end
-
--- Cut text, a whole UTF-8 character at a time, until it fits max_width px
-local function fit_text(text, max_width)
-  while text ~= "" and screen.text_extents(text) > max_width do
-    text = text:gsub("[^\128-\191][\128-\191]*$", "")
-  end
-  return text
-end
-
-function redraw_setup()
-  -- Connected grids (count, then sizes in port order)
-  local grid_count = 0
-  local grid_sizes = {}
-  for port = 1, MAX_GRID_PORTS do
-    local grid_port = S.grids[port]
-    if grid_port and grid_port.device then
-      grid_count = grid_count + 1
-      table.insert(grid_sizes, grid_port.cols .. "x" .. grid_port.rows)
-    end
-  end
-
-  local scenes_saved = 0
-  for scene_num = 1, NUM_SCENES do
-    if S.scenes[scene_num].populated then scenes_saved = scenes_saved + 1 end
-  end
-
-  -- rows 6 px apart (like the BUFFER page), leaving y 54 above the hints
-  screen.level(10)
-  screen.move(0, 18)
-  screen.text("grid: " .. grid_count .. " connected")
-  screen.level(4)
-  screen.move(0, 24)
-  screen.text(table.concat(grid_sizes, " "))
-  screen.level(10)
-  screen.move(0, 30)
-  screen.text("arc: " .. (arc_connected and "connected" or "none"))
-  screen.move(0, 36)
-  screen.text("scenes: " .. scenes_saved .. "/" .. NUM_SCENES .. " saved")
-  -- restored = confirmed by the engine; missing files are remembered paths
-  -- not found on start ("restored" becomes "ok" to fit beside them)
-  local buffers_missing = 0
-  for slot = 1, NUM_BUFFERS do
-    if S.buffers[slot].missing_path then buffers_missing = buffers_missing + 1 end
-  end
-  screen.move(0, 42)
-  if buffers_missing > 0 then
-    screen.text("buffers: " .. S.buffers_restored .. " ok, " .. buffers_missing .. " missing")
-  else
-    screen.text("buffers: " .. S.buffers_restored .. " restored")
-  end
-  -- the selected MIDI port and its device (cut to the screen width), then the channel mode
-  local midi_prefix = "midi " .. params:get("midi_device") .. ": "
-  screen.move(0, 48)
-  screen.text(midi_prefix .. fit_text(midi_device_name(), 127 - screen.text_extents(midi_prefix)))
-  screen.level(4)
-  screen.move(0, 54)
-  screen.text("ch: " .. params:string("midi_channel_mode"))
-
-  draw_hints("E2:port E3:ch K3:save")
-end
-
--- FX page: a scrolling list of the effects params. E2 selects a row, E3
--- adjusts it; format is a string.format pattern, or nil to show the param's
--- own string (the filter type's name).
-local FX_PAGE = {
-  rows = {
-    {label = "density", param_id = "master_density", format = "%.2f"},
-    {label = "tape drift", param_id = "drift_amount", format = "%.3f"},
-    {label = "filter type", param_id = "filter_type"},
-    {label = "filter freq", param_id = "filter_freq", format = "%.0f Hz"},
-    {label = "filter res", param_id = "filter_res", format = "%.2f"},
-    {label = "filter mix", param_id = "filter_mix", format = "%.2f"},
-    {label = "delay time", param_id = "delay_time", format = "%.3f s"},
-    {label = "delay fdbk", param_id = "delay_feedback", format = "%.2f"},
-    {label = "delay mix", param_id = "delay_mix", format = "%.2f"},
-    {label = "reverb mix", param_id = "reverb_mix", format = "%.2f"},
-    {label = "reverb size", param_id = "reverb_size", format = "%.2f"},
-    {label = "reverb damp", param_id = "reverb_damp", format = "%.2f"}
-  },
-  visible_rows = 5,       -- rows at y 18-50, clear of the hint row at y 62
-  first_row_y = 18,
-  row_spacing = 8
-}
-local fx_row = 1               -- selected FX_PAGE.rows index
-
-function redraw_fx()
-  -- Keep one row above the selection in view, like the MAIN voice list
-  local first_visible = util.clamp(fx_row - 1, 1, #FX_PAGE.rows - FX_PAGE.visible_rows + 1)
-  for offset = 0, FX_PAGE.visible_rows - 1 do
-    local row_index = first_visible + offset
-    local row = FX_PAGE.rows[row_index]
-    local y = FX_PAGE.first_row_y + offset * FX_PAGE.row_spacing
-    local value = row.format and string.format(row.format, params:get(row.param_id))
-      or params:string(row.param_id)
-    screen.level(row_index == fx_row and 15 or 4)
-    screen.move(0, y)
-    screen.text(row.label)
-    screen.move(127, y)
-    screen.text_right(value)
-  end
-
-  draw_hints("K3:filter " .. (params:get("filter_mix") > 0 and "bypass" or "on"))
-end
-
-local function fx_enc(n, d)
-  if n == 2 then
-    fx_row = util.clamp(fx_row + d, 1, #FX_PAGE.rows)
-  elseif n == 3 then
-    params:delta(FX_PAGE.rows[fx_row].param_id, d)
-  end
-end
-
--- K3 on FX: bypass the filter (mix 0), or bring back its last non-zero mix
-local function fx_key(n)
-  if n == 3 then
-    params:set("filter_mix", params:get("filter_mix") > 0 and 0 or S.fx_filter_last_mix)
-  end
-end
-
--- LFO page: one row per LFO at y 16-57 (clear of the header and the hint
--- row): "L<n>", one cycle of its shape (64 px), a dot at the estimated phase
--- and last raw value while it runs, then its destination and state/depth
--- right-aligned
--- (one table: the script's main chunk is at Lua's 200-local limit)
-local LFO_PAGE = {
-  row_first_y = 16,   -- top of LFO 1's row
-  row_spacing = 15,
-  wave_height = 10,   -- shape value 1 at the row top, 0 at top + 10
-  wave_x = 12,
-  wave_width = 64,
-  -- the random shape holds a new value each half cycle; drawn as two steps
-  random_display_levels = {0.75, 0.3}
-}
-
--- One point (0..1) of a shape at a phase, as the library's process_lfo
--- computes its raw value
-function lfo_shape_value(shape, phase)
-  if shape == "sine" then
-    return (math.sin(2 * math.pi * phase) + 1) / 2
-  elseif shape == "tri" then
-    return phase < 0.5 and phase / 0.5 or 1 - (phase - 0.5) / 0.5
-  elseif shape == "up" then
-    return phase
-  elseif shape == "down" then
-    return 1 - phase
-  elseif shape == "square" then
-    return phase < 0.5 and 1 or 0
-  end
-  return LFO_PAGE.random_display_levels[phase < 0.5 and 1 or 2]  -- random
-end
-
-local function lfo_running(n)
-  return params:get("lfo_" .. n) == 2
-end
-
-function redraw_lfo()
-  for n = 1, NUM_LFOS do
-    local top = LFO_PAGE.row_first_y + (n - 1) * LFO_PAGE.row_spacing
-    local bottom = top + LFO_PAGE.wave_height
-    local running = lfo_running(n)
-    local label_level = n == S.selected_lfo and 15 or 4
-
-    screen.level(label_level)
-    screen.move(0, top + 7)
-    screen.text("L" .. n)
-
-    local shape = params:string("lfo_shape_" .. n)
-    screen.level(running and 6 or 2)
-    for px = 0, LFO_PAGE.wave_width - 1 do
-      local y = bottom - lfo_shape_value(shape, px / (LFO_PAGE.wave_width - 1)) * LFO_PAGE.wave_height
-      if px == 0 then
-        screen.move(LFO_PAGE.wave_x, y)
-      else
-        screen.line(LFO_PAGE.wave_x + px, y)
-      end
-    end
-    screen.stroke()
-
-    if running and S.lfo_last_raw[n] then
-      local x = util.round(LFO_PAGE.wave_x + lfo_phase_estimate(n) * (LFO_PAGE.wave_width - 1))
-      local y = util.round(bottom - S.lfo_last_raw[n] * LFO_PAGE.wave_height)
-      screen.level(15)
-      screen.rect(x - 1, y - 1, 3, 3)
-      screen.fill()
-    end
-
-    screen.level(label_level)
-    screen.move(127, top + 5)
-    screen.text_right(S.LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label)
-    screen.move(127, top + 11)
-    screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get("lfo_depth_" .. n)))
-  end
-
-  draw_hints("E3:depth K2:dest K3:" .. (lfo_running(S.selected_lfo) and "off" or "on"))
-end
-
-local function lfo_enc(n, d)
-  if n == 2 then
-    local previous_lfo = S.selected_lfo
-    S.selected_lfo = util.clamp(S.selected_lfo + d, 1, NUM_LFOS)
-    if S.selected_lfo ~= previous_lfo then forget_arc_lfo_period_ticks() end
-  elseif n == 3 then
-    params:delta("lfo_depth_" .. S.selected_lfo, d)  -- percent steps
-  end
-end
-
-local function lfo_key(n)
-  if n == 2 then
-    local dest_id = "strata_lfo" .. S.selected_lfo .. "_dest"
-    params:set(dest_id, params:get(dest_id) % #S.LFO_DESTINATIONS + 1)
-  elseif n == 3 then
-    params:set("lfo_" .. S.selected_lfo, lfo_running(S.selected_lfo) and 1 or 2)
-  end
-end
-
-local function ignore_page_input() end
-
--- E2 on MAIN and BUFFER: step the shared selected voice (an omni MIDI
--- pitchbend moves with it)
-local function select_voice_by(d)
-  local previous_voice = S.selected_voice
-  S.selected_voice = util.clamp(S.selected_voice + d, 1, NUM_VOICES)
-  if S.selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
-  update_voice_list()
-end
-
-local function main_enc(n, d)
-  if n == 2 then
-    select_voice_by(d)
-  elseif n == 3 then
-    params:delta(main_param_id(S.selected_voice), d)
-  end
-end
-
--- K3 on MAIN (and the arc button): start the selected voice, or freeze it
-local function start_or_freeze_selected_voice()
-  if not S.voices[S.selected_voice].active then
-    toggle_voice(S.selected_voice)
-  else
-    toggle_freeze(S.selected_voice)
-  end
-end
-
-local function main_key(n)
-  if n == 2 then
-    randomize_voice(S.selected_voice)
-  elseif n == 3 then
-    start_or_freeze_selected_voice()
-  end
-end
-
-local function setup_key(n)
-  if n == 3 then
-    save_scenes_to_disk()
-  end
-end
-
--- SETUP E2: MIDI port, E3: channel mode (a global: the main chunk is near
--- Lua's local limit)
-function setup_enc(n, d)
-  if n == 2 then
-    params:delta("midi_device", d)
-  elseif n == 3 then
-    params:delta("midi_channel_mode", d)
-  end
-end
-
--- Per key: the page it was pressed on, while it is held (nil when up).
--- key() sends a release only to the page the key went down on.
-local key_press_page = {}
-
--- BUFFER page: the selected voice and its source on the left, the eight
--- buffer slots on the right (slot, name or "empty", seconds or REC)
-local BUFFER_PAGE = {
-  row_first_y = 14,
-  row_spacing = 6,        -- eight rows at y 14-56, clear of the hint row at y 62
-  slot_x = 65,
-  name_x = 71,
-  name_max_width = 31,    -- the name ends before the widest seconds ("16.0s" from x 103)
-  flash_seconds = 1.5,    -- a transient hint (the K2+K3 save result) shows this long
-  flash_text = nil,       -- the transient hint, drawn instead of the key hints
-  flash_until = 0,        -- util.time() when it ends
-  flash_clock = nil,      -- asks for a redraw when it ends
-  file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
-  file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
-  script_key = nil,               -- Strata's key and enc as K2 opened the selector
-  script_enc = nil
-}
-
--- Show `text` in the BUFFER page's hint row for BUFFER_PAGE.flash_seconds.
--- redraw_buffer stops drawing it at flash_until; the clock clears it (even
--- if it wakes a little early) and asks for a redraw so it goes away untouched.
-function buffer_page_flash(text)
-  BUFFER_PAGE.flash_text = text
-  BUFFER_PAGE.flash_until = util.time() + BUFFER_PAGE.flash_seconds
-  cancel_buffer_page_flash_clock()
-  BUFFER_PAGE.flash_clock = clock.run(function()
-    clock.sleep(BUFFER_PAGE.flash_seconds)
-    BUFFER_PAGE.flash_clock = nil
-    BUFFER_PAGE.flash_text = nil
-    request_redraw()
-  end)
-end
-
-function cancel_buffer_page_flash_clock()
-  if BUFFER_PAGE.flash_clock then
-    clock.cancel(BUFFER_PAGE.flash_clock)
-    BUFFER_PAGE.flash_clock = nil
-  end
-end
-
--- A buffer's name for the screen: the file name without its extension, cut
--- to fit. Cached per slot until the name changes (load, take, clear), so a
--- redraw does not measure eight names a character at a time.
-local function buffer_display_name(slot)
-  local buffer = S.buffers[slot]
-  if buffer.display_name_of ~= buffer.name then
-    local name = buffer.name:gsub("%.[^.]*$", "")
-    if name == "" then name = buffer.name end
-    buffer.display_name = fit_text(name, BUFFER_PAGE.name_max_width)
-    buffer.display_name_of = buffer.name
-  end
-  return buffer.display_name
-end
-
-function redraw_buffer()
-  local v = S.voices[S.selected_voice]
-  local voice_slot = voice_buffer_slot(S.selected_voice)
-
-  -- Left column (0-60px): voice, source, recording settings
-  screen.level(15)
-  screen.move(0, 18)
-  screen.text(string.upper(v.name))
-  screen.level(10)
-  screen.move(0, 26)
-  screen.text("src: " .. voice_source_label(S.selected_voice))
-  screen.level(4)
-  screen.move(0, 42)
-  screen.text("dur: " .. string.format("%.1f", params:get("record_duration")) .. "s")
-  screen.move(0, 50)
-  screen.text("lvl: " .. string.format("%.2f", params:get("record_level")))
-
-  screen.level(1)
-  screen.move(62, 10)
-  screen.line(62, 56)
-  screen.stroke()
-
-  -- Right column (65-127px): one row per buffer slot. The voice's buffer is
-  -- brightest, loaded (or recording) slots mid, empty slots dim.
-  for slot = 1, NUM_BUFFERS do
-    local buffer = S.buffers[slot]
-    local y = BUFFER_PAGE.row_first_y + (slot - 1) * BUFFER_PAGE.row_spacing
-    local level = 2
-    if slot == voice_slot then
-      level = 15
-    elseif buffer.loaded or buffer.recording then
-      level = 8
-    end
-    screen.level(level)
-    screen.move(BUFFER_PAGE.slot_x, y)
-    screen.text(tostring(slot))
-    screen.move(BUFFER_PAGE.name_x, y)
-    screen.text(buffer_display_name(slot))
-    screen.move(127, y)
-    screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
-  end
-
-  if BUFFER_PAGE.flash_text and util.time() < BUFFER_PAGE.flash_until then
-    draw_hints(BUFFER_PAGE.flash_text)
-  elseif voice_slot then
-    -- "..." while a take that ended waits for the engine (K3 does nothing)
-    local voice_buffer = S.buffers[voice_slot]
-    local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
-    draw_hints("K2:load K3:" .. record_hint .. " K2+3:save")
-  else
-    -- K2 and K3 need a buffer source; E3 picks one
-    draw_hints("K2:- K3:- E3:source")
-  end
-end
-
-local function buffer_enc(n, d)
-  if n == 2 then
-    select_voice_by(d)
-  elseif n == 3 then
-    params:delta("v" .. S.selected_voice .. "_source", d)
-  end
-end
-
--- K3 while K2 is held saved the buffer: K2's release then opens nothing
-local buffer_saved_during_k2 = false
-
--- K3 (press) records into the voice's buffer, or stops early; with K2 held
--- it saves the buffer instead. K2 acts on release (buffer_key_release).
--- Both do nothing when the voice's source is not a buffer.
-local function buffer_key(n)
-  if n == 2 then
-    buffer_saved_during_k2 = false
-  elseif n == 3 then
-    local slot = voice_buffer_slot(S.selected_voice)
-    if not slot then return end
-    if key_press_page[2] == S.ui_page then
-      -- a slot recording or awaiting its take is busy: nothing to save yet.
-      -- Otherwise save_buffer saves only a slot the engine reports holding audio
-      local buffer = S.buffers[slot]
-      if buffer.recording or buffer.finishing then
-        buffer_page_flash("buf " .. slot .. " busy")
-      else
-        local has_audio = buffer.seconds > 0
-        save_buffer(slot)
-        buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
-      end
-      buffer_saved_during_k2 = true
-    else
-      record_buffer(slot)
-    end
-  end
-end
-
--- Forget every held key (and the K2 save): for the norns menu and the file
--- selector, which take the keys while open, so releases never reach key()
-function forget_held_keys()
-  for n in pairs(key_press_page) do
-    key_press_page[n] = nil
-  end
-  buffer_saved_during_k2 = false
-end
-
--- K2 released: open the file selector for the voice's buffer, unless K3
--- saved while K2 was down
-local function buffer_key_release(n)
-  if n ~= 2 then return end
-  if buffer_saved_during_k2 then
-    buffer_saved_during_k2 = false
-    return
-  end
-  local slot = voice_buffer_slot(S.selected_voice)
-  if not slot then return end
-  -- the selector takes every key while open, so keys held now are released
-  -- there, never reaching key(): forget them
-  forget_held_keys()
-  -- From play mode norns puts Strata's redraw back while the selector is
-  -- open (fs.enter calls norns.menu.init), so Strata's redraws would draw
-  -- over the file list: until the callback, which norns calls on a choice
-  -- and on a cancel alike, they draw the selector instead
-  local function file_chosen(path)
-    -- loaded directly (it also shows the path in buf<n>_file): setting the
-    -- param would do nothing when it already holds this path
-    if path ~= "cancel" then
-      load_buffer(slot, path)
-    end
-    close_buffer_file_selector()
-  end
-  BUFFER_PAGE.file_selector_open = true
-  BUFFER_PAGE.file_selector_callback = file_chosen
-  BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc = key, enc
-  local entered, enter_error = xpcall(function()
-    fileselect.enter(_path.audio, file_chosen)
-  end, with_traceback)
-  if not entered then
-    -- no selector is open, so no callback will come: Strata's page, key and
-    -- enc come back. fs.enter fails after norns.menu.init() has routed
-    -- play mode's keys and encoders to fs.key/fs.enc (_menu.key and
-    -- norns.encoders.callback are copied from the globals only in
-    -- set_mode(false)), so restoring the globals is not enough: route them
-    -- again, as fs.exit does
-    key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
-    close_buffer_file_selector()
-    if not norns.menu.status() then pcall(norns.menu.init) end
-    error(enter_error, 0)
-  end
-end
-
--- The BUFFER K2 selector is closed (its callback ran) or will never call back
-function close_buffer_file_selector()
-  BUFFER_PAGE.file_selector_open = false
-  BUFFER_PAGE.file_selector_callback = nil
-  BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc = nil, nil
-  request_redraw()
-end
-
--- norns has one file selector. Opened from play mode (BUFFER K2), fs.enter
--- puts its own key and enc in the globals and keeps Strata's to restore in
--- fs.exit. A PARAMS file param (or TAPE) opening a selector from the menu
--- over it replaces its callback and restore list with the menu's: that
--- exit gives the menu its handlers back, Strata's callback never comes, and
--- the globals keep the selector's handlers, which norns hands back to play
--- mode as the menu closes. So when the menu closes (menu_watch.wrapper,
--- before norns' set_mode(false) reads the globals) and fs.callback is no
--- longer Strata's, the selector state is cleared and Strata's key and enc
--- are put back. Only a real menu-to-play change counts (the menu still
--- open as set_mode(false) starts; fs.enter's and fs.exit's own
--- norns.menu.init() run in play mode), and a fileselect without a
--- `callback` field (other norns internals) releases nothing, so a change
--- there leaves the selector state set rather than breaking BUFFER K2.
-function release_superseded_file_selector()
-  if not BUFFER_PAGE.file_selector_open or not norns.menu.status() then return end
-  if fileselect.callback == nil then return end
-  if fileselect.callback == BUFFER_PAGE.file_selector_callback then return end
-  key, enc = BUFFER_PAGE.script_key, BUFFER_PAGE.script_enc
-  close_buffer_file_selector()
-end
-
--- Indexed like UI_PAGES: MAIN, FX, LFO, BUFFER, SETUP. PAGE_KEY gets key
--- presses, PAGE_KEY_RELEASE releases (only BUFFER uses them).
-local PAGE_DRAW = {redraw_main, redraw_fx, redraw_lfo, redraw_buffer, redraw_setup}
-local PAGE_ENC = {main_enc, fx_enc, lfo_enc, buffer_enc, setup_enc}
-local PAGE_KEY = {main_key, fx_key, lfo_key, buffer_key, setup_key}
-local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_input, buffer_key_release, ignore_page_input}
-
--- Show another page (draw_frame redraws the LFO page on every frame)
-local function set_ui_page(page)
-  S.ui_page = page
-end
-
--- Encoders
+-- Encoders. E1 selects the page; E2 and E3 go to the page record's enc
 function enc(n, d)
   if n == 1 then
-    set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
+    S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
   else
-    PAGE_ENC[S.ui_page](n, d)
+    S.registry.pages[S.ui_page].enc(n, d)
   end
   request_redraw()
 end
 
--- The norns menu (K1, or PARAMS and its file selector) takes every key
--- while it is open, so a key released there never reaches key() and would
--- stay "held" (on BUFFER, every later K3 would save instead of record).
--- While the menu is open, forget every held key and the BUFFER page's K2
--- gesture. Called as the menu opens (watch_menu_opening) and, as a fallback,
--- on every 10 Hz drift_metro tick (end of drift_update).
-function forget_keys_held_through_menu()
-  if not norns.menu.status() then return end
-  forget_held_keys()
-end
-
--- Every way into the norns menu (K1, a script error, a keyboard's menu key)
--- goes through _menu.set_mode(true) (lua/core/menu.lua), looked up on _menu
--- at each call, so a wrapper sees the menu open. cleanup puts norns' own
--- function back; if something wrapped it after Strata, that wrapper stays
--- and Strata's becomes a plain pass-through.
-local menu_watch = {original_set_mode = nil, wrapper = nil, active = false}
-
-function watch_menu_opening()
-  if menu_watch.wrapper or not (_menu and _menu.set_mode) then return end
-  -- both held as upvalues: the wrapper never looks up a script global, so
-  -- it cannot break the system menu even if one is gone
-  local original_set_mode = _menu.set_mode
-  local forget_keys = forget_keys_held_through_menu
-  local release_selector = release_superseded_file_selector
-  menu_watch.original_set_mode = original_set_mode
-  menu_watch.wrapper = function(mode)
-    if mode == false and menu_watch.active then
-      -- never let it stop the menu closing
-      local released, release_error = pcall(release_selector)
-      if not released then print("strata: file selector release failed: " .. tostring(release_error)) end
-    end
-    original_set_mode(mode)
-    if mode == true and menu_watch.active then forget_keys() end
-  end
-  menu_watch.active = true
-  _menu.set_mode = menu_watch.wrapper
-end
-
-function unwatch_menu_opening()
-  menu_watch.active = false
-  if menu_watch.wrapper and _menu.set_mode == menu_watch.wrapper then
-    _menu.set_mode = menu_watch.original_set_mode
-  end
-  menu_watch.wrapper = nil
-  menu_watch.original_set_mode = nil
-end
-
--- Keys. Presses go to the page's PAGE_KEY handler. A release goes to
--- PAGE_KEY_RELEASE only if the key went down on the page still showing, so a
+-- Keys. Presses go to the page record's key handler. A release goes to its
+-- key_release only if the key went down on the page still showing, so a
 -- key held across a page change does nothing when it comes up.
 function key(n, z)
   if z == 1 then
-    key_press_page[n] = S.ui_page
-    PAGE_KEY[S.ui_page](n)
+    S.key_press_page[n] = S.ui_page
+    S.registry.pages[S.ui_page].key(n)
   else
-    local press_page = key_press_page[n]
-    key_press_page[n] = nil
+    local press_page = S.key_press_page[n]
+    S.key_press_page[n] = nil
     if press_page == S.ui_page then
-      PAGE_KEY_RELEASE[S.ui_page](n)
+      S.registry.pages[S.ui_page].key_release(n)
     end
   end
   request_redraw()
@@ -930,13 +265,13 @@ end
 function redraw()
   -- the open file selector owns the screen: norns' own redraw() calls (as
   -- the norns menu closes) and Strata's draw the file list, never the page
-  if BUFFER_PAGE.file_selector_open then
+  if S.BUFFER_PAGE.file_selector_open then
     fileselect.redraw()
     return
   end
   screen.clear()
   draw_header()
-  PAGE_DRAW[S.ui_page]()
+  S.registry.pages[S.ui_page].draw()
   screen.update()
 end
 
@@ -1103,7 +438,7 @@ end
 -- Depth rings are bright while their LFO runs
 local function arc_lfo_redraw(arc_port)
   for n = 1, NUM_LFOS do
-    arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), lfo_running(n) and 15 or 4)
+    arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), S.lib.pages_lfo.lfo_running(n) and 15 or 4)
   end
   arc_ring_fill(arc_port, ARC_LFO.period_ring, param_fraction(lfo_period_param_id(S.selected_lfo)), 12)
 end
@@ -1128,7 +463,7 @@ local function attach_arc(port)
   arc_device = arc.connect(port)
   arc_device.delta = arc_delta
   arc_device.key = arc_key
-  arc_connected = arc_device.device ~= nil
+  S.arc_connected = arc_device.device ~= nil
 end
 
 -- The first arc vport (in port order) holding a device, other than
@@ -1153,7 +488,7 @@ end
 function arc.add(device)
   local port = device.port or UI_PAGES.ARC_PORT
   if port < 1 or port > UI_PAGES.ARC_PORTS then return end
-  if arc_connected and arc_device ~= arc.connect(port) then return end  -- already following another arc
+  if S.arc_connected and arc_device ~= arc.connect(port) then return end  -- already following another arc
   attach_arc(port)
   request_redraw()  -- its rings, and SETUP shows the arc state
   print("arc connected")
@@ -1169,7 +504,7 @@ function arc.remove(device)
     attach_arc(next_port)
     print("arc disconnected; following the arc on port " .. next_port)
   else
-    arc_connected = false
+    S.arc_connected = false
     print("arc disconnected")
   end
   request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
@@ -1183,7 +518,7 @@ end
 function arc_key(n, s)
   -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
   if s == 1 and S.ui_page == UI_PAGES.MAIN_PAGE then
-    start_or_freeze_selected_voice()
+    S.lib.pages_main.start_or_freeze_selected_voice()
     request_redraw()
   end
 end
@@ -1241,7 +576,7 @@ end
 
 function grid_init()
   -- Connect up to 4 grids
-  for port = 1, MAX_GRID_PORTS do
+  for port = 1, S.MAX_GRID_PORTS do
     if grid.connect(port).device then
       local grid_port = attach_grid(port)
       print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
@@ -1571,36 +906,6 @@ end
 
 function fader_page_count(voice_idx)
   return math.ceil(#fader_param_ids(voice_idx) / GRID_LAYOUT.fader_rows)
-end
-
--- Range of a control param (controlspec), option param (option indices
--- 1..count) or number param (min/max)
-function param_range(param_id)
-  local param = params:lookup_param(param_id)
-  if param.controlspec then
-    return param.controlspec.minval, param.controlspec.maxval
-  end
-  if param.options then  -- option param (norns' param.t is a number, so test the field)
-    return 1, param.count
-  end
-  return param.min, param.max
-end
-
--- A value as a fraction (0-1) of a param's range. Control params follow
--- their controlspec warp (exp for freq, cutoff, mod speed); number params
--- (mod sources) and option params (grain envelope) are linear.
-function param_value_fraction(param_id, value)
-  local spec = params:lookup_param(param_id).controlspec
-  if spec then
-    return spec:unmap(value)
-  end
-  local minval, maxval = param_range(param_id)
-  return util.linlin(minval, maxval, 0, 1, value)
-end
-
--- A param's current value as a fraction (0-1) of its range
-function param_fraction(param_id)
-  return param_value_fraction(param_id, params:get(param_id))
 end
 
 -- A fader whose range spans 0 (pan, buffer scan, the crossmod amounts) has
