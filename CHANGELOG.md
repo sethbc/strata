@@ -1,5 +1,13 @@
 # Strata Changelog
 
+## Version 3.1.1 - 2026-11-07
+
+A fix release. No command, param or file format changes.
+
+### Fixed
+
+- Saving a buffer, and the scratch take written after every recording, no longer holds up the script's commands while the file is written: notes, param changes and LFO sends arrive on time instead of in a late burst when the write ends (#124).
+
 ## Version 3.1.0 - 2026-11-07
 
 Makes Strata playable from the norns alone, with the grid and arc as accelerators: three new screen pages (VOICE, SEQ and SCENES), K1 held as ALT on every page, lock in place of freeze, one level of randomize undo, fine adjustment and center detents, arc rings on every page but SETUP, and small grids that catch up with the 256. Underneath, `strata.lua` is split into modules built for parallel work. No engine command, param or file format changes, and no sound changes: scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.0.2 load unchanged. One default changes, the LFO depth (see Changed Defaults). Many keys moved (see Upgrade Notes).

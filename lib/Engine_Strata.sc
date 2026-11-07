@@ -1859,13 +1859,31 @@ Engine_Strata : CroneEngine {
                 interleaved[(frame * 2) + 1] = (right[frame] ? 0).clip(negativePeak, peak);
             });
             output.writeData(interleaved);
-            writeChunkWait.wait;
+            // from the real time: a chunk can outlast a 1 ms wait (#124)
+            this.yieldToCommands(writeChunkWait);
             finished = keepGoing.value;
         };
         output.close;
         sources.do({ arg source; source.close });
         ^finished
     }
+
+    // Inside a routine: wait `wait` seconds, and at least until commandGap
+    // seconds of real time from now. A routine whose chunks take longer than
+    // its waits falls behind its logical time, so a plain wait reschedules
+    // it in the past: SystemClock runs it again at once without ever
+    // releasing the language lock, and every OSC message (matron's commands,
+    // server replies) waits until the routine ends (#124). Waking in the real
+    // future lets them in after every chunk. A routine on time waits just
+    // `wait`, as a plain wait would.
+    yieldToCommands { arg wait;
+        wait.max((Main.elapsedTime - thisThread.seconds) + this.commandGap).wait
+    }
+
+    // The least real time a yielding chunk loop waits (s): long enough for a
+    // waiting OSC message to take the language lock, short enough to add
+    // little to a save (about 0.02 s over a 16 s take's 94 chunks)
+    commandGap { ^0.0002 }
 
     // Gate off a voice's synth trio (each frees itself after its release,
     // even one created in this control block: see openedGate), so later

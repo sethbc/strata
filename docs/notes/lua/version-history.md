@@ -31,6 +31,14 @@
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
 
+## Version 3.1.1 (2026-11-07)
+
+A fix release on 3.1 (`release/3.1.x`), with no command, param or file format change:
+- Engine: buffer writes (saves and scratch takes) yield to commands between chunks (`yieldToCommands`, `commandGap`), so a save no longer holds up the script's commands until it ends (#124; fixed on main for 3.2 by #126).
+- Tests: 462 Lua tests; the engine check sends a message during a save and requires it handled before the save ends.
+
+See CHANGELOG.md.
+
 ## Version 3.1.0 (2026-11-07)
 
 Playable from the norns alone (design: `docs/design/3.1-design.md`). No engine, command, param or scene format change; the one default change is LFO depth 25%. Highlights:
