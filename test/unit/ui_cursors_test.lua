@@ -6,53 +6,7 @@
 
 return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
-local local_value, finish_startup = h.local_value, h.finish_startup
-
--- S.lib.ui_field_list is Task 1.5's (lib/ui/field_list.lua), built in
--- parallel: until it is merged these tests set a stand-in with its
--- documented move, clamp and ordinal. Once it is, the real one is used.
-local function field_list_stand_in()
-  local function selectable(rows, index) return rows[index] ~= nil and rows[index].selectable ~= false end
-  local FL = {}
-  function FL.clamp(rows, cursor)
-    for index = math.min(math.floor(cursor), #rows), 1, -1 do
-      if selectable(rows, index) then return index end
-    end
-    for index = 1, #rows do
-      if selectable(rows, index) then return index end
-    end
-    return 1
-  end
-  function FL.move(rows, cursor, d)
-    cursor = FL.clamp(rows, cursor)
-    local step = d < 0 and -1 or 1
-    for _ = 1, math.abs(d) do
-      local index = cursor + step
-      while rows[index] ~= nil and not selectable(rows, index) do index = index + step end
-      if rows[index] == nil then break end
-      cursor = index
-    end
-    return cursor
-  end
-  function FL.ordinal(rows, cursor)
-    local position, count = 0, 0
-    for index = 1, #rows do
-      if selectable(rows, index) then
-        count = count + 1
-        if index <= cursor then position = count end
-      end
-    end
-    return math.max(position, 1), count
-  end
-  return FL
-end
-
-local function load_strata(...)
-  local context = h.load_strata(...)
-  local S = local_value("S")
-  if S.lib.ui_field_list == nil then S.lib.ui_field_list = field_list_stand_in() end
-  return context
-end
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
 -- The param ids of a list of rows, label rows as "[<section>]"
 local function row_ids(rows)

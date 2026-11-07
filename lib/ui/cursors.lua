@@ -41,12 +41,7 @@ return function(S)
   -- selected voice's current rows (field_list.clamp: the nearest one at or
   -- before it), the others within their range
   function M.clamp_all()
-    -- S.lib.ui_field_list comes from Task 1.5 (lib/ui/field_list.lua); until
-    -- it is merged the voice cursor is left as it is, so redraws still work
-    local field_list = S.lib.ui_field_list
-    if field_list then
-      S.cursors.voice = field_list.clamp(voice_page_rows(S.selected_voice), S.cursors.voice)
-    end
+    S.cursors.voice = S.lib.ui_field_list.clamp(voice_page_rows(S.selected_voice), S.cursors.voice)
     S.cursors.seq_step = util.clamp(S.cursors.seq_step, 1, last_stop("seq_step"))
     S.cursors.scene = util.clamp(S.cursors.scene, 1, last_stop("scene"))
   end
