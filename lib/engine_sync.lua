@@ -5,7 +5,8 @@
 -- stopping, freezing and syncing a voice. The functions that were global stay
 -- global, as does engine_param_value; engine_mod_source, with_lfo_offsets and
 -- send_engine_value are fields of this module's table (S.lib.engine_sync) for
--- the code in strata.lua that calls them.
+-- the code that calls them: engine_mod_source in strata.lua, the other two in
+-- lib/lfos.lua (apply_lfo).
 
 return function(S)
   local M = {}

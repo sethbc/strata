@@ -561,6 +561,8 @@ local MODULE_HOMES = {
     "set_buffer_file_param", "empty_buffer_state", "buffer_state_before_load", "load_buffer", "record_buffer",
     "clear_buffer", "buffer_save_path", "save_buffer", "buffer_load_failed", "save_buffers_to_disk",
     "load_buffers_from_disk" },
+  ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "apply_lfo", "lfo_phase_estimate",
+    "add_lfo_params" },
 }
 
 test("functions live in their module", function()
