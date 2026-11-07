@@ -929,4 +929,62 @@ test("strata.lua never compares a param type with a string", function()
   end
 end)
 
+-- CI's LuaJIT is built without Lua 5.2 compatibility, so these names are nil
+-- there even when a local LuaJIT has them (#119). A use passes only with a
+-- fallback in the same expression (`table.unpack or unpack`).
+local LUAJIT_MISSING_NAMES = {
+  "table.unpack", "table.pack", "table.move", "math.type", "math.tointeger",
+  "utf8", "string.pack", "string.unpack",
+}
+
+local function luajit_missing_name_problems(sources)
+  local problems = {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    local line_number = 0
+    for line in (sanitized .. "\n"):gmatch("([^\n]*)\n") do
+      line_number = line_number + 1
+      for _, name in ipairs(LUAJIT_MISSING_NAMES) do
+        local pattern = "%f[%w_.]" .. name:gsub("%.", "%%.") .. (name == "utf8" and "%." or "%f[^%w_]")
+        local first, last = line:find(pattern)
+        if first then
+          local fallback = line:sub(last + 1):match("^%s*or%s") or line:sub(1, first - 1):match("%sor%s+$")
+          if not fallback then
+            table.insert(problems, source.path .. ":" .. line_number .. " uses " .. name .. " with no fallback")
+          end
+        end
+      end
+    end
+  end
+  return problems
+end
+
+test("no Lua 5.2+ name that CI's LuaJIT lacks is used without a fallback (#119)", function()
+  -- the scanner itself
+  local problems = luajit_missing_name_problems({ { path = "x.lua", text = table.concat({
+    "local a = table.unpack(t)",
+    "local b = table.unpack or unpack",
+    "local c = unpack or table.unpack",
+    "-- table.pack in a comment",
+    'local d = "math.type in a string"',
+    "local e = math.type(1) + utf8.char(65)",
+    "local f = mytable.unpack(t)",
+    "local g = string.pack('i', 1) and string.unpack('i', s)",
+  }, "\n") } })
+  assert_equal(table.concat(problems, "; "), "x.lua:1 uses table.unpack with no fallback; "
+    .. "x.lua:6 uses math.type with no fallback; x.lua:6 uses utf8 with no fallback; "
+    .. "x.lua:8 uses string.pack with no fallback; x.lua:8 uses string.unpack with no fallback",
+    "bad uses are reported; fallbacks, comments, strings and other tables are not")
+  local sources = read_lua_sources()
+  local listing = assert(io.popen('cd "' .. repo_root .. '" && find test -name "*.lua" | sort'))
+  for path in listing:read("*a"):gmatch("[^\n]+") do
+    local file = assert(io.open(repo_root .. "/" .. path, "r"))
+    table.insert(sources, { path = path, text = file:read("*a") })
+    file:close()
+  end
+  listing:close()
+  problems = luajit_missing_name_problems(sources)
+  assert_equal(#problems, 0, table.concat(problems, "; "))
+end)
+
 end
