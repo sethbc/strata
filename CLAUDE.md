@@ -108,7 +108,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of `strata.lua`): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (2), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (5), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `BUFFER_SECONDS` (16), `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers`, `bufferSeconds` and `numModSlots`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
-**Lua's 200-local limit**: `strata.lua`'s main chunk uses 25 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
+**Lua's 200-local limit**: `strata.lua`'s main chunk uses 16 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
 
 **Descriptive names**: `selected_voice`, not `sv`; `master_density`, not `md`.
 
@@ -134,7 +134,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### CRITICAL: keep grid and arc in step with the code
 
-- Grid layouts: `grid_key_256/128h/128v/64()` and `grid_redraw_*()`, chosen by exact `cols`/`rows` in `grid_layout()`. Patterns are `patterns[voice][step]`. Anything the grid shows must call `grid_redraw()` when it changes, wherever it changes (cheap without a grid).
+- Grid layouts: `grid_key_256/128h/128v/64()` and `grid_redraw_*()`, one file per layout (`lib/grid/layout_256.lua`, ...), each registering `{key, redraw}` in `S.registry.grid_layouts`; `grid_key` and `grid_redraw` (`lib/grid/core.lua`) dispatch through it by the name `grid_layout()` picks from the exact `cols`/`rows`. The 256's faders are in `lib/grid/faders.lua`. Patterns are `S.patterns[voice][step]` (`lib/sequencer.lua`). Anything the grid shows must call `grid_redraw()` when it changes, wherever it changes (cheap without a grid).
 - New params in `param_order` appear on the 256 fader page automatically (`fader_param_ids`, `set_param_from_column`, which follows the controlspec warp). Review whether a feature needs grid buttons or LED feedback on every layout.
 - Arc: review whether new params belong on a page's rings (`lib/arc/main.lua`, ...: `arc_*_delta`/`arc_*_redraw`, `ARC_FX_RINGS`, `ARC_BUFFER_RINGS`). Ring feedback must use the same ranges as the param specs (`param_fraction`).
 - Everything must degrade gracefully when no grid, arc or MIDI device is connected. Update README's grid/arc sections and `docs/notes/lua.md` with new patterns.

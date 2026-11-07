@@ -587,6 +587,18 @@ local MODULE_HOMES = {
   ["lib/pages/setup.lua"] = { "redraw_setup", "setup_enc" },
   ["lib/arc/core.lua"] = { "arc_sweep_param", "arc_ring_fill", "arc_init", "first_arc_port", "arc_delta",
     "arc_key", "arc_redraw", "forget_arc_lfo_period_ticks" },
+  ["lib/grid/core.lua"] = { "grid_init", "grid_key", "grid_redraw", "select_grid_voice" },
+  ["lib/grid/faders.lua"] = { "voice_level_fader_keys", "fader_param_ids", "fader_page_count",
+    "fader_zero_column", "fader_column_fraction", "set_param_from_column", "set_fader_param", "fader_position",
+    "grid_redraw_fader_row", "grid_redraw_faders" },
+  ["lib/grid/layout_256.lua"] = { "grid_key_256", "grid_key_256_transport", "grid_key_256_freeze",
+    "grid_redraw_256", "grid_redraw_256_buffers", "grid_redraw_256_sources", "grid_redraw_256_page_row",
+    "grid_redraw_256_transport", "grid_redraw_256_freeze" },
+  ["lib/grid/layout_128h.lua"] = { "grid_key_128h", "grid_redraw_128h" },
+  ["lib/grid/layout_128v.lua"] = { "grid_key_128v", "grid_redraw_128v" },
+  ["lib/grid/layout_64.lua"] = { "grid_key_64", "grid_redraw_64" },
+  ["lib/sequencer.lua"] = { "toggle_pattern_step", "clear_pattern", "randomize_pattern", "pattern_toggle",
+    "pattern_clock_start", "pattern_clock_stop", "step_brightness" },
 }
 
 test("functions live in their module", function()

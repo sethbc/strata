@@ -26,7 +26,7 @@ return function()
     pages = {},         -- one record per screen page
     params = {},        -- param-adding functions, run by init in order
     cleanup = {},       -- cleanup functions, run by cleanup()
-    grid_layouts = {},  -- per grid layout, its page records
+    grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw}
   }
 
   return M
