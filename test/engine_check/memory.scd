@@ -13,10 +13,14 @@
 //   no UGen to print anything), so the number that did, times a probe's
 //   size, is the pool's free memory to within one probe. A probe's size is
 //   calibrated against four DelayN probes (1 MB) on the running server.
-//   Two 256 KB DelayN probes are allocated just before each flood and freed
-//   just after it, so the server never runs with a full pool: replies
+//   Two 64 KB DelayN probes (\strataCheckReserveProbe) are allocated just
+//   before each flood and freed just after it (in its bundle), so the server never runs with a full pool: replies
 //   (/c_getn, /n_info) and anything an engine synth allocates meanwhile find
-//   room. They count as free.
+//   room (the high run's spectral writers take their last ~16 KB each
+//   lazily, about 21 ms in, after the flood: the freed reserve holds it).
+//   They count as free. (256 KB each until 2d: beside sixteen probes the
+//   high worst case now leaves about 250 KB, too little for them and the
+//   spectral writers' lazy allocations.)
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
@@ -36,7 +40,7 @@ var floodStart = {
     var bus = Bus.control(server, floodCount), ids = floodCount.collect({ server.nextNodeID });
     var reserve = 2.collect({ server.nextNodeID });
     bus.setAll(0);
-    server.sendBundle(nil, *reserve.collect({ arg id; ['/s_new', \strataCheckMemProbe, id, 1, engine.processGroup.nodeID,
+    server.sendBundle(nil, *reserve.collect({ arg id; ['/s_new', \strataCheckReserveProbe, id, 1, engine.processGroup.nodeID,
         \out, reserveBus.index] }));
     server.sync; 0.01.wait;
     server.sendBundle(nil, *([['/error', -1]] ++ ids.collect({ arg id, index;
@@ -58,7 +62,7 @@ var floodResult = { arg flood;
 };
 // The number of small probes the pool holds now
 var floodFit = { var flood; server.sync; flood = floodStart.value; floodResult.(flood) };
-var reserveKB = 2 * 257;   // the two DelayN probes around each flood
+var reserveKB = 2 * 65;   // the two 64 KB DelayN probes around each flood
 
 // A small probe's size (KB): how many fewer fit beside four 256 KB DelayN
 // probes, which take 1024 KB of delay lines (and about 1 KB each of graph)
@@ -240,6 +244,8 @@ SynthDef(\strataCheckPoolProbe, { arg out;
     var padding = NamedControl.kr(\padding, 0 ! 240);
     Out.kr(out, DC.kr(1) + (padding[0] * 0));
 }).add;
+// The flood's reserve: a 64 KB DelayN (16384 floats)
+SynthDef(\strataCheckReserveProbe, { arg out; Out.kr(out, A2K.kr(DelayN.ar(DC.ar(1), 0.25, 0.01))) }).add;
 server.sync;
 
 probeKB = smallProbeKB.value;

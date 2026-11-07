@@ -57,10 +57,10 @@
     // crossfades over 20 ms: the three filters always run and each is
     // weighted by a lagged "this is the type" (the weights sum to 1 once
     // settled), so switching never steps the output. Never compare a UGen
-    // with == (object identity): BinaryOpUGen('==', ...).
-    multimodeFilter { arg sig, cutoff, res, filterType, wet;
+    // with == (object identity): BinaryOpUGen('==', ...). type is a whole
+    // number (any other weights every filter 0: the output is sig x (1 - wet)).
+    multimodeFilter { arg sig, cutoff, res, type, wet;
         var rq = 1 - (res * 0.95);
-        var type = filterType.round.clip(0, 2);
         var filtered = [
             RLPF.ar(sig, cutoff, rq),
             RHPF.ar(sig, cutoff, rq),
@@ -74,7 +74,8 @@
     // lagged as every mix reader) and the reverb's return (reverbIn, m_r R):
     // dry + m_d (1 - m_r) D + m_r R, which at sends of 1 is 3.0's chain
     masterSum { arg in, delayIn, reverbIn, fxMix;
-        var reverbMix = In.kr(fxMix + 1, 1).clip(0, 1).lag(this.fxMixLag);
+        // (the engine broadcasts mixes already clipped to 0-1: liveMix)
+        var reverbMix = In.kr(fxMix + 1, 1).lag(this.fxMixLag);
         ^In.ar(in, 2) + (In.ar(delayIn, 2) * (1 - reverbMix)) + In.ar(reverbIn, 2)
     }
 
@@ -96,8 +97,8 @@
         SynthDef(\strataFilter, {
             arg in, out, freq=5000, res=0.5, filterType=0, mix=0;
             var dry = In.ar(in, 2).collect({ arg channel; this.zeroBadValues(channel) });
-            Out.ar(out, this.multimodeFilter(dry, freq.lag(0.05).clip(20, 20000), res.clip(0, 1), filterType,
-                mix.lag(0.05).clip(0, 1)));
+            Out.ar(out, this.multimodeFilter(dry, freq.lag(0.05).clip(20, 20000), res.clip(0, 1),
+                filterType.round.clip(0, 2), mix.lag(0.05).clip(0, 1)));
         }).add;
 
         // Stereo delay with feedback (LocalIn/LocalOut around DelayC, max 2 s),
@@ -137,7 +138,6 @@
             var feedbackBase = 0.7 + (0.28 * room), reference = 1378 * SampleDur.ir;
             var drift = [0, 0, LFNoise1.kr(0.31) * 0.0006, 0, 0, 0, LFNoise1.kr(0.43) * 0.0005, 0];
             var lengths = this.fdnLineSeconds * (0.6 + (0.4 * room)) + drift;
-            var maxLength = this.fdnLineSeconds.maxItem + 0.002;
             var diffused, feedback, lines, sum, wet;
             diffused = sig.collect({ arg channel, side;
                 this.fdnDiffuserSeconds[side].inject(channel, { arg each, time;
@@ -146,7 +146,9 @@
             });
             feedback = LocalIn.ar(8);
             lines = 8.collect({ arg index;
-                var line = DelayL.ar((diffused[index % 2] * 0.25) + feedback[index], maxLength,
+                // each line's own maximum (its size-1 length plus the drift's
+                // room), so a short line never takes the longest one's memory
+                var line = DelayL.ar((diffused[index % 2] * 0.25) + feedback[index], this.fdnLineSeconds[index] + 0.002,
                     lengths[index] - ControlDur.ir);
                 OnePole.ar(line, damping)
             });

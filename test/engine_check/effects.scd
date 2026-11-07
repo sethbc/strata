@@ -422,7 +422,7 @@ checkBypassMemory = {
 // Toggled at 20 Hz for 2 s, the delay never has two nodes, and once it
 // settles bypassed none
 checkBypassToggling = {
-    var most = 0, bypassed = 0;
+    var most = 0, bypassed = 0, created;
     41.do({ arg index;
         bypassed = 1 - bypassed;
         command.(\setBypass, 0, bypassed);
@@ -436,6 +436,24 @@ checkBypassToggling = {
     command.(\setBypass, 0, 0);
     server.sync;
     check.((delayNodes.value == 1) and: { engine.synths[\delay].notNil }, "effects: and lifting it brings one back");
+    // at about 15 Hz each bypass outlasts the fade (bypassFadeTime, about
+    // 51 ms), so its free is sent and the next lift creates a new node
+    most = 0; bypassed = 0;
+    created = IdentitySet[engine.synths[\delay]];
+    31.do({
+        bypassed = 1 - bypassed;
+        command.(\setBypass, 0, bypassed);
+        if (bypassed == 0) { created.add(engine.synths[\delay]) };
+        0.067.wait;
+        most = most.max(delayNodes.value);
+    });
+    0.3.wait; server.sync;
+    check.((most <= 1) and: { created.size >= 8 } and: { delayNodes.value == 0 } and: { engine.synths[\delay].isNil },
+        "effects: 15 Hz bypass toggling frees and re-creates the delay, never two nodes and none once bypassed (most %, % nodes made, at the end %)".format(
+            most, created.size, delayNodes.value));
+    command.(\setBypass, 0, 0);
+    server.sync;
+    check.((delayNodes.value == 1) and: { engine.synths[\delay].notNil }, "effects: and lifting it brings one back again");
 };
 
 // An LFO-rate series of setDelays taking the mix through 0 and back never

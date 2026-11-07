@@ -65,8 +65,10 @@
     // a lagged type match, so a type change crossfades over 20 ms), with the
     // cutoff and mix lagged 0.05 s as the master's. filterMix 0 (the
     // default) passes sig unchanged.
+    // filterType is only rounded (Lua sends 0-2; any other value leaves the
+    // filter out), one UGen less in every grain synth than the master's clip.
     voiceFilter { arg sig, filterType, filterFreq, filterRes, filterMix;
-        ^this.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType,
+        ^this.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
             filterMix.lag(0.05).clip(0, 1))
     }
 
@@ -82,7 +84,8 @@
     // The mirror (mirrorOut, times mirrorLevel: the voice bus, for its mod
     // synth) is the whole output, whatever the sends.
     voiceOutput { arg sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
-        var mixes = In.kr(\fxMixIn.kr(this.mixBus(\fxMix).index), 2).clip(0, 1).lag(this.fxMixLag);
+        // (the engine broadcasts mixes already clipped to 0-1: liveMix)
+        var mixes = In.kr(\fxMixIn.kr(this.mixBus(\fxMix).index), 2).lag(this.fxMixLag);
         var toDelay = delaySend.clip(0, 1).lag(this.fxMixLag), toReverb = reverbSend.clip(0, 1).lag(this.fxMixLag);
         var pastDelay = 1 - (toDelay * mixes[0]);
         Out.ar(out, sig * (pastDelay * (1 - (toReverb * mixes[1]))));
