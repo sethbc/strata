@@ -3,7 +3,7 @@
 - MIDI notes never create nodes. A note on starts a stopped voice with `toggle_voice`, then accents it with `engine.retrigger(i - 1, vel / 127)`. Velocity lands on the accent; voices keep their slow attacks.
 - The handler lives on the vport only (`S.midi_device = midi.connect(port)`), never on the raw device. Cleanup detaches it (step 150), before the voices go off.
 - A note off goes to the voice its note on played (`S.midi_state.note_voice`), even if the omni selection moved since.
-- `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection.
+- After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly).
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - Strata's code handles no CC: norns' PARAMS > MAP maps any CC to any param.
 

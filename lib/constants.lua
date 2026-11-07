@@ -152,8 +152,8 @@ local UNDO_SECONDS = 5
 
 -- Center detents (lib/ui/detent.lua): a param whose range spans 0 holds at
 -- 0 for the next encoder_detents encoder detents after reaching or crossing
--- it, or the next arc_ticks arc ticks
-local DETENT = {encoder_detents = 3, arc_ticks = 24}
+-- it, or the next arc_ticks arc ticks, within hold_seconds of reaching it
+local DETENT = {encoder_detents = 3, arc_ticks = 24, hold_seconds = 1}
 
 -- ALT+E3 fine adjustment: a control param moves 1 / FINE_DIVISOR of its raw
 -- step per detent (lib/ui/detent.lua)

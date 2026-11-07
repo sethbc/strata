@@ -14,7 +14,7 @@
 - Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
 - VOICE's rings read the cursor only from `S.lib.pages_voice.sync_cursor()` (the page's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw: after a source switch the raw cursor can sit past the last row or on a section label. Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
-- A ring move of the SCENES cursor disarms a pending overwrite confirmation (`S.scenes_page.armed_slot`) and clears its hint-row prompt (`S.lib.ui_flash.start("hints", nil)`), as E2 does.
+- SCENES ring 1 moves the cursor only through `S.lib.pages_scenes.move_cursor(slot)`, the page's own move (E2 uses it too), which disarms a pending overwrite confirmation and clears its prompt. The ring never touches `S.scenes_page` itself.
 
 ## Owns
 
@@ -63,7 +63,7 @@ BUFFER (`ARC_BUFFER_RINGS`, `{voice_key | param_id}` per ring):
 - rings 3-4 at 12.
 
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
-- Ring 1: the scene cursor over E2's stops (slots 1..`NUM_SCENES`, then `SCENES_FIELDS`), `S.lib.ui_cursors.move("scene", steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`. A move clears `S.scenes_page.armed_slot`, `armed_until` and the hints flash, as `scenes_enc` E2 does.
+- Ring 1: the scene cursor over E2's stops (slots 1..`NUM_SCENES`, then `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
 - Ring 2: `scene_transition_time` through `arc_sweep_param`.
 - Rings 3-4 dark (3.4's morph will take ring 3). Both lit rings at 12.
 
