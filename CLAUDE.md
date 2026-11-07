@@ -46,6 +46,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/midi_in.lua` | `midi_in` | `docs/notes/lua/midi.md` | midi_in_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-and-pages.md` | ui_test.lua |
+| `lib/ui/voice_rows.lua`, `lib/ui/cursors.lua` | `ui_voice_rows`, `ui_cursors` | `docs/notes/lua/ui-and-pages.md` | ui_cursors_test.lua |
 | `lib/ui/alt.lua` | `ui_alt` | `docs/notes/lua/ui-and-pages.md` | ui_alt_test.lua |
 | `lib/pages/main.lua`, `lib/pages/voice.lua`, `lib/pages/seq.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/scenes.lua`, `lib/pages/setup.lua` | `pages_main`, `pages_voice`, `pages_seq`, `pages_fx`, `pages_lfo`, `pages_buffer`, `pages_scenes`, `pages_setup` | `docs/notes/lua/ui-and-pages.md` | pages_test.lua, ui_pages_test.lua |
 | `lib/arc/core.lua`, `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua` | `arc_core`, `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_buffer`, `arc_scenes` | `docs/notes/lua/arc.md` | arc_test.lua |

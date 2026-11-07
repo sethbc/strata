@@ -56,6 +56,10 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
+-- The params the SCENES page lists after the eight slots: its cursor's stops
+-- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)
+local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration"}
+
 -- voices[i].grain keys holding an option index rather than a continuous
 -- value, mapped to their option count: smooth transitions switch them at the
 -- end instead of crossfading, mutation never touches them, and scenes must
@@ -175,6 +179,7 @@ return {
   SOURCE_INPUT = SOURCE_INPUT,
   SOURCE_OPTIONS = SOURCE_OPTIONS,
   UI_PAGES = UI_PAGES,
+  SCENES_FIELDS = SCENES_FIELDS,
   DISCRETE_GRAIN_KEYS = DISCRETE_GRAIN_KEYS,
   BUFFER_MUTATION_KEYS = BUFFER_MUTATION_KEYS,
   GRAIN_PARAM_IDS = GRAIN_PARAM_IDS,

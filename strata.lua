@@ -42,6 +42,8 @@ S.lib.scenes = include("lib/scenes")(S)
 S.lib.midi_in = include("lib/midi_in")(S)
 S.lib.params_setup = include("lib/params_setup")(S)
 S.lib.ui_params = include("lib/ui/params")(S)
+S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
+S.lib.ui_cursors = include("lib/ui/cursors")(S)
 S.lib.ui_header = include("lib/ui/header")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_field_list = include("lib/ui/field_list")(S)
@@ -209,6 +211,7 @@ function redraw()
     fileselect.redraw()
     return
   end
+  S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor since the last frame
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
