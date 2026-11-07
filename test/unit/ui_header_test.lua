@@ -202,7 +202,7 @@ test("a header flash replaces dots and indicators for 1.5 s", function()
   next_frame(context)
   assert_equal(header_text(context, "tempo 121"), nil, "the next frame draws it away")
   assert_equal(#page_dots(context), 8, "dots back")
-  assert_true(header_text(context, "[M]"), "indicators back")
+  assert_true(header_text(context, "120 bpm"), "SEQ's status back")
 end)
 
 test("a new flash replaces the running one and its clock", function()
