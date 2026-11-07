@@ -55,7 +55,7 @@ After installation with either method, restart norns or run `;restart` in maiden
 
 1. The script starts with the Resonator and FM voices active
 2. Use E2 to select different voices
-3. Press K3 to start a voice (pressing it again locks the running voice)
+3. Press K3 to start or stop the selected voice (hold K1 and press K3 to lock it)
 4. Experiment with master density (arc ring 1 on the MAIN page, or PARAMETERS) to change the overall texture
 
 ## Documentation

@@ -62,7 +62,7 @@ test("ALT+K2 and ALT+K3 go to the page's alt_key through alt_action", function()
   show_page("MAIN")
   assert_true(alt_action(S.constants.UI_PAGES.index.FX, 2), "alt_action reports that the page has alt_key")
   assert_equal(table.concat(log, ","), "alt_key 2", "alt_action runs the named page's alt_key, shown or not")
-  assert_true(not alt_action(S.constants.UI_PAGES.index.MAIN, 2), "a page without alt_key: nothing runs")
+  assert_true(not alt_action(S.constants.UI_PAGES.index.SETUP, 2), "a page without alt_key: nothing runs")
   assert_true(not alt_action(0, 2) and not alt_action(S.constants.NUM_UI_PAGES + 1, 2),
     "a page index out of range does nothing")
   assert_true(not alt_action(S.constants.UI_PAGES.index.FX, 1) and not alt_action(S.constants.UI_PAGES.index.FX, 4),

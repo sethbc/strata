@@ -254,20 +254,21 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   assert_equal(params:string("midi_channel_mode"), "per voice")
   show_page("SETUP")
   assert_true(screen_has("midi 1: none"), "no device on port 1")
-  assert_true(screen_has("ch: per voice"), "channel mode shown")
+  enc(2, 1); redraw(); enc(2, -1); redraw()
+  assert_true(screen_has("per voice"), "channel mode shown")
   context.midi.plug(1, "keys"); next_frame(context)
   assert_true(screen_has("midi 1: keys"), "plugging a device redraws SETUP")
-  -- E2 selects the port; events on the old port no longer reach Strata
-  enc(2, 1); next_frame(context); assert_equal(params:get("midi_device"), 2)
+  -- E3 on the first field selects the port; events on the old port no longer reach Strata
+  enc(3, 1); next_frame(context); assert_equal(params:get("midi_device"), 2)
   assert_true(screen_has("midi 2: none"))
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_equal(#context.engine_calls, 0, "port 1 is no longer listened to")
   context.midi.send(2, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_true(#context.calls_named("retrigger") == 1, "port 2 is")
-  -- E3 sets the channel mode
-  enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
-  assert_true(screen_has("ch: omni to selected"))
+  -- E2 then E3 sets the channel mode
+  enc(2, 1); enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
+  assert_true(screen_has("omni to selected"))
   assert_true(screen_has("midi 2: stub midi"), "the device that played is shown")
   -- unplugging the selected port's device shows none on the next frame
   context.midi.unplug(2); next_frame(context)

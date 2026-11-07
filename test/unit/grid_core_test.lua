@@ -241,23 +241,18 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
-test("a scene saved on a hold redraws the screen (SETUP counts it)", function()
+test("a scene saved on a hold redraws the screen (SETUP no longer counts scenes)", function()
   local context = load_strata(); finish_startup(context)
-  local function screen_has(text)
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == text then return true end
-    end
-    return false
-  end
   h.show_page("SETUP")
   context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
   h.next_frame(context)
   context.grid.press(1, 2, 3, 1)
   h.next_frame(context)
-  assert_true(screen_has("scenes: 0/8 saved"), "nothing saved yet")
+  local counter = h.count_screen_draws()
   context.clock.run_for(0.5)
   h.next_frame(context)
-  assert_true(screen_has("scenes: 1/8 saved"), "the save shows on the next frame")
+  counter.restore()
+  assert_equal(counter.screen, 1, "the save shows on the next frame")
 end)
 
 test("a third key sets only its own voice's held step", function()
