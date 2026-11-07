@@ -57,7 +57,7 @@ return function(S)
     if n == 2 then
       S.fx_row = util.clamp(S.fx_row + d, 1, #S.FX_PAGE.rows)
     elseif n == 3 then
-      params:delta(S.FX_PAGE.rows[S.fx_row].param_id, d)
+      enc_param_delta(n, S.FX_PAGE.rows[S.fx_row].param_id, d)
     end
   end
 

@@ -45,10 +45,11 @@ The arc follows the screen page (`S.ui_page`):
 
 Ring speed rule:
 - Every continuous ring (MAIN 1-4, FX 1-4, BUFFER 1-4, LFO ring 4 in free mode) goes through `arc_sweep_param(param_id, delta)`.
-- It sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks: `params:delta(id, delta / (512 * controlspec.quantum))`.
-- norns' `Control:delta` moves the 0-1 raw value by `d * quantum`, so the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq). The step only quantizes the value read back; raw keeps the remainder.
+- It sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks: `delta_with_detent(id, nil, {arc_ticks = delta})` (`lib/ui/detent.lua`) moves the 0-1 raw value by `delta / 512` through `params:set_raw`, and holds a range through 0 at 0 for `DETENT.arc_ticks` (24) ticks (center detents, `docs/notes/lua/ui-and-pages.md`). The arc has no fine mode.
+- Moving the raw value, the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq). The step only quantizes the value read back; raw keeps the remainder.
 - 512 is half a revolution: the arc reports 1024 ticks per revolution (monome arc docs: "high resolution knobs, 1024 ticks per revolution", every edition; matron passes libmonome's deltas through unscaled, `device_monome.cc`).
-- There are no per-ring scales; never add one beyond the two exceptions. The LFO depth rings (`ticks_per_percent`) and the clocked rate (`ticks_per_rate`) step whole values instead.
+- There are no per-ring scales; never add one beyond the two exceptions. The LFO depth rings (`ticks_per_percent`) and the clocked rate (`ticks_per_rate`) step whole values instead, through `delta_with_detent(id, steps)`.
+- No ring calls `params:delta`: every ring change goes through `arc_sweep_param` or `delta_with_detent` (a test checks `lib/arc/` and `lib/pages/`).
 
 `arc_delta(n, delta)` handles rings 1-4 through the page's handler.
 
