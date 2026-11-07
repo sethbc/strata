@@ -136,7 +136,7 @@ Voice list:
   - active status (`+` running, `-` stopped);
   - the voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF;
   - lock status (` [L]` suffix).
-- The widest entry, `+ pulse [F]`, is 54 px by the harness estimate, so it ends 8 px before the divider.
+- The widest entry, `+ pulse [L]`, is 54 px by the harness estimate, so it ends 8 px before the divider.
 - The list puts the selected voice on row 2 (y=26, the ON/OFF row) except at the ends of the list (`num_above_selected` = 1), so entries must stay left of x=60 or they overlap the details.
 
 Layout (two columns):

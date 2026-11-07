@@ -22,7 +22,7 @@ test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
   enc(2, 1); assert_equal(local_value("selected_voice"), 2)
   local before = params:get(main_param_id(2)); enc(3, 1)
   assert_true(params:get(main_param_id(2)) ~= before, "E3 moves the main param on MAIN")
-  key(3, 1); assert_true(local_value("frozen")[2], "K3 freezes a running voice on MAIN")
+  key(3, 1); assert_true(local_value("frozen")[2], "K3 locks a running voice on MAIN")
 end)
 
 test("E1 steps one page per detent: no acceleration, 4 ticks per page", function()
@@ -63,7 +63,7 @@ test("every encoder, key and arc control is safe on every page; arc button only 
       context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
       for voice_idx, voice in ipairs(local_value("voices")) do
         assert_equal(voice.active, active[voice_idx], "arc button leaves voices alone on " .. PAGE_TITLES[page])
-        assert_equal(local_value("frozen")[voice_idx], frozen[voice_idx], "arc button leaves freeze alone on " .. PAGE_TITLES[page])
+        assert_equal(local_value("frozen")[voice_idx], frozen[voice_idx], "arc button leaves lock alone on " .. PAGE_TITLES[page])
       end
     end
   end
@@ -269,14 +269,14 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_drawn_on_next_frame(context, arc_hardware, "gentle_mutate", gentle_mutate)
 
   assert_drawn_on_next_frame(context, arc_hardware, "K3 on MAIN", function() key(3, 1); key(3, 0) end)
-  assert_true(screen_shows(context, "[LOCK]"), "K3 froze voice 1")
+  assert_true(screen_shows(context, "[LOCK]"), "K3 locked voice 1")
   assert_drawn_on_next_frame(context, arc_hardware, "arc button", function()
     context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   end)
-  assert_true(not screen_shows(context, "[LOCK]"), "the arc button unfroze voice 1")
+  assert_true(not screen_shows(context, "[LOCK]"), "the arc button unlocked voice 1")
   -- its callers (keys, arc, grid) ask for redraws too: call it directly
   assert_drawn_on_next_frame(context, arc_hardware, "toggle_lock", function() toggle_lock(1) end)
-  assert_true(screen_shows(context, "[LOCK]"), "toggle_lock froze voice 1"); toggle_lock(1)
+  assert_true(screen_shows(context, "[LOCK]"), "toggle_lock locked voice 1"); toggle_lock(1)
   assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
     context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
   end)
@@ -433,8 +433,8 @@ test("key releases reach only the BUFFER page; other pages act once per press", 
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(2)
   show_page("MAIN")
-  key(3, 1); assert_true(local_value("frozen")[2], "K3 press freezes on MAIN")
-  key(3, 0); assert_true(local_value("frozen")[2], "K3 release does not unfreeze")
+  key(3, 1); assert_true(local_value("frozen")[2], "K3 press locks on MAIN")
+  key(3, 0); assert_true(local_value("frozen")[2], "K3 release does not unlock")
   show_page("FX")
   local mix = params:get("filter_mix")
   key(3, 1); key(3, 0)

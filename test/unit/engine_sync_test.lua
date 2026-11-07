@@ -143,7 +143,6 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   assert_equal(#context.calls_named("voiceOn"), 0, "switching creates no voice")
 end)
 
-
 test("toggle_lock locks and unlocks a voice", function()
   local context = load_strata()
   finish_startup(context)
@@ -156,6 +155,8 @@ test("toggle_lock locks and unlocks a voice", function()
   assert_true(toggle_freeze == nil, "toggle_freeze is gone")
 end)
 
+-- 3.2 adds a real audio freeze ([F] on MAIN, freeze functions): that work must
+-- narrow or replace this scan.
 test("no Lua file says freeze for the lock feature", function()
   local banned = { "toggle_freeze", "%[FREEZE%]", "%[F%]", "_freeze%(", "start_or_freeze" }
   for _, source in ipairs(h.read_lua_sources()) do

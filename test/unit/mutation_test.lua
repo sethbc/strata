@@ -315,7 +315,7 @@ test("a randomize of another voice, a recall or a mutation of the voice clears t
   end
   -- a mutation step on another voice keeps it; one on the undo's voice clears it
   params:set("mutation_probability", 1); params:set("mutation_amount", 0.5)
-  randomize_voice(2); toggle_lock(2)                 -- voice 2 locked: only voice 1 mutates
+  randomize_voice(2); toggle_lock(2)   -- voice 2 locked: only voice 1 mutates
   gentle_mutate()
   assert_true(undo_available(2), "a mutation of another voice keeps the undo")
   toggle_lock(2)
