@@ -1,2 +1,2 @@
 ### Added
-- A test fails the suite when a tracked source, doc or workflow file uses a British spelling (behaviour, colour, initialise and the like), so US English stays the house style.
+- A test (`text uses US spelling`) fails on common British spellings in code, tests, docs, plans and changelog fragments; the word list lives in `test/unit/docs_test.lua`.
