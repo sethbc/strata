@@ -1,6 +1,6 @@
 -- norns_stubs.lua
 -- Minimal stand-ins for the norns Lua runtime, used by test/run.lua to load
--- strata.lua off-device. Behaviour mirrors norns' own implementations
+-- strata.lua off-device. Behavior mirrors norns' own implementations
 -- (lua/core/params/*.lua, controlspec.lua, grid.lua, arc.lua, clock.lua,
 -- lib/util.lua, lib/tabutil.lua) wherever the script depends on it:
 --   * control params quantize to controlspec.step and only fire their action
@@ -35,7 +35,7 @@
 --     tempo changes. A resumed coroutine gets the clock time (sleep) or beat
 --     (sync); one that cancels itself and then waits errors when it wakes,
 --     as on norns. Each coroutine holds one of matron's 100 event slots
---     (the lowest free one when it first waits, until it is cancelled or
+--     (the lowest free one when it first waits, until it is canceled or
 --     ends; all 100 in use is an error, where matron would never wake the
 --     coroutine): events due at the same time fire in slot order, a sleep
 --     before a sync (matron fires a sleep when the time reaches it, a sync
@@ -46,7 +46,7 @@
 --     fixed and resume in slot order, not wake order, as matron's tick
 --     posts them); clock.advance_until(id) runs it event
 --     by event until coroutine id wakes once, and fails at once if id is not
---     waiting or is cancelled first; clock.run_for(seconds[, latency]) runs the
+--     waiting or is canceled first; clock.run_for(seconds[, latency]) runs the
 --     scheduler for `seconds`, each coroutine `latency` (default 0) after
 --     its wake-up, so a clock that sleeps many short steps falls behind one
 --     that sleeps once. An error raised in a scheduler resume is not raised:
@@ -918,7 +918,7 @@ local function make_params(util, controlspec)
   end
 
   -- each type follows its lua/core/params/*.lua set(): actions fire only on a
-  -- change, except triggers (and trigger-behaviour binaries), which always fire
+  -- change, except triggers (and trigger-behavior binaries), which always fire
   function ParamSet:set(id, value, silent)
     local param = self:lookup_param(id)
     local changed = false
@@ -1121,7 +1121,7 @@ local function make_clock(util)
   -- slot (its matron event slot) and order (a count of schedulings, so a
   -- step can tell a rescheduled event from the one it found). It outlives
   -- the wake-up, so a repeated sync counts on from its beat, and goes, with
-  -- its slot, when the coroutine is cancelled or ends.
+  -- its slot, when the coroutine is canceled or ends.
   -- slots[n] is the coroutine holding event slot n: clock_scheduler_find_event
   -- gives a coroutine's first wait the lowest free slot, which it keeps until
   -- clock_scheduler_clear (clock.cancel). Each scheduler tick posts the due
@@ -1185,7 +1185,7 @@ local function make_clock(util)
     ready_event(coro_id, SCHEDULE_SYNC).sync_beat = next_clock_beat(from, sync_beat, offset)
   end
 
-  -- lua/core/clock.lua's clock.resume. A coroutine cancelled from inside that
+  -- lua/core/clock.lua's clock.resume. A coroutine canceled from inside that
   -- then sleeps or syncs is scheduled all the same (the yield comes after
   -- the cancel), so its wake-up resumes a coroutine that is no longer in
   -- clock.threads: coroutine.resume(nil) raises, as on norns
@@ -1284,7 +1284,7 @@ local function make_clock(util)
   end
 
   -- Whether the event an entry found is still the one waiting (not
-  -- cancelled, fired or rescheduled since)
+  -- canceled, fired or rescheduled since)
   local function still_waiting(entry)
     return clock.events[entry.id] == entry.event and entry.event.ready and entry.event.order == entry.order
   end
@@ -1323,7 +1323,7 @@ local function make_clock(util)
   -- the step's, not its own), and fire in slot order: every one whose fire
   -- time has passed, and those at the step's time of the first one's rank (a sleep at the step's
   -- time leaves a sync at that time to the next step, at the same time).
-  -- Events scheduled during the step wait for the next one; one cancelled or
+  -- Events scheduled during the step wait for the next one; one canceled or
   -- rescheduled by an earlier one in the step is skipped
   function clock.advance()
     local pending = ready_events()
@@ -1361,7 +1361,7 @@ local function make_clock(util)
       util.stub_now = math.max(util.time(), entry.time)
       fire(entry)
       if entry.id == coro_id and entry.order == waiting.order then return end
-      if not still_waiting(waiting) then failure("was cancelled (or rescheduled) before it woke") end
+      if not still_waiting(waiting) then failure("was canceled (or rescheduled) before it woke") end
     end
     failure("never woke")
   end
@@ -1952,7 +1952,7 @@ local function make_fileselect()
     fileselect.redraw()
   end
   -- Test helper: close the selector the way fs.exit does, with `path`
-  -- chosen, or cancelled when path is nil
+  -- chosen, or canceled when path is nil
   function fileselect.close(path)
     local request = assert(fileselect.last, "the file selector is not open")
     menu_init_redraw()
