@@ -5,10 +5,12 @@
 -- E3 sets its level, K2 plays/stops, K3 turns the step on or off; ALT+E2
 -- moves to another voice's row (the selected voice follows), ALT+E3 the
 -- tempo, ALT+K2 clears and ALT+K3 randomizes the voice's pattern. The
--- header shows the tempo (header_status). Pattern edits go through the
--- sequencer (lib/sequencer.lua) and call grid_redraw(). Registers its
--- S.registry.pages record (every field but the arc fields, which are
--- lib/arc/seq.lua's).
+-- header shows the tempo (header_status). E3 (and arc ring 2,
+-- lib/arc/seq.lua) set the step's level in S.patterns directly, within
+-- bounds; clear and randomize call the sequencer's clear_pattern and
+-- randomize_pattern (lib/sequencer.lua). Every pattern edit calls
+-- grid_redraw(). Registers its S.registry.pages record (every field but
+-- the arc fields, which are lib/arc/seq.lua's).
 
 return function(S)
   local M = {}
@@ -82,10 +84,6 @@ return function(S)
     screen.rect(SEQ_PAGE.cells_x + (cursor_step() - 1) * SEQ_PAGE.cell_spacing - 1, cursor_y - 1,
       SEQ_PAGE.cell_size + 2, SEQ_PAGE.cell_size + 2)
     screen.stroke()
-
-    -- the playing column moves without anything else asking for a redraw:
-    -- while the patterns play, each frame asks for the next
-    if playing then request_redraw() end
   end
 
   -- The hint row (redraw() draws it after the page)

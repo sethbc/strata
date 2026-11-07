@@ -2,9 +2,11 @@
 -- Static Lua <-> SuperCollider command sync check.
 -- Extracts every engine.<name>(...) call from strata.lua and lib/**/*.lua
 -- (the script's Lua files) and every
--- this.addCommand(\<name>, "<sig>", ...) from lib/Engine_Strata.sc (skipping
--- commented-out ones), then checks that the two name sets are equal and that
--- every Lua call passes exactly as many arguments as its signature declares.
+-- this.addCommand(\<name>, "<sig>", ...) from the engine source,
+-- lib/Engine_Strata.sc and lib/engine/*.sc (stubs.engine_sources; skipping
+-- commented-out ones), then checks that the two name sets are equal and
+-- that every Lua call passes exactly as many arguments as its signature
+-- declares.
 -- Any other use of `engine` is an error, because the check cannot see what
 -- it calls: engine[name](...), engine.voiceOn passed or stored without a
 -- call (local f = engine.voiceOn), engine:method(), a call without
@@ -265,7 +267,7 @@ function sync_check.lua_sources(repo_root)
 end
 
 function sync_check.run(repo_root)
-  return sync_check.check_sources(sync_check.lua_sources(repo_root), read_file(repo_root .. "/lib/Engine_Strata.sc"))
+  return sync_check.check_sources(sync_check.lua_sources(repo_root), stubs.engine_sources(repo_root))
 end
 
 sync_check.sanitize_lua = sanitize_lua

@@ -67,9 +67,10 @@
 --     folder's <file>.lua, every call (stubs.install's module_sources
 --     replaces a file's text)
 -- The engine stub validates every engine.* call against the addCommand
--- signatures parsed from lib/Engine_Strata.sc, and range-checks indices,
+-- signatures parsed from the engine source (lib/Engine_Strata.sc and
+-- lib/engine/*.sc, stubs.engine_sources), and range-checks indices,
 -- enumerated values, setVoiceParam/setGrainParam names and continuous values
--- against the limits and SynthDef controls parsed from the same file
+-- against the limits and SynthDef controls parsed from the same source
 -- (stubs.parse_engine_spec), plus the ranges CLAUDE.md documents for
 -- arguments the engine does not clip (DOCUMENTED_LIMITS).
 
@@ -89,11 +90,53 @@ end
 -- engine command signatures (parsed from the SC engine)
 ---------------------------------------------------------------------------
 
-local function read_engine_source(sc_path)
-  local file = assert(io.open(sc_path, "r"))
+local function read_text(path)
+  local file = assert(io.open(path, "r"))
   local source = file:read("*a")
   file:close()
   return source
+end
+
+-- The engine's source: lib/Engine_Strata.sc first, then every
+-- lib/engine/*.sc in sorted order, each after a "// file: <path>" line (so
+-- a parse error can name the file it is in). Every parser of the engine
+-- reads this text.
+function stubs.engine_files(repo_root)
+  local paths = {}
+  local listing = assert(io.popen('ls -1 "' .. repo_root .. '/lib/engine" 2>/dev/null'))
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    if name:match("%.sc$") then table.insert(paths, "lib/engine/" .. name) end
+  end
+  listing:close()
+  table.sort(paths)
+  table.insert(paths, 1, "lib/Engine_Strata.sc")
+  return paths
+end
+
+function stubs.engine_sources(repo_root)
+  local parts = {}
+  for _, path in ipairs(stubs.engine_files(repo_root)) do
+    local text = read_text(repo_root .. "/" .. path)
+    if text:sub(-1) ~= "\n" then text = text .. "\n" end
+    table.insert(parts, "// file: " .. path .. "\n" .. text)
+  end
+  return table.concat(parts)
+end
+
+-- "line N" of the engine source at position (counted in the whole text),
+-- and, when engine_sources' "// file:" lines are there, the file and the
+-- line in it
+local function engine_location(source, position)
+  local before = source:sub(1, position)
+  local _, newlines = before:gsub("\n", "")
+  local where = "line " .. (newlines + 1)
+  local marker_start, path
+  for start, found in before:gmatch("()// file: (%S+)\n") do marker_start, path = start, found end
+  if path then
+    local _, marker_lines = source:sub(1, marker_start):gsub("\n", "")
+    where = where .. " (" .. path .. ":" .. (newlines - marker_lines) .. ")"
+  end
+  return where
 end
 
 -- SuperCollider source with its // line comments and /* */ block comments
@@ -105,20 +148,22 @@ end
 -- Every parser of the engine source goes through it: the ones below,
 -- engine_spec_from_source, sync_check.lua (which uses
 -- engine_signatures_from_source) and the CLAUDE.md table check (which uses
--- parse_engine_signatures).
+-- parse_engine_signatures). engine_sources' "// file: <path>" lines are
+-- kept, so the parsers can tell where a file ends and name it in errors.
 function stubs.strip_sc_comments(source)
   local output = {}
   local index, length = 1, #source
   local function blank(text) return (text:gsub("[^\n]", " ")) end
   local function unterminated(what, start)
-    local _, newlines = source:sub(1, start):gsub("\n", "")
-    error(string.format("engine source: unterminated %s from line %d", what, newlines + 1), 0)
+    error(string.format("engine source: unterminated %s from %s", what, engine_location(source, start)), 0)
   end
   while index <= length do
     local char, two = source:sub(index, index), source:sub(index, index + 1)
     if two == "//" then
       local finish = (source:find("\n", index, true) or (length + 1)) - 1
-      table.insert(output, blank(source:sub(index, finish)))
+      local line = source:sub(index, finish)
+      local file_marker = (index == 1 or source:sub(index - 1, index - 1) == "\n") and line:match("^// file: %S+$")
+      table.insert(output, file_marker and line or blank(line))
       index = finish + 1
     elseif two == "/*" then
       local depth, cursor = 1, index + 2
@@ -159,8 +204,9 @@ function stubs.engine_signatures_from_source(source)
   return signatures
 end
 
-function stubs.parse_engine_signatures(sc_path)
-  return stubs.engine_signatures_from_source(read_engine_source(sc_path))
+-- The parse_* functions take the engine's source text (engine_sources)
+function stubs.parse_engine_signatures(source)
+  return stubs.engine_signatures_from_source(source)
 end
 
 -- engine polls (this.addPoll(\name, ...) in the SC engine)
@@ -172,17 +218,19 @@ function stubs.engine_polls_from_source(source)
   return names
 end
 
-function stubs.parse_engine_polls(sc_path)
-  return stubs.engine_polls_from_source(read_engine_source(sc_path))
+function stubs.parse_engine_polls(source)
+  return stubs.engine_polls_from_source(source)
 end
 
 -- The engine's limits and SynthDef controls, for the engine stub's range and
 -- name checks. Everything is read from the SC source, so a limit or control
 -- changed there needs no stub change:
 --   num_voices, num_buffers,  var <numVoices = N; var <numBuffers = N;
---   buffer_seconds,           var <bufferSeconds = N;
---   buffer_state_stride       var <bufferStateStride = N;
+--   buffer_seconds,           var <>bufferSeconds = N;
+--   buffer_state_stride       bufferStateStride { ^N }
 --   num_mod_slots             var <numModSlots = N; (the slots the crossmod commands accept)
+--                             (each number is read as `var <name = N;`, with
+--                             any of < and >, or as a method `name { ^N }`)
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
@@ -202,24 +250,31 @@ end
 --   voice_synthdefs[i]        voiceSynthDefs = [...], i = engine voice + 1
 --   mod_slots                 modBus1..N on every voice SynthDef
 --   grain_params              setGrainParam names: every control of the
---                             grain SynthDefs (grainDefFor), whichever the
+--                             grain SynthDefs (the areas' grainDefs:
+--                             [predicate -> \name, ...]), whichever the
 --                             voice uses now (the engine keeps the value for a
---                             source switch), plus the names the command
---                             handles itself (param == \name)
+--                             source switch), plus the names an area handles
+--                             itself (the keys of its grainParamHandlers: (...))
+--                             and any `param == \name` in setGrainParam
 --   voice_params[i]           setVoiceParam names: the voice's SynthDef's
 --                             controls (bend is one), plus any `param == \name`
 --   enumerations[name]        {low, high}: whole-number controls the engine
 --                             rounds (name.round.clip(low, high)), and envShape
 --                             (0 = Hann, 1..envBuffers.size, envBufnumFor)
--- Comments are stripped first (strip_sc_comments).
-local function engine_number(source, pattern, what)
-  return tonumber((assert(source:match(pattern), "engine source: cannot find " .. what)))
+-- Comments are stripped first (strip_sc_comments). A part the source does
+-- not hold is left out (nil, or an empty table), so a fragment parses too;
+-- stubs.engine_spec_problems lists what the whole engine must have.
+local function engine_number(source, name)
+  local value = source:match("var%s+[<>]*" .. name .. "%s*=%s*(%d+)%s*;")
+    or source:match("%f[%w_]" .. name .. "%s*{%s*%^%s*(%d+)%s*}")
+  return tonumber(value)
 end
 
--- The source of one addCommand's function, up to the next addCommand
+-- The source of one addCommand's function, up to the next addCommand or
+-- the end of its file
 local function engine_command_body(source, name)
   local start = assert(source:find("addCommand%(%s*\\" .. name .. "%f[^%w]"), "engine source: no addCommand \\" .. name)
-  local finish = source:find("addCommand%(", start + 1) or #source
+  local finish = math.min(source:find("addCommand%(", start + 1) or #source, source:find("\n// file: ", start, true) or #source)
   return source:sub(start, finish)
 end
 
@@ -228,10 +283,15 @@ local function engine_special_params(source, name, into)
   return into
 end
 
--- The text of the { ... } block whose "{" is at open_index (strings, quoted
+-- The text of the { ... } block whose "{" is at open_index, or the ( ... )
+-- or [ ... ] block when that is the character there (strings, quoted
 -- symbols and $x characters skipped; comments are already stripped, and
--- strip_sc_comments has checked that every string ends)
+-- strip_sc_comments has checked that every string ends). Only the block's
+-- own kind of bracket is counted.
+local CLOSING = { ["{"] = "}", ["("] = ")", ["["] = "]" }
 local function engine_block(source, open_index)
+  local open = source:sub(open_index, open_index)
+  local close = CLOSING[open]
   local depth, cursor = 0, open_index
   while cursor <= #source do
     local char = source:sub(cursor, cursor)
@@ -242,16 +302,43 @@ local function engine_block(source, open_index)
       end
     elseif char == "$" then
       cursor = cursor + (source:sub(cursor + 1, cursor + 1) == "\\" and 2 or 1)
-    elseif char == "{" then
+    elseif char == open then
       depth = depth + 1
-    elseif char == "}" then
+    elseif char == close then
       depth = depth - 1
       if depth == 0 then return source:sub(open_index, cursor) end
     end
     cursor = cursor + 1
   end
-  local _, newlines = source:sub(1, open_index):gsub("\n", "")
-  error(string.format("engine source: unbalanced { from line %d", newlines + 1), 0)
+  error(string.format("engine source: unbalanced %s from %s", open, engine_location(source, open_index)), 0)
+end
+
+-- The keys of an Event literal's text "( key: value, ... )": the names
+-- followed by ":" at its top level
+local function event_keys(block)
+  local keys, depth = {}, 0
+  local index = 2
+  while index < #block do
+    local char = block:sub(index, index)
+    if char == '"' or char == "'" then
+      index = index + 1
+      while index < #block and block:sub(index, index) ~= char do
+        index = index + (block:sub(index, index) == "\\" and 2 or 1)
+      end
+    elseif char == "{" or char == "(" or char == "[" then
+      depth = depth + 1
+    elseif char == "}" or char == ")" or char == "]" then
+      depth = depth - 1
+    elseif depth == 0 then
+      local key, after = block:match("^([%a_][%w_]*)%s*:()", index)
+      if key and not block:sub(index - 1, index - 1):match("[%w_]") then
+        table.insert(keys, key)
+        index = after - 1
+      end
+    end
+    index = index + 1
+  end
+  return keys
 end
 
 -- `.clip(low, high)` with two literal numbers
@@ -287,11 +374,11 @@ end
 function stubs.engine_spec_from_source(source)
   source = stubs.strip_sc_comments(source)
   local spec = {
-    num_voices = engine_number(source, "var%s+<?numVoices%s*=%s*(%d+)", "numVoices"),
-    num_buffers = engine_number(source, "var%s+<?numBuffers%s*=%s*(%d+)", "numBuffers"),
-    buffer_seconds = engine_number(source, "var%s+<?bufferSeconds%s*=%s*(%d+)", "bufferSeconds"),
-    buffer_state_stride = engine_number(source, "var%s+<?bufferStateStride%s*=%s*(%d+)", "bufferStateStride"),
-    num_mod_slots = engine_number(source, "var%s+<?numModSlots%s*=%s*(%d+)", "numModSlots"),
+    num_voices = engine_number(source, "numVoices"),
+    num_buffers = engine_number(source, "numBuffers"),
+    buffer_seconds = engine_number(source, "bufferSeconds"),
+    buffer_state_stride = engine_number(source, "bufferStateStride"),
+    num_mod_slots = engine_number(source, "numModSlots"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},
@@ -302,8 +389,8 @@ function stubs.engine_spec_from_source(source)
     voice_params = {},
     enumerations = {},
   }
-  spec.input_source = spec.num_buffers
-    + engine_number(source, "inputSource%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}", "inputSource")
+  local input_offset = tonumber(source:match("inputSource%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}"))
+  spec.input_source = spec.num_buffers and input_offset and (spec.num_buffers + input_offset)
 
   for name, position in source:gmatch("SynthDef%(%s*\\([%w_]+)%s*,%s*{()") do
     local rest = source:sub(position)
@@ -320,12 +407,13 @@ function stubs.engine_spec_from_source(source)
     spec.control_limits[name] = synthdef_control_limits(engine_block(source, position - 1), controls)
   end
 
+  local commands = stubs.engine_signatures_from_source(source)
   local fx_synthdefs = {}
   for key, name in source:gmatch("synths%[%s*\\([%w_]+)%s*%]%s*=%s*Synth%(%s*\\([%w_]+)") do
     assert(spec.synthdef_controls[name], "engine source: synths[\\" .. key .. "] plays unknown SynthDef \\" .. name)
     fx_synthdefs[key] = name
   end
-  for command in pairs(stubs.engine_signatures_from_source(source)) do
+  for command in pairs(commands) do
     local body = engine_command_body(source, command)
     local limits = {}
     for key, settings in body:gmatch("this%.setSynth%(%s*\\([%w_]+)%s*,([^;]*)%)%s*;") do
@@ -348,15 +436,16 @@ function stubs.engine_spec_from_source(source)
     if next(limits) then spec.argument_limits[command] = limits end
   end
 
-  local voice_list = assert(source:match("voiceSynthDefs%s*=%s*%[(.-)%]"), "engine source: no voiceSynthDefs")
-  for name in voice_list:gmatch("\\([%w_]+)") do
+  local voice_list = source:match("voiceSynthDefs%s*=%s*%[(.-)%]")
+  for name in (voice_list or ""):gmatch("\\([%w_]+)") do
     assert(spec.synthdef_controls[name], "engine source: voiceSynthDefs names unknown SynthDef \\" .. name)
     table.insert(spec.voice_synthdefs, name)
   end
-  assert(#spec.voice_synthdefs == spec.num_voices, "engine source: voiceSynthDefs does not list numVoices SynthDefs")
+  assert(not (voice_list and spec.num_voices) or #spec.voice_synthdefs == spec.num_voices,
+    "engine source: voiceSynthDefs does not list numVoices SynthDefs")
 
   spec.mod_slots = 0
-  while true do
+  while #spec.voice_synthdefs > 0 do
     local control = "modBus" .. (spec.mod_slots + 1)
     for _, name in ipairs(spec.voice_synthdefs) do
       if not spec.synthdef_controls[name][control] then control = nil; break end
@@ -365,15 +454,22 @@ function stubs.engine_spec_from_source(source)
     spec.mod_slots = spec.mod_slots + 1
   end
 
-  local grain_def_body = assert(source:match("grainDefFor%s*{(.-)\n%s*}"), "engine source: no grainDefFor")
-  for name in grain_def_body:gmatch("\\([%w_]+)") do
-    for control in pairs(assert(spec.synthdef_controls[name], "grainDefFor names unknown SynthDef \\" .. name)) do
-      spec.grain_params[control] = true
+  -- every area's grainDefs: [predicate -> \defName, ...]
+  for position in source:gmatch("grainDefs%s*:%s*()%[") do
+    for name in engine_block(source, position):gmatch("%->%s*\\([%w_]+)") do
+      for control in pairs(assert(spec.synthdef_controls[name], "grainDefs names unknown SynthDef \\" .. name)) do
+        spec.grain_params[control] = true
+      end
     end
   end
-  engine_special_params(source, "setGrainParam", spec.grain_params)
+  -- every area's grainParamHandlers: (name: { arg voice, value; ... }, ...)
+  for position in source:gmatch("grainParamHandlers%s*:%s*()%(") do
+    for _, name in ipairs(event_keys(engine_block(source, position))) do spec.grain_params[name] = true end
+  end
+  if commands.setGrainParam then engine_special_params(source, "setGrainParam", spec.grain_params) end
   for index, name in ipairs(spec.voice_synthdefs) do
-    spec.voice_params[index] = engine_special_params(source, "setVoiceParam", shallow_copy(spec.synthdef_controls[name]))
+    spec.voice_params[index] = shallow_copy(spec.synthdef_controls[name])
+    if commands.setVoiceParam then engine_special_params(source, "setVoiceParam", spec.voice_params[index]) end
   end
 
   for name, low, high in source:gmatch("([%a_][%w_]*)%.round%.clip%(%s*(%-?%d+)%s*,%s*(%-?%d+)%s*%)") do
@@ -382,14 +478,33 @@ function stubs.engine_spec_from_source(source)
     assert(not known or (known[1] == range[1] and known[2] == range[2]), "engine source: " .. name .. " is clipped to two ranges")
     spec.enumerations[name] = range
   end
-  local envelopes = assert(source:match("envBuffers%s*=%s*%[(.-)%]%.collect"), "engine source: no envBuffers")
-  local _, envelope_count = envelopes:gsub("Env[%.%(]", "")
-  spec.enumerations.envShape = { 0, envelope_count }
+  local envelopes = source:match("envBuffers%s*=%s*%[(.-)%]%.collect")
+  if envelopes then
+    local _, envelope_count = envelopes:gsub("Env[%.%(]", "")
+    spec.enumerations.envShape = { 0, envelope_count }
+  end
   return spec
 end
 
-function stubs.parse_engine_spec(sc_path)
-  return stubs.engine_spec_from_source(read_engine_source(sc_path))
+function stubs.parse_engine_spec(source)
+  return stubs.engine_spec_from_source(source)
+end
+
+-- What engine_spec_from_source could not find that the whole engine must
+-- have (an empty list when nothing is missing)
+function stubs.engine_spec_problems(spec)
+  local problems = {}
+  local function need(ok, what) if not ok then table.insert(problems, "engine source: cannot find " .. what) end end
+  need(spec.num_voices, "var <numVoices = N;")
+  need(spec.num_buffers, "var <numBuffers = N;")
+  need(spec.buffer_seconds, "var <>bufferSeconds = N;")
+  need(spec.buffer_state_stride, "bufferStateStride { ^N }")
+  need(spec.num_mod_slots, "var <numModSlots = N;")
+  need(spec.input_source, "inputSource { ^numBuffers + N }")
+  need(#spec.voice_synthdefs > 0, "voiceSynthDefs = [...]")
+  need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
+  need(spec.enumerations.envShape, "envBuffers = [...].collect")
+  return problems
 end
 
 -- Limits CLAUDE.md's command table documents for arguments the engine does
@@ -2068,7 +2183,7 @@ function stubs.install(options)
         local count = select("#", ...)
         local signature = context.signatures[command_name]
         if not signature then
-          error("engine." .. command_name .. " has no matching addCommand in Engine_Strata.sc", 2)
+          error("engine." .. command_name .. " has no matching addCommand in the engine (lib/Engine_Strata.sc, lib/engine/)", 2)
         end
         if count ~= #signature then
           error(string.format("engine.%s called with %d args, signature \"%s\" expects %d",

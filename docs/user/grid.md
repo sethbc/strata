@@ -11,9 +11,9 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 Each size has its own layout:
 
 - [16×16 (256)](grid/256.md) - Full featured layout with patterns, parameters, scenes, buffers and FX
-- [16×8 (128 horizontal)](grid/128h.md) - Pattern sequencing with essential controls and a scene page
-- [8×16 (128 vertical)](grid/128v.md) - Pattern sequencing optimized for vertical layout
-- [8×8 (64)](grid/64.md) - Basic pattern sequencing (8 steps per voice)
+- [16×8 (128 horizontal)](grid/128h.md) - Four pages: patterns, faders, scenes and sources (record and clear buffers)
+- [8×16 (128 vertical)](grid/128v.md) - The same four pages as the 16×8, laid out vertically; the key at (8,8) steps to the next page
+- [8×8 (64)](grid/64.md) - Pattern sequencing, 8 steps per voice, one half of the 16 at a time: tap row 8 column 1 for play/stop, hold it to switch halves; columns 2-8 toggle voices 1-7
 
 A grid of any other size stays dark.
 
@@ -22,12 +22,12 @@ A grid of any other size stays dark.
 Strata knows which keys of each grid are held, so a key can act on a hold, and a second key can change what a held key does:
 
 - **Setting a step's level** - hold a step key and press another key of the same voice: the held step's level becomes that key's share of 15 along the voice's steps (column 16 = 15, column 8 = 8, column 1 = 1; on the 8×8, column 8 = 15 and column 4 = 8; on the 8×16, down the voice's column). The second key does not toggle its own step. Press more keys while still holding to try other levels; with two steps held, the one pressed last gets the level
-- **Hold to save a scene** - a scene save key (row 3 of the scene page on the 16×16 and 16×8) saves only once held for half a second. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene
+- **Hold to save a scene** - a scene save key (row 3 of the scene page on the 16×16 and 16×8, column 3 on the 8×16) saves only once held for half a second. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved
 
 ## Pattern Sequencer Features
 
-- **16-step patterns** per voice (only steps 1-8 are visible on a 64-button grid)
+- **16-step patterns** per voice (a 64-button grid shows steps 1-8 or 9-16, as you choose)
 - **Per-voice patterns** - each voice has independent pattern
 - **Real-time recording** - toggle steps while playing
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty)

@@ -69,7 +69,7 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 -- order and spacing and fit.)
 local HEADER = {dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
   dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
-  status_play_x = 74, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
+  status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
 
 -- The params the SCENES page lists after the eight slots: its cursor's stops
 -- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)
@@ -152,8 +152,8 @@ local UNDO_SECONDS = 5
 
 -- Center detents (lib/ui/detent.lua): a param whose range spans 0 holds at
 -- 0 for the next encoder_detents encoder detents after reaching or crossing
--- it, or the next arc_ticks arc ticks
-local DETENT = {encoder_detents = 3, arc_ticks = 24}
+-- it, or the next arc_ticks arc ticks, within hold_seconds of reaching it
+local DETENT = {encoder_detents = 3, arc_ticks = 24, hold_seconds = 1}
 
 -- ALT+E3 fine adjustment: a control param moves 1 / FINE_DIVISOR of its raw
 -- step per detent (lib/ui/detent.lua)

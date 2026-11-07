@@ -138,14 +138,41 @@ test("K2 plays and stops; the playing column is brighter", function()
   assert_equal(cell(context, 2, 4).level, 1)
 end)
 
-test("SEQ asks for every frame while the patterns play, so the column moves", function()
+test("while the patterns play SEQ redraws the screen every frame and never the arc", function()
   local context, S = started_on_seq()
-  tap(2)
+  local arc_hardware = context.arc.plug(1)
   h.next_frame(context)
-  assert_true(S.constants.UI_PAGES.screen_dirty, "a frame drawn while playing asks for the next")
+  tap(2)
+  h.next_frame(context)  -- the press's own redraw
+  local counter = h.count_screen_draws()
+  local arc_refreshes = arc_hardware.refresh_count
+  for _ = 1, 3 do h.next_frame(context) end
+  counter.restore()
+  assert_equal(counter.screen, 3, "the screen draws each frame while playing")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes, "the arc does not")
+  -- the playhead moves
+  S.patterns[1][4] = 9
+  local before = S.pattern_position
+  context.clock.advance_until(S.pattern_clock)
+  assert_true(S.pattern_position ~= before, "the pattern clock advances")
+  -- stopped: no extra redraws
   tap(2)
   h.next_frame(context); h.next_frame(context)
-  assert_true(not S.constants.UI_PAGES.screen_dirty, "stopped: no redraw until something changes")
+  counter = h.count_screen_draws()
+  h.next_frame(context); h.next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 0, "stopped: no redraw until something changes")
+end)
+
+test("SEQ playing while another page shows adds no redraws", function()
+  local context, S = started_on_seq()
+  tap(2)
+  show_page("MAIN")
+  h.next_frame(context); h.next_frame(context)
+  local counter = h.count_screen_draws()
+  h.next_frame(context); h.next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 0, "patterns playing, SEQ not shown")
 end)
 
 test("ALT+K2 clears and ALT+K3 randomizes the voice's pattern", function()

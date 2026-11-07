@@ -6,16 +6,16 @@ The screen pages, and what the encoders and keys do on every page. Back to the [
 
 The screen has eight pages, in this order (each page's own controls are on its page):
 
-1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter
-2. [VOICE](pages/voice.md) - every parameter of the selected voice (a placeholder in this build)
-3. [SEQ](pages/seq.md) - the pattern sequencer (a placeholder in this build)
-4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb
-5. [LFO](pages/lfo.md) - the three LFOs
-6. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers
-7. [SCENES](pages/scenes.md) - scenes and the scene sequencer (a placeholder in this build)
-8. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes
+1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter. ALT+K2 randomizes the voice (again within 5 s to undo), ALT+K3 locks it
+2. [VOICE](pages/voice.md) - every parameter of the selected voice, in four sections. ALT+K2 resets the row to its default, ALT+K3 locks the voice
+3. [SEQ](pages/seq.md) - the pattern sequencer: all seven patterns, transport and tempo. ALT+E2 picks the voice row, ALT+E3 sets the tempo, ALT+K2 clears the voice's pattern, ALT+K3 randomizes it
+4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb. No ALT actions of its own
+5. [LFO](pages/lfo.md) - the three LFOs. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 resets the setting, ALT+K3 turns the LFO on or off
+6. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
+7. [SCENES](pages/scenes.md) - the eight scenes and the scene sequencer. ALT+K3 saves the current sound into the slot
+8. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own
 
-VOICE, SEQ and SCENES show only their name and the hint `E1:page` for now, and ignore the encoders, keys and arc. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)).
+E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP.
 
 ## E1
 
@@ -34,7 +34,7 @@ The bottom row shows the page's key hints. A short message (a saved buffer, a fa
 Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a quarter of a second (a shorter press opens the norns menu), so ALT is always a hold.
 
 - While K1 is held the hint row shows the page's ALT keys
-- **ALT+K2** and **ALT+K3** take the page's ALT actions instead of K2's and K3's. In this build no page has ALT actions yet, so they do nothing (they never run the plain K2 or K3 action)
+- **ALT+K2** and **ALT+K3** take the page's ALT actions instead of K2's and K3's. Where a page has no ALT action for a key (FX, SETUP, and ALT+K2 on SCENES) they do nothing: they never run the plain K2 or K3 action
 - A key pressed with K1 held stays an ALT press until it is released, even if K1 comes up first (on BUFFER such a K2 never opens the file browser)
 - **ALT+E2** and **ALT+E3** take a page's ALT turns where it has them; elsewhere they act as E2 and E3 (E3 in fine steps, below)
 
@@ -44,4 +44,4 @@ Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a 
 
 ## Center Detents
 
-A value whose range runs through 0 (pan, buffer scan, the cross-modulation amounts) stops at exactly 0 when a turn reaches or crosses it, even on a fast turn, and stays there for the next 3 encoder detents or 24 arc ticks; turning on past them leaves 0.
+A value whose range runs through 0 (pan, buffer scan, the cross-modulation amounts) stops at exactly 0 when a turn reaches or crosses it, even on a fast turn, and holds there for up to a second: the next 3 encoder detents or 24 arc ticks in that second stay at 0, and turning on past them, or after the second, leaves 0.

@@ -1,20 +1,22 @@
 ## Must not break
 
 - Never call `redraw()` or `arc_redraw()` from script code. Call `request_redraw()`, and the frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15). Grid redraws stay direct (`grid_redraw()`).
+- SEQ animates through the frame clock: `draw_frame` marks the screen dirty each frame while SEQ shows and `S.pattern_playing`, like the LFO page, and never the arc. A page's `draw()` never calls `request_redraw()` to animate itself (that would redraw a connected arc at 15 fps).
 - Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`. While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page.
 - Each page file creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]` and sets every field but the four arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`), which only its `lib/arc/<page>.lua` sets. `strata.lua` includes every page file before every arc file and asserts every `UI_PAGES` name has its record with `draw`, `hints`, `enc` and `key`. A test checks who sets which field.
 - A page's `draw()` draws its body only; `redraw()` draws the hint row from the "hints" flash while one shows, else from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
 - Transient texts go through `S.lib.ui_flash` (one clock per slot, canceled before a new flash in that slot starts, and at cleanup). Never give a page its own flash clock.
 - Every page draws the header at y=8 and the hint row at y=62. No two strings on a row overlap and nothing leaves 128×64. The layout tests check it on every page record with every voice, source, ALT state and flash, and each record's `layout_states` (`test/unit/ui_layout_test.lua`). A page adds layout states only through its record's `layout_states`.
+- The layout tests catch only strings that overlap on the same baseline, text off-screen, header rects under header text, the hint row and the MAIN divider. They do not catch strings on nearby baselines that collide, nor text drawn over a rect or a line in the page body: look at the page renders (Page renders below) for those.
 - The header has no `dens:`: master density is on FX's first row, MAIN's arc ring 1 and in params.
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
 - Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call, so the long-press fallback can trigger it. A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`.
-- Never call `params:delta` from an encoder or a ring: a page's `enc` calls `enc_param_delta(n, id, d)` for every param edit, a ring `arc_sweep_param` or `delta_with_detent` (a test checks `lib/pages/` and `lib/arc/`). Fine adjustment is ALT+E3 only, never ALT+E2 or the arc. A change that reaches or crosses 0 on a range through 0 lands on exactly 0, whatever the size of the delta (an accelerated encoder delta of 2-5 included).
+- Never call `params:delta` from an encoder or a ring: a page's `enc` calls `enc_param_delta(n, id, d)` for every param edit, a ring `arc_sweep_param` or `delta_with_detent` (a test checks `lib/pages/` and `lib/arc/`). Fine adjustment is ALT+E3 only, never ALT+E2 or the arc. A change that reaches or crosses 0 on a range through 0 lands on exactly 0, whatever the size of the delta (an accelerated encoder delta of 2-5 included), and holds there for 3 detents or 24 ticks, but only within `DETENT.hold_seconds` (1 s) of reaching 0: a hold never outlives that, so one left from an old turn never swallows a later detent.
 - A page change goes through `S.lib.ui_keys.set_ui_page`, which runs the records' `leave`/`enter` and forgets every carried arc tick (`forget_arc_ticks()`). Never set `S.ui_page` directly.
-- `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `clamp_all()` first.
+- `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `S.lib.pages_voice.sync_cursor()` first, never `clamp_all()` alone: `clamp_all` only clamps the index and would lose the anchored param (a source change A → B → A must come back to the same param). Code that sets the cursor outside VOICE's handlers calls `S.lib.pages_voice.place_cursor(index)`.
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
-- The lock is called lock everywhere the user reads it (`[L]`, `[LOCK]`, hints); the state and the scene field keep the name `frozen` (`S.frozen`, `toggle_lock`), so scene files load unchanged.
+- The lock is called lock everywhere the user reads it (`[L]`, hints); the state and the scene field keep the name `frozen` (`S.frozen`, `toggle_lock`), so scene files load unchanged.
 
 ## Owns
 
@@ -23,7 +25,7 @@
 - `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`. Its positions are `S.constants.HEADER` (`lib/constants.lua`).
 - `lib/ui/flash.lua` (`S.lib.ui_flash`): the flashes, `S.lib.ui_flash.start`, `.text`, `.cancel_all`, `.slots`, and `header_flash` (global); cleanup step 140.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.
-- `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp`, `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits). No page uses it yet.
+- `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp`, `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits). FX, VOICE, BUFFER and SETUP use it.
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter` and forgets carried arc ticks), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `long_press` (fields of `S.lib.ui_alt`). See ALT below.
 - `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); the holds at 0 (local). See Center detents and fine adjustment below.
@@ -51,7 +53,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
   - `alt_enc(n, d) -> handled`, `alt_key(n)`, `alt_key_release(n)`: the ALT layer (ALT below);
   - `key_release(n)`: a plain key's release, on the page it went down on;
   - `enter()`, `leave()`: run by `set_ui_page` on a page change;
-  - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_or_lock_selected_voice` (K3);
+  - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_stop_selected_voice` (K3; VOICE's is `start_or_stop_selected_voice`, and `toggle_lock` locks);
   - `header_status() -> string|nil`: a text that replaces the header's indicators (Header and flashes);
   - `layout_states`: an array of `{name, setup = function(context)}` the layout tests (`test/unit/ui_layout_test.lua`) and the page renders draw, each on a fresh script with the page shown.
 - Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)` (`docs/notes/lua/arc-core.md`).
@@ -71,7 +73,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Eight page dots: 2×2 filled rects (`dot_size`) at y 4 (`dot_y`) from x 40 (`dots_x`), 4 px apart (`dot_spacing`), so x 40-69. The current page's at level 15 (`current_dot_level`), the rest at 3 (`dot_level`).
 - Indicators, each only while active: `[M]` at x 76 (`mutation_x`, level 6) while `mutation_enabled` is 1 (abbreviated to make room for the play mark, `REC` and the scene); the play mark at x 90 (`play_x`) while `S.pattern_playing`; `REC` at x 96 (`rec_x`, level 15) while any `S.buffers[slot].recording`.
 - The play mark is a filled 3×5 triangle pointing right: three 1-px-wide rects, 5, 3 and 1 px tall, from y 3 (`play_y`), level 15.
-- A record with `header_status()` returning a string: the text at x 79 (`status_x`, level 10, cut with `fit_text` to end by x 114) and the play mark at x 74 (`status_play_x`, while patterns play) replace `[M]`, the play mark and `REC`. Returning nil keeps the indicators. The dots stay.
+- A record with `header_status()` returning a string: the text at x 79 (`status_x`, level 10, cut with `fit_text` to end by x 114) and the play mark at x 73 (`status_play_x`, while patterns play; three clear pixels before the text) replace `[M]`, the play mark and `REC`. Returning nil keeps the indicators. The dots stay.
 - Scene indicator `S1`-`S8` (`S.current_scene`) right-aligned at x 127 (`scene_right`): level 10 while the scene sequencer runs, 6 when static.
 - No `dens:`: master density left the header.
 - The design's x 80/94/100 put `REC` over a right-aligned `S8` under the layout test's width estimate; 76/90/96 keep the same order and spacing and fit.
@@ -122,8 +124,8 @@ The long-press fallback (design §2): if the hardware check rejects K1 as ALT, a
 - Pages: `enc_param_delta(n, param_id, d)` (global) is `delta_with_detent(param_id, d, {fine = n == 3 and S.alt_held})`. Every page's `enc` calls it for a param edit (MAIN, FX, LFO and BUFFER E3, SETUP E2 and E3), so fine adjustment reaches E3 only: ALT+E2 stays whole steps.
 - Rings: `arc_sweep_param(id, ticks)` (`lib/arc/core.lua`) is `delta_with_detent(id, nil, {arc_ticks = ticks})`; the LFO page's whole-value rings call `delta_with_detent(id, steps)`.
 - The change. Encoders: `d` detents, as `params:delta` takes them. A control param's raw value moves `d * quantum` through `params:set_raw` (what `Control:delta` does), or `d * quantum / FINE_DIVISOR` (10) with `opts.fine`; number and option params go through `params:delta` in whole steps and ignore `fine`. Arc (`opts.arc_ticks = n`, control params only): the raw value moves `n / UI_PAGES.ARC_TICKS_PER_SWEEP`. A param's `controlspec.step` still rounds the value read back, so a coarse param moves more slowly under fine adjustment, not more finely.
-- The detent, for a param whose range spans 0 (`param_spans_zero`: a control or number param with `min < 0 < max`; option params and wrapping specs never): a change from a non-zero value whose result is 0 or has the other sign sets exactly 0 (`params:set(id, 0)`) and starts a hold, however large the change. While the hold lasts and the value is still 0, each change uses up `|d|` detents or `|n|` ticks and leaves the value at 0; the change that uses up more than is left ends the hold and applies in full, from 0. A hold ends too when the value is found away from 0 (something else moved it).
-- A hold is `DETENT.encoder_detents` (3) detents or `DETENT.arc_ticks` (24) ticks (`lib/constants.lua`). Holds are kept per param id in units both turn kinds use up in whole numbers (a whole hold is 3 × 24; a detent uses 24, a tick 3), so a hold the arc starts and an encoder finishes lasts as long.
+- The detent, for a param whose range spans 0 (`param_spans_zero`: a control or number param with `min < 0 < max`; option params and wrapping specs never): a change from a non-zero value whose result is 0 or has the other sign sets exactly 0 (`params:set(id, 0)`) and starts a hold, however large the change. While the hold lasts and the value is still 0, each change uses up `|d|` detents or `|n|` ticks and leaves the value at 0; the change that uses up more than is left ends the hold and applies in full, from 0. A hold ends too when the value is found away from 0 (something else moved it), and when `DETENT.hold_seconds` (1 s) have passed since it started (`util.time()` is stored with the hold): an expired hold swallows nothing, so a value set back to 0 by something else (two scene recalls, say) never keeps an old hold.
+- A hold is `DETENT.encoder_detents` (3) detents or `DETENT.arc_ticks` (24) ticks within `DETENT.hold_seconds` (1 s) (`lib/constants.lua`). Holds are kept per param id in units both turn kinds use up in whole numbers (a whole hold is 3 × 24; a detent uses 24, a tick 3), so a hold the arc starts and an encoder finishes lasts as long.
 - `param_default(id)`: a control param's `controlspec.default` (a spec without one: `spec:map(0)`, where norns starts it), or a number or option param's `default`.
 
 ## Key releases and the norns menu
@@ -136,15 +138,15 @@ Releases:
 
 Keys held into the menu:
 - The norns menu (K1, PARAMS, its file selector) takes every key while open (`_menu.key` is the menu's handler), so a key released there never reaches `key()`.
-- `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2` whenever `norns.menu.status()` is true.
-- Without it, a K2 released in the menu would stay held and every BUFFER K3 would save instead of record.
+- `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page`, `S.key_press_alt` and `S.alt_held` whenever `norns.menu.status()` is true.
+- Without it, a key released in the menu would stay held on the page it went down on.
 - It also runs the moment the menu opens. Every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call.
 - So `watch_menu_opening()` (from its start step, `START_ORDER.menu_watch`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
 - The wrapper holds norns' function and `forget_keys_held_through_menu` as upvalues (no script-global lookup).
 - `unwatch_menu_opening()`, cleanup's second step (after the tempo handler, before anything that can fail), puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper. Otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`).
 - The 10 Hz tick stays as a fallback.
 - norns has no key-state query.
-- A file selector opened from play mode, as BUFFER K2 does, keeps `norns.menu.status()` false and takes the keys through the global `key`. It opens on K2's release, so only a K3 or K1 (ALT) held at that moment can be released there. `buffer_key_release` therefore calls `forget_held_keys()` just before `fileselect.enter`. `forget_held_keys` is a global: it clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2`, and is also the body of `forget_keys_held_through_menu`.
+- A file selector opened from play mode, as BUFFER K2 does, keeps `norns.menu.status()` false and takes the keys through the global `key`. It opens on K2's release, so only a K3 or K1 (ALT) held at that moment can be released there. `buffer_key_release` therefore calls `forget_held_keys()` just before `fileselect.enter`. `forget_held_keys` is a global: it clears `S.key_press_page`, `S.key_press_alt` and `S.alt_held`, and is also the body of `forget_keys_held_through_menu`.
 
 ## Redraws
 
@@ -153,7 +155,7 @@ Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in init's last start step, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
 - `draw_frame()` clears each dirty flag and calls the global `redraw()` and/or `arc_redraw()`. A burst of arc turns, encoder steps, MIDI or param changes costs one screen draw and one arc redraw per frame, and an idle frame draws nothing.
 - Both flags start set, so the first frame draws the screen and any arc connected at start.
-- On the LFO page `draw_frame` marks the screen dirty every frame, so the dots move. The LFO page has no clock of its own.
+- On the LFO page, and on SEQ while `S.pattern_playing`, `draw_frame` marks the screen dirty every frame (screen only, never the arc), so the dots and the playing column move. Neither page has a clock of its own.
 
 Draw errors:
 - Each draw runs through `draw_frame_part(part, draw)` (`part` is `"screen"` or `"arc"`): an `xpcall` with `draw_error_report`, which returns a key and the error with its traceback.

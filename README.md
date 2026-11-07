@@ -6,7 +6,7 @@ An ambient granular soundscape generator for monome norns.
 
 Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
-This is version 3.0.2. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. See [CHANGELOG.md](CHANGELOG.md).
+This is version 3.1.0. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. Version 3.1 makes everything playable from the norns alone: new VOICE, SEQ and SCENES pages, K1 held as ALT, lock and randomize undo, fine adjustment, arc rings on every page but SETUP and fuller layouts for the smaller grids. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -15,7 +15,8 @@ This is version 3.0.2. Version 3.0 added buffers and live input, filter and dela
 - Cross-modulation between voices, three global LFOs and probability-based mutations
 - Filter, delay, reverb and a limiter on the master output
 - Eight scenes with smooth recall and a scene sequencer
-- A pattern sequencer on the grid, MIDI input, monome arc support and an eight-page screen UI
+- An eight-page screen UI that reaches every parameter, the patterns and the scenes without a grid or arc
+- A pattern sequencer (on the SEQ page and the grid), MIDI input and monome arc support
 
 ## Requirements
 
@@ -53,10 +54,10 @@ After installation with either method, restart norns or run `;restart` in maiden
 
 ## Quick Start
 
-1. The script starts with the Resonator and FM voices active
-2. Use E2 to select different voices
-3. Press K3 to start or stop the selected voice (hold K1 and press K3 to lock it)
-4. Experiment with master density (arc ring 1 on the MAIN page, or PARAMETERS) to change the overall texture
+1. The script starts with the Resonator and FM voices active, on the MAIN page
+2. Use E2 to select a voice, and E3 to adjust its main parameter (K2 moves to grain size and grain density)
+3. Press K3 to start or stop the selected voice. Hold K1 for ALT: ALT+K2 randomizes the voice (again within 5 s to undo) and ALT+K3 locks it
+4. Turn E1 to reach the other pages: VOICE for every parameter of the voice, SEQ for the patterns, FX for master density and the effects, and SCENES to save and recall scenes
 
 ## Documentation
 

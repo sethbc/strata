@@ -23,12 +23,30 @@ var names, voiceNames, grainIndices, firstGrain, other;
 var freeDuringPendingFades = { arg engine, stereoPath;
     var command = { arg name ... args; h.commandTo(engine, name, *args) };
     var fails = List.new, watcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr), waiting;
+    var sent, realAddr, nodeFrees, bufferFrees;
     engine.bufferFadeWait = 0.5;
     command.(\clearBuffer, 0);
     command.(\loadBuffer, 1, stereoPath);
     command.(\recordBuffer, 2, 0.2, 1.0);
     waiting = (0..2).every({ arg slot; engine.slotPlaying(slot) }) and: { engine.recordSynths[2].notNil };
-    h.freeEngine(engine);
+    // every message free sends, in order (free never yields, so only the
+    // engine's messages pass through the recording address meanwhile)
+    // (Server.addr_ reads addr and isLocal; Server.sendMsg, listSendMsg,
+    // sendBundle and listSendBundle all go through sendMsg and sendBundle)
+    sent = List.new; realAddr = server.addr;
+    protect {
+        server.addr = (
+            addr: realAddr.addr, port: realAddr.port, isLocal: realAddr.isLocal,
+            sendMsg: { arg self ... msg; sent.add(msg); realAddr.sendMsg(*msg) },
+            sendBundle: { arg self, time ... msgs; sent.addAll(msgs); realAddr.sendBundle(time, *msgs) }
+        );
+        h.freeEngine(engine);
+    } { server.addr = realAddr };
+    nodeFrees = sent.selectIndices({ arg msg; ["11", "/n_free", "n_free"].includesEqual(msg[0].asString) });
+    bufferFrees = sent.selectIndices({ arg msg; ["32", "/b_free", "b_free"].includesEqual(msg[0].asString) });
+    check.(nodeFrees.notEmpty and: { bufferFrees.notEmpty } and: { nodeFrees.maxItem < bufferFrees.minItem },
+        "free sends every node free before any buffer free (node frees at %, buffer frees from %)".format(
+            nodeFrees, bufferFrees.minItem));
     1.0.wait; server.sync;
     watcher.free;
     check.(waiting and: { fails.isEmpty } and: { engine.bufferFrames[1] == 0 } and: { engine.recordSynths.every(_.isNil) },
@@ -102,5 +120,7 @@ server.sync;
 check.(synthNames.(other.context.xg).size == 0, "free removes every engine node");
 check.(other.envBuffers.every({ arg buffer; buffer.bufnum.isNil }), "free frees the envelope buffers");
 check.((other.buffersL ++ other.buffersR).every({ arg buffer; buffer.bufnum.isNil }), "free frees the buffer slots");
-check.(other.inputBus.index.isNil, "free frees the input bus");
+check.(([other.inputBus, other.silentBus, other.mainBus, other.filterBus, other.delayBus, other.reverbBus]
+    ++ other.granBuses ++ other.modBuses ++ other.recordFrameBuses).every({ arg bus; bus.index.isNil }),
+    "free frees every engine bus");
 }

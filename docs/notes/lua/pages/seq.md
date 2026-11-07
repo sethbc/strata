@@ -4,7 +4,7 @@
 - Pattern edits go through the sequencer's functions or write `S.patterns[voice][step]` within bounds (voice 1..`NUM_VOICES`, step 1..`PATTERN_LENGTH`, level 0..`MAX_STEP_LEVEL`), and call `grid_redraw()`, so the grid follows. `lib/sequencer.lua` is consumed, never edited.
 - An empty step (0) is drawn as an outline, never as a filled cell at level 0 or 1, so a level-1 step never reads as empty.
 - The playing column is the step that sounded last (`(S.pattern_position - 2) % PATTERN_LENGTH + 1`): the pattern clock plays `S.pattern_position` and then advances it. It is the column the grid lights on each step.
-- While the patterns play, SEQ's `draw()` calls `request_redraw()` so the next frame draws the moving column (nothing else asks for a redraw on a step). When they stop it asks for nothing.
+- While the patterns play, the frame clock redraws SEQ's screen every frame (screen only, never the arc; the rule is in `docs/notes/lua/ui-core.md`), so the column moves. `draw()` requests no redraw. When they stop or another page shows, nothing extra draws.
 - ALT+K2/ALT+K3 are the record's `alt_key` (reached through `alt_action`), never handled in `key`. ALT+E3 changes `tempo` through `enc_param_delta` (a number param: whole BPM).
 - The arc button (`arc_button`) plays/stops, like K2; K3 is the step's on/off (design §7 lists SEQ play/stop for the button).
 

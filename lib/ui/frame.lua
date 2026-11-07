@@ -59,10 +59,13 @@ return function(S)
   -- One frame. It calls the global redraw(), so norns' swaps apply: nothing
   -- while its menu is open (redraw is norns.none then; norns redraws as the
   -- menu closes), and the file list while the file selector is open (redraw()
-  -- never draws the page then). The LFO page draws every frame: its dots move.
+  -- never draws the page then). The LFO page draws every frame (its dots
+  -- move), and so does SEQ while the patterns play (its column moves). Both
+  -- mark the screen only: the arc shows nothing that moves with them.
   -- Each flag clears before its draw, so a failed draw is not retried.
   function draw_frame()
-    if UI_PAGES[S.ui_page] == "LFO" then UI_PAGES.screen_dirty = true end
+    local page = S.ui_page
+    if page == UI_PAGES.index.LFO or (page == UI_PAGES.index.SEQ and S.pattern_playing) then UI_PAGES.screen_dirty = true end
     if UI_PAGES.screen_dirty then
       UI_PAGES.screen_dirty = false
       draw_frame_part("screen", redraw)

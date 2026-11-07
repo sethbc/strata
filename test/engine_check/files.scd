@@ -257,7 +257,8 @@ check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[saveP
 info = tempFloatFiles.value - tempFilesBefore;
 check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
 checkStaleParts.value;
-file = Engine_Strata.findMethod(\alloc);
+// alloc runs every area's allocState: the files area's calls it
+file = Engine_Strata.findMethod(\strataAreaFiles);
 data = File.readAllString(file.filenameSymbol.asString);
 data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
 check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");

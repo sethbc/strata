@@ -1,20 +1,22 @@
 -- test/unit/arc_pages_test.lua
--- The arc's rings on each page (lib/arc/main.lua, fx.lua, lfo.lua,
--- buffer.lua, and the VOICE, SEQ and SCENES stubs): mappings, sweeps and
--- drawing
+-- The arc's rings on each page (lib/arc/main.lua, voice.lua, seq.lua,
+-- fx.lua, lfo.lua, buffer.lua, scenes.lua): mappings, sweeps, whole-step
+-- rings, MAIN's ALT rings and drawing
 -- Run alone: lua test/run.lua arc_pages
 
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, find_upvalue, local_value, next_frame = h.load_strata, h.find_upvalue, h.local_value, h.next_frame
 local finish_startup, PAGE_TITLES, show_page = h.finish_startup, h.PAGE_TITLES, h.show_page
+local read_lua_sources, hint_text = h.read_lua_sources, h.hint_text
 
 test("arc rings follow the page; MAIN mapping unchanged", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
-  -- rings drawn (with at least one segment) on each page: SETUP and the stub pages none
-  local expected_rings = { MAIN = 4, VOICE = 0, SEQ = 0, FX = 4, LFO = 4, BUFFER = 4, SCENES = 0, SETUP = 0 }
+  -- rings drawn (with at least one segment) on each page: SETUP none,
+  -- SCENES two (rings 3-4 dark)
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 4, FX = 4, LFO = 4, BUFFER = 4, SCENES = 2, SETUP = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -242,24 +244,385 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
   assert_equal(params:get("lfo_depth_1"), 26, "ring 1's carry survives a selection change")
 end)
 
-test("the stub pages' rings stay dark and ignore turns", function()
+-- LEDs lit on a ring of the arc stub
+local function lit(device, ring)
+  local count = 0
+  for led = 1, 64 do
+    if device.rings[ring][led] > 0 then count = count + 1 end
+  end
+  return count
+end
+
+-- A ring drawn from 0 to fraction of a turn (arc_ring_fill)
+local function assert_ring_fraction(device, ring, fraction, where)
+  if fraction >= 1 then
+    assert_equal(lit(device, ring), 64, where .. ": all 64 LEDs at fraction 1")
+  elseif fraction <= 0 then
+    assert_equal(lit(device, ring), 0, where .. ": no LED at fraction 0")
+  else
+    assert_true(device.segments[ring], where .. ": drawn")
+    assert_near(device.segments[ring].from, 0, 1e-9, where .. ": from the top")
+    assert_near(device.segments[ring].to, fraction * math.pi * 2, 1e-9, where .. ": to fraction " .. fraction)
+  end
+end
+
+local function assert_ring_dark(device, ring, where)
+  assert_true(device.segments[ring] == nil, where .. ": no segment")
+  assert_equal(lit(device, ring), 0, where .. ": every LED dark")
+end
+
+-- Put the VOICE cursor on row index through the VOICE page's place_cursor
+-- (which moves its anchor, so sync_cursor keeps it there)
+local function place_voice_cursor(index)
+  local_value("S").lib.pages_voice.place_cursor(index)
+end
+
+test("MAIN's ALT rings are pitch, spread, level and pan", function()
   local context = load_strata(); finish_startup(context)
-  local arc_hardware = context.arc.plug(1)
-  for _, name in ipairs({ "VOICE", "SEQ", "SCENES" }) do
-    show_page(name)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("MAIN")
+  S.selected_voice = 1
+  local density = params:get("v1_grain_density")
+  local master_density = params:get("master_density")
+  key(1, 1)
+  assert_true(S.alt_held, "K1 held is ALT")
+  for ring, param_id in ipairs({ "v1_grain_pitch", "v1_grain_spread", "v1_amp", "v1_pan" }) do
+    local before = params:get(param_id)
+    context.arc.turn(1, ring, 10)
+    assert_true(params:get(param_id) > before, "ALT ring " .. ring .. " raises " .. param_id)
+  end
+  assert_equal(params:get("v1_grain_density"), density, "ALT ring 4 leaves grain density")
+  assert_equal(params:get("master_density"), master_density, "ALT ring 1 leaves master density")
+  -- pan spans 0: ring 4 draws bipolar, counter-clockwise below 0
+  params:set("v1_pan", -0.5); arc_redraw()
+  assert_near(device.segments[4].from, math.pi * 1.5, 1e-9, "pan -0.5 fills from three quarters")
+  assert_near(device.segments[4].to, math.pi * 2, 1e-9, "up to the top")
+  assert_ring_fraction(device, 3, param_fraction("v1_amp"), "ALT ring 3 shows the level")
+  assert_ring_fraction(device, 1, param_fraction("v1_grain_pitch"), "ALT ring 1 shows the pitch")
+  key(1, 0)
+  assert_true(not S.alt_held, "K1 released")
+  local pan = params:get("v1_pan")
+  context.arc.turn(1, 4, 40)
+  assert_true(params:get("v1_grain_density") > density, "without ALT ring 4 is grain density again")
+  assert_equal(params:get("v1_pan"), pan, "and not pan")
+  arc_redraw()
+  assert_ring_fraction(device, 4, param_fraction("v1_grain_density"), "ring 4 shows grain density")
+end)
+
+test("MAIN's ALT pan ring is dark and ignored for Sub", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("MAIN")
+  S.selected_voice = 4
+  assert_true(S.voices[4].params.pan == nil, "Sub has no pan")
+  key(1, 1)
+  local before = {}
+  for _, row in ipairs(voice_page_rows(4)) do
+    if row.param_id then before[row.param_id] = params:get(row.param_id) end
+  end
+  context.arc.turn(1, 4, 100)
+  for param_id, value in pairs(before) do
+    assert_equal(params:get(param_id), value, "ALT ring 4 on Sub leaves " .. param_id)
+  end
+  arc_redraw()
+  assert_ring_dark(device, 4, "Sub's ALT ring 4")
+  assert_true(device.segments[3], "ALT ring 3 (level) still drawn")
+  key(1, 0)
+end)
+
+test("an input voice's MAIN ring 3 is grain pitch", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("MAIN")
+  S.selected_voice = 1
+  params:set("v1_source", 10)   -- input
+  local size, pitch = params:get("v1_grain_size"), params:get("v1_grain_pitch")
+  context.arc.turn(1, 3, 40)
+  assert_true(params:get("v1_grain_pitch") > pitch, "ring 3 raises grain pitch")
+  assert_equal(params:get("v1_grain_size"), size, "and leaves grain size (ring 2's)")
+  arc_redraw()
+  assert_ring_fraction(device, 3, param_fraction("v1_grain_pitch"), "ring 3 shows grain pitch")
+  -- back to the synth: ring 3 is grain size again
+  params:set("v1_source", 1)
+  pitch = params:get("v1_grain_pitch")
+  context.arc.turn(1, 3, 40)
+  assert_true(params:get("v1_grain_size") > size, "a synth voice's ring 3 is grain size")
+  assert_equal(params:get("v1_grain_pitch"), pitch)
+end)
+
+test("VOICE rings follow the cursor's group of four", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("VOICE")
+  local function row_of(param_id)
+    for index, row in ipairs(voice_page_rows(S.selected_voice)) do
+      if row.param_id == param_id then return index end
+    end
+  end
+  place_voice_cursor(row_of("v1_grain_density"))
+  local group = { "v1_mod2", "v1_grain_size", "v1_grain_density", "v1_grain_pitch" }
+  for ring, param_id in ipairs(group) do
     local before = {}
-    for _, param_id in ipairs({ "master_density", "v1_grain_size", "tempo", "midi_device" }) do
-      before[param_id] = params:get(param_id)
-    end
-    for ring = 1, 4 do context.arc.turn(1, ring, 40) end
-    for param_id, value in pairs(before) do
-      assert_equal(params:get(param_id), value, name .. " rings leave " .. param_id)
-    end
-    arc_redraw()
-    for ring = 1, 4 do
-      for led = 1, 64 do
-        assert_equal(arc_hardware.rings[ring][led], 0, name .. " ring " .. ring .. " LED " .. led .. " dark")
+    for _, other in ipairs(group) do before[other] = params:get(other) end
+    context.arc.turn(1, ring, 40)
+    for _, other in ipairs(group) do
+      if other == param_id then
+        assert_true(params:get(other) > before[other], "ring " .. ring .. " raises " .. other)
+      else
+        assert_equal(params:get(other), before[other], "ring " .. ring .. " leaves " .. other)
       end
+    end
+  end
+  arc_redraw()
+  for ring, param_id in ipairs(group) do
+    assert_ring_fraction(device, ring, param_fraction(param_id), "VOICE ring " .. ring .. " (" .. param_id .. ")")
+  end
+  -- an option row in the next group: one whole value per 20 ticks
+  place_voice_cursor(row_of("v1_grain_env"))
+  local env = params:get("v1_grain_env")
+  context.arc.turn(1, 2, 19)
+  assert_equal(params:get("v1_grain_env"), env, "19 ticks do not step the envelope")
+  context.arc.turn(1, 2, 1)
+  assert_equal(params:get("v1_grain_env"), env + 1, "the 20th steps it once")
+  context.arc.turn(1, 2, -20)
+  assert_equal(params:get("v1_grain_env"), env, "20 back step it back")
+  -- a number row (a mod source) steps the same way
+  local function ring_of(param_id)
+    place_voice_cursor(row_of(param_id))
+    local rows = voice_page_rows(S.selected_voice)
+    local _, row_indices = voice_page_group(rows, S.cursors.voice)
+    for ring, index in ipairs(row_indices) do
+      if rows[index].param_id == param_id then return ring end
+    end
+  end
+  local ring = ring_of("v1_mod_source_1")
+  local source = params:get("v1_mod_source_1")
+  context.arc.turn(1, ring, 45)
+  assert_equal(params:get("v1_mod_source_1"), source + 2, "45 ticks: two whole steps")
+  -- the carry belongs to its param: another voice's row never takes it
+  context.arc.turn(1, ring, 10)   -- 15 carried for v1_mod_source_1
+  S.selected_voice = 2
+  ring = ring_of("v2_mod_source_1")
+  local other = params:get("v2_mod_source_1")
+  context.arc.turn(1, ring, 5)
+  assert_equal(params:get("v2_mod_source_1"), other, "voice 1's carried ticks never step voice 2")
+  context.arc.turn(1, ring, 15)
+  assert_equal(params:get("v2_mod_source_1"), other + 1, "20 of its own ticks do")
+end)
+
+test("VOICE rings past the last row are dark and ignored", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  params:set("v1_source", 2)   -- buffer 1: 22 rows, the last group holds two
+  show_page("VOICE")
+  local rows = voice_page_rows(1)
+  place_voice_cursor(#rows)
+  local _, group = voice_page_group(rows, S.cursors.voice)
+  assert_equal(#group, 2, "the last group has two rows")
+  local before = {}
+  for _, row in ipairs(rows) do
+    if row.param_id then before[row.param_id] = params:get(row.param_id) end
+  end
+  local density = params:get("master_density")
+  for _, ring in ipairs({ 3, 4 }) do context.arc.turn(1, ring, 100) end
+  for param_id, value in pairs(before) do
+    assert_equal(params:get(param_id), value, "rings 3-4 leave " .. param_id)
+  end
+  assert_equal(params:get("master_density"), density)
+  arc_redraw()
+  assert_ring_dark(device, 3, "VOICE ring 3")
+  assert_ring_dark(device, 4, "VOICE ring 4")
+  assert_true(lit(device, 1) > 0, "ring 1 (level) drawn")
+  assert_equal(device.rings[2][1], 3, "ring 2 (pan at 0) lights its dim LED 1")
+  -- the rows shrinking under the cursor (input: 19 rows) move the group with it
+  params:set("v1_source", 10)
+  context.arc.turn(1, 4, 40)
+  arc_redraw()
+  rows = voice_page_rows(1)
+  _, group = voice_page_group(rows, S.cursors.voice)
+  assert_equal(#group, 3, "input: the last group has three rows")
+  assert_ring_dark(device, 4, "input: ring 4 dark")
+  assert_equal(rows[group[3]].param_id, "v1_pan", "the group's third row is pan")
+  assert_equal(device.rings[3][1], 3, "ring 3 shows pan at 0 (bipolar: the dim LED 1)")
+end)
+
+test("SEQ rings move the step, set its level, the tempo and the voice row", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  local C = S.constants
+  S.selected_voice = 1
+  show_page("SEQ")
+  S.cursors.seq_step = 1
+  context.arc.turn(1, 1, 10)
+  assert_equal(S.cursors.seq_step, 2, "ring 1: 10 ticks a step")
+  context.arc.turn(1, 1, 5); context.arc.turn(1, 1, 4)
+  assert_equal(S.cursors.seq_step, 2, "9 ticks carried")
+  context.arc.turn(1, 1, -9)
+  assert_equal(S.cursors.seq_step, 2)
+  context.arc.turn(1, 1, 1000)
+  assert_equal(S.cursors.seq_step, C.PATTERN_LENGTH, "the step stops at the last")
+  context.arc.turn(1, 1, -1000)
+  assert_equal(S.cursors.seq_step, 1, "and at the first")
+  context.arc.turn(1, 1, 10)
+  -- ring 2: the step's level, with the grid following
+  local grid_redraws = 0
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function(...) grid_redraws = grid_redraws + 1; return real_grid_redraw(...) end
+  S.patterns[1][2] = 0
+  context.arc.turn(1, 2, 30)
+  grid_redraw = real_grid_redraw
+  assert_equal(S.patterns[1][2], 3, "ring 2: 10 ticks a level")
+  assert_true(grid_redraws > 0, "a level edit redraws the grid")
+  context.arc.turn(1, 2, 1000)
+  assert_equal(S.patterns[1][2], C.MAX_STEP_LEVEL, "levels stop at MAX_STEP_LEVEL")
+  context.arc.turn(1, 2, -1000)
+  assert_equal(S.patterns[1][2], 0, "and at 0 (off)")
+  assert_equal(S.patterns[1][1], 0, "only the cursor's step changes")
+  -- the level carry belongs to its step
+  context.arc.turn(1, 2, 9)
+  context.arc.turn(1, 1, 10)   -- step 3
+  context.arc.turn(1, 2, 1)
+  assert_equal(S.patterns[1][3], 0, "step 2's carried ticks never set step 3")
+  -- ring 3: tempo, one BPM per 10 ticks
+  local tempo = params:get("tempo")
+  context.arc.turn(1, 3, 20)
+  assert_equal(params:get("tempo"), tempo + 2, "ring 3: 10 ticks a BPM")
+  -- ring 4: the voice row, 20 ticks a voice
+  context.arc.turn(1, 4, 19)
+  assert_equal(S.selected_voice, 1, "19 ticks keep the voice")
+  context.arc.turn(1, 4, 1)
+  assert_equal(S.selected_voice, 2, "ring 4: 20 ticks a voice")
+  context.arc.turn(1, 4, 1000)
+  assert_equal(S.selected_voice, C.NUM_VOICES, "the voice stops at the last")
+  S.patterns[C.NUM_VOICES][3] = 0
+  context.arc.turn(1, 2, 10)
+  assert_equal(S.patterns[C.NUM_VOICES][3], 1, "ring 2 edits the selected voice's row")
+end)
+
+test("SEQ and SCENES rings draw their position fractions", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local C = S.constants
+  S.selected_voice = 1
+  show_page("SEQ")
+  S.cursors.seq_step = C.PATTERN_LENGTH
+  S.patterns[1][C.PATTERN_LENGTH] = C.MAX_STEP_LEVEL
+  arc_redraw()
+  assert_ring_fraction(device, 1, 1, "SEQ ring 1 at the last step")
+  assert_ring_fraction(device, 2, 1, "SEQ ring 2 at level 15")
+  assert_ring_fraction(device, 3, param_fraction("tempo"), "SEQ ring 3 tempo")
+  assert_ring_fraction(device, 4, 0, "SEQ ring 4 at voice 1")
+  S.cursors.seq_step = 9
+  S.selected_voice = 4
+  S.patterns[4][9] = 5
+  arc_redraw()
+  assert_ring_fraction(device, 1, 8 / (C.PATTERN_LENGTH - 1), "SEQ ring 1 at step 9")
+  assert_ring_fraction(device, 2, 5 / C.MAX_STEP_LEVEL, "SEQ ring 2 at level 5")
+  assert_ring_fraction(device, 4, 3 / (C.NUM_VOICES - 1), "SEQ ring 4 at voice 4")
+  show_page("SCENES")
+  local stops = C.NUM_SCENES + #C.SCENES_FIELDS
+  S.cursors.scene = stops
+  arc_redraw()
+  assert_ring_fraction(device, 1, 1, "SCENES ring 1 at the last field")
+  assert_ring_fraction(device, 2, param_fraction("scene_transition_time"), "SCENES ring 2 transition time")
+  assert_ring_dark(device, 3, "SCENES ring 3")
+  assert_ring_dark(device, 4, "SCENES ring 4")
+  S.cursors.scene = 4
+  arc_redraw()
+  assert_ring_fraction(device, 1, 3 / (stops - 1), "SCENES ring 1 at slot 4")
+  S.cursors.scene = 1
+  arc_redraw()
+  assert_ring_fraction(device, 1, 0, "SCENES ring 1 at slot 1")
+end)
+
+test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  local C = S.constants
+  show_page("SCENES")
+  S.cursors.scene = 1
+  context.arc.turn(1, 1, 10)
+  assert_equal(S.cursors.scene, 2, "ring 1: 10 ticks a stop")
+  context.arc.turn(1, 1, 25)
+  assert_equal(S.cursors.scene, 4, "25 ticks: two stops, 5 carried")
+  context.arc.turn(1, 1, 5)
+  assert_equal(S.cursors.scene, 5, "the carry counts")
+  context.arc.turn(1, 1, 1000)
+  assert_equal(S.cursors.scene, C.NUM_SCENES + #C.SCENES_FIELDS, "past the slots into the fields, to the last")
+  context.arc.turn(1, 1, -1000)
+  assert_equal(S.cursors.scene, 1, "back to slot 1")
+  local transition = params:get("scene_transition_time")
+  context.arc.turn(1, 2, 100)
+  assert_true(params:get("scene_transition_time") > transition, "ring 2 raises the transition time")
+  local before = params:get("scene_transition_time")
+  for _, ring in ipairs({ 3, 4 }) do context.arc.turn(1, ring, 100) end
+  assert_equal(params:get("scene_transition_time"), before, "rings 3-4 do nothing")
+  assert_equal(S.cursors.scene, 1)
+  -- a cursor move disarms an overwrite confirmation, as E2 does
+  S.scenes_page.armed_slot = 1
+  S.scenes_page.armed_until = util.time() + 10
+  context.arc.turn(1, 1, 5)
+  assert_equal(S.scenes_page.armed_slot, 1, "a part-turn leaves it armed")
+  S.lib.ui_flash.start("hints", "K3 again: overwrite S1", 2, C.UI_PAGES.index.SCENES)
+  context.arc.turn(1, 1, 5)
+  assert_true(S.scenes_page.armed_slot == nil, "moving the cursor disarms")
+  assert_true(S.lib.ui_flash.text("hints") == nil, "and clears the overwrite prompt")
+  redraw()
+  assert_true(hint_text(context) ~= "K3 again: overwrite S1", "the hint row no longer asks")
+end)
+
+test("SCENES ring 1 moves the cursor through the page's move_cursor", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  show_page("SCENES")
+  local real = S.lib.pages_scenes.move_cursor
+  local targets = {}
+  S.lib.pages_scenes.move_cursor = function(slot) table.insert(targets, slot); real(slot) end
+  context.arc.turn(1, 1, 20)
+  S.lib.pages_scenes.move_cursor = real
+  assert_equal(table.concat(targets, ","), "3", "two stops from slot 1: move_cursor(3)")
+  assert_equal(S.cursors.scene, 3, "the cursor moved")
+end)
+
+test("page and arc files keep to their record fields", function()
+  local ARC_FIELDS = { arc_delta = true, arc_redraw = true, arc_alt_delta = true, arc_alt_redraw = true }
+  local PAGE_FIELDS = { "name", "draw", "hints", "enc", "key", "alt_enc", "alt_key", "key_release",
+    "alt_key_release", "enter", "leave", "arc_button", "header_status", "layout_states" }
+  local files = { ["lib/arc/main.lua"] = true, ["lib/arc/voice.lua"] = true,
+    ["lib/arc/seq.lua"] = true, ["lib/arc/scenes.lua"] = true }
+  local seen = 0
+  for _, source in ipairs(read_lua_sources()) do
+    if files[source.path] then
+      seen = seen + 1
+      local sanitized = h.sync_check.sanitize_lua(source.text)
+      local fields = {}
+      for field in sanitized:gmatch("%.([%a_][%w_]*)%s*=[^=]") do fields[field] = true end
+      for field in sanitized:gmatch("[{,]%s*([%a_][%w_]*)%s*=[^=]") do fields[field] = true end
+      for _, field in ipairs(PAGE_FIELDS) do
+        assert_true(not fields[field], source.path .. " sets the page field " .. field)
+      end
+      assert_true(fields.arc_delta and fields.arc_redraw, source.path .. " sets arc_delta and arc_redraw")
+    end
+  end
+  assert_equal(seen, 4, "the four ring files this package owns")
+  load_strata()
+  local S = local_value("S")
+  for _, name in ipairs({ "MAIN", "VOICE", "SEQ", "SCENES" }) do
+    local record = S.registry.pages[S.constants.UI_PAGES.index[name]]
+    for field in pairs(ARC_FIELDS) do
+      local wanted = name == "MAIN" or (field ~= "arc_alt_delta" and field ~= "arc_alt_redraw")
+      assert_equal(type(record[field]), wanted and "function" or "nil", name .. "." .. field)
     end
   end
 end)
