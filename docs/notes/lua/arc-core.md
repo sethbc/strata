@@ -36,7 +36,7 @@
 The arc follows the screen page (`S.ui_page`):
 - `arc_delta(n, delta)` calls the current page record's `arc_delta(ring, delta)` (`S.registry.pages[S.ui_page]`), then requests a redraw.
 - `arc_redraw` runs `S.lib.ui_cursors.clamp_all()`, clears the rings, calls the record's `arc_redraw(S.arc_device)` and refreshes.
-- While ALT is held (`S.alt_held`), both use the record's `arc_alt_delta`/`arc_alt_redraw` instead, when it has them; a page without ALT rings keeps its plain ones under ALT (`page_ring_handler`). K1 requests a redraw, so the rings switch at once. No page has ALT rings yet.
+- While ALT is held (`S.alt_held`), both use the record's `arc_alt_delta`/`arc_alt_redraw` instead, when it has them; a page without ALT rings keeps its plain ones under ALT (`page_ring_handler`). K1 requests a redraw, so the rings switch at once. MAIN is the page with ALT rings (`lib/arc/main.lua`, `docs/notes/lua/arc-pages.md`).
 - A record without ring handlers ignores turns and leaves the rings off (and `arc_delta` still requests a redraw).
 - A page change (`set_ui_page` in `lib/ui/keys.lua`) forgets every carried tick (`forget_arc_ticks()`), so ticks turned on one page never step a param on another.
 - `enc` calls `request_redraw()`, which marks the arc dirty too, so changing page redraws the rings.
@@ -44,7 +44,7 @@ The arc follows the screen page (`S.ui_page`):
 `arc_key(n, s)` handles the button (2025 arc models):
 - A press calls the shown page record's `arc_button()` and requests a redraw, on whichever page is up; a release does nothing, and so does a press on a page whose record has no `arc_button`.
 - The record is found by index (`S.registry.pages[S.ui_page]`), never by the title string.
-- Today only MAIN has one (`start_or_lock_selected_voice`, as K3).
+- Each page file sets its own (`lib/pages/<page>.lua`, the page's main action: MAIN and VOICE start or stop the selected voice, SEQ plays or stops, SCENES recalls at once, ...); FX and SETUP have none.
 
 ## Input
 
