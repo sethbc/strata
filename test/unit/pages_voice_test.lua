@@ -28,16 +28,14 @@ local function cursor_param(S)
   return voice_page_rows(S.selected_voice)[S.cursors.voice].param_id
 end
 
--- Put the VOICE cursor on param_id (a row of the selected voice) and redraw
+-- Put the VOICE cursor on param_id (a row of the selected voice), as a
+-- deliberate move, and redraw
 local function put_cursor(S, param_id)
-  for index, row in ipairs(voice_page_rows(S.selected_voice)) do
-    if row.param_id == param_id then
-      S.cursors.voice = index
-      redraw()
-      return index
-    end
-  end
-  error("no VOICE row " .. param_id)
+  local index = S.lib.pages_voice.row_of(param_id)
+  assert_true(index, "no VOICE row " .. param_id)
+  S.lib.pages_voice.place_cursor(index)
+  redraw()
+  return index
 end
 
 -- The drawn field label text and the value drawn on the same row
@@ -238,6 +236,63 @@ test("a source or voice change keeps the cursor on its param when it still exist
   local rows = voice_page_rows(1)
   assert_true(rows[S.cursors.voice].selectable, "a selectable row")
   assert_equal(rows[S.cursors.voice].section, "synth", "in voice 1's synth section")
+end)
+
+test("a change and back (A -> B -> A) returns the cursor to its param", function()
+  local context, S = started_voice_page()
+  -- source: synth -> input -> synth while MAIN shows (its redraws clamp)
+  put_cursor(S, "v1_pan")
+  show_page("MAIN")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  redraw()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  redraw()
+  show_page("VOICE")
+  assert_equal(cursor_param(S), "v1_pan", "pan again after input and back")
+  -- voice: 1 -> 4 (Sub, no pan) -> 1, as scrolling voices on MAIN does
+  show_page("MAIN")
+  for _ = 1, 3 do enc(2, 1); redraw() end
+  assert_equal(S.selected_voice, 4, "MAIN's E2 selects voice 4")
+  for _ = 1, 3 do enc(2, -1); redraw() end
+  assert_equal(S.selected_voice, 1)
+  show_page("VOICE")
+  assert_equal(cursor_param(S), "v1_pan", "pan again after voice 4 and back")
+  -- the param missing in between: on voice 4 the cursor is clamped, then
+  -- back on voice 1 it is on pan again
+  S.selected_voice = 4
+  redraw()
+  assert_true(voice_page_rows(4)[S.cursors.voice].selectable, "a selectable row on Sub")
+  S.selected_voice = 1
+  redraw()
+  assert_equal(cursor_param(S), "v1_pan", "pan again")
+  -- a deliberate move on voice 4 anchors there instead
+  S.selected_voice = 4
+  put_cursor(S, "v4_amp")
+  S.selected_voice = 1
+  redraw()
+  assert_equal(cursor_param(S), "v1_amp", "the newer anchor wins")
+end)
+
+test("sync_cursor is idempotent and never moves the anchor", function()
+  local context, S = started_voice_page()
+  local voice_page = S.lib.pages_voice
+  put_cursor(S, "v1_grain_pitch")
+  local rows, cursor = voice_page.sync_cursor()
+  assert_equal(rows[cursor].param_id, "v1_grain_pitch")
+  for _ = 1, 3 do
+    local again_rows, again = voice_page.sync_cursor()
+    assert_equal(again, cursor, "the same cursor every call")
+    assert_equal(#again_rows, #rows)
+  end
+  -- a bare write to S.cursors.voice is not a deliberate move
+  S.cursors.voice = 2
+  assert_equal(select(2, voice_page.sync_cursor()), cursor, "taken back to the anchored param")
+  -- with the param gone, repeated calls agree too
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  local first = select(2, voice_page.sync_cursor())
+  S.lib.ui_cursors.clamp_all()
+  assert_equal(select(2, voice_page.sync_cursor()), first, "unchanged by clamp_all in between")
+  assert_equal(cursor_param(S), "v1_grain_pitch")
 end)
 
 test("with an arc connected the screen marks the ring group", function()

@@ -21,6 +21,6 @@ Each value is the parameter's own text with its unit, shortened when it does not
 
 The hint row shows `K2:prev K3:next`, and with ALT (K1 held) `K2:reset K3:lock` or `K3:unlock`.
 
-When the voice's source changes (from the grid, MIDI, a scene or the mix section itself) the sections change with it. The cursor stays on its parameter when the new sections still have it (grain pitch stays on grain pitch when the synth section goes), and otherwise moves to the nearest row. Selecting another voice keeps the cursor on the same parameter of that voice where it has one.
+When the voice's source changes (from the grid, MIDI, a scene or the mix section itself) the sections change with it. The cursor stays on its parameter when the new sections still have it (grain pitch stays on grain pitch when the synth section goes), and otherwise moves to the nearest row. Selecting another voice keeps the cursor on the same parameter of that voice where it has one, and a change and back (input and back to synth, another voice and back) returns it to where it was.
 
 **Arc.** While an arc is connected, a short mark at the left edge shows the rows its four rings edit: the cursor's group of four rows (rows 1-4, 5-8, ... of the voice's list, counting only parameter rows). The arc's button starts or stops the selected voice. See [Monome Arc](../arc.md).

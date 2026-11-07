@@ -36,56 +36,63 @@ return function(S)
   }
   local LAYOUT = M.LAYOUT
 
-  -- The cursor's anchor: the param (its id without the "v<i>_" prefix), the
-  -- row index and the rows' signature it was last seen with. When the rows
-  -- change under the cursor (a source switch, another selected voice),
-  -- sync_cursor finds the param again before clamping.
-  local anchor = {key = nil, index = nil, signature = nil}
+  -- The cursor's anchor: the param it was deliberately put on (its id
+  -- without the "v<i>_" prefix) and that row's index. Only deliberate moves
+  -- set it (E2, K2/K3, place_cursor); sync_cursor only reads it, so a
+  -- source or voice change and back (A -> B -> A) finds the param again.
+  local anchor = {key = nil, index = nil}
 
   local function param_key(row)
     return row and row.param_id and row.param_id:match("^v%d+_(.+)$")
   end
 
-  local function rows_signature(rows)
-    local ids = {}
-    for index, row in ipairs(rows) do ids[index] = row.param_id or ("[" .. row.label .. "]") end
-    return table.concat(ids, " ")
+  local function anchor_on(rows, cursor)
+    anchor.key, anchor.index = param_key(rows[cursor]), cursor
   end
 
   -- Put S.cursors.voice on the selected voice's current rows and return
-  -- them with the cursor. When the rows changed since the cursor was last
-  -- seen, the cursor goes back to its param when the new rows still have it
-  -- (grain pitch stays grain pitch when the synth section goes or another
-  -- voice is selected); otherwise it is clamped from where it was. Every
-  -- VOICE handler and draw calls it before reading the cursor; the rings
-  -- can too (S.lib.pages_voice.sync_cursor).
+  -- them with the cursor: on the anchored param's row when the rows have it
+  -- (grain pitch stays grain pitch when the synth section goes, comes back
+  -- or another voice is selected), otherwise clamped from the anchored
+  -- index. Idempotent: it never moves the anchor (before the first
+  -- deliberate move it anchors where the cursor is), so calling it any
+  -- number of times, from the page or the rings, gives the same cursor
+  -- until the rows or a deliberate move change. Every VOICE handler and
+  -- draw calls it before reading the cursor; lib/arc/voice.lua calls it in
+  -- arc_delta and arc_redraw.
   function M.sync_cursor()
     local rows = voice_page_rows(S.selected_voice)
-    local signature = rows_signature(rows)
-    local cursor = S.cursors.voice
-    if anchor.key and anchor.signature ~= signature then
-      cursor = anchor.index
-      for index, row in ipairs(rows) do
-        if param_key(row) == anchor.key then
-          cursor = index
-          break
-        end
+    if anchor.key == nil then
+      anchor_on(rows, field_list.clamp(rows, S.cursors.voice))
+    end
+    local cursor
+    for index, row in ipairs(rows) do
+      if param_key(row) == anchor.key then
+        cursor = index
+        break
       end
     end
-    cursor = field_list.clamp(rows, cursor)
+    cursor = cursor or field_list.clamp(rows, anchor.index)
     S.cursors.voice = cursor
-    anchor.key, anchor.index, anchor.signature = param_key(rows[cursor]), cursor, signature
     return rows, cursor
   end
 
   -- Put the VOICE cursor on row index of the selected voice's current rows
-  -- (clamped) and anchor it there. Code that sets S.cursors.voice outside
-  -- VOICE's handlers and S.lib.ui_cursors.move calls this, so a later
-  -- sync_cursor never takes it back to the param it left.
+  -- (clamped) and anchor it there: a deliberate move. Code that sets the
+  -- VOICE cursor outside VOICE's handlers uses this; a bare
+  -- S.cursors.voice = index is taken back to the anchored param by the
+  -- next sync_cursor.
   function M.place_cursor(index)
-    S.cursors.voice = index
-    anchor.key = nil
+    local rows = voice_page_rows(S.selected_voice)
+    anchor_on(rows, field_list.clamp(rows, index))
     return M.sync_cursor()
+  end
+
+  -- The row index of param_id in the selected voice's current rows, or nil
+  function M.row_of(param_id)
+    for index, row in ipairs(voice_page_rows(S.selected_voice)) do
+      if row.param_id == param_id then return index end
+    end
   end
 
   -- The sections in rows, in order: {name, first = the first field's row index}
@@ -193,7 +200,7 @@ return function(S)
     local rows, cursor = M.sync_cursor()
     if n == 2 then
       S.lib.ui_cursors.move("voice", d)
-      M.sync_cursor()
+      M.place_cursor(S.cursors.voice)
     elseif n == 3 then
       enc_param_delta(n, rows[cursor].param_id, d)
     end
@@ -234,9 +241,14 @@ return function(S)
 
   -- The layout tests' and page renders' states: each voice with each
   -- source, the cursor on the first and the last field of every section
+  local function source_option(name)
+    for option, option_name in ipairs(S.constants.SOURCE_OPTIONS) do
+      if option_name == name then return option end
+    end
+  end
   local LAYOUT_SOURCES = {
     {name = "synth", option = S.constants.SOURCE_SYNTH},
-    {name = "buf 1", option = S.constants.SOURCE_SYNTH + 1},  -- SOURCE_OPTIONS[2]
+    {name = "buf 1", option = source_option("buf 1")},
     {name = "input", option = S.constants.SOURCE_INPUT},
   }
   local function layout_state(voice_idx, source, section, edge)
@@ -271,14 +283,14 @@ return function(S)
   -- mode with a crossmod source by name
   table.insert(layout_states, {name = "arc ring group", setup = function(context)
     context.arc.plug(1)
-    M.place_cursor(9)  -- voice 1's grain density: the group starts above the view
+    M.place_cursor(M.row_of("v1_grain_density"))  -- its ring group starts above the view
   end})
   table.insert(layout_states, {name = "locked voice", setup = function()
     S.selected_voice = 7
     toggle_lock(7)
     params:set("v7_grain_mode", 2)
     params:set("v7_mod_source_1", 5)
-    M.place_cursor(#voice_page_rows(7) - 12)  -- mod source 1
+    M.place_cursor(M.row_of("v7_mod_source_1"))
   end})
 
   -- The page's record, at VOICE's place in UI_PAGES: enc, key and redraw in
