@@ -108,13 +108,13 @@ test("VOICE draws the section and its position at the top right", function()
   local voice_text = texts_on_row(context, SECTION_Y)[1]
   assert_equal(voice_text.x, 0, "the selected voice at the left")
   assert_equal(voice_text.text, "1+ reso", "number, running mark and short name")
-  -- an input voice has no synth section: one section fewer, grain first
-  local synth_sections = #voice_sections(S)
+  -- an input voice has no synth section
   params:set("v1_source", S.constants.SOURCE_INPUT)
   redraw()
-  assert_equal(#voice_sections(S), synth_sections - 1, "an input voice has no synth section")
+  for _, section in ipairs(voice_sections(S)) do
+    assert_true(section.name ~= "synth", "an input voice has no synth section")
+  end
   expected = section_text(S, "v1_grain_density")
-  assert_true(expected:find("^grain 1/"), "an input voice's grain section is the first")
   assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
   -- crossmod and mix, and a locked, stopped voice
   put_cursor(S, "v1_mod_speed")
@@ -160,7 +160,12 @@ test("VOICE's section position counts come from voice_page_rows", function()
   params:set("v1_source", S.constants.SOURCE_INPUT)
   put_cursor(S, "v1_grain_density")
   expected = section_text(S, "v1_grain_density")
-  assert_equal(expected, "grain 1/" .. (synth_sections - 1), "an input voice's grain is first")
+  local grain_position
+  for position, section in ipairs(voice_sections(S)) do
+    assert_true(section.name ~= "synth", "an input voice has no synth section")
+    if section.name == "grain" then grain_position = position end
+  end
+  assert_equal(expected, "grain " .. grain_position .. "/" .. #voice_sections(S), "an input voice's grain")
   assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
 end)
 
@@ -242,10 +247,15 @@ test("K2 and K3 jump to the previous and next section's first field", function()
   tap(2); assert_equal(cursor_param(S), "v1_freq", "K2: synth")
   enc(2, 2)
   tap(2); assert_equal(cursor_param(S), "v1_freq", "K2 in the first section: its first field")
-  -- an input voice: grain is the first section
+  -- an input voice: no synth section, so K2 stops at its first section
+  -- (grain, or a registered section before it)
   params:set("v1_source", S.constants.SOURCE_INPUT)
+  put_cursor(S, "v1_grain_size")
   tap(3); assert_equal(cursor_param(S), "v1_mod_speed", "input: K3 from grain to crossmod")
-  tap(2); tap(2); assert_equal(cursor_param(S), "v1_grain_size", "input: K2 stops at grain")
+  sections = voice_sections(S)
+  for _ = 1, #sections do tap(2) end
+  assert_equal(cursor_param(S), sections[1].first, "input: K2 stops at the first section")
+  assert_true(sections[1].name ~= "synth", "which is not synth")
 end)
 
 test("values use the param's own string with its unit, cut to fit", function()

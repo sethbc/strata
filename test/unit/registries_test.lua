@@ -274,6 +274,31 @@ test("built-in LFO destinations keep their indices", function()
   assert_true(not ok, "a registered label never repeats a built-in one")
 end)
 
+test("the LFO page's ALT+E3 groups keep each voice and add the registered destinations", function()
+  local context = load_with(function(S)
+    S.register_voice_params(probe_record())
+    S.register_lfo_destination("probe", "probe")
+  end)
+  finish_startup(context)
+  local S = local_value("S")
+  local built_in = #built_in_lfo_labels()
+  assert_equal(S.lib.lfos.BUILT_IN_DESTINATIONS, built_in)
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 " .. (built_in + 1))
+  -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the registered group
+  h.show_page("LFO")
+  S.lfo_field = 1
+  params:set("strata_lfo1_dest", 1)
+  local landed = {}
+  key(1, 1)
+  for _ = 1, 10 do
+    enc(3, 1)
+    table.insert(landed, S.LFO_DESTINATIONS[params:get("strata_lfo1_dest")].label)
+  end
+  key(1, 0)
+  assert_equal(table.concat(landed, ","),
+    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main,v1 probe,v1 probe")
+end)
+
 test("registered fx params grow the fx group and follow its 11 params", function()
   load_with(function(S)
     S.register_fx_params({ name = "probe fx", count = 2, add = function()

@@ -7,7 +7,8 @@
 -- (add_lfo_params, which lib/params_setup.lua's lfos record calls).
 -- S.selected_lfo is the LFO the LFO page and arc ring 4 work on. The
 -- functions that were global stay global;
--- LFO_DEFAULT_PERIOD is a field of this module's table (S.lib.lfos) for the
+-- LFO_DEFAULT_PERIOD and BUILT_IN_DESTINATIONS (the LFO page's groups) are
+-- fields of this module's table (S.lib.lfos); the period for the
 -- scene defaults in lib/scenes.lua. Registers the LFOs' cleanup step.
 
 return function(S)
@@ -262,5 +263,6 @@ return function(S)
   end)
 
   M.LFO_DEFAULT_PERIOD = LFO_DEFAULT_PERIOD
+  M.BUILT_IN_DESTINATIONS = BUILT_IN_LFO_DESTINATIONS  -- the LFO page's last voice group ends here
   return M
 end

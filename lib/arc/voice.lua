@@ -5,8 +5,8 @@
 -- sweep their range like every continuous ring; option and number params
 -- step one whole value per ARC_VOICE.ticks_per_step ticks, carried under
 -- "voice:<ring>", and binary params (registered rows) the same way, as a
--- two-value option (a step up on, a step down off; the ring dark or full). Rings past the group's last row are dark and ignore
--- turns. Sets only the arc fields (arc_delta, arc_redraw) on VOICE's
+-- two-value option (a step up on, a step down off; the ring dark or full).
+-- Rings past the group's last row are dark and ignore turns. Sets only the arc fields (arc_delta, arc_redraw) on VOICE's
 -- S.registry.pages record (lib/pages/voice.lua).
 
 return function(S)

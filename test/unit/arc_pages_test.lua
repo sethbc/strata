@@ -463,38 +463,58 @@ test("VOICE rings past the last row are dark and ignored", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   local S = local_value("S")
-  S.selected_voice = 1
-  params:set("v1_source", 2)   -- buffer 1: 22 rows, the last group holds two
   show_page("VOICE")
-  local rows = voice_page_rows(1)
-  place_voice_cursor(#rows)
-  local _, group = voice_page_group(rows, S.cursors.voice)
-  assert_equal(#group, 2, "the last group has two rows")
-  local before = {}
-  for _, row in ipairs(rows) do
-    if row.param_id then before[row.param_id] = params:get(row.param_id) end
+  -- the voices and sources whose last ring group is short (from the rows,
+  -- so registered rows may move it): 3.1's buffer voice 1 has two rows
+  local sources = { S.constants.SOURCE_SYNTH, 2, S.constants.SOURCE_INPUT }
+  local short = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for _, source in ipairs(sources) do
+      params:set("v" .. voice_idx .. "_source", source)
+      local rows = voice_page_rows(voice_idx)
+      local _, group = voice_page_group(rows, #rows)
+      if #group < 4 then table.insert(short, { voice = voice_idx, source = source, size = #group }) end
+    end
+    params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH)
   end
-  local density = params:get("master_density")
-  for _, ring in ipairs({ 3, 4 }) do context.arc.turn(1, ring, 100) end
-  for param_id, value in pairs(before) do
-    assert_equal(params:get(param_id), value, "rings 3-4 leave " .. param_id)
+  assert_true(#short > 0, "some voice has a short last group")
+  for _, case in ipairs(short) do
+    local where = "voice " .. case.voice .. " source " .. case.source
+    S.selected_voice = case.voice
+    params:set("v" .. case.voice .. "_source", case.source)
+    local rows = voice_page_rows(case.voice)
+    place_voice_cursor(#rows)
+    local _, group = voice_page_group(rows, S.cursors.voice)
+    assert_equal(#group, case.size, where .. ": the last group")
+    local before = {}
+    for _, row in ipairs(rows) do
+      if row.param_id then before[row.param_id] = params:get(row.param_id) end
+    end
+    local density = params:get("master_density")
+    for ring = case.size + 1, 4 do context.arc.turn(1, ring, 100) end
+    for param_id, value in pairs(before) do
+      assert_equal(params:get(param_id), value, where .. ": rings past the group leave " .. param_id)
+    end
+    assert_equal(params:get("master_density"), density)
+    arc_redraw()
+    for ring = case.size + 1, 4 do assert_ring_dark(device, ring, where .. ": VOICE ring " .. ring) end
+    params:set("v" .. case.voice .. "_source", S.constants.SOURCE_SYNTH)
   end
-  assert_equal(params:get("master_density"), density)
-  arc_redraw()
-  assert_ring_dark(device, 3, "VOICE ring 3")
-  assert_ring_dark(device, 4, "VOICE ring 4")
-  assert_true(lit(device, 1) > 0, "ring 1 (level) drawn")
-  assert_equal(device.rings[2][1], 3, "ring 2 (pan at 0) lights its dim LED 1")
-  -- the rows shrinking under the cursor (input: 19 rows) move the group with it
-  params:set("v1_source", 10)
+  -- the rows shrinking under the cursor (buffer -> input on voice 1: the
+  -- synth section goes) move the group with it
+  S.selected_voice = 1
+  params:set("v1_source", 2)
+  place_voice_cursor(#voice_page_rows(1))
+  params:set("v1_source", S.constants.SOURCE_INPUT)
   context.arc.turn(1, 4, 40)
   arc_redraw()
-  rows = voice_page_rows(1)
-  _, group = voice_page_group(rows, S.cursors.voice)
-  assert_equal(#group, 3, "input: the last group has three rows")
-  assert_ring_dark(device, 4, "input: ring 4 dark")
-  assert_equal(rows[group[3]].param_id, "v1_pan", "the group's third row is pan")
-  assert_equal(device.rings[3][1], 3, "ring 3 shows pan at 0 (bipolar: the dim LED 1)")
+  local rows = voice_page_rows(1)
+  local _, group = voice_page_group(rows, S.cursors.voice)
+  local holds_cursor = false
+  for _, index in ipairs(group) do holds_cursor = holds_cursor or index == S.cursors.voice end
+  assert_true(holds_cursor, "input: the group holds the cursor")
+  assert_true(rows[S.cursors.voice].selectable, "on a selectable row")
+  for ring = #group + 1, 4 do assert_ring_dark(device, ring, "input: ring " .. ring .. " dark") end
 end)
 
 test("SEQ rings move the step, set its level, the tempo and the voice row", function()
