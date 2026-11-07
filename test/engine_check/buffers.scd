@@ -615,6 +615,22 @@ var checkDecodeYields = { arg other, path60;
         "buffers: a long file's check lets commands in between its chunks (decodes %, heard during it %)".format(result, heard));
 };
 
+// ... and loadBuffer runs that check yielding: a message sent 5 ms after a
+// long file's loadBuffer is handled while the check still runs (the load
+// has not taken effect: slotChanges unchanged)
+var checkLoadYields = { arg other, path60;
+    var change = other.slotChanges[7], heard, ping;
+    ping = OSCFunc({ heard = other.slotChanges[7] == change }, '/strataCheckLoadPing');
+    h.commandTo(other, \loadBuffer, 7, path60);
+    SystemClock.sched(0.005, { NetAddr.localAddr.sendMsg('/strataCheckLoadPing'); nil });
+    waitFor.({ other.bufferFrames[7] == (60 * server.sampleRate) }, 10);
+    0.1.wait;
+    ping.free;
+    check.(heard == true and: { other.slotChanges[7] != change },
+        "buffers: a message sent during a long file's loadBuffer check is handled before the load takes effect (heard during it %)".format(heard));
+    h.commandTo(other, \clearBuffer, 7); server.sync;
+};
+
 var checkLongSlots = {
     var other, path60 = scratchRoot +/+ "sixty.wav", path20 = scratchRoot +/+ "twenty.wav";
     var damaged = scratchRoot +/+ "twenty-damaged.flac";
@@ -629,6 +645,7 @@ var checkLongSlots = {
     checkAsyncDecodeOrder.(other, path60, path20, damaged);
     checkAsyncLoadNumbers.(other, path60);
     checkDecodeYields.(other, path60);
+    checkLoadYields.(other, path60);
     // freed during a check: nothing applies to the freed buffers
     h.commandTo(other, \loadBuffer, 6, path60);
     h.freeEngine(other);

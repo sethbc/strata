@@ -197,7 +197,7 @@
     // (loadsSuperseded). bufferLoads counts at the command either way, so
     // bufferLoadFailed's numbering is the same.
     loadSlot { arg index, path;
-        var file, frames, rightChannel, sampleRate, load, decodes, damaged;
+        var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled;
         if (this.validBuffer(index).not) { ^this };
         bufferLoads[index] = bufferLoads[index] + 1;
         load = bufferLoads[index];
@@ -215,13 +215,14 @@
             ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate)
         };
         // a long file: whatever the check finds, the recording is over (Lua's load_buffer ends it)
-        if (this.slotRecording(index)) { this.cancelSlotRecording(index, load - 1) };
+        canceled = this.slotRecording(index);
+        if (canceled) { this.cancelSlotRecording(index, load - 1) };
         fork({
             decodes = this.fileDecodes(file, frames, true);
             file.close;
             if (load > this.loadsSuperseded(index)) {
                 if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate) } {
-                    this.rejectLoad(index, load, damaged)
+                    this.rejectLoad(index, load, damaged, canceled)
                 };
             };
         }, SystemClock);
@@ -299,10 +300,11 @@
     // slot's load number), so Lua puts back what the slot held (its
     // bufferState reports cannot tell a rejected load over audio from a
     // good one).
-    rejectLoad { arg index, load, reason;
+    // canceled: a long file's command already canceled the slot's recording
+    rejectLoad { arg index, load, reason, canceled = false;
         var recording = this.slotRecording(index);
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
-            ++ (if (recording) { " recording canceled" } { " unchanged" }));
+            ++ (if (recording or: { canceled }) { " recording canceled" } { " unchanged" }));
         if (recording) { this.cancelSlotRecording(index) };
         bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
     }

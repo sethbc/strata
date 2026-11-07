@@ -166,7 +166,7 @@ var checkLongSave = {
     var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     var ramp = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 };
     var other, sourcePath = root +/+ "ramp.wav", savePath = root +/+ "saved/ramp.wav", file, data, start, seconds;
-    var heard, ping, spots;
+    var heard, ping, spots, parts, partSeen;
     File.mkdir(root);
     write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
     write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
@@ -182,17 +182,24 @@ var checkLongSave = {
     h.commandTo(other, \loadBuffer, 0, sourcePath);
     check.(other.bufferSeconds == 60 and: { waitFor.({ other.bufferFrames[0] == frames }, 10) },
         "files: a 60 s file fills a high engine's 60 s slot (% frames)".format(other.bufferFrames[0]));
-    ping = OSCFunc({ heard = File.exists(savePath).not }, '/strataCheckSavePing');
+    // the ping goes out once the interleave has opened its .part file, and
+    // its handler notes whether the save was still running (the .part there,
+    // the file not yet in place)
+    parts = { (savePath ++ ".*.part").pathMatch };
+    ping = OSCFunc({ heard = parts.value.notEmpty and: { File.exists(savePath).not } }, '/strataCheckSavePing');
     other.writeChunkWait = 0.0001;
     start = Main.elapsedTime;
     h.commandTo(other, \saveBuffer, 0, savePath);
-    0.3.wait;
+    while { parts.value.isEmpty and: { File.exists(savePath).not } and: { (Main.elapsedTime - start) < 30 } } { 0.001.wait };
+    partSeen = parts.value.notEmpty;
     NetAddr.localAddr.sendMsg('/strataCheckSavePing');
     waitFor.({ File.exists(savePath) }, 120);
     seconds = Main.elapsedTime - start;
     0.2.wait;
     ping.free;
-    check.(heard == true, "files: a message sent while a long save interleaves is handled before it ends (heard during it %)".format(heard));
+    check.(partSeen and: { heard == true },
+        "files: a message sent while a long save interleaves is handled before it ends (.part seen %, heard during it %)".format(
+            partSeen, heard));
     file = SoundFile.openRead(savePath);
     spots = (0, 9973 .. frames - 1) ++ [8191, 8192, 8193, frames div: 2, frames - 8193, frames - 1];
     if (file.notNil) {
@@ -207,6 +214,29 @@ var checkLongSave = {
         "files: a 60 s save writes 60 s of stereo 16-bit (% frames in % s)".format(file !? _.numFrames, seconds.round(0.01)));
     h.freeEngine(other);
     File.delete(sourcePath); File.delete(savePath);
+};
+// A short temporary file (the server's write ran out of disk) fails the
+// save: simulated by asking for more frames than the slot's buffers hold,
+// which the server's /b_write clips to the buffer's end. The file already
+// at the path is kept, no .part is left, and the newest write's entry goes.
+var checkShortWrite = { arg stereoPath;
+    var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept;
+    File.mkdir(dir);
+    File.copy(stereoPath, savePath);
+    command.(\loadBuffer, 6, stereoPath); 0.5.wait; server.sync;
+    engine.bufferFrames[6] = engine.buffersL[6].numFrames + 100;
+    command.(\saveBuffer, 6, savePath);
+    3.0.wait;
+    engine.bufferFrames[6] = 11025;
+    file = SoundFile.openRead(savePath);
+    kept = file.notNil and: { file.numFrames == 11025 } and: { file.sampleRate == 22050 };
+    file !? { file.close };
+    check.(kept and: { PathName(dir).files.collect(_.fileName) == ["kept.wav"] }
+        and: { engine.writeGenerations[savePath.standardizePath].isNil },
+        "files: a save whose temporary file is short keeps the old file and leaves no .part (left: %)".format(
+            PathName(dir).files.collect(_.fileName)));
+    command.(\clearBuffer, 6); server.sync;
+    File.delete(savePath);
 };
 var tempFilesBefore = tempFloatFiles.value;
 
@@ -339,5 +369,6 @@ engine.scratchDir = savePath;
 command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
 check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
+checkShortWrite.(stereoPath);
 checkLongSave.value;
 }

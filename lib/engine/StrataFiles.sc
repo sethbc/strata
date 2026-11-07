@@ -152,7 +152,7 @@
             var current = { writeGenerations[path] == generation };
             var written;
             context.server.sync;
-            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current) };
+            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
             tempPaths.do({ arg tempPath; File.delete(tempPath) });
             // no yield between this check and the rename. The newest write
             // forgets its generation whether it succeeded or failed; an
@@ -173,13 +173,23 @@
 
     // Called inside a routine. Returns false (and writes nothing more) as
     // soon as keepGoing is false, i.e. a newer write to the same path began,
-    // or when the output cannot be written.
-    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing;
+    // or when the output cannot be written. frames is the slot's valid
+    // length: a temporary file holding fewer (the server's write ran out of
+    // disk: a 300 s save needs about 115 MB of them) or an output that ends
+    // short is a failed write, posted as one, so writeSlot never renames a
+    // truncated file over the old one.
+    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames;
         var chunkFrames = 8192;
         var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
-        var output, left, right, interleaved, finished = true;
+        var output, left, right, interleaved, finished = true, written;
         var peak = int16Peak, negativePeak = int16Peak.neg;
 
+        if (sources.includes(nil).not and: { sources.any({ arg source; source.numFrames < frames }) }) {
+            postln("strata: cannot write " ++ path ++ " (a temporary file holds % of % frames: is the disk full?)".format(
+                sources.collect(_.numFrames).minItem, frames));
+            sources.do({ arg source; source.close });
+            ^false
+        };
         // File.mkdir throws when the directory cannot be made; openWrite then fails below
         try { File.mkdir(path.dirname) };
         output = if (sources.includes(nil).not) { SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate) };
@@ -208,6 +218,14 @@
         };
         output.close;
         sources.do({ arg source; source.close });
-        ^finished
+        if (finished.not) { ^false };
+        // the output read back: a write that ran out of disk ends short
+        written = SoundFile.openRead(path);
+        written = written !? { arg file; var count = file.numFrames; file.close; count };
+        if (written != frames) {
+            postln("strata: cannot write " ++ path ++ " (% of % frames written: is the disk full?)".format(written, frames));
+            ^false
+        };
+        ^true
     }
 }
