@@ -18,13 +18,13 @@ return function(S)
   local UI = require "ui"
 
   -- The details column (x 65-127, right of the divider at x 62): name and
-  -- source on y 18, state, [L] and [T] on y 26 (fixed x, so nothing moves
-  -- as they come and go), the three fields on y 34/42/50 (the cursor, the
+  -- source on y 18, state, [L], [T] and [F] on y 26 (fixed x, so nothing
+  -- moves as they come and go; "OFF [L] [T] [F]" fills it to x 127), the three fields on y 34/42/50 (the cursor, the
   -- label, the value right-aligned). The name gives way to the source:
   -- it is cut to end name_gap px before it
   local LAYOUT = {
     left = 65, right = 127, divider_x = 62, name_y = 18, name_gap = 1,
-    state_y = 26, lock_x = 87, trig_x = 105, field_rows = {34, 42, 50}, label_x = 71,
+    state_y = 26, lock_x = 84, trig_x = 99, freeze_x = 113, field_rows = {34, 42, 50}, label_x = 71,
     bright = 15, dim = 4, trig_level = 8, field_count = 3,
   }
   M.LAYOUT = LAYOUT
@@ -127,7 +127,8 @@ return function(S)
     screen.move(LAYOUT.right, LAYOUT.name_y)
     screen.text_right(source)
 
-    -- y 26: ON/OFF, [L] when locked (full brightness), [T] in triggered mode
+    -- y 26: ON/OFF, [L] when locked (full brightness), [T] in triggered
+    -- mode, [F] while its audio is frozen (S.lib.freeze, full brightness)
     screen.level(LAYOUT.dim)
     screen.move(LAYOUT.left, LAYOUT.state_y)
     screen.text(v.active and "ON" or "OFF")
@@ -140,6 +141,11 @@ return function(S)
       screen.level(LAYOUT.trig_level)
       screen.move(LAYOUT.trig_x, LAYOUT.state_y)
       screen.text("[T]")
+    end
+    if S.lib.freeze.is_frozen(voice_idx) then
+      screen.level(LAYOUT.bright)
+      screen.move(LAYOUT.freeze_x, LAYOUT.state_y)
+      screen.text("[F]")
     end
 
     -- y 34/42/50: the fields, the one under the cursor bright. A locked
@@ -226,20 +232,22 @@ return function(S)
   end
 
   -- The layout tests' and page renders' extra states: every voice running,
-  -- locked and triggered with the cursor on field 3, with the first or last
-  -- voice selected, and a buffer and an input source
+  -- locked, triggered and frozen with the cursor on field 3, with the first
+  -- or last voice selected, and a buffer and an input source
   local function layout_state(name, selected, source)
     return {name = name, setup = function()
       local triggered
       for option, mode in ipairs(GRAIN_MODE_OPTIONS) do
         if mode == "triggered" then triggered = option end
       end
+      -- the source first: a switch unfreezes
+      if source then params:set("v" .. selected .. "_source", source) end
       for i = 1, NUM_VOICES do
         if not S.voices[i].active then toggle_voice(i) end
         if not S.frozen[i] then toggle_lock(i) end
         params:set("v" .. i .. "_grain_mode", triggered)
+        params:set("v" .. i .. "_freeze", 1)
       end
-      if source then params:set("v" .. selected .. "_source", source) end
       S.selected_voice = selected
       S.main_field = LAYOUT.field_count
       update_voice_list()
@@ -252,7 +260,7 @@ return function(S)
   S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
     enc = main_enc, key = main_key, alt_key = main_alt_key, arc_button = start_stop_selected_voice,
     layout_states = {
-      layout_state("all locked, running, triggered, field 3", 1),
+      layout_state("all locked, running, triggered, frozen, field 3", 1),
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),
       layout_state("resonator, input source", 1, S.constants.SOURCE_INPUT),
     }}

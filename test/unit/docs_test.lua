@@ -637,30 +637,45 @@ test("every user page and grid layout doc is linked from its index", function()
   end
 end)
 
--- The user-facing places that say "freeze" (or frozen, unfrozen, ...) for
--- the lock: every such word in `text`, unless written "freeze (3.2)", the
--- audio freeze a later release adds
-local function freeze_words(text)
+-- The user-facing sentences that say "freeze" (or frozen, unfrozen, ...)
+-- for the lock: every sentence (split at . ! ? followed by a space, and at
+-- line ends) holding such a word and also "lock", "[L]", "params" or
+-- "values", unless it contrasts the two ("unlike"). Freeze is 3.2's audio
+-- freeze; the lock keeps a voice's values
+local function freeze_lock_sentences(text)
   local found = {}
-  local lowered = text:lower()
-  for start, word, finish in lowered:gmatch("()(%a*froz%a*)()") do table.insert(found, { start, word, finish }) end
-  for start, word, finish in lowered:gmatch("()(%a*freez%a*)()") do
-    if lowered:sub(finish, finish + 5) ~= " (3.2)" then table.insert(found, { start, word, finish }) end
+  local lowered = text:lower():gsub("[%.!?]%s+", "\n")
+  for sentence in (lowered .. "\n"):gmatch("([^\n]*)\n") do
+    local says_freeze = sentence:find("%a*freez%a*") or sentence:find("%a*froz%a*")
+    local says_lock = sentence:find("lock", 1, true) or sentence:find("[l]", 1, true)
+      or sentence:find("params", 1, true) or sentence:find("values", 1, true)
+    if says_freeze and says_lock and not sentence:find("unlike", 1, true) then
+      table.insert(found, sentence)
+    end
   end
-  local words = {}
-  for _, hit in ipairs(found) do table.insert(words, hit[2]) end
-  return words
+  return found
 end
 
-test("the user docs say lock, not freeze", function()
-  assert_equal(table.concat(freeze_words("Freeze the voice; frozen, unfrozen; freeze (3.2) later"), " "),
-    "frozen unfrozen freeze", "the scan finds every form but the 3.2 freeze")
+test("the user docs never say freeze for lock", function()
+  local planted = freeze_lock_sentences("Freeze a voice to keep its values safe from randomize. "
+    .. "Unlike lock, freeze holds the audio itself. Frozen grains keep playing.\nLocked voices keep their params.")
+  assert_equal(#planted, 1, "one bad sentence found")
+  assert_true(planted[1]:find("keep its values", 1, true), "the bad one: " .. tostring(planted[1]))
   local files = markdown_files("docs/user")
   table.insert(files, "README.md")
   for _, path in ipairs(files) do
-    local words = freeze_words(read_repo_file(path))
-    assert_true(#words == 0, path .. " says '" .. tostring(words[1]) .. "' (the feature is lock)")
+    local sentences = freeze_lock_sentences(read_repo_file(path))
+    assert_true(#sentences == 0, path .. " says freeze for lock: '" .. tostring(sentences[1]) .. "'")
   end
+  -- MAIN's page names both marks
+  local main = read_repo_file("docs/user/pages/main.md"):lower():gsub("[%.!?]%s+", "\n")
+  local lock_mark, freeze_mark
+  for sentence in (main .. "\n"):gmatch("([^\n]*)\n") do
+    if sentence:find("`[l]`", 1, true) and sentence:find("lock", 1, true) then lock_mark = true end
+    if sentence:find("`[f]`", 1, true) and sentence:find("froz", 1, true) then freeze_mark = true end
+  end
+  assert_true(lock_mark, "docs/user/pages/main.md describes [L] as lock")
+  assert_true(freeze_mark, "docs/user/pages/main.md describes [F] as freeze")
 end)
 
 -- The names (without extension) of the files in a repo folder that end in

@@ -12,3 +12,4 @@ The engine notes are one file per area of the engine check (`test/engine_check/<
 - [effects](engine/effects.md): `\strataFilter`, `\strataDelay`, `\strataReverb`, `\strataMaster`, the NaN guard before the effects
 - [performance](engine/performance.md): the values a performance tier sets
 - [rings](engine/rings.md): the voice and input rings, their writers, where a ring grain starts (the lookback, history), `ringReaders`
+- [freeze](engine/freeze.md): freeze per source (hold, spectral), the input copy and its fade, the frozen read point, the spectral writer

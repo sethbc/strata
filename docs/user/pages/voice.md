@@ -9,7 +9,16 @@ Below it, five rows at a time, the voice's parameters in four sections, each und
 - **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
-- **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp) and pan (the Sub has no pan)
+- **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp), pan (the Sub has no pan) and freeze. With the high performance setting a freeze mode row follows: `hold` or `spectral`
+
+### Freeze
+
+E3 on the freeze row turns it on or off. A frozen voice's grains keep playing what they were playing, while pitch, spread, grain size and density still move:
+- **a synth voice**: the last 4 seconds of its synth, which stops being recorded. Its buffer scan (`buf_scan` on the grid's faders or in PARAMS) moves through those 4 seconds;
+- **an input voice**: the 4 seconds of input up to where it was playing (its history), so freezing never jumps to the present. The input keeps recording; unfreezing goes back to it;
+- **a buffer voice**: its scan stops at the current position.
+
+Frozen grains play from about half a second before the moment you froze. `spectral` (high setting only) holds one sound spectrum instead and keeps granulating it; on the standard setting, and for a buffer voice, freeze always holds. Changing the voice's source unfreezes it. Scenes save freeze and its mode, but never the audio: a recalled frozen scene freezes whatever the voice plays at the end of the transition. Randomize and mutations never change it. Map it to a MIDI CC in PARAMS > MAP. On the grid it has keys on the 256, 128h and 128v layouts ([Grid](../grid.md)).
 
 Each value is the parameter's own text with its unit, shortened when it does not fit beside its name. The row under the cursor is bright.
 
