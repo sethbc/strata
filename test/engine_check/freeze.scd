@@ -42,6 +42,15 @@ SynthDef(\strataCheckFreezeRead, { arg in, now, out, t_reset = 0;
         Sweep.ar(reset, on)
     ]));
 }).add;
+// Where each grain starts reading: its read 1 ms in (a latch on the
+// grain's first sample may still hold the read before it), held between
+// grains
+SynthDef(\strataCheckFreezeGrainStart, { arg in, out;
+    var sig = In.ar(in, 2), on = sig[1] > 0.05;
+    var read = sig[0] / sig[1].max(0.001);
+    var onset = (on - Delay1.ar(on)) > 0;
+    Out.kr(out, A2K.kr(Latch.ar(read, DelayN.ar(onset, 0.001, 0.001))));
+}).add;
 // The timecode: into out (voice 1's bus, while voiceOn > 0) and out2 (the
 // input bus, while inputOn > 0); the time to now (audio) and nowKr
 SynthDef(\strataCheckFreezeTimecode, { arg out, out2, now, nowKr, voiceOn = 1, inputOn = 1;
@@ -129,13 +138,36 @@ check.(ok and: { state[\frozen][0] } and: { state[\mode][0] == \hold } and: { re
     and: { (readings[2] - readings[3]) < 0.15 },
     "freeze: a frozen synth voice keeps sounding after its voice synth falls silent (writer paused %, % s of grains, reads % to % s, frozen at % s)".format(
         ok, readings[4].round(0.01), readings[3].round(0.001), readings[2].round(0.001), frozenAt.round(0.001)));
-// the scan moves through the frozen ring (wrapping), never past the freeze
-command.(\setGrainParam, 0, \bufScan, 0.25);
-readings = timeReads.(0, 1.5);
-command.(\setGrainParam, 0, \bufScan, 0.0);
-check.(((readings[2] - readings[3]) > 0.5) and: { readings[2] <= (frozenAt + periodSlack) },
-    "freeze: bufScan scans a frozen ring (reads % to % s, frozen at % s)".format(
-        readings[3].round(0.001), readings[2].round(0.001), frozenAt.round(0.001)));
+// the scan moves the read point back through the frozen ring, wrapping:
+// at bufScan 1 (one ring length, 4 s, a second) each grain (0.1 s apart, 0.05 s long)
+// starts about 0.4 s further back, and the start jumps up to the newest
+// audio (the seam) once per 4 s of travel. Each grain's start, polled at
+// 20 Hz for about 3 s
+readings = { arg seconds;
+    var bus = Bus.control(server, 1), synth = grainOf.(0), probe, starts = List.new, began, travel;
+    synth.set(\out, readOut.index);
+    probe = Synth(\strataCheckFreezeGrainStart, [\in, readOut, \out, bus], probeGroup);
+    command.(\setGrainParam, 0, \grainSize, 0.05);  // a gap between grains, so each start shows
+    server.sync; 0.2.wait;
+    command.(\setGrainParam, 0, \bufScan, 1.0);
+    server.sync;
+    began = Main.elapsedTime;
+    while { (Main.elapsedTime - began) < seconds } { starts.add(h.readBusValue(bus)); 0.05.wait };
+    travel = (Main.elapsedTime - began) * engine.ringSeconds;
+    command.(\setGrainParam, 0, \bufScan, 0.0);
+    command.(\setGrainParam, 0, \grainSize, 0.1);
+    probe.free; bus.free;
+    synth.set(\out, engine.mainBus.index);
+    [starts.asArray.differentiate.drop(1), travel]
+}.value(3.0);
+ok = readings[0].select({ arg step; step.abs > 0.01 });
+check.((ok.select({ arg step; step > 2 }).size).inclusivelyBetween((readings[1] / engine.ringSeconds).floor,
+        (readings[1] / engine.ringSeconds).ceil)
+    and: { ok.reject({ arg step; step > 2 }).every({ arg step; step < 0 }) }
+    and: { ok.size > 20 },
+    "freeze: bufScan moves the read point back through a frozen ring and passes the seam once per 4 s of travel (% s of travel, % seam jumps, % steps back, % forward)".format(
+        readings[1].round(0.1), ok.count({ arg step; step > 2 }), ok.count({ arg step; step < 0 }),
+        ok.count({ arg step; (step > 0) and: { step <= 2 } })));
 // unfreeze: the writer resumes and the grains read just behind the head again
 timecode.set(\voiceOn, 1);
 command.(\setGrainParam, 0, \freeze, 0.0);
@@ -327,6 +359,11 @@ write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         600000
 other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
 otherCommand = { arg name ... args; h.commandTo(other, name, *args) };
 high = other.tier == \high;
+// the spectral writer's def is added by a high engine only (so not in the
+// runner's allDefs, which the structure area checks on the standard engine)
+check.(high and: { SynthDescLib.global.at(\strataRingWriteSpectral).notNil }
+    and: { SynthDescLib.global.at(\strataRingWriteSpectral).controlNames.collect(_.asSymbol) == [\in, \bufL, \bufR, \phaseOut] },
+    "freeze: a high engine adds strataRingWriteSpectral, with strataRingWrite's controls");
 writerNodes = {
     h.synthTree(other.voiceGroup).select({ arg node; [\strataRingWrite, \strataRingWriteSpectral].includes(node.def) })
 };
@@ -347,6 +384,21 @@ toggles = 20.collect({ arg index;
 });
 check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\frozen][0].not },
     "freeze: spectral writer replacement leaves one writer per voice (high %, 20 toggles: %)".format(high, toggles));
+// spectral on silence (a stopped voice: its bus is silent) writes only the
+// dither, far below hearing: no buzz at the hop rate
+otherCommand.(\setGrainParam, 4, \freezeMode, 1.0);
+otherCommand.(\setGrainParam, 4, \freeze, 1.0);
+server.sync; 0.6.wait;
+readings = {
+    var condition = Condition(false), values;
+    other.ringBuffersFor(4, 0)[0].loadToFloatArray(action: { arg array; values = array; condition.test = true; condition.signal });
+    h.awaitReply(condition, 10);
+    (values ? [1]).abs.maxItem
+}.value;
+check.((writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }) == 1) and: { readings < 0.001 },
+    "freeze: a spectral writer frozen on silence writes nothing audible (ring peak %)".format(readings));
+otherCommand.(\setGrainParam, 4, \freeze, 0.0);
+server.sync;
 // spectral on an input voice: the copy, then a spectral writer of the input
 otherCommand.(\setGrainSource, 2, other.inputSource);
 otherCommand.(\voiceOn, 2, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);

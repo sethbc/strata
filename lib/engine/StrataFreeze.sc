@@ -15,6 +15,9 @@
     // The spectral writer's FFT size (frames)
     spectralFrames { ^2048 }
 
+    // The spectral writer's analysis dither (amplitude, about -100 dBFS)
+    spectralDither { ^0.00001 }
+
     // How long an input grain synth set back from the voice ring to the
     // input ring still counts as reading the voice ring (s): its longest
     // grain, started just before, plus the read margin
@@ -59,6 +62,10 @@
         // Inside a frozen input copy history is 0: a history change is kept
         // (it applies again on unfreeze) but not sent while the voice is
         // frozen on the input. The grains area's handler does the rest.
+        // This relies on alloc building grainParamHandlers from every area
+        // before any allocState runs (so the grains area's handler is there
+        // to wrap, whatever the orders), and on no other area wrapping or
+        // replacing \history (two areas registering it is an error).
         historyHandler = grainParamHandlers[\history];
         grainParamHandlers[\history] = { arg voice, value;
             if (this.frozenOnInput(voice)) {
@@ -82,8 +89,11 @@
             var dry = In.ar(in, 2).collect({ arg channel; this.zeroBadValues(channel) });
             var settle = 2 * window * SampleDur.ir;
             var held = Line.kr(0, 1, settle) >= 1;
+            // the analysis gets a dither about 100 dB down: on exact digital
+            // silence PV_MagFreeze would hold zero phases (a buzz at the hop
+            // rate); under any real sound it is inaudible
             var wet = dry.collect({ arg channel;
-                var chain = FFT(LocalBuf(window), channel, 0.5);
+                var chain = FFT(LocalBuf(window), channel + WhiteNoise.ar(this.spectralDither), 0.5);
                 this.zeroBadValues(IFFT(PV_MagFreeze(chain, held)))
             });
             var mix = EnvGen.kr(Env([0, 0, 1], [settle, 0.01]));
@@ -106,12 +116,15 @@
     // start at least its own length behind it, or it would read across the
     // seam into the ring's oldest audio: grainMaxSeconds (0.5 s) covers any
     // grain's forward reach, max(r - 1, 0) x dur being in the lookback
-    // already. Then bufScan scans through the ring (ring lengths per
-    // second, forward for a positive scan, as on a slot) from where the
-    // freeze began, wrapping: the ring holds valid audio all round.
+    // already. Then bufScan moves the read point back through the ring
+    // (ring lengths per second; a negative scan moves it forward) from
+    // where the freeze began, wrapping: the ring holds valid audio all
+    // round. Moving back, the grains play about 3.5 s of continuous audio
+    // before the read point crosses the seam (into the newest audio again),
+    // once per ring length of travel.
     ringScanOffset { arg bufScan, freeze;
         var held = freeze > 0.5;
-        var scan = Phasor.ar(K2A.ar(held), bufScan.neg * SampleDur.ir, 0, 1);
+        var scan = Phasor.ar(K2A.ar(held), bufScan * SampleDur.ir, 0, 1);
         ^held * (this.grainMaxSeconds + (scan * this.ringSeconds))
     }
 

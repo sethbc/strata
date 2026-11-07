@@ -118,6 +118,23 @@ test("freeze reaches the engine and a source switch clears it", function()
   end
   assert_true(source_at and last and last.index > source_at, "freeze 0 is sent after setGrainSource")
   assert_equal(last.value, 0, "and the last freeze sent is 0")
+  -- no freeze 1 at all: the hook clears it before the voice's sync, so the
+  -- engine never freezes the new source for a moment (synth -> input too)
+  for _, from_to in ipairs({{2, 1}, {1, S.constants.SOURCE_INPUT}, {S.constants.SOURCE_INPUT, 3}}) do
+    params:set("v1_source", from_to[1])
+    params:set("v1_freeze", 1)
+    context.clear_engine_calls()
+    params:set("v1_source", from_to[2])
+    local freezes = 0
+    for _, each in ipairs(sent_freeze(context)) do
+      if each.name == "freeze" then
+        freezes = freezes + 1
+        assert_equal(each.value, 0, "a switch " .. from_to[1] .. " -> " .. from_to[2] .. " never sends freeze 1")
+      end
+    end
+    assert_true(freezes > 0, "the switch sends freeze 0")
+    assert_true(first_call(context, "setGrainSource", 0) < sent_freeze(context)[1].index, "after the source")
+  end
   -- a switch of a voice that is not frozen sends no freeze
   context.clear_engine_calls()
   params:set("v1_source", 3)

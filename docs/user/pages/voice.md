@@ -14,7 +14,7 @@ Below it, five rows at a time, the voice's parameters in four sections, each und
 ### Freeze
 
 E3 on the freeze row turns it on or off. A frozen voice's grains keep playing what they were playing, while pitch, spread, grain size and density still move:
-- **a synth voice**: the last 4 seconds of its synth, which stops being recorded. Its buffer scan (`buf_scan` on the grid's faders or in PARAMS) moves through those 4 seconds;
+- **a synth voice**: the last 4 seconds of its synth, which stops being recorded. Its buffer scan moves backward through those 4 seconds and around again (a synth voice has no scan row here or on the grid: set `v<i>_buf_scan` in the PARAMS menu, or point an LFO at `v<i> scan`);
 - **an input voice**: the 4 seconds of input up to where it was playing (its history), so freezing never jumps to the present. The input keeps recording; unfreezing goes back to it;
 - **a buffer voice**: its scan stops at the current position.
 
