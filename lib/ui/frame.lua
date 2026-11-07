@@ -90,6 +90,12 @@ return function(S)
     end
   end
 
+  -- init's last start step: from here on the screen and arc draw at
+  -- FRAMES_PER_SECOND
+  S.register_start(S.constants.START_ORDER.frame_clock, function()
+    start_frame_clock()
+  end)
+
   S.register_cleanup(S.constants.CLEANUP_ORDER.frame_clock, function()
     stop_frame_clock()
   end)
