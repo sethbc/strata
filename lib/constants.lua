@@ -146,6 +146,15 @@ local START_ORDER = {
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
 
+-- Center detents (lib/ui/detent.lua): a param whose range spans 0 holds at
+-- 0 for the next encoder_detents encoder detents after reaching or crossing
+-- it, or the next arc_ticks arc ticks
+local DETENT = {encoder_detents = 3, arc_ticks = 24}
+
+-- ALT+E3 fine adjustment: a control param moves 1 / FINE_DIVISOR of its raw
+-- step per detent (lib/ui/detent.lua)
+local FINE_DIVISOR = 10
+
 -- cleanup()'s steps in the order it runs them: each module registers its
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
 -- The files are saved before anything stops, with the stored values (the
@@ -204,5 +213,7 @@ return {
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
+  DETENT = DETENT,
+  FINE_DIVISOR = FINE_DIVISOR,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }

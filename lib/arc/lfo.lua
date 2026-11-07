@@ -34,14 +34,14 @@ return function(S)
   local function arc_lfo_delta(n, delta)
     if n <= NUM_LFOS then
       local steps = arc_whole_steps(ticks_key(n), delta, ARC_LFO.ticks_per_percent)
-      if steps ~= 0 then params:delta("lfo_depth_" .. n, steps) end
+      if steps ~= 0 then delta_with_detent("lfo_depth_" .. n, steps) end
     elseif n == ARC_LFO.period_ring then
       local period_id = lfo_period_param_id(S.selected_lfo)
       if period_id == "lfo_free_" .. S.selected_lfo then
         arc_sweep_param(period_id, delta)
       else
         local steps = arc_whole_steps(ticks_key(n), delta, ARC_LFO.ticks_per_rate)
-        if steps ~= 0 then params:delta(period_id, steps) end
+        if steps ~= 0 then delta_with_detent(period_id, steps) end
       end
     end
   end

@@ -119,7 +119,7 @@ return function(S)
     if n == 2 then
       S.lib.ui_keys.select_voice_by(d)
     elseif n == 3 then
-      params:delta(main_param_id(S.selected_voice), d)
+      enc_param_delta(n, main_param_id(S.selected_voice), d)
     end
   end
 

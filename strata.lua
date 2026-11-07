@@ -50,6 +50,7 @@ S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_field_list = include("lib/ui/field_list")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
 S.lib.ui_alt = include("lib/ui/alt")(S)
+S.lib.ui_detent = include("lib/ui/detent")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
 -- The screen pages, in UI_PAGES order: each creates its record at

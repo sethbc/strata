@@ -74,9 +74,9 @@ return function(S)
   -- SETUP E2: MIDI port, E3: channel mode
   function setup_enc(n, d)
     if n == 2 then
-      params:delta("midi_device", d)
+      enc_param_delta(n, "midi_device", d)
     elseif n == 3 then
-      params:delta("midi_channel_mode", d)
+      enc_param_delta(n, "midi_channel_mode", d)
     end
   end
 

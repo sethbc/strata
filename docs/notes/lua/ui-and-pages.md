@@ -11,18 +11,20 @@
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
 - MAIN is found by index (`S.ui_page == UI_PAGES.MAIN_PAGE`), never by its title string.
+- Never call `params:delta` from an encoder or a ring: a page's `enc` calls `enc_param_delta(n, id, d)` for every param edit, a ring `arc_sweep_param` or `delta_with_detent` (a test checks `lib/pages/` and `lib/arc/`). Fine adjustment is ALT+E3 only, never ALT+E2 or the arc. A change that reaches or crosses 0 on a range through 0 lands on exactly 0, whatever the size of the delta (an accelerated encoder delta of 2-5 included).
 - `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `clamp_all()` first.
 
 ## Owns
 
 - `lib/ui/frame.lua` (`S.lib.ui_frame`): `S.ui_page`; `request_redraw`, `draw_frame`, `draw_frame_part`, `draw_error_report` and the frame clock (`start_frame_clock`, `stop_frame_clock`; cleanup step 60). The runtime fields (`screen_dirty`, `arc_dirty`, `frame_clock`, `draw_errors`) are on the shared `S.constants.UI_PAGES` table.
-- `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_value_fraction`, `param_fraction`.
+- `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_spans_zero`, `param_default`, `param_value_fraction`, `param_fraction`.
 - `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`. Its positions are `S.constants.HEADER` (`lib/constants.lua`).
 - `lib/ui/flash.lua` (`S.lib.ui_flash`): the flashes, `S.lib.ui_flash.start`, `.text`, `.cancel_all`, `.slots`, and `header_flash` (global); cleanup step 140.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.
 - `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp`, `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits). No page uses it yet.
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `long_press` (fields of `S.lib.ui_alt`). See ALT below.
+- `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); the holds at 0 (local). See Center detents and fine adjustment below.
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
 - `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
 - `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors`; `move`, `clamp_all` (fields).
@@ -110,6 +112,16 @@ The rows are built on each call from the voice's current source, so they follow 
 - `forget_held_keys` (as the norns menu or the file selector takes the keys) clears `S.alt_held` and every `S.key_press_alt` mark with `S.key_press_page`.
 
 The long-press fallback (design §2): if the hardware check rejects K1 as ALT, a `LONG_PRESS_SECONDS` (0.6, `lib/constants.lua`) hold of K2 or K3 takes its ALT action. Only the hook is built: `S.lib.ui_alt.long_press(n)` is what the hold timer would call. If key `n` (2 or 3) is still down on the page showing and is not already an ALT press, it marks it one, calls `alt_action(S.ui_page, n)`, requests a redraw and returns true (its release then goes to `alt_key_release`); otherwise it returns false. Nothing calls it while K1 works as ALT. Switching to the fallback means starting a `LONG_PRESS_SECONDS` clock on each K2/K3 press that calls it (canceled on release and in cleanup), and moving each page's press actions to release where a long press must not also run them.
+
+## Center detents and fine adjustment
+
+`lib/ui/detent.lua` (`S.lib.ui_detent`), with `param_spans_zero` and `param_default` in `lib/ui/params.lua`. Every encoder and ring change of a param goes through `delta_with_detent(param_id, d, opts)` (global); never `params:delta`.
+- Pages: `enc_param_delta(n, param_id, d)` (global) is `delta_with_detent(param_id, d, {fine = n == 3 and S.alt_held})`. Every page's `enc` calls it for a param edit (MAIN, FX, LFO and BUFFER E3, SETUP E2 and E3), so fine adjustment reaches E3 only: ALT+E2 stays whole steps.
+- Rings: `arc_sweep_param(id, ticks)` (`lib/arc/core.lua`) is `delta_with_detent(id, nil, {arc_ticks = ticks})`; the LFO page's whole-value rings call `delta_with_detent(id, steps)`.
+- The change. Encoders: `d` detents, as `params:delta` takes them. A control param's raw value moves `d * quantum` through `params:set_raw` (what `Control:delta` does), or `d * quantum / FINE_DIVISOR` (10) with `opts.fine`; number and option params go through `params:delta` in whole steps and ignore `fine`. Arc (`opts.arc_ticks = n`, control params only): the raw value moves `n / UI_PAGES.ARC_TICKS_PER_SWEEP`. A param's `controlspec.step` still rounds the value read back, so a coarse param moves more slowly under fine adjustment, not more finely.
+- The detent, for a param whose range spans 0 (`param_spans_zero`: a control or number param with `min < 0 < max`; option params and wrapping specs never): a change from a non-zero value whose result is 0 or has the other sign sets exactly 0 (`params:set(id, 0)`) and starts a hold, however large the change. While the hold lasts and the value is still 0, each change uses up `|d|` detents or `|n|` ticks and leaves the value at 0; the change that uses up more than is left ends the hold and applies in full, from 0. A hold ends too when the value is found away from 0 (something else moved it).
+- A hold is `DETENT.encoder_detents` (3) detents or `DETENT.arc_ticks` (24) ticks (`lib/constants.lua`). Holds are kept per param id in units both turn kinds use up in whole numbers (a whole hold is 3 × 24; a detent uses 24, a tick 3), so a hold the arc starts and an encoder finishes lasts as long.
+- `param_default(id)`: a control param's `controlspec.default` (a spec without one: `spec:map(0)`, where norns starts it), or a number or option param's `default`.
 
 ## Key releases and the norns menu
 

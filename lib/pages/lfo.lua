@@ -96,7 +96,7 @@ return function(S)
       S.selected_lfo = util.clamp(S.selected_lfo + d, 1, NUM_LFOS)
       if S.selected_lfo ~= previous_lfo then forget_arc_lfo_period_ticks() end
     elseif n == 3 then
-      params:delta("lfo_depth_" .. S.selected_lfo, d)  -- percent steps
+      enc_param_delta(n, "lfo_depth_" .. S.selected_lfo, d)  -- percent steps
     end
   end
 
