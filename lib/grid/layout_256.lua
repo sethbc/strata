@@ -63,7 +63,7 @@ return function(S)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
-        grid_key_256_freeze(x)
+        grid_key_256_lock(x)
       end
     elseif y >= 1 and y <= NUM_VOICES then
       -- Rows 1-NUM_VOICES: Pattern triggers for each voice
@@ -99,7 +99,7 @@ return function(S)
         randomize_pattern(x - 8)
       end
     elseif y == 16 then
-      grid_key_256_freeze(x)
+      grid_key_256_lock(x)
     end
   end
 
@@ -118,10 +118,10 @@ return function(S)
   end
 
   -- 256 row 16: global functions
-  function grid_key_256_freeze(x)
+  function grid_key_256_lock(x)
     if x <= NUM_VOICES then
-      -- Freeze voice
-      toggle_freeze(x)
+      -- Lock voice
+      toggle_lock(x)
     elseif x >= 9 and x <= 16 then
       -- Copy/paste patterns
       -- (Future expansion)
@@ -177,7 +177,7 @@ return function(S)
       end
       grid_redraw_256_sources(grid_device)
       grid_redraw_256_transport(port, grid_device)
-      grid_redraw_256_freeze(grid_device)
+      grid_redraw_256_lock(grid_device)
     else
       -- Patterns/parameters pages
       -- Draw patterns (rows 1-NUM_VOICES)
@@ -201,7 +201,7 @@ return function(S)
         grid_device:led(i + 8, 14, S.voices[i].active and 12 or 2)
       end
 
-      grid_redraw_256_freeze(grid_device)
+      grid_redraw_256_lock(grid_device)
     end
   end
 
@@ -249,8 +249,8 @@ return function(S)
     grid_redraw_256_page_row(port, grid_device)
   end
 
-  -- 256 row 16: freeze status
-  function grid_redraw_256_freeze(grid_device)
+  -- 256 row 16: lock status
+  function grid_redraw_256_lock(grid_device)
     for i = 1, NUM_VOICES do
       grid_device:led(i, 16, S.frozen[i] and 12 or 2)
     end

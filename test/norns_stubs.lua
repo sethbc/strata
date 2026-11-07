@@ -968,6 +968,37 @@ local function make_params(util, controlspec)
     if changed and not silent then bang(param) end
   end
 
+  -- lua/core/params/control.lua (control params only; norns has no
+  -- get_raw/set_raw on the other types, so the stub errors): get_raw is the
+  -- 0-1 value as stored; set_raw wraps it (a wrapping spec) or clamps it to
+  -- 0-1 and stores it unrounded (get rounds through controlspec:map), firing
+  -- the action on a change unless silent
+  local function control_param(self, id, method)
+    local param = self:lookup_param(id)
+    if param.t ~= tCONTROL then
+      error("params:" .. method .. "(" .. tostring(id) .. ") on a param that is not a control", 3)
+    end
+    return param
+  end
+
+  function ParamSet:get_raw(id)
+    return control_param(self, id, "get_raw").raw
+  end
+
+  function ParamSet:set_raw(id, value, silent)
+    local param = control_param(self, id, "set_raw")
+    require_number(id, value)
+    if param.controlspec.wrap then
+      while value > 1 do value = value - 1 end
+      while value < 0 do value = value + 1 end
+    end
+    local raw = util.clamp(value, 0, 1)
+    if param.raw ~= raw then
+      param.raw = raw
+      if not silent then bang(param) end
+    end
+  end
+
   function ParamSet:delta(id, delta)
     local param = self:lookup_param(id)
     if param.t == tCONTROL then

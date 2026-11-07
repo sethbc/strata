@@ -1,7 +1,7 @@
 ## Must not break
 
 - A new captured field needs `validate_scene` coverage (and a `SCENE_GLOBAL_PARAMS` entry for a global param) and a migration default (`SCENE_GLOBAL_PARAMS.default`, `S.VOICE_SCENE_DEFAULTS` or `S.SCENE_BLOCK_DEFAULTS`), or older files stop loading.
-- Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, freeze and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
+- Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, lock and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
 - A recall stops the voices it stops before setting their sources and params, starts the voices it starts after their params, and sends at most one full sync per running voice whose source changed (`S.scene_recall_in_progress`).
 - Every recall clears the randomize undo (`clear_undo`, `lib/mutation.lua`): `recall_scene` after validation, `recall_scene_instant` at its start.
 - Every recall cancels a running transition first. The transition clock clears `S.scene_transition_active` and `S.scene_transition_clock` on every exit (end, cancel, error).
@@ -26,7 +26,7 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene page is in `do
 - **Storage**: `S.scenes`, 8 slots (1-8). The `lib/scenes.lua` constructor builds the array afresh on every script load, empty by default.
 - **Data**, a complete snapshot:
   - every voice parameter (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents);
-  - voice active and freeze states;
+  - voice active and lock states (stored as `frozen`);
   - pattern data (all 7 voices × 16 steps);
   - global parameters: master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, destination and state.
 - **Sequencer**: automatic scene progression with configurable timing.
@@ -84,7 +84,7 @@ end
 Voice activation:
 - checks whether a voice's state needs to change (on → off or off → on);
 - starts and stops voices with `toggle_voice()`;
-- restores freeze states with the scene.
+- restores lock states (stored as `frozen`) with the scene.
 
 Patterns:
 - restored after all parameter changes;
@@ -112,7 +112,7 @@ A failed instant recall keeps the previous scene current (`docs/status.md`, Deci
 - `scene_transition_targets(scene_data)` snapshots `{id, start, target, step}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift).
 - 20 steps whatever the transition time. Step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole time. Never re-read the current value inside the loop: that makes the fade front-loaded.
 - A number param (`step` 1: the LFO depths `lfo_depth_<n>`, which do not round themselves) is rounded to whole numbers during the fade, so arc and E3 depth steps land on whole percents again. The end applies the scene's exact value.
-- Not interpolated: mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), freeze and active states, tempo, filter type and mutation settings. They switch at the end through `recall_scene_instant()`, which also lands every param exactly on its target.
+- Not interpolated: mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), lock and active states, tempo, filter type and mutation settings. They switch at the end through `recall_scene_instant()`, which also lands every param exactly on its target.
 - Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `S.scene_transition_active`.
 - `S.scene_transition_clock` / `S.scene_transition_active` track the running transition; `cancel_scene_transition()` clears both.
 - A successful `load_scenes_from_disk()` cancels a running transition before it replaces the scenes. Otherwise the fade's end would apply the file's data for that slot, or fail on a slot that is now empty. The fade stops where it is.
@@ -273,7 +273,7 @@ Composition workflow:
 
 ## With other systems
 
-- **Freeze**: frozen states are captured and restored per scene.
+- **Lock**: locked states (`frozen`) are captured and restored per scene.
 - **Mutations**: mutation settings are per scene, so the sequencer can alternate between static and evolving scenes.
 - **Pattern sequencer**: pattern data is saved per scene, so scenes can switch rhythms.
 - **Cross-modulation**: routing is per scene, for evolving relationships between voices.

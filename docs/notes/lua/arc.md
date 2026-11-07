@@ -5,7 +5,7 @@
 - Every continuous ring sweeps its param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions are the LFO page's whole-value rings (depth at 10 ticks per percent, clocked rate at 20 ticks per rate).
 - Every ring is filled through `arc_ring_fill` from `param_fraction`, or through `arc_ring_fill_bipolar` (which reads `param_fraction` itself) for a range through 0, never from a hardcoded range and never with a bare `segment` (a full turn would light nothing). `arc_ring_fill_param` picks between them.
 - Whole-step rings carry their spare ticks through `arc_whole_steps(key, delta, ticks_per_step)` under a key of their own (`S.arc_ticks[key]`), never in a table of their own, so a page change forgets them all.
-- The button goes through the page record's `arc_button()` (`arc_key` finds the record by index, `S.registry.pages[S.ui_page]`, never by the title string). MAIN's is `start_or_freeze_selected_voice`, set by `lib/pages/main.lua` (a page field, not an arc field).
+- The button goes through the page record's `arc_button()` (`arc_key` finds the record by index, `S.registry.pages[S.ui_page]`, never by the title string). MAIN's is `start_or_lock_selected_voice`, set by `lib/pages/main.lua` (a page field, not an arc field).
 - Everything degrades gracefully without an arc: `arc_redraw()` returns unless `S.arc_device` has a connected device.
 - Rings are drawn by the frame clock (`request_redraw()`), never by calling `arc_redraw()` from script code.
 
@@ -45,10 +45,11 @@ The arc follows the screen page (`S.ui_page`):
 
 Ring speed rule:
 - Every continuous ring (MAIN 1-4, FX 1-4, BUFFER 1-4, LFO ring 4 in free mode) goes through `arc_sweep_param(param_id, delta)`.
-- It sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks: `params:delta(id, delta / (512 * controlspec.quantum))`.
-- norns' `Control:delta` moves the 0-1 raw value by `d * quantum`, so the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq). The step only quantizes the value read back; raw keeps the remainder.
+- It sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks: `delta_with_detent(id, nil, {arc_ticks = delta})` (`lib/ui/detent.lua`) moves the 0-1 raw value by `delta / 512` through `params:set_raw`, and holds a range through 0 at 0 for `DETENT.arc_ticks` (24) ticks (center detents, `docs/notes/lua/ui-and-pages.md`). The arc has no fine mode.
+- Moving the raw value, the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq). The step only quantizes the value read back; raw keeps the remainder.
 - 512 is half a revolution: the arc reports 1024 ticks per revolution (monome arc docs: "high resolution knobs, 1024 ticks per revolution", every edition; matron passes libmonome's deltas through unscaled, `device_monome.cc`).
-- There are no per-ring scales; never add one beyond the two exceptions. The LFO depth rings (`ticks_per_percent`) and the clocked rate (`ticks_per_rate`) step whole values instead.
+- There are no per-ring scales; never add one beyond the two exceptions. The LFO depth rings (`ticks_per_percent`) and the clocked rate (`ticks_per_rate`) step whole values instead, through `delta_with_detent(id, steps)`.
+- No ring calls `params:delta`: every ring change goes through `arc_sweep_param` or `delta_with_detent` (a test checks `lib/arc/` and `lib/pages/`).
 
 `arc_delta(n, delta)` handles rings 1-4 through the page's handler.
 
@@ -79,7 +80,7 @@ LFO:
 
 `arc_key(n, s)` handles the button (2025 arc models):
 - A press calls the page record's `arc_button()` and requests a redraw; a release does nothing, and so does a press on a page without `arc_button`.
-- MAIN's `arc_button` mirrors K3 (`start_or_freeze_selected_voice`); no other page has one yet.
+- MAIN's `arc_button` mirrors K3 (`start_or_lock_selected_voice`); no other page has one yet.
 - The record is found by index (`S.registry.pages[S.ui_page]`), never by the title string.
 
 ## LED feedback

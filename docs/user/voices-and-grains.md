@@ -25,5 +25,5 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 ## Performance Features
 
 - **Randomization** - Generate new parameter sets for each voice
-- **Freeze** - Lock a voice's parameters while others continue to evolve
+- **Lock** - Protect a voice's parameters while others continue to evolve
 - **Drift** - A slow random walk adds subtle grain pitch movement to active voices that are not frozen; it always drifts back toward the pitch you set

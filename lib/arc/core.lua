@@ -31,13 +31,14 @@ return function(S)
   -- rings (SETUP) ignores turns and leaves its rings off.
 
   -- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
-  -- param's whole range. params:delta moves its 0-1 raw value by delta *
-  -- quantum, so the sweep follows the warp (exp params sweep evenly) and the
-  -- step only quantizes the value read back.
-  -- Control params only: it reads the param's controlspec.
+  -- param's whole range. The ticks move its 0-1 raw value by delta /
+  -- ARC_TICKS_PER_SWEEP (delta_with_detent, lib/ui/detent.lua, which also
+  -- holds a range through 0 at 0 for DETENT.arc_ticks ticks), so the sweep
+  -- follows the warp (exp params sweep evenly) and the step only quantizes
+  -- the value read back. The arc has no fine mode.
+  -- Control params only.
   function arc_sweep_param(param_id, delta)
-    local quantum = params:lookup_param(param_id).controlspec.quantum
-    params:delta(param_id, delta / (UI_PAGES.ARC_TICKS_PER_SWEEP * quantum))
+    delta_with_detent(param_id, nil, {arc_ticks = delta})
   end
 
   -- Fill ring n from 0 to fraction (0-1) of a turn. Every ring draws through

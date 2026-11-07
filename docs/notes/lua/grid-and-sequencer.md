@@ -95,7 +95,7 @@ end
 - **256 parameter page faders (rows 9-12) and FX faders (page 4, rows 3-7)**: a bar at 8 up to the value, the value's column at 15. Row 13 (page 2): fader pages, selected 15, available 4.
 - **256 page 4 buffers**: row 1 at 15 recording / 8 loaded / 2 empty, row 2 at 4. Source rows 9-15: selected 15, others 4, empty buffers 2.
 - Always call `grid_port:refresh()` after updating LEDs, and `grid_port:all(0)` to clear them before redrawing.
-- Any state shown on the grid calls `grid_redraw()` when it changes, wherever it changes (`toggle_voice`, `toggle_freeze`, `randomize_voice`, scene recall, ...). `grid_redraw()` returns at once when no grid is connected, so calling it is cheap.
+- Any state shown on the grid calls `grid_redraw()` when it changes, wherever it changes (`toggle_voice`, `toggle_lock`, `randomize_voice`, scene recall, ...). `grid_redraw()` returns at once when no grid is connected, so calling it is cheap.
 - Parameter faders on grid page 2 are redrawn after `gentle_mutate`, after every scene-transition step, and from `drift_update` only when a grid shows page 2 (it runs 10 times a second).
 
 ## Keys
@@ -163,5 +163,5 @@ It follows changes made anywhere (issue #49):
 - Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input). Columns 11-16 do nothing.
   - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
   - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.
-- Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_freeze`/`grid_redraw_256_freeze`).
+- Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`).
 - Smaller grids have no buffers / FX page: buffers and sources are on the BUFFER screen page and in params.

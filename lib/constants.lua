@@ -104,7 +104,7 @@ local GRAIN_PARAM_IDS = {
 -- (param id suffix, screen label and screen value format; the arc ring sweeps
 -- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
 -- and the short name the voice list shows (at most 5 characters, which a
--- test asserts, so the widest entry, "+ pulse [F]", ends well left of the
+-- test asserts, so the widest entry, "+ pulse [L]", ends well left of the
 -- divider at x 62)
 local MAIN_PARAMS = {
   resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},
@@ -149,6 +149,15 @@ local START_ORDER = {
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
+
+-- Center detents (lib/ui/detent.lua): a param whose range spans 0 holds at
+-- 0 for the next encoder_detents encoder detents after reaching or crossing
+-- it, or the next arc_ticks arc ticks
+local DETENT = {encoder_detents = 3, arc_ticks = 24}
+
+-- ALT+E3 fine adjustment: a control param moves 1 / FINE_DIVISOR of its raw
+-- step per detent (lib/ui/detent.lua)
+local FINE_DIVISOR = 10
 
 -- cleanup()'s steps in the order it runs them: each module registers its
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
@@ -209,5 +218,7 @@ return {
   GRID_HOLD = GRID_HOLD,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
+  DETENT = DETENT,
+  FINE_DIVISOR = FINE_DIVISOR,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }

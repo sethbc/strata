@@ -143,4 +143,45 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   assert_equal(#context.calls_named("voiceOn"), 0, "switching creates no voice")
 end)
 
+test("toggle_lock locks and unlocks a voice", function()
+  local context = load_strata()
+  finish_startup(context)
+  local frozen = local_value("frozen")
+  local before = frozen[3] and true or false
+  toggle_lock(3); assert_true(frozen[3] == not before)
+  toggle_lock(3); assert_true(frozen[3] == before)
+  toggle_lock(99); toggle_lock(0)  -- ignored
+  assert_true(frozen[99] == nil and frozen[0] == nil, "out-of-range voices never grow the table")
+  assert_true(toggle_freeze == nil, "toggle_freeze is gone")
+end)
+
+-- 3.2 adds a real audio freeze ([F] on MAIN, freeze functions): that work must
+-- narrow or replace this scan.
+test("no Lua file says freeze for the lock feature", function()
+  local banned = { "toggle_freeze", "%[FREEZE%]", "%[F%]", "_freeze%(", "start_or_freeze" }
+  for _, source in ipairs(h.read_lua_sources()) do
+    if not source.path:match("^test/") then
+      local code = source.text:gsub("%-%-[^\n]*", "")
+      for _, pattern in ipairs(banned) do
+        assert_true(not code:find(pattern), source.path .. " still says " .. pattern)
+      end
+    end
+  end
+end)
+
+test("each effect remembers its last non-zero mix", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.fx_last_mix.filter, 1); assert_equal(S.fx_last_mix.delay, 0.3)
+  assert_equal(S.fx_last_mix.reverb, 0.3)
+  params:set("delay_mix", 0.6); params:set("delay_mix", 0)
+  assert_equal(S.fx_last_mix.delay, 0.6); assert_equal(S.fx_last_mix.reverb, 0.3)
+  params:set("reverb_mix", 0.8); params:set("reverb_mix", 0)
+  assert_equal(S.fx_last_mix.reverb, 0.8)
+  params:set("filter_mix", 0.4); params:set("filter_mix", 0)
+  assert_equal(S.fx_last_mix.filter, 0.4)
+  assert_equal(S.fx_last_mix.delay, 0.6, "other effects keep theirs")
+end)
+
 end

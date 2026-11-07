@@ -57,14 +57,14 @@ return function(S)
     if n == 2 then
       S.fx_row = util.clamp(S.fx_row + d, 1, #S.FX_PAGE.rows)
     elseif n == 3 then
-      params:delta(S.FX_PAGE.rows[S.fx_row].param_id, d)
+      enc_param_delta(n, S.FX_PAGE.rows[S.fx_row].param_id, d)
     end
   end
 
   -- K3 on FX: bypass the filter (mix 0), or bring back its last non-zero mix
   local function fx_key(n)
     if n == 3 then
-      params:set("filter_mix", params:get("filter_mix") > 0 and 0 or S.fx_filter_last_mix)
+      params:set("filter_mix", params:get("filter_mix") > 0 and 0 or S.fx_last_mix.filter)
     end
   end
 
