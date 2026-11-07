@@ -3,7 +3,7 @@
 - The page has no clock of its own: `draw_frame` marks the screen dirty on every frame while it is shown (15 fps), so the dots move. `cleanup` stops the frame clock with `stop_frame_clock()`.
 - Changing `S.selected_lfo` (K2/K3) calls `forget_arc_ticks("lfo:4")`, so ring 4's carried ticks never step another LFO's clocked rate. Only a real change forgets them (K3 on LFO 3 forgets nothing); the depth rings' keys (`lfo:1`-`lfo:3`) are never forgotten here.
 - Every E3 edit goes through `enc_param_delta(3, id, d)` (center detents, ALT+E3 fine on a control param), except the on/off field and ALT+E3 on the destination.
-- Turning an LFO on or off from the page (ALT+K3, E3 on the on/off field, ALT+K2 on it, the arc button) goes through `set_lfo_running`, which puts `lfo_offset_<n>` back: the library's state action re-bangs the baseline, and its `change_offset` sets the offset to 0. Never `params:set("lfo_<n>", ...)` directly from the page.
+- Turning an LFO on or off from the page (ALT+K3, E3 on the on/off field, ALT+K2 on it, the arc button) goes through `set_lfo_running`, a plain `params:set("lfo_<n>", ...)`. The offset survives because `lib/lfos.lua`'s wrapper of the state action restores it (#103), not because of anything on the page.
 - `lfo_dest_group_starts()` is derived from `S.LFO_DESTINATIONS` and `NUM_VOICES` (none, the first global, then `v1 main` and every `per_voice` after it), never hardcoded. Adding a global destination or a per-voice destination keeps it right as long as the voice destinations stay last, `v1 main` first, the same number per voice.
 - The strip measures with `screen.text_extents`, so it fits whatever the real font draws; the layout tests use the stub's estimate (`stubs.text_width`), which is wider, so the device shows at least as many fields as the renders.
 - Rows and strip stay between y 10 and 56 (above the hint row's glyphs) for every selected LFO: `LFO_PAGE.row_first_y` 12, `row_spacing` 12, `strip_height` 8. The rows test in `test/unit/pages_lfo_test.lua` checks it.
@@ -34,5 +34,5 @@ Input:
 - `lfo_dest_group_jump(index, d)`: the first start above `index` (d > 0) or the last start below it (d < 0); `index` itself when there is none. Today the starts are 1, 2, 13, 21, ..., 61.
 - K2/K3: `select_lfo_by(-1|1)`, clamped to 1..`NUM_LFOS`.
 - `alt_key`: ALT+K2 sets the field's param to `param_default(id)` (depth 25, destination none, free period 4 s, offset 0, on/off off); ALT+K3 toggles the selected LFO. `arc_button` is the same toggle.
-- Hints: `K2/K3:lfo E3:<label>`; with ALT `K2:reset K3:on|off`.
+- Hints: `K2/K3:lfo E3:<label>`; with ALT `K2:reset K3:on|off`, plus ` E3:group` on the destination field (`K2:reset K3:off E3:group`, 120 px by the stub's estimate, is the longest).
 - `layout_states`: `lfo1`-`lfo3` (each selected, running, on the last destination), `field-dest` ... `field-state` (LFO 2 with wide values: v7 scan, random, 300 s, 100 %, -50 %), `clocked` (LFO 3 at `5/16`), `free` (LFO 1 at 0.1 s).

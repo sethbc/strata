@@ -8,13 +8,13 @@ Under the selected LFO's row, one line shows its settings, left to right: destin
 
 - **E2** - Move the cursor along the settings line
 - **E3** - Change the setting under the cursor, both ways (the destination stops at none and at the last voice's scan). On the rate: ALT+E3 changes the free period in finer steps
-- **ALT+E3** on the destination - Jump a group: none, the global destinations (density, drift, filter, delay, reverb), then voice 1 ... voice 7 (each group starts at the voice's main parameter)
+- **ALT+E3** on the destination - Jump a group (the ALT hint row shows `E3:group` there): none, the global destinations (density, drift, filter, delay, reverb), then voice 1 ... voice 7 (each group starts at the voice's main parameter)
 - **K2** / **K3** - Select the previous / next LFO
 - **ALT+K2** - Reset the setting under the cursor to its default
 - **ALT+K3** - Turn the selected LFO on or off (the hint row shows `K3:on` or `K3:off`). The arc's button does the same on this page
 
 LFOs start at 25 % depth, so turning one on is audible straight away. A scene saved with another depth (0 included) recalls its own depth.
 
-The offset shifts the LFO's swing up or down (-50 to 50 % with the "from center" baseline). Turning an LFO on or off from this page keeps its offset; norns' LFO library sets the offset back to 0 when the LFO is turned on or off anywhere else (in PARAMETERS, or by a scene recall that turns it on or off). Scenes do not store the offset. Phase, baseline, min/max and the reset settings stay in PARAMETERS > LFO 1-3.
+The offset shifts the LFO's swing up or down (-50 to 50 % with the "from center" baseline). Turning an LFO on or off keeps its offset, wherever you do it; changing the baseline in PARAMETERS sets it back to 0. Scenes do not store the offset. Phase, baseline, min/max and the reset settings stay in PARAMETERS > LFO 1-3.
 
 What the LFOs modulate is described in [Modulation](../modulation.md).

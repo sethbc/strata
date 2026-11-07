@@ -235,4 +235,26 @@ test("cleanup stops the LFOs and restores their destinations", function()
   assert_near(context.calls_named("setFilter")[1].args[1], 800, 1e-6, "destination restored")
 end)
 
+-- the library's on/off action re-bangs the baseline, whose change_offset
+-- zeroes the offset (#103): Strata keeps it across on/off, wherever the
+-- state is set, while a real baseline change still zeroes it
+test("an LFO keeps its offset when turned on or off, and a baseline change zeroes it (#103)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[2]
+  params:set("lfo_offset_2", 15)
+  params:set("lfo_2", 2)
+  assert_equal(params:get("lfo_offset_2"), 15, "on through PARAMS keeps the offset")
+  assert_near(lfo:get("offset"), 0.15, 1e-9, "and so does the library")
+  params:set("lfo_2", 1)
+  assert_equal(params:get("lfo_offset_2"), 15, "off through PARAMS keeps it")
+  params:set("lfo_offset_2", -20); params:set("lfo_2", 2)
+  assert_equal(params:get("lfo_offset_2"), -20, "a negative offset too")
+  params:set("lfo_baseline_2", 1)   -- from min
+  assert_equal(params:get("lfo_offset_2"), 0, "a baseline change zeroes it, as the library intends")
+  params:set("lfo_offset_2", 30); params:set("lfo_baseline_2", 2)
+  assert_equal(params:get("lfo_offset_2"), 0, "back to center zeroes it again")
+  params:set("lfo_offset_2", 10); params:set("lfo_2", 1)
+  assert_equal(params:get("lfo_offset_2"), 10, "and on/off keeps the new one")
+end)
+
 end

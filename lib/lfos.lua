@@ -195,7 +195,15 @@ return function(S)
       depth_param.default = math.floor(depth_param.default + 0.5)
       depth_param.value = depth_param.default
       note_lfo_reset(n)
-      wrap_param_action("lfo_" .. n, nil, function(state)
+      -- the library's state action re-bangs the baseline, whose
+      -- change_offset sets lfo_offset_<n> to 0 (#103): keep the offset across
+      -- on/off (a real baseline change still zeroes it)
+      local offset_id = "lfo_offset_" .. n
+      local offset_before_state
+      wrap_param_action("lfo_" .. n, function()
+        offset_before_state = params:get(offset_id)
+      end, function(state)
+        if params:get(offset_id) ~= offset_before_state then params:set(offset_id, offset_before_state) end
         if state == 1 then
           restore_lfo_destination(n)
           S.lfo_last_raw[n] = nil

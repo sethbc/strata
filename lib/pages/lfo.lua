@@ -126,13 +126,9 @@ return function(S)
     return index
   end
 
-  -- Turn LFO n on or off. The library's on/off action re-bangs its baseline,
-  -- which sets the offset back to 0, so the page puts the offset back
+  -- Turn LFO n on or off (lib/lfos.lua keeps its offset across on/off)
   local function set_lfo_running(n, on)
-    local offset_id = "lfo_offset_" .. n
-    local offset = params:get(offset_id)
     params:set("lfo_" .. n, on and 2 or 1)
-    if params:get(offset_id) ~= offset then params:set(offset_id, offset) end
   end
 
   local function toggle_selected_lfo()
@@ -263,7 +259,9 @@ return function(S)
   -- The hint row (redraw() draws it after the page)
   local function lfo_hints(alt_held)
     if alt_held then
-      return "K2:reset K3:" .. (lfo_running(S.selected_lfo) and "off" or "on")
+      -- on the destination, ALT+E3 jumps a group
+      local jump = S.lfo_field == DEST_FIELD and " E3:group" or ""
+      return "K2:reset K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
     end
     return "K2/K3:lfo E3:" .. LFO_FIELDS[S.lfo_field].label
   end
