@@ -177,4 +177,210 @@ test("mean_reverting_step: one random step plus a pull toward the base, used by 
     "buffer position drift step")
 end)
 
+-- Randomize undo (one level, UNDO_SECONDS): S.undo holds the values the last
+-- randomize replaced, and undo_randomize puts them back through params:set
+
+-- The param ids randomize_voice sets for voice 1 with its current source
+local function randomized_ids()
+  local ids = {}
+  if voice_uses_synth(1) then
+    for key in pairs(local_value("voices")[1].params) do
+      if key ~= "amp" then ids[#ids + 1] = "v1_" .. key end
+    end
+  elseif voice_uses_buffer(1) then
+    ids = { "v1_buf_pos", "v1_buf_rate", "v1_buf_scan" }
+  end
+  ids[#ids + 1] = "v1_grain_size"; ids[#ids + 1] = "v1_grain_pitch"
+  table.sort(ids)
+  return ids
+end
+
+local function stored_ids()
+  local ids = {}
+  for id in pairs(local_value("undo").values) do ids[#ids + 1] = id end
+  table.sort(ids)
+  return ids
+end
+
+test("undo restores the values a randomize changed", function()
+  local context = load_strata(); finish_startup(context)   -- voice 1 (synth source) running
+  assert_equal(local_value("UNDO_SECONDS"), 5, "UNDO_SECONDS")
+  assert_true(not undo_available(1), "no undo before a randomize")
+  assert_equal(undo_randomize(), false, "nothing to undo")
+  local before = {}
+  for _, id in ipairs(randomized_ids()) do before[id] = params:get(id) end
+  local amp = params:get("v1_amp")
+  math.randomseed(21); randomize_voice(1)
+  assert_true(undo_available(1), "undo available for voice 1")
+  assert_true(not undo_available(2), "and for no other voice")
+  local undo = local_value("undo")
+  assert_equal(undo.voice, 1, "S.undo.voice")
+  assert_near(undo.until_time, util.time() + 5, 1e-9, "S.undo.until_time")
+  assert_equal(table.concat(stored_ids(), " "), table.concat(randomized_ids(), " "),
+    "every param randomize sets is stored, amp is not")
+  for id, value in pairs(before) do assert_equal(undo.values[id], value, id .. " stored before the change") end
+  assert_true(params:get("v1_freq") ~= before.v1_freq, "the randomize changed freq")
+  local engine_calls = #context.engine_calls
+  assert_equal(undo_randomize(), true, "undo_randomize reports the undo")
+  for id, value in pairs(before) do assert_near(params:get(id), value, 1e-9, id .. " restored") end
+  assert_equal(params:get("v1_amp"), amp, "amp untouched")
+  assert_true(#context.engine_calls > engine_calls, "the restore reaches the engine (params:set)")
+  assert_equal(local_value("undo"), nil, "the undo is cleared")
+  assert_true(not undo_available(1), "no second undo")
+  assert_equal(undo_randomize(), false, "undo_randomize after the undo does nothing")
+end)
+
+test("undo expires after 5 s and requests a redraw", function()
+  local context = load_strata(); finish_startup(context)
+  randomize_voice(1)
+  local start = util.time()
+  local real_request_redraw = request_redraw
+  local requests = {}
+  request_redraw = function() requests[#requests + 1] = util.time(); real_request_redraw() end
+  context.clock.run_for(4.9)
+  assert_true(undo_available(1), "still available at 4.9 s")
+  context.clock.run_for(0.11)
+  request_redraw = real_request_redraw
+  assert_true(not undo_available(1), "expired after 5 s")
+  assert_equal(local_value("undo"), nil, "the expiry clears S.undo")
+  local at_expiry = false
+  for _, time in ipairs(requests) do
+    if math.abs(time - (start + 5)) < 1e-6 then at_expiry = true end
+  end
+  assert_true(at_expiry, "a redraw is requested at until_time, without input")
+  assert_equal(local_value("undo_clock"), nil, "the expiry clock is done")
+  -- availability follows util.time() even before the clock runs
+  randomize_voice(1)
+  context.set_time(util.time() + 5)
+  assert_true(not undo_available(1), "not available at until_time")
+  assert_equal(undo_randomize(), false, "and not undone")
+end)
+
+test("a manual edit of a stored param clears the undo, an edit of another param does not", function()
+  local context = load_strata(); finish_startup(context)
+  randomize_voice(1)
+  params:set("v1_grain_density", 77)                 -- not stored
+  assert_true(undo_available(1), "an edit of a param randomize left alone keeps the undo")
+  params:set("v1_rq", params:get("v1_rq") == 0.5 and 0.4 or 0.5)
+  assert_equal(local_value("undo"), nil, "an edit of a stored param clears it")
+  assert_equal(local_value("undo_clock"), nil, "and cancels its expiry clock")
+  -- every param a randomize stores reports its edits, for each kind of source
+  for _, source in ipairs({ 1, 2, 10 }) do            -- synth, buffer, input
+    params:set("v1_source", source)
+    for _, id in ipairs(randomized_ids()) do
+      randomize_voice(1)
+      assert_true(local_value("undo").values[id] ~= nil, "source " .. source .. ": " .. id .. " stored")
+      local spec = params:lookup_param(id).controlspec
+      params:set(id, spec:map(spec:unmap(params:get(id)) < 0.5 and 0.9 or 0.1))
+      assert_equal(local_value("undo"), nil, "source " .. source .. ": an edit of " .. id .. " clears the undo")
+    end
+  end
+end)
+
+test("the drift's pitch writes do not clear the undo; undo restores the stored pitch", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_source", 2)                           -- buffer: the position drifts too
+  local pitch, position = params:get("v1_grain_pitch"), params:get("v1_buf_pos")
+  math.randomseed(4); randomize_voice(1)
+  for _ = 1, 20 do drift_update() end
+  assert_true(undo_available(1), "drift writes keep the undo")
+  assert_true(undo_randomize(), "undo")
+  assert_near(params:get("v1_grain_pitch"), pitch, 1e-9, "the stored pitch is back")
+  assert_near(params:get("v1_buf_pos"), position, 1e-9, "the stored position is back")
+  assert_near(local_value("grain_pitch_base")[1], pitch, 1e-9, "the drift carries on from the restored pitch")
+  assert_near(local_value("buf_pos_base")[1], position, 1e-9, "and the restored position")
+end)
+
+test("a randomize of another voice, a recall or a mutation of the voice clears the undo", function()
+  local context = load_strata(); finish_startup(context)   -- voices 1 and 2 running
+  -- another voice's randomize replaces it (one level)
+  randomize_voice(1); randomize_voice(2)
+  assert_true(not undo_available(1), "voice 1's undo is gone")
+  assert_true(undo_available(2), "voice 2's randomize holds the undo")
+  -- a second randomize of the same voice stores the values it replaced
+  local first = params:get("v2_grain_size")
+  randomize_voice(2)
+  assert_equal(local_value("undo").values.v2_grain_size, first, "the latest randomize's previous values")
+  -- scene recalls: instant, faded, and recall_scene_instant directly
+  capture_scene(1)
+  for _, recall in ipairs({
+    function() recall_scene(1) end,
+    function() recall_scene(1, 2) end,
+    function() recall_scene_instant(1) end,
+  }) do
+    randomize_voice(1); assert_true(undo_available(1), "undo before the recall")
+    recall()
+    assert_equal(local_value("undo"), nil, "a recall clears the undo")
+    cancel_scene_transition()
+  end
+  -- a mutation step on another voice keeps it; one on the undo's voice clears it
+  params:set("mutation_probability", 1); params:set("mutation_amount", 0.5)
+  randomize_voice(2); toggle_freeze(2)                 -- voice 2 locked: only voice 1 mutates
+  gentle_mutate()
+  assert_true(undo_available(2), "a mutation of another voice keeps the undo")
+  toggle_freeze(2)
+  gentle_mutate()
+  assert_equal(local_value("undo"), nil, "a mutation step on the undo's voice clears it")
+  -- a mutation step that changes only an unstored param of the voice clears it too
+  params:set("v2_source", 10)                           -- input: grain params only
+  randomize_voice(2)
+  local discrete = local_value("DISCRETE_GRAIN_KEYS")
+  discrete.size = 1; discrete.pitch = 1                 -- only grain spread may mutate
+  local spread = params:get("v2_grain_spread")
+  for _ = 1, 200 do                                     -- spread mutates in a fifth of the steps
+    gentle_mutate()
+    if params:get("v2_grain_spread") ~= spread then break end
+    assert_true(undo_available(2), "a step that changes nothing on the voice keeps the undo")
+  end
+  discrete.size = nil; discrete.pitch = nil
+  assert_true(params:get("v2_grain_spread") ~= spread, "grain spread mutated")
+  assert_equal(local_value("undo"), nil, "a mutation of grain spread on the voice clears it")
+end)
+
+test("a locked voice is not randomized and keeps an earlier undo", function()
+  local context = load_strata(); finish_startup(context)
+  randomize_voice(1)
+  local undo = local_value("undo")
+  toggle_freeze(2)
+  local size = params:get("v2_grain_size")
+  randomize_voice(2)
+  assert_equal(params:get("v2_grain_size"), size, "locked voice unchanged")
+  assert_true(local_value("undo") == undo and undo_available(1), "voice 1's undo stays")
+  assert_true(not undo_available(2), "nothing stored for the locked voice")
+  randomize_voice(0); randomize_voice(8)                 -- out of range: ignored
+  assert_true(local_value("undo") == undo, "out-of-range voices leave the undo alone")
+end)
+
+test("an input voice's undo holds only grain size and pitch", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_source", 10)
+  randomize_voice(1)
+  assert_equal(table.concat(stored_ids(), " "), "v1_grain_pitch v1_grain_size", "only grain size and pitch")
+  params:set("v1_source", 2)
+  randomize_voice(1)
+  assert_equal(table.concat(stored_ids(), " "), "v1_buf_pos v1_buf_rate v1_buf_scan v1_grain_pitch v1_grain_size",
+    "a buffer voice's undo: buffer params, grain size and pitch")
+end)
+
+test("the undo flag clears after an error in a param action, and cleanup cancels the expiry clock", function()
+  local context = load_strata(); finish_startup(context)
+  local param = params:lookup_param("v1_grain_size")
+  local real_action = param.action
+  param.action = function() error("grain size failed") end
+  local ok, message = pcall(randomize_voice, 1)
+  assert_true(not ok and tostring(message):find("grain size failed", 1, true), "the error is raised")
+  assert_true(tostring(message):find("stack traceback:", 1, true), "with its traceback")
+  param.action = real_action
+  assert_equal(local_value("undo_writing"), false, "undo_writing cleared")
+  randomize_voice(1)
+  params:set("v1_grain_size", params:get("v1_grain_size") == 0.2 and 0.3 or 0.2)
+  assert_equal(local_value("undo"), nil, "a later edit clears the undo again")
+  randomize_voice(1)
+  local clock_id = local_value("undo_clock")
+  assert_true(clock_id ~= nil, "expiry clock running")
+  cleanup()
+  assert_equal(local_value("undo_clock"), nil, "cleanup cancels the expiry clock")
+  assert_equal(context.clock.threads[clock_id], nil, "the clock is gone")
+end)
+
 end

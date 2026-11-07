@@ -11,6 +11,7 @@ local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
+local LONG_PRESS_SECONDS = 0.6  -- K2/K3 hold for the ALT long-press fallback (lib/ui/alt.lua; unused while K1 is ALT)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
@@ -116,6 +117,9 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- How long a randomize can be undone (lib/mutation.lua, S.undo)
+local UNDO_SECONDS = 5
+
 -- cleanup()'s steps in the order it runs them: each module registers its
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
 -- The files are saved before anything stops, with the stored values (the
@@ -131,6 +135,7 @@ local CLEANUP_ORDER = {
   frame_clock = 60,         -- lib/ui/frame.lua
   drift_metro = 70,         -- lib/mutation.lua
   mutation_metro = 80,      -- lib/mutation.lua (and its param)
+  undo_clock = 85,          -- lib/mutation.lua: the randomize undo's expiry clock
   pattern_clock = 90,       -- lib/sequencer.lua
   scene_sequencer = 100,    -- lib/scenes.lua (and its param)
   scene_transition = 110,   -- lib/scenes.lua
@@ -151,6 +156,7 @@ return {
   NUM_MOD_SLOTS = NUM_MOD_SLOTS,
   NUM_UI_PAGES = NUM_UI_PAGES,
   E1_TICKS_PER_PAGE = E1_TICKS_PER_PAGE,
+  LONG_PRESS_SECONDS = LONG_PRESS_SECONDS,
   MAX_STEP_LEVEL = MAX_STEP_LEVEL,
   NUM_BUFFERS = NUM_BUFFERS,
   BUFFER_SECONDS = BUFFER_SECONDS,
@@ -169,5 +175,6 @@ return {
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  UNDO_SECONDS = UNDO_SECONDS,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }
