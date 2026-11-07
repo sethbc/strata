@@ -240,19 +240,28 @@ var probeFree = { arg count;
 
 // Build an engine in a context and wait for its alloc. settings: an Event
 // of Engine_Strata classvars (settingsDir, modelPath, meminfoPath) set for
-// this build only (the previous values come back once it is built).
+// this build only (the previous values come back once it is built). A
+// settingsDir or modelPath left out is a fresh folder below the check's temp
+// dir and a model file that does not exist, so the performance area never
+// reads or writes ~/dust and decides auto on an unknown board: standard.
+var settingsBuilds = 0;
 var buildEngine = { arg target, settings;
-    var done = Condition(false), built, saved = IdentityDictionary.new;
-    (settings ? ()).keysValuesDo({ arg key, value;
+    // saved: [key, previous value] pairs (a Dictionary would drop a nil value)
+    var done = Condition(false), built, saved = List.new;
+    settings = (settings ? ()).copy;
+    settingsBuilds = settingsBuilds + 1;
+    if (settings[\settingsDir].isNil) { settings[\settingsDir] = scratchRoot +/+ ("settings" ++ settingsBuilds ++ "/") };
+    if (settings[\modelPath].isNil) { settings[\modelPath] = scratchRoot +/+ "no-board-model" };
+    settings.keysValuesDo({ arg key, value;
         var setter = (key.asString ++ "_").asSymbol;
         if (Engine_Strata.respondsTo(setter).not) { Error("Engine_Strata has no classvar " ++ key).throw };
-        saved[key] = Engine_Strata.perform(key);
+        saved.add([key, Engine_Strata.perform(key)]);
         Engine_Strata.perform(setter, value);
     });
     built = Engine_Strata.new(target, { done.test = true; done.signal });
     awaitReply.(done, 30);
     server.sync;
-    saved.keysValuesDo({ arg key, value; Engine_Strata.perform((key.asString ++ "_").asSymbol, value) });
+    saved.do({ arg pair; Engine_Strata.perform((pair[0].asString ++ "_").asSymbol, pair[1]) });
     takeCommands.(built);
     built
 };

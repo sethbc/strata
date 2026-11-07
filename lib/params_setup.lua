@@ -8,7 +8,7 @@
 -- read by the FX page's K3. Reads, at init, the registered voice params
 -- (added through S.lib.params_setup.add_voice_extra), fx params, param
 -- filters and source change hooks (lib/state.lua), and sets S.performance
--- (the standard tier's values until 3.2's performance setting fills it).
+-- (the standard tier's values until the "performance" record fills it).
 
 return function(S)
   local M = {}
@@ -22,8 +22,9 @@ return function(S)
 
   -- The performance tier's values (tier, buffer_seconds, max_grains,
   -- history_seconds): the standard tier's, a copy so nothing changes the
-  -- constant. 3.2's performance setting fills it at init, before any param
-  -- is added; every tier-dependent spec reads it as its params are added
+  -- constant. The "performance" record (lib/performance.lua) fills it at
+  -- init, before any param is added; every tier-dependent spec reads it as
+  -- its params are added
   S.performance = {}
   for key, value in pairs(S.constants.STANDARD_PERFORMANCE) do S.performance[key] = value end
 
@@ -90,6 +91,10 @@ return function(S)
         record.count), 0)
     end
   end
+
+  -- The performance tier the engine runs (lib/performance.lua): first, so
+  -- S.performance is filled before any param is added. It adds no params
+  register_params("performance", function() S.lib.performance.read_active() end)
 
   register_params("master", function()
     params:add_separator("strata")

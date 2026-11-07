@@ -3,7 +3,7 @@
 - norns' scsynth pool is 8192 KB. The grain `PitchShift` window is the fixed `pitchShiftWindow` (0.1 s) and every `GrainIn`/`GrainBuf` uses `maxGrains` (128); never size a delay line or table from a control.
 - A voice never holds more than its live synths, one fading and one cutting set, however fast switches, stops and starts arrive (`freeCuttingSynths`, `fadeSupersededSynths`).
 - The worst case (spaced, in a burst and for fast A -> B -> A -> C recalls) leaves at least 1 MB of the pool free.
-- **Buffer memory**: 8 × 2 mono buffers of 16 s (≈ 49 MB, not in the real-time pool). Never allocate longer ones.
+- **Buffer memory**: 8 × 2 mono buffers of `bufferSeconds` (16 s on standard, ≈ 49 MB; up to 300 s on high, set by the performance area: [performance.md](performance.md); not in the real-time pool). Never allocate longer ones.
 
 ## Real-time memory
 

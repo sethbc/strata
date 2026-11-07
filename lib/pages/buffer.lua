@@ -15,7 +15,6 @@ return function(S)
   local M = {}
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local NUM_VOICES = S.constants.NUM_VOICES
-  local BUFFER_SECONDS = S.constants.BUFFER_SECONDS
   local UI_PAGES = S.constants.UI_PAGES
   local fileselect = require "fileselect"
 
@@ -185,7 +184,7 @@ return function(S)
     screen.move(PAGE.slot_x, y)
     screen.text(tostring(slot))
     -- names end before the seconds column (the widest seconds, "16.0s")
-    local name_right = value_right - text_width(string.format("%.1fs", BUFFER_SECONDS)) - PAGE.column_gap
+    local name_right = value_right - text_width(string.format("%.1fs", S.performance.buffer_seconds)) - PAGE.column_gap
     if not empty then
       local seconds = buffer.recording and "REC" or string.format("%.1fs", buffer.seconds)
       screen.move(value_right, y)
@@ -497,7 +496,7 @@ return function(S)
   local function load_long_names(context)
     for slot = 1, NUM_BUFFERS do
       load_buffer(slot, "/tmp/" .. LONG_NAMES[(slot - 1) % #LONG_NAMES + 1])
-      context.polls.fire("bufferState", (slot - 1) * 100 + BUFFER_SECONDS)
+      context.polls.fire("bufferState", (slot - 1) * 1000 + S.performance.buffer_seconds)
     end
   end
 
@@ -510,7 +509,7 @@ return function(S)
     {name = "slot 1", setup = function(context) load_long_names(context); voices_on_slot(1, 2) end},
     {name = "slot 8", setup = function(context)
       load_long_names(context); voices_on_slot(8, 2); S.buffer_page.slot = NUM_BUFFERS end},
-    {name = "field dur", setup = function() S.buffer_page.field = 2; params:set("record_duration", BUFFER_SECONDS) end},
+    {name = "field dur", setup = function() S.buffer_page.field = 2; params:set("record_duration", S.performance.buffer_seconds) end},
     {name = "field lvl", setup = function() S.buffer_page.field = 3; params:set("record_level", 0.5) end},
     {name = "long names", setup = function(context)
       load_long_names(context); voices_on_slot(4, NUM_VOICES); S.buffer_page.slot = 4 end},

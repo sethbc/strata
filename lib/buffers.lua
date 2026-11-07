@@ -11,7 +11,7 @@
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride by matching this line in the script's sources
-local BUFFER_STATE_STRIDE = 100  -- bufferState value = slot index * 100 + valid seconds (engine bufferStateStride)
+local BUFFER_STATE_STRIDE = 1000  -- bufferState value = slot index * 1000 + valid seconds (engine bufferStateStride)
 
 return function(S)
   local M = {}
@@ -218,7 +218,9 @@ return function(S)
       engine.stopRecord(slot - 1)
       finish_buffer_take(slot)
     else
-      local duration = params:get("record_duration")
+      -- at most what a slot holds on this tier (the param's range already
+      -- ends there; a value set before the range was known never passes it)
+      local duration = math.min(params:get("record_duration"), S.performance.buffer_seconds)
       engine.recordBuffer(slot - 1, duration, params:get("record_level"))
       set_buffer_file_param(slot, _path.audio)
       buffer.recording = true
@@ -277,7 +279,7 @@ return function(S)
     print("buffer " .. slot .. " saved to " .. path)
   end
 
-  -- bufferState poll: one slot per message, slot index * 100 + seconds. It
+  -- bufferState poll: one slot per message, slot index * 1000 + seconds. It
   -- also settles a take or load awaiting the engine (confirm_since set,
   -- settle_buffer_slot), on any report, repeated or not: audio settles it at
   -- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or

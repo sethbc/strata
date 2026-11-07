@@ -1,10 +1,12 @@
 -- lib/pages/setup.lua
 -- The SETUP page: a field list (MIDI port, channel mode, mutations on/off,
--- rate, probability, amount, save scenes, load scenes) with the status lines
--- (grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
+-- rate, probability, amount, save scenes, load scenes, the performance
+-- setting and its buffer length) with the status lines (the running tier,
+-- grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
 -- value, K3 runs a save/load field. It scrolls like FX
--- (S.lib.ui_field_list). Registers its S.registry.pages record. The
--- functions that were global stay global.
+-- (S.lib.ui_field_list). The performance fields edit the setting
+-- (S.lib.performance), not params. Registers its S.registry.pages record.
+-- The functions that were global stay global.
 
 return function(S)
   local M = {}
@@ -17,6 +19,8 @@ return function(S)
     first_y = 18,
     spacing = 6,
     value_right = 124,    -- the scroll marker owns x 127
+    note_indent = 8,      -- a field's dim note row ("(next start)", ...) starts here
+    xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
   }
 
   -- The fields, in cursor order. kind "param": E3 edits param_id, shown with
@@ -34,6 +38,11 @@ return function(S)
   }
   M.SETUP_FIELDS = SETUP_FIELDS
 
+  -- The performance setting's fields (kind "performance": E3 steps key's
+  -- choices in S.lib.performance.PERFORMANCE)
+  local PERFORMANCE_FIELD = {label = "performance", kind = "performance", key = "performance"}
+  local BUFFER_FIELD = {label = "buffer length", kind = "performance", key = "buffer_seconds"}
+
   S.setup_cursor = 1      -- a row index into setup_rows(), always a field
 
   -- The connected grids' count and sizes, in port order
@@ -49,12 +58,51 @@ return function(S)
     return count, sizes
   end
 
+  local function note_row(text)
+    return {selectable = false, text = text, dim = true, indent = SETUP_PAGE.note_indent}
+  end
+
+  -- The performance fields, then their dim note rows (below both fields, so
+  -- the view, which keeps one row above the cursor, always shows the
+  -- performance field above the buffer length): "(next start)" when a
+  -- shown field differs from the setting this start used (the engine read
+  -- the same file at alloc), "may xrun" for high on a CM3 or Pi 3, and the
+  -- memory step-down ("300 s -> 120 s (memory)") when the high tier runs
+  -- shorter buffers than the unchanged setting asks for. The buffer length
+  -- is offered when the setting or the running tier is high
+  local function add_performance_rows(rows)
+    local performance = S.lib.performance
+    local setting = performance.setting()
+    local start = S.performance_start_setting or setting
+    local running = S.performance
+    local buffer_shown = setting.performance == "high" or running.tier == "high"
+    table.insert(rows, PERFORMANCE_FIELD)
+    if buffer_shown then table.insert(rows, BUFFER_FIELD) end
+    local notes = {}
+    if setting.performance ~= start.performance
+      or (buffer_shown and setting.buffer_seconds ~= start.buffer_seconds) then
+      table.insert(notes, "(next start)")
+    end
+    if setting.performance == "high" and SETUP_PAGE.xrun_platforms[norns.platform] then
+      table.insert(notes, "may xrun")
+    end
+    if #notes > 0 then table.insert(rows, note_row(table.concat(notes, ", "))) end
+    if buffer_shown and running.tier == "high" and setting.buffer_seconds == start.buffer_seconds
+      and running.buffer_seconds < setting.buffer_seconds then
+      table.insert(rows, note_row(string.format("%d s -> %d s (memory)", setting.buffer_seconds,
+        running.buffer_seconds)))
+    end
+  end
+
   -- The fields, then the status lines (no cursor stops). The sizes line
   -- exists only while a grid is connected. Restored buffers are confirmed by
   -- the engine; missing files are remembered paths not found on start
   local function setup_rows()
     local rows = {}
     for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
+    add_performance_rows(rows)
+    table.insert(rows, {selectable = false, text = S.performance.tier == "high"
+      and string.format("running: high, %d s", S.performance.buffer_seconds) or "running: standard"})
     local grid_count, grid_sizes = connected_grids()
     table.insert(rows, {selectable = false, text = "grid: " .. grid_count .. " connected"})
     if grid_count > 0 then
@@ -72,13 +120,17 @@ return function(S)
   end
 
   local function field_value(field)
+    if field.kind == "performance" then
+      local value = S.lib.performance.setting()[field.key]
+      return field.key == "buffer_seconds" and (value .. " s") or value
+    end
     if field.format then return string.format(field.format, params:get(field.param_id)) end
     if field.param_id == "mutation_enabled" then return params:get(field.param_id) == 1 and "on" or "off" end
     return params:string(field.param_id)
   end
 
   local function draw_row(row, y, selected, value_right)
-    screen.move(0, y)
+    screen.move(row.indent or 0, y)
     if row.selectable == false then
       screen.level(row.dim and 4 or 10)
       screen.text(row.text)
@@ -90,7 +142,7 @@ return function(S)
     else
       screen.level(selected and 15 or 4)
       screen.text(row.label)
-      if row.kind == "param" then
+      if row.kind == "param" or row.kind == "performance" then
         screen.move(value_right, y)
         screen.text_right(field_value(row))
       end
@@ -106,7 +158,7 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page)
   local function setup_hints(alt_held)
-    local field = SETUP_FIELDS[S.setup_cursor]
+    local field = setup_rows()[S.setup_cursor]
     local hints = "E2:field E3:value"
     if field and field.hint then hints = hints .. " K3:" .. field.hint end
     return hints
@@ -115,9 +167,29 @@ return function(S)
   -- K3 runs the save/load field under the cursor; elsewhere it does nothing
   local function setup_key(n)
     if n == 3 then
-      local field = SETUP_FIELDS[S.setup_cursor]
+      local field = setup_rows()[S.setup_cursor]
       if field and field.kind == "action" then _G[field.action]() end
     end
+  end
+
+  -- The choice d steps from value in choices (clamped at the ends)
+  local function step_choice(choices, value, d)
+    local index = 1
+    for position, choice in ipairs(choices) do
+      if choice == value then index = position end
+    end
+    return choices[util.clamp(index + d, 1, #choices)]
+  end
+
+  -- E3 on a performance field: the next or previous choice, saved at once
+  -- (performance.data; the engine applies it at the next start)
+  local function step_performance_field(field, d)
+    local performance = S.lib.performance
+    local choices = field.key == "performance" and performance.PERFORMANCE.choices
+      or performance.PERFORMANCE.buffer_choices
+    local value = performance.setting()[field.key]
+    local stepped = step_choice(choices, value, d)
+    if stepped ~= value then performance.set_setting(field.key, stepped) end
   end
 
   -- E2 moves over the fields, E3 edits the one under the cursor
@@ -125,8 +197,10 @@ return function(S)
     if n == 2 then
       S.setup_cursor = field_list.move(setup_rows(), S.setup_cursor, d)
     elseif n == 3 then
-      local field = SETUP_FIELDS[S.setup_cursor]
-      if field and field.kind == "param" then
+      local field = setup_rows()[S.setup_cursor]
+      if field and field.kind == "performance" then
+        step_performance_field(field, d)
+      elseif field and field.kind == "param" then
         if field.param_id == "mutation_enabled" then
           params:set(field.param_id, d > 0 and 1 or 0)  -- a binary has no range for enc_param_delta
         else
@@ -159,6 +233,19 @@ return function(S)
       end},
       {name = "long MIDI device", setup = function(context)
         context.midi.plug(1, "Very Long Manufacturer Name USB MIDI Interface Port 1")
+      end},
+      {name = "performance: standard", setup = function() enc(2, 20) end},
+      {name = "performance: high setting, standard tier on a CM3", setup = function()
+        norns.platform = 2
+        S.performance_setting = {performance = "high", buffer_seconds = 300}
+        enc(2, 20)
+      end},
+      {name = "performance: memory step-down", setup = function()
+        S.performance = {tier = "high", buffer_seconds = 120, max_grains = 128, history_seconds = 60,
+          reason = "high: setting"}
+        S.performance_setting = {performance = "high", buffer_seconds = 300}
+        S.performance_start_setting = {performance = "high", buffer_seconds = 300}
+        enc(2, 20)
       end},
     }}
 

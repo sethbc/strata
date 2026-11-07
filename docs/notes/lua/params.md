@@ -12,7 +12,7 @@
 - A registered record's `add` adds exactly `count` params (an error names the record otherwise), and every key its `grain_keys`, `scene_defaults` and `voice_rows.rows` name is one of the params it added with `add_voice_extra`.
 - Registered voice params are never on the 256 fader pages (`fader` is never true) and never touched by randomize or mutations: they live in `S.voices[i].extras`, which neither reads.
 - The fx group's size is its 11 params plus every registered fx record's `count`, and the registered fx params follow tape drift.
-- `S.performance` is a copy of `S.constants.STANDARD_PERFORMANCE`, never the constant itself. A tier-dependent spec reads it when its param is added (`record_duration`'s maximum is `S.performance.buffer_seconds`).
+- `S.performance` is never the constant `S.constants.STANDARD_PERFORMANCE` itself (a copy, or the table `lib/performance.lua` reads at init). A tier-dependent spec reads it when its param is added (`record_duration`'s maximum is `S.performance.buffer_seconds`).
 
 ## Owns
 
@@ -22,7 +22,7 @@
 - `S.fx_last_mix` (`{filter, delay, reverb}`: each mix action stores its last non-zero value; the FX page's K3 reads `.filter`) and `fx_fader_changed` (the grid's FX faders);
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
 - the readers of the voice-param, fx-param, param-filter and source-change registries (below), and `S.lib.params_setup.add_voice_extra`;
-- `S.performance` (the tier's values, standard until 3.2's performance setting fills it at init);
+- `S.performance` (the tier's values, standard until `lib/performance.lua` fills it at init);
 - cleanup step 10: the tempo handler given back.
 
 ## Parameter system
@@ -69,7 +69,7 @@ Menu order:
 
 **Fx params** (`S.register_fx_params({name, count, add})`). The fx group's size is 11 plus every record's `count`; init runs each `add()` after tape drift, in registration order, and checks the count.
 
-**`S.performance`** (`{tier, buffer_seconds, max_grains, history_seconds}`). This module's constructor sets it to a copy of `S.constants.STANDARD_PERFORMANCE` (standard: 16 s buffers, 128 grains, 16 s of input history). 3.2's performance setting fills it at init, from a params record that runs before any param is added. Every tier-dependent spec reads it as its param is added: `record_duration` goes from 0.5 s to `S.performance.buffer_seconds`.
+**`S.performance`** (`{tier, buffer_seconds, max_grains, history_seconds}`). This module's constructor sets it to a copy of `S.constants.STANDARD_PERFORMANCE` (standard: 16 s buffers, 128 grains, 16 s of input history). lib/performance.lua fills it at init (`read_active`), from the `"performance"` params record, which runs before any param is added ([performance.md](performance.md)). Every tier-dependent spec reads it as its param is added: `record_duration` goes from 0.5 s to `S.performance.buffer_seconds`.
 
 ## Tempo
 

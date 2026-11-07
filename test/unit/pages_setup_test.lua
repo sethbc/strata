@@ -100,7 +100,7 @@ test("SETUP scrolls with a marker and reaches both ends", function()
   show_page("SETUP")
   enc(2, 20)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 8, "the cursor is on load scenes")
+  assert_equal(local_value("S").setup_cursor, 9, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "load scenes"), "load scenes is drawn")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi port"), "the first fields scrolled out")
@@ -162,6 +162,167 @@ test("hot-plugged devices reach SETUP on the next frame (#11)", function()
   assert_true(screen_shows(context, "arc: connected"), "SETUP shows the new arc")
   assert_equal(arc_before_frame, 0, "arc.add: the new arc waits for the frame")
   assert_equal(new_arc.refresh_count, 1, "arc.add: the next frame draws the new arc once")
+end)
+
+-- The performance fields: the setting in performance.data (S.lib.performance),
+-- never a param
+local function entry_named(context, text)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text == text then return entry end
+  end
+end
+
+-- The other text on the label's row (the value, right-aligned at x 124)
+local function value_beside(context, label)
+  local label_entry = entry_named(context, label)
+  if not label_entry then return nil end
+  for _, entry in ipairs(context.screen.texts) do
+    if entry ~= label_entry and entry.y == label_entry.y then return entry.text end
+  end
+end
+
+local function read_file(path)
+  local file = io.open(path, "r")
+  if not file then return nil end
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
+local function write_file(path, text)
+  os.execute("mkdir -p '" .. path:match("^(.*)/") .. "'")
+  local file = assert(io.open(path, "w"))
+  file:write(text)
+  file:close()
+end
+
+-- Load with an active file (the engine's) and a setting file (Lua's), and
+-- show SETUP scrolled to its last field
+local function load_setup(active, setting_text)
+  if active then h.write_performance_active(active) end
+  local context = load_strata({ before_init = function(context)
+    if setting_text then write_file(context.data_dir .. "strata/performance.data", setting_text) end
+  end })
+  finish_startup(context)
+  show_page("SETUP"); enc(2, 20); redraw()
+  return context
+end
+
+local HIGH_60 = {tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60, reason = "high: setting"}
+
+test("SETUP shows the setting, (next start) and the running tier", function()
+  local context = load_setup()
+  assert_equal(value_beside(context, "performance"), "auto", "the setting: auto by default")
+  assert_true(screen_shows(context, "running: standard"), "the running tier")
+  assert_true(not screen_shows(context, "(next start)"), "the setting is what this start used")
+  assert_screen_layout(context, "SETUP performance auto")
+  enc(3, 2); redraw()
+  assert_equal(value_beside(context, "performance"), "high", "E3 steps to high")
+  assert_true(screen_shows(context, "(next start)"), "high applies at the next start")
+  assert_true(screen_shows(context, "running: standard"), "standard still runs")
+  assert_true(entry_named(context, "(next start)").x > 0, "the note is indented under the field")
+  assert_screen_layout(context, "SETUP performance high (next start)")
+  enc(3, -1); redraw()
+  assert_equal(value_beside(context, "performance"), "standard")
+  assert_true(screen_shows(context, "(next start)"), "standard differs from auto too")
+  enc(3, -5); redraw()
+  assert_equal(value_beside(context, "performance"), "auto", "clamped at auto")
+  assert_true(not screen_shows(context, "(next start)"), "back to the setting this start used")
+  -- a high start
+  context = load_setup(HIGH_60, "performance high\nbuffer_seconds 60\n")
+  assert_equal(value_beside(context, "performance"), "high")
+  assert_true(screen_shows(context, "running: high, 60 s"), "the running tier and its length")
+  assert_true(not screen_shows(context, "(next start)"), "nothing waits for the next start")
+  assert_screen_layout(context, "SETUP performance high")
+end)
+
+test("the buffer length field shows only for the high setting or tier", function()
+  local context = load_setup()
+  assert_true(not screen_shows(context, "buffer length"), "auto on standard: no buffer length")
+  enc(3, 2); redraw()
+  assert_equal(value_beside(context, "buffer length"), "60 s", "the high setting offers it")
+  enc(2, 1); enc(3, 1); redraw()
+  assert_equal(value_beside(context, "buffer length"), "120 s", "E3 steps 60 -> 120")
+  assert_true(screen_shows(context, "(next start)"), "the new length waits for the next start")
+  enc(3, 5); redraw()
+  assert_equal(value_beside(context, "buffer length"), "300 s", "clamped at 300")
+  enc(3, -9); redraw()
+  assert_equal(value_beside(context, "buffer length"), "16 s", "clamped at 16")
+  assert_screen_layout(context, "SETUP buffer length")
+  -- the running tier is high and the setting auto (a Pi 4)
+  context = load_setup({tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+    reason = "auto: Raspberry Pi 4 Model B Rev 1.4"})
+  assert_equal(value_beside(context, "performance"), "auto")
+  assert_equal(value_beside(context, "buffer length"), "60 s", "the high tier offers it")
+  -- the memory step-down
+  context = load_setup({tier = "high", buffer_seconds = 120, max_grains = 128, history_seconds = 60,
+    reason = "high: setting; buffer 300 s -> 120 s (memory)"}, "performance high\nbuffer_seconds 300\n")
+  assert_equal(value_beside(context, "buffer length"), "300 s", "the setting")
+  assert_true(screen_shows(context, "300 s -> 120 s (memory)"), "memory stepped it down")
+  assert_true(screen_shows(context, "running: high, 120 s"), "what runs")
+  assert_screen_layout(context, "SETUP memory step-down")
+  -- standard: the setting says standard and so does the tier
+  context = load_setup(nil, "performance standard\nbuffer_seconds 300\n")
+  assert_equal(value_beside(context, "performance"), "standard")
+  assert_true(not screen_shows(context, "buffer length"), "no buffer length on standard")
+end)
+
+test("high on a CM3 or Pi 3 warns may xrun", function()
+  for _, platform in ipairs({ 2, 3 }) do
+    local context = load_setup()
+    norns.platform = platform
+    redraw()
+    assert_true(not screen_shows(context, "may xrun"), "auto never warns (platform " .. platform .. ")")
+    enc(3, 2); redraw()
+    assert_true(screen_shows(context, "(next start), may xrun"), "high warns on platform " .. platform)
+    assert_screen_layout(context, "SETUP may xrun")
+    enc(3, -1); redraw()
+    assert_true(screen_shows(context, "(next start)"), "standard does not warn")
+  end
+  for _, platform in ipairs({ 0, 1, 4, 5, 6 }) do
+    local context = load_setup(HIGH_60, "performance high\nbuffer_seconds 60\n")
+    norns.platform = platform
+    redraw()
+    assert_true(not screen_shows(context, "may xrun"), "no warning on platform " .. platform)
+  end
+  local context = load_setup(HIGH_60, "performance high\nbuffer_seconds 60\n")
+  norns.platform = 2; redraw()
+  assert_true(screen_shows(context, "may xrun"), "a high start on a CM3 warns too")
+end)
+
+test("changing a SETUP field writes performance.data as key value lines", function()
+  local context = load_setup()
+  local path = context.data_dir .. "strata/performance.data"
+  assert_equal(read_file(path), nil, "nothing written before a change")
+  enc(3, 2); enc(2, 1); enc(3, 1)
+  assert_equal(read_file(path), "performance high\nbuffer_seconds 120\n")
+  enc(3, 1); enc(3, -1)
+  assert_equal(read_file(path), "performance high\nbuffer_seconds 120\n", "rewritten on each change")
+  enc(3, 9)
+  assert_equal(read_file(path), "performance high\nbuffer_seconds 300\n")
+  -- no param, PSET or scene holds either
+  for id in pairs(params.lookup) do
+    assert_true(not tostring(id):find("performance", 1, true) and not tostring(id):find("buffer_length", 1, true),
+      "param " .. tostring(id))
+  end
+  capture_scene(1)
+  local function holds(value, depth)
+    if type(value) ~= "table" or depth > 8 then return false end
+    for key, inner in pairs(value) do
+      if key == "performance" or key == "buffer_seconds" or holds(inner, depth + 1) then return true end
+    end
+    return false
+  end
+  assert_true(local_value("S").scenes[1] ~= nil, "a scene was captured")
+  assert_true(not holds(local_value("S").scenes[1], 1), "a captured scene holds neither")
+  -- K3 on a performance field runs nothing
+  local saved = 0
+  local real_save = save_scenes_to_disk
+  save_scenes_to_disk = function() saved = saved + 1 end
+  tap(3)
+  save_scenes_to_disk = real_save
+  assert_equal(saved, 0, "K3 does nothing on a performance field")
+  assert_true(not hint_text(context):find("K3", 1, true), "and its hints offer no K3")
 end)
 
 end
