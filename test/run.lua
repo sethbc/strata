@@ -11,6 +11,11 @@ local stubs = require("norns_stubs")
 local sync_check = require("sync_check")
 local real_print = print
 
+-- The globals of plain Lua and of this harness, before any stub or script
+-- adds its own (the global-reference check starts from these)
+local harness_globals = {}
+for name in pairs(_G) do harness_globals[name] = true end
+
 local SC_PATH = repo_root .. "/lib/Engine_Strata.sc"
 local LUA_PATH = repo_root .. "/strata.lua"
 local signatures = stubs.parse_engine_signatures(SC_PATH)
@@ -68,7 +73,8 @@ end
 -- every param: each group must have all of its params. Each load gets its
 -- own data directory (unless options.data_subdir names a shared one): a
 -- counter, since tests reseed math.random and two loads after one seed
--- would draw the same name.
+-- would draw the same name. options.skip_init loads the script but leaves
+-- init() to the caller (the golden session).
 local loads = 0
 local function load_strata(options)
   options = options or {}
@@ -82,6 +88,7 @@ local function load_strata(options)
   local chunk = options.source and assert(load(options.source, "@" .. LUA_PATH)) or assert(loadfile(LUA_PATH))
   chunk()
   if options.before_init then options.before_init(context) end
+  if options.skip_init then return context end  -- the caller runs init() and check_param_groups()
   init()
   context.check_param_groups()
   return context
@@ -557,6 +564,713 @@ test("functions live in their module", function()
       assert_true(source:sub(-#path) == path, name .. " is defined in " .. path .. ", not " .. source)
     end
   end
+end)
+
+---------------------------------------------------------------------------
+-- Refactor safety nets (Wave 0): a golden-master log of one scripted
+-- session, a static check that every global read is defined, and a probe
+-- of each file's free locals. They prove that a move into lib/ changed
+-- nothing
+---------------------------------------------------------------------------
+
+local GOLDEN_BASELINE_PATH = repo_root .. "/test/fixtures/wave0_baseline.txt"
+
+-- A number as the golden log writes it, the same under Lua 5.3 and LuaJIT
+-- (5.3 writes an integral float as "2.0"): whole numbers as integers, the
+-- rest with 12 significant digits (libm may differ in the last bits)
+local function golden_number(value)
+  if value ~= value then return "nan" end
+  if value == math.huge then return "inf" end
+  if value == -math.huge then return "-inf" end
+  if value == math.floor(value) and math.abs(value) < 2 ^ 53 then return string.format("%d", value) end
+  return string.format("%.12g", value)
+end
+
+-- A string in quotes, with quotes, backslashes and control characters as
+-- decimal escapes (%q differs between Lua 5.3 and LuaJIT)
+local function golden_string(text)
+  return '"' .. text:gsub('[%c"\\]', function(char) return "\\" .. char:byte() end) .. '"'
+end
+
+local function golden_scalar(value)
+  if type(value) == "number" then return golden_number(value) end
+  if type(value) == "string" then return golden_string(value) end
+  if type(value) == "table" or type(value) == "function" then return "<" .. type(value) .. ">" end
+  return tostring(value)
+end
+
+-- pairs' order depends on string hashes, which Lua 5.3 seeds per run, and
+-- differs between Lua 5.3 and LuaJIT. The golden session runs with keys in
+-- sorted order instead: numbers, then strings, then booleans. A key of
+-- another type has no stable order: on_unordered is told
+local KEY_RANK = { number = 1, string = 2, boolean = 3 }
+local function key_before(left, right)
+  local left_rank, right_rank = KEY_RANK[type(left)] or 4, KEY_RANK[type(right)] or 4
+  if left_rank ~= right_rank then return left_rank < right_rank end
+  if left_rank == 3 then return (not left) and right end
+  if left_rank == 4 then return tostring(left) < tostring(right) end
+  return left < right
+end
+
+local function make_sorted_pairs(on_unordered)
+  return function(target)
+    local keys = {}
+    local key = next(target)
+    while key ~= nil do
+      if not KEY_RANK[type(key)] then on_unordered(key) end
+      keys[#keys + 1] = key
+      key = next(target, key)
+    end
+    table.sort(keys, key_before)
+    local index = 0
+    return function()
+      repeat
+        index = index + 1
+        local current = keys[index]
+        if current == nil then return nil end
+        local value = rawget(target, current)
+        if value ~= nil then return current, value end
+      until false
+    end, target, nil
+  end
+end
+
+-- math.random differs between Lua 5.3 and LuaJIT even after the same
+-- seed. The golden session draws from the Park-Miller generator instead
+-- (exact in integers and in doubles), with Lua 5.3's argument forms
+local function make_portable_random()
+  local state = 1
+  local function random(low, high)
+    state = (state * 16807) % 2147483647
+    local fraction = (state - 1) / 2147483646
+    if low == nil then return fraction end
+    if high == nil then low, high = 1, low end
+    return low + math.floor(fraction * (high - low + 1))
+  end
+  local function randomseed(seed) state = math.floor(seed or 0) % 2147483646 + 1 end
+  return random, randomseed
+end
+
+-- Run fn with sorted pairs and the portable generator seeded with 1, then
+-- put the real ones back. Returns fn's result and the number of keys
+-- without a stable order that pairs met
+local function with_deterministic_runtime(fn)
+  local real_pairs, real_random, real_randomseed = pairs, math.random, math.randomseed
+  local unordered = 0
+  pairs = make_sorted_pairs(function() unordered = unordered + 1 end)
+  math.random, math.randomseed = make_portable_random()
+  math.randomseed(1)
+  local ok, result = xpcall(fn, debug.traceback)
+  pairs, math.random, math.randomseed = real_pairs, real_random, real_randomseed
+  if not ok then error(result, 0) end
+  return result, unordered
+end
+
+-- Every leaf of a value as "<prefix>.<key path> = <value>" lines, keys in
+-- sorted order (a scene or buffers file, loaded back with tab.load; the
+-- log writes "file <path>: <key path> = <value>")
+local function golden_flatten(prefix, value, lines, seen)
+  seen = seen or {}
+  if type(value) ~= "table" then
+    table.insert(lines, prefix .. " = " .. golden_scalar(value))
+    return lines
+  end
+  if seen[value] then
+    table.insert(lines, prefix .. " = <repeated table>")
+    return lines
+  end
+  seen[value] = true
+  local keys = {}
+  for key in next, value do table.insert(keys, key) end
+  table.sort(keys, key_before)
+  if #keys == 0 then table.insert(lines, prefix .. " = {}") end
+  for _, key in ipairs(keys) do
+    local name = type(key) == "string" and key or ("[" .. golden_scalar(key) .. "]")
+    golden_flatten(prefix .. "." .. name, value[key], lines, seen)
+  end
+  seen[value] = nil
+  return lines
+end
+
+-- One LED level as a hex digit (a level that is not a whole 0..15 in
+-- parentheses)
+local function golden_level(level)
+  if type(level) == "number" and level >= 0 and level <= 15 and level == math.floor(level) then
+    return string.format("%x", level)
+  end
+  return "(" .. golden_scalar(level) .. ")"
+end
+
+-- One grid of each layout, on its own port (they stay plugged to the end,
+-- so cleanup darkens all four)
+local GOLDEN_GRIDS = {
+  { name = "256", cols = 16, rows = 16 },
+  { name = "128h", cols = 16, rows = 8 },
+  { name = "128v", cols = 8, rows = 16 },
+  { name = "64", cols = 8, rows = 8 },
+}
+
+-- The scripted Wave 0 session on a script loaded with skip_init: init,
+-- the startup clock, every page's draw and controls, voices, sources, a
+-- recording, scenes, grids, arc, MIDI and cleanup. Returns the log: every
+-- engine call, screen frame (texts, lines, rectangles), grid and arc LED
+-- frame and file written under the data directory, in the order they
+-- happened, under "## <step>" headings. Paths under the data directory read
+-- "<data>/" and os.date stamps "<date>"
+local function golden_session(context)
+  local log = {}
+  local data_dir = context.data_dir
+
+  local function normalize(text)
+    local start = 1
+    local parts = {}
+    while true do
+      local found = text:find(data_dir, start, true)
+      if not found then break end
+      table.insert(parts, text:sub(start, found - 1)); table.insert(parts, "<data>/")
+      start = found + #data_dir
+    end
+    table.insert(parts, text:sub(start))
+    return (table.concat(parts):gsub("%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d", "<date>"))
+  end
+  local function emit(line) table.insert(log, normalize(line)) end
+
+  local engine_logged = 0
+  local function flush_engine()
+    for index = engine_logged + 1, #context.engine_calls do
+      local call = context.engine_calls[index]
+      local args = {}
+      for position = 1, #call.args do args[position] = golden_scalar(call.args[position]) end
+      emit("engine." .. call.name .. "(" .. table.concat(args, ", ") .. ")")
+    end
+    engine_logged = #context.engine_calls
+  end
+
+  -- files: writes, renames and removals under the data directory are logged
+  -- as they happen; a written file's contents follow at the next flush
+  local real_open, real_rename, real_remove = io.open, os.rename, os.remove
+  local pending_files = {}
+  local function under_data(path) return type(path) == "string" and path:sub(1, #data_dir) == data_dir end
+  local function flush_files()
+    local paths = pending_files
+    pending_files = {}
+    for _, path in ipairs(paths) do
+      local loaded_ok, loaded = pcall(context.tab.load, path)
+      if loaded_ok and type(loaded) == "table" then
+        for _, line in ipairs(golden_flatten("", loaded, {})) do emit("file " .. path .. ": " .. line:sub(2)) end
+      else
+        local handle = real_open(path, "r")
+        if handle then
+          local text = handle:read("*a"); handle:close()
+          for line in (text .. "\n"):gmatch("([^\n]*)\n") do emit("file " .. path .. " | " .. line) end
+        else
+          emit("file " .. path .. " (gone)")
+        end
+      end
+    end
+  end
+  io.open = function(path, mode, ...)
+    if under_data(path) and mode and mode:find("[wa+]") then
+      flush_engine()
+      emit("file write " .. path .. " (" .. mode .. ")")
+      table.insert(pending_files, path)
+    end
+    return real_open(path, mode, ...)
+  end
+  os.rename = function(from, to)
+    if under_data(from) or under_data(to) then
+      flush_engine(); emit("file rename " .. tostring(from) .. " -> " .. tostring(to))
+    end
+    return real_rename(from, to)
+  end
+  os.remove = function(path)
+    if under_data(path) then flush_engine(); emit("file remove " .. path) end
+    return real_remove(path)
+  end
+
+  -- screen: one frame per screen.update
+  local screen, last_screen = context.screen, nil
+  screen.update = function()
+    flush_engine()
+    local lines = {}
+    for _, text in ipairs(screen.texts) do
+      table.insert(lines, string.format("  text %s %s %s %s %s", golden_number(text.x), golden_number(text.y),
+        text.align, golden_number(text.level), golden_string(text.text)))
+    end
+    for _, line in ipairs(screen.lines) do
+      table.insert(lines, string.format("  line %s %s %s %s %s", golden_number(line.x1), golden_number(line.y1),
+        golden_number(line.x2), golden_number(line.y2), golden_number(line.level)))
+    end
+    for _, rect in ipairs(screen.rects) do
+      table.insert(lines, string.format("  rect %s %s %s %s %s", golden_number(rect.x), golden_number(rect.y),
+        golden_number(rect.w), golden_number(rect.h), golden_number(rect.level)))
+    end
+    local frame = table.concat(lines, "\n")
+    if frame == last_screen then
+      emit("screen frame (unchanged)")
+    else
+      emit("screen frame"); if frame ~= "" then emit(frame) end
+      last_screen = frame
+    end
+  end
+
+  -- grid and arc: one frame per refresh of a plugged device
+  local function record_refreshes(device, label, frame_of)
+    local real_refresh, last_frame = device.refresh, nil
+    device.refresh = function(self, ...)
+      flush_engine()
+      local frame = frame_of(self)
+      if frame == last_frame then emit(label .. " frame (unchanged)") else emit(label .. " frame " .. frame) end
+      last_frame = frame
+      return real_refresh(self, ...)
+    end
+  end
+  local function grid_frame(device)
+    local rows = {}
+    for y = 1, device.rows do
+      local row = {}
+      for x = 1, device.cols do row[x] = golden_level(device:get_led(x, y)) end
+      rows[y] = table.concat(row)
+    end
+    return table.concat(rows, " ")
+  end
+  local function arc_frame(device)
+    local rings = {}
+    for ring = 1, 4 do
+      local leds = {}
+      for x = 1, 64 do leds[x] = golden_level(device:get_led(ring, x)) end
+      rings[ring] = table.concat(leds)
+    end
+    return table.concat(rings, " ")
+  end
+
+  local function step(name, action)
+    emit("## " .. name)
+    action()
+    flush_engine(); flush_files()
+  end
+  local function current_page() return local_value("ui_page") end
+
+  local ok, problem = xpcall(function()
+    step("init", function() init(); context.check_param_groups() end)
+    step("startup clock", function() finish_startup(context); next_frame(context) end)
+
+    -- every page: its draw, then E2/E3 both ways, K2 and K3, and E1 to the next
+    local _, set_ui_page = find_upvalue("ui_page")
+    for page = 1, #local_value("UI_PAGES") do
+      step("page " .. page .. " draw", function() set_ui_page(page); redraw() end)
+      step("page " .. page .. " controls", function()
+        enc(2, 1); enc(2, -1); enc(3, 1); enc(3, -1)
+        key(2, 1); key(2, 0)
+        if local_value("BUFFER_PAGE").file_selector_open then context.fileselect.close("/tmp/golden.wav") end
+        key(3, 1); key(3, 0)
+        next_frame(context)
+      end)
+      step("page " .. page .. " E1", function() enc(1, 1); next_frame(context) end)
+    end
+    step("back to MAIN", function() enc(1, 1 - current_page()); next_frame(context) end)
+
+    for voice_idx = 1, 7 do
+      step("toggle voice " .. voice_idx, function() toggle_voice(voice_idx); next_frame(context) end)
+    end
+    step("voice 3 source buffer 1", function() params:set("v3_source", 2); next_frame(context) end)
+    step("voice 4 source input", function() params:set("v4_source", 10); next_frame(context) end)
+
+    step("record buffer 1", function()
+      record_buffer(1); next_frame(context)
+      context.polls.fire("bufferState", 0)        -- slot 1 recording: 0 s
+      wake_buffer_clock(context, 1)
+      context.polls.fire("bufferState", params:get("record_duration"))  -- the take
+      context.clock.run_for(1.5)
+      context.polls.fire("bufferState", params:get("record_duration"))
+      next_frame(context)
+      -- the BUFFER page shows the take
+      enc(1, 3); next_frame(context); enc(1, -3); next_frame(context)
+    end)
+
+    step("capture scene 1", function() capture_scene(1); next_frame(context) end)
+    step("instant recall", function()
+      params:set("filter_freq", 2000); toggle_voice(5)
+      recall_scene(1, 0); next_frame(context)
+    end)
+    step("smooth recall", function()
+      params:set("filter_freq", 500); toggle_voice(6)
+      recall_scene(1, 2)
+      for _ = 1, 1000 do
+        if not local_value("scene_transition_clock") then break end
+        wake(context, "scene_transition_clock")
+      end
+      assert_true(not local_value("scene_transition_clock"), "the transition ended")
+      next_frame(context)
+    end)
+
+    -- grid keys on each layout: a diagonal and an anti-diagonal (every row
+    -- and column), on each of the 256's four pages
+    for port, size in ipairs(GOLDEN_GRIDS) do
+      step("grid " .. size.name .. " plug", function()
+        local device = context.grid.plug(port, size.cols, size.rows)
+        record_refreshes(device, "grid" .. port, grid_frame)
+        grid_redraw()
+      end)
+      local pages = size.name == "256" and { 1, 2, 3, 4 } or { 1 }
+      for _, grid_page in ipairs(pages) do
+        step("grid " .. size.name .. " keys, page " .. grid_page, function()
+          if size.name == "256" then
+            context.grid.press(port, 12 + grid_page, 8, 1); context.grid.press(port, 12 + grid_page, 8, 0)
+          end
+          for index = 1, math.max(size.cols, size.rows) do
+            for _, x in ipairs({ (index - 1) % size.cols + 1, size.cols - (index - 1) % size.cols }) do
+              local y = (index - 1) % size.rows + 1
+              context.grid.press(port, x, y, 1); context.grid.press(port, x, y, 0)
+              next_frame(context)
+            end
+          end
+        end)
+      end
+    end
+
+    step("arc plug", function()
+      local device = context.arc.plug(1)
+      record_refreshes(device, "arc", arc_frame)
+      next_frame(context)
+    end)
+    for page = 1, #local_value("UI_PAGES") do
+      step("arc page " .. page, function()
+        enc(1, page - current_page()); next_frame(context)
+        for ring = 1, 4 do
+          context.arc.turn(1, ring, 20); context.arc.turn(1, ring, -7)
+          next_frame(context)
+        end
+        context.arc.push(1, 1, 1); context.arc.push(1, 1, 0); next_frame(context)
+      end)
+    end
+
+    step("midi plug", function() context.midi.plug(1, "keys"); next_frame(context) end)
+    step("midi notes", function()
+      local notes = { { ch = 1, note = 60, vel = 100 }, { ch = 3, note = 64, vel = 80 }, { ch = 7, note = 67, vel = 40 } }
+      for _, note in ipairs(notes) do
+        context.midi.send(1, { type = "note_on", ch = note.ch, note = note.note, vel = note.vel })
+        next_frame(context)
+        context.midi.send(1, { type = "note_off", ch = note.ch, note = note.note, vel = 0 })
+        next_frame(context)
+      end
+    end)
+    step("midi bend", function()
+      context.midi.send(1, { type = "pitchbend", ch = 3, val = 12000 }); next_frame(context)
+    end)
+
+    step("cleanup", function() cleanup() end)
+  end, debug.traceback)
+  io.open, os.rename, os.remove = real_open, real_rename, real_remove
+  if not ok then error(problem, 0) end
+  return table.concat(log, "\n") .. "\n"
+end
+
+-- The first line where two logs differ, with the step it falls in (nil
+-- when they are equal)
+local function first_difference(expected, actual)
+  local function lines_of(text)
+    local lines = {}
+    for line in text:gmatch("([^\n]*)\n") do table.insert(lines, line) end
+    return lines
+  end
+  local expected_lines, actual_lines = lines_of(expected), lines_of(actual)
+  local section = "(before the first step)"
+  for index = 1, math.max(#expected_lines, #actual_lines) do
+    local want, got = expected_lines[index], actual_lines[index]
+    if want ~= got then
+      return string.format("line %d, in step %s:\n  baseline: %s\n  session:  %s", index, section,
+        tostring(want or "(end of baseline)"), tostring(got or "(end of session)"))
+    end
+    if want:sub(1, 3) == "## " then section = want:sub(4) end
+  end
+  return nil
+end
+
+test("golden master: the session matches the Wave 0 baseline", function()
+  local log, unordered = with_deterministic_runtime(function()
+    return golden_session(load_strata { skip_init = true, data_subdir = "golden" })
+  end)
+  assert_equal(unordered, 0, "pairs met keys without a stable order (tables or functions as keys)")
+  local output_path = os.getenv("STRATA_GOLDEN_OUT")
+  if output_path and output_path ~= "" then
+    local out = assert(io.open(output_path, "w")); out:write(log); out:close()
+  end
+  local file = io.open(GOLDEN_BASELINE_PATH, "r")
+  if not file then
+    os.execute("mkdir -p '" .. repo_root .. "/test/fixtures'")
+    local out = assert(io.open(GOLDEN_BASELINE_PATH, "w")); out:write(log); out:close()
+    fail("baseline written; rerun")
+  end
+  local expected = file:read("*a"); file:close()
+  if expected ~= log then
+    fail("the session differs from test/fixtures/wave0_baseline.txt at " .. tostring(first_difference(expected, log))
+      .. "\n  (STRATA_GOLDEN_OUT=<path> writes the session's log there; never edit the baseline to pass a move)")
+  end
+end)
+
+test("the golden log normalizes what varies between runs and interpreters", function()
+  assert_equal(golden_number(2.0), "2"); assert_equal(golden_number(0.1 + 0.2), "0.3")
+  assert_equal(golden_number(-3), "-3"); assert_equal(golden_number(1 / 3), "0.333333333333")
+  assert_equal(golden_string('a"b\n'), '"a\\34b\\10"')
+  local order = {}
+  local _, unordered = with_deterministic_runtime(function()
+    for key in pairs({ b = 1, [2] = 1, a = 1, [1] = 1, [true] = 1, [false] = 1 }) do table.insert(order, tostring(key)) end
+    for _ in pairs({ [{}] = 1 }) do end
+    local first = { math.random(), math.random(1, 10), math.random(5) }
+    math.randomseed(1)
+    assert_equal(math.random(), first[1], "reseeding repeats the sequence")
+    assert_true(first[1] >= 0 and first[1] < 1); assert_true(first[2] >= 1 and first[2] <= 10)
+    assert_true(first[3] >= 1 and first[3] <= 5 and first[3] == math.floor(first[3]))
+  end)
+  assert_equal(table.concat(order, " "), "1 2 a b false true", "sorted pairs")
+  assert_equal(unordered, 1, "a table key is reported")
+  assert_true(not pcall(with_deterministic_runtime, function() error("x") end), "errors pass through")
+  assert_true(pairs ~= nil and math.random ~= nil, "the real pairs and math.random are back")
+  local lines = golden_flatten("f", { b = { 1, 2 }, a = "x" }, {})
+  assert_equal(table.concat(lines, "; "), 'f.a = "x"; f.b.[1] = 1; f.b.[2] = 2')
+  assert_equal(first_difference("a\nb\n", "a\nb\n"), nil, "equal logs")
+  assert_true(first_difference("## s\na\n", "## s\nc\n"):find("line 2, in step s", 1, true), "the line and step")
+end)
+
+-- Lua 5.3's luac for the global-reference check: `luac`, or Debian's
+-- `luac5.3` (CI installs the lua5.3 package), when it reports 5.3; nil
+-- under LuaJIT, which has none
+local function luac_53_command()
+  if _VERSION ~= "Lua 5.3" or rawget(_G, "jit") then return nil end
+  for _, command in ipairs({ "luac", "luac5.3" }) do
+    local pipe = io.popen(command .. " -v 2>&1")
+    if pipe then
+      local version = pipe:read("*a"); pipe:close()
+      if version:find("Lua 5%.3") then return command end
+    end
+  end
+  return nil
+end
+local LUAC = luac_53_command()
+
+-- The globals a file's bytecode reads (GETTABUP on _ENV) and writes
+-- (SETTABUP on _ENV), from `luac -l -l -p`, as name -> "<path>:<line>" of
+-- the first. A key in the first 256 constants names the global in the
+-- instruction's comment (`; _ENV "name"`); a constant index above 255
+-- cannot be an operand, so the key is a register, loaded before by
+-- `LOADK <reg> ... ; "name"`. Keys found neither way are returned as
+-- unresolved. `label` names the file in the result
+local function global_accesses(file_path, label)
+  local pipe = assert(io.popen(LUAC .. " -l -l -p '" .. file_path .. "' 2>&1"))
+  local listing = pipe:read("*a"); pipe:close()
+  local reads, writes, unresolved = {}, {}, {}
+  -- opcodes that write no register A (the rest clear what LOADK put there)
+  local keeps_register = { SETTABUP = true, SETTABLE = true, SETUPVAL = true, SETLIST = true, EQ = true,
+    LT = true, LE = true, TEST = true, JMP = true, RETURN = true }
+  local loaded = {}  -- register -> the string constant LOADK put there, in the function being read
+  local listed = 0
+  for line in listing:gmatch("[^\n]+") do
+    if line:match("^main <") or line:match("^function <") then
+      loaded = {}
+    else
+      local source_line, opcode, rest = line:match("^%s*%d+%s+%[(%-?%d+)%]%s+(%u+)(.*)$")
+      local operands, comment = (rest or ""):match("^([^;]*);%s*(.-)%s*$")
+      if not operands then operands, comment = rest, "" end
+      if opcode then
+        listed = listed + 1
+        local numbers = {}
+        for number in operands:gmatch("%-?%d+") do table.insert(numbers, tonumber(number)) end
+        local where = label .. ":" .. source_line
+        if opcode == "LOADK" then
+          loaded[numbers[1]] = comment:match('^"(.*)"$')
+        elseif (opcode == "GETTABUP" or opcode == "SETTABUP") and comment:match("^_ENV") then
+          local key_operand = opcode == "GETTABUP" and numbers[3] or numbers[2]
+          local name
+          if key_operand < 0 then name = comment:match('^_ENV "([^"]*)"') else name = loaded[key_operand] end
+          if not name then
+            table.insert(unresolved, where .. " " .. opcode)
+          else
+            local into = opcode == "GETTABUP" and reads or writes
+            into[name] = into[name] or where
+          end
+          if opcode == "GETTABUP" then loaded[numbers[1]] = nil end
+        elseif not keeps_register[opcode] and numbers[1] then
+          loaded[numbers[1]] = nil
+        end
+      end
+    end
+  end
+  assert(listed > 0, "luac listed no instructions for " .. label .. ":\n" .. listing)
+  return reads, writes, unresolved
+end
+
+-- The globals norns (as stubbed) and the Lua standard library provide: the
+-- keys of _G right after stubs.install, with every global a script load
+-- left behind cleared first (and put back after)
+local function stub_global_names()
+  local left_over = {}
+  for name, value in next, _G do
+    if not harness_globals[name] then left_over[name] = value end
+  end
+  for name in next, left_over do _G[name] = nil end
+  stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
+    data_dir = data_root .. "stub_globals/", quiet = true }
+  local names = {}
+  for name in next, _G do names[name] = true end
+  for name, value in next, left_over do
+    if rawget(_G, name) == nil then rawset(_G, name, value) end
+  end
+  return names
+end
+
+-- Globals Strata reads that neither a script file nor norns defines, found
+-- by the check below. Each one is a known bug with a GitHub issue; remove
+-- its entry when the bug is fixed
+local KNOWN_UNDEFINED_GLOBALS = {}
+
+-- Every global read from a list of { path, text } files (path relative to
+-- `root`) that no file writes and no stub provides, as
+-- "<path>:<line> reads <name>"
+local function undefined_global_reads(root, sources, provided)
+  local all_reads, written, problems = {}, {}, {}
+  for _, source in ipairs(sources) do
+    local reads, writes, unresolved = global_accesses(root .. "/" .. source.path, source.path)
+    for _, entry in ipairs(unresolved) do
+      table.insert(problems, entry .. " uses a global whose name the listing does not show")
+    end
+    for name in next, writes do written[name] = true end
+    table.insert(all_reads, reads)
+  end
+  for _, reads in ipairs(all_reads) do
+    for name, where in next, reads do
+      if not written[name] and not provided[name] and not KNOWN_UNDEFINED_GLOBALS[name] then
+        table.insert(problems, where .. " reads " .. name)
+      end
+    end
+  end
+  table.sort(problems)
+  return problems
+end
+
+test("every global read is defined", function()
+  if not LUAC then
+    real_print("     (skipped: the global-reference check needs Lua 5.3 and its luac; LuaJIT has none)")
+    return
+  end
+  local provided = stub_global_names()
+  local problems = undefined_global_reads(repo_root, read_lua_sources(), provided)
+  assert_equal(#problems, 0, "undefined globals:\n  " .. table.concat(problems, "\n  "))
+  -- the scanner: constant keys, register keys (past 255 constants), reads
+  -- in nested functions, and writes in any file
+  local scratch = data_root .. "global_check"
+  os.execute("mkdir -p '" .. scratch .. "/lib'")
+  local filler = {}
+  for index = 1, 300 do filler[index] = string.format("%q", "k" .. index) end
+  local files = {
+    { path = "strata.lua", text = "defined_a = 1\nlocal t = { " .. table.concat(filler, ", ") .. " }\n"
+      .. "function late() return defined_b, missing_late end\nlate_global = 2\nprint(missing_early)\n" },
+    { path = "lib/x.lua", text = "defined_b = defined_a + late_global\nreturn missing_in_module\n" },
+  }
+  for _, source in ipairs(files) do
+    local out = assert(io.open(scratch .. "/" .. source.path, "w")); out:write(source.text); out:close()
+  end
+  local found = undefined_global_reads(scratch, files, provided)
+  local names = {}
+  for _, entry in ipairs(found) do table.insert(names, entry:match("reads (.*)$") or entry) end
+  table.sort(names)
+  assert_equal(table.concat(names, " "), "missing_early missing_in_module missing_late",
+    "each undefined read is found, defined ones are not:\n  " .. table.concat(found, "\n  "))
+  local reads, writes = global_accesses(scratch .. "/strata.lua", "strata.lua")
+  assert_true(reads.missing_late and reads.defined_b, "reads past 255 constants (register keys) are seen")
+  assert_true(writes.late_global and writes.late, "writes past 255 constants are seen")
+end)
+
+-- The number of locals that can still be declared at a point of a file:
+-- insert(text, probe) puts `local p1, ..., pN` there, and the largest N
+-- that still loads is the answer (nil and the error when the text does not
+-- load with no probe)
+local function free_locals(text, chunk_name, insert)
+  local function loads(count)
+    local names = {}
+    for index = 1, count do names[index] = "p" .. index end
+    local probe = count > 0 and ("local " .. table.concat(names, ", ") .. "\n") or ""
+    local chunk, problem = load(insert(text, probe), chunk_name)
+    return chunk ~= nil, problem
+  end
+  local ok, problem = loads(0)
+  if not ok then return nil, problem end
+  local low, high = 0, 256
+  while low < high do
+    local middle = math.ceil((low + high) / 2)
+    if loads(middle) then low = middle else high = middle - 1 end
+  end
+  return low
+end
+
+-- The probe at the end of a main chunk: before a module's final top-level
+-- `return`, or after strata.lua's last line
+local function probe_main_chunk(path)
+  return function(text, probe)
+    if path ~= "strata.lua" then
+      local last
+      for position in text:gmatch("()\nreturn[%s%(%{]") do last = position end
+      if last then return text:sub(1, last) .. probe .. text:sub(last + 1) end
+      if text:match("^return[%s%(%{]") then return probe .. text end
+    end
+    return text .. "\n" .. probe
+  end
+end
+
+-- The probe at the end of a constructor (`return function(S) ... return M
+-- end`): before its final `  return M\nend`. constructor_end is the
+-- position of that line's newline, or nil for a file that ends otherwise
+local CONSTRUCTOR_END = "\n  return M\nend"
+local function constructor_end(text)
+  local last, start = nil, 1
+  while true do
+    local found = text:find(CONSTRUCTOR_END, start, true)
+    if not found then break end
+    last, start = found, found + 1
+  end
+  if last and text:sub(last + #CONSTRUCTOR_END):match("^%s*$") then return last end
+  return nil
+end
+local function probe_constructor(text, probe)
+  local position = constructor_end(text)
+  return text:sub(1, position) .. probe .. text:sub(position + 1)
+end
+
+-- strata.lua's main chunk keeps at least this many free locals until the
+-- end of Wave 0 raises it to 30 (15 free once S was added; the margin is
+-- for the module moves, which may add an alias before code moves out)
+local STRATA_MIN_FREE_LOCALS = 14
+local MODULE_MIN_FREE_LOCALS = 30
+
+test("each file keeps 30 free locals", function()
+  local problems = {}
+  local function check(label, free, problem, minimum)
+    if not free then
+      table.insert(problems, label .. " does not load with the probe: " .. tostring(problem))
+    elseif free < minimum then
+      table.insert(problems, string.format("%s has %d free locals, fewer than %d", label, free, minimum))
+    end
+  end
+  for _, source in ipairs(read_lua_sources()) do
+    local minimum = source.path == "strata.lua" and STRATA_MIN_FREE_LOCALS or MODULE_MIN_FREE_LOCALS
+    local free, problem = free_locals(source.text, "@" .. source.path, probe_main_chunk(source.path))
+    check(source.path .. "'s main chunk", free, problem, minimum)
+    if source.path ~= "strata.lua" and constructor_end(source.text) then
+      free, problem = free_locals(source.text, "@" .. source.path, probe_constructor)
+      check(source.path .. "'s constructor", free, problem, minimum)
+    end
+  end
+  assert_equal(#problems, 0, table.concat(problems, "\n"))
+  -- the probe itself: 190 locals leave 10 free in a main chunk; a
+  -- constructor also holds S and M
+  local names = {}
+  for index = 1, 190 do names[index] = "v" .. index end
+  local declared = "local " .. table.concat(names, ", ")
+  assert_equal(free_locals(declared .. "\n", "=probe", probe_main_chunk("strata.lua")), 10, "main chunk")
+  local module_text = "local a\nreturn function(S)\n  local M = {}\n  " .. declared .. "\n  return M\nend\n"
+  assert_equal(free_locals(module_text, "=probe", probe_constructor), 8, "constructor")
+  assert_equal(free_locals(module_text, "=probe", probe_main_chunk("lib/x.lua")), 199, "module main chunk")
+  assert_equal(constructor_end("return {}\n"), nil, "a plain table module has no constructor")
 end)
 
 test("the engine source parsers skip // and /* */ comments (#25)", function()
