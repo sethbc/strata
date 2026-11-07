@@ -1,6 +1,6 @@
 # Strata development status
 
-Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
+Last updated 2026-11-07, after the 3.1-3.6 roadmap. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
 
 ## Where things are
 
@@ -18,6 +18,7 @@ Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between m
   - CLAUDE.md holds the rules and the engine command table. Keep it short: put new details in the notes.
   - `docs/notes/engine.md` and `docs/notes/lua.md` are the detailed implementation reference (the Lua notes end with the version history and the test harness details).
   - `docs/design/3.0-design.md` is the 3.0 design, still the reference for behavior; CHANGELOG.md's 3.0 "Deviations from the design" and the later entries say where the code differs.
+  - `docs/design/3.1-3.6-roadmap.md` is the agreed order and scope of the next releases (3.1 to 3.6) with the decisions taken on it. Each release still gets its own design document before code.
   - README.md is the user documentation, CHANGELOG.md the per-release changes, and this file the open items and decisions.
   - The 3.0 and 3.0.1 implementation plans were removed in 3.0.2; git history keeps them.
   - `test/run.lua` checks the maintained docs (CLAUDE.md, README.md, this file and `docs/notes/`): CLAUDE.md's command table must match the engine, no `engine.<name>(` may name a command the engine lacks, and every path under docs/, test/ or .github/ they name must exist.
@@ -48,7 +49,8 @@ CHANGELOG.md has every fix. In short:
 
 ## Open items
 
-- [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on a norns.** Nothing has been tried on hardware yet; the issue and its comments list every check. Pending, in short:
+- **Next: 3.1 Wave 0**, the restructure for parallel work (module split, then tests, notes and process split): `docs/design/3.1-design.md` (approved 2026-11-07) and its plan, `docs/superpowers/plans/2026-11-07-3.1-wave0-restructure.md`. Waves 1-3 get their plans once Wave 0's module names exist.
+- [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on a norns.** 3.0.2 has run on a norns shield (Raspberry Pi 4, 8 GB): everything runs, with plenty of CPU headroom. The detailed measurements are still to do; the issue and its comments list every check. Pending, in short:
   - from 3.0 and 3.0.1: CPU with all voices and with several buffer voices, xruns while scrolling sources, levels across synth, buffer and input sources and against 2.0, the limiter, arc ring feel (512 ticks per sweep), clicks on filter type and grain mode changes, triggered grain mode (velocity-scaled accents, Karplus re-plucks), the BUFFER page's record/stop/clear/save, the save time of a 16 s buffer, the buffer restore at start, MIDI (notes, velocity, bend, voice-off mode, hot-plug, CC mapping), grid page 4 and the arc pages;
   - from 3.0.2: the Resonator in the mix and as a cross-modulation source, pitch-shifted voices with the fixed window, clicks from rapid source switches and scene chords (a synth already fading is cut), real-time memory and CPU at the peak on norns' own scsynth (armhf, and that the engine compiles there), xruns on voice start and source switch at large grain sizes, the pitch of a 44.1 kHz file, how long a load's decode check and a take's write take on the CM3 (and whether pattern steps, LFO sends and MIDI run late while a take is written), the `/fail /b_readChannel` message format on norns' scsynth, a scene-fade step's real duration against the 1 s overrun bound, the sequencer's `clock.sleep(0)` deferral after a PSET read from the menu, frame-clock CPU with the arc spinning, with the LFO page drawing at 15 fps and with drift redraws, tempo following under Link and MIDI clock, the font's real glyph widths against the harness estimate, arc LEDs at a ring's maximum and minimum, and brief "not loaded" or file-list flashes after a slow reload or a file choice.
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
@@ -64,7 +66,7 @@ CHANGELOG.md has every fix. In short:
 
 ## Decisions taken during development
 
-Each was taken during development without asking Seth, and lists what it costs if it was wrong. Reverse any of them in a normal pull request.
+Each was taken during development without a design review, and lists what it costs if it was wrong. Reverse any of them in a normal pull request.
 
 **3.0 (sample sources, FX, LFOs, MIDI, pages)**
 - **Limiter placement:** the master limiter sits *before* the tanh saturator, where the design said "after". After it, the limiter could never act. If wrong: a one-line revert.
@@ -94,7 +96,7 @@ Each was taken during development without asking Seth, and lists what it costs i
 **3.0.2 (review fixes)**
 - **Hardware-only checks stay on #6.** Real-time memory on the device, the 44.1 kHz pitch on the device, write-timing jitter, xruns, glyph widths and arc-spin CPU cannot be settled off-device; the code bounds each one and #6 lists what to measure. If wrong: a hardware finding becomes a new issue.
 - **The file selector owns the screen while open:** `redraw()` draws the selector instead of doing nothing, so the selector is still there after a K1 menu visit. If wrong: one extra selector redraw now and then.
-- **ASCII voice-list marks:** the MAIN list shows `+`/`-` and short names (`reso`, `karp`, ...) instead of `●`/`○`, because the glyphs' width on the norns font is unconfirmed and ASCII fits with 8 px to spare. If wrong: Seth prefers the dots; a one-line change if hardware shows they render one character wide.
+- **ASCII voice-list marks:** the MAIN list shows `+`/`-` and short names (`reso`, `karp`, ...) instead of `●`/`○`, because the glyphs' width on the norns font is unconfirmed and ASCII fits with 8 px to spare. If wrong: the dots are preferred; a one-line change if hardware shows they render one character wide.
 - **Bounded sequencer wait:** the sequencer waits for a transition's end, but cancels one whose next step or end is `SCENE_TRANSITION.overrun_seconds` (1 s) overdue, measured from the fade's progress (`next_step_due`), not its start, so a lost or errored fade can't freeze the sequencer. If wrong: a fade step that really takes over 1 s on a busy CM3 gets canceled; measure on #6 and raise the bound.
 - **One followed arc:** Strata follows one arc; a second one is ignored while it is connected, and unplugging the followed arc moves to the next port that holds one, in the order norns clears its ports. If wrong: none in the usual one-arc setup.
 - **Engine stub param names:** `setVoiceParam`/`setGrainParam` names are checked against every SynthDef control, including the engine-managed ones (`gate`, `out`, `kill`, ...). If wrong: Lua sending an internal control name isn't caught; a stricter list is a follow-up.
