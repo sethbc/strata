@@ -1,7 +1,9 @@
 -- lib/ui/keys.lua
 -- Page input the screen pages share: the page each held key went down on
 -- (S.key_press_page, read by key() in strata.lua and the BUFFER page), ALT
--- (S.alt_held), forgetting held keys (forget_held_keys, global), and
+-- (S.alt_held) and the keys held as ALT presses (S.key_press_alt; the ALT
+-- functions are in lib/ui/alt.lua), forgetting held keys (forget_held_keys,
+-- global), and
 -- ignore_page_input, select_voice_by and set_ui_page (which runs the page
 -- records' leave and enter), fields of this module's table (S.lib.ui_keys).
 
@@ -13,9 +15,16 @@ return function(S)
   -- key() sends a release only to the page the key went down on.
   S.key_press_page = {}
 
-  -- ALT: true while K1 is held (key() in strata.lua sets it). Pages read it
-  -- through their hints(alt_held)
+  -- ALT: true while K1 is held (key() in strata.lua sets it through
+  -- S.lib.ui_alt.set; lib/ui/alt.lua). Pages read it through their
+  -- hints(alt_held)
   S.alt_held = false
+
+  -- Per key: true while it is held as an ALT press (it went down with ALT
+  -- held, or the long-press fallback took it), nil otherwise. key() sends
+  -- its release to alt_key_release, never key_release, even if K1 came up
+  -- first
+  S.key_press_alt = {}
 
   -- Forget every held key, ALT and the K2 save: for the norns menu and the
   -- file selector, which take the keys while open, so releases never reach
@@ -23,6 +32,9 @@ return function(S)
   function forget_held_keys()
     for n in pairs(S.key_press_page) do
       S.key_press_page[n] = nil
+    end
+    for n in pairs(S.key_press_alt) do
+      S.key_press_alt[n] = nil
     end
     S.alt_held = false
     S.buffer_saved_during_k2 = false

@@ -46,6 +46,7 @@ S.lib.ui_header = include("lib/ui/header")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_field_list = include("lib/ui/field_list")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
+S.lib.ui_alt = include("lib/ui/alt")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
 -- The screen pages, in UI_PAGES order: each creates its record at
@@ -181,33 +182,49 @@ function init()
   start_frame_clock()
 end
 
--- Encoders. E1 selects the page; E2 and E3 go to the page record's enc
+-- Encoders. E1 selects the page (with or without ALT). E2 and E3 go to the
+-- page record's enc; with ALT held, to its alt_enc first, and on to enc
+-- when it has none or it returns false (not handled)
 function enc(n, d)
   if n == 1 then
     S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
   else
-    S.registry.pages[S.ui_page].enc(n, d)
+    local record = S.registry.pages[S.ui_page]
+    if not (S.alt_held and record.alt_enc and record.alt_enc(n, d)) then
+      record.enc(n, d)
+    end
   end
   request_redraw()
 end
 
 -- Keys. K1 (which norns delivers only once held) is ALT: S.alt_held while
--- it is down. K2 and K3 presses go to the page record's key handler. A
--- release goes to its key_release (if it has one) only if the key went down
--- on the page still showing, so a key held across a page change does
--- nothing when it comes up.
+-- it is down (lib/ui/alt.lua). A K2 or K3 press goes to the page record's
+-- key handler, or, with ALT held, to alt_action (the record's alt_key) and
+-- is marked an ALT press (S.key_press_alt). A release goes only to the page
+-- the key went down on, if it still shows (a key held across a page change
+-- does nothing when it comes up): an ALT press's to alt_key_release, even
+-- if K1 came up first, any other's to key_release (if the record has them).
 function key(n, z)
   if n == 1 then
-    S.alt_held = z == 1
+    S.lib.ui_alt.set(z == 1)
   elseif z == 1 then
     S.key_press_page[n] = S.ui_page
-    S.registry.pages[S.ui_page].key(n)
+    if S.alt_held then
+      S.key_press_alt[n] = true
+      alt_action(S.ui_page, n)
+    else
+      S.key_press_alt[n] = nil
+      S.registry.pages[S.ui_page].key(n)
+    end
   else
-    local press_page = S.key_press_page[n]
+    local press_page, alt_press = S.key_press_page[n], S.key_press_alt[n]
     S.key_press_page[n] = nil
+    S.key_press_alt[n] = nil
     local record = S.registry.pages[S.ui_page]
-    if press_page == S.ui_page and record.key_release then
-      record.key_release(n)
+    if press_page == S.ui_page then
+      local release = record.key_release
+      if alt_press then release = record.alt_key_release end
+      if release then release(n) end
     end
   end
   request_redraw()
