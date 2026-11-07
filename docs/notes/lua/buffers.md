@@ -6,6 +6,7 @@
 - `S.buffers_restored` counts only the slots the engine's `bufferState` poll confirms holding audio.
 - `buffer_load_failed` undoes exactly the load its `bufferLoadFailed` report names (by load number), never a later load, clear or recording.
 - `BUFFER_STATE_STRIDE` (top of `lib/buffers.lua`, at the start of a line, where a test finds it) equals the engine's `bufferStateStride`.
+- Lengths come from `S.performance.buffer_seconds` (16 s standard, up to 300 s high), never a constant: `record_buffer` caps a take at it and the BUFFER page sizes its seconds column from it.
 
 ## Owns
 
@@ -15,6 +16,10 @@
 - the `bufferState` and `bufferLoadFailed` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
 - two cleanup steps: 40 (save the buffer paths) and 130 (the polls and recording timers).
+
+## Long buffers
+
+On the high tier a slot holds up to `S.performance.buffer_seconds` (60, 120 or 300 s). `record_duration` ranges up to it (its spec reads it at init) and `record_buffer` sends at most that. The engine checks a file longer than 16 s in a routine before the load takes effect: meanwhile the slot keeps its old audio and reports its old length, so `load_buffer`'s optimistic name settles on that report (or, over an empty slot, settles empty after `BUFFER_SETTLE.confirm_seconds` and is adopted when the new length arrives, as for a slow read). A load superseded during its check is dropped without a `bufferLoadFailed` report; a later load that fails leaves the checked one to apply, which is the state `buffer_load_failed` puts back. A remembered 300 s file restored on a 60 s tier loads its first 60 s (the engine caps the read), and the poll reports 60.
 
 The BUFFER page is in `docs/notes/lua/pages/buffer.md`, its arc rings in `docs/notes/lua/arc-pages.md`, grid page 4 in `docs/notes/lua/grid/layout_256.md`.
 

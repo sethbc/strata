@@ -623,6 +623,13 @@ return function(S)
       action = function(x)
         S.voices[voice_idx].source = x
         engine.setGrainSource(voice_idx - 1, x - 1)
+        -- the registered hooks (S.registry.source_change), before the sync,
+        -- so it sends what they set (freeze cleared, never the old freeze
+        -- first); a scene recall sets every value itself, so they never run
+        -- during one
+        if not S.scene_recall_in_progress then
+          for _, hook in ipairs(S.registry.source_change) do hook(voice_idx, x) end
+        end
         -- a scene recall syncs once, after it has set every param
         if S.voices[voice_idx].active and not S.scene_recall_in_progress then
           sync_voice_values_to_engine(voice_idx)
@@ -632,11 +639,6 @@ return function(S)
           S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
         end
         grid_redraw()
-        -- the registered hooks (S.registry.source_change); a scene recall
-        -- sets every value itself, so they never run during one
-        if not S.scene_recall_in_progress then
-          for _, hook in ipairs(S.registry.source_change) do hook(voice_idx, x) end
-        end
       end
     }
 

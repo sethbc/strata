@@ -83,7 +83,9 @@ test("256-grid parameter page faders set values and show them (I8)", function()
     local source = params:get("v" .. (y - 8) .. "_source")
     for x = 1, 16 do
       local level = device:get_led(x, y)
-      if x > 10 then
+      if x == 12 then
+        assert_equal(level, 3, "column 12 the freeze key on page 4")
+      elseif x > 10 then
         assert_equal(level, 0, "no fader past the source columns on page 4")
       elseif x == source then
         assert_equal(level, 15, "source rows on page 4")
@@ -253,7 +255,7 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
       if x > 8 then assert_equal(device:get_led(x, y), 0, "row " .. y .. " column " .. x .. " dark on page 4") end
     end
     for y = 9, 15 do
-      if x > 10 then assert_equal(device:get_led(x, y), 0, "row " .. y .. " column " .. x .. " dark on page 4") end
+      if x > 10 and x ~= 12 then assert_equal(device:get_led(x, y), 0, "row " .. y .. " column " .. x .. " dark on page 4") end
     end
   end
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 play on page 4")
@@ -355,7 +357,9 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
       else expected = 4 end
       assert_equal(device:get_led(x, y), expected, "voice " .. voice_idx .. " source col " .. x)
     end
-    for x = 11, 16 do assert_equal(device:get_led(x, y), 0, "cols 11-16 dark") end
+    for x = 11, 16 do
+      if x ~= 12 then assert_equal(device:get_led(x, y), 0, "cols 11 and 13-16 dark") end
+    end
   end
   -- the selected source wins over "empty"
   params:set("v4_source", 9); assert_equal(device:get_led(9, 12), 15, "selected empty buffer lit 15")
@@ -599,10 +603,78 @@ test("row 16 columns 1-7 lock voices", function()
   assert_equal(device:get_led(3, 16), 2)
   tap(context, 8, 16)
   assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "column 8 does nothing")
-  assert_equal(device:get_led(8, 16), 0, "column 8 stays dark")
+  assert_equal(device:get_led(8, 16), 4, "column 8 is the freeze key (not held: 4)")
   tap(context, 14, 8)  -- page 2
   tap(context, 3, 16)
   assert_true(frozen[3], "page 2 locks too")
+end)
+
+-- A 256 on port 1, with voices 1 and 2 running
+local function freeze_grid()
+  local context = load_strata()
+  finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  return context, device
+end
+
+local function grid_tap(context, x, y)
+  context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0)
+end
+
+test("256 page 4 column 12 toggles freeze per voice with LED feedback", function()
+  local context, device = freeze_grid()
+  local S = local_value("S")
+  grid_tap(context, 16, 8)  -- page 4
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local y = 8 + voice_idx
+    assert_equal(device:get_led(12, y), 3, "voice " .. voice_idx .. " not frozen: 3")
+    grid_tap(context, 12, y)
+    assert_equal(params:get("v" .. voice_idx .. "_freeze"), 1, "column 12 row " .. y .. " freezes voice " .. voice_idx)
+    assert_equal(device:get_led(12, y), 15, "frozen: 15")
+    assert_equal(params:get("v" .. voice_idx .. "_source"), S.constants.SOURCE_SYNTH, "the source is left alone")
+  end
+  grid_tap(context, 12, 10)
+  assert_equal(params:get("v2_freeze"), 0, "a second press unfreezes")
+  assert_equal(device:get_led(12, 10), 3)
+  -- a freeze from anywhere else (VOICE, a scene, MIDI) shows at once
+  params:set("v2_freeze", 1)
+  assert_equal(device:get_led(12, 10), 15, "a param change redraws the grid")
+  -- columns 11 and 13-16 stay dark, and nothing else changed
+  for _, x in ipairs({11, 13, 14, 15, 16}) do assert_equal(device:get_led(x, 9), 0, "column " .. x .. " dark") end
+  assert_true(not local_value("frozen")[1], "freeze is not lock")
+end)
+
+test("256 page 1: holding row 16 column 8 turns row 16 columns 1-7 into freeze keys", function()
+  local context, device = freeze_grid()
+  local S = local_value("S")
+  local frozen = local_value("frozen")
+  -- without the hold: lock
+  grid_tap(context, 1, 16)
+  assert_true(frozen[1], "column 1 locks voice 1")
+  assert_equal(params:get("v1_freeze"), 0, "and does not freeze it")
+  assert_equal(device:get_led(1, 16), 12, "row 16 shows the lock")
+  grid_tap(context, 1, 16)
+  -- hold column 8: columns 1-7 show and toggle freeze
+  context.grid.press(1, 8, 16, 1)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(device:get_led(voice_idx, 16), 3, "voice " .. voice_idx .. " not frozen: 3")
+  end
+  grid_tap(context, 3, 16)
+  assert_equal(params:get("v3_freeze"), 1, "column 3 freezes voice 3 while column 8 is held")
+  assert_true(not frozen[3], "and does not lock it")
+  assert_equal(device:get_led(3, 16), 15, "frozen: 15")
+  assert_true(device:get_led(8, 16) > 0, "column 8 lights while held")
+  context.grid.press(1, 8, 16, 0)
+  -- released: lock again, the lock LEDs back
+  assert_equal(device:get_led(3, 16), 2, "row 16 shows the lock again")
+  grid_tap(context, 3, 16)
+  assert_true(frozen[3], "column 3 locks once column 8 is released")
+  assert_equal(params:get("v3_freeze"), 1, "the freeze stays")
+  -- column 8 alone does nothing
+  grid_tap(context, 8, 16)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(params:get("v" .. voice_idx .. "_freeze"), voice_idx == 3 and 1 or 0)
+  end
 end)
 
 end

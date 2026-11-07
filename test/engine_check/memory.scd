@@ -137,8 +137,10 @@ var checkGrainSynthSizes = {
 // flood of small probes (what is left beyond them) and the node tree, in
 // that order: the cutting synths must still be there (so the probes meet
 // the real peak) and every 256 KB probe must allocate. run_engine_check.sh
-// also fails on any "alloc failed". Returns the free KB at each peak.
-var checkMemoryWorstCase = { arg target, probeCount, floorLabel;
+// also fails on any "alloc failed". engage (optional) runs right after each
+// scenario's last command, before the probes (the high run's spectral
+// freeze). Returns the free KB at each peak.
+var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var command = { arg name ... args; h.commandTo(target, name, *args) };
     var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
     var startAll = { target.numVoices.do(startVoice) };
@@ -179,12 +181,15 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel;
     });
     target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
     startAll.value;
+    engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted");
     sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
+    engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, each switched three times at once");
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, target.numBuffers + 1); command.(\voiceOff, voice) });
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
+    engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer)");
     h.stopAllVoices(target);
     probeBus.free;
@@ -193,10 +198,21 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel;
 
 // The high run (needs the performance setting): the default engine is
 // replaced by a high one (one engine alone in the pool), the three worst
-// cases run with sixteen probes, and the default engine comes back for the
-// areas that follow. 2a adds spectral freeze on every voice to this run.
+// cases run with sixteen probes and spectral freeze engaged on every voice
+// (a spectral writer per voice reading a ring: the first two scenarios end
+// on the synth source; the third ends on the slots, where spectral holds),
+// and the default engine comes back for the areas that follow.
+// PV_MagFreeze takes its few KB once its first frame is analyzed (about
+// 21 ms in): after the probes have allocated, while they are still held,
+// so an allocation that did not fit would fail the run ("alloc failed").
+var spectralFreezeAll = { arg command;
+    engine.numVoices.do({ arg voice;
+        command.(\setGrainParam, voice, \freezeMode, 1.0);
+        command.(\setGrainParam, voice, \freeze, 1.0);
+    });
+};
 var checkHighWorstCase = {
-    var root = h.tempDir +/+ "memory-high/", high;
+    var root = h.tempDir +/+ "memory-high/", high, spectral;
     var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     File.mkdir(root);
     write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
@@ -206,7 +222,14 @@ var checkHighWorstCase = {
     engine = high;   // the floods go into its processGroup
     check.(high.tier == \high, "memory: the high engine runs tier high (got %, % s slots, % s history)".format(
         high.tier, high.bufferSeconds, high.historySeconds));
-    checkMemoryWorstCase.(high, 16, "4 MB");
+    spectral = List.new;
+    checkMemoryWorstCase.(high, 16, "4 MB", { arg command;
+        spectralFreezeAll.(command);
+        spectral.add(high.numVoices.collect({ arg voice; high.ringWriterFor(voice) })
+            .count({ arg writer; writer.defName.asSymbol == \strataRingWriteSpectral }));
+    });
+    check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices },
+        "memory: the high run engages spectral freeze on every voice (spectral writers per scenario: %)".format(spectral));
     engine = h.replaceEngine(nil);
     check.(engine.tier == \standard, "memory: the default engine is back for the areas that follow");
 };

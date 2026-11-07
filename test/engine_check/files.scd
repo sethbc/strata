@@ -2,7 +2,8 @@
 // Files: the scratch directory, decoding a file before it loads
 // (fileDecodes), saveBuffer (stereo 16-bit WAV, clipping, back-to-back
 // writes to one path, a full 16 s take, a write that fails), stale .part
-// and temporary float files, and which directories deleteStaleParts cleans.
+// and temporary float files, which directories deleteStaleParts cleans, and
+// a 60 s save on a high engine of its own (commands still get in meanwhile).
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -155,6 +156,88 @@ var checkDecodeShortfall = { arg stereoPath, longPath;
         and: { decodes.(stereoPath, 11025 + engine.loadShortfallFrames + 1).not },
         "fileDecodes tolerates a shortfall of loadShortfallFrames (%) and no more".format(engine.loadShortfallFrames));
 };
+// A 60 s slot on a high engine of its own (h.startEngine with a high
+// setting of 60 s, a Pi 4 model and plenty of memory) saves 60 s of stereo
+// 16-bit, every frame in place, and posts the time it took. Its chunk wait
+// is set shorter than a chunk takes, so the interleave falls behind its
+// clock: a message sent while it runs must still be handled before it ends.
+var checkLongSave = {
+    var root = scratchRoot +/+ "long-save", rate = server.sampleRate.asInteger, frames = 60 * rate;
+    var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
+    var ramp = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 };
+    var other, sourcePath = root +/+ "ramp.wav", savePath = root +/+ "saved/ramp.wav", file, data, start, seconds;
+    var heard, ping, spots, parts, partSeen;
+    File.mkdir(root);
+    write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
+    write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
+    write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    file.openWrite(sourcePath);
+    60.do({ arg second;
+        file.writeData(FloatArray.fill(rate * 2, { arg i;
+            var value = ramp.((second * rate) + (i div: 2)); if (i.odd) { value.neg } { value } }));
+    });
+    file.close;
+    other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
+    h.commandTo(other, \loadBuffer, 0, sourcePath);
+    check.(other.bufferSeconds == 60 and: { waitFor.({ other.bufferFrames[0] == frames }, 10) },
+        "files: a 60 s file fills a high engine's 60 s slot (% frames)".format(other.bufferFrames[0]));
+    // the ping goes out once the interleave has opened its .part file, and
+    // its handler notes whether the save was still running (the .part there,
+    // the file not yet in place)
+    parts = { (savePath ++ ".*.part").pathMatch };
+    ping = OSCFunc({ heard = parts.value.notEmpty and: { File.exists(savePath).not } }, '/strataCheckSavePing');
+    other.writeChunkWait = 0.0001;
+    start = Main.elapsedTime;
+    h.commandTo(other, \saveBuffer, 0, savePath);
+    while { parts.value.isEmpty and: { File.exists(savePath).not } and: { (Main.elapsedTime - start) < 30 } } { 0.001.wait };
+    partSeen = parts.value.notEmpty;
+    NetAddr.localAddr.sendMsg('/strataCheckSavePing');
+    waitFor.({ File.exists(savePath) }, 120);
+    seconds = Main.elapsedTime - start;
+    0.2.wait;
+    ping.free;
+    check.(partSeen and: { heard == true },
+        "files: a message sent while a long save interleaves is handled before it ends (.part seen %, heard during it %)".format(
+            partSeen, heard));
+    file = SoundFile.openRead(savePath);
+    spots = (0, 9973 .. frames - 1) ++ [8191, 8192, 8193, frames div: 2, frames - 8193, frames - 1];
+    if (file.notNil) {
+        data = FloatArray.newClear(frames * 2);
+        file.readData(data);
+        file.close;
+    };
+    check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames } and: { file.sampleFormat == "int16" }
+        and: { file.sampleRate == rate } and: { data.size == (frames * 2) }
+        and: { spots.every({ arg frame;
+            ((data[frame * 2] - ramp.(frame)).abs < 0.001) and: { (data[(frame * 2) + 1] + ramp.(frame)).abs < 0.001 } }) },
+        "files: a 60 s save writes 60 s of stereo 16-bit (% frames in % s)".format(file !? _.numFrames, seconds.round(0.01)));
+    h.freeEngine(other);
+    File.delete(sourcePath); File.delete(savePath);
+};
+// A short temporary file (the server's write ran out of disk) fails the
+// save: simulated by asking for more frames than the slot's buffers hold,
+// which the server's /b_write clips to the buffer's end. The file already
+// at the path is kept, no .part is left, and the newest write's entry goes.
+var checkShortWrite = { arg stereoPath;
+    var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept;
+    File.mkdir(dir);
+    File.copy(stereoPath, savePath);
+    command.(\loadBuffer, 6, stereoPath); 0.5.wait; server.sync;
+    engine.bufferFrames[6] = engine.buffersL[6].numFrames + 100;
+    command.(\saveBuffer, 6, savePath);
+    3.0.wait;
+    engine.bufferFrames[6] = 11025;
+    file = SoundFile.openRead(savePath);
+    kept = file.notNil and: { file.numFrames == 11025 } and: { file.sampleRate == 22050 };
+    file !? { file.close };
+    check.(kept and: { PathName(dir).files.collect(_.fileName) == ["kept.wav"] }
+        and: { engine.writeGenerations[savePath.standardizePath].isNil },
+        "files: a save whose temporary file is short keeps the old file and leaves no .part (left: %)".format(
+            PathName(dir).files.collect(_.fileName)));
+    command.(\clearBuffer, 6); server.sync;
+    File.delete(savePath);
+};
 var tempFilesBefore = tempFloatFiles.value;
 
 check.(h.defaultScratchDir == (Platform.userHomeDir +/+ "dust/audio/strata/scratch/"),
@@ -286,4 +369,6 @@ engine.scratchDir = savePath;
 command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
 check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
+checkShortWrite.(stereoPath);
+checkLongSave.value;
 }

@@ -807,7 +807,8 @@ test("BUFFER's layout states draw clear of each other", function()
   local names = {}
   for _, state in ipairs(record.layout_states) do names[state.name] = true end
   for _, name in ipairs({ "slot 1", "slot 8", "field dur", "field lvl", "long names", "every slot recording",
-    "saved flash", "busy flash", "empty flash", "load failed flash", "meter peak" }) do
+    "saved flash", "busy flash", "empty flash", "load failed flash", "meter peak",
+    "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)" }) do
     assert_true(names[name], "a layout state " .. name)
   end
 end)
@@ -917,6 +918,50 @@ test("the cursor row lists the voices in full when they fit, and keeps the name'
   screen.text_extents = text_extents
   assert_true(name ~= nil and 4 * #name >= page.name_min_width - 4, "the name keeps about its minimum width: " .. tostring(name))
   assert_true(voices ~= nil and voices.text:sub(-1) == "+", "the voices are shortened with +: " .. tostring(voices and voices.text))
+end)
+
+-- A high tier with buffers of `seconds` for the next load_strata
+local function write_high_tier(seconds)
+  h.write_performance_active({ tier = "high", buffer_seconds = seconds, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+end
+
+test("the record duration reaches the tier's buffer length", function()
+  write_high_tier(60)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  with_alt(function() enc(2, 1) end)   -- the duration field
+  for _ = 1, 40 do enc(3, 5) end
+  assert_equal(params:get("record_duration"), 60, "E3 takes the duration to the slot length")
+  redraw()
+  assert_equal(field_rows(context).dur.value, "60.0s", "the field shows it")
+  assert_screen_layout(context, "BUFFER with a 60 s duration")
+  context.clear_engine_calls()
+  tap(3)
+  local call = context.calls_named("recordBuffer")[1]
+  assert_true(call ~= nil and call.args[1] == 0, "K3 records into the cursor slot")
+  assert_near(call.args[2], 60, 1e-9, "for the tier's 60 s")
+  -- on standard it stops at 16
+  context = load_strata(); finish_startup(context); show_page("BUFFER")
+  with_alt(function() enc(2, 1) end)
+  for _ = 1, 40 do enc(3, 5) end
+  assert_equal(params:get("record_duration"), 16, "standard stops at 16 s")
+end)
+
+test("BUFFER shows 65 s as 1:05 and 16.5 s as today", function()
+  write_high_tier(300)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local cases = { { 65, "1:05" }, { 16.5, "16.5s" }, { 59.9, "59.9s" }, { 60, "1:00" }, { 59.96, "1:00" },
+    { 299.4, "4:59" }, { 300, "5:00" }, { 0.5, "0.5s" } }
+  for index, case in ipairs(cases) do
+    local slot = (index - 1) % 6 + 1   -- the six rows shown with the cursor on slot 1
+    load_buffer(slot, "/tmp/x" .. index .. ".wav")
+    context.polls.fire("bufferState", (slot - 1) * 1000 + case[1])
+    redraw()
+    local rows = slot_rows(context)
+    assert_equal(slot_row_text(context, rows[slot]), slot .. " x" .. index .. " " .. case[2],
+      string.format("%s s shows as %s", case[1], case[2]))
+    assert_screen_layout(context, "BUFFER with a slot of " .. case[1] .. " s")
+  end
 end)
 
 end

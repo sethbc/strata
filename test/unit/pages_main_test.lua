@@ -534,7 +534,7 @@ test("MAIN acts once per K3 press; the release does nothing", function()
   key(3, 0); assert_true(not local_value("voices")[2].active, "K3 release does not restart")
 end)
 
-test("MAIN's layout states cover every voice locked, running and triggered", function()
+test("MAIN's layout states cover every voice locked, running, triggered and frozen", function()
   load_strata()
   local S = local_value("S")
   local states = S.registry.pages[S.constants.UI_PAGES.MAIN_PAGE].layout_states
@@ -546,8 +546,46 @@ test("MAIN's layout states cover every voice locked, running and triggered", fun
   for voice_idx = 1, 7 do
     assert_true(S.voices[voice_idx].active and S.frozen[voice_idx], "voice " .. voice_idx .. " running and locked")
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 2, "voice " .. voice_idx .. " triggered")
+    assert_true(S.lib.freeze.is_frozen(voice_idx), "voice " .. voice_idx .. " frozen")
   end
   assert_equal(S.main_field, 3, "the cursor on field 3")
+end)
+
+test("MAIN shows [F] after [L] and [T] for a frozen voice", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  local function states()
+    local row = {}
+    for _, entry in ipairs(texts_on_row(context, 26)) do if entry.x >= 65 then row[#row + 1] = entry end end
+    return row
+  end
+  local function state_text()
+    local words = {}
+    for _, entry in ipairs(states()) do words[#words + 1] = entry.text end
+    return table.concat(words, " ")
+  end
+  assert_equal(state_text(), "ON", "not frozen: no [F]")
+  params:set("v1_freeze", 1); redraw()
+  assert_equal(state_text(), "ON [F]", "frozen")
+  toggle_lock(1); params:set("v1_grain_mode", 2); redraw()
+  assert_equal(state_text(), "ON [L] [T] [F]", "locked, triggered and frozen, in that order")
+  local row = states()
+  local _, right = text_span(row[#row])
+  assert_true(right <= 128, "[F] ends by x 127 (ends at " .. right .. ")")
+  assert_screen_layout(context, "MAIN with ON [L] [T] [F]")
+  -- a stopped voice too
+  toggle_voice(1); redraw()
+  assert_equal(state_text(), "OFF [L] [T] [F]", "stopped, locked, triggered and frozen")
+  assert_screen_layout(context, "MAIN with OFF [L] [T] [F]")
+  -- [F] is not in the voice list
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x < 62 then assert_true(not entry.text:find("[F]", 1, true), "the list has no [F]: " .. entry.text) end
+  end
+  -- unfreezing removes it
+  params:set("v1_freeze", 0); redraw()
+  assert_equal(state_text(), "OFF [L] [T]")
+  assert_true(S.lib.freeze ~= nil)
 end)
 
 end

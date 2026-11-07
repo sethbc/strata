@@ -34,6 +34,8 @@
         slotChanges = Array.fill(numBuffers, 0);
         stopReplies = Array.newClear(numBuffers);
         bufferLoads = Array.fill(numBuffers, 0);
+        // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
+        areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -185,17 +187,17 @@
     // At most bufferSeconds at the server rate fit (the buffers' size), so a
     // file at twice the server rate keeps half as many seconds. A missing,
     // unreadable, empty or damaged file (one that stops decoding before its
-    // frames end: fileDecodes) leaves the slot unchanged (rejectLoad). The
-    // file's sample rate becomes the slot's bufRateScale, so it plays at
-    // pitch. The voices reading the slot fade out first (afterSlotFade):
-    // the slot reads 0 frames until the reads have completed (a sync after
-    // them), then its length and rate reach the grain synths and the poll,
-    // only if nothing else changed the slot meanwhile (slotChanges). A
-    // server read that fails (/fail for /b_readChannel: the file vanished,
-    // or became unreadable, after the checks) leaves the slot zeroed, so it
-    // stays empty and the load is reported as failed with the slot emptied.
+    // frames end: fileDecodes) leaves the slot unchanged (rejectLoad). A
+    // file of up to standardBufferSeconds at the server rate is checked at
+    // once; a longer one (high tier only) in a routine that yields between
+    // chunks, so the commands go on meanwhile: the load cancels a recording
+    // in the slot at once, but takes effect (applyLoad) only after the
+    // check, and is dropped silently, reporting nothing, if a record, clear
+    // or stop, or a later load that took effect, arrived meanwhile
+    // (loadsSuperseded). bufferLoads counts at the command either way, so
+    // bufferLoadFailed's numbering is the same.
     loadSlot { arg index, path;
-        var file, frames, rightChannel, sampleRate, change, load, decodes, readFailed, failWatcher, bufnums;
+        var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled;
         if (this.validBuffer(index).not) { ^this };
         bufferLoads[index] = bufferLoads[index] + 1;
         load = bufferLoads[index];
@@ -204,13 +206,52 @@
         sampleRate = file.sampleRate;
         frames = [file.numFrames, (sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
-        decodes = (frames < 1) or: { this.fileDecodes(file, frames) };
-        file.close;
-        if (frames < 1) { ^this.rejectLoad(index, load, "sound file " ++ path ++ " is empty") };
-        if (decodes.not) { ^this.rejectLoad(index, load, "sound file " ++ path ++ " is damaged (it stops decoding early)") };
+        damaged = "sound file " ++ path ++ " is damaged (it stops decoding early)";
+        if (frames < 1) { file.close; ^this.rejectLoad(index, load, "sound file " ++ path ++ " is empty") };
+        if (frames <= this.loadCheckAtOnceFrames) {
+            decodes = this.fileDecodes(file, frames);
+            file.close;
+            if (decodes.not) { ^this.rejectLoad(index, load, damaged) };
+            ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate)
+        };
+        // a long file: whatever the check finds, the recording is over (Lua's load_buffer ends it)
+        canceled = this.slotRecording(index);
+        if (canceled) { this.cancelSlotRecording(index, load - 1) };
+        fork({
+            decodes = this.fileDecodes(file, frames, true);
+            file.close;
+            if (load > this.loadsSuperseded(index)) {
+                if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate) } {
+                    this.rejectLoad(index, load, damaged, canceled)
+                };
+            };
+        }, SystemClock);
+    }
 
+    // The most frames loadSlot checks at once (standardBufferSeconds at the
+    // server rate: about 9 ms for a FLAC on a desktop); longer files are
+    // checked in a routine (fileDecodes, yielding)
+    loadCheckAtOnceFrames { ^(this.standardBufferSeconds * context.server.sampleRate).floor.asInteger }
+
+    // Loads of the slot numbered up to this can no longer take effect: a
+    // record, clear or stop supersedes every load sent before it, a load
+    // that takes effect every earlier one (slotChanged)
+    loadsSuperseded { arg index; ^areaState[\buffers][\loadsSuperseded][index] }
+
+    // A load that passed its checks takes effect: it cancels a recording,
+    // supersedes every earlier load and empties the slot at once. The file's
+    // sample rate becomes the slot's bufRateScale, so it plays at pitch.
+    // The voices reading the slot fade out first (afterSlotFade): the slot
+    // reads 0 frames until the reads have completed (a sync after them),
+    // then its length and rate reach the grain synths and the poll, only if
+    // nothing else changed the slot meanwhile (slotChanges). A server read
+    // that fails (/fail for /b_readChannel: the file vanished, or became
+    // unreadable, after the checks) leaves the slot zeroed, so it stays
+    // empty and the load is reported as failed with the slot emptied.
+    applyLoad { arg index, load, path, frames, rightChannel, sampleRate;
+        var change, readFailed, failWatcher, bufnums;
         this.stopRecording(index);
-        change = this.slotChanged(index);
+        change = this.slotChanged(index, load);
         bufferFrames[index] = 0;
         this.bufferChanged(index);
         this.afterSlotFade(index, change, {
@@ -259,16 +300,30 @@
     // slot's load number), so Lua puts back what the slot held (its
     // bufferState reports cannot tell a rejected load over audio from a
     // good one).
-    rejectLoad { arg index, load, reason;
-        var recording = recordSynths[index].notNil or: { stopReplies[index].notNil };
+    // canceled: a long file's command already canceled the slot's recording
+    rejectLoad { arg index, load, reason, canceled = false;
+        var recording = this.slotRecording(index);
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
-            ++ (if (recording) { " recording canceled" } { " unchanged" }));
-        if (recording) {
-            this.stopRecording(index);
-            this.slotChanged(index);  // also drops the awaited frame count (stopReplies)
-            this.bufferChanged(index);
-        };
+            ++ (if (recording or: { canceled }) { " recording canceled" } { " unchanged" }));
+        if (recording) { this.cancelSlotRecording(index) };
         bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
+    }
+
+    // true while a recording runs or waits to start in the slot, or one
+    // stopRecord ended still awaits its frame count (stopReplies)
+    slotRecording { arg index;
+        ^recordSynths[index].notNil or: { stopReplies[index].notNil }
+    }
+
+    // A load cancels the slot's recording: it never completes, and the slot
+    // reads empty (0 frames). The change also drops the awaited frame count
+    // (stopReplies) and supersedes the loads up to throughLoad (every load
+    // sent so far unless given: a long file's load passes the load before
+    // its own, so it can still take effect after its check)
+    cancelSlotRecording { arg index, throughLoad;
+        this.stopRecording(index);
+        this.slotChanged(index, throughLoad);
+        this.bufferChanged(index);
     }
 
     // true when a grain synth reads the slot: a running voice's, or one
@@ -296,10 +351,14 @@
     // A stopped take's frame count still awaited (stopReplies) is dropped
     // with it, so a bad load sent after this change sees no take to cancel
     // and never cancels this change instead (rejectLoad); stopRecordSlot
-    // sets its own entry after its change.
-    slotChanged { arg index;
+    // sets its own entry after its change. The loads up to throughLoad
+    // (every load sent so far unless given) can no longer take effect
+    // (loadsSuperseded): a long file still in its check is dropped.
+    slotChanged { arg index, throughLoad;
+        var superseded = areaState[\buffers][\loadsSuperseded];
         slotChanges[index] = slotChanges[index] + 1;
         stopReplies[index] = nil;
+        superseded[index] = superseded[index].max(throughLoad ? bufferLoads[index]);
         ^slotChanges[index]
     }
 

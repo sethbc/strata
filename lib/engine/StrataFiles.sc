@@ -25,16 +25,37 @@
     // frames), so a header count that overshoots by a codec's padding still
     // loads, while damage before the last block is caught. One chunk array
     // serves the whole file (the last read may run past `frames`).
-    fileDecodes { arg file, frames;
+    // yielding: called inside a routine, which yields after every chunk
+    // (yieldToCommands), so a long file (a 300 s FLAC takes seconds on a Pi)
+    // never holds up the commands meanwhile.
+    fileDecodes { arg file, frames, yielding = false;
         var remaining = frames, chunk = FloatArray.newClear(loadCheckFrames * file.numChannels), decoded;
         while { remaining > 0 } {
             file.readData(chunk);  // shrinks chunk to the samples decoded
             decoded = chunk.size div: file.numChannels;
             remaining = remaining - decoded;
             if ((decoded < loadCheckFrames) and: { remaining > 0 }) { ^remaining <= loadShortfallFrames };
+            if (yielding and: { remaining > 0 }) { this.yieldToCommands(0) };
         };
         ^true
     }
+
+    // Inside a routine: wait `wait` seconds, and at least until commandGap
+    // seconds of real time from now. A routine whose chunks take longer than
+    // its waits falls behind its logical time, so a plain wait reschedules
+    // it in the past: SystemClock runs it again at once without ever
+    // releasing the language lock, and every OSC message (matron's commands,
+    // server replies) waits until the routine ends. Waking in the real
+    // future lets them in after every chunk. A routine on time waits just
+    // `wait`, as a plain wait would.
+    yieldToCommands { arg wait;
+        wait.max((Main.elapsedTime - thisThread.seconds) + this.commandGap).wait
+    }
+
+    // The least real time a yielding chunk loop waits (s): long enough for a
+    // waiting OSC message to take the language lock, short enough to add
+    // little to a long loop (0.18 s over a 300 s save's 1758 chunks)
+    commandGap { ^0.0002 }
 
     scratchPath { arg index;
         ^scratchDir +/+ ("buf" ++ (index + 1) ++ ".wav")
@@ -99,7 +120,8 @@
     // Write a slot's valid region to path as a stereo 16-bit WAV at the
     // content's sample rate, creating the directory. The server writes each
     // mono buffer to a temporary float file; sclang then interleaves them in
-    // chunks (yielding between chunks) into a per-write
+    // chunks (yielding between chunks from the real time, so a 300 s save
+    // never holds up the commands) into a per-write
     // path.<instanceTag>-<n>.part file and renames it into place, so a
     // reader never sees a half-written file. Each write to a path gets a new
     // generation number: an older write still interleaving when a newer one
@@ -130,7 +152,7 @@
             var current = { writeGenerations[path] == generation };
             var written;
             context.server.sync;
-            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current) };
+            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
             tempPaths.do({ arg tempPath; File.delete(tempPath) });
             // no yield between this check and the rename. The newest write
             // forgets its generation whether it succeeded or failed; an
@@ -151,13 +173,23 @@
 
     // Called inside a routine. Returns false (and writes nothing more) as
     // soon as keepGoing is false, i.e. a newer write to the same path began,
-    // or when the output cannot be written.
-    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing;
+    // or when the output cannot be written. frames is the slot's valid
+    // length: a temporary file holding fewer (the server's write ran out of
+    // disk: a 300 s save needs about 115 MB of them) or an output that ends
+    // short is a failed write, posted as one, so writeSlot never renames a
+    // truncated file over the old one.
+    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames;
         var chunkFrames = 8192;
         var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
-        var output, left, right, interleaved, finished = true;
+        var output, left, right, interleaved, finished = true, written;
         var peak = int16Peak, negativePeak = int16Peak.neg;
 
+        if (sources.includes(nil).not and: { sources.any({ arg source; source.numFrames < frames }) }) {
+            postln("strata: cannot write " ++ path ++ " (a temporary file holds % of % frames: is the disk full?)".format(
+                sources.collect(_.numFrames).minItem, frames));
+            sources.do({ arg source; source.close });
+            ^false
+        };
         // File.mkdir throws when the directory cannot be made; openWrite then fails below
         try { File.mkdir(path.dirname) };
         output = if (sources.includes(nil).not) { SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate) };
@@ -180,11 +212,20 @@
                 interleaved[(frame * 2) + 1] = (right[frame] ? 0).clip(negativePeak, peak);
             });
             output.writeData(interleaved);
-            writeChunkWait.wait;
+            // from the real time: a long save's chunks outlast a 1 ms wait
+            this.yieldToCommands(writeChunkWait);
             finished = keepGoing.value;
         };
         output.close;
         sources.do({ arg source; source.close });
-        ^finished
+        if (finished.not) { ^false };
+        // the output read back: a write that ran out of disk ends short
+        written = SoundFile.openRead(path);
+        written = written !? { arg file; var count = file.numFrames; file.close; count };
+        if (written != frames) {
+            postln("strata: cannot write " ++ path ++ " (% of % frames written: is the disk full?)".format(written, frames));
+            ^false
+        };
+        ^true
     }
 }

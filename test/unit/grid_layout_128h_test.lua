@@ -197,10 +197,10 @@ test("128h page 4 sets sources and records and clears slots", function()
   tap(context, 1, 15, 4)
   assert_equal(context.calls_named("clearBuffer")[2].args[1], 6, "(15,4) clears slot 7")
 
-  -- columns 11-12 and rows 5-7 of columns 13-16 do nothing
+  -- column 11 and rows 5-7 of columns 13-16 do nothing (column 12 is freeze)
   context.clear_engine_calls()
   for y = 1, 7 do
-    for x = 11, 12 do tap(context, 1, x, y) end
+    tap(context, 1, 11, y)
   end
   for y = 5, 7 do
     for x = 13, 16 do tap(context, 1, x, y) end
@@ -222,7 +222,8 @@ test("128h page 4 LEDs come from source_level, record_level and CLEAR_LEVEL", fu
       assert_equal(device:get_led(x, voice_idx), core.source_level(voice_idx, x),
         "voice " .. voice_idx .. " source column " .. x)
     end
-    for x = 11, 12 do assert_equal(device:get_led(x, voice_idx), 0, "columns 11-12 dark") end
+    assert_equal(device:get_led(11, voice_idx), 0, "column 11 dark")
+    assert_equal(device:get_led(12, voice_idx), 3, "column 12 the freeze key (not frozen: 3)")
   end
   assert_equal(device:get_led(9, 4), 15, "the selected empty buffer lights 15")
   for slot = 1, 8 do
@@ -276,6 +277,32 @@ test("two 128h grids keep their own pages", function()
   tap(context, 1, 3, 2)
   assert_equal(params:get("v2_source"), 3, "grid 1's key sets the source")
   assert_equal(patterns[2][3], 15, "and toggles no step")
+end)
+
+test("128h page 4 column 12 and 128v row 14 toggle freeze", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local device = context.grid.plug(1, 16, 8)
+  tap(context, 1, 8, 8)  -- page 4
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(device:get_led(12, voice_idx), 3, "voice " .. voice_idx .. " not frozen: 3")
+    tap(context, 1, 12, voice_idx)
+    assert_equal(params:get("v" .. voice_idx .. "_freeze"), 1, "column 12 row " .. voice_idx .. " freezes it")
+    assert_equal(device:get_led(12, voice_idx), 15, "frozen: 15")
+    assert_equal(params:get("v" .. voice_idx .. "_source"), S.constants.SOURCE_SYNTH, "the source is left alone")
+  end
+  tap(context, 1, 12, 4)
+  assert_equal(params:get("v4_freeze"), 0, "a second press unfreezes")
+  assert_equal(device:get_led(12, 4), 3)
+  params:set("v4_freeze", 1)
+  assert_equal(device:get_led(12, 4), 15, "a param change redraws the grid")
+  -- the slot keys on columns 13-16 still work
+  assert_equal(device:get_led(13, 3), 4, "slot 1's clear key")
+  -- on page 1 the key is a pattern step again
+  tap(context, 1, 5, 8)
+  tap(context, 1, 12, 4)
+  assert_equal(params:get("v4_freeze"), 1, "page 1's step key leaves freeze alone")
 end)
 
 end
