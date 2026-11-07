@@ -83,8 +83,11 @@ return function(S)
       screen.move(127, top + 11)
       screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get("lfo_depth_" .. n)))
     end
+  end
 
-    draw_hints("E3:depth K2:dest K3:" .. (lfo_running(S.selected_lfo) and "off" or "on"))
+  -- The hint row (redraw() draws it after the page)
+  local function lfo_hints(alt_held)
+    return "E3:depth K2:dest K3:" .. (lfo_running(S.selected_lfo) and "off" or "on")
   end
 
   local function lfo_enc(n, d)
@@ -107,13 +110,10 @@ return function(S)
   end
 
   -- The page's record, at LFO's place in UI_PAGES: enc, key and redraw in
-  -- strata.lua dispatch through S.registry.pages[S.ui_page]
-  for index, name in ipairs(UI_PAGES) do
-    if name == "LFO" then
-      S.registry.pages[index] = {name = name, draw = redraw_lfo, enc = lfo_enc, key = lfo_key,
-        key_release = S.lib.ui_keys.ignore_page_input}
-    end
-  end
+  -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
+  -- are lib/arc/lfo.lua's
+  S.registry.pages[UI_PAGES.index.LFO] = {name = "LFO", draw = redraw_lfo, hints = lfo_hints,
+    enc = lfo_enc, key = lfo_key}
 
   return M
 end

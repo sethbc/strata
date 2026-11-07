@@ -16,7 +16,7 @@
   - the norns entry points `arc_delta`, `arc_key` and `arc_redraw`;
   - all global but `attach_arc`, a local of the constructor (`arc.add`/`arc.remove` are fields of norns' `arc` table);
   - cleanup step 180: the arc left dark.
-- `lib/arc/main.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/buffer.lua` (`S.lib.arc_main`, ...): each page's rings. Each sets `arc_delta` and `arc_redraw` on its page's record in `S.registry.pages`, found by name.
+- `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua` (`S.lib.arc_main`, ...): each page's rings. Each sets only the arc fields (`arc_delta`, `arc_redraw`, and later `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those; a test checks both). `strata.lua` includes them after every page file. VOICE, SEQ and SCENES are stubs for now: their rings stay dark and ignore turns.
 
 ## Device lifecycle
 
@@ -34,7 +34,7 @@ The arc follows the screen page (`S.ui_page`):
 - `arc_delta` calls the current page record's `arc_delta(ring, delta)` (`S.registry.pages[S.ui_page]`).
 - `arc_redraw` clears the rings, calls the record's `arc_redraw(S.arc_device)` and refreshes.
 - A record without them ignores turns and leaves the rings off (and `arc_delta` still requests a redraw).
-- MAIN uses `arc_main_delta`/`arc_main_redraw`, FX `arc_fx_delta`/`arc_fx_redraw`, LFO `arc_lfo_delta`/`arc_lfo_redraw`, BUFFER `arc_buffer_delta`/`arc_buffer_redraw`. SETUP has no rings (no `arc_delta`/`arc_redraw` on its record).
+- MAIN uses `arc_main_delta`/`arc_main_redraw`, FX `arc_fx_delta`/`arc_fx_redraw`, LFO `arc_lfo_delta`/`arc_lfo_redraw`, BUFFER `arc_buffer_delta`/`arc_buffer_redraw`. VOICE, SEQ and SCENES have stub rings that draw nothing and ignore turns. SETUP has no rings (no `arc_delta`/`arc_redraw` on its record).
 - `enc` calls `request_redraw()`, which marks the arc dirty too, so changing page redraws the rings.
 
 ## Input

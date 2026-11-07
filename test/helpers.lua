@@ -330,7 +330,8 @@ local function text_span(entry)
   return entry.x, entry.x + width
 end
 
-local PAGE_TITLES = { "MAIN", "FX", "LFO", "BUFFER", "SETUP" }
+-- The screen pages in E1 order (S.constants.UI_PAGES)
+local PAGE_TITLES = { "MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP" }
 
 local HINT_ROW_Y = 62
 
@@ -342,9 +343,36 @@ local MAIN_LIST_RIGHT = 60
 
 local MAIN_DETAILS_LEFT = 65
 
+-- Show a page by its name ("FX") or its index in PAGE_TITLES (E1 turns
+-- there) and draw it. Tests name pages; an index is for loops over every page
 local function show_page(page)
-  enc(1, page - local_value("ui_page"))
+  local index = page
+  if type(page) == "string" then
+    index = nil
+    for page_index, title in ipairs(PAGE_TITLES) do
+      if title == page then index = page_index end
+    end
+    assert(index, "no page named " .. page)
+  end
+  enc(1, index - local_value("ui_page"))
   redraw()
+end
+
+-- The drawn strings on row y, left to right
+local function texts_on_row(context, y)
+  local row = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == y then table.insert(row, entry) end
+  end
+  table.sort(row, function(a, b) return select(1, text_span(a)) < select(1, text_span(b)) end)
+  return row
+end
+
+-- The text drawn at the start of the hint row (nil when there is none)
+local function hint_text(context)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == HINT_ROW_Y then return entry.text end
+  end
 end
 
 -- Check the drawn screen: everything inside 128x64, no two strings overlap on
@@ -500,6 +528,8 @@ return {
   MAIN_LIST_RIGHT = MAIN_LIST_RIGHT,
   MAIN_DETAILS_LEFT = MAIN_DETAILS_LEFT,
   show_page = show_page,
+  texts_on_row = texts_on_row,
+  hint_text = hint_text,
   assert_screen_layout = assert_screen_layout,
   count_screen_draws = count_screen_draws,
   screen_shows = screen_shows,

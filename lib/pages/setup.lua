@@ -58,8 +58,11 @@ return function(S)
     screen.level(4)
     screen.move(0, 54)
     screen.text("ch: " .. params:string("midi_channel_mode"))
+  end
 
-    draw_hints("E2:port E3:ch K3:save")
+  -- The hint row (redraw() draws it after the page)
+  local function setup_hints(alt_held)
+    return "E2:port E3:ch K3:save"
   end
 
   local function setup_key(n)
@@ -78,13 +81,10 @@ return function(S)
   end
 
   -- The page's record, at SETUP's place in UI_PAGES: enc, key and redraw in
-  -- strata.lua dispatch through S.registry.pages[S.ui_page]
-  for index, name in ipairs(UI_PAGES) do
-    if name == "SETUP" then
-      S.registry.pages[index] = {name = name, draw = redraw_setup, enc = setup_enc, key = setup_key,
-        key_release = S.lib.ui_keys.ignore_page_input}
-    end
-  end
+  -- strata.lua dispatch through S.registry.pages[S.ui_page]. It has no arc
+  -- fields: the rings stay dark on SETUP
+  S.registry.pages[UI_PAGES.index.SETUP] = {name = "SETUP", draw = redraw_setup, hints = setup_hints,
+    enc = setup_enc, key = setup_key}
 
   return M
 end

@@ -34,7 +34,7 @@ On the **LFO** page:
 - **Rings 1-3** - Depth of LFO 1-3 (10 ticks per percent; bright while the LFO runs)
 - **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked (part-turns toward the next rate are forgotten when you select another LFO or change its mode)
 
-On the **SETUP** page the rings are off and do nothing.
+On the **SETUP** page, and for now on the placeholder **VOICE**, **SEQ** and **SCENES** pages, the rings are off and do nothing.
 
 ## Arc Button (2025 model)
 

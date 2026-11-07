@@ -129,7 +129,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
   -- K3 (and the arc button) never stop a running voice: on a held voice K3
   -- freezes it, and the note off then stops it as voice off mode says
   local _, set_selected = find_upvalue("selected_voice"); set_selected(2)
-  show_page(1)
+  show_page("MAIN")
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
   key(3, 1); key(3, 0)
   assert_true(voices[2].active and local_value("frozen")[2], "K3 freezes the held voice, it does not stop it")
@@ -209,7 +209,7 @@ test("omni pitchbend follows the selection: the old voice re-centers, the new on
     return value
   end
   local up = 2 ^ (1 / 12)
-  params:set("midi_channel_mode", 2); show_page(1)
+  params:set("midi_channel_mode", 2); show_page("MAIN")
   context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })   -- bends voice 1
   context.clear_engine_calls()
   enc(2, 1)   -- voice 2, wheel still up
@@ -222,11 +222,11 @@ test("omni pitchbend follows the selection: the old voice re-centers, the new on
   assert_equal(last_bend(2), nil, "nothing sent to a stopped voice"); assert_near(bend[3], up, 1e-9)
   toggle_voice(3); assert_near(last_bend(2), up, 1e-9, "starting it sends the wheel")
   -- BUFFER page E2 is the same selection
-  show_page(4); context.clear_engine_calls()
+  show_page("BUFFER"); context.clear_engine_calls()
   enc(2, -1)
   assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centered"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
   -- E2 against the end of the list changes nothing
-  show_page(1); enc(2, -1)   -- voice 1
+  show_page("MAIN"); enc(2, -1)   -- voice 1
   context.clear_engine_calls(); enc(2, -1)
   assert_equal(#context.calls_named("setVoiceParam"), 0, "no selection change, no bend")
   -- wheel centered: moving the selection sends nothing
@@ -252,7 +252,7 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   assert_equal(params:get("midi_device"), 1); assert_equal(params:get("midi_channel_mode"), 1)
   assert_equal(params:get("midi_note_off"), 1)
   assert_equal(params:string("midi_channel_mode"), "per voice")
-  show_page(5)
+  show_page("SETUP")
   assert_true(screen_has("midi 1: none"), "no device on port 1")
   assert_true(screen_has("ch: per voice"), "channel mode shown")
   context.midi.plug(1, "keys"); next_frame(context)

@@ -15,7 +15,7 @@ This is version 3.0.2. Version 3.0 added buffers and live input, filter and dela
 - Cross-modulation between voices, three global LFOs and probability-based mutations
 - Filter, delay, reverb and a limiter on the master output
 - Eight scenes with smooth recall and a scene sequencer
-- A pattern sequencer on the grid, MIDI input, monome arc support and a five-page screen UI
+- A pattern sequencer on the grid, MIDI input, monome arc support and an eight-page screen UI
 
 ## Requirements
 

@@ -104,8 +104,11 @@ return function(S)
     end
     screen.move(65, 50)
     screen.text(string.format(main_param_entry(S.selected_voice).format, params:get(main_param_id(S.selected_voice))))
+  end
 
-    draw_hints("K2:rand K3:" .. (v.active and "freeze" or "start"))
+  -- The hint row (redraw() draws it after the page)
+  local function main_hints(alt_held)
+    return "K2:rand K3:" .. (S.voices[S.selected_voice].active and "freeze" or "start")
   end
 
   local function main_enc(n, d)
@@ -135,13 +138,10 @@ return function(S)
   end
 
   -- The page's record, at MAIN's place in UI_PAGES: enc, key and redraw in
-  -- strata.lua dispatch through S.registry.pages[S.ui_page]
-  for index, name in ipairs(UI_PAGES) do
-    if name == "MAIN" then
-      S.registry.pages[index] = {name = name, draw = redraw_main, enc = main_enc, key = main_key,
-        key_release = S.lib.ui_keys.ignore_page_input}
-    end
-  end
+  -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
+  -- are lib/arc/main.lua's
+  S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
+    enc = main_enc, key = main_key}
 
   return M
 end

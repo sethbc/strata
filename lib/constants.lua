@@ -10,7 +10,6 @@ local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
-local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
@@ -39,8 +38,13 @@ for slot = 1, NUM_BUFFERS do
 end
 SOURCE_OPTIONS[SOURCE_INPUT] = "input"
 
-local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
-UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by its title)
+-- The screen pages in E1 order. Each lib/pages/<page>.lua registers its
+-- record at S.registry.pages[UI_PAGES.index.<PAGE>]
+local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}
+local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (8)
+UI_PAGES.index = {}  -- page name -> its index (UI_PAGES.index.FX == 4)
+for index, name in ipairs(UI_PAGES) do UI_PAGES.index[name] = index end
+UI_PAGES.MAIN_PAGE = UI_PAGES.index.MAIN  -- 1 (arc_key tests the page by index, not by its title)
 -- Arc pages follow the screen pages. Every continuous arc ring sweeps its
 -- param's whole range in this many ticks: half a turn of the arc's 1024
 -- ticks per revolution (monome arc spec; matron passes the deltas through)

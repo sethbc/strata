@@ -106,18 +106,22 @@ return function(S)
       screen.move(127, y)
       screen.text_right(buffer.recording and "REC" or string.format("%.1fs", buffer.seconds))
     end
+  end
 
+  -- The hint row (redraw() draws it after the page): the flash while it
+  -- shows, else the keys
+  local function buffer_hints(alt_held)
+    local voice_slot = voice_buffer_slot(S.selected_voice)
     if S.BUFFER_PAGE.flash_text and util.time() < S.BUFFER_PAGE.flash_until then
-      draw_hints(S.BUFFER_PAGE.flash_text)
+      return S.BUFFER_PAGE.flash_text
     elseif voice_slot then
       -- "..." while a take that ended waits for the engine (K3 does nothing)
       local voice_buffer = S.buffers[voice_slot]
       local record_hint = voice_buffer.finishing and "..." or (voice_buffer.recording and "stop" or "rec")
-      draw_hints("K2:load K3:" .. record_hint .. " K2+3:save")
-    else
-      -- K2 and K3 need a buffer source; E3 picks one
-      draw_hints("K2:- K3:- E3:source")
+      return "K2:load K3:" .. record_hint .. " K2+3:save"
     end
+    -- K2 and K3 need a buffer source; E3 picks one
+    return "K2:- K3:- E3:source"
   end
 
   local function buffer_enc(n, d)
@@ -235,13 +239,9 @@ return function(S)
 
   -- The page's record, at BUFFER's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Only BUFFER
-  -- acts on key releases
-  for index, name in ipairs(UI_PAGES) do
-    if name == "BUFFER" then
-      S.registry.pages[index] = {name = name, draw = redraw_buffer, enc = buffer_enc, key = buffer_key,
-        key_release = buffer_key_release}
-    end
-  end
+  -- acts on key releases. Its arc fields are lib/arc/buffer.lua's
+  S.registry.pages[UI_PAGES.index.BUFFER] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
+    enc = buffer_enc, key = buffer_key, key_release = buffer_key_release}
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_page_flash, function()
     cancel_buffer_page_flash_clock()
