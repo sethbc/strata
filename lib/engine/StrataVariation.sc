@@ -19,31 +19,35 @@
     // the pitchbend and frequency-crossmod factor (1 for the synth source),
     // vary an Event of the controls reverseProb, pitchJitter, intervals
     // (an Array of 8), intervalCount, intervalProb, quantize and scaleNote.
-    //   - pitch jitter: 2^(u x pitchJitter / 12), u uniform in -1..1;
+    //   - pitch jitter: u x pitchJitter semitones, u uniform in -1..1;
     //   - an interval: with probability intervalProb, one of the first
     //     intervalCount intervals (semitones), each as likely; none while
-    //     intervalCount is 0;
+    //     intervalCount is 0. Its draw (TIRand and TRand on trig) is read by
+    //     a Select.kr at the start of each control block, so a grain takes
+    //     the draw of the last trigger before its block: still one draw per
+    //     grain, without the eight K2As a Select.ar would need (every UGen
+    //     takes real-time memory in every grain synth);
     //   - quantize (quantize 1): the pitch, jitter and interval together
-    //     moved to the nearest tone of the scale (quantizedRatio,
+    //     moved to the nearest tone of the scale (quantizedOffset,
     //     StrataScale.sc), before bend and crossmod, so they still bend;
     //   - reverse: x -1 with probability reverseProb.
+    // The rate is pitchShift x 2^(semitones / 12) x bendRate x the sign: at
+    // the defaults exactly pitchShift x bendRate.
     grainRate { arg trig, pitchShift, bendRate, vary;
         // (written on the control's own name: the Lua stub reads the
         // enumeration from "intervalCount.round.clip(0, 8)"; 8 is the
         // number of interval controls, interval1..8)
         var intervalCount = vary[\intervalCount];
         var count = intervalCount.round.clip(0, 8);
-        var pick = TIRand.ar(0, (count - 1).max(0), trig);
-        var takes = (TRand.ar(0, 1, trig) < vary[\intervalProb]) * (count > 0);
-        var interval = vary[\intervals].collect({ arg semitones, index;
-            semitones * BinaryOpUGen('==', pick, index)
-        }).sum * takes;
+        var chance = vary[\intervalProb] * (count > 0);
+        // 0: no interval this grain; 1..count: that interval
+        var pick = TIRand.ar(1, count.max(1), trig) * (TRand.ar(0, 1, trig) < chance);
+        var interval = Select.kr(pick, [0] ++ vary[\intervals]);
         var offset = (TRand.ar(-1, 1, trig) * vary[\pitchJitter]) + interval;
-        var free = pitchShift * offset.midiratio;
-        var quantized = this.quantizedRatio(pitchShift, offset, vary[\scaleNote]);
-        var ratio = Select.ar(vary[\quantize] > 0.5, [free, quantized]);
+        var semitones = Select.ar(vary[\quantize] > 0.5,
+            [offset, this.quantizedOffset(pitchShift, offset, vary[\scaleNote])]);
         var reverse = TRand.ar(0, 1, trig) < vary[\reverseProb];
-        ^ratio * bendRate * (1 - (2 * reverse))
+        ^pitchShift * semitones.midiratio * bendRate * (1 - (2 * reverse))
     }
 
     // A grain's pan offset, u x panJitter (u uniform in -1..1), added to

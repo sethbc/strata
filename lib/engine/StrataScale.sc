@@ -15,8 +15,46 @@
             order: 80,
             allocState: { this.allocScaleBuffer },
             addCommands: { this.addScaleCommands },
-            free: { this.freeScaleBuffer }
+            free: { this.freeScaleBuffer },
+            // scaleNote is Lua's reference note; a buffer voice's grains
+            // quantize around the rate it plays its slot at, so bufRate
+            // moves the note the grain synth gets (scaleNoteFor)
+            grainParamHandlers: (
+                scaleNote: { arg voice, value;
+                    areaState[\scale][\notes][voice] = value;
+                    this.sendScaleNote(voice);
+                    true
+                },
+                bufRate: { arg voice, value;
+                    grainControls[voice][\bufRate] = value;
+                    this.setSynth(this.grainKey(voice), \bufRate, value);
+                    this.sendScaleNote(voice);
+                    true
+                }
+            )
         )
+    }
+
+    // The scaleNote a voice's grain synth quantizes around: Lua's reference
+    // note (setGrainParam scaleNote: a synth voice's freq, the root + 60 for
+    // a buffer or input voice), plus, for a buffer slot, the semitones of its
+    // bufRate, so a MIDI note (or any rate) transposes the voice without
+    // moving the scale its grains land on
+    scaleNoteFor { arg voice;
+        var note = areaState[\scale][\notes][voice];
+        if (grainSource[voice].inclusivelyBetween(1, numBuffers)) {
+            note = note + (grainControls[voice][\bufRate] ? 1).max(0.001).ratiomidi;
+        };
+        ^note
+    }
+
+    // Keep and send a voice's scaleNote (scaleNoteFor), so a replacement
+    // grain synth starts with it. Lua resends scaleNote after every source
+    // switch, which recomputes it for the new source
+    sendScaleNote { arg voice;
+        var note = this.scaleNoteFor(voice);
+        grainControls[voice][\scaleNote] = note;
+        this.setSynth(this.grainKey(voice), \scaleNote, note);
     }
 
     // 12 frames, one per pitch class (0 = C): the semitones from that pitch
@@ -30,6 +68,7 @@
     // Chromatic until setScale arrives (Lua's default: scale off, root C)
     allocScaleBuffer {
         var state = areaState[\scale];
+        state[\notes] = Array.fill(numVoices, 60);  // Lua's reference notes (the grain defs' default)
         state[\root] = 0;
         state[\mask] = this.chromaticMask;
         state[\offsets] = this.scaleOffsets(0, this.chromaticMask);
@@ -74,15 +113,14 @@
         });
     }
 
-    // A grain's pitch ratio quantized: its semitones s (the voice's pitch
-    // pitchShift, a ratio, plus offset semitones) become
-    // q(scaleNote + s) - scaleNote, with q(n) = round(n) + scaleBuffer[round(n)
-    // mod 12]: the grain lands on a scale tone, measured from the voice's
-    // reference note scaleNote (a fractional MIDI note)
-    quantizedRatio { arg pitchShift, offset, scaleNote;
-        var note = scaleNote + pitchShift.max(0.001).ratiomidi + offset;
-        var rounded = note.round;
-        var tone = rounded + Index.ar(this.scaleBuffer.bufnum, rounded % 12);
-        ^(tone - scaleNote).midiratio
+    // A grain's offset (semitones from the voice's pitch) quantized: its
+    // note n = scaleNote + 12 log2(pitchShift) + offset (scaleNote: the
+    // voice's reference note, a fractional MIDI note) becomes
+    // q(n) = round(n) + scaleBuffer[round(n) mod 12], and the result is
+    // q(n) - scaleNote - 12 log2(pitchShift): the grain lands on a scale tone
+    quantizedOffset { arg pitchShift, offset, scaleNote;
+        var base = scaleNote + pitchShift.max(0.001).ratiomidi;
+        var rounded = (base + offset).round;
+        ^rounded + Index.ar(this.scaleBuffer.bufnum, rounded % 12) - base
     }
 }

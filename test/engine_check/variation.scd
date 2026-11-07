@@ -17,7 +17,7 @@ var check = { arg condition, message; h.check(condition, message) };
 var command = { arg name ... args; h.command(name, *args) };
 var probeGroup, quietBus, nowBus, readOut, rectEnv, timecode, logRates, logDurs, grainLog, startTimecodeVoice;
 var grains, rates, semitones, majorMask = 2741, majorOffsets, before, after, state, bufferOffsets;
-var leftPath, peakBus, peakProbe, levels, ratioDb, logFrames = 128, sentinel = -1000;
+var rampPath, rampFile, rampFrames, scaleNote, leftPath, peakBus, peakProbe, levels, ratioDb, logFrames = 128, sentinel = -1000;
 var varyControls = [\reverseProb, \pitchJitter, \panJitter, \sizeJitter, \intervalCount, \intervalProb, \quantize,
     \scaleNote] ++ (1..8).collect({ arg index; ("interval" ++ index).asSymbol });
 
@@ -57,17 +57,17 @@ logRates = Buffer.alloc(server, logFrames, 1);
 logDurs = Buffer.alloc(server, logFrames, 1);
 server.sync;
 
-// The grains voice 1 plays while seconds pass: [rate, length] per grain,
+// The grains a voice (engine voice 0 by default) plays while seconds pass: [rate, length] per grain,
 // the first left out (it may have started before the log)
-grainLog = { arg seconds;
+grainLog = { arg seconds, voice = 0;
     var log, values = [nil, nil];
     [logRates, logDurs].do({ arg buffer; buffer.fill(0, logFrames, sentinel) });
     server.sync;
-    engine.synths[engine.grainKey(0)].set(\out, readOut.index);
+    engine.synths[engine.grainKey(voice)].set(\out, readOut.index);
     log = Synth(\strataCheckGrainLog, [\in, readOut, \rates, logRates, \durs, logDurs], probeGroup);
     seconds.wait;
     log.free;
-    engine.synths[engine.grainKey(0)].set(\out, engine.mainBus.index);
+    engine.synths[engine.grainKey(voice)].set(\out, engine.mainBus.index);
     server.sync;
     [logRates, logDurs].do({ arg buffer, index;
         var condition = Condition(false);
@@ -233,6 +233,40 @@ peakProbe.free;
 command.(\voiceOff, 1);
 command.(\setGrainSource, 1, 0);
 
+// ---- A buffer voice quantizes around the rate it plays (voice 2) ----
+// A slot holding a ramp (left: the fraction of its 1 s, right: 1) is read
+// like the timecode. bufRate 2^(4/12) (a MIDI E4) with Lua's scaleNote 60
+// (root C): the grain synth quantizes around 64, so every grain, played at
+// its rate, still lands on C major
+rampPath = h.tempDir +/+ "variation-ramp.wav";
+rampFrames = server.sampleRate.asInteger;
+rampFile = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(server.sampleRate);
+rampFile.openWrite(rampPath);
+rampFile.writeData(FloatArray.fill(rampFrames * 2, { arg index; if (index.odd) { 1.0 } { (index div: 2) / rampFrames } }));
+rampFile.close;
+command.(\loadBuffer, 0, rampPath); 0.3.wait; server.sync;
+startTimecodeVoice.(1, 1, 0.1, 5.0, 1.0);
+[[\bufPos, 0.3], [\bufScan, 0.0], [\scaleNote, 60.0], [\bufRate, 2 ** (4 / 12)], [\pitchJitter, 12.0], [\quantize, 1.0]]
+    .do({ arg pair; command.(\setGrainParam, 1, *pair) });
+command.(\setScale, 0, majorMask);
+server.sync;
+scaleNote = h.getControl(engine.synths[engine.grainKey(1)], \scaleNote);
+check.((scaleNote - 64).abs < 0.001,
+    "variation: a buffer voice's bufRate moves the scaleNote its grain synth gets (60 + 4 semitones; got %)".format(scaleNote));
+0.3.wait;
+grains = grainLog.(5.0, 1);
+semitones = grains.collect({ arg pair; pair[0].ratiomidi });
+check.((grains.size >= 15) and: { semitones.every({ arg each;
+        ((each - each.round).abs < 0.03) and: { majorOffsets[(60 + each.round.asInteger) % 12] == 0 } }) }
+    and: { semitones.collect(_.round).asSet.size >= 4 },
+    "variation: a buffer voice at bufRate 2^(4/12) (MIDI E4) keeps its grains in C major (semitones %)".format(
+        semitones.collect(_.round(0.01))));
+[[\pitchJitter, 0.0], [\quantize, 0.0], [\bufRate, 1.0], [\bufPos, 0.0], [\posSpread, 0.5], [\panSpread, 0.5]]
+    .do({ arg pair; command.(\setGrainParam, 1, *pair) });
+command.(\setScale, 0, 4095);
+command.(\voiceOff, 1);
+command.(\setGrainSource, 1, 0);
+
 h.stopAllVoices;
 [\reverseProb, \pitchJitter, \panJitter, \sizeJitter, \intervalCount, \quantize].do({ arg control;
     engine.numVoices.do({ arg voice; command.(\setGrainParam, voice, control, 0.0) });
@@ -244,5 +278,6 @@ probeGroup.free;
 [quietBus, nowBus, readOut, peakBus].do(_.free);
 [rectEnv, logRates, logDurs].do(_.free);
 File.delete(leftPath);
+File.delete(rampPath);
 server.sync;
 }

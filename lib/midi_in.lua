@@ -121,8 +121,8 @@ return function(S)
 
   -- A note sets the voice's pitch (synth: freq; buffer: rate, note 60 = 1;
   -- input: no pitch), snapped to the scale for a quantized voice, starts the
-  -- voice if it is off, then accents it at the note's velocity. Voices keep their slow attacks; the velocity lands on the
-  -- accent.
+  -- voice if it is off, then accents it at the note's velocity. Voices keep
+  -- their slow attacks; the velocity lands on the accent.
   function midi_note_on(voice_idx, note, velocity)
     local prefix = "v" .. voice_idx .. "_"
     -- a quantized voice plays the scale tone nearest the note (lib/variation.lua)

@@ -210,6 +210,24 @@ test("a quantized freq moves by scale tones on slow encoder and arc turns", func
   assert_true(in_c_major(math.floor(local_value("S").lib.variation.scale_note(1) + 0.5)), "scaleNote on a tone")
 end)
 
+test("a set after a turn snaps the set value, not the turn's leftover", function()
+  local context = load_strata()
+  finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  for _ = 1, 3 do arc_sweep_param("v1_freq", 1) end
+  assert_near(params:get("v1_freq"), 440, 1e-6, "three arc ticks (0.47 st) stay on A4")
+  params:set("v1_freq", freq_of(64.3))
+  assert_near(params:get("v1_freq"), freq_of(64), 1e-6, "note 64.3 set after the turn is E4, not F4")
+  -- a turn of the largest encoder delta (5 detents) still counts as a turn
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  enc_param_delta(3, "v1_freq", 1)                -- shadow 69.8: A4
+  assert_near(params:get("v1_freq"), 440, 1e-6)
+  enc_param_delta(3, "v1_freq", 5)                -- shadow 73.8: D5, not 73.0 + the jump's own snap
+  assert_near(params:get("v1_freq"), freq_of(74), 1e-6, "a 5-detent turn keeps the shadow")
+end)
+
 test("quantize snaps freq on all seven synth voices but never index, fold or the other main params", function()
   local context = load_strata()
   finish_startup(context)
