@@ -104,6 +104,11 @@ test("SETUP scrolls with a marker and reaches both ends", function()
   assert_true(screen_shows(context, "load scenes"), "load scenes is drawn")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi port"), "the first fields scrolled out")
+  local marker_bottom
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == 127 and line.x2 == 127 then marker_bottom = math.max(line.y1, line.y2) end
+  end
+  assert_equal(marker_bottom, 55, "the marker's bottom is at the list's bottom")
   assert_screen_layout(context, "SETUP scrolled to the end")
   enc(2, -20)
   redraw()
