@@ -119,9 +119,17 @@ for index, name in ipairs(UI_PAGES) do
   assert(S.registry.pages[index] and S.registry.pages[index].name == name, "no page record for " .. name)
 end
 
--- Arc device (the arc vport from arc.connect); SETUP shows S.arc_connected
-local arc_device = nil
-S.arc_connected = false
+-- The arc: S.arc_device, S.arc_connected, arc_sweep_param, arc_ring_fill,
+-- arc_init, first_arc_port, arc.add/arc.remove, forget_arc_lfo_period_ticks
+-- and the norns entry points arc_delta, arc_key and arc_redraw, which
+-- dispatch through the page records' arc_delta and arc_redraw
+-- (lib/arc/core.lua). Each page's rings set those two fields on its record
+-- (lib/arc/main.lua, fx.lua, lfo.lua, buffer.lua); SETUP has none
+S.lib.arc_core = include("lib/arc/core")(S)
+S.lib.arc_main = include("lib/arc/main")(S)
+S.lib.arc_fx = include("lib/arc/fx")(S)
+S.lib.arc_lfo = include("lib/arc/lfo")(S)
+S.lib.arc_buffer = include("lib/arc/buffer")(S)
 
 -- Grid devices (support multiple grids); SETUP counts S.MAX_GRID_PORTS
 S.MAX_GRID_PORTS = 4
@@ -273,262 +281,6 @@ function redraw()
   draw_header()
   S.registry.pages[S.ui_page].draw()
   screen.update()
-end
-
--- Arc functions
-
--- Arc pages follow the screen page: ARC_PAGE_DELTA[S.ui_page] handles ring
--- turns and ARC_PAGE_REDRAW[S.ui_page] draws the rings between arc_redraw's
--- clear and refresh.
-
--- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
--- param's whole range. params:delta moves its 0-1 raw value by delta *
--- quantum, so the sweep follows the warp (exp params sweep evenly) and the
--- step only quantizes the value read back. (A global: the main chunk is near
--- Lua's local limit.)
--- Control params only: it reads the param's controlspec.
-function arc_sweep_param(param_id, delta)
-  local quantum = params:lookup_param(param_id).controlspec.quantum
-  params:delta(param_id, delta / (UI_PAGES.ARC_TICKS_PER_SWEEP * quantum))
-end
-
-local function arc_main_delta(n, delta)
-  if n == 1 then
-    -- Ring 1: Master density
-    arc_sweep_param("master_density", delta)
-  elseif n == 2 then
-    -- Ring 2: Selected voice's main parameter
-    arc_sweep_param(main_param_id(S.selected_voice), delta)
-  elseif n == 3 then
-    -- Ring 3: Grain size
-    arc_sweep_param("v" .. S.selected_voice .. "_grain_size", delta)
-  elseif n == 4 then
-    -- Ring 4: Grain density
-    arc_sweep_param("v" .. S.selected_voice .. "_grain_density", delta)
-  end
-end
-
--- Fill ring n from 0 to fraction (0-1) of a turn. Every ring draws through
--- here: the end angle stays just below a full turn, so a ring at its maximum
--- lights all 64 LEDs instead of none
-function arc_ring_fill(arc_port, ring, fraction, level)
-  local turn = math.pi * 2
-  local clamped = math.max(0, math.min(1, fraction))
-  arc_port:segment(ring, 0, math.min(clamped * turn, turn - UI_PAGES.ARC_FULL_TURN_MARGIN), level)
-end
-
-local function arc_main_redraw(arc_port)
-  -- Every ring is drawn across its param's controlspec range (as the sweep
-  -- moves it): density, the selected voice's main param, grain size, grain density
-  local v = S.voices[S.selected_voice]
-  local prefix = "v" .. S.selected_voice .. "_"
-  arc_ring_fill(arc_port, 1, param_fraction("master_density"), 15)
-  arc_ring_fill(arc_port, 2, param_fraction(main_param_id(S.selected_voice)), v.active and 15 or 4)
-  arc_ring_fill(arc_port, 3, param_fraction(prefix .. "grain_size"), v.active and 12 or 3)
-  arc_ring_fill(arc_port, 4, param_fraction(prefix .. "grain_density"), v.active and 12 or 3)
-end
-
--- FX page rings: the param each ring adjusts (each sweeps its range in
--- UI_PAGES.ARC_TICKS_PER_SWEEP ticks)
-local ARC_FX_RINGS = {
-  {param_id = "filter_freq"},
-  {param_id = "filter_res"},
-  {param_id = "delay_time"},
-  {param_id = "delay_mix"}
-}
-
-local function arc_fx_delta(n, delta)
-  local ring = ARC_FX_RINGS[n]
-  if ring then
-    arc_sweep_param(ring.param_id, delta)
-  end
-end
-
--- Each ring shows its param across its controlspec (following the warp,
--- so exp params such as filter freq and delay time sweep evenly)
-local function arc_fx_redraw(arc_port)
-  for n, ring in ipairs(ARC_FX_RINGS) do
-    arc_ring_fill(arc_port, n, param_fraction(ring.param_id), 12)
-  end
-end
-
--- BUFFER page rings: the selected voice's buffer position and rate, then
--- the recording duration and level. Param id suffixes after "v<i>_" for
--- the voice rings. Each sweeps its range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks.
-local ARC_BUFFER_RINGS = {
-  {voice_key = "buf_pos"},
-  {voice_key = "buf_rate"},
-  {param_id = "record_duration"},
-  {param_id = "record_level"}
-}
-
-local function arc_buffer_ring_param(ring)
-  return ring.param_id or ("v" .. S.selected_voice .. "_" .. ring.voice_key)
-end
-
--- Rings 1-2 adjust the voice's buffer params whatever its source (they are
--- ready when it switches to a buffer)
-local function arc_buffer_delta(n, delta)
-  local ring = ARC_BUFFER_RINGS[n]
-  if ring then
-    arc_sweep_param(arc_buffer_ring_param(ring), delta)
-  end
-end
-
--- Rings 1-2 are bright for a buffer-sourced voice and dim otherwise (the
--- buffer params do nothing then); the recording rings are always lit
-local function arc_buffer_redraw(arc_port)
-  local uses_buffer = voice_uses_buffer(S.selected_voice)
-  for n, ring in ipairs(ARC_BUFFER_RINGS) do
-    local level = 12
-    if ring.voice_key then
-      level = uses_buffer and 15 or 4
-    end
-    arc_ring_fill(arc_port, n, param_fraction(arc_buffer_ring_param(ring)), level)
-  end
-end
-
--- LFO page rings: 1-3 the depth of LFO 1-3 (whole percents), 4 the
--- selected LFO's period (free seconds, swept like every continuous ring, or
--- the clocked rate option in whole steps)
-local ARC_LFO = {
-  ticks_per_percent = 10,
-  ticks_per_rate = 20,
-  period_ring = 4
-}
-local arc_lfo_ticks = {}  -- per ring: ticks not yet worth a whole step
-
--- Ring 4's carried ticks belong to one LFO's clocked rate: forget them when
--- the selected LFO (E2 on the LFO page) or its mode changes, so they never
--- step another param
-function forget_arc_lfo_period_ticks()
-  arc_lfo_ticks[ARC_LFO.period_ring] = nil
-end
-
--- Whole steps in a ring's accumulated ticks; the rest is kept for later
-local function arc_whole_steps(ring, delta, ticks_per_step)
-  local ticks = (arc_lfo_ticks[ring] or 0) + delta
-  local steps = ticks >= 0 and math.floor(ticks / ticks_per_step) or -math.floor(-ticks / ticks_per_step)
-  arc_lfo_ticks[ring] = ticks - steps * ticks_per_step
-  return steps
-end
-
-local function lfo_period_param_id(n)
-  if params:string("lfo_mode_" .. n) == "clocked" then
-    return "lfo_clocked_" .. n
-  end
-  return "lfo_free_" .. n
-end
-
-local function arc_lfo_delta(n, delta)
-  if n <= NUM_LFOS then
-    local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_percent)
-    if steps ~= 0 then params:delta("lfo_depth_" .. n, steps) end
-  elseif n == ARC_LFO.period_ring then
-    local period_id = lfo_period_param_id(S.selected_lfo)
-    if period_id == "lfo_free_" .. S.selected_lfo then
-      arc_sweep_param(period_id, delta)
-    else
-      local steps = arc_whole_steps(n, delta, ARC_LFO.ticks_per_rate)
-      if steps ~= 0 then params:delta(period_id, steps) end
-    end
-  end
-end
-
--- Depth rings are bright while their LFO runs
-local function arc_lfo_redraw(arc_port)
-  for n = 1, NUM_LFOS do
-    arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), S.lib.pages_lfo.lfo_running(n) and 15 or 4)
-  end
-  arc_ring_fill(arc_port, ARC_LFO.period_ring, param_fraction(lfo_period_param_id(S.selected_lfo)), 12)
-end
-
-local function arc_ignore_delta() end
-local function arc_draw_nothing() end  -- rings stay off
-
--- Indexed like UI_PAGES
-local ARC_PAGE_DELTA = {arc_main_delta, arc_fx_delta, arc_lfo_delta, arc_buffer_delta, arc_ignore_delta}
-local ARC_PAGE_REDRAW = {arc_main_redraw, arc_fx_redraw, arc_lfo_redraw, arc_buffer_redraw, arc_draw_nothing}
-
--- Arc handlers live on the vport only (as for grids): norns fires both
--- device.delta/key and vports[port].delta/key, so setting them on the device
--- as well would run every turn twice.
-local function attach_arc(port)
-  if arc_device and arc_device ~= arc.connect(port) then
-    -- following another vport now: the old one (e.g. the empty port-1
-    -- fallback from init) must not keep handlers for a later arc
-    arc_device.delta = nil
-    arc_device.key = nil
-  end
-  arc_device = arc.connect(port)
-  arc_device.delta = arc_delta
-  arc_device.key = arc_key
-  S.arc_connected = arc_device.device ~= nil
-end
-
--- The first arc vport (in port order) holding a device, other than
--- skipped_port; nil when there is none
-function first_arc_port(skipped_port)
-  for candidate = 1, UI_PAGES.ARC_PORTS do
-    if candidate ~= skipped_port and arc.connect(candidate).device then
-      return candidate
-    end
-  end
-  return nil
-end
-
--- Strata follows one arc: at init the first vport holding a device (port 1
--- preferred by being first); later, a hot-plugged arc connects only while none
--- is connected, and removing the connected arc moves to the first other
--- vport holding one, or disconnects.
-function arc_init()
-  attach_arc(first_arc_port() or UI_PAGES.ARC_PORT)  -- the first frame draws its rings
-end
-
-function arc.add(device)
-  local port = device.port or UI_PAGES.ARC_PORT
-  if port < 1 or port > UI_PAGES.ARC_PORTS then return end
-  if S.arc_connected and arc_device ~= arc.connect(port) then return end  -- already following another arc
-  attach_arc(port)
-  request_redraw()  -- its rings, and SETUP shows the arc state
-  print("arc connected")
-end
-
-function arc.remove(device)
-  local port = device.port or UI_PAGES.ARC_PORT
-  if port < 1 or port > UI_PAGES.ARC_PORTS then return end
-  if arc_device ~= arc.connect(port) then return end  -- not the arc Strata follows
-  -- norns clears the removed vport only after arc.remove returns: skip it
-  local next_port = first_arc_port(port)
-  if next_port then
-    attach_arc(next_port)
-    print("arc disconnected; following the arc on port " .. next_port)
-  else
-    S.arc_connected = false
-    print("arc disconnected")
-  end
-  request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
-end
-
-function arc_delta(n, delta)
-  ARC_PAGE_DELTA[S.ui_page](n, delta)
-  request_redraw()
-end
-
-function arc_key(n, s)
-  -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
-  if s == 1 and S.ui_page == UI_PAGES.MAIN_PAGE then
-    S.lib.pages_main.start_or_freeze_selected_voice()
-    request_redraw()
-  end
-end
-
-function arc_redraw()
-  if arc_device == nil or arc_device.device == nil then return end
-
-  arc_device:all(0)
-  ARC_PAGE_REDRAW[S.ui_page](arc_device)
-  arc_device:refresh()
 end
 
 -- Grid functions
@@ -1413,8 +1165,8 @@ function cleanup()
     grid_port:all(0)
     grid_port:refresh()
   end
-  if arc_device then
-    arc_device:all(0)
-    arc_device:refresh()
+  if S.arc_device then
+    S.arc_device:all(0)
+    S.arc_device:refresh()
   end
 end

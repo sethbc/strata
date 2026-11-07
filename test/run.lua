@@ -585,6 +585,8 @@ local MODULE_HOMES = {
   ["lib/pages/buffer.lua"] = { "buffer_page_flash", "cancel_buffer_page_flash_clock", "redraw_buffer",
     "close_buffer_file_selector", "release_superseded_file_selector" },
   ["lib/pages/setup.lua"] = { "redraw_setup", "setup_enc" },
+  ["lib/arc/core.lua"] = { "arc_sweep_param", "arc_ring_fill", "arc_init", "first_arc_port", "arc_delta",
+    "arc_key", "arc_redraw", "forget_arc_lfo_period_ticks" },
 }
 
 test("functions live in their module", function()
