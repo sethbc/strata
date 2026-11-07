@@ -276,6 +276,20 @@ return function(S)
     grid_redraw()
   end
 
+  -- init's start steps: the per-voice drift runs from the start; the
+  -- mutation metro waits for the mutation_enabled param to start it
+  S.register_start(S.constants.START_ORDER.drift_metro, function()
+    S.drift_metro = metro.init()
+    S.drift_metro.time = 0.1
+    S.drift_metro.event = drift_update
+    S.drift_metro:start()
+  end)
+  S.register_start(S.constants.START_ORDER.mutation_metro, function()
+    S.mutation_metro = metro.init()
+    S.mutation_metro.time = params:get("mutation_rate")
+    S.mutation_metro.event = gentle_mutate
+  end)
+
   -- cleanup()'s steps: stop the drift, then the mutations, setting their
   -- param to off so param and metro agree, then cancel the undo's expiry clock
   S.register_cleanup(S.constants.CLEANUP_ORDER.drift_metro, function()

@@ -54,6 +54,11 @@ return function(S)
     menu_watch.original_set_mode = nil
   end
 
+  -- Forget held keys the moment the norns menu opens, from init on
+  S.register_start(S.constants.START_ORDER.menu_watch, function()
+    watch_menu_opening()
+  end)
+
   -- Give the norns menu its own set_mode back early in cleanup(), before
   -- anything after it can fail
   S.register_cleanup(S.constants.CLEANUP_ORDER.menu_watch, function()

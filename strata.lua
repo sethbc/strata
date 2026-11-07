@@ -42,6 +42,8 @@ S.lib.scenes = include("lib/scenes")(S)
 S.lib.midi_in = include("lib/midi_in")(S)
 S.lib.params_setup = include("lib/params_setup")(S)
 S.lib.ui_params = include("lib/ui/params")(S)
+S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
+S.lib.ui_cursors = include("lib/ui/cursors")(S)
 S.lib.ui_header = include("lib/ui/header")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_field_list = include("lib/ui/field_list")(S)
@@ -94,8 +96,8 @@ S.lib.sequencer = include("lib/sequencer")(S)
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
 -- later; clock is the start-up clock while it waits (cleanup() cancels it).
--- It stays here, beside init, the one function that starts it; a global
--- table, where the tests read it
+-- Its start step stays here, since only the script starts voices at init; a
+-- global table, where the tests read it
 STARTUP = {voice_delay_seconds = 0.5, clock = nil}
 
 function cancel_startup_clock()
@@ -109,6 +111,31 @@ S.register_cleanup(S.constants.CLEANUP_ORDER.startup_clock, function()
   cancel_startup_clock()
 end)
 
+-- E1 only selects the page: without acceleration, and E1_TICKS_PER_PAGE
+-- ticks per page, a fast turn steps through pages instead of jumping to SETUP
+S.register_start(S.constants.START_ORDER.e1_settings, function()
+  norns.enc.accel(1, false)
+  norns.enc.sens(1, E1_TICKS_PER_PAGE)
+end)
+
+-- Start with the first two voices: voice 1 at once, voice 2 later
+S.register_start(S.constants.START_ORDER.startup_clock, function()
+  cancel_startup_clock()
+  STARTUP.clock = clock.run(function()
+    toggle_voice(1)
+    clock.sleep(STARTUP.voice_delay_seconds)
+    STARTUP.clock = nil
+    -- toggle_voice toggles: leave voice 2 alone if a MIDI note or grid press started it meanwhile
+    if not S.voices[2].active then toggle_voice(2) end
+  end)
+end)
+
+-- Each module registers its own start steps with S.register_start (the
+-- metros, the buffer polls, the controllers and MIDI, the scenes and buffers
+-- files, the frame clock); S.constants.START_ORDER lists the whole sequence.
+-- init adds the params first, so every step can read them. A step that fails
+-- stops the rest: the scenes and buffers loads then never set their loaded
+-- flags, so cleanup() does not overwrite the files (#72)
 function init()
   -- Also keeps S an upvalue of init, where the test harness finds it
   assert(S.registry, "lib/state builds the registries")
@@ -120,67 +147,12 @@ function init()
   end
   redraw_on_param_changes()
 
-  -- UI setup
-  update_voice_list()
-  -- E1 only selects the page: without acceleration, and 4 ticks per page,
-  -- a fast turn steps through pages instead of jumping to SETUP
-  norns.enc.accel(1, false)
-  norns.enc.sens(1, E1_TICKS_PER_PAGE)
-  -- forget held keys the moment the norns menu opens
-  watch_menu_opening()
-  
-  -- Start the per-voice drift
-  S.drift_metro = metro.init()
-  S.drift_metro.time = 0.1
-  S.drift_metro.event = drift_update
-  S.drift_metro:start()
-
-  -- Initialize mutation system
-  S.mutation_metro = metro.init()
-  S.mutation_metro.time = params:get("mutation_rate")
-  S.mutation_metro.event = gentle_mutate
-  -- Don't start automatically - controlled by mutation_enabled param
-
-  -- Valid seconds per buffer slot, and failed loads, from the engine
-  S.buffer_polls.state = poll.set("bufferState", S.lib.buffers.buffer_state_changed)
-  if S.buffer_polls.state then
-    S.buffer_polls.state:start()
-  else
-    print("bufferState poll not found")
+  local steps = {}
+  for index, record in ipairs(S.registry.start) do steps[index] = record end
+  table.sort(steps, function(first, second) return first.order < second.order end)
+  for _, step in ipairs(steps) do
+    step.fn()
   end
-  S.buffer_polls.load_failed = poll.set("bufferLoadFailed", buffer_load_failed)
-  if S.buffer_polls.load_failed then
-    S.buffer_polls.load_failed:start()
-  else
-    print("bufferLoadFailed poll not found")
-  end
-
-  -- Connect arc
-  arc_init()
-
-  -- Connect grids
-  grid_init()
-
-  -- Listen for MIDI
-  midi_init()
-
-  -- Load saved scenes from disk
-  load_scenes_from_disk()
-
-  -- Reload the buffers remembered on exit (after the scenes, which may use them)
-  load_buffers_from_disk()
-
-  -- Start with first two voices (delayed)
-  cancel_startup_clock()
-  STARTUP.clock = clock.run(function()
-    toggle_voice(1)
-    clock.sleep(STARTUP.voice_delay_seconds)
-    STARTUP.clock = nil
-    -- toggle_voice toggles: leave voice 2 alone if a MIDI note or grid press started it meanwhile
-    if not S.voices[2].active then toggle_voice(2) end
-  end)
-
-  start_frame_clock()
 end
 
 -- Encoders. E1 selects the page (with or without ALT). E2 and E3 go to the
@@ -240,6 +212,7 @@ function redraw()
     fileselect.redraw()
     return
   end
+  S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor since the last frame
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()

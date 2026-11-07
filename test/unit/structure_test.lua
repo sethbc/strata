@@ -11,6 +11,7 @@ local real_print, harness_globals, signatures = h.real_print, h.harness_globals,
 local engine_polls, engine_spec, data_root = h.engine_polls, h.engine_spec, h.data_root
 local assert_true, assert_equal, load_strata = h.assert_true, h.assert_equal, h.load_strata
 local find_upvalue, local_value, read_lua_sources = h.find_upvalue, h.local_value, h.read_lua_sources
+local finish_startup = h.finish_startup
 
 -- Every include(...) call in the script's Lua files: problems found (a call
 -- outside strata.lua, a path not under lib/ or not a string literal, a path
@@ -636,6 +637,156 @@ test("cleanup runs every registered step in today's order", function()
   assert_true(not pcall(S.register_cleanup, S.constants.CLEANUP_ORDER.lfos, function() end),
     "a second step at a taken order is refused")
   assert_true(not pcall(S.register_cleanup, nil, function() end), "an order is a number")
+end)
+
+-- init's start steps, in the order init has always run them, each with its
+-- observable effects (each logged once in a row): the param records are
+-- added and their actions wrapped first (no step), then the voice list, E1's
+-- settings, the menu watch, the two metros, the buffer polls, the arc, the
+-- grids, MIDI, the scenes and buffers files (one saved scene and one saved
+-- buffer path), the start-up clock (voice 1 starts and syncs at once) and the
+-- frame clock
+local function start_steps()
+  local voice_sync = { "engine.voiceOn", "engine.setGrainSource", "engine.setVoiceParam", "engine.setGrainParam" }
+  for _ = 1, local_value("NUM_MOD_SLOTS") do
+    for _, command in ipairs({ "engine.setModSource", "engine.setModAmpAmt", "engine.setModFreqAmt" }) do
+      table.insert(voice_sync, command)
+    end
+  end
+  for _, effect in ipairs({ "engine.setModSpeed", "engine.setVoiceParam", "voice list built", "redraw requested",
+      "grid redrawn" }) do
+    table.insert(voice_sync, effect)
+  end
+  table.insert(voice_sync, 1, "clock started")
+  return {
+    { "voice list", { "voice list built" } },
+    { "E1 settings", { "encoder 1 accel false", "encoder 1 sens 4" } },
+    { "menu watch", { "menu watched" } },
+    { "drift metro", { "metro created", "drift metro started" } },
+    { "mutation metro", { "metro created" } },
+    { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
+      "poll started bufferLoadFailed" } },
+    { "arc", { "arc connected" } },
+    { "grids", { "grid connected", "print grid 1 connected: 16x16", "grid connected", "grid redrawn" } },
+    { "midi", { "midi connected" } },
+    { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn" } },
+    { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
+      "print 1 buffers reloading from buffers.data" } },
+    { "startup clock", voice_sync },
+    { "frame clock", { "clock started" } },
+  }
+end
+
+test("init runs every registered start step in today's order", function()
+  -- a session that saved a scene and a buffer path, so both loads read a file
+  local first = load_strata(); finish_startup(first)
+  capture_scene(1)
+  local recorded = first.audio_dir .. "kept.wav"
+  io.open(recorded, "w"):close()
+  load_buffer(1, recorded)
+  cleanup()
+
+  local log = {}
+  local function observe(effect) if log[#log] ~= effect then table.insert(log, effect) end end
+  local function wrap_global(name, effect)
+    local original = _G[name]
+    _G[name] = function(...) observe(effect); return original(...) end
+  end
+  local function wrap_function(owner, name, effect)
+    local original = owner[name]
+    owner[name] = function(...) observe(type(effect) == "function" and effect(...) or effect); return original(...) end
+  end
+  local S
+  local options = { data_subdir = first.data_dir:match("([^/]+)/$") }
+  function options.before_load(context)
+    context.grid.plug(1, 16, 16)
+    context.arc.plug(1)
+    context.midi.plug(1, "keys")
+  end
+  function options.before_init(context)
+    S = local_value("S")
+    for _, record in ipairs(S.registry.params) do wrap_function(record, "add", "params added") end
+    wrap_global("redraw_on_param_changes", "param actions wrapped")
+    local quiet_print = print
+    print = function(...)
+      observe("print " .. table.concat({ ... }, " "):gsub("%S*/", ""))  -- file names without their folders
+      return quiet_print(...)
+    end
+    local engine_meta = getmetatable(engine)
+    local real_command = engine_meta.__index
+    engine_meta.__index = function(self, name)
+      local command = real_command(self, name)
+      return function(...) observe("engine." .. name); return command(...) end
+    end
+    wrap_function(context.UI.ScrollingList, "new", "voice list built")
+    wrap_function(norns.enc, "accel", function(n, on) return "encoder " .. n .. " accel " .. tostring(on) end)
+    wrap_function(norns.enc, "sens", function(n, sens) return "encoder " .. n .. " sens " .. sens end)
+    local real_set_mode = _menu.set_mode
+    setmetatable(_menu, {
+      __index = function(_, name) if name == "set_mode" then return real_set_mode end end,
+      __newindex = function(self, name, value)
+        if name == "set_mode" then real_set_mode = value; observe("menu watched") else rawset(self, name, value) end
+      end,
+    })
+    rawset(_menu, "set_mode", nil)
+    local real_metro_init = metro.init
+    metro.init = function(...)
+      observe("metro created")
+      local timer = real_metro_init(...)
+      local real_start = timer.start
+      function timer.start(self, ...)
+        observe(self.event == drift_update and "drift metro started" or "metro started")
+        return real_start(self, ...)
+      end
+      return timer
+    end
+    local real_poll_set = poll.set
+    poll.set = function(name, ...)
+      observe("poll set " .. name)
+      local entry = real_poll_set(name, ...)
+      if entry then wrap_function(entry, "start", "poll started " .. name) end
+      return entry
+    end
+    wrap_function(arc, "connect", "arc connected")
+    wrap_function(grid, "connect", "grid connected")
+    wrap_function(midi, "connect", "midi connected")
+    wrap_global("grid_redraw", "grid redrawn")
+    wrap_global("request_redraw", "redraw requested")
+    wrap_function(tab, "load", function(path) return "file read " .. path:match("[^/]*$") end)
+    wrap_function(clock, "run", "clock started")
+    -- "|" marks the start of each registered step
+    assert_equal(type(S.register_start), "function", "S.register_start")
+    for _, record in ipairs(S.registry.start) do
+      local step = record.fn
+      record.fn = function(...) table.insert(log, "|"); return step(...) end
+    end
+  end
+  local ok, problem = pcall(load_strata, options)
+  assert_true(ok, tostring(problem))
+
+  local START_STEPS = start_steps()
+  local expected = { "params added", "param actions wrapped" }
+  for _, step in ipairs(START_STEPS) do
+    table.insert(expected, "|")
+    for _, effect in ipairs(step[2]) do table.insert(expected, effect) end
+  end
+  assert_equal(table.concat(log, "\n"), table.concat(expected, "\n"), "one registered step per group of effects, in order")
+  -- the clocks init started: the start-up clock, then the frame clock
+  assert_true(STARTUP.clock ~= nil and local_value("UI_PAGES").frame_clock ~= nil, "both clocks run")
+  assert_true(STARTUP.clock < local_value("UI_PAGES").frame_clock, "the start-up clock starts first")
+  assert_equal(S.mutation_metro.event, gentle_mutate, "the mutation metro runs gentle_mutate")
+  assert_equal(S.mutation_metro.running, false, "and waits for its param")
+  assert_equal(S.drift_metro.running, true, "the drift metro runs")
+  assert_true(S.scenes_loaded and S.buffers_loaded, "both loads set their flags")
+  -- S.constants.START_ORDER names each step's order, and no two steps share one
+  local orders = 0
+  for _ in pairs(S.constants.START_ORDER) do orders = orders + 1 end
+  assert_equal(orders, #START_STEPS, "START_ORDER has one order per step")
+  assert_equal(#S.registry.start, #START_STEPS, "one registered step per order")
+  assert_true(not pcall(S.register_start, S.constants.START_ORDER.frame_clock, function() end),
+    "a second step at a taken order is refused")
+  assert_true(not pcall(S.register_start, nil, function() end), "an order is a number")
+  assert_true(not pcall(S.register_start, 1000, nil), "a step is a function")
 end)
 
 -- The first place source compares a param type (x.t) with a string literal,

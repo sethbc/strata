@@ -193,12 +193,18 @@ return function(S)
 
   function arc_redraw()
     if S.arc_device == nil or S.arc_device.device == nil then return end
+    S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor (lib/ui/cursors.lua)
 
     S.arc_device:all(0)
     local page_redraw = page_ring_handler("arc_redraw", "arc_alt_redraw")
     if page_redraw then page_redraw(S.arc_device) end  -- nil: rings stay off
     S.arc_device:refresh()
   end
+
+  -- Connect the arc at init
+  S.register_start(S.constants.START_ORDER.arc, function()
+    arc_init()
+  end)
 
   -- Leave the arc dark on exit, the last cleanup step
   S.register_cleanup(S.constants.CLEANUP_ORDER.arc_dark, function()

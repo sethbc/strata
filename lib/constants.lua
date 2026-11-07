@@ -56,6 +56,10 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
+-- The params the SCENES page lists after the eight slots: its cursor's stops
+-- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)
+local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration"}
+
 -- voices[i].grain keys holding an option index rather than a continuous
 -- value, mapped to their option count: smooth transitions switch them at the
 -- end instead of crossfading, mutation never touches them, and scenes must
@@ -101,6 +105,28 @@ local MAIN_PARAMS = {
 -- input-sourced voice its grain size (its synth and buffer params do nothing)
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
+
+-- init()'s start steps in the order it runs them, after the params are
+-- added and their actions wrapped: each module registers its own with
+-- S.register_start(START_ORDER.<step>, fn) (lib/state.lua). The UI first,
+-- then the metros and polls, the controllers and MIDI, the files (the
+-- scenes before the buffers, which they may use), and the clocks last.
+-- Spaced by 10, so a new step can go between two others
+local START_ORDER = {
+  voice_list = 10,       -- lib/pages/main.lua: MAIN's voice list
+  e1_settings = 20,      -- strata.lua: E1 steps pages (no acceleration)
+  menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
+  drift_metro = 40,      -- lib/mutation.lua: created and started
+  mutation_metro = 50,   -- lib/mutation.lua: created; its param starts it
+  buffer_polls = 60,     -- lib/buffers.lua: bufferState and bufferLoadFailed
+  arc = 70,              -- lib/arc/core.lua
+  grids = 80,            -- lib/grid/core.lua
+  midi = 90,             -- lib/midi_in.lua
+  scenes_load = 100,     -- lib/scenes.lua: scenes.data (sets S.scenes_loaded)
+  buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
+  startup_clock = 120,   -- strata.lua: voices 1 and 2
+  frame_clock = 130,     -- lib/ui/frame.lua
+}
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
@@ -162,12 +188,14 @@ return {
   SOURCE_INPUT = SOURCE_INPUT,
   SOURCE_OPTIONS = SOURCE_OPTIONS,
   UI_PAGES = UI_PAGES,
+  SCENES_FIELDS = SCENES_FIELDS,
   DISCRETE_GRAIN_KEYS = DISCRETE_GRAIN_KEYS,
   BUFFER_MUTATION_KEYS = BUFFER_MUTATION_KEYS,
   GRAIN_PARAM_IDS = GRAIN_PARAM_IDS,
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
   DETENT = DETENT,
   FINE_DIVISOR = FINE_DIVISOR,

@@ -170,6 +170,11 @@ return function(S)
     midi_set_bend(S.selected_voice, ratio)
   end
 
+  -- Listen for MIDI from init on
+  S.register_start(S.constants.START_ORDER.midi, function()
+    midi_init()
+  end)
+
   -- Stop listening to MIDI before the voices go off
   S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
     if S.midi_device then S.midi_device.event = nil end
