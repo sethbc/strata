@@ -8,7 +8,7 @@ Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of
 
 **Sound and engine**
 
-- **Resonator level.** At its defaults the Resonator peaked about 23 on its bus, against 0.05-0.5 for the other voices, so whenever it played the master limiter pushed every other voice down by about 28 dB. A fixed gain cut and a limiter on this voice alone (3 ms lookahead) keep it in line: centred it peaks at most 0.75 per channel, and panned hard about 1 on one channel. As a cross-modulation source, voice 1 now modulates in the same range as the other voices; it used to drive what it modulated to the limit at almost any depth. (#45, #59)
+- **Resonator level.** At its defaults the Resonator peaked about 23 on its bus, against 0.05-0.5 for the other voices, so whenever it played the master limiter pushed every other voice down by about 28 dB. A fixed gain cut and a limiter on this voice alone (3 ms lookahead) keep it in line: centered it peaks at most 0.75 per channel, and panned hard about 1 on one channel. As a cross-modulation source, voice 1 now modulates in the same range as the other voices; it used to drive what it modulated to the limit at almost any depth. (#45, #59)
 - **Voices no longer go silent at large grain sizes.** Each grain synth's `PitchShift` window followed the grain size (up to 0.5 s), so seven voices at large grain sizes, plus the synths still fading out after source switches, ran out of scsynth's 8 MB real-time memory pool (norns never raises it), and the newest voices went silent with nothing on screen. The window is now a fixed 0.1 s, grain tables hold 128 grains instead of 512 (still more than Lua can ever ask for), and a voice holds at most one live, one fading and one cutting grain synth, and at most three voice synths, however source switches, stops, starts and scene recalls interleave: fast scrolling, a grid chord of instant recalls, PMAP-mapped source params and fast alternating recalls (A → B → A → C) all stay within the pool, at about 6.9 MB at the peak. (#42, #45, #57)
 - **Scene recalls stop and start voices in order.** A recall that stops a voice stops it before setting its source and params, so no grain synth is built just to be released, and its release tail keeps the outgoing scene's sound. A voice the recall starts is started after its params. (#57)
 - **Buffers from files not at 48 kHz play at their real pitch.** `\strataGrainBuf` applied a file's rate correction twice for files not at the server's rate, so a file played off by its sample rate ratio: a 1 kHz sine in a 44.1 kHz file played at 920 Hz, about 1.47 semitones flat, a 96 kHz file played an octave sharp, and a take recorded over that slot was off by the same amount. (#41)
@@ -41,7 +41,7 @@ Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of
 
 **Scenes, sequencer and tempo**
 
-- **Sequenced transitions finish.** When the transition time was at least the scene duration, the sequencer's next recall cut the running transition short, so none of a scene's switched settings (voices on/off, sources, patterns, freeze, grain envelope and mode, mod sources, tempo, filter type, LFO settings) ever arrived: the header moved on but the sound didn't. Each scene now plays for the longer of the two times and the sequencer then waits for the transition to end. The wait is bounded: a transition whose next step or end is 1 s overdue has stopped and is cancelled, with a console message, while a slow but healthy one is never cut short. (#34, #54)
+- **Sequenced transitions finish.** When the transition time was at least the scene duration, the sequencer's next recall cut the running transition short, so none of a scene's switched settings (voices on/off, sources, patterns, freeze, grain envelope and mode, mod sources, tempo, filter type, LFO settings) ever arrived: the header moved on but the sound didn't. Each scene now plays for the longer of the two times and the sequencer then waits for the transition to end. The wait is bounded: a transition whose next step or end is 1 s overdue has stopped and is canceled, with a console message, while a slow but healthy one is never cut short. (#34, #54)
 - **Scene edge cases.** Loading scenes during a transition stops it first. Shortening the sequence while it waits wraps to scene 1. LFO depths fade in whole percents and end on the scene's value. A PSET saved with the sequencer on starts it once the whole PSET has loaded (it used to recall scene 1 partway through the read, with the old transition time). A failing sequenced recall is printed with its traceback and the sequencer keeps going. Saving into the scene a transition is heading for no longer makes the transition's end snap back. (#40, #54)
 - **The tempo param follows the clock.** It was copied from norns' clock tempo once at start, so after a tempo change in PARAMETERS > CLOCK or from an external clock, scenes captured a stale tempo, recalling one jumped the clock back, and the grid's tempo buttons stepped from the stale value. It now follows the clock, over the clock's own 1-300 BPM range (it was 40-300). Running `init` twice no longer overflows the stack, and cleanup gives back norns' previous tempo handler. (#37, #54)
 - **Randomize and mutate follow each param's curve.** K2 and mutations drew and stepped linearly between a param's min and max: for exponential params such as freq, 92 % of K2 presses put a Sub voice above 200 Hz, and a mutation could move it by up to 495 Hz. Both now work in the param's normalized range; linear params behave as before. (#29)
@@ -52,7 +52,7 @@ Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of
 - Documentation: the engine keeps at most 16 s of a file at the server rate, so a 96 kHz file keeps 8 s (#41); README's 16×8 and 8×16 grid sections and the LFO rate ceiling describe what the code does (#30); the 3.0 design and the development status moved to `docs/design/3.0-design.md` and `docs/status.md`, the old implementation plans were removed (git history keeps them), and the docs that no longer matched the code were corrected (the `bufferState` poll's cadence, the sequencer's bounded wait, LFO cleanup, redraws), in the docs pull request that closes issue #52.
 - Engine check script: it uses `$SCLANG`, else `sclang` on `PATH`, else the macOS app, and README explains running it on Linux with a JACK dummy server (#30). It stops at once on a compile error and after its own timeout (570 s, below CI's 600 s), killing only its own processes (#45). It fails on "alloc failed" (#42), on a "Strata invariant broken" warning, which two engine paths that should be unreachable now post (#57), and on "Too many grains!" (#59).
 - Messages to voice, grain and mod synths that may have freed a moment before they arrive are sent so that scsynth no longer prints `FAILURE` lines for them. Messages to the filter, delay, reverb and master stay plain, so a missing effects node is still reported. (#59)
-- CI: `actions/checkout` is pinned to a commit and SuperCollider to the 3.13.0 package norns ships (#30); superseded pull-request runs are cancelled, and runs on `main` never are (#58).
+- CI: `actions/checkout` is pinned to a commit and SuperCollider to the 3.13.0 package norns ships (#30); superseded pull-request runs are canceled, and runs on `main` never are (#58).
 - `strata.lua`'s main chunk holds 184 of Lua's 200 locals (186 in 3.0.1): `fileselect` added one (#32), and the LFO page's own clock, folded into the frame clock, freed three (#39).
 
 ### Decisions
@@ -61,14 +61,14 @@ The full list, with what each costs if wrong, is in `docs/status.md`. The ones u
 - **Plain ASCII voice-list marks** (`+`/`-`) instead of `●`/`○`, so the list never depends on the norns font having those glyphs. (#31)
 - **Loads are decode-checked before they are read.** The check is synchronous: an estimated 0.2 s per FLAC on a norns, a short pause in engine commands during a load you started. (#53)
 - **Rapid source switches cut hard.** A synth already in its 50 ms fade-out when the next switch arrives is freed at once, so bursts stay within the memory pool. (#42)
-- **Transitions are cancelled after 1 s without progress**, measured from the fade's next due step, not from its start. (#34, #54)
+- **Transitions are canceled after 1 s without progress**, measured from the fade's next due step, not from its start. (#34, #54)
 
 ### Testing
 
 - `lua test/run.lua` / `luajit test/run.lua` grew from 118 to 210 tests.
   - The stubs follow norns' own code: `Arc:segment` (#28, #58), `UI.ScrollingList` (#31), `fileselect` only through `require` (#32), menu routing (#56), and tabutil, the system params, param strings and matron's clock scheduler (sleep and sync wake-ups, then tie order and event slots) (#43, #58). Tests drive the clock they mean (`run_for` from #34; `next_frame`, `finish_startup` and `wake` from #43), and a clock error no test claims fails the run (#43, #58).
   - The engine stub range-checks every index and enumerated argument and every param name (#36), and the continuous arguments (#58), against limits parsed from the engine source. The parsers skip SuperCollider comments, and group sizes, the FX defaults and the shared constants are checked against the engine (#38). `sync_check.lua` fails on any use of `engine` it cannot check (#43, #58).
-  - The behaviour-test gaps from the final review are closed: tempo handler chain, LFO offset clamp, scene validation, redraw requests, start-up, sequencer restarts (#55).
+  - The behavior-test gaps from the final review are closed: tempo handler chain, LFO offset clamp, scene validation, redraw requests, start-up, sequencer restarts (#55).
   - A docs check also reads `docs/status.md` and checks that every repo path the docs name exists (the docs pull request for #52).
   - Each new test was shown to fail before its fix or against a mutated `strata.lua`.
 - `test/run_engine_check.sh` runs scsynth with norns' 8192 KB pool and checks the memory peak, bursts and alternating recalls with memory probes (#42, #45, #57); measures output pitch for files not at the server rate (#41); checks that velocity only scales accent envelopes in every voice and grain SynthDef (#44), with a Karplus allowance that accepts only the `t_trig` pluck and mutant SynthDefs compiled inside the check that must be rejected (#59); covers buffer fades and bad loads (#41), damaged and vanished loads and their reports (#53), the Resonator's level, the NaN guard and triggered grains on buffer and input sources (#45), stop/start cycles counted from the engine's own synth lists (#57), and recordings, loads and frees during a slot's fade wait (#59).
@@ -100,7 +100,7 @@ Fixes the minor findings deferred from the 3.0 reviews. No engine command, param
 - **LFO ring 4 forgets its part-turn.** Ticks carried toward the next clocked rate are dropped when another LFO is selected or the selected LFO's mode changes, so they never step a different LFO or mode.
 - **BUFFER save confirmation.** K2 + K3 shows `saved buf <n>` in the hint row for 1.5 s, `buf <n> busy` while the buffer records or waits for its take, or `buf <n> empty` when the buffer holds no audio; nothing is saved in the last two cases.
 - **Keys held into the norns menu.** Opening the menu (K1, a script error, a keyboard's menu key) forgets held keys at once instead of on the next 100 ms check, so even a quick menu visit with K2 held no longer turns the next BUFFER K3 into a save. Strata wraps norns' `_menu.set_mode` and gives it back on exit; the 10 Hz check stays as a fallback. The BUFFER page's file selector (K2) forgets held keys the same way as it opens.
-- **Omni pitchbend follows the selection.** In omni mode, selecting another voice with the wheel off centre returns the old voice to pitch and bends the new one.
+- **Omni pitchbend follows the selection.** In omni mode, selecting another voice with the wheel off center returns the old voice to pitch and bends the new one.
 - **Takes and loads are confirmed by the engine.** A take shows `REC` (hint `K3:...`, K3 does nothing) until the engine reports what it captured, then becomes `take <n>`, or `empty` when nothing was captured (a stop right after the start). A loaded file the engine reports no audio for (an unreadable file) drops to dim. A take or load the engine reports late, such as a slow read during the restore at start, is still picked up unless the buffer was cleared, loaded or recorded into meanwhile, and a take settles from its last known length after 5 s if no report ever comes. In 3.0 a take was named and counted as loaded the moment its timer ended, whatever the engine had captured.
 - **Restored buffers are counted when the engine has them.** SETUP's `buffers: k restored` counts a buffer once the engine reports audio in it, and reads `buffers: k ok, m missing` when remembered files were not found.
 - **Missing buffer files are remembered.** A file that is not found at start (deleted, moved or on a drive that is not mounted) is skipped but kept in `buffers.data`, so it comes back once the file is there again; clearing, loading or recording into that buffer forgets it.
@@ -118,7 +118,7 @@ Fixes the minor findings deferred from the 3.0 reviews. No engine command, param
 
 ### Other Changes
 
-- Code only, no change in behaviour: the arc button finds MAIN by its page index, not its title; `gentle_mutate` checks every grain key against `DISCRETE_GRAIN_KEYS`; the drift's step is one helper (`mean_reverting_step`); `add_voice_params` builds every param id the same way.
+- Code only, no change in behavior: the arc button finds MAIN by its page index, not its title; `gentle_mutate` checks every grain key against `DISCRETE_GRAIN_KEYS`; the drift's step is one helper (`mean_reverting_step`); `add_voice_params` builds every param id the same way.
 - `strata.lua`'s main chunk holds 186 of Lua's 200 locals (183 in 3.0).
 
 ### Decisions
@@ -260,7 +260,7 @@ Fixes every finding from a whole-app code review, plus an off-device test harnes
 
 ### Testing
 
-- `lua test/run.lua` / `luajit test/run.lua` - behaviour tests against norns stubs; every `engine.*` call is checked against the engine's command signatures.
+- `lua test/run.lua` / `luajit test/run.lua` - behavior tests against norns stubs; every `engine.*` call is checked against the engine's command signatures.
 - `lua test/sync_check.lua` - static Lua/engine command sync check.
 - `test/run_engine_check.sh` - compiles the engine against the real norns classes and exercises every command on a local scsynth.
 
@@ -343,7 +343,7 @@ Fixes every finding from a whole-app code review, plus an off-device test harnes
 
 **Resource Management**
 - Added nil checks to cleanup() for metros and clocks
-- Scene transition clock properly cancelled on cleanup
+- Scene transition clock properly canceled on cleanup
 - All clocks tracked and cleaned up to prevent orphaned coroutines
 
 **SuperCollider Engine Improvements**

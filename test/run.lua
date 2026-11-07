@@ -976,7 +976,7 @@ test("restarting the pattern clock leaves one pattern clock running", function()
   pattern_clock_start()
   local first_clock = local_value("pattern_clock")
   pattern_clock_start()                                          -- restart while it plays
-  assert_true(context.clock.threads[first_clock] == nil, "the first pattern clock was cancelled")
+  assert_true(context.clock.threads[first_clock] == nil, "the first pattern clock was canceled")
   context.clear_engine_calls()
   context.clock.run_for(clock.get_beat_sec() + 0.01)             -- four 16th steps
   local retriggers = 0
@@ -1078,10 +1078,10 @@ test("grain pitch drift wanders subtly around the user-set pitch (C4)", function
   end
   assert_true(max_offset > 0.001, "pitch actually drifts (" .. max_offset .. ")")
   assert_true(max_offset < 0.06, "drift stays within a few percent (" .. max_offset .. ")")
-  -- a new user value becomes the new centre
+  -- a new user value becomes the new center
   params:set("v1_grain_pitch", 0.5)
   for _ = 1, 2000 do drift_metro.event() end
-  assert_near(params:get("v1_grain_pitch"), 0.5, 0.06, "walk re-centres on the new value")
+  assert_near(params:get("v1_grain_pitch"), 0.5, 0.06, "walk re-centers on the new value")
   -- frozen voices do not drift
   toggle_freeze(1)
   local frozen_pitch = params:get("v1_grain_pitch")
@@ -1090,10 +1090,10 @@ test("grain pitch drift wanders subtly around the user-set pitch (C4)", function
 end)
 
 -- drift_writing tells the param actions a write is the drift's: left set
--- after an error, every later edit would stop re-centring the walk
+-- after an error, every later edit would stop re-centering the walk
 test("drift_update clears drift_writing when a param action raises (#48)", function()
   load_strata()                                                 -- voice 1 starts at once
-  local centres = { v1_grain_pitch = "grain_pitch_base", v1_buf_pos = "buf_pos_base" }
+  local centers = { v1_grain_pitch = "grain_pitch_base", v1_buf_pos = "buf_pos_base" }
   for _, id in ipairs({ "v1_grain_pitch", "v1_buf_pos" }) do
     params:set("v1_source", id == "v1_buf_pos" and 2 or 1)     -- buffer 1: its position drifts too
     params:set(id, 0.5)                                          -- clear of the rails: every step moves it
@@ -1106,13 +1106,13 @@ test("drift_update clears drift_writing when a param action raises (#48)", funct
     assert_equal(local_value("drift_writing"), false, id .. ": drift_writing cleared")
     param.action = real_action
     params:set(id, 0.6)
-    assert_equal(local_value(centres[id])[1], 0.6, id .. ": a later edit is the drift's new centre")
+    assert_equal(local_value(centers[id])[1], 0.6, id .. ": a later edit is the drift's new center")
   end
 end)
 
 test("tempo param drives clock_tempo and grid tempo buttons (I1)", function()
   local context = load_strata({ before_init = function() params:set("clock_tempo", 97) end })
-  assert_equal(params:get("tempo"), 97, "tempo initialised from clock_tempo")
+  assert_equal(params:get("tempo"), 97, "tempo initialized from clock_tempo")
   params:set("tempo", 133)
   assert_equal(params:get("clock_tempo"), 133, "tempo param sets clock_tempo")
   context.grid.plug(1, 16, 16)
@@ -1155,7 +1155,7 @@ test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48
   local tempo_min, tempo_max = param_range("tempo")
   assert_equal(tempo_min, clock_min, "tempo minimum is clock_tempo's")
   assert_equal(tempo_max, clock_max, "tempo maximum is clock_tempo's")
-  assert_equal(params:get("tempo"), 30, "tempo initialised from a 30 BPM clock")
+  assert_equal(params:get("tempo"), 30, "tempo initialized from a 30 BPM clock")
   capture_scene(1)
   assert_equal(local_value("scenes")[1].data.tempo, 30, "the scene captured 30 BPM")
   params:set("tempo", 100)
@@ -1286,7 +1286,7 @@ end)
 test("bipolar grid faders have a column that sets exactly 0, and keep both ends (#49)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
-  -- 16 columns have no centre: a plain sweep of -1..1 gives +/-0.07 there
+  -- 16 columns have no center: a plain sweep of -1..1 gives +/-0.07 there
   params:set("v1_source", 2)  -- a buffer voice: its faders include scan and pan
   for _, param_id in ipairs({"v1_pan", "v1_buf_scan", "v1_mod_amp_amt_1", "v1_mod_freq_amt_1"}) do
     local minval, maxval = param_range(param_id)
@@ -1320,7 +1320,7 @@ test("bipolar grid faders have a column that sets exactly 0, and keep both ends 
   end)()
   params:set("v1_pan", 1)
   context.grid.press(1, pan_zero_column, 9, 1)
-  assert_equal(params:get("v1_pan"), 0, "the pan fader's zero column centres the pan")
+  assert_equal(params:get("v1_pan"), 0, "the pan fader's zero column centers the pan")
   assert_equal(device:get_led(pan_zero_column, 9), 15, "and the fader shows it there")
   -- unipolar faders keep the plain sweep: column 8 on the exp freq fader
   params:set("v1_source", 1)
@@ -1399,7 +1399,7 @@ test("the startup clock leaves a voice 2 started within STARTUP.voice_delay_seco
   end
 end)
 
-test("init's start-up clock is stored, ends after starting voice 2 and is cancelled by cleanup (#48)", function()
+test("init's start-up clock is stored, ends after starting voice 2 and is canceled by cleanup (#48)", function()
   local context = load_strata()
   assert_true(type(STARTUP.voice_delay_seconds) == "number" and STARTUP.voice_delay_seconds > 0,
     "STARTUP.voice_delay_seconds")
@@ -1407,7 +1407,7 @@ test("init's start-up clock is stored, ends after starting voice 2 and is cancel
   finish_startup(context)
   assert_true(local_value("voices")[2].active, "voice 2 started")
   assert_equal(STARTUP.clock, nil, "the clock is forgotten once it has ended")
-  -- a script stopped before the delay ends starts nothing afterwards
+  -- a script stopped before the delay ends starts nothing afterward
   context = load_strata()
   cleanup()
   assert_equal(STARTUP.clock, nil, "cleanup forgets the start-up clock")
@@ -1631,11 +1631,11 @@ test("scene transitions crossfade linearly from snapshotted start values (I6)", 
   recall_scene(1, 10)
   assert_equal(local_value("scene_transition_active"), true, "transition running")
   recall_scene(1, 0)
-  assert_equal(local_value("scene_transition_active"), false, "cancelled transition clears the flag")
-  assert_equal(local_value("scene_transition_clock"), nil, "cancelled transition clock cleared")
+  assert_equal(local_value("scene_transition_active"), false, "canceled transition clears the flag")
+  assert_equal(local_value("scene_transition_clock"), nil, "canceled transition clock cleared")
   assert_near(params:get("v1_freq"), 1000, 1.0, "instant recall wins")
-  context.clock.run_for(1)  -- longer than a step of the cancelled 10 s fade
-  assert_near(params:get("v1_freq"), 1000, 1.0, "cancelled transition no longer writes")
+  context.clock.run_for(1)  -- longer than a step of the canceled 10 s fade
+  assert_near(params:get("v1_freq"), 1000, 1.0, "canceled transition no longer writes")
 end)
 
 test("a smooth scene transition holds filter_type until the fade ends", function()
@@ -1704,7 +1704,7 @@ for _, slot_on_disk in ipairs({ "empty", "other" }) do
     local ran, run_error = pcall(context.clock.run_for, 5, 0.001)
     assert_true(ran, "the transition's end raised no error: " .. tostring(run_error))
     assert_equal(local_value("scene_transition_active"), false, "no transition left running")
-    assert_equal(params:get("v1_freq"), faded, "the cancelled fade applied nothing more")
+    assert_equal(params:get("v1_freq"), faded, "the canceled fade applied nothing more")
     assert_equal(params:get("v4_grain_mode"), 1, "nor the old scene's discrete state")
     assert_true(not voices[3].active, "nor the new slot's voices")
   end)
@@ -1860,7 +1860,7 @@ test("the scene sequencer waits for a manual transition it did not start, within
   assert_true(voices[3].active, "the manual transition ended and applied scene 2")
   assert_equal(#recalls, 3, "then the sequencer moved on")
   assert_true(not recalls[3].interrupts, "without cutting it short")
-  -- a manual transition that gets stuck is cancelled once its next step is overrun_seconds late
+  -- a manual transition that gets stuck is canceled once its next step is overrun_seconds late
   recall_scene(2, 25)
   local started = util.time() - recalls[#recalls].time           -- recall times count from here
   context.clock.run_for(10, 0.001)                                 -- the sequencer is waiting for it
@@ -1983,7 +1983,7 @@ test("a manual recall still interrupts a transition the scene sequencer started"
   assert_equal(recalls[#recalls].scene, 2, "the sequencer recalled scene 2")
   assert_true(local_value("scene_transition_active"), "scene 2's transition is running")
   recall_scene(2, 0)                                             -- a manual instant recall
-  assert_true(not local_value("scene_transition_active"), "the manual recall cancelled the transition")
+  assert_true(not local_value("scene_transition_active"), "the manual recall canceled the transition")
   assert_true(voices[3].active, "and applied scene 2 at once")
   context.clock.run_for(16, 0.001)                               -- the sequencer keeps going
   assert_equal(local_value("current_scene"), 1, "the sequencer moved on to scene 1")
@@ -2009,7 +2009,7 @@ test("restarting the scene sequencer leaves one sequencer clock running", functi
   local recalls = run_scene_sequencer(context, 0, 4, 1)          -- scene 1 at 0 s
   local first_clock = local_value("scene_sequencer_clock")
   scene_sequencer_start()                                        -- restart at 1 s: scene 1 again
-  assert_true(context.clock.threads[first_clock] == nil, "the first sequencer clock was cancelled")
+  assert_true(context.clock.threads[first_clock] == nil, "the first sequencer clock was canceled")
   context.clock.run_for(8.5, 0.001)
   assert_equal(#recalls, 4, "one recall every 4 s from the restart")
   assert_near(recalls[3].time, 5, 0.01, "scene 2 4 s after the restart")
@@ -3706,8 +3706,8 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
   clock.run(function() while true do clock.sleep(0.3); log("short") end end)
   clock.run(function() clock.sleep(1); log("long") end)
   clock.run(function() for _ = 1, 3 do clock.sync(1/4); log("sync") end end)
-  local cancelled = clock.run(function() clock.sleep(0.1); log("cancelled") end)
-  clock.cancel(cancelled)
+  local canceled = clock.run(function() clock.sleep(0.1); log("canceled") end)
+  clock.cancel(canceled)
   context.clock.run_for(1)
   assert_equal(table.concat(events, " "),
     "sync@0.125 sync@0.250 short@0.300 sync@0.375 short@0.600 short@0.900 long@1.000",
@@ -3825,9 +3825,9 @@ test("stub clock errors: reported per wake-up, the other clocks keep running (#2
   own = clock.run(function() clock.sleep(0.1); clock.cancel(own); clock.sleep(0.1); error("never reached") end)
   context.clock.run_for(0.5)
   errors = context.clock.take_errors()
-  assert_equal(#errors, 1, "the self-cancelled coroutine's wake-up errors")
+  assert_equal(#errors, 1, "the self-canceled coroutine's wake-up errors")
   assert_true(errors[1]:find("expected", 1, true) and not errors[1]:find("never reached", 1, true),
-    "coroutine.resume of the cancelled coroutine raises: " .. tostring(errors[1]))
+    "coroutine.resume of the canceled coroutine raises: " .. tostring(errors[1]))
   -- the first run of clock.run is a direct call: its errors reach the caller
   assert_true(not pcall(clock.run, function() error("at once") end), "clock.run raises the first segment's error")
   local ok, message = pcall(clock.run, function() clock.sleep() end)
@@ -3854,7 +3854,7 @@ test("the runner adds the clock errors to a failing test's own error (#51)", fun
   assert_equal(#context.clock.take_errors(), 0, "the runner claimed them")
 end)
 
-test("stub clock.advance_until fails at once when its coroutine is cancelled or nothing is pending (#51)", function()
+test("stub clock.advance_until fails at once when its coroutine is canceled or nothing is pending (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock()
   local ticker = clock.run(function() while true do clock.sleep(0.1) end end)
@@ -3862,7 +3862,7 @@ test("stub clock.advance_until fails at once when its coroutine is cancelled or 
   clock.run(function() clock.sleep(0.45); clock.cancel(target) end)
   local start = util.time()
   local ok, message = pcall(context.clock.advance_until, target)
-  assert_true(not ok and tostring(message):find("cancelled", 1, true), "a cancelled target: " .. tostring(message))
+  assert_true(not ok and tostring(message):find("canceled", 1, true), "a canceled target: " .. tostring(message))
   assert_near(util.time(), start + 0.45, 1e-9, "it stops at the cancel, the ticker running on no further")
   clock.cancel(ticker)
   ok, message = pcall(context.clock.advance_until, target)
@@ -3874,7 +3874,7 @@ test("stub clock.advance_until fails at once when its coroutine is cancelled or 
 end)
 
 -- matron's scheduler keeps one event slot per coroutine (the lowest free one
--- when it first waits, kept until it is cancelled or ends) and every tick
+-- when it first waits, kept until it is canceled or ends) and every tick
 -- posts the due events in slot order; a sleep is due once the time reaches it
 -- (>=), a sync once the beat is past it (>)
 test("stub clock ties: equal wake times fire in event-slot order, a sync after a sleep (#51)", function()
@@ -3883,7 +3883,7 @@ test("stub clock ties: equal wake times fire in event-slot order, a sync after a
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
   -- a placeholder takes the lowest free slot and B the next; once the
-  -- placeholder is cancelled, D (which sleeps after B) gets the lower slot
+  -- placeholder is canceled, D (which sleeps after B) gets the lower slot
   local function start_tied_pair()
     local placeholder = clock.run(function() clock.sleep(100) end)
     clock.run(function() clock.sleep(1); log("B") end)
@@ -4408,7 +4408,7 @@ test("pitchbend: range, buffer voices, stopped voices, restarts and resets", fun
   context.midi.send(1, { type = "pitchbend", val = 0, ch = 1 })
   assert_near(last_bend(0), 2 ^ (-2 / 12), 1e-9, "full down = -2 semitones")
   context.midi.send(1, { type = "pitchbend", val = 8192, ch = 1 })
-  assert_near(last_bend(0), 1, 1e-12, "centre = 1")
+  assert_near(last_bend(0), 1, 1e-12, "center = 1")
   -- a buffer-sourced voice gets the same voice-level bend (the engine passes it to strataGrainBuf)
   params:set("v2_source", 4)
   context.clear_engine_calls()
@@ -4427,14 +4427,14 @@ test("pitchbend: range, buffer voices, stopped voices, restarts and resets", fun
   assert_equal(last_bend(3), nil, "stopped voice: nothing sent")
   toggle_voice(4)
   assert_near(last_bend(3), 2 ^ (-1 / 12), 1e-9, "starting the voice sends the held bend")
-  -- changing the channel mode re-centres every bent voice
+  -- changing the channel mode re-centers every bent voice
   context.clear_engine_calls()
   params:set("midi_channel_mode", 2)
-  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centred"); assert_near(last_bend(3), 1, 1e-12, "voice 4 re-centred")
+  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centered"); assert_near(last_bend(3), 1, 1e-12, "voice 4 re-centered")
   assert_equal(last_bend(0), nil, "an unbent voice gets nothing")
 end)
 
-test("omni pitchbend follows the selection: the old voice re-centres, the new one takes the wheel", function()
+test("omni pitchbend follows the selection: the old voice re-centers, the new one takes the wheel", function()
   local context = load_strata(); finish_startup(context)
   local bend = local_value("midi_state").bend
   local function last_bend(engine_voice)
@@ -4449,26 +4449,26 @@ test("omni pitchbend follows the selection: the old voice re-centres, the new on
   context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })   -- bends voice 1
   context.clear_engine_calls()
   enc(2, 1)   -- voice 2, wheel still up
-  assert_near(last_bend(0), 1, 1e-12, "voice 1 re-centred"); assert_equal(bend[1], 1)
+  assert_near(last_bend(0), 1, 1e-12, "voice 1 re-centered"); assert_equal(bend[1], 1)
   assert_near(last_bend(1), up, 1e-9, "voice 2 takes the wheel"); assert_near(bend[2], up, 1e-9)
   -- a stopped voice keeps the wheel for its start
   context.clear_engine_calls()
   enc(2, 1)   -- voice 3 (stopped)
-  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centred")
+  assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centered")
   assert_equal(last_bend(2), nil, "nothing sent to a stopped voice"); assert_near(bend[3], up, 1e-9)
   toggle_voice(3); assert_near(last_bend(2), up, 1e-9, "starting it sends the wheel")
   -- BUFFER page E2 is the same selection
   show_page(4); context.clear_engine_calls()
   enc(2, -1)
-  assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centred"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
+  assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centered"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
   -- E2 against the end of the list changes nothing
   show_page(1); enc(2, -1)   -- voice 1
   context.clear_engine_calls(); enc(2, -1)
   assert_equal(#context.calls_named("setVoiceParam"), 0, "no selection change, no bend")
-  -- wheel centred: moving the selection sends nothing
+  -- wheel centered: moving the selection sends nothing
   context.midi.send(1, { type = "pitchbend", val = 8192, ch = 1 })
   context.clear_engine_calls(); enc(2, 1)
-  assert_equal(#context.calls_named("setVoiceParam"), 0, "a centred wheel moves nothing")
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "a centered wheel moves nothing")
   -- per voice: bends stay with their channels' voices
   params:set("midi_channel_mode", 1)
   context.midi.send(1, { type = "pitchbend", val = 8192 + 4096, ch = 1 })
@@ -4756,7 +4756,7 @@ test("buffer position drifts subtly and reverts to the user-set position", funct
   assert_equal(params:get("v1_freq"), synth_freq, "drift leaves synth params alone")
   params:set("v1_buf_pos", 0.8)
   for _ = 1, 3000 do drift_update() end
-  assert_true(math.abs(params:get("v1_buf_pos") - 0.8) < 0.05, "a new user position becomes the centre")
+  assert_true(math.abs(params:get("v1_buf_pos") - 0.8) < 0.05, "a new user position becomes the center")
   -- a synth-sourced voice's position does not drift
   params:set("v1_source", 1); local pos = params:get("v1_buf_pos")
   for _ = 1, 100 do drift_update() end
@@ -4937,7 +4937,7 @@ test("recording again stops early; clear and load cancel the timer", function()
   assert_true(not context.polls.polls.bufferLoadFailed.running, "bufferLoadFailed poll stopped")
 end)
 
-test("a file the engine cannot read, loaded during a recording, leaves a cancelled recording", function()
+test("a file the engine cannot read, loaded during a recording, leaves a canceled recording", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   params:set("record_duration", 4)
@@ -4946,7 +4946,7 @@ test("a file the engine cannot read, loaded during a recording, leaves a cancell
   load_buffer(3, "/tmp/missing.wav")   -- the engine cancels the recording, then cannot read the file
   assert_true(not buffers[3].recording and not buffers[3].finishing, "the load ends the recording state")
   assert_equal(context.clock.pending_count(), pending, "no recording timer or fallback is left to finish a take")
-  -- the cancelled recording left the slot empty: the engine reports 0 s
+  -- the canceled recording left the slot empty: the engine reports 0 s
   context.polls.fire("bufferState", 200)
   context.set_time(5); context.polls.fire("bufferState", 200)
   assert_true(not buffers[3].loaded, "not loaded"); assert_equal(buffers[3].settled_empty, "load")
@@ -5231,7 +5231,7 @@ test("a late or duplicate load failure report never undoes a later load, clear o
   context.polls.fire("bufferLoadFailed", load_failed_value(7, 1))
   assert_true(buffers[7].recording, "the new recording wins")
   assert_equal(params:get("buf7_file"), _path.audio)
-  -- a failed load during a recording cancelled it in the engine: the slot is empty
+  -- a failed load during a recording canceled it in the engine: the slot is empty
   params:set("record_duration", 4)
   record_buffer(8); load_buffer(8, "/tmp/z.wav")
   context.polls.fire("bufferLoadFailed", load_failed_value(8, 1))
@@ -5584,7 +5584,7 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
   assert_equal(#context.calls_named("recordBuffer"), 0, "K3 does nothing for a synth voice")
   assert_equal(context.fileselect.last, nil, "K2 does nothing for a synth voice")
   redraw(); for _, entry in ipairs(context.screen.texts) do local l, r = text_span(entry); assert_true(r <= 128) end
-  -- E2 selects the voice (shared with MAIN); a cancelled selection loads nothing
+  -- E2 selects the voice (shared with MAIN); a canceled selection loads nothing
   enc(2, 3); assert_equal(local_value("selected_voice"), 4)
   params:set("v4_source", 7); tap(2); context.clear_engine_calls()
   context.fileselect.last.callback("cancel")
@@ -5700,7 +5700,7 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
   end
   assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
   key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
-  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is cancelled")
+  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is canceled")
   flash_clock = page.flash_clock
   context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
   assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
@@ -5783,7 +5783,7 @@ test("BUFFER K2's release forgets every held key as the file selector opens", fu
   key(3, 1); key(2, 1); key(2, 0)
   assert_true(context.fileselect.last ~= nil, "K2's release opens the selector")
   assert_true(held_at_enter ~= nil and next(held_at_enter) == nil, "no key is held when the selector opens")
-  assert_equal(next(local_value("key_press_page")), nil, "and none afterwards")
+  assert_equal(next(local_value("key_press_page")), nil, "and none afterward")
   assert_equal(local_value("buffer_saved_during_k2"), false, "the K2-save flag is clear")
 end)
 
@@ -5828,7 +5828,7 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   next_frame(context)
   assert_equal(draws, 0, "the page does not draw over the selector while it is open")
   assert_true(selector.redraws > 0, "they draw the selector instead")
-  -- cancelled: fs.exit's redraw() comes before the callback, which asks
+  -- canceled: fs.exit's redraw() comes before the callback, which asks
   -- for one redraw
   context.clear_engine_calls()
   context.fileselect.close()
@@ -5878,7 +5878,7 @@ test("a file selector that fails to open leaves the BUFFER page drawing (#49)", 
   next_frame(context)
   screen.update = update
   assert_equal(draws, 1, "the next frame draws the page, not a selector that never opened")
-  tap(2); assert_true(context.fileselect.last ~= nil, "K2 opens the selector afterwards")
+  tap(2); assert_true(context.fileselect.last ~= nil, "K2 opens the selector afterward")
   context.fileselect.close("/tmp/after.wav")
   assert_equal(#context.calls_named("loadBuffer"), 1, "and its choice loads")
 end)
@@ -5927,14 +5927,14 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
   screen.update = update
   assert_equal(draws, 1, "redraw() draws the page again")
   assert_equal(selector.redraws, selector_redraws, "not the file list")
-  -- the PARAMS selector cancelled (K2 in it) instead of a choice
+  -- the PARAMS selector canceled (K2 in it) instead of a choice
   open_strata_selector()
   _menu.set_mode(true)
   selector.enter(_path.audio, function(path) picked = path end)
   selector.close()
-  assert_equal(picked, "cancel", "the PARAMS selector was cancelled")
+  assert_equal(picked, "cancel", "the PARAMS selector was canceled")
   _menu.set_mode(false)
-  assert_strata_routed("a cancelled PARAMS selector")
+  assert_strata_routed("a canceled PARAMS selector")
   -- the menu closed while the PARAMS selector is still open
   open_strata_selector()
   _menu.set_mode(true)
@@ -6530,10 +6530,10 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
   params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
   context.lfo.tick(lfos[1], 0.25)
   show_page(3)
-  -- three rows, each labelled, and every string inside the screen
+  -- three rows, each labeled, and every string inside the screen
   for n = 1, 3 do
     local row = lfo_row_drawing(context, n)
-    assert_true(table.concat(row.texts, " "):find("L" .. n, 1, true), "row " .. n .. " labelled L" .. n)
+    assert_true(table.concat(row.texts, " "):find("L" .. n, 1, true), "row " .. n .. " labeled L" .. n)
     assert_true(#row.lines >= 63, "row " .. n .. " draws its waveform")
   end
   for _, entry in ipairs(context.screen.texts) do

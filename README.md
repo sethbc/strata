@@ -85,7 +85,7 @@ Three LFOs, built on norns' own LFO library, can each modulate one parameter:
 - **Rate** - free (a period from 0.1 s to 300 s) or clocked to the norns clock (the library's rates from 1/16 bar, a quarter beat, to 1024 bars)
 - **Depth** - 0-100 %; at 100 % the LFO swings half the destination's range either side of its value
 - **Destinations** - none, master density, tape drift, filter freq / res / mix, delay time / feedback / mix, reverb mix / size / damp, and for each voice: its main parameter (the one E3 adjusts: the synthesis parameter, or buffer position for a buffer-sourced voice, grain size for an input-sourced one), grain size, density, pitch, spread, buffer position, rate and scan
-- **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the centre. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
+- **Modulates around your setting** - an LFO never changes the parameter's value; it moves the sound around it, so turning the knob still sets the center. When an LFO is turned off, its depth reaches 0 or its destination changes, the parameter goes back to exactly its set value. Two LFOs on one destination add up
 
 The fastest free rate is 10 Hz (the library's 0.1 s free period). Clocked rates follow the tempo: 1/16 bar is a quarter beat, so it is 8 Hz at 120 BPM and 20 Hz at 300 BPM. 20 Hz at any tempo would need the LFOs in the engine instead of Lua. Each LFO updates 48 times per beat (96 times a second at 120 BPM) and only sends a new value to the engine when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
@@ -208,7 +208,7 @@ A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page
 - **Channels** - In **per voice** mode (the default) MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored. In **omni to selected** mode every channel plays the voice selected with E2
 - **Notes** - A note sets the voice's pitch: its frequency for a synth voice (exact equal temperament, limited to 20 Hz-2 kHz), its buffer rate for a buffer-sourced voice (note 60 plays at rate 1, an octave up doubles it, limited to 0.25x-4x); an input-sourced voice takes no pitch. A voice that is off starts; then the note accents it at the note's velocity (Karplus plucks its string, a triggered-mode voice fires a grain). Voices keep their slow attacks: Strata is not a fast-attack synth, the velocity lands on the accent
 - **Note off** - Ignored by default, so a note starts a voice that keeps sounding. Set PARAMETERS > midi > midi note off to **voice off** for gated playing: a voice stops when its last held note is released, and a note played while it is still fading out brings it back without restarting its synths
-- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centres every bent voice. In omni mode the bend follows the selection: selecting another voice with the wheel off centre returns the old voice to pitch and bends the new one by the wheel's position
+- **Pitchbend** - Bends the voice by up to 2 semitones either way (the buffer rate for a buffer-sourced voice). It is not saved in scenes; a voice started while the wheel is held starts bent. Changing the port or channel mode re-centers every bent voice. In omni mode the bend follows the selection: selecting another voice with the wheel off center returns the old voice to pitch and bends the new one by the wheel's position
 - **CC** - Strata has no fixed CC mapping: map CCs to any parameter with norns' PARAMS > MAP (below)
 
 ### MIDI CC mapping (norns PARAMS > MAP)
@@ -485,7 +485,7 @@ Scene LED feedback:
 - Set scene sequence length (how many scenes to cycle through). Shortened while a scene past the new end plays, the sequence wraps to scene 1
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
-- Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is cancelled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
+- Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is canceled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
 - Press row 5, column 1 to start/stop the sequencer
 - Loading a PSET saved with the sequencer on, while the sequencer is off, starts it once the whole PSET has loaded, from scene 1, with the PSET's transition time, duration and length. A sequencer that is already running keeps its place
 - Loading scenes from disk stops a running transition where it is
@@ -617,7 +617,7 @@ Input source:   Audio input → Input Bus → Granular Processor → Main Bus (a
 ## Development
 
 Off-device checks (no norns needed):
-- `lua test/run.lua` (or `luajit test/run.lua`) - behaviour tests against norns stubs
+- `lua test/run.lua` (or `luajit test/run.lua`) - behavior tests against norns stubs
 - `lua test/sync_check.lua` - checks Lua `engine.*` calls against the engine's commands
 - `test/run_engine_check.sh [path/to/norns]` - compiles and exercises the SuperCollider engine against the norns `sc/core` classes (requires SuperCollider; the norns source defaults to `~/src/norns` or `$NORNS_DIR`)
 

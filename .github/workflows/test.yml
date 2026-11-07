@@ -6,7 +6,7 @@ on:
   pull_request:
 
 # A new push to a pull request cancels its superseded run. Runs on main are
-# never cancelled: each gets a group of its own (in a shared group a pending
+# never canceled: each gets a group of its own (in a shared group a pending
 # run would still be replaced by the next one, even without cancel-in-progress)
 concurrency:
   group: tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -25,10 +25,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lua5.3 luajit
 
-      - name: Behaviour tests (Lua 5.3)
+      - name: Behavior tests (Lua 5.3)
         run: lua5.3 test/run.lua
 
-      - name: Behaviour tests (LuaJIT)
+      - name: Behavior tests (LuaJIT)
         run: luajit test/run.lua
 
       - name: Lua / engine command sync check

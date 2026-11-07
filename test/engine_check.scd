@@ -874,7 +874,7 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
 // free with fades still pending (#22, #47): with a long fade wait, a
 // clear, a load and a recording on slots that running voices read (voices 1-3,
 // engine 0-2, read slots 1-3 as checkMemoryWorstCase leaves them), then free
-// at once. Nothing that waited runs afterwards: no zeroing, read or record
+// at once. Nothing that waited runs afterward: no zeroing, read or record
 // synth reaches the freed buffers and nodes (the server reports no failure)
 // and no slot change completes. Frees the engine.
 var freeDuringPendingFades = { arg stereoPath;
@@ -1052,8 +1052,8 @@ var checkResonatorCeiling = {
 //   and peak at most 0.75 per channel;
 // - at the extremes Lua allows (freq 20-2000, rq 0.01 or 1, noise 1, amp 1,
 //   amplitude and frequency crossmod at full, accents at velocity 1 every
-//   0.25 s), centred, no channel passes 0.75 (the limiter's 1 x Pan2's
-//   0.707 at the centre);
+//   0.25 s), centered, no channel passes 0.75 (the limiter's 1 x Pan2's
+//   0.707 at the center);
 // - one extreme panned hard right reaches the limiter's own level: its right
 //   channel peaks at 0.9-1.05 and its left stays silent.
 var checkResonatorLevel = {
@@ -1097,7 +1097,7 @@ var checkResonatorLevel = {
     check.(defaultPeak.notNil and: { defaultPeak > 0.05 } and: { defaultPeak <= 0.75 },
         "the Resonator at its defaults peaks at most 0.75 per channel (got %)".format(defaultPeak));
     check.(extremePeak.notNil and: { extremePeak <= 0.75 },
-        "the Resonator at reachable extremes, centred, never peaks past 0.75 per channel (got %; per case %)".format(extremePeak,
+        "the Resonator at reachable extremes, centered, never peaks past 0.75 per channel (got %; per case %)".format(extremePeak,
             peaks.copyRange(defaultCount, defaultCount + extremes.size - 1).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
     check.(pannedPeaks.notNil and: { pannedPeaks[1] >= 0.9 } and: { pannedPeaks[1] <= 1.05 } and: { pannedPeaks[0] < 0.001 },
         "a Resonator extreme panned hard right peaks at its limiter's level, 0.9-1.05 (got %)".format(pannedPeaks));
@@ -1182,7 +1182,7 @@ var checkModGuard = {
 // reverb and master never end on their own, so a "Node not found" there is a
 // real bug the server must report, while a voice's synth may have just freed
 // and gets sendToSynth's quiet bundle. With \filter pointed at a freed node
-// (restored afterwards), each FX command's messages are captured with
+// (restored afterward), each FX command's messages are captured with
 // makeBundle(false), which sends nothing (a real failure would print a
 // FAILURE line and fail this run on purpose): no /error -1 among them, and
 // the filter's /n_set names the freed node. A voice param's set has one.
@@ -1326,7 +1326,7 @@ var checkStopStartCycles = { arg voice;
 // posts a "Strata invariant broken" line that run_engine_check.sh fails
 // on. The lines are captured through postInvariantWarning, so this run
 // does not fail (nor do these checks print them); the stand-ins are freed
-// and forgotten afterwards. The voice runs on its synth source.
+// and forgotten afterward. The voice runs on its synth source.
 var engineCheckScript = thisProcess.nowExecutingPath !? { arg path; path.dirname +/+ "run_engine_check.sh" };
 var checkInvariantWarnings = { arg voice, before;
     var lines = List.new, grainKey = engine.grainKey(voice), standIns, failPattern, standInBus = Bus.control(server, 1);
@@ -2026,13 +2026,13 @@ server.waitForBoot({
         command.(\clearBuffer, 3); 0.5.wait; server.sync;
         check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.bufferFrames[3] == 0 },
             "clearBuffer stops a recording in progress");
-        // cancelled before the record synth could start (still waiting for its zeroed buffers)
+        // canceled before the record synth could start (still waiting for its zeroed buffers)
         command.(\recordBuffer, 3, 0.2, 1.0);
         command.(\clearBuffer, 3);
         0.5.wait; server.sync;
         check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.bufferFrames[3] == 0 }
-            and: { engine.recordSynths[3].isNil }, "a recording cancelled before it starts never runs");
-        check.(File.exists(engine.scratchDir +/+ "buf4.wav").not, "a cancelled recording writes no scratch take");
+            and: { engine.recordSynths[3].isNil }, "a recording canceled before it starts never runs");
+        check.(File.exists(engine.scratchDir +/+ "buf4.wav").not, "a canceled recording writes no scratch take");
 
         // stopRecord ends a recording early, keeping what was captured
         File.delete(engine.scratchDir +/+ "buf4.wav");

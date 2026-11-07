@@ -315,7 +315,7 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 local ui_page = 1  -- index into UI_PAGES
 
 -- Screen and arc redraws. Anything that changes what they show calls
--- request_redraw(); the frame clock (started by init, cancelled by cleanup)
+-- request_redraw(); the frame clock (started by init, canceled by cleanup)
 -- then draws whichever is dirty, at most FRAMES_PER_SECOND times a second,
 -- so a burst of arc turns, MIDI or param changes costs one frame. Handlers
 -- never draw directly. The global redraw() still draws at once when norns
@@ -410,7 +410,7 @@ local voice_list
 local drift_metro
 local DRIFT_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
 local DRIFT_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
-local grain_pitch_base = {}          -- last non-drift grain pitch per voice (the walk's centre)
+local grain_pitch_base = {}          -- last non-drift grain pitch per voice (the walk's center)
 local DRIFT_BUF_POS_STEP = 0.002     -- width of each random buffer position step (+/-0.001 per tick)
 local DRIFT_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base position removed per tick
 local buf_pos_base = {}              -- last non-drift buffer position per voice
@@ -639,7 +639,7 @@ function set_buffer_file_param(slot, path)
 end
 
 -- An empty slot's shown state and file param, for buffer_load_failed.
--- settled_empty is "take" after a cancelled recording whose take may have
+-- settled_empty is "take" after a canceled recording whose take may have
 -- completed (a later report of audio adopts it), else false.
 function empty_buffer_state(settled_empty)
   return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
@@ -791,7 +791,7 @@ end
 -- slot's loads (missing, unreadable, unsupported, empty or damaged). value =
 -- (load number * 2 + emptied) * NUM_BUFFERS + slot index; the engine and
 -- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
--- left the slot as it was (cancelling a recording in it), 1 when it left it
+-- left the slot as it was (canceling a recording in it), 1 when it left it
 -- empty (the server's read failed after the slot was zeroed). The failed
 -- load is undone only while the slot still tracks it (pending_loads): the
 -- newest load gives the slot the state the failed load left (the state it
@@ -945,7 +945,7 @@ engine_senders.reverb_damp = send_reverb_to_engine
 engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 
 -- Global LFOs, built on norns' lib/lfo.lua. Each LFO runs from -1 to 1
--- around a centre baseline, so the library applies depth and its action
+-- around a center baseline, so the library applies depth and its action
 -- gets a scaled value in -depth..depth. apply_lfo sends the destination's
 -- stored value plus scaled * half its range to the engine through
 -- send_param_to_engine; the param itself is never written. The library
@@ -2116,7 +2116,7 @@ function mean_reverting_step(current, base, step, reversion)
 end
 
 -- Set a param as the drift: its action sees drift_writing, so the write is
--- not taken as a new centre for the walk. The flag must not outlive an
+-- not taken as a new center for the walk. The flag must not outlive an
 -- error in the action (every later edit would be taken for the drift's):
 -- clear it, then raise the error again, with its traceback
 function set_drifted_param(param_id, value)
@@ -2657,12 +2657,12 @@ end
 -- transition (the sequencer's or a manual recall's) is flagged, but never
 -- for ever. A transition whose next step or end is
 -- SCENE_TRANSITION.overrun_seconds late is stuck (its clock is gone) and is
--- cancelled. The bound follows the fade's progress, so a healthy fade whose
+-- canceled. The bound follows the fade's progress, so a healthy fade whose
 -- steps each run late under load is never cut short, however late it ends
 function wait_for_scene_transition()
   while scene_transition_active do
     if util.time() >= SCENE_TRANSITION.next_step_due + SCENE_TRANSITION.overrun_seconds then
-      print("scene transition overran; cancelled")
+      print("scene transition overran; canceled")
       cancel_scene_transition()
       return
     end
@@ -4046,7 +4046,7 @@ function midi_device_name()
   return midi_device.name
 end
 
--- Forget held notes and re-centre every bent voice: called when the port or
+-- Forget held notes and re-center every bent voice: called when the port or
 -- channel mode changes or the device goes away, since the note offs and
 -- bend returns for them will not arrive
 function reset_midi_input()
@@ -4133,7 +4133,7 @@ function midi_set_bend(voice_idx, ratio)
 end
 
 -- Omni mode bends whichever voice is selected. When the selection moves with
--- the wheel off centre, the voice it leaves returns to pitch and the newly
+-- the wheel off center, the voice it leaves returns to pitch and the newly
 -- selected voice takes the wheel's current bend (a stopped voice gets it
 -- when it starts). Per voice mode leaves bends with their channels' voices.
 function midi_bend_follow_selection(previous_voice)
@@ -4553,7 +4553,7 @@ end
 
 -- A fader whose range spans 0 (pan, buffer scan, the crossmod amounts) has
 -- a zero column: the column nearest 0's place on the range, never an end
--- one. 16 columns have no centre, so a plain sweep would give +/-0.07 for
+-- one. 16 columns have no center, so a plain sweep would give +/-0.07 for
 -- pan there and never 0. nil for any other range.
 function fader_zero_column(param_id)
   local minval, maxval = param_range(param_id)

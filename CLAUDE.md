@@ -11,7 +11,7 @@ Strata is an ambient granular soundscape generator for monome norns. It has seve
 - `docs/notes/engine.md`: the engine. Signal flow, cross-modulation, `voiceOn` sync, retrigger and accent, pitchbend, the grain/envelope/mode params, audio sources (buffers, input, mirror, replace-never-stack, kill fade), buffer commands and file writes, SynthDefs, buses, node ordering, synth lifecycle.
 - `docs/notes/lua.md`: the Lua side. Voice state, `send_param_to_engine`, the param system, LFOs, MIDI, mutations, scenes (transitions, migration, validation, persistence), buffers persistence, bounds checks, cleanup, grid, arc, screen pages and MAIN layout, plus the version history and future ideas.
 - `README.md`: user documentation (controls, grid/arc layouts, params). `CHANGELOG.md`: per-release changes.
-- `docs/design/3.0-design.md`: the 3.0 design, still the reference for behaviour. Where the code differs from it, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how.
+- `docs/design/3.0-design.md`: the 3.0 design, still the reference for behavior. Where the code differs from it, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how.
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md, `docs/status.md` or `docs/notes/` may name a command the engine no longer has. Behaviour details are in `docs/notes/engine.md`.
+**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md, `docs/status.md` or `docs/notes/` may name a command the engine no longer has. Behavior details are in `docs/notes/engine.md`.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
@@ -91,11 +91,11 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 **On norns:** copy the project to `~/dust/code/`, then restart norns or run `;restart` in maiden. SuperCollider changes need a script restart. Watch the maiden console for errors.
 
 **Off-device checks** (run from the repo root before committing; CI runs all three, see `docs/status.md`):
-- `lua test/run.lua` and `luajit test/run.lua`: behaviour tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, a docs check (no `engine.<name>(` in this file, README.md, `docs/status.md` or `docs/notes/` names a missing command, and every path under docs/, test/ or .github/ that they name in backticks exists), and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal their `strata.lua` constants.
+- `lua test/run.lua` and `luajit test/run.lua`: behavior tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, a docs check (no `engine.<name>(` in this file, README.md, `docs/status.md` or `docs/notes/` names a missing command, and every path under docs/, test/ or .github/ that they name in backticks exists), and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal their `strata.lua` constants.
 - `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand` with the same argument count, and every command is used. Call engine commands only as `engine.<name>(...)`: any other use of `engine` (`engine[name](...)`, `local f = engine.voiceOn`, `local e = engine`) fails the check, which cannot see what it calls.
 - `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` (default `~/src/norns`, or `$NORNS_DIR`) and runs `test/engine_check.scd` on a silent local scsynth. It needs SuperCollider (`$SCLANG` overrides the path). Run only one at a time per machine (port 57110). It stops sclang after `$ENGINE_CHECK_TIMEOUT` s (570) and at once on a compile error, so a broken check never hangs. Besides a failed check it fails on any `ERROR`, `FAILURE`, `alloc failed`, `Too many grains` or `Strata invariant broken` line.
-- Add a test to `test/run.lua` for every behaviour change. Script locals are reached through `find_upvalue()`/`local_value()`.
-- The stubs mirror the real norns libraries (`~/src/norns/lua`): check behaviour there before changing them. `param.t` holds numeric type codes (`params.tOPTION`, ...), so never compare it with a string (a test enforces this). The stubbed APIs and test helpers (`context.polls.fire`, `context.midi.plug`, `context.set_time`, `context.encoders.deliver`, ...) are listed under "Test harness details" in `docs/notes/lua.md`.
+- Add a test to `test/run.lua` for every behavior change. Script locals are reached through `find_upvalue()`/`local_value()`.
+- The stubs mirror the real norns libraries (`~/src/norns/lua`): check behavior there before changing them. `param.t` holds numeric type codes (`params.tOPTION`, ...), so never compare it with a string (a test enforces this). The stubbed APIs and test helpers (`context.polls.fire`, `context.midi.plug`, `context.set_time`, `context.encoders.deliver`, ...) are listed under "Test harness details" in `docs/notes/lua.md`.
 - `test/StrataTestNoBoot.sc.in` is deliberately not a `.sc` file: norns compiles every `.sc` under `~/dust`.
 
 **Common norns pitfalls:**
@@ -114,7 +114,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Bounds-check every index** (voice 1..`NUM_VOICES`, scene, step, slot, grid coordinates) before indexing, so tables never grow by accident. **Clean up** every metro, clock, poll and device handler in `cleanup()`, and cancel an existing clock before starting its replacement.
 
-**Keep docs current in the same change**: README.md (user-facing behaviour), this file (rules, command table) and the matching `docs/notes/` file (implementation details), plus `docs/status.md`.
+**Keep docs current in the same change**: README.md (user-facing behavior), this file (rules, command table) and the matching `docs/notes/` file (implementation details), plus `docs/status.md`.
 
 ### CRITICAL: keep Lua and the engine in sync
 

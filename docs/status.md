@@ -8,7 +8,7 @@ Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between m
   - 3.0 (sample and input sources, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, paged screen) through PR #3, and CI through PR #4.
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
   - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
-- **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never cancelled. `main` is protected:
+- **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
   - the rules apply to admins too;
@@ -17,7 +17,7 @@ Last updated 2026-11-05, after Strata 3.0.2. This file is the hand-off between m
 - **Docs layout:**
   - CLAUDE.md holds the rules and the engine command table. Keep it short: put new details in the notes.
   - `docs/notes/engine.md` and `docs/notes/lua.md` are the detailed implementation reference (the Lua notes end with the version history and the test harness details).
-  - `docs/design/3.0-design.md` is the 3.0 design, still the reference for behaviour; CHANGELOG.md's 3.0 "Deviations from the design" and the later entries say where the code differs.
+  - `docs/design/3.0-design.md` is the 3.0 design, still the reference for behavior; CHANGELOG.md's 3.0 "Deviations from the design" and the later entries say where the code differs.
   - README.md is the user documentation, CHANGELOG.md the per-release changes, and this file the open items and decisions.
   - The 3.0 and 3.0.1 implementation plans were removed in 3.0.2; git history keeps them.
   - `test/run.lua` checks the maintained docs (CLAUDE.md, README.md, this file and `docs/notes/`): CLAUDE.md's command table must match the engine, no `engine.<name>(` may name a command the engine lacks, and every path under docs/, test/ or .github/ they name must exist.
@@ -95,7 +95,7 @@ Each was taken during development without asking Seth, and lists what it costs i
 - **Hardware-only checks stay on #6.** Real-time memory on the device, the 44.1 kHz pitch on the device, write-timing jitter, xruns, glyph widths and arc-spin CPU cannot be settled off-device; the code bounds each one and #6 lists what to measure. If wrong: a hardware finding becomes a new issue.
 - **The file selector owns the screen while open:** `redraw()` draws the selector instead of doing nothing, so the selector is still there after a K1 menu visit. If wrong: one extra selector redraw now and then.
 - **ASCII voice-list marks:** the MAIN list shows `+`/`-` and short names (`reso`, `karp`, ...) instead of `●`/`○`, because the glyphs' width on the norns font is unconfirmed and ASCII fits with 8 px to spare. If wrong: Seth prefers the dots; a one-line change if hardware shows they render one character wide.
-- **Bounded sequencer wait:** the sequencer waits for a transition's end, but cancels one whose next step or end is `SCENE_TRANSITION.overrun_seconds` (1 s) overdue, measured from the fade's progress (`next_step_due`), not its start, so a lost or errored fade can't freeze the sequencer. If wrong: a fade step that really takes over 1 s on a busy CM3 gets cancelled; measure on #6 and raise the bound.
+- **Bounded sequencer wait:** the sequencer waits for a transition's end, but cancels one whose next step or end is `SCENE_TRANSITION.overrun_seconds` (1 s) overdue, measured from the fade's progress (`next_step_due`), not its start, so a lost or errored fade can't freeze the sequencer. If wrong: a fade step that really takes over 1 s on a busy CM3 gets canceled; measure on #6 and raise the bound.
 - **One followed arc:** Strata follows one arc; a second one is ignored while it is connected, and unplugging the followed arc moves to the next port that holds one, in the order norns clears its ports. If wrong: none in the usual one-arc setup.
 - **Engine stub param names:** `setVoiceParam`/`setGrainParam` names are checked against every SynthDef control, including the engine-managed ones (`gate`, `out`, `kill`, ...). If wrong: Lua sending an internal control name isn't caught; a stricter list is a follow-up.
 - **Group-size check:** a group must be followed by exactly its size in params and then a group, a separator or the end. If wrong: a future layout with ungrouped params right after a group needs a separator first.
