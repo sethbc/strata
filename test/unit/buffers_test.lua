@@ -781,4 +781,32 @@ test("bufferState poll ignores NaN, infinities and out-of-range slots", function
   redraw(); assert_screen_layout(context, "BUFFER page after bad poll values")
 end)
 
+test("a restored 300 s file on a 60 s tier shows 60 s", function()
+  local high_60 = { tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60, reason = "high: setting" }
+  h.write_performance_active(high_60)
+  local context = load_strata({ data_subdir = "buf_long_restore" }); finish_startup(context)
+  local long_file = context.audio_dir .. "five-minutes.wav"
+  io.open(long_file, "w"):close()
+  load_buffer(2, long_file)
+  cleanup()
+  h.write_performance_active(high_60)
+  context = load_strata({ data_subdir = "buf_long_restore" }); finish_startup(context)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the remembered file is restored")
+  assert_equal(loads[1].args[2], long_file)
+  -- the engine reads at most its 60 s slot of the 300 s file
+  context.polls.fire("bufferState", 1060)
+  local buffer = local_value("buffers")[2]
+  assert_true(buffer.loaded and buffer.name == "five-minutes.wav", "the restore is confirmed")
+  assert_equal(buffer.seconds, 60, "it holds the slot's 60 s")
+  assert_equal(local_value("buffers_restored"), 1)
+  local_value("buffer_page").slot = 2
+  show_page("BUFFER")
+  assert_true(h.screen_shows(context, "1:00"), "BUFFER shows 1:00")
+  assert_screen_layout(context, "BUFFER with a restored 60 s slot")
+  context.clear_engine_calls()
+  save_buffer(2)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "the 60 s slot saves")
+end)
+
 end
