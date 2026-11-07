@@ -610,4 +610,70 @@ test("CI cancels superseded runs of pull requests only, never of main (#51)", fu
   assert_equal(group, "tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}", "group")
 end)
 
+
+-- British spellings that must not creep back in (whole words, case-insensitive).
+-- Extend this table; the list lives here, so this file is the one file not scanned.
+-- ("analyses" is left out: it is also the US plural noun.)
+local BRITISH_SPELLINGS = {
+  "behaviour", "behaviours", "centre", "centres", "centred", "centring",
+  "colour", "colours", "coloured", "colouring", "favour", "favours", "favourite",
+  "honour", "honours", "honoured", "neighbour", "neighbours", "flavour", "labour", "humour",
+  "cancelled", "cancelling", "labelled", "labelling", "modelled", "modelling",
+  "travelled", "signalled", "initialise", "initialised", "initialises",
+  "organise", "organised", "organises", "realise", "realised", "realises",
+  "recognise", "recognised", "recognises", "normalise", "normalised", "normalises",
+  "synchronise", "synchronised", "synchronises", "optimise", "optimised", "optimises",
+  "summarise", "summarised", "summarises", "prioritise", "prioritised", "prioritises",
+  "analyse", "analysed", "catalogue", "dialogue", "licence", "defence",
+  "grey", "metre", "fibre", "towards", "afterwards", "whilst", "amongst", "learnt",
+  "judgement", "programme",
+}
+-- Exact "path:word" pairs allowed to stay (e.g. a quoted third-party name). Greyhole
+-- needs none: whole-word matching never sees "grey" inside the UGen name.
+local BRITISH_ALLOWED = {}
+local SPELLING_SKIP = { ["test/unit/docs_test.lua"] = true }
+
+local function british_hits(text, path)
+  local hits, wanted = {}, {}
+  for _, word in ipairs(BRITISH_SPELLINGS) do wanted[word] = true end
+  local line_number = 0
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    line_number = line_number + 1
+    for word in line:lower():gmatch("%a+") do
+      if wanted[word] and not BRITISH_ALLOWED[path .. ":" .. word] then
+        table.insert(hits, ("%s:%d:%s"):format(path, line_number, word))
+      end
+    end
+  end
+  return hits
+end
+
+local function spelling_files()
+  local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
+  local files = {}
+  for path in listing:gmatch("[^\n]+") do
+    local scanned = path == "strata.lua" or path == "README.md" or path == "CLAUDE.md"
+      or path == "CHANGELOG.md" or path == "lib/Engine_Strata.sc"
+      or path:match("^lib/.*%.lua$") or path:match("^test/.*%.lua$")
+      or path:match("^test/[^/]*%.scd$") or path:match("^test/[^/]*%.sh$")
+      or path:match("^test/[^/]*%.sc%.in$") or path:match("^docs/.*%.md$")
+      or path:match("^changes/[^/]*%.md$") or path:match("^%.github/workflows/[^/]*%.yml$")
+    if scanned and not SPELLING_SKIP[path] then table.insert(files, path) end
+  end
+  return files
+end
+
+test("text uses US spelling", function()
+  local planted = british_hits("fine\nThe Behaviour is grey; Greyhole stays", "x")
+  assert_equal(table.concat(planted, " "), "x:2:behaviour x:2:grey", "the scan finds whole words only")
+  local found, files = {}, spelling_files()
+  assert_true(#files > 10, "the scan sees the repo's files")
+  for _, path in ipairs(files) do
+    local file = assert(io.open(repo_root .. "/" .. path, "r"))
+    local text = file:read("*a"); file:close()
+    for _, hit in ipairs(british_hits(text, path)) do table.insert(found, hit) end
+  end
+  assert_true(#found == 0, "use US spelling:\n" .. table.concat(found, "\n"))
+end)
+
 end
