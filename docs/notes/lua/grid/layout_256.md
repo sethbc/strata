@@ -3,16 +3,34 @@
 - The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
 - Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`.
 - The FX faders follow changes made anywhere through `fx_fader_changed()`, except during a smooth scene transition, which redraws the grid once per step.
-- Rows 8 and 16 work and draw the same on every page.
+- Rows 8 and 16 work and draw the same on pages 1, 2 and 4 (page 3, scenes, has only the page keys on row 8 and no row 16).
+- The clipboard lives in `grid_core.port_state(port).clipboard` (`{voice = i, steps = {...}}` or nil), never in a module local or on `S`: each grid has its own, and unplugging the grid forgets it. `steps` is a copy of the levels at copy time; a paste copies them into `S.patterns[target]` level by level and never shares the table.
+- A paste onto the copied voice changes nothing (the pattern stays as edited since the copy, the clipboard stays). Column 16 is the only way to drop the clipboard.
+- The tempo keys light from `grid_core.held(port, x, 8)` (15 held, 4 otherwise); `grid_key` redraws after every press and release, so the layout keeps no lit state of its own. Each tempo press calls `header_flash("tempo <bpm>")` with the tempo it lands on.
+- Scene page row 1: the sequencer position (`S.scene_sequencer_position`, the next scene it recalls) at 10 only while `S.scene_sequencer_enabled`; the current scene at 15 wins over it.
+- The layout's keys and levels are in the `LAYOUT_256` table at the top of the constructor (no new locals per value).
 
 ## Owns
 
-- `lib/grid/layout_256.lua` (`S.lib.grid_layout_256`): `grid_key_256`, `grid_key_256_transport`, `grid_key_256_lock`, `grid_redraw_256`, `grid_redraw_256_buffers`, `grid_redraw_256_sources`, `grid_redraw_256_page_row`, `grid_redraw_256_transport`, `grid_redraw_256_lock` (global); it registers `S.registry.grid_layouts["256"]`.
+- `lib/grid/layout_256.lua` (`S.lib.grid_layout_256`): `grid_key_256`, `grid_key_256_transport`, `grid_key_256_lock(port, x)`, `grid_redraw_256`, `grid_redraw_256_buffers`, `grid_redraw_256_sources`, `grid_redraw_256_page_row`, `grid_redraw_256_transport`, `grid_redraw_256_lock(port, grid_device)` (global); it registers `S.registry.grid_layouts["256"]`.
 - Its unit tests: `test/unit/grid_layout_256_test.lua` (with the fader maths of `lib/grid/faders.lua`, `docs/notes/lua/grid-core.md`).
 
 ## Pages
 
-Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10; rows 14-15 voice select/toggle and pattern clear/randomize; row 16 lock.
+Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10; rows 14-15 voice select/toggle and pattern clear/randomize; row 16 lock and copy/paste.
+
+## Row 8: tempo keys
+
+`LAYOUT_256.tempo_steps` maps columns 5-8 to -10, -1, +1, +10. A press calls `params:delta("tempo", step)` (the `tempo` param drives `clock_tempo`) and `header_flash(string.format("tempo %d", ...))` with the new tempo, so the screen's header shows it for 1.5 s on any page. `grid_redraw_256_transport` lights a held tempo key at 15 (`grid_core.held`), the others at 4.
+
+## Row 16: lock and copy/paste
+
+`grid_key_256_lock(port, x)`:
+- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked.
+- Columns 9-15 (voices 1-7), through the local `copy_paste_key(port, voice)`: with no clipboard, copy the voice's pattern (`clipboard = {voice = v, steps = <copy of S.patterns[v]>}`); with one, paste `clipboard.steps` onto the voice, unless it is the copied voice. The clipboard stays for more pastes.
+- Column 16: clear the clipboard. Column 8 does nothing.
+
+`grid_redraw_256_lock(port, grid_device)`: the copied voice's key 15, the other voice keys and column 16 at 4 while a pattern is copied; columns 9-16 at 2 with none. It works on pages 1, 2 and 4 (page 3 has no row 16).
 
 ## Parameter page (page 2)
 
@@ -33,7 +51,7 @@ LEDs:
 - Populated scenes: 8 (row 1) or 6 (row 2).
 - Current scene: 15 (in row 1).
 - Empty scenes: 2.
-- Active sequencer: 15, and the next scene position is shown.
+- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the sequencer position (the next scene it recalls) at 10 while it runs. The current scene's 15 wins when they are the same key.
 - Sequence length: 8 for included scenes, 2 for excluded.
 
 It follows changes made anywhere (issue #49):
