@@ -186,8 +186,8 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   assert_equal(device.segments[1].level, 4, "not buffer-sourced: ring 1 dim")
   assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
   assert_equal(device.segments[4].level, 12, "record rings stay lit")
-  -- the selected voice follows E2
-  enc(2, 1)
+  -- the selected voice (picked on MAIN; BUFFER's E2 picks a slot) follows
+  show_page("MAIN"); enc(2, 1); show_page("BUFFER")
   local position = params:get("v2_buf_pos"); local voice1_position = params:get("v1_buf_pos")
   context.arc.turn(1, 1, 20)
   assert_true(params:get("v2_buf_pos") > position, "ring 1 follows the selected voice")

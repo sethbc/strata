@@ -111,6 +111,7 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   assert_true(not buffers[3].loaded, "not loaded before the engine reports it")
   assert_equal(buffers[3].name, "empty", "no take name yet")
   params:set("v1_source", 4); show_page("BUFFER")      -- voice 1 reads buf 3
+  local_value("buffer_page").slot = 3; redraw()      -- BUFFER's slot cursor on it
   assert_equal(hint(), buffer_record_hints(), "BUFFER hint while finishing")
   assert_true(hint():find("K3:...", 1, true), "K3 waits while the take finishes")
   context.clear_engine_calls(); record_buffer(3)
