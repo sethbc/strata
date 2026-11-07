@@ -1193,6 +1193,7 @@ function restore_tempo_change_handler()
 end
 
 function init()
+  -- Also keeps S an upvalue of init, where the test harness finds it
   assert(S.registry, "lib/state builds the registries")
 
   -- Set up params

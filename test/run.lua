@@ -101,14 +101,17 @@ local function shared_state()
   end
 end
 
--- Find a script value by name: a field of S, then of S.constants, then a
--- script local, found by searching the upvalues of global functions.
--- Returns the value and a setter that writes where the name was found.
+-- Find a script value by name: a field of S (one it holds, or one ever
+-- assigned, even to nil: S.__declared), then of S.constants, then a script
+-- local, found by searching the upvalues of global functions. Returns the
+-- value and a setter that writes where the name was found.
 local function find_upvalue(name)
   local S = shared_state()
   if type(S) == "table" then
+    local declared = rawget(S, "__declared")
     for _, home in ipairs({ S, rawget(S, "constants") }) do
-      if type(home) == "table" and rawget(home, name) ~= nil then
+      if type(home) == "table" and (rawget(home, name) ~= nil
+          or (home == S and type(declared) == "table" and declared[name])) then
         return rawget(home, name), function(new_value) rawset(home, name, new_value) end
       end
     end
@@ -484,7 +487,7 @@ test("S is init's upvalue and holds the registries", function()
   assert_equal(local_value("lookup_probe"), 1, "a field of S")
   assert_equal(local_value("constant_probe"), 2, "a field of S.constants")
   assert_equal(local_value("NUM_VOICES"), 99, "S before the upvalues")
-  S.NUM_VOICES = nil
+  S.NUM_VOICES = nil; S.__declared.NUM_VOICES = nil  -- a name S never declared
   assert_equal(local_value("NUM_VOICES"), 7, "the upvalues last")
   local _, set_field = find_upvalue("lookup_probe"); set_field(3)
   local _, set_constant = find_upvalue("constant_probe"); set_constant(4)
@@ -492,6 +495,22 @@ test("S is init's upvalue and holds the registries", function()
   assert_equal(S.constants.constant_probe, 4, "the setter writes into S.constants")
   assert_equal(S.constant_probe, nil, "and not into S")
   S.lookup_probe = nil; S.constants = nil
+end)
+
+test("a field of S assigned nil stays reachable by name", function()
+  load_strata()
+  local S = local_value("S")
+  assert_true(S.__declared.registry, "the registries are a declared key")
+  S.some_clock = nil  -- as a module declares a clock that is not running
+  assert_true(S.__declared.some_clock, "the nil assignment is recorded")
+  local ok, value = pcall(local_value, "some_clock")
+  assert_true(ok, "a declared nil field is found: " .. tostring(value))
+  assert_equal(value, nil, "its value is nil")
+  local _, set_field = find_upvalue("some_clock"); set_field(7)
+  assert_equal(rawget(S, "some_clock"), 7, "the setter writes into S")
+  S.some_clock = nil
+  assert_equal(local_value("some_clock"), nil, "set back to nil, still found")
+  assert_true(not pcall(local_value, "never_declared_name"), "a name never assigned is still not found")
 end)
 
 test("a reload builds a fresh S that shares no tables", function()

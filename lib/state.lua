@@ -9,6 +9,18 @@
 return function()
   local M = {}
 
+  -- Every key ever assigned into S, even to nil (a clock that is not
+  -- running): M.__declared[name] = true. The test harness finds such a
+  -- name in S while its value is nil. Assigning to a key that holds a value
+  -- skips __newindex, but that key was recorded when it was first set
+  rawset(M, "__declared", {})
+  setmetatable(M, {
+    __newindex = function(table, key, value)
+      rawget(table, "__declared")[key] = true
+      rawset(table, key, value)
+    end,
+  })
+
   -- Registries modules add to as they load (the Wave 0 moves fill them)
   M.registry = {
     pages = {},         -- one record per screen page
