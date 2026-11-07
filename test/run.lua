@@ -63,16 +63,19 @@ local function assert_near(actual, expected, tolerance, message)
 end
 
 -- Load strata.lua (or options.source, a patched copy of it) into fresh
--- stubs and run init(). init() has added every param: each group must have
--- all of its params. Each load gets its own data directory (unless
--- options.data_subdir names a shared one): a counter, since tests reseed
--- math.random and two loads after one seed would draw the same name.
+-- stubs and run init(). options.module_sources ({ ["lib/x"] = source })
+-- replaces the text of the modules it names (include). init() has added
+-- every param: each group must have all of its params. Each load gets its
+-- own data directory (unless options.data_subdir names a shared one): a
+-- counter, since tests reseed math.random and two loads after one seed
+-- would draw the same name.
 local loads = 0
 local function load_strata(options)
   options = options or {}
   loads = loads + 1
   local data_dir = data_root .. (options.data_subdir or ("load" .. loads)) .. "/"
-  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec, data_dir = data_dir, quiet = true }
+  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
+    data_dir = data_dir, quiet = true, module_sources = options.module_sources }
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
   if options.before_load then options.before_load(context) end
@@ -84,8 +87,32 @@ local function load_strata(options)
   return context
 end
 
--- Find a script-local variable by searching the upvalues of global functions.
+-- The script's shared table S (lib/state.lua): the upvalue S of init, or
+-- nil before a load
+local function shared_state()
+  local init_function = rawget(_G, "init")
+  if type(init_function) ~= "function" then return nil end
+  local index = 1
+  while true do
+    local upvalue_name, upvalue_value = debug.getupvalue(init_function, index)
+    if not upvalue_name then return nil end
+    if upvalue_name == "S" then return upvalue_value end
+    index = index + 1
+  end
+end
+
+-- Find a script value by name: a field of S, then of S.constants, then a
+-- script local, found by searching the upvalues of global functions.
+-- Returns the value and a setter that writes where the name was found.
 local function find_upvalue(name)
+  local S = shared_state()
+  if type(S) == "table" then
+    for _, home in ipairs({ S, rawget(S, "constants") }) do
+      if type(home) == "table" and rawget(home, name) ~= nil then
+        return rawget(home, name), function(new_value) rawset(home, name, new_value) end
+      end
+    end
+  end
   for _, value in pairs(_G) do
     if type(value) == "function" then
       local index = 1
@@ -160,6 +187,49 @@ local function maintained_docs()
   end
   listing:close()
   return docs
+end
+
+-- The script's Lua files: strata.lua first, then every lib/**/*.lua, as
+-- { path = "strata.lua" | "lib/...", text = source }
+local function read_lua_sources() return sync_check.lua_sources(repo_root) end
+
+-- Load options running a copy of the script's Lua sources with `pattern`
+-- replaced by `replacement` (string.gsub) in the one file that holds it:
+-- { source = ... } for strata.lua, { module_sources = ... } for a module.
+-- Returns them and the number of replacements (0 when no file matches)
+local function patched_script(pattern, replacement)
+  for _, source in ipairs(read_lua_sources()) do
+    local patched, count = source.text:gsub(pattern, replacement)
+    if count > 0 then
+      if source.path == "strata.lua" then return { source = patched }, count end
+      return { module_sources = { [source.path:gsub("%.lua$", "")] = patched } }, count
+    end
+  end
+  return {}, 0
+end
+
+-- The repo paths a maintained doc's text names that do not exist, and the
+-- number of paths it names: `docs/...`, `test/...`, `.github/...` and
+-- `lib/...` in backticks, and relative Markdown link targets to a file,
+-- such as [CHANGELOG.md](CHANGELOG.md) (not code such as
+-- `PAGE_KEY[ui_page](n)`). A norns library is named by its path in the
+-- norns repo (`lua/lib/lfo.lua`), which is not checked
+local function doc_paths_missing(text)
+  local paths = {}
+  for path in text:gmatch("`([%w%._/%-]+)`") do
+    if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") or path:match("^lib/") then
+      table.insert(paths, path)
+    end
+  end
+  for target in text:gmatch("%]%(([%w%._/%-]+%.%a+)%)") do
+    table.insert(paths, target)
+  end
+  local missing = {}
+  for _, path in ipairs(paths) do
+    local handle = io.open(repo_root .. "/" .. path, "r")
+    if handle then handle:close() else table.insert(missing, path) end
+  end
+  return missing, #paths
 end
 
 -- Compare a voice's live state with a captured scene voice, allowing for
@@ -252,12 +322,16 @@ test("sync_check fails on engine uses it cannot check: engine[...], references, 
   local calls = sync_check.lua_calls(sample)
   assert_equal(#calls, 1, "only engine.<name>(...) is a call")
   assert_equal(calls[1].name, "retrigger"); assert_equal(calls[1].arg_count, 2, "a spaced call is counted")
-  -- the whole check fails when strata.lua holds one
-  local file = assert(io.open(LUA_PATH, "r")); local lua_source = file:read("*a"); file:close()
-  file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
-  assert_true((sync_check.check(lua_source, sc_source)), "strata.lua passes as it is")
+  -- the whole check fails when one of the script's files holds one
+  local lua_sources = read_lua_sources()
+  local file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
+  assert_true((sync_check.check_sources(lua_sources, sc_source)), "the script's files pass as they are")
   for _, patch in ipairs({ "local f = engine.voiceOn", 'engine["voiceOff"](0)', "local e = engine" }) do
-    local ok, found = sync_check.check(lua_source .. "\n" .. patch .. "\n", sc_source)
+    local patched = {}
+    for index, source in ipairs(lua_sources) do
+      patched[index] = { path = source.path, text = source.text .. (index == 1 and "\n" .. patch .. "\n" or "") }
+    end
+    local ok, found = sync_check.check_sources(patched, sc_source)
     assert_true(not ok, "the check fails on: " .. patch)
     assert_true(found[#found]:find("strata.lua:%d+ "), "with the line: " .. tostring(found[#found]))
   end
@@ -294,6 +368,176 @@ test("sync_check accepts a table key or parameter named engine and #engine (#51)
   local lines = {}
   for _, entry in ipairs(sync_check.lua_reference_problems(flagged)) do table.insert(lines, entry.line) end
   assert_equal(table.concat(lines, " "), "1 2 3 4 5 6 7 8 9", "each use of the table as a value is reported")
+end)
+
+test("sync check reports a bad engine call in a module file", function()
+  local file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
+  local function problems_of(sources)
+    local ok, problems = sync_check.check_sources(sources, sc_source)
+    return ok, table.concat(problems, "\n")
+  end
+  local ok, report = problems_of({ { path = "strata.lua", text = "" }, { path = "lib/x.lua", text = "engine.nope(1)" } })
+  assert_true(not ok, "an unknown command in a module fails the check")
+  assert_true(report:find("lib/x.lua:1 engine.nope", 1, true), "the report names the module and line:\n" .. report)
+  ok, report = problems_of({ { path = "strata.lua", text = "" }, { path = "lib/x.lua", text = "\n\nengine.voiceOff(1, 2)\nlocal e = engine" } })
+  assert_true(report:find("lib/x.lua:3 engine.voiceOff passes 2 args", 1, true), "a wrong argument count:\n" .. report)
+  assert_true(report:find("lib/x.lua:4 the engine table", 1, true), "an unchecked use:\n" .. report)
+  -- every command is called somewhere: a call in any file counts
+  local sources = read_lua_sources()
+  assert_equal(sources[1].path, "strata.lua", "strata.lua comes first")
+  local moved = { { path = "strata.lua", text = "" } }
+  for _, source in ipairs(sources) do table.insert(moved, { path = "lib/moved_" .. #moved .. ".lua", text = source.text }) end
+  ok, report = problems_of(moved)
+  assert_true(ok, "the calls moved into modules still cover every command:\n" .. report)
+  ok, report = problems_of({ { path = "strata.lua", text = "" } })
+  assert_true(not ok and report:find("is never called", 1, true), "a command no file calls is reported")
+  -- the single-source entry point reports its source as strata.lua
+  local _, single = sync_check.check("\nengine.nope(1)", sc_source)
+  assert_equal(single[1], "strata.lua:2 engine.nope has no addCommand in the engine", "check() reads one source")
+end)
+
+-- Every include(...) call in the script's Lua files: problems found (a call
+-- outside strata.lua, a path not under lib/ or not a string literal, a path
+-- included twice) and the paths included
+local function include_problems(sources)
+  local problems, included, seen = {}, {}, {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    assert_equal(#sanitized, #source.text, source.path .. " keeps its length when sanitized")
+    for start in sanitized:gmatch("()%f[%w_]include%s*%(") do
+      local before = sanitized:sub(1, start - 1)
+      if not before:match("function%s+$") and not before:match("[%.:]%s*$") then
+        local where = source.path .. ":" .. select(2, before:gsub("\n", "")) + 1
+        local path = source.text:match('^include%s*%(%s*"([^"]*)"%s*%)', start)
+        if source.path ~= "strata.lua" then table.insert(problems, where .. " includes outside strata.lua") end
+        if not path then
+          table.insert(problems, where .. " includes a path that is not a string literal")
+        elseif not path:match("^lib/") then
+          table.insert(problems, where .. " includes " .. path .. ", not a lib/ path")
+        elseif seen[path] then
+          table.insert(problems, where .. " includes " .. path .. " again")
+        end
+        if path then seen[path] = true; table.insert(included, path) end
+      end
+    end
+  end
+  return problems, included
+end
+
+test("only strata.lua includes, once per module, by lib/ paths", function()
+  local problems, included = include_problems(read_lua_sources())
+  assert_equal(#problems, 0, table.concat(problems, "; "))
+  assert_equal(included[1], "lib/state", "strata.lua includes lib/state first")
+  -- the scanner itself
+  problems = include_problems({
+    { path = "strata.lua", text = '-- include("lib/comment")\nlocal s = "include(\\"lib/string\\")"\ninclude("lib/a")\n'
+      .. 'include("strata/lib/b")\ninclude("lib/a")\ninclude(name)\nfunction include(x) end\nx.include("y")' },
+    { path = "lib/a.lua", text = 'local m = include("lib/c")' },
+  })
+  assert_equal(table.concat(problems, "; "), "strata.lua:4 includes strata/lib/b, not a lib/ path; "
+    .. "strata.lua:5 includes lib/a again; strata.lua:6 includes a path that is not a string literal; "
+    .. "lib/a.lua:1 includes outside strata.lua", "each bad include is reported, comments and strings are not")
+end)
+
+test("include stub loads lib modules and honors overrides", function()
+  local function install(module_sources)
+    return stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
+      data_dir = data_root .. "include_stub/", quiet = true, module_sources = module_sources }
+  end
+  install()
+  local constructor = include("lib/state")
+  assert_equal(type(constructor), "function", "lib/state returns a constructor")
+  assert_true(debug.getinfo(constructor, "S").source:sub(-#"lib/state.lua") == "lib/state.lua",
+    "the module's functions are defined in lib/state.lua")
+  assert_true(constructor() ~= constructor(), "each call builds a new table")
+  local ok, message = pcall(include, "lib/missing")
+  assert_true(not ok and tostring(message):find("MISSING INCLUDE: lib/missing", 1, true), "a missing file is an error: " .. tostring(message))
+  install({ ["lib/state"] = "return function() return { marker = 1 } end" })
+  constructor = include("lib/state")
+  assert_equal(constructor().marker, 1, "an override replaces the file")
+  assert_true(debug.getinfo(constructor, "S").source:sub(-#"lib/state.lua") == "lib/state.lua",
+    "an override keeps the file's chunk name")
+  install()
+  assert_equal(include("lib/state")().marker, nil, "overrides last one install")
+  -- load_strata passes them through
+  load_strata { module_sources = { ["lib/state"] =
+    "return function() return { marker = 2, registry = { pages = {}, params = {}, cleanup = {}, grid_layouts = {} } } end" } }
+  assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
+end)
+
+test("S is init's upvalue and holds the registries", function()
+  load_strata()
+  local upvalue
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(init, index)
+    if not name then break end
+    if name == "S" then upvalue = value end
+  end
+  assert_equal(type(upvalue), "table", "init's upvalue S")
+  local S = local_value("S")
+  assert_equal(S, upvalue, "local_value finds S")
+  for _, registry in ipairs({ "pages", "params", "cleanup", "grid_layouts" }) do
+    assert_equal(type(S.registry[registry]), "table", "S.registry." .. registry)
+  end
+  -- lookups look in S, then S.constants, then the upvalues; setters write where the name was found
+  S.lookup_probe = 1; S.constants = { constant_probe = 2 }; S.NUM_VOICES = 99
+  assert_equal(local_value("lookup_probe"), 1, "a field of S")
+  assert_equal(local_value("constant_probe"), 2, "a field of S.constants")
+  assert_equal(local_value("NUM_VOICES"), 99, "S before the upvalues")
+  S.NUM_VOICES = nil
+  assert_equal(local_value("NUM_VOICES"), 7, "the upvalues last")
+  local _, set_field = find_upvalue("lookup_probe"); set_field(3)
+  local _, set_constant = find_upvalue("constant_probe"); set_constant(4)
+  assert_equal(S.lookup_probe, 3, "the setter writes into S")
+  assert_equal(S.constants.constant_probe, 4, "the setter writes into S.constants")
+  assert_equal(S.constant_probe, nil, "and not into S")
+  S.lookup_probe = nil; S.constants = nil
+end)
+
+test("a reload builds a fresh S that shares no tables", function()
+  load_strata(); local first = local_value("S")
+  load_strata(); local second = local_value("S")
+  assert_true(first ~= second, "a reload builds a new S")
+  local function tables_in(root)
+    local found, pending = {}, { root }
+    while #pending > 0 do
+      local value = table.remove(pending)
+      if not found[value] then
+        found[value] = true
+        for key, inner in pairs(value) do
+          if type(key) == "table" then table.insert(pending, key) end
+          if type(inner) == "table" then table.insert(pending, inner) end
+        end
+      end
+    end
+    return found
+  end
+  local in_second = tables_in(second)
+  for key, value in pairs(first) do
+    if type(value) == "table" then assert_true(second[key] ~= value, "S." .. tostring(key) .. " is shared") end
+  end
+  for value in pairs(tables_in(first)) do
+    assert_true(not in_second[value], "the two loads share a table")
+  end
+  for name in pairs(package.loaded) do
+    assert_true(not tostring(name):match("^lib[/.]"), "a module is cached in package.loaded: " .. tostring(name))
+  end
+end)
+
+-- Module path -> the global functions defined there. Later moves add a
+-- module's entry before moving its functions
+local MODULE_HOMES = {}
+
+test("functions live in their module", function()
+  load_strata()
+  for path, names in pairs(MODULE_HOMES) do
+    for _, name in ipairs(names) do
+      local value = rawget(_G, name)
+      assert_equal(type(value), "function", name .. " is a global function")
+      local source = debug.getinfo(value, "S").source
+      assert_true(source:sub(-#path) == path, name .. " is defined in " .. path .. ", not " .. source)
+    end
+  end
 end)
 
 test("the engine source parsers skip // and /* */ comments (#25)", function()
@@ -401,8 +645,15 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.num_mod_slots, local_value("NUM_MOD_SLOTS"), "numModSlots = NUM_MOD_SLOTS")
   assert_equal(engine_spec.num_mod_slots, engine_spec.mod_slots, "numModSlots = the modBus1..N controls")
   -- only buffer_state_changed, a local function, reads BUFFER_STATE_STRIDE
-  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
-  local stride = tonumber(source:match("\nlocal BUFFER_STATE_STRIDE%s*=%s*(%d+)"))
+  -- (declared in exactly one of the script's files)
+  local stride
+  for _, source in ipairs(read_lua_sources()) do
+    local found = tonumber(source.text:match("\nlocal BUFFER_STATE_STRIDE%s*=%s*(%d+)"))
+    if found then
+      assert_equal(stride, nil, "BUFFER_STATE_STRIDE is declared once")
+      stride = found
+    end
+  end
   assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
 end)
 
@@ -511,10 +762,9 @@ test("each FX param's controlspec lies within the engine's limit for its argumen
   local problems, compared = fx_specs_outside_engine_limits(load_strata())
   assert_equal(#problems, 0, table.concat(problems, "; "))
   assert_equal(compared, 6, "filter freq, res and mix; delay time, feedback and mix compared")
-  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
-  local widened, count = source:gsub('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
+  local widened, count = patched_script('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
   assert_equal(count, 1, "delay feedback patch applies")
-  problems = fx_specs_outside_engine_limits(load_strata { source = widened })
+  problems = fx_specs_outside_engine_limits(load_strata(widened))
   assert_true(#problems == 1 and problems[1]:find("delay_feedback", 1, true), "a widened range fails: " .. table.concat(problems, "; "))
 end)
 
@@ -704,33 +954,20 @@ test("CLAUDE.md command table lists exactly the engine's commands", function()
 end)
 
 test("every repo path the maintained docs name exists (#52)", function()
-  local function exists(path)
-    local handle = io.open(repo_root .. "/" .. path, "r")
-    if handle then handle:close() end
-    return handle ~= nil
-  end
   local checked = 0
   for _, doc_name in ipairs(maintained_docs()) do
     local file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
-    local paths = {}
-    -- `docs/...`, `test/...` and `.github/...` name files in this repo
-    -- (`lib/...` may be a norns library path, so it is not checked)
-    for path in text:gmatch("`([%w%._/%-]+)`") do
-      if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") then
-        table.insert(paths, path)
-      end
-    end
-    -- relative Markdown link targets to a file, such as
-    -- [CHANGELOG.md](CHANGELOG.md) (not code such as `PAGE_KEY[ui_page](n)`)
-    for target in text:gmatch("%]%(([%w%._/%-]+%.%a+)%)") do
-      table.insert(paths, target)
-    end
-    for _, path in ipairs(paths) do
-      checked = checked + 1
-      assert_true(exists(path), doc_name .. " names " .. path .. ", which does not exist")
-    end
+    local missing, count = doc_paths_missing(text)
+    checked = checked + count
+    if #missing > 0 then fail(doc_name .. " names " .. missing[1] .. ", which does not exist") end
   end
   assert_true(checked > 0, "the check finds the paths the docs name")
+end)
+
+test("the docs path check covers lib/ paths", function()
+  local missing, checked = doc_paths_missing("see `lib/missing.lua`, `lib/Engine_Strata.sc` and `lib/x`, not lib/bare.lua")
+  assert_equal(table.concat(missing, " "), "lib/missing.lua lib/x", "the missing lib/ paths are reported")
+  assert_equal(checked, 3, "every backticked lib/ path is checked")
 end)
 
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
@@ -3612,12 +3849,11 @@ end)
 -- the next group or separator, or at the end of the list after init()
 test("stub params: each group is followed by exactly n params (#25)", function()
   -- the 3.0.1 review's mutation: the strata_midi group one param short or long
-  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
   for _, size in ipairs({2, 4}) do
-    local mutated, count = source:gsub('params:add_group%("strata_midi", "midi", 3%)',
+    local mutated, count = patched_script('params:add_group%("strata_midi", "midi", 3%)',
       'params:add_group("strata_midi", "midi", ' .. size .. ')')
     assert_equal(count, 1, "test patch applies")
-    local ok, message = pcall(load_strata, { source = mutated })
+    local ok, message = pcall(load_strata, mutated)
     assert_true(not ok, "a strata_midi group of " .. size .. " is rejected")
     assert_true(tostring(message):find("strata_midi", 1, true) ~= nil, "the error names the group: " .. tostring(message))
   end
@@ -4063,9 +4299,10 @@ test("strata.lua never compares a param type with a string", function()
   for _, line in ipairs(allowed) do
     assert_equal(param_type_string_comparison(line), nil, "allowed: " .. line)
   end
-  local file = assert(io.open(LUA_PATH, "r")); local source = file:read("*a"); file:close()
-  local found = param_type_string_comparison(source)
-  assert_equal(found, nil, "param.t is numeric on norns; compare with params.tX")
+  for _, source in ipairs(read_lua_sources()) do
+    local found = param_type_string_comparison(source.text)
+    assert_equal(found, nil, source.path .. ": param.t is numeric on norns; compare with params.tX")
+  end
 end)
 
 test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()

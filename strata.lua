@@ -20,6 +20,10 @@ local LFO = require "lfo"
 local musicutil = require "musicutil"
 local fileselect = require "fileselect"
 
+-- The table the script and its lib/ modules share (lib/state.lua): one
+-- include per module, by its lib/ path, in this file only
+local S = include("lib/state")()
+
 -- Constants
 local NUM_VOICES = 7
 local NUM_SCENES = 8
@@ -1189,6 +1193,8 @@ function restore_tempo_change_handler()
 end
 
 function init()
+  assert(S.registry, "lib/state builds the registries")
+
   -- Set up params
   params:add_separator("strata")
   
