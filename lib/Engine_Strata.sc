@@ -1410,8 +1410,8 @@ Engine_Strata : CroneEngine {
 
     // The voice's pan on a buffer or input grain synth's stereo output, as a
     // balance: the far channel is turned down (pan -1 leaves the left only,
-    // 1 the right only) and a centred voice is unchanged. Not a Balance2,
-    // which takes 3 dB off both channels at the centre.
+    // 1 the right only) and a centered voice is unchanged. Not a Balance2,
+    // which takes 3 dB off both channels at the center.
     panBalance { arg sig, pan;
         ^sig * [1 - pan.clip(0, 1), 1 + pan.clip(-1, 0)]
     }
@@ -1497,7 +1497,7 @@ Engine_Strata : CroneEngine {
     }
 
     // Cancel a recording in progress, or one still waiting for its zeroed
-    // buffers (it then never starts); its onFree sees it was cancelled
+    // buffers (it then never starts); its onFree sees it was canceled
     stopRecording { arg index;
         var synth = recordSynths[index];
         recordSynths[index] = nil;
@@ -1579,7 +1579,7 @@ Engine_Strata : CroneEngine {
     // early whose frame count has not arrived yet (stopReplies; the slot
     // change drops that reply), as Lua's load_buffer expects: that take
     // never completes, so it is never adopted under the bad file's name.
-    // The slot reads empty (0 frames), as for a recording a clear cancelled.
+    // The slot reads empty (0 frames), as for a recording a clear canceled.
     // Either way the bufferLoadFailed poll reports the failure (load is the
     // slot's load number), so Lua puts back what the slot held (its
     // bufferState reports cannot tell a rejected load over audio from a
@@ -1587,7 +1587,7 @@ Engine_Strata : CroneEngine {
     rejectLoad { arg index, load, reason;
         var recording = recordSynths[index].notNil or: { stopReplies[index].notNil };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
-            ++ (if (recording) { " recording cancelled" } { " unchanged" }));
+            ++ (if (recording) { " recording canceled" } { " unchanged" }));
         if (recording) {
             this.stopRecording(index);
             this.slotChanged(index);  // also drops the awaited frame count (stopReplies)
@@ -1631,8 +1631,8 @@ Engine_Strata : CroneEngine {
     // Record the stereo input into a slot, replacing it: the slot reads as
     // empty at once (the voices reading it fade out, afterSlotFade), then
     // the pair is zeroed and the record synth starts after a sync, so
-    // zeroing never lands on the new take, and only if nothing cancelled it
-    // meanwhile (a completion message could not be cancelled before the
+    // zeroing never lands on the new take, and only if nothing canceled it
+    // meanwhile (a completion message could not be canceled before the
     // node exists). The slot reads as empty until the recording completes,
     // then the take is written to scratchDir so it survives a restart.
     recordSlot { arg index, seconds, level;
@@ -1685,7 +1685,7 @@ Engine_Strata : CroneEngine {
     // after the free, and /c_get is answered after the /n_free), then the
     // scratch take is written as for a completed recording. A recording
     // still waiting for its zeroed buffers captured nothing and is simply
-    // cancelled; an idle slot is left alone. The reply applies only if no
+    // canceled; an idle slot is left alone. The reply applies only if no
     // load, record or clear changed the slot before it arrived (slotChanges).
     stopRecordSlot { arg index;
         var synth, started, change;
@@ -1907,7 +1907,7 @@ Engine_Strata : CroneEngine {
     }
 
     free {
-        // cancelled first, so no recording completes (and writes) on free;
+        // canceled first, so no recording completes (and writes) on free;
         // a slot change also drops a load or zeroing still waiting for its fade
         numBuffers.do({ arg index; this.stopRecording(index); this.slotChanged(index) });
         synths.do({ arg synth; this.sendToSynth(synth.freeMsg); synth.free(false) });
