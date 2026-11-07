@@ -154,7 +154,7 @@ test("LFO params: library groups, a destination group, labels and resolvers", fu
     assert_equal(dest.count, #destinations); assert_equal(params:get("strata_lfo" .. n .. "_dest"), 1, "none")
     assert_equal(params:lookup_param("lfo_group_" .. n).n, 15, "the library's own group")
     assert_equal(params:string("lfo_" .. n), "off", "LFOs start off")
-    assert_equal(params:get("lfo_depth_" .. n), 0)
+    assert_equal(params:get("lfo_depth_" .. n), 25, "LFOs start at 25% depth")
     assert_equal(params:string("lfo_mode_" .. n), "free")
     assert_near(params:get("lfo_free_" .. n), 4, 1e-9, "4 s period")
     assert_equal(params:string("lfo_baseline_" .. n), "from center")

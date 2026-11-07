@@ -28,6 +28,10 @@ return function(S)
   S.selected_lfo = 1     -- LFO page and arc ring 4
   S.lfo_last_raw = {}    -- per LFO: last raw shape value (0..1), for the LFO page dot
   local LFO_DEFAULT_PERIOD = 4  -- seconds (free mode)
+  -- LFOs start at a quarter of their depth, so turning one on is audible
+  -- (scenes keep the depth they store; lib/scenes.lua's migration default
+  -- for a file without one stays 0)
+  local LFO_DEFAULT_DEPTH = 0.25
   -- Library steps per beat (its default is 96): the action, and so an engine
   -- message, runs on every step, so this bounds the message rate (96/s per LFO
   -- at 120 BPM) while a 10 Hz LFO still gets several steps per cycle
@@ -178,13 +182,18 @@ return function(S)
 
     for n = 1, NUM_LFOS do
       S.lfos[n] = LFO:add{
-        shape = "sine", min = -1, max = 1, depth = 0, mode = "free", period = LFO_DEFAULT_PERIOD,
+        shape = "sine", min = -1, max = 1, depth = LFO_DEFAULT_DEPTH, mode = "free", period = LFO_DEFAULT_PERIOD,
         baseline = "center",
         action = function(scaled, raw) apply_lfo(n, scaled, raw) end
       }
       S.lfos[n]:set("ppqn", LFO_PPQN)  -- before start: the sprocket is built from it
       -- the library's params lfo_<n>, lfo_shape_<n>, lfo_depth_<n> (0-100 %), ...
       S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)
+      -- the library starts lfo_depth_<n> at depth * 100, a float in Lua 5.3
+      -- that its formatter shows as "25.0%": make the default and value whole
+      local depth_param = params:lookup_param("lfo_depth_" .. n)
+      depth_param.default = math.floor(depth_param.default + 0.5)
+      depth_param.value = depth_param.default
       note_lfo_reset(n)
       wrap_param_action("lfo_" .. n, nil, function(state)
         if state == 1 then

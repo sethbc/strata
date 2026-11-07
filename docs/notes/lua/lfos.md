@@ -25,8 +25,9 @@ Three LFOs (`NUM_LFOS`), built on norns' `lua/lib/lfo.lua` (`local LFO = require
 ## Construction
 
 `add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record):
-- `LFO:add{shape = "sine", min = -1, max = 1, depth = 0, mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`;
-- then `S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`.
+- `LFO:add{shape = "sine", min = -1, max = 1, depth = LFO_DEFAULT_DEPTH (0.25, since 3.1), mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`;
+- then `S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`;
+- then `lfo_depth_<n>`'s `default` and `value` are rounded to a whole 25: the library computes depth × 100, a float in Lua 5.3 that its formatter would show as `25.0%`. The scene migration default for `lfo_depth_<n>` stays 0 (`lib/scenes.lua`), so files without LFO depths keep silent LFOs.
 
 The library owns the params:
 - `lfo_<n>` (state, option off/on), `lfo_shape_<n>`, `lfo_depth_<n>` (a **number 0-100, percent**), `lfo_phase_<n>`, `lfo_offset_<n>`, `lfo_mode_<n>` (clocked/free), `lfo_clocked_<n>` (rate option), `lfo_free_<n>` (0.1-300 s), `lfo_reset_<n>`, ...;
