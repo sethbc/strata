@@ -488,7 +488,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
     end
     return false
   end
-  show_page("SETUP")
+  show_page("SETUP"); enc(2, 20); redraw()  -- the status lines are below the fields
   assert_true(screen_has("buffers: 0 restored"), "nothing restored without a file")
   local loaded_file = context.audio_dir .. "loop.wav"
   io.open(loaded_file, "w"):close()
@@ -521,7 +521,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   assert_equal(local_value("buffers_restored"), 0, "restored once the engine reports audio")
   context.polls.fire("bufferState", 202); context.polls.fire("bufferState", 404)
   assert_equal(local_value("buffers_restored"), 2)
-  show_page("SETUP")
+  show_page("SETUP"); enc(2, 20); redraw()  -- the status lines are below the fields
   assert_true(screen_has("buffers: 2 restored"), "SETUP shows the restored count")
   -- a slot whose file has gone is skipped and reported, and stays empty
   os.remove(loaded_file)
@@ -582,7 +582,7 @@ test("restores count engine-confirmed slots; missing remembered files are kept a
   assert_true(not buffers[3].loaded)
   assert_true(table.concat(context.printed, "\n"):find(away, 1, true), "the console names the missing file")
   assert_equal(local_value("buffers_restored"), 0, "nothing restored until the engine reports audio")
-  show_page("SETUP")
+  show_page("SETUP"); enc(2, 20); redraw()  -- the status lines are below the fields
   assert_true(screen_has("buffers: 0 ok, 1 missing"), "SETUP shows the missing file")
   context.polls.fire("bufferState", 3)          -- buffer 1 holds 3 s
   context.polls.fire("bufferState", 3)          -- the periodic poll repeats it
@@ -590,7 +590,7 @@ test("restores count engine-confirmed slots; missing remembered files are kept a
   context.set_time(5); context.polls.fire("bufferState", 100)   -- buffer 2: the engine could not read it
   assert_equal(local_value("buffers_restored"), 1, "a slot without audio does not count")
   assert_true(not buffers[2].loaded, "and is not loaded")
-  show_page("SETUP")
+  show_page("SETUP"); enc(2, 20); redraw()  -- the status lines are below the fields
   assert_true(screen_has("buffers: 1 ok, 1 missing"), "SETUP count after the reports")
   assert_screen_layout(context, "SETUP with missing buffers")
 
@@ -607,7 +607,7 @@ test("restores count engine-confirmed slots; missing remembered files are kept a
   assert_equal(loads[3].args[1], 2); assert_equal(loads[3].args[2], away)
   context.polls.fire("bufferState", 3); context.polls.fire("bufferState", 201)
   assert_equal(local_value("buffers_restored"), 2)
-  show_page("SETUP")
+  show_page("SETUP"); enc(2, 20); redraw()  -- the status lines are below the fields
   assert_true(screen_has("buffers: 2 restored"), "no missing files: the plain count")
   -- a slot cleared after a missing restore forgets the path
   cleanup(); os.remove(away)
