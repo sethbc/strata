@@ -122,6 +122,7 @@ return function(S)
 
   function arc_redraw()
     if S.arc_device == nil or S.arc_device.device == nil then return end
+    S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor (lib/ui/cursors.lua)
 
     S.arc_device:all(0)
     local page_redraw = S.registry.pages[S.ui_page].arc_redraw
