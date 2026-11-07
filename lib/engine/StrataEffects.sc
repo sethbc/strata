@@ -12,6 +12,7 @@
             addDefs: { this.addEffectDefs; [] },
             addCommands: { this.addEffectCommands },
             start: { this.startEffectsChain },
+            stop: { this.stopEffects },
             free: { this.freeEffects },
             effectKeys: this.effectChainKeys
         )
@@ -151,12 +152,16 @@
         ], target: context.xg, addAction: \addToTail);
     }
 
-    // The chain's synths (quietly, as free frees every synth), then its buses
-    freeEffects {
+    // The chain's synths (quietly, as the voices' are freed)
+    stopEffects {
         this.effectChainKeys.do({ arg key;
             var synth = synths.removeAt(key);
             if (synth.notNil) { this.sendToSynth(synth.freeMsg); synth.free(false) };
         });
+    }
+
+    // The chain's buses (every area's nodes are gone by now)
+    freeEffects {
         mainBus.free;
         filterBus.free;
         delayBus.free;

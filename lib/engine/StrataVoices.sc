@@ -13,6 +13,7 @@
             addDefs: { this.addVoiceDefs; voiceSynthDefs },
             addCommands: { this.addVoiceCommands },
             start: { this.startVoiceGroups },
+            stop: { this.stopVoices },
             free: { this.freeVoices }
         )
     }
@@ -181,14 +182,18 @@
         });
     }
 
-    // The voices' synths (the effects area has freed its own), then their
-    // groups and buses
-    freeVoices {
+    // The voices' synths (the effects area has stopped its own), then their
+    // groups
+    stopVoices {
         synths.do({ arg synth; this.sendToSynth(synth.freeMsg); synth.free(false) });
         synths.clear;  // their onFree must not start them again
         // also frees voices still in their release phase
         voiceGroup.free;
         processGroup.free;
+    }
+
+    // The voices' buses (every area's nodes are gone by now)
+    freeVoices {
         granBuses.do({ arg bus; bus.free });
         modBuses.do({ arg bus; bus.free });
         silentBus.free;

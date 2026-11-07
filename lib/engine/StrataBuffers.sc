@@ -12,6 +12,7 @@
             addDefs: { this.addBufferDefs; [] },
             addCommands: { this.addBufferCommands },
             start: { this.startInputSynth },
+            stop: { this.stopBuffers },
             free: { this.freeBuffers }
         )
     }
@@ -108,13 +109,16 @@
         bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
     }
 
-    // Recordings and waiting slot changes first, then the input synth, then
-    // the slots and buses
-    freeBuffers {
+    // Recordings and waiting slot changes, then the input synth
+    stopBuffers {
         // canceled first, so no recording completes (and writes) on free;
         // a slot change also drops a load or zeroing still waiting for its fade
         numBuffers.do({ arg index; this.stopRecording(index); this.slotChanged(index) });
         inputSynth.free;
+    }
+
+    // The slots and buses (every area's nodes are gone by now)
+    freeBuffers {
         buffersL.do({ arg buffer; buffer.free });
         buffersR.do({ arg buffer; buffer.free });
         inputBus.free;

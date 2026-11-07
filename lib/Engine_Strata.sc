@@ -142,10 +142,13 @@ Engine_Strata : CroneEngine {
         areas.do({ arg area; area[\start].value });
     }
 
-    // Each area's free, in descending order: an area's nodes and state go
-    // before those of the areas it was built on
+    // Two passes, each in descending order: every area's stop (its nodes:
+    // recordings canceled, synths and groups freed), then every area's free
+    // (its buses and buffers), so no bus or buffer is freed while a node of
+    // any area still uses it
     free {
         if (areas.isNil) { ^this };
+        areas.reverseDo({ arg area; area[\stop].value });
         areas.reverseDo({ arg area; area[\free].value });
     }
 }
