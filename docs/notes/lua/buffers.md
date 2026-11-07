@@ -16,7 +16,7 @@
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
 - two cleanup steps: 40 (save the buffer paths) and 130 (the polls and recording timers).
 
-The BUFFER page is in `docs/notes/lua/ui-and-pages.md`, its arc rings in `docs/notes/lua/arc.md`, grid page 4 in `docs/notes/lua/grid-and-sequencer.md`.
+The BUFFER page is in `docs/notes/lua/pages/buffer.md`, its arc rings in `docs/notes/lua/arc-pages.md`, grid page 4 in `docs/notes/lua/grid/layout_256.md`.
 
 ## buffers.data
 

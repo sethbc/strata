@@ -16,7 +16,7 @@
 - cleanup step 120: the LFOs stopped, their destinations restored.
 
 Elsewhere:
-- The LFO page is `lib/pages/lfo.lua` (`docs/notes/lua/ui-and-pages.md`), the arc's LFO rings `lib/arc/lfo.lua` (`docs/notes/lua/arc.md`).
+- The LFO page is `lib/pages/lfo.lua` (`docs/notes/lua/pages/lfo.md`), the arc's LFO rings `lib/arc/lfo.lua` (`docs/notes/lua/arc-pages.md`).
 - `forget_arc_lfo_period_ticks` is in `lib/arc/core.lua`.
 - The grid has no LFO controls.
 

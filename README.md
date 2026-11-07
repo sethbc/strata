@@ -4,7 +4,7 @@ An ambient granular soundscape generator for monome norns.
 
 ## Overview
 
-Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and frozen, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
+Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
 This is version 3.0.2. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -65,9 +65,9 @@ After installation with either method, restart norns or run `;restart` in maiden
 - [Modulation](docs/user/modulation.md) - cross-modulation, mutations and LFOs
 - [Global Controls and Effects](docs/user/effects.md) - master density, drift, filter, delay, reverb, tempo
 - [Scenes and Automation](docs/user/scenes.md) - scenes, the scene sequencer and composing with scenes
-- [Screen Controls](docs/user/controls.md) - the five screen pages, encoders and keys
+- [Screen Controls](docs/user/controls.md) - the eight screen pages (one file each under docs/user/pages/), E1, the header, ALT, fine adjustment and center detents
 - [MIDI Input](docs/user/midi.md) - playing voices from MIDI and mapping CCs
-- [Monome Grid](docs/user/grid.md) - grid layouts and the pattern sequencer
+- [Monome Grid](docs/user/grid.md) - grid sizes (one layout file each under docs/user/grid/), holds and step levels, and the pattern sequencer
 - [Monome Arc](docs/user/arc.md) - arc rings, button and LED feedback
 - [Parameters Reference](docs/user/params.md) - everything in the PARAMETERS menu
 - [Usage Tips](docs/user/tips.md) - workflows and starting points

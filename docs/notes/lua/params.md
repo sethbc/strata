@@ -34,7 +34,7 @@ Menu order:
 ## Tempo
 
 - The script's `tempo` param is initialized from `clock_tempo`, with its range, read with `param_range("clock_tempo")`: 1-300, so a scene captured at any clock tempo recalls it exactly.
-- Its action sets `clock_tempo`. Grid tempo buttons adjust `tempo`. The pattern clock only syncs (`docs/notes/lua/grid-and-sequencer.md`), so external clock sources still work.
+- Its action sets `clock_tempo`. Grid tempo buttons adjust `tempo`. The pattern clock only syncs (`docs/notes/lua/sequencer.md`), so external clock sources still work.
 - `install_tempo_change_handler()` (from `init`, in the master params record) installs the global `follow_clock_tempo` as `clock.tempo_change_handler`.
   - It keeps the previous handler in `previous_tempo_change_handler` and calls it after its own work.
   - Installing again is a no-op, so the handler never chains to itself.

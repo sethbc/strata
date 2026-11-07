@@ -1,310 +1,23 @@
--- test/unit/pages_test.lua
--- The screen pages: MAIN, FX, LFO, BUFFER (and its file selector) and
--- SETUP, their layout and keys (lib/pages/)
--- Run alone: lua test/run.lua pages
+-- test/unit/pages_buffer_test.lua
+-- The BUFFER page (lib/pages/buffer.lua): its rows, keys, flashes and the
+-- file selector
+-- Run alone: lua test/run.lua pages_buffer
 
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
-local load_strata, find_upvalue, local_value = h.load_strata, h.find_upvalue, h.local_value
-local next_frame, finish_startup, text_span = h.next_frame, h.finish_startup, h.text_span
-local PAGE_TITLES, HINT_ROW_Y, TEXT_HEIGHT = h.PAGE_TITLES, h.HINT_ROW_Y, h.TEXT_HEIGHT
-local show_page, assert_screen_layout = h.show_page, h.assert_screen_layout
-local count_screen_draws, tap = h.count_screen_draws, h.tap
+local load_strata, find_upvalue, local_value, next_frame = h.load_strata, h.find_upvalue, h.local_value, h.next_frame
+local finish_startup, text_span, PAGE_TITLES, HINT_ROW_Y = h.finish_startup, h.text_span, h.PAGE_TITLES, h.HINT_ROW_Y
+local TEXT_HEIGHT, show_page, assert_screen_layout, count_screen_draws = h.TEXT_HEIGHT, h.show_page, h.assert_screen_layout, h.count_screen_draws
+local tap, hint_text, texts_on_row = h.tap, h.hint_text, h.texts_on_row
 
-test("MAIN shows [TRIG] for a voice in triggered grain mode", function()
-  local context = load_strata(); finish_startup(context)
-  local function trig_drawn()
-    redraw()
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == "[TRIG]" then return entry end
-    end
+-- The header's page dots (lib/ui/header.lua): its 2x2 rects above y 9
+local function page_dots(context)
+  local dots = {}
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.y + rect.h <= 9 and rect.w == 2 and rect.h == 2 then table.insert(dots, rect) end
   end
-  assert_true(not trig_drawn(), "no indicator in continuous mode")
-  params:set("v1_grain_mode", 2)
-  local entry = trig_drawn()
-  assert_true(entry, "indicator in triggered mode")
-  assert_equal(entry.y, 42, "on the main parameter label row")
-end)
-
-test("every page's header, hints and text stay apart and inside 128x64 (M7)", function()
-  local context = load_strata()
-  params:set("mutation_enabled", 1)
-  params:set("master_density", 2.0)
-  capture_scene(8)
-  recall_scene(8, 0)
-  -- the widest SETUP page: four grids of every size and an arc
-  context.grid.plug(1, 16, 16)
-  context.grid.plug(2, 16, 8)
-  context.grid.plug(3, 8, 16)
-  context.grid.plug(4, 8, 8)
-  context.arc.plug(1)
-  local voices = local_value("voices")
-  local _, set_selected = find_upvalue("selected_voice")
-  for voice_idx = 1, 7 do
-    set_selected(voice_idx)
-    if not voices[voice_idx].active then toggle_voice(voice_idx) end
-    if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
-    params:set("v" .. voice_idx .. "_grain_mode", 2)  -- MAIN shows [TRIG]
-    for page = 1, #PAGE_TITLES do
-      show_page(page)
-      assert_screen_layout(context, PAGE_TITLES[page] .. ", voice " .. voice_idx)
-    end
-  end
-  -- UI.ScrollingList draws row i at y + 5 + (i - 1) * 11; its last row must
-  -- end above the hint row
-  local voice_list = local_value("voice_list")
-  local last_row_y = voice_list.y + 5 + (voice_list.num_visible - 1) * 11
-  assert_true(last_row_y <= HINT_ROW_Y - TEXT_HEIGHT,
-    "voice list's last row (y " .. last_row_y .. ") clears the hint row")
-end)
-
-test("MAIN voice list fits its column for every voice, state and selection (#23)", function()
-  local context = load_strata(); finish_startup(context)
-  local voices = local_value("voices")
-  local frozen = local_value("frozen")
-  local _, set_selected = find_upvalue("selected_voice")
-  local states = { { active = false, frozen = false }, { active = false, frozen = true },
-    { active = true, frozen = false }, { active = true, frozen = true } }
-  local entries_by_state = {}
-  for state_idx, state in ipairs(states) do
-    for voice_idx = 1, 7 do
-      if voices[voice_idx].active ~= state.active then toggle_voice(voice_idx) end
-      if (frozen[voice_idx] or false) ~= state.frozen then toggle_lock(voice_idx) end
-    end
-    for voice_idx = 1, 7 do
-      set_selected(voice_idx)
-      update_voice_list()
-      show_page("MAIN")
-      local where = string.format("MAIN, voice %d, active %s, frozen %s", voice_idx,
-        tostring(state.active), tostring(state.frozen))
-      assert_screen_layout(context, where)
-      -- the list draws its four rows; the selected voice's entry is bright
-      local voice_list = local_value("voice_list")
-      local rows_drawn, selected_entry = 0, nil
-      for _, entry in ipairs(context.screen.texts) do
-        local row = (entry.y - voice_list.y - 5) / 11
-        if entry.x == voice_list.x and row >= 0 and row < voice_list.num_visible and row % 1 == 0 then
-          rows_drawn = rows_drawn + 1
-          if entry.level == 15 then selected_entry = entry.text end
-        end
-      end
-      assert_equal(rows_drawn, voice_list.num_visible, "list rows drawn (" .. where .. ")")
-      assert_equal(selected_entry, voice_list.entries[voice_idx], "selected entry bright (" .. where .. ")")
-    end
-    entries_by_state[state_idx] = local_value("voice_list").entries
-  end
-  for voice_idx = 1, 7 do
-    local stopped, stopped_frozen = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
-    local running, running_frozen = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
-    assert_true(stopped ~= running, "running and stopped entries differ: " .. stopped)
-    assert_true(not stopped:find("[L]", 1, true) and not running:find("[L]", 1, true), "[L] only when locked")
-    assert_true(stopped_frozen:find("[L]", 1, true) and running_frozen:find("[L]", 1, true),
-      "locked entries show [L]: " .. running_frozen)
-    -- every entry is plain ASCII, so its width does not depend on how the
-    -- norns font draws other glyphs
-    for _, entry in ipairs({ stopped, stopped_frozen, running, running_frozen }) do
-      assert_true(not entry:find("[\128-\255]"), "ASCII entry: " .. entry)
-    end
-  end
-end)
-
-test("every voice type's list name is at most 5 characters, as MAIN_PARAMS states (#49)", function()
-  load_strata()
-  local main_params = local_value("MAIN_PARAMS")
-  local voices = local_value("voices")
-  for voice_idx = 1, #voices do
-    local voice_type = voices[voice_idx].name
-    local list_name = main_params[voice_type].list_name
-    assert_true(type(list_name) == "string" and #list_name >= 1, voice_type .. " has a list name")
-    assert_true(#list_name <= 5, voice_type .. "'s list name '" .. list_name .. "' has at most 5 characters")
-  end
-end)
-
-test("every page draws within 128x64 with a header and hint row", function()
-  local context = load_strata(); finish_startup(context)
-  for page = 1, #PAGE_TITLES do
-    show_page(PAGE_TITLES[page])
-    local texts = context.screen.texts
-    assert_equal(texts[1].text, PAGE_TITLES[page], "page title")
-    for _, entry in ipairs(texts) do
-      local left, right = text_span(entry)
-      assert_true(left >= 0 and right <= 128 and entry.y <= 64, "text inside screen on page " .. page)
-    end
-  end
-end)
-
-test("main_param_id and main_param_label name each voice's E3 and arc ring 2 param", function()
-  local context = load_strata()
-  local device = context.arc.plug(1)
-  local expected = { resonator = "freq", fm = "index", folder = "fold", sub = "drift",
-    pulse = "width", karplus = "decay", ring = "ratio" }
-  local voices = local_value("voices")
-  local _, set_selected = find_upvalue("selected_voice")
-  for voice_idx = 1, 7 do
-    local key_name = expected[voices[voice_idx].name]
-    local param_id = "v" .. voice_idx .. "_" .. key_name
-    assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
-    assert_equal(main_param_label(voice_idx), key_name, "main param label of voice " .. voice_idx)
-    -- arc ring 2 adjusts it and shows it across its controlspec range,
-    -- following the warp (param_fraction, as the FX and BUFFER rings)
-    set_selected(voice_idx)
-    local min_value, max_value = param_range(param_id)
-    params:set(param_id, min_value)
-    context.arc.turn(1, 2, 100)  -- enough for one step of sub's fine-scaled drift
-    next_frame(context)
-    local value = params:get(param_id)
-    assert_true(value > min_value, "arc ring 2 raises " .. param_id)
-    assert_near(device.segments[2].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring 2 shows " .. param_id)
-    -- MAIN shows the label and value in the right column
-    redraw()
-    local label_found = false
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.x == 65 and entry.y == 42 and entry.text == key_name then label_found = true end
-    end
-    assert_true(label_found, "MAIN shows the " .. key_name .. " label")
-  end
-  -- an exp main param: the resonator's freq at the sweep's midpoint (200 Hz
-  -- on 20-2000) is drawn at half a turn, not at its linear 9 %
-  set_selected(1)
-  params:set("v1_freq", 20)
-  for _ = 1, 256 do context.arc.turn(1, 2, 1) end
-  next_frame(context)
-  assert_near(params:get("v1_freq"), 200, 1e-6, "256 ticks reach the exp midpoint")
-  assert_near(device.segments[2].to, math.pi, 1e-6, "ring 2 draws the exp midpoint at half a turn")
-end)
-
-test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function()
-  local context = load_strata()
-  local function screen_has(text)
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == text then return true end
-    end
-    return false
-  end
-  show_page("SETUP")
-  assert_true(screen_has("grid: 0 connected"), "no grids")
-  assert_true(screen_has("arc: none"), "no arc")
-  assert_true(screen_has("scenes: 0/8 saved"), "no scenes")
-  context.grid.plug(1, 16, 16)
-  context.grid.plug(3, 8, 8)
-  context.arc.plug(1)
-  capture_scene(3)
-  redraw()
-  assert_true(screen_has("grid: 2 connected"), "two grids")
-  assert_true(screen_has("16x16 8x8"), "grid sizes in port order")
-  assert_true(screen_has("arc: connected"), "arc connected")
-  assert_true(screen_has("scenes: 1/8 saved"), "one scene")
-  context.arc.unplug(1)
-  context.grid.unplug(3)
-  next_frame(context)
-  assert_true(screen_has("arc: none"), "unplugging the arc redraws SETUP on the next frame")
-  assert_true(screen_has("grid: 1 connected"), "unplugging a grid redraws SETUP on the next frame")
-
-  local scene_file = context.data_dir .. "strata/scenes.data"
-  assert_true(not util.file_exists(scene_file), "no scenes file yet")
-  key(3, 1)
-  assert_true(util.file_exists(scene_file), "K3 on SETUP saves scenes")
-end)
-
-test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", function()
-  local context = load_strata(); show_page("FX")
-  params:set("filter_mix", 0.8); key(3, 1); assert_equal(params:get("filter_mix"), 0)
-  key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6)
-  enc(2, 3); local before = params:get("filter_freq"); enc(3, 2)
-  assert_true(params:get("filter_freq") > before, "row 4 is filter freq")
-  -- K3 from a bypassed default turns the filter fully on
-  context = load_strata(); show_page("FX")
-  key(3, 1); assert_equal(params:get("filter_mix"), 1, "first K3 turns the filter on")
-  local function hint_text()
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.y == 62 then return entry.text end
-    end
-  end
-  redraw(); assert_equal(hint_text(), "K3:filter bypass")
-  key(3, 1); redraw(); assert_equal(hint_text(), "K3:filter on")
-end)
-
-test("FX page K3 restores the last non-zero filter mix however it was set", function()
-  load_strata(); show_page("FX")
-  enc(2, 5)                                    -- row 6: filter mix
-  enc(3, 50); assert_near(params:get("filter_mix"), 0.5, 1e-6, "E3 sets the mix to 0.5")
-  enc(3, -50); assert_equal(params:get("filter_mix"), 0, "E3 brings it to 0")
-  key(3, 1); assert_near(params:get("filter_mix"), 0.5, 1e-6, "K3 restores the mix E3 last set")
-  params:set("filter_mix", 0.3); params:set("filter_mix", 0)  -- PARAMS menu, scene recall, ...
-  key(3, 1); assert_near(params:get("filter_mix"), 0.3, 1e-6, "K3 restores a mix set through params")
-end)
-
-test("FX page rows stay apart and inside 128x64 at every row and value", function()
-  local context = load_strata()
-  params:set("mutation_enabled", 1)
-  capture_scene(8); recall_scene(8, 0)
-  show_page("FX")
-  local rows = local_value("FX_PAGE").rows
-  assert_equal(#rows, 12, "density, drift, 4 filter, 3 delay, 3 reverb rows")
-  local function screen_has(text)
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == text then return true end
-    end
-    return false
-  end
-  for _, extreme in ipairs({ "max", "min" }) do
-    for _, row in ipairs(rows) do
-      local min_value, max_value = param_range(row.param_id)
-      if row.param_id == "filter_type" then min_value, max_value = 2, 3 end  -- highpass, bandpass
-      params:set(row.param_id, extreme == "max" and max_value or min_value)
-    end
-    enc(2, -100)
-    for row = 1, #rows do
-      assert_equal(local_value("fx_row"), row, "E2 steps one row")
-      redraw()
-      assert_screen_layout(context, "FX row " .. row .. ", " .. extreme)
-      assert_true(screen_has(rows[row].label), "selected row " .. rows[row].label .. " is visible")
-      enc(2, 1)
-    end
-    assert_equal(local_value("fx_row"), #rows, "E2 stops at the last row")
-  end
-end)
-
-test("buffer-sourced voices: E3, arc ring 2 and MAIN use buf_pos", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.arc.plug(1)
-  params:set("v1_source", 3)
-  params:set("v1_buf_pos", 0.5)
-  local freq = params:get("v1_freq")
-  enc(3, 2)
-  assert_near(params:get("v1_buf_pos"), 0.52, 1e-6, "E3 moves buf_pos")
-  assert_equal(params:get("v1_freq"), freq, "E3 leaves the synth freq alone")
-  context.arc.turn(1, 2, 10); next_frame(context)
-  assert_true(params:get("v1_buf_pos") > 0.52, "arc ring 2 moves buf_pos")
-  assert_equal(params:get("v1_freq"), freq, "arc ring 2 leaves the synth freq alone")
-  assert_near(device.segments[2].to, params:get("v1_buf_pos") * math.pi * 2, 1e-9, "ring 2 shows buf_pos")
-  redraw()
-  local label, value
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 65 and entry.y == 42 then label = entry.text end
-    if entry.x == 65 and entry.y == 50 then value = entry.text end
-  end
-  assert_equal(label, "pos", "MAIN label")
-  assert_equal(value, string.format("%.2f", params:get("v1_buf_pos")), "MAIN value")
-end)
-
-test("MAIN layout holds for buffer- and input-sourced voices", function()
-  local context = load_strata(); finish_startup(context)
-  local _, set_selected = find_upvalue("selected_voice")
-  for _, source in ipairs({ 9, 10 }) do
-    for voice_idx = 1, 7 do
-      set_selected(voice_idx)
-      params:set("v" .. voice_idx .. "_source", source)
-      params:set("v" .. voice_idx .. "_buf_pos", 1)
-      params:set("v" .. voice_idx .. "_grain_mode", 2)
-      if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
-      show_page("MAIN")
-      assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
-    end
-  end
-end)
-
-local texts_on_row, hint_text = h.texts_on_row, h.hint_text
+  return dots
+end
 
 test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens the file selector", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
@@ -381,8 +94,8 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", fun
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
--- The save confirmation's 1.5 s flash: test/unit/ui_header_test.lua ("the
--- BUFFER hint flash still shows on the hint row for 1.5 s")
+-- The save confirmation's 1.5 s flash: "the BUFFER hint flash still shows on
+-- the hint row for 1.5 s" below
 
 test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
@@ -724,113 +437,53 @@ test("BUFFER page layout holds for every voice, source and buffer state", functi
   end
 end)
 
-test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destination", function()
-  local context = load_strata(); finish_startup(context)
-  show_page("LFO")
-  enc(2, 1); assert_equal(local_value("selected_lfo"), 2)
-  enc(2, 5); assert_equal(local_value("selected_lfo"), 3, "clamped to 3 LFOs")
-  enc(2, -1)
-  enc(3, 7); assert_equal(params:get("lfo_depth_2"), 7, "E3 steps depth by percent")
-  key(3, 1); key(3, 0); assert_equal(params:string("lfo_2"), "on")
-  key(3, 1); key(3, 0); assert_equal(params:string("lfo_2"), "off")
-  key(2, 1); key(2, 0); assert_equal(params:get("strata_lfo2_dest"), 2)
-  params:set("strata_lfo2_dest", #local_value("LFO_DESTINATIONS"))
-  key(2, 1); key(2, 0); assert_equal(params:get("strata_lfo2_dest"), 1, "K2 wraps to none")
-  -- MAIN is untouched by LFO page input
-  assert_equal(local_value("selected_voice"), 1)
-end)
-
-test("the LFO page redraws on every frame while it is shown, with no clock of its own", function()
-  local context = load_strata(); finish_startup(context)
-  local baseline = context.clock.pending_count()
-  show_page("LFO")
-  assert_equal(context.clock.pending_count(), baseline, "no page clock: the frame clock draws it")
-  next_frame(context)
-  local counter = count_screen_draws()
-  next_frame(context); next_frame(context)
-  assert_equal(counter.screen, 2, "each frame redraws, so the dots move")
-  show_page("BUFFER"); next_frame(context)
-  counter.screen = 0
-  next_frame(context)
-  counter.restore()
-  assert_equal(counter.screen, 0, "other pages draw only when asked")
-end)
-
--- The LFO page's waveform, dot and labels for LFO n
-local function lfo_row_drawing(context, n)
-  local top = 16 + (n - 1) * 15
-  local row = { lines = {}, rects = {}, texts = {} }
-  for _, line in ipairs(context.screen.lines) do
-    if line.y1 >= top and line.y1 <= top + 10 then table.insert(row.lines, line) end
-  end
-  for _, rect in ipairs(context.screen.rects) do
-    if rect.y >= top - 1 and rect.y <= top + 10 then table.insert(row.rects, rect) end
-  end
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.y > top and entry.y <= top + 11 then table.insert(row.texts, entry.text) end
-  end
-  return row
-end
-
-test("LFO page rows: waveform, dot from the last raw value and elapsed period, labels; cleanup stops LFOs", function()
-  local context = load_strata(); finish_startup(context)
-  local lfos = local_value("lfos")
+test("the BUFFER hint flash still shows on the hint row for 1.5 s", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
+  context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
   context.set_time(100)
-  params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
-  context.lfo.tick(lfos[1], 0.25)
-  show_page("LFO")
-  -- three rows, each labeled, and every string inside the screen
-  for n = 1, 3 do
-    local row = lfo_row_drawing(context, n)
-    assert_true(table.concat(row.texts, " "):find("L" .. n, 1, true), "row " .. n .. " labeled L" .. n)
-    assert_true(#row.lines >= 63, "row " .. n .. " draws its waveform")
-  end
-  for _, entry in ipairs(context.screen.texts) do
-    local left, right = text_span(entry)
-    assert_true(left >= 0 and right <= 128 and entry.y <= 64, "'" .. entry.text .. "' inside the screen")
-  end
-  -- every drawn shape stays inside its row, rows inside y 14-58
-  for _, line in ipairs(context.screen.lines) do
-    assert_true(line.y1 >= 14 and line.y2 <= 58 and line.y2 >= 14 and line.y1 <= 58, "line inside y 14-58")
-    assert_true(line.x1 >= 12 and line.x2 <= 75, "waveform inside x 12-75")
-  end
-  local row = lfo_row_drawing(context, 1)
-  assert_true(#row.lines >= 63, "64 px waveform ")
-  assert_equal(#row.rects, 1, "one dot for a running LFO")
-  -- reset to the floor (phase 0.75) at t 100, so at t 100 the dot is at 0.75
-  local dot = row.rects[1]
-  assert_near(dot.x + 1, 12 + 0.75 * 63, 0.51, "dot x from the phase since the reset")
-  assert_near(dot.y + 1, 16 + 10 - 0.25 * 10, 0.51, "dot y from the last raw value")
-  assert_true(table.concat(row.texts, " "):find("filt freq"), "destination label")
-  assert_true(table.concat(row.texts, " "):find("on 50%%"), "state and depth")
-  -- one second later at a 4 s period: a quarter cycle further, wrapped to 0
-  context.set_time(101); redraw()
-  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12, 0.51, "dot advanced and wrapped")
-  -- a period change keeps the phase (like the library), then advances at the new rate
-  params:set("lfo_free_1", 2)
+  key(2, 1); tap(3); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
+  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
+  assert_screen_layout(context, "BUFFER with the save confirmation")
+  key(2, 0); next_frame(context); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
+  context.set_time(101.4); redraw()
+  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
   context.set_time(101.5); redraw()
-  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.25 * 63, 0.51, "advances at the new period")
-  -- the phase offset shifts the dot, the reset trigger restarts it
-  params:set("lfo_phase_1", 50); redraw()
-  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.75 * 63, 0.51, "phase offset")
-  params:set("lfo_phase_1", 0); params:set("lfo_reset_1", 1); redraw()
-  assert_near(lfo_row_drawing(context, 1).rects[1].x + 1, 12 + 0.75 * 63, 0.51, "reset to the floor")
-  -- stopped LFOs draw no dot
-  assert_equal(#lfo_row_drawing(context, 2).rects, 0, "no dot for a stopped LFO")
-  assert_true(table.concat(lfo_row_drawing(context, 2).texts, " "):find("off 0%%"), "stopped LFO shows off")
-  -- every shape and every destination label keeps the page apart and inside the screen
-  for shape = 1, 6 do
-    for n = 1, 3 do params:set("lfo_shape_" .. n, shape) end
-    for _, dest in ipairs({ 1, 3, 12, 17, 68 }) do
-      params:set("strata_lfo2_dest", dest); params:set("lfo_depth_2", 100); redraw()
-      assert_screen_layout(context, "LFO shape " .. shape .. ", dest " .. dest)
-      for _, line in ipairs(context.screen.lines) do
-        assert_true(line.y1 >= 14 and line.y2 <= 58 and line.y2 >= 14 and line.y1 <= 58, "shape " .. shape .. " inside rows")
-      end
-    end
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the normal hint after 1.5 s")
+  -- an empty buffer: nothing saved, the hint says so
+  context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
+  context.clear_engine_calls()
+  key(2, 1); tap(3); key(2, 0); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
+  assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
+  assert_screen_layout(context, "BUFFER with the empty-buffer flash")
+  -- one clock ends the flash: it sleeps 1.5 s, clears the flash (even if it
+  -- woke a little early) and asks for a redraw
+  local slot = S.lib.ui_flash.slots.hints
+  local flash_clock = slot.clock
+  assert_true(flash_clock ~= nil, "the flash has a clock")
+  local flash_sleep
+  for _, entry in ipairs(context.clock.sleep_log) do
+    if entry.id == flash_clock then flash_sleep = entry.amount end
   end
-  -- cleanup turns a running LFO off
-  params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1, "cleanup stops LFO 3")
+  assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
+  key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
+  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is canceled")
+  flash_clock = slot.clock
+  context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
+  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
+  assert_equal(slot.clock, nil)
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the next frame shows the normal hint")
+  assert_true(#page_dots(context) == 8, "the hint flash leaves the header alone")
+  -- cleanup cancels a pending flash clock
+  key(2, 1); tap(3); key(2, 0)
+  flash_clock = slot.clock
+  cleanup()
+  assert_equal(context.clock.threads[flash_clock], nil, "cleanup cancels the flash clock")
+  assert_equal(slot.clock, nil)
 end)
 
 end

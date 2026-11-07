@@ -1,0 +1,58 @@
+## Must not break
+
+- The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
+- Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`.
+- The FX faders follow changes made anywhere through `fx_fader_changed()`, except during a smooth scene transition, which redraws the grid once per step.
+- Rows 8 and 16 work and draw the same on every page.
+
+## Owns
+
+- `lib/grid/layout_256.lua` (`S.lib.grid_layout_256`): `grid_key_256`, `grid_key_256_transport`, `grid_key_256_lock`, `grid_redraw_256`, `grid_redraw_256_buffers`, `grid_redraw_256_sources`, `grid_redraw_256_page_row`, `grid_redraw_256_transport`, `grid_redraw_256_lock` (global); it registers `S.registry.grid_layouts["256"]`.
+- Its unit tests: `test/unit/grid_layout_256_test.lua` (with the fader maths of `lib/grid/faders.lua`, `docs/notes/lua/grid-core.md`).
+
+## Pages
+
+Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10; rows 14-15 voice select/toggle and pattern clear/randomize; row 16 lock.
+
+## Parameter page (page 2)
+
+- Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` of `fader_param_ids(S.grid_voice_select)` on rows 9-12 (`GRID_LAYOUT.param_page_row`, `fader_rows`, `fader_first_row`; `fader_width` 16 columns). Row 13: fader pages, selected 15, available 4.
+- Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`; a press calls `set_fader_param()`.
+- Row 14 columns 1-7 select the voice (`select_grid_voice`).
+
+## Scene page (page 3)
+
+Keys:
+- **Row 1**: scene recall (instant): press to load scene 1-8 at once.
+- **Row 2**: scene recall with transition: press to crossfade into scene 1-8.
+- **Row 3**: scene save: hold 0.5 s to capture the current state to scene 1-8 (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
+- **Row 5, column 1**: scene sequencer on/off.
+- **Row 5, columns 3-10**: sequence length (1-8 scenes).
+
+LEDs:
+- Populated scenes: 8 (row 1) or 6 (row 2).
+- Current scene: 15 (in row 1).
+- Empty scenes: 2.
+- Active sequencer: 15, and the next scene position is shown.
+- Sequence length: 8 for included scenes, 2 for excluded.
+
+It follows changes made anywhere (issue #49):
+- `recall_scene_instant` sets `S.current_scene` before its closing grid redraw, so an instant recall repaints the grid once with the scene lit;
+- `recall_scene` redraws the grid after a smooth recall's start (the fade's first step redraws before `S.current_scene` is set);
+- the `scene_sequence_length` action redraws it (PARAMS, CC maps, PSETs);
+- `scene_sequencer_start` redraws it as it turns the sequencer on.
+
+## Buffers / FX page (page 4)
+
+`grid_key_256` has an explicit page 4 branch (`page(port) == 4`), so page 4 never falls through to the pattern page.
+- Row 1 (`GRID_LAYOUT.buffer_record_row`), columns 1-`NUM_BUFFERS`: `record_key(x)` (`record_buffer`; a second press stops early).
+- Row 2 (`GRID_LAYOUT.buffer_clear_row`): `clear_key(x)` (`clear_buffer`).
+- `grid_redraw_256_buffers`: row 1 at `record_level` (15 recording, 8 loaded, 2 empty); row 2 at `CLEAR_LEVEL` (4).
+- Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`; a bar at 8 up to the value, the value's column at 15).
+  - The filter/delay param actions call `fx_fader_changed()` (`lib/params_setup.lua`), which redraws the grid while page 4 is shown, so the faders follow the screen, the arc and scene recalls.
+  - During a smooth scene transition (`S.scene_transition_active`) it does not redraw: the transition loop redraws once per step.
+- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input). Columns 11-16 do nothing.
+  - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
+  - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.
+- Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`).
+- Smaller grids have no buffers / FX page: buffers and sources are on the BUFFER screen page and in params.

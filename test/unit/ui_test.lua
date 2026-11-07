@@ -11,20 +11,6 @@ local deep_copy, PAGE_TITLES, show_page = h.deep_copy, h.PAGE_TITLES, h.show_pag
 local count_screen_draws, screen_shows = h.count_screen_draws, h.screen_shows
 local assert_drawn_on_next_frame, tap = h.assert_drawn_on_next_frame, h.tap
 
-test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
-  local context = load_strata(); finish_startup(context)
-  assert_equal(local_value("ui_page"), 1)
-  local density = params:get("master_density")
-  enc(1, 1); assert_equal(local_value("ui_page"), 2)
-  assert_equal(params:get("master_density"), density, "E1 no longer changes density")
-  enc(1, 10); assert_equal(local_value("ui_page"), #PAGE_TITLES, "E1 stops at the last page")
-  enc(1, -10); assert_equal(local_value("ui_page"), 1)
-  enc(2, 1); assert_equal(local_value("selected_voice"), 2)
-  local before = params:get(main_param_id(2)); enc(3, 1)
-  assert_true(params:get(main_param_id(2)) ~= before, "E3 moves the main param on MAIN")
-  key(3, 1); assert_true(local_value("frozen")[2], "K3 locks a running voice on MAIN")
-end)
-
 test("E1 steps one page per detent: no acceleration, 4 ticks per page", function()
   local context = load_strata()
   local encoders = context.encoders
@@ -43,7 +29,7 @@ test("E1 steps one page per detent: no acceleration, 4 ticks per page", function
   assert_equal(local_value("ui_page"), 1, "eight ticks back return two pages")
 end)
 
-test("every encoder, key and arc control is safe on every page; arc button only acts on MAIN", function()
+test("every encoder, key and arc control is safe on every page; the arc button acts only through arc_button", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   context.grid.plug(1, 16, 16)
@@ -56,7 +42,8 @@ test("every encoder, key and arc control is safe on every page; arc button only 
     for n = 1, 3 do key(n, 1); key(n, 0) end
     for ring = 1, 4 do context.arc.turn(1, ring, 5); context.arc.turn(1, ring, -5) end
     arc_redraw()
-    if page ~= 1 then
+    -- a page without arc_button (all but MAIN today) leaves voices alone
+    if not local_value("S").registry.pages[page].arc_button then
       local frozen = deep_copy(local_value("frozen"))
       local active = {}
       for voice_idx, voice in ipairs(local_value("voices")) do active[voice_idx] = voice.active end

@@ -177,27 +177,6 @@ test("the stub's set_raw keeps the raw value unrounded like norns", function()
   assert_true(context ~= nil, "loaded")
 end)
 
-test("ALT+E3 on FX is fine and ALT+E2 on SETUP steps whole values", function()
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  show_page("FX")
-  for index, row in ipairs(S.FX_PAGE.rows) do
-    if row.param_id == "filter_freq" then S.fx_row = index end
-  end
-  assert_equal(S.FX_PAGE.rows[S.fx_row].param_id, "filter_freq", "FX has a filter_freq row")
-  local r0 = params:get_raw("filter_freq")
-  key(1, 1); enc(3, 1); key(1, 0)
-  assert_near(params:get_raw("filter_freq") - r0, 0.001, 1e-9, "ALT+E3 on FX is fine")
-  r0 = params:get_raw("filter_freq")
-  enc(3, 1)
-  assert_near(params:get_raw("filter_freq") - r0, 0.01, 1e-9, "E3 on FX is a whole step")
-  -- SETUP: ALT+E2 (the MIDI port) stays in whole steps
-  show_page("SETUP")
-  params:set("midi_device", 1)
-  key(1, 1); enc(2, 1); key(1, 0)
-  assert_equal(params:get("midi_device"), 2, "ALT+E2 on SETUP steps the port")
-end)
-
 test("arc rings go through the sweep", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)

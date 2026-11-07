@@ -27,7 +27,7 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 ## Performance Workflow
 
 1. Build up layers by activating voices one at a time
-2. Randomize unfrozen voices to create variation
+2. Randomize unlocked voices to create variation
 3. Use master density for dynamic swells and fades
 4. Lock/unlock voices to create structural changes
 5. Set up cross-modulation for interdependent voice relationships
