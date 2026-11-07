@@ -25,9 +25,11 @@ return function(S)
     if n == 1 then return "master_density" end
     if n == 2 then return main_param_id(S.selected_voice) end
     if n == 3 then
-      -- an input voice's main param (ring 2) is grain size: ring 3 is pitch
+      -- an input voice's main param (ring 2) is grain size: ring 3 is its
+      -- third MAIN field, grain pitch (main_fields, lib/pages/main.lua)
       local uses_input = not voice_uses_synth(S.selected_voice) and not voice_uses_buffer(S.selected_voice)
-      return prefix .. (uses_input and "grain_pitch" or "grain_size")
+      if uses_input then return main_fields(S.selected_voice)[3] end
+      return prefix .. "grain_size"
     end
     if n == 4 then return prefix .. "grain_density" end
     return nil

@@ -31,7 +31,7 @@ MAIN (`arc_main_delta`/`arc_main_redraw`, with ALT `arc_main_alt_delta`/`arc_mai
 - Ring 4: the selected voice's grain density.
 - ALT (`ARC_MAIN_ALT_KEYS`): grain pitch, grain spread, level (`amp`), pan. Sub has no pan (`S.voices[i].params.pan == nil`): its ring 4 is dark and ignores turns.
 - Every ring, plain and ALT, sweeps through `arc_sweep_param` and draws through `arc_ring_fill_param` (pan bipolar).
-- The button is MAIN's `arc_button` (set by `lib/pages/main.lua`: K3's start/stop of the selected voice).
+- The button is MAIN's `arc_button` (`start_stop_selected_voice`, set by `lib/pages/main.lua`: K3, start or stop the selected voice).
 
 VOICE (`arc_voice_delta`/`arc_voice_redraw`):
 - `voice_page_group(voice_page_rows(S.selected_voice), S.cursors.voice)` gives up to four row indices; ring n edits the n-th. Control rows sweep (`arc_sweep_param`), option and number rows (grain envelope and mode, the mod sources, the source) step one whole value per `ARC_VOICE.ticks_per_step` (20) ticks, under `"voice:<n>"`. A local `carried_param[n]` remembers the param ring n's ticks were turned on and forgets them (`forget_arc_ticks`) when the row is another param (the cursor's group or the selected voice changed).
