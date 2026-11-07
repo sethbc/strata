@@ -46,6 +46,7 @@ S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
 S.lib.ui_cursors = include("lib/ui/cursors")(S)
 S.lib.ui_header = include("lib/ui/header")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
+S.lib.ui_field_list = include("lib/ui/field_list")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
