@@ -65,16 +65,16 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 |-------|------|--------|
 | 10 | give the clock back the tempo handler found at init, if the script's is still installed (`restore_tempo_change_handler`) | `lib/params_setup.lua` |
 | 20 | give the norns menu its own `_menu.set_mode` back (`unwatch_menu_opening`), before anything that can fail | `lib/ui/menu_watch.lua` |
-| 30 | save the scenes (skipped, with a message, if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
-| 40 | save the buffer paths (skipped the same way for buffers.data) | `lib/buffers.lua` |
+| 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
+| 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |
 | 60 | stop the frame clock | `lib/ui/frame.lua` |
 | 70 | stop the drift metro | `lib/mutation.lua` |
 | 80 | stop the mutation metro and set `mutation_enabled` to 0, so param and state agree | `lib/mutation.lua` |
 | 90 | stop the pattern clock | `lib/sequencer.lua` |
-| 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0, then `scene_sequencer_stop`) | `lib/scenes.lua` |
+| 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
-| 120 | stop the LFOs (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
+| 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
 | 140 | cancel the BUFFER page's flash clock | `lib/pages/buffer.lua` |
 | 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
@@ -84,7 +84,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 
 Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).
-- The test "cleanup runs every registered step in today's order" logs each step's observable effect. It fails if a step moves, merges with another or is missing. Add the new step's effect to its `CLEANUP_STEPS` list.
+- The test "cleanup runs every registered step in today's order" (`test/unit/structure_test.lua`) logs each step's observable effect. It fails if a step moves, merges with another or is missing. Add the new step's effect to its `CLEANUP_STEPS` list.
 
 Clocks: cancel the running one before starting its replacement.
 

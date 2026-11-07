@@ -11,7 +11,7 @@
 ## Owns
 
 `lib/scenes.lua` (`S.lib.scenes`) holds the whole scene system:
-- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`);
+- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`);
 - `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION`;
 - capture, recall, transitions, the scene sequencer, migration, validation and scenes.data;
 - the global `with_traceback` error handler;
@@ -194,7 +194,7 @@ In the PARAMS menu (strata_scenes section):
   - On any failure (error, unknown version, invalid data after migration) it prints a message and keeps the current scenes (empty at startup).
   - It preserves the file: it is renamed to `scenes.data.bak`, so the save in `cleanup()` cannot destroy it. If the rename fails, `S.scene_autosave_blocked` makes `cleanup()` skip the auto-save.
   - Missing slots in a valid file are filled with empty scenes.
-- **Auto-save**: `cleanup()` saves the scenes when the script exits (step 30).
+- **Auto-save**: `cleanup()` saves the scenes when the script exits (step 30), but only once `load_scenes_from_disk()` has run in this session (`S.scenes_loaded`, set when it returns). A start that failed before init's loads (the engine did not load, an error earlier in `init`) therefore never overwrites the saved file with the empty in-memory state (#72). buffers.data has the same guard (`docs/notes/lua/buffers.md`).
 - **Auto-load**: `init()` loads them on startup.
 - **Manual**: the PARAMS triggers "save scenes to disk" and "load scenes from disk"; SETUP K3 saves.
 - **What is saved**: all 8 slots, their populated state and their data. Scenes persist across reboots, building a library of sonic palettes.

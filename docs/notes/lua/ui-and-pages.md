@@ -133,7 +133,7 @@ Header indicators:
 - `S1` to `S8` at the top right shows the current scene (`S.current_scene`): level 10 while the scene sequencer runs, 6 when static.
 - The mutation indicator is abbreviated to `[M]` to make room for the scene indicator.
 
-Layout tests (`test/run.lua`), on every page and for every selected voice:
+Layout tests (`test/unit/pages_test.lua`, through `assert_screen_layout` in `test/helpers.lua`), on every page and for every selected voice:
 - no two strings on a row overlap, and nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise);
 - `dens:` starts at least 4 px after the page title;
 - a hint row is drawn at y=62;

@@ -10,7 +10,7 @@
 ## Owns
 
 `lib/buffers.lua` (`S.lib.buffers`):
-- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine.md`, Audio Sources, Lua side), `S.buffer_polls`, `S.buffer_record_clocks`, `S.buffers_restored`, `S.buffer_autosave_blocked`;
+- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine.md`, Audio Sources, Lua side), `S.buffer_polls`, `S.buffer_record_clocks`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
 - recording, loading, clearing and saving (`record_buffer`, `load_buffer`, `clear_buffer`, `save_buffer`, ...);
 - the `bufferState` and `bufferLoadFailed` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`), whose polls `init` starts into `S.buffer_polls`;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
@@ -26,7 +26,7 @@ Location: `~/dust/data/strata/buffers.data` (`buffer_data_file()`).
 Saving (`save_buffers_to_disk()`):
 - writes `{version = BUFFER_DATA_VERSION, paths = {[n] = S.buffers[n].path or S.buffers[n].missing_path or ""}}`;
 - per slot, the loaded file or scratch take, or a remembered file that was missing on start;
-- `cleanup()` calls it after the scenes save (step 40).
+- `cleanup()` calls it after the scenes save (step 40), but only once `load_buffers_from_disk()` has run in this session (`S.buffers_loaded`, set when it returns), so a start that failed before init's restore never overwrites the saved paths with empty slots (#72).
 
 Loading (`load_buffers_from_disk()`, from `init` after `load_scenes_from_disk()`):
 - resets `S.buffers_restored` and `S.buffer_autosave_blocked` first;

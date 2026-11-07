@@ -11,11 +11,14 @@
 
 ## Owns
 
-`test/run.lua`, `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`. The per-module test layout (one unit file per module) is described in CLAUDE.md, Development & Testing.
+`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; CLAUDE.md's module table names each), `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`.
 
 ## The Lua test run
 
-`lua test/run.lua` and `luajit test/run.lua` load `strata.lua` into norns stubs (`test/norns_stubs.lua`) and run the behavior tests. They exit non-zero on failure. The run includes the static sync check.
+- `lua test/run.lua` and `luajit test/run.lua` load every `test/unit/*_test.lua` (listed and sorted by `load_unit_files` in `test/helpers.lua`, so a new unit file needs no runner edit) and run their tests. With an argument (`lua test/run.lua scenes`) they load only the unit files whose name contains it.
+- Each unit file is `return function(h) ... end`: it registers its tests with `h.test(name, fn)` and takes the helpers from `h`.
+- `test/helpers.lua` holds the harness: the stubs, the test registry and `run_test`, the assertions, `load_strata`, `find_upvalue`/`local_value`, the clock drivers and the helpers several unit files share.
+- The tests load `strata.lua` into norns stubs (`test/norns_stubs.lua`). The run exits non-zero on failure and includes the static sync check.
 
 ### Engine stub
 
@@ -83,7 +86,7 @@ Tests built on it:
 - Only `strata.lua` includes, each module once, by its `lib/` path. A test checks this, and that a reload builds an `S` sharing no table with the last one.
 - `load_strata { source = text }` loads a patched copy of `strata.lua`, and `load_strata { module_sources = { ["lib/x"] = text } }` patched modules. `patched_script(pattern, replacement)` builds either from whichever file holds the pattern.
 - `read_lua_sources()` returns the script's Lua files (`strata.lua`, then `lib/**/*.lua`) for the tests that read the source.
-- `MODULE_HOMES` maps a module path to the global functions it must define.
+- `MODULE_HOMES` (`test/unit/structure_test.lua`) maps a module path to the global functions it must define.
 - Each `load_strata` gets a data directory of its own, named by a counter (tests reseed `math.random`, so a random name could repeat). `load_strata { data_subdir = name }` shares one between loads (the persistence tests).
 
 ### Module safety nets
@@ -123,7 +126,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 
 ### Libraries
 
-- `tab.save`/`tab.load`: lib/tabutil.lua's, ported unchanged. The `-- Table: {n}` layout; numbers go through `tostring`, so they keep 14 significant digits as on norns. A plain `return {...}` file loads as nil, so test fixtures are written with `tab.save`, or the `tabutil_text(value)` helper in `test/run.lua`.
+- `tab.save`/`tab.load`: lib/tabutil.lua's, ported unchanged. The `-- Table: {n}` layout; numbers go through `tostring`, so they keep 14 significant digits as on norns. A plain `return {...}` file loads as nil, so test fixtures are written with `tab.save`, or the `tabutil_text(value)` helper in `test/helpers.lua`.
 - `require("lfo")`: `test/stub_lfo.lua`, compared line by line with `lua/lib/lfo.lua`.
   - The library's `lfo_*` params and actions; `reset_phase` and `set("period")` reset and rescale `phase_counter` as the library does.
   - Nothing runs on its own: `context.lfo.tick(instance, raw)` performs one library step, with `raw` 0..1 as the shape output.
@@ -174,7 +177,7 @@ Driving it:
 - `clock.advance()` is one scheduler step, a matron tick: `util.time()` moves to the earliest wake-up (never back), the events due then are fixed before any runs, and they fire in slot order. A sleep due at the step's time leaves a sync due at that time to the next step, at the same time. With the frame clock running, a step is usually a frame tick.
 - `clock.advance_until(id)` runs the scheduler one event at a time until coroutine `id` wakes once, every clock due before it running first. It fails at once when `id` is not waiting ("nothing is pending" when no clock is) or another clock cancels it first.
 - `clock.run_for(seconds, latency)` runs the scheduler for `seconds`, each coroutine `latency` (default 0) after its wake-up and never before `util.time()`, so a clock sleeping many short steps falls behind one long sleep, as on norns. `util.time()` ends at the start time plus `seconds`.
-- `test/run.lua` helpers drive the script through it:
+- Helpers in `test/helpers.lua` drive the script through it:
   - `finish_startup(context)` runs the clocks for init's start-up sleep (`STARTUP.voice_delay_seconds`, 0.5 s; voice 2 starts);
   - `next_frame(context)` runs them to the frame clock's next tick (one frame);
   - `wake(context, name)` to the next wake of the clock in script local `name` (`"pattern_clock"`, `"scene_transition_clock"`);
@@ -184,7 +187,7 @@ Driving it:
 Errors in clocks:
 - An error raised while the scheduler resumes a coroutine is not raised. norns prints it through `l_report` and keeps every other clock running; the coroutine stays dead in `clock.threads`, as norns never cancels it.
 - The stub records it, and `context.clock.take_errors()` claims the recorded errors.
-- The harness fails any test that leaves one unclaimed, so an error cannot pass silently (`run_test` in `test/run.lua`; a test that fails anyway gets them added to its own error).
+- The harness fails any test that leaves one unclaimed, so an error cannot pass silently (`run_test` in `test/helpers.lua`; a test that fails anyway gets them added to its own error).
 - A coroutine that cancels itself and then sleeps errors when it wakes (norns resumes the coroutine it no longer has).
 
 ## The engine check
