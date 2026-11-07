@@ -3,7 +3,11 @@
 # run test/engine_check.scd, which boots a local scsynth (output routed to a
 # private bus, so it is silent) and exercises every engine command.
 #
-# usage: test/run_engine_check.sh [path/to/norns]
+# usage: [STRATA_SC_PORT=57141] test/run_engine_check.sh [path/to/norns]
+#   STRATA_SC_PORT is the UDP port scsynth boots on (default 57110). Give each
+#   run its own port to run checks side by side (one per worktree); avoid
+#   sclang's own language port (57120, and the few above it when several
+#   sclang processes run). Two runs on the same port collide.
 #   NORNS_DIR / SCLANG environment variables override the defaults. sclang is
 #   $SCLANG if set, else `sclang` on PATH, else the macOS SuperCollider app.
 #   scsynth needs a running JACK server on Linux (see README, Development).
@@ -47,8 +51,8 @@ YAML
 # 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
-# command) signals every descendant, so no scsynth is left holding port
-# 57110. stdbuf makes sclang's output line-buffered, so an error is in the
+# command) signals every descendant, so no scsynth is left holding its
+# port. stdbuf makes sclang's output line-buffered, so an error is in the
 # output file while sclang waits (block-buffered, it never would be).
 sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
 compile_error='^ERROR: (syntax error|Command line parse failed|file .* parse failed)|Library has not been compiled successfully'
@@ -69,7 +73,7 @@ output="$work_dir/output.txt"
 set +e
 # started from the temp dir: anything the check writes to its working
 # directory is removed with it, never left in the caller's directory
-(cd "$work_dir" && exec "$@" "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1 &
+(cd "$work_dir" && STRATA_CHECK_TMPDIR="$work_dir" exec "$@" "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1 &
 sclang_pid=$!
 # Without a timeout command this loop enforces the limit itself
 elapsed=0
