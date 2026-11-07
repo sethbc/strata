@@ -45,6 +45,7 @@ S.lib.ui_params = include("lib/ui/params")(S)
 S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
 S.lib.ui_cursors = include("lib/ui/cursors")(S)
 S.lib.ui_header = include("lib/ui/header")(S)
+S.lib.ui_flash = include("lib/ui/flash")(S)
 S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_field_list = include("lib/ui/field_list")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
@@ -203,8 +204,9 @@ function key(n, z)
   request_redraw()
 end
 
--- Redraw: the header, the page record's body (draw), then the hint row
--- from its hints(alt_held)
+-- Redraw: the header, the page record's body (draw), then the hint row:
+-- the "hints" flash while one shows (lib/ui/flash.lua), else the record's
+-- hints(alt_held)
 function redraw()
   -- the open file selector owns the screen: norns' own redraw() calls (as
   -- the norns menu closes) and Strata's draw the file list, never the page
@@ -217,7 +219,7 @@ function redraw()
   screen.clear()
   draw_header()
   record.draw()
-  draw_hints(record.hints(S.alt_held))
+  draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held))
   screen.update()
 end
 
