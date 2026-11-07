@@ -47,7 +47,16 @@ return function(S)
     return string.format("dur %.0fs", params:get(field_id))
   end
 
+  -- The confirmation counts only on the slot it was asked for
+  local function armed_here()
+    return S.scenes_page.armed_slot == S.cursors.scene
+  end
+
   local function redraw_scenes()
+    if S.scenes_page.armed_slot and not armed_here() then
+      S.scenes_page.armed_slot = nil
+      S.lib.ui_flash.start("hints", nil)
+    end
     local cursor = S.cursors.scene
     for slot = 1, NUM_SCENES do
       local x, y = slot_position(slot)
@@ -84,6 +93,10 @@ return function(S)
   end
 
   local function scenes_hints(alt_held)
+    if S.scenes_page.armed_slot and not armed_here() then
+      S.scenes_page.armed_slot = nil
+      S.lib.ui_flash.start("hints", nil)
+    end
     if alt_held then return "K3:save" end
     if S.cursors.scene > NUM_SCENES then return "E2:move E3:edit" end
     return "K2:fade K3:recall"

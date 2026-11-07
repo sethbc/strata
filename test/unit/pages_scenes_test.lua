@@ -39,8 +39,7 @@ test("SCENES shows eight slots in two columns", function()
     assert_true(entry, "slot " .. slot .. " number drawn")
     if slot <= 4 then left_x = left_x or entry.x; assert_equal(entry.x, left_x, "slot " .. slot .. " in the left column")
     else right_x = right_x or entry.x; assert_equal(entry.x, right_x, "slot " .. slot .. " in the right column") end
-    if slot >= 2 then assert_true(entry.y > number_entry(slot <= 4 and slot - 1 or math.max(slot - 1, 5)).y or slot == 5,
-      "rows descend") end
+    if slot ~= 1 and slot ~= 5 then assert_true(entry.y > number_entry(slot - 1).y, "rows descend in a column") end
   end
   assert_true(right_x > left_x, "two columns")
   -- a box per slot: filled when populated
@@ -142,6 +141,17 @@ test("moving the cursor disarms the overwrite", function()
   redraw(); assert_equal(hint_text(context), "K3 again: overwrite S4", "S4 asks for its own")
   alt_tap(3)
   assert_true(scene_data(S, 4) ~= s4, "S4's own second press saves")
+end)
+
+test("the overwrite flash goes when the cursor leaves the slot by another route", function()
+  local context, S = started_on_scenes()
+  capture_scene(3)
+  enc(2, 2); alt_tap(3)
+  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S3", "armed")
+  S.cursors.scene = 6   -- as the arc moves it
+  redraw()
+  assert_true(hint_text(context) ~= "K3 again: overwrite S3", "no prompt over another slot")
+  assert_equal(S.scenes_page.armed_slot, nil, "disarmed")
 end)
 
 test("SCENES hints", function()
