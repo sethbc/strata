@@ -1,15 +1,24 @@
 -- strata.lua
 -- ambient granular layers
+-- v3.1.0
 --
--- E1: page (MAIN VOICE SEQ FX LFO
---     BUFFER SCENES SETUP)
--- MAIN: E2 select voice, E3 main param,
---       K2 randomize, K3 start/lock
--- FX: E2 select row, E3 adjust,
---     K3 filter bypass/on
--- LFO: E2 select LFO, E3 depth,
---      K2 destination, K3 on/off
--- SETUP: E2 MIDI port, E3 channel mode
+-- E1: page   K1 held: ALT
+-- MAIN: E2 voice, E3 field,
+--   K2 next field, K3 start/stop,
+--   ALT+K2 randomize, ALT+K3 lock
+-- VOICE: E2 row, E3 value,
+--   K2/K3 prev/next section
+-- SEQ: E2 step, E3 level,
+--   K2 play/stop, K3 step on/off
+-- FX: E2 row, E3 value,
+--   K3 bypass/on
+-- LFO: K2/K3 select, E2 setting,
+--   E3 value, ALT+K3 on/off
+-- BUFFER: E2 buffer, E3 field,
+--   K2 load, K3 record/stop
+-- SCENES: E2 slot, K2 fade,
+--   K3 recall, ALT+K3 save
+-- SETUP: E2 field, E3 value
 --
 -- MIDI: notes play voices 1-7 on
 -- channels 1-7 (or the selected voice)

@@ -1,6 +1,6 @@
 # Strata development status
 
-Last updated 2026-11-07, after the 3.1 Wave 0b notes split. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
+Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
 
 ## Where things are
 
@@ -8,6 +8,7 @@ Last updated 2026-11-07, after the 3.1 Wave 0b notes split. This file is the han
   - 3.0 (sample and input sources, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, paged screen) through PR #3, and CI through PR #4.
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
   - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
+  - 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes and the release.
 - **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
@@ -16,11 +17,11 @@ Last updated 2026-11-07, after the 3.1 Wave 0b notes split. This file is the han
 - **CI pins:** norns commit `227aa044` (the engine is compiled against its `sc/core`), SuperCollider `1:3.13.0+repack-1ubuntu3` (Ubuntu 24.04's package; norns ships 3.13.0) and `actions/checkout` by commit. The workflow's comments say how to move each pin.
 - **Docs layout:**
   - CLAUDE.md is an index: the rules every change needs, the engine command table, how to run the checks, the "Working in parallel" rules, and a table mapping each module to its notes file and its unit tests. Keep it short: put module details in that module's notes file.
-  - The Lua notes are one file per module under docs/notes/lua/ (state and voices, engine sync, buffers, LFOs, mutation, scenes, MIDI, params, UI and pages, arc, grid and sequencer, the test harness, and the version history). Each opens with "## Must not break". `docs/notes/lua.md` now only maps the old sections to the new files; it stays while `docs/notes/engine.md`, a comment in `strata.lua` and the docs tests (`test/unit/docs_test.lua`, `test/helpers.lua`) still name it.
+  - The Lua notes are one file per module under docs/notes/lua/ (state and voices, engine sync, buffers, LFOs, mutation, scenes, MIDI, params, the UI core, the arc core and page rings, the grid core, the sequencer, the test harness and the version history), plus one per screen page (docs/notes/lua/pages/) and per grid layout (docs/notes/lua/grid/). Each opens with "## Must not break"; CLAUDE.md folds in the rules that span modules. `docs/notes/lua.md` now only maps the old sections to the new files; it stays while `docs/notes/engine.md`, a comment in `strata.lua` and the docs tests (`test/unit/docs_test.lua`, `test/helpers.lua`) still name it.
   - `docs/notes/engine.md` is the engine's implementation reference. It splits per module with the engine in 3.2.
   - `docs/design/3.0-design.md` is the 3.0 design, still the reference for behavior; CHANGELOG.md's 3.0 "Deviations from the design" and the later entries say where the code differs.
-  - `docs/design/3.1-3.6-roadmap.md` is the agreed order and scope of the next releases (3.1 to 3.6) with the decisions taken on it. Each release still gets its own design document before code.
-  - README.md is a short overview, quick start and index; the user documentation is one page per area under docs/user/ (`docs/user/controls.md`, `docs/user/grid.md`, ...). CHANGELOG.md holds the per-release changes, and this file the open items and decisions.
+  - `docs/design/3.1-3.6-roadmap.md` is the agreed order and scope of the next releases (3.1 to 3.6) with the decisions taken on it. Each release still gets its own design document before code: `docs/design/3.1-design.md` (shipped as 3.1.0) and `docs/design/3.2-design.md` (approved). Implementation plans are under docs/superpowers/plans/.
+  - README.md is a short overview, quick start and index; the user documentation is one page per area under docs/user/ (`docs/user/controls.md`, `docs/user/grid.md`, ...), with one page per screen page under docs/user/pages/ and per grid size under docs/user/grid/. CHANGELOG.md holds the per-release changes (pull requests add fragments under changes/, merged at each release), and this file the open items and decisions.
   - The 3.0 and 3.0.1 implementation plans were removed in 3.0.2; git history keeps them.
   - The tests check the maintained docs (CLAUDE.md, README.md, this file and every `.md` under docs/notes/, recursively, and docs/user/): CLAUDE.md's command table must match the engine, no `engine.<name>(` may name a command the engine lacks, every path under docs/, test/, .github/ or lib/ they name must exist, relative links resolve from each doc's folder, and every docs/notes/lua/ file opens with "## Must not break".
 
@@ -32,6 +33,7 @@ Last updated 2026-11-07, after the 3.1 Wave 0b notes split. This file is the han
   - It uses `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app.
   - It stops after `$ENGINE_CHECK_TIMEOUT` seconds (570 by default, below CI's 600) and at once on a compile error.
   - Each run boots scsynth on the UDP port in `$STRATA_SC_PORT` (57110 by default). Runs on different ports can overlap, for example one per worktree (`STRATA_SC_PORT=57141 test/run_engine_check.sh`); avoid 57120 and the few ports above it, which sclang takes for itself when several run. Two runs on the same port collide, so on a shared machine give each its own port or wrap the runs in a lock, for example `flock /tmp/strata-engine-check.lock test/run_engine_check.sh`.
+- **Page renders** (on demand, not in CI): `lua test/render_pages.lua <dir>` then `python3 test/render_pages.py <dir> --font ~/src/norns/resources/norns.ttf` (needs Pillow) draws every page state as a PNG. The layout tests catch overlaps on one baseline and text off-screen; the renders are the check for text over a line or box and for strings crowding on nearby baselines.
 - **Engine check on Linux:** install `supercollider-language`, `supercollider-server` and `jackd2`. scsynth needs a JACK server, and a dummy driver needs no sound card. Start one in the background, then run the check headless:
 
   ```sh
@@ -41,19 +43,27 @@ Last updated 2026-11-07, after the 3.1 Wave 0b notes split. This file is the han
 
   If scsynth does not boot, check that JACK is running (`jack_lsp` fails when it is not) and start `jackd` again. Run JACK at 48 kHz, like norns.
 
-## What 3.0.2 changed
+## What 3.1 changed
 
-CHANGELOG.md has every fix. In short:
-- **Engine:** a fixed 0.1 s `PitchShift` window and 128-grain tables, and at most one live, one fading and one cutting grain synth per voice on every path, so seven voices at large grain sizes fit norns' 8 MB real-time pool (about 6.9 MB at the peak). The Resonator's level (it peaked about 23 and drove the master limiter), the pitch of buffers from files not at 48 kHz, fades before a played buffer slot changes, pan for buffer and input voices, NaN guards before the effects and in cross-modulation, fades for release tails before their slot changes, and engine-side reports of failed loads (`bufferLoadFailed`).
-- **Lua:** `fileselect` required (BUFFER K2 crashed on norns), a 15 fps frame clock for every screen and arc redraw, arc rings at their maximum and on any port, an ASCII MAIN voice list, grid LEDs, sequenced transitions that finish, the tempo param following the clock, randomize and mutations on each param's curve, start-up and scene edge cases.
-- **Tests:** the stubs follow norns' and matron's own code (arc, list, fileselect, clock scheduler, tabutil, params, menu routing); the engine stub range-checks every argument and param name from the engine source; the engine check runs with norns' memory and measures pitch and level. 210 Lua tests.
+CHANGELOG.md has every change. In short:
+- **Pages:** eight (MAIN, VOICE, SEQ, FX, LFO, BUFFER, SCENES, SETUP). VOICE (every voice param), SEQ (all seven patterns) and SCENES (the slots and the sequencer's fields) are new; every page has a header with page dots and indicators, and FX, LFO, BUFFER and SETUP have field cursors.
+- **Keys:** K1 held as ALT through `alt_action`; ALT+E3 fine adjustment; center detents for ranges through 0; lock (stored as `frozen`) on ALT+K3; randomize on MAIN's ALT+K2 with a 5 s undo.
+- **Grid and arc:** pages and holds per grid, step levels from a second key, half-second scene saves, fader and sources pages on the 16×8 and 8×16, pattern halves on the 8×8, copy/paste on the 16×16; arc rings on every page but SETUP, ALT rings on MAIN, bipolar fills and a per-page button.
+- **Code:** `strata.lua` split into `lib/` modules with registries (pages, params, grid layouts, start, cleanup), so features own disjoint files. No engine change; the one default change is LFO depth 25%.
+- **Tests:** 457 Lua tests, in one unit file per module, page, grid layout and the arc's page rings.
 
 ## Open items
 
-- **Next: 3.1 Wave 0**, the restructure for parallel work (module split, then tests, notes and process split). Wave 0a, the module split, is merged (#69): `strata.lua` holds the entry points and every part of the script is a `lib/` module (CLAUDE.md, "Lua modules and `S`"); its golden master was retired with it. Wave 0b (tests, notes, process) is under way: the README is split into docs/user/, the engine check takes its port from `$STRATA_SC_PORT`, the tests are split into one unit file per module (#75), pull requests add changelog fragments in changes/ (#76), and the Lua notes are split per module with CLAUDE.md as an index (CLAUDE.md, "Working in parallel"). The design is `docs/design/3.1-design.md` (approved 2026-11-07), the plan `docs/superpowers/plans/2026-11-07-3.1-wave0-restructure.md`. Waves 1-3 get their plans once Wave 0's module names exist.
+- **Next: 3.2**, the performance setting and one grain path (`docs/design/3.2-design.md`, approved; plan `docs/superpowers/plans/2026-11-08-3.2-plan.md`). It starts with the engine split, as 3.1 started with the module split.
+- [#103](https://github.com/sethbc/strata/issues/103) **LFO offset in scenes** (step 2): scenes should capture `lfo_offset_<n>`. That is a new scene field, so it waits for 3.2 (3.1 added none). Step 1, keeping the offset across on/off, shipped in 3.1.
+- [#113](https://github.com/sethbc/strata/issues/113) **Grid playhead one step ahead between steps:** a grid redraw between pattern steps lights the next step, while SEQ draws the sounding one. Not new in 3.1; a shared "sounding step" helper fixes both.
+- [#109](https://github.com/sethbc/strata/issues/109) **Move the VOICE cursor anchor into `lib/ui/cursors.lua`:** a refactor with no behavior change, for a release whose design owns the cursor module.
+- [#114](https://github.com/sethbc/strata/issues/114) **3.1 follow-ups:** the small cleanups the 3.1 reviews deferred (none a user would notice), as a checklist.
+- **K1 as ALT on hardware:** the long-press fallback (`S.lib.ui_alt.long_press`, 0.6 s) is a hook only; no timer calls it yet. If K1 held feels wrong in play, wiring the timer is the fallback (checked on #6).
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on a norns.** 3.0.2 has run on a norns shield (Raspberry Pi 4, 8 GB): everything runs, with plenty of CPU headroom. The detailed measurements are still to do; the issue and its comments list every check. Pending, in short:
   - from 3.0 and 3.0.1: CPU with all voices and with several buffer voices, xruns while scrolling sources, levels across synth, buffer and input sources and against 2.0, the limiter, arc ring feel (512 ticks per sweep), clicks on filter type and grain mode changes, triggered grain mode (velocity-scaled accents, Karplus re-plucks), the BUFFER page's record/stop/clear/save, the save time of a 16 s buffer, the buffer restore at start, MIDI (notes, velocity, bend, voice-off mode, hot-plug, CC mapping), grid page 4 and the arc pages;
   - from 3.0.2: the Resonator in the mix and as a cross-modulation source, pitch-shifted voices with the fixed window, clicks from rapid source switches and scene chords (a synth already fading is cut), real-time memory and CPU at the peak on norns' own scsynth (armhf, and that the engine compiles there), xruns on voice start and source switch at large grain sizes, the pitch of a 44.1 kHz file, how long a load's decode check and a take's write take on the CM3 (and whether pattern steps, LFO sends and MIDI run late while a take is written), the `/fail /b_readChannel` message format on norns' scsynth, a scene-fade step's real duration against the 1 s overrun bound, the sequencer's `clock.sleep(0)` deferral after a PSET read from the menu, frame-clock CPU with the arc spinning, with the LFO page drawing at 15 fps and with drift redraws, tempo following under Link and MIDI clock, the font's real glyph widths against the harness estimate, arc LEDs at a ring's maximum and minimum, and brief "not loaded" or file-list flashes after a slow reload or a file choice.
+  - from 3.1: K1 held as ALT in play (the hold is norns' menu timer), the page dots, `[L]`/`[T]`, the SEQ step rows and the BUFFER input meter on the real screen and font, the input meter against a recorded take, the arc's whole-step rings (20 ticks per value) and the 24-tick center detent, the grid's half-second holds and step levels, and the screen against the PNG renders.
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
   - A buffer slot's internal `restoring` flag can stay set after a restore that never gets audio. Nothing reads it except when audio is confirmed.
@@ -115,3 +125,25 @@ Each was taken during development without a design review, and lists what it cos
 - **The `tempo` param takes the clock's range** (`clock_tempo`'s 1-300 BPM), so any clock tempo is captured and recalled. If wrong: none.
 - **Docs layout:** this file and the 3.0 design live under `docs/` (`docs/status.md`, `docs/design/3.0-design.md`), and the old implementation plans were removed. If wrong: links to the old paths break; git history keeps the files.
 - **3.0's features are described as Strata's own**, with no reference to the earlier, unreleased script they were first sketched for. Git history, commit messages and old pull request titles keep their wording, since rewriting them would mean force-pushing the protected `main`. If wrong: none; the name survives only in history.
+
+**3.1 (playable from the norns alone)**
+
+From the 3.1 design's "Cost if wrong" and the calls made while building it:
+- **K1 held as ALT:** norns hands K1 to a script only after its menu hold (0.25 s), so ALT is always a hold. Every ALT+K2/ALT+K3 action goes through `alt_action`, so a long-press fallback (0.6 s) can call the same actions; the hook is built, the timer is not. If wrong: wire a timer to `S.lib.ui_alt.long_press`, a small change.
+- **MAIN's K3 starts and stops** the selected voice; lock moved to ALT+K3 and randomize to ALT+K2. If wrong: a stopped voice is one press from running again, and each page's keys are one function.
+- **Eight pages:** E1 travels further (seven turns end to end at 4 ticks per page). If wrong: reorder `UI_PAGES`, one line.
+- **BUFFER's E2 picks a buffer, not a voice:** the selected voice comes from MAIN or VOICE, and every BUFFER key acts on the cursor's buffer. If wrong: ALT+E2 could pick the voice instead of the field cursor.
+- **Lock is a UI name only:** the state, the code and the scene field stay `frozen`, so scenes need no migration. If wrong: none; the 3.2 audio freeze gets its own field name.
+- **The only default change is LFO depth 25%:** new LFOs are audible when turned on; scenes keep their stored depth, and scene files without LFO settings recall silent LFOs. If wrong: one constant.
+- **No new scene fields in 3.1:** the LFO offset is kept across on/off (`wrap_param_action` in `lib/lfos.lua`, #103 step 1), but scenes don't store it until 3.2. If wrong: recalls keep whatever offset is set.
+- **Fine adjustment is a tenth of the raw step, on ALT+E3 only;** a param's own `controlspec.step` still limits it, number and option params keep whole steps, and the arc has no fine mode. If wrong: `FINE_DIVISOR`, one constant.
+- **Center detents hold for 3 encoder detents or 24 arc ticks** after a change reaches or crosses 0. If wrong: `DETENT`'s two values.
+- **The arc button acts per page** (start/stop, play/stop, record/stop, recall, LFO on/off; nothing on FX and SETUP), not always as K3: on LFO, K3 selects the next LFO. If wrong: one `arc_button` field per page.
+- **VOICE's whole-step rings step one value per 20 ticks** (choices and numbers), like the LFO page's clocked rate. If wrong: retune on #6.
+- **Grid scene saves need a half-second hold**, so a stray press never overwrites a scene. If wrong: `GRID_HOLD`, one constant.
+- **The 8×8's column 1 blinks per quarter note** (every 4 steps) while the other half plays, rather than every step, which would strobe at 8 Hz. If wrong: one line.
+- **MAIN cuts a long voice name to fit its row** (`fit_text`, so `RESONAT` on hardware), because the source sits on the next row, where `[T]` would collide with a longer name. If wrong: a short display name in `MAIN_PARAMS`.
+- **SEQ's playhead animates through the frame clock, screen only,** so a connected arc doesn't redraw at 15 fps while the patterns play. If wrong: none.
+- **Built as parallel pull requests:** Wave 1 ran as batches of separate pull requests instead of one serial package, and Wave 2 as twelve packages at once, each owning disjoint files (CLAUDE.md, "Working in parallel"). Parallel pull requests merged `main` and kept both sides of registration conflicts. If wrong: rebase conflicts within a batch, and `main` carried a partly built 3.1 between merges (never tagged).
+- **Merged names win:** later work follows the module names already merged (`S.lib.ui_text`, `S.lib.grid_core`, ...) and never renames merged code to match a plan. If wrong: none.
+- **The start registry** (#73) came into Wave 1, so each module registers its start step beside its cleanup step and `init` never changes. If wrong: a later package re-homes init pieces.
