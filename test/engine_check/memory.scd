@@ -2,23 +2,75 @@
 // Real-time memory: the grain UGens' fixed sizes, what each grain synth
 // takes of the pool, and the worst cases (spaced switches, a burst, fast
 // recalls) on norns' 8192 KB pool: 3 MB left on standard, 4 MB on high.
+//
+// Everything is measured with allocation probes, as on SuperCollider 3.13
+// (norns' and CI's version, which has no /rtMemoryStatus):
+// - the floors: 256 KB DelayN probes (\strataCheckMemProbe) that must all
+//   allocate (a failing one would print "alloc failed", which fails the run);
+// - the figures: a flood of small graph probes (\strataCheckPoolProbe, about
+//   16 KB of controls each) sent in one bundle with /error -1. A probe whose
+//   graph does not fit is simply not created (its /s_new fails quietly, with
+//   no UGen to print anything), so the number that did, times a probe's
+//   size, is the pool's free memory to within one probe. A probe's size is
+//   calibrated against four DelayN probes (1 MB) on the running server.
+//   Two 256 KB DelayN probes are allocated just before each flood and freed
+//   just after it, so the server never runs with a full pool: replies
+//   (/c_getn, /n_info) and anything an engine synth allocates meanwhile find
+//   room. They count as free.
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
-var command = { arg name ... args; h.command(name, *args) };
 var awaitReply = { arg condition, timeout = 5; h.awaitReply(condition, timeout) };
 var grainDefs = h.grainDefs;
+var floodCount = 640;   // more small probes than the whole pool holds
+var reserveBus = Bus.control(server, 1);
 
-// The pool's free bytes and its largest free block, from /rtMemoryStatus
-var poolFree = {
-    var condition = Condition(false), reply;
-    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal }, '/rtMemoryStatus.reply', server.addr).oneShot;
-    server.sync;
-    server.sendMsg('/rtMemoryStatus');
-    awaitReply.(condition);
-    (reply ? [nil, 0, 0]).copyRange(1, 2)
+// Send the flood of small probes now (in processGroup, at the tail), with
+// error reports off for that bundle. Returns their bus and node IDs; read
+// the count with floodResult once the server has answered.
+// (A DelayN, and a GrainBuf or Pluck of a synth just started, takes its
+// memory when it first runs, in the next block, where a graph takes its
+// own at /s_new: so the flood waits a sync and 10 ms, past that block, for
+// everything sent before it, the reserve included)
+var floodStart = {
+    var bus = Bus.control(server, floodCount), ids = floodCount.collect({ server.nextNodeID });
+    var reserve = 2.collect({ server.nextNodeID });
+    bus.setAll(0);
+    server.sendBundle(nil, *reserve.collect({ arg id; ['/s_new', \strataCheckMemProbe, id, 1, engine.processGroup.nodeID,
+        \out, reserveBus.index] }));
+    server.sync; 0.01.wait;
+    server.sendBundle(nil, *([['/error', -1]] ++ ids.collect({ arg id, index;
+        ['/s_new', \strataCheckPoolProbe, id, 1, engine.processGroup.nodeID, \out, bus.index + index]
+    }) ++ reserve.collect({ arg id; ['/n_free', id] })));
+    [bus, ids]
 };
-var poolUsedKB = { ((server.options.memSize * 1024) - poolFree.value[0]) / 1024 };
+// How many of a flood's probes were created; frees them (quietly: the
+// ones that were not created do not exist)
+var floodResult = { arg flood;
+    var values, count;
+    server.sync; 0.05.wait;
+    values = h.readBus(flood[0]);
+    count = values.count({ arg value; value > 0.5 });
+    server.sendBundle(nil, ['/error', -1], *flood[1].collect({ arg id; ['/n_free', id] }));
+    server.sync;
+    flood[0].free;
+    count
+};
+// The number of small probes the pool holds now
+var floodFit = { var flood; server.sync; flood = floodStart.value; floodResult.(flood) };
+var reserveKB = 2 * 257;   // the two DelayN probes around each flood
+
+// A small probe's size (KB): how many fewer fit beside four 256 KB DelayN
+// probes, which take 1024 KB of delay lines (and about 1 KB each of graph)
+var smallProbeKB = {
+    var bus = Bus.control(server, 4), without, with, probes;
+    without = floodFit.value;
+    probes = 4.collect({ arg index; Synth(\strataCheckMemProbe, [\out, bus.index + index], engine.processGroup, \addToTail) });
+    with = floodFit.value;
+    probes.do(_.free); server.sync; bus.free;
+    1028 / (without - with).max(1)
+};
+var probeKB, idleFreeKB;
 
 // maxGrains (one grain table per GrainBuf, from the pool) covers the
 // largest overlap Lua can ask for: grain size 0.5 s x density 100 x master
@@ -37,46 +89,30 @@ var checkGrainMemorySizes = {
     });
 };
 
-// What one grain synth of each def takes of the pool: ten of them started
-// at once (playing grains, to a private bus), the pool's free bytes before
-// and after. Posted, for docs/notes/engine/memory.md.
+// What one grain synth of each def takes of the pool: the small probes
+// that fit with and without twenty of them (playing grains, to a private
+// bus), so the figure is within a probe / 20 (under 1 KB)
 var checkGrainSynthSizes = {
-    var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), count = 10;
+    var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), count = 20;
     var ring = engine.ringBuffersFor(0, 0), sizes;
     var argsFor = (
         strataGrainRing: [\bufL, ring[0], \bufR, ring[1], \phaseBus, ring[2]],
         strataGrainBuf: [\bufnumL, engine.buffersL[0], \bufnumR, engine.buffersR[0]]
     );
-    server.sync;
     sizes = grainDefs.collect({ arg name;
-        var before = poolFree.value[0], synths, after;
+        var before = floodFit.value, synths, after;
         synths = count.collect({ Synth(name, [\out, privateBus, \mirrorOut, privateBus, \grainSize, 0.5, \grainDensity, 200]
             ++ argsFor[name], group) });
         server.sync; 0.1.wait;
-        after = poolFree.value[0];
+        after = floodFit.value;
         synths.do(_.free); server.sync;
-        (before - after) / count / 1024
-    });
-    grainDefs.do({ arg name, index;
-        ("memory: % takes % KB of the pool per synth".format(name, sizes[index].round(0.1))).postln;
+        (before - after) * probeKB / count
     });
     check.(sizes.every({ arg size; (size > 0) and: { size < 64 } }),
-        "memory: each grain synth takes under 64 KB of the pool (% KB)".format(
+        "memory: each grain synth takes under 64 KB of the pool (% KB, by allocation probes)".format(
             [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", ")));
     group.free; privateBus.free;
 };
-
-// What one probe takes of the pool (its delay line and graph), so the
-// worst-case figures below are the engine's own
-var probeKB = {
-    var bus = Bus.control(server, 1), before, after, probe;
-    server.sync;
-    before = poolFree.value[0];
-    probe = Synth(\strataCheckMemProbe, [\out, bus], engine.processGroup, \addToTail);
-    after = poolFree.value[0];
-    probe.free; server.sync; bus.free;
-    (before - after) / 1024
-}.value;
 
 // The worst cases (inside the check routine), on an engine (h.engine or
 // the high one): every voice at the largest grain size and density Lua
@@ -96,11 +132,11 @@ var probeKB = {
 // 8192 KB pool (memSize, set before boot), probeCount 256 KB probes (twelve
 // on standard: 3 MB, 3.5's second note per voice plus 1 MB; sixteen on
 // high: 4 MB; see docs/notes/engine/memory.md) are sent right after the
-// last command, with no sync between, inside the 50 ms kill fade; the
-// pool's status and the node tree are asked for after them, in the same
-// order: the cutting synths must still be there (so the probes measure the
-// real peak) and every probe must allocate. run_engine_check.sh also fails
-// on any "alloc failed". Returns the engine's own use at each peak (KB).
+// last command, with no sync between, inside the 50 ms kill fade, then the
+// flood of small probes (what is left beyond them) and the node tree, in
+// that order: the cutting synths must still be there (so the probes meet
+// the real peak) and every 256 KB probe must allocate. run_engine_check.sh
+// also fails on any "alloc failed". Returns the free KB at each peak.
 var checkMemoryWorstCase = { arg target, probeCount, floorLabel;
     var command = { arg name ... args; h.commandTo(target, name, *args) };
     var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
@@ -110,24 +146,25 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel;
     var probeBus = Bus.control(server, probeCount), figures = List.new;
     var probeHeadroom = { arg label;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
-        var probes, statusDone = Condition(false), status, tree, present, values, used;
+        var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB;
         probes = probeCount.collect({ arg index;
             Synth(\strataCheckMemProbe, [\out, probeBus.index + index], target.processGroup, \addToTail)
         });
-        OSCFunc({ arg msg; status = msg; statusDone.test = true; statusDone.signal }, '/rtMemoryStatus.reply', server.addr).oneShot;
-        server.sendMsg('/rtMemoryStatus');
-        tree = h.synthTree(target.context.xg);   // answered after the probes and the status
-        awaitReply.(statusDone);
-        present = tree.count({ arg node; cutting.includes(node.id) });
-        server.sync; 0.1.wait;
+        flood = floodStart.value;
+        // which cutting synths still exist, asked right after: /n_query
+        // answers /n_info for each one there and (errors off) nothing for one gone
+        watcher = OSCFunc({ arg msg; infos.add(msg[1]) }, '/n_info', server.addr);
+        server.sendBundle(nil, ['/error', -1], *cutting.collect({ arg id; ['/n_query', id] }));
+        freeKB = (probeCount * 256) + (floodResult.(flood) * probeKB) + reserveKB;
+        watcher.free;
+        present = cutting.count({ arg id; infos.includes(id) });
         values = h.readBus(probeBus);
-        used = (((server.options.memSize * 1024) - (status ? [nil, 0])[1]) / 1024) - (probeCount * probeKB);
-        figures.add(used.round(1));
+        figures.add(freeKB.round(1));
         check.((cutting.size > 0) and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start (%: % of %)".format(label, present, cutting.size));
         check.((values.size == probeCount) and: { values.every({ arg value; value > 0.5 }) },
-            "memory: % free at the % worst case: % (the engine uses % KB with its cutting synths)".format(
-                floorLabel, target.tier, label, used.round(1)));
+            "memory: % free at the % worst case: % (about % KB free, the engine using about % KB more than idle)".format(
+                floorLabel, target.tier, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
         probes.do(_.free);
         probeBus.setAll(0);
         2.5.wait; server.sync;
@@ -165,6 +202,7 @@ var checkHighWorstCase = {
     write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
     write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
     high = h.replaceEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
+    engine = high;   // the floods go into its processGroup
     check.(high.tier == \high, "memory: the high engine runs tier high (got %, % s slots, % s history)".format(
         high.tier, high.bufferSeconds, high.historySeconds));
     checkMemoryWorstCase.(high, 16, "4 MB");
@@ -172,11 +210,23 @@ var checkHighWorstCase = {
     check.(engine.tier == \standard, "memory: the default engine is back for the areas that follow");
 };
 
+// The small probe: about 16 KB of graph (240 controls); it writes 1 to its
+// bus once created
+SynthDef(\strataCheckPoolProbe, { arg out;
+    var padding = NamedControl.kr(\padding, 0 ! 240);
+    Out.kr(out, DC.kr(1) + (padding[0] * 0));
+}).add;
+server.sync;
+
+probeKB = smallProbeKB.value;
+idleFreeKB = (floodFit.value * probeKB) + reserveKB;
 checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
-check.(engine.tier == \standard, "memory: the default engine runs tier standard (idle, it uses % KB of the pool; a probe % KB)".format(
-    poolUsedKB.value.round(1), probeKB.round(0.1)));
+check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
+    "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
+        idleFreeKB.round(10), probeKB.round(0.1)));
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
 h.stopAllVoices;
+reserveBus.free;
 }
