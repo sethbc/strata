@@ -91,5 +91,9 @@ return function(S)
     end
   end
 
+  S.register_cleanup(S.constants.CLEANUP_ORDER.frame_clock, function()
+    stop_frame_clock()
+  end)
+
   return M
 end

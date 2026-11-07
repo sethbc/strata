@@ -3,10 +3,11 @@
 -- destinations (S.LFO_DESTINATIONS), the action that modulates a
 -- destination's engine value (apply_lfo), restoring it, the LFO page dot's
 -- phase estimate (S.lfo_last_raw, lfo_phase_estimate) and the LFO params
--- (add_lfo_params, which init calls). S.selected_lfo is the LFO the LFO page
--- and arc ring 4 work on. The functions that were global stay global;
+-- (add_lfo_params, which lib/params_setup.lua's lfos record calls).
+-- S.selected_lfo is the LFO the LFO page and arc ring 4 work on. The
+-- functions that were global stay global;
 -- LFO_DEFAULT_PERIOD is a field of this module's table (S.lib.lfos) for the
--- scene defaults in strata.lua.
+-- scene defaults in lib/scenes.lua. Registers the LFOs' cleanup step.
 
 return function(S)
   local M = {}
@@ -206,6 +207,16 @@ return function(S)
       end)
     end
   end
+
+  -- Stop the LFOs (through their state params, like the library's menu) and
+  -- give their destinations back their stored values
+  S.register_cleanup(S.constants.CLEANUP_ORDER.lfos, function()
+    for n = 1, NUM_LFOS do
+      S.lfos[n]:stop()
+      params:set("lfo_" .. n, 1)
+      restore_lfo_destination(n)
+    end
+  end)
 
   M.LFO_DEFAULT_PERIOD = LFO_DEFAULT_PERIOD
   return M

@@ -6,8 +6,9 @@
 -- and scenes.data on disk. The functions stay global. The tables tests and
 -- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
--- scene_data_dir, scene_data_file and move_aside_unloadable_file are fields
--- of this module's table (S.lib.scenes) for lib/buffers.lua and cleanup().
+-- scene_data_dir and move_aside_unloadable_file are fields of this
+-- module's table (S.lib.scenes) for lib/buffers.lua. Registers its three
+-- cleanup steps (saving the scenes, the sequencer, the transition).
 
 return function(S)
   local M = {}
@@ -719,8 +720,29 @@ return function(S)
     return true
   end
 
+  -- cleanup()'s steps: save the scenes before anything stops, unless that
+  -- would overwrite a scenes file that failed to load and could not be
+  -- moved aside
+  S.register_cleanup(S.constants.CLEANUP_ORDER.scenes_save, function()
+    if S.scene_autosave_blocked then
+      print("scenes not auto-saved: " .. scene_data_file .. " could not be loaded")
+    else
+      save_scenes_to_disk()
+    end
+  end)
+
+  -- Stop the scene sequencer through its param so param and state agree
+  S.register_cleanup(S.constants.CLEANUP_ORDER.scene_sequencer, function()
+    params:set("scene_sequencer_enabled", 0)
+    scene_sequencer_stop()
+  end)
+
+  -- Cancel any active transition clock
+  S.register_cleanup(S.constants.CLEANUP_ORDER.scene_transition, function()
+    cancel_scene_transition()
+  end)
+
   M.scene_data_dir = scene_data_dir
-  M.scene_data_file = scene_data_file
   M.move_aside_unloadable_file = move_aside_unloadable_file
   return M
 end

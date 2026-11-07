@@ -54,5 +54,11 @@ return function(S)
     menu_watch.original_set_mode = nil
   end
 
+  -- Give the norns menu its own set_mode back early in cleanup(), before
+  -- anything after it can fail
+  S.register_cleanup(S.constants.CLEANUP_ORDER.menu_watch, function()
+    unwatch_menu_opening()
+  end)
+
   return M
 end

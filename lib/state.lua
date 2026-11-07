@@ -21,13 +21,31 @@ return function()
     end,
   })
 
-  -- Registries modules add to as they load (the Wave 0 moves fill them)
+  -- Registries modules add to as they load
   M.registry = {
     pages = {},         -- one record per screen page
     params = {},        -- param-adding functions, run by init in order
-    cleanup = {},       -- cleanup functions, run by cleanup()
+    cleanup = {},       -- {order, fn} records, run by cleanup() by order
     grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw}
   }
+
+  -- Each module adds one cleanup step per thing it must stop or save on
+  -- exit: cleanup() in strata.lua runs fn of every record in ascending
+  -- order. The orders are S.constants.CLEANUP_ORDER, so the whole sequence
+  -- reads in one place; two steps never share an order (table.sort is not
+  -- stable, so a tie would run in no fixed order)
+  function M.register_cleanup(order, fn)
+    assert(type(order) == "number", "a cleanup step needs a number order")
+    assert(type(fn) == "function", "a cleanup step needs a function")
+    for _, record in ipairs(M.registry.cleanup) do
+      assert(record.order ~= order, "two cleanup steps at order " .. order)
+    end
+    M.registry.cleanup[#M.registry.cleanup + 1] = {order = order, fn = fn}
+  end
+
+  -- The module tables, S.lib.<name> (strata.lua stores each constructor's
+  -- table here)
+  M.lib = {}
 
   return M
 end

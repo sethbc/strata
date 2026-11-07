@@ -23,8 +23,7 @@ return function(S)
   -- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
   -- param's whole range. params:delta moves its 0-1 raw value by delta *
   -- quantum, so the sweep follows the warp (exp params sweep evenly) and the
-  -- step only quantizes the value read back. (A global: the main chunk is near
-  -- Lua's local limit.)
+  -- step only quantizes the value read back.
   -- Control params only: it reads the param's controlspec.
   function arc_sweep_param(param_id, delta)
     local quantum = params:lookup_param(param_id).controlspec.quantum
@@ -129,6 +128,14 @@ return function(S)
     if page_redraw then page_redraw(S.arc_device) end  -- nil: rings stay off
     S.arc_device:refresh()
   end
+
+  -- Leave the arc dark on exit, the last cleanup step
+  S.register_cleanup(S.constants.CLEANUP_ORDER.arc_dark, function()
+    if S.arc_device then
+      S.arc_device:all(0)
+      S.arc_device:refresh()
+    end
+  end)
 
   return M
 end

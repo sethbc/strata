@@ -2,7 +2,8 @@
 -- Per-voice drift (drift_update, on the 10 Hz S.drift_metro: a slow random
 -- walk of grain pitch and buffer position; not the global LFOs), randomize
 -- (randomize_voice) and mutations (gentle_mutate, on S.mutation_metro).
--- The functions stay global. The metros are created by init in strata.lua.
+-- The functions stay global. The metros are created by init in strata.lua;
+-- this module registers their cleanup steps.
 -- S.grain_pitch_base and S.buf_pos_base (the walk's centers) are also set by
 -- the grain pitch and buffer position param actions, so they live on S, as
 -- does S.drift_writing, which those actions and redraw_on_param_changes read.
@@ -184,6 +185,18 @@ return function(S)
     request_redraw()
     grid_redraw()
   end
+
+  -- cleanup()'s steps: stop the drift, then the mutations, setting their
+  -- param to off so param and metro agree
+  S.register_cleanup(S.constants.CLEANUP_ORDER.drift_metro, function()
+    if S.drift_metro then S.drift_metro:stop() end
+  end)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.mutation_metro, function()
+    if S.mutation_metro then
+      S.mutation_metro:stop()
+      params:set("mutation_enabled", 0)
+    end
+  end)
 
   return M
 end

@@ -471,7 +471,8 @@ test("include stub loads lib modules and honors overrides", function()
   assert_equal(include("lib/state")().marker, nil, "overrides last one install")
   -- load_strata passes them through
   load_strata { module_sources = { ["lib/state"] =
-    "return function() return { marker = 2, registry = { pages = {}, params = {}, cleanup = {}, grid_layouts = {} } } end" } }
+    "return function() return { marker = 2, registry = { pages = {}, params = {}, cleanup = {}, grid_layouts = {} },"
+    .. " lib = {}, register_cleanup = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
@@ -1353,10 +1354,9 @@ local function probe_constructor(text, probe)
   return text:sub(1, position) .. probe .. text:sub(position + 1)
 end
 
--- strata.lua's main chunk keeps at least this many free locals until the
--- end of Wave 0 raises it to 30 (15 free once S was added; the margin is
--- for the module moves, which may add an alias before code moves out)
-local STRATA_MIN_FREE_LOCALS = 14
+-- strata.lua's main chunk keeps at least this many free locals, like every
+-- module (it holds only the entry points)
+local STRATA_MIN_FREE_LOCALS = 30
 local PLAIN_TABLE_MODULE = "lib/constants.lua"  -- the one module that is not a constructor
 local MODULE_MIN_FREE_LOCALS = 30
 
@@ -4397,6 +4397,118 @@ test("cleanup stops everything and darkens controllers (M9)", function()
   assert_equal(table.concat(voices_off, ","), table.concat(expected_off, ","),
     "exactly the running voices are turned off, by 0-based engine index")
   assert_true(util.file_exists(context.data_dir .. "strata/scenes.data"), "scenes saved on cleanup")
+end)
+
+-- cleanup()'s steps, in the order cleanup has always run them: the files
+-- are saved before anything stops, the LFOs give their destinations back
+-- before the voices go off, MIDI is detached before the voices go off, and
+-- the controllers go dark last
+local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
+  "frame clock", "drift metro", "mutation metro", "pattern clock", "scene sequencer", "scene transition", "lfos",
+  "buffer polls and timers", "buffer page flash", "midi handler", "voices off", "grids dark", "arc dark" }
+
+test("cleanup runs every registered step in today's order", function()
+  local context = load_strata()  -- init's start-up clock still waits to start voice 2
+  local S = local_value("S")
+  context.grid.plug(1, 16, 16)
+  context.arc.plug(1)
+  capture_scene(1)
+  params:set("scene_sequencer_enabled", 1)
+  params:set("mutation_enabled", 1)
+  pattern_toggle()
+  recall_scene(1, 5)
+  params:set("lfo_1", 2)
+  record_buffer(1)
+  buffer_page_flash("flash")
+
+  -- the steps' observable effects, each logged once in a row; "|" marks
+  -- the start of each registered step
+  local log = {}
+  local function observe(step) if log[#log] ~= step then table.insert(log, step) end end
+  local function watch_field(target, key, step)
+    assert_equal(getmetatable(target), nil, "a plain table to watch " .. key .. " on")
+    local value = rawget(target, key)
+    rawset(target, key, nil)
+    setmetatable(target, {
+      __index = function(_, name) if name == key then return value end end,
+      __newindex = function(self, name, new_value)
+        if name == key then value = new_value; observe(step) else rawset(self, name, new_value) end
+      end,
+    })
+  end
+  local function watch_method(object, method, step, unless)
+    local original = object[method]
+    object[method] = function(...)
+      if not (unless and unless()) then observe(step) end
+      return original(...)
+    end
+  end
+  local clocks = { { "startup clock", STARTUP.clock }, { "frame clock", local_value("UI_PAGES").frame_clock },
+    { "pattern clock", S.pattern_clock }, { "scene sequencer", S.scene_sequencer_clock },
+    { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
+    { "buffer page flash", S.BUFFER_PAGE.flash_clock } }
+  local clock_steps = {}
+  for _, entry in ipairs(clocks) do
+    assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")
+    clock_steps[entry[2]] = entry[1]
+  end
+  local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
+  for n = 1, local_value("NUM_LFOS") do param_steps["lfo_" .. n] = "lfos" end
+  local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved" }
+
+  watch_field(clock, "tempo_change_handler", "tempo handler")
+  watch_field(_menu, "set_mode", "menu watch")
+  local real_save = tab.save
+  tab.save = function(value, path)
+    observe(file_steps[path:match("[^/]*$")] or ("file " .. path))
+    return real_save(value, path)
+  end
+  local real_cancel = clock.cancel
+  clock.cancel = function(id) observe(clock_steps[id] or ("clock " .. tostring(id))); return real_cancel(id) end
+  watch_method(S.drift_metro, "stop", "drift metro")
+  watch_method(S.mutation_metro, "stop", "mutation metro")
+  local real_set = params.set
+  params.set = function(self, id, ...)
+    if param_steps[id] then observe(param_steps[id]) end
+    return real_set(self, id, ...)
+  end
+  for n = 1, local_value("NUM_LFOS") do watch_method(S.lfos[n], "stop", "lfos") end
+  watch_method(S.buffer_polls.state, "stop", "buffer polls and timers")
+  watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
+  watch_field(S.midi_device, "event", "midi handler")
+  local real_voice_off = engine.voiceOff
+  engine.voiceOff = function(...) observe("voices off"); return real_voice_off(...) end
+  -- a redraw clears the LEDs too: only a clear outside one counts
+  local drawing = false
+  local real_grid_redraw, real_arc_redraw = grid_redraw, arc_redraw
+  grid_redraw = function(...) drawing = true; real_grid_redraw(...); drawing = false end
+  arc_redraw = function(...) drawing = true; real_arc_redraw(...); drawing = false end
+  for _, grid_port in pairs(S.grids) do
+    watch_method(grid_port, "all", "grids dark", function() return drawing end)
+  end
+  watch_method(S.arc_device, "all", "arc dark", function() return drawing end)
+
+  assert_equal(type(S.register_cleanup), "function", "S.register_cleanup")
+  local registered = S.registry.cleanup
+  for _, record in ipairs(registered) do
+    local step = record.fn
+    record.fn = function(...) table.insert(log, "|"); return step(...) end
+  end
+  local ok, problem = pcall(cleanup)
+  tab.save, clock.cancel, params.set = real_save, real_cancel, nil
+  grid_redraw, arc_redraw = real_grid_redraw, real_arc_redraw
+  assert_true(ok, tostring(problem))
+
+  local expected = {}
+  for _, step in ipairs(CLEANUP_STEPS) do table.insert(expected, "|"); table.insert(expected, step) end
+  assert_equal(table.concat(log, ", "), table.concat(expected, ", "), "one registered step per effect, in order")
+  -- S.constants.CLEANUP_ORDER names each step's order, and no two steps share one
+  local orders = 0
+  for _ in pairs(S.constants.CLEANUP_ORDER) do orders = orders + 1 end
+  assert_equal(orders, #CLEANUP_STEPS, "CLEANUP_ORDER has one order per step")
+  assert_true(not pcall(S.register_cleanup, S.constants.CLEANUP_ORDER.lfos, function() end),
+    "a second step at a taken order is refused")
+  assert_true(not pcall(S.register_cleanup, nil, function() end), "an order is a number")
 end)
 
 ---------------------------------------------------------------------------

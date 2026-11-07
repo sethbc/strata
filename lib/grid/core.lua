@@ -139,5 +139,13 @@ return function(S)
     end
   end
 
+  -- Leave every connected grid dark on exit
+  S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
+    for _, grid_port in pairs(S.grids) do
+      grid_port:all(0)
+      grid_port:refresh()
+    end
+  end)
+
   return M
 end

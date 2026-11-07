@@ -5,8 +5,9 @@
 -- stopping, freezing and syncing a voice. The functions that were global stay
 -- global, as does engine_param_value; engine_mod_source, with_lfo_offsets and
 -- send_engine_value are fields of this module's table (S.lib.engine_sync) for
--- the code that calls them: engine_mod_source in strata.lua, the other two in
--- lib/lfos.lua (apply_lfo).
+-- the code that calls them: engine_mod_source in lib/params_setup.lua, the
+-- other two in lib/lfos.lua (apply_lfo). Registers the cleanup step that
+-- turns the voices off.
 
 return function(S)
   local M = {}
@@ -202,6 +203,16 @@ return function(S)
     -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
     engine.setVoiceParam(engine_voice, "bend", S.midi_state.bend[voice_idx])
   end
+
+  -- Turn off every running voice (after MIDI is detached, so no note can
+  -- start one again)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.voices_off, function()
+    for i = 1, NUM_VOICES do
+      if S.voices[i].active then
+        engine.voiceOff(i - 1)
+      end
+    end
+  end)
 
   M.engine_mod_source = engine_mod_source
   M.with_lfo_offsets = with_lfo_offsets

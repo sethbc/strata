@@ -57,6 +57,11 @@ return function(S)
     previous_tempo_change_handler = nil
   end
 
+  -- cleanup()'s first step
+  S.register_cleanup(S.constants.CLEANUP_ORDER.tempo_handler, function()
+    restore_tempo_change_handler()
+  end)
+
   -- Add one part of the PARAMS menu: init runs the records' add functions
   -- in the order they are registered here, which is the menu's order
   local function register_params(name, add)

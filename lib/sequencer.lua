@@ -118,5 +118,9 @@ return function(S)
     return level
   end
 
+  S.register_cleanup(S.constants.CLEANUP_ORDER.pattern_clock, function()
+    pattern_clock_stop()
+  end)
+
   return M
 end

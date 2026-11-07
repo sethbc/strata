@@ -3,11 +3,11 @@
 -- clearing and saving them, the engine's bufferState and bufferLoadFailed
 -- polls (S.buffer_polls; init starts them), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
--- valid_buffer_slot, cancel_buffer_recording_timer, buffer_state_changed
--- and buffer_data_file (a function: the path is built at call time) are
--- fields of this module's table (S.lib.buffers) for the code in strata.lua
--- that uses them. finish_buffer_take is also S.finish_buffer_take, where the
--- tests reach it.
+-- valid_buffer_slot (for lib/grid/layout_256.lua) and buffer_state_changed
+-- (the bufferState poll's handler, which init sets) are fields of this
+-- module's table (S.lib.buffers). finish_buffer_take is also
+-- S.finish_buffer_take, where the tests reach it. Registers two cleanup
+-- steps (saving the buffer paths; the polls and recording timers).
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride by matching this line in the script's sources
@@ -448,9 +448,26 @@ return function(S)
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
   S.finish_buffer_take = finish_buffer_take
 
+  -- cleanup()'s steps: remember each buffer's file or scratch take for the
+  -- next start (unless that would overwrite a buffers file that failed to
+  -- load and could not be moved aside), and later stop the polls and the
+  -- recording timers (the engine finishes or frees any recording itself)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_paths_save, function()
+    if S.buffer_autosave_blocked then
+      print("buffer paths not auto-saved: " .. buffer_data_file() .. " could not be loaded")
+    else
+      save_buffers_to_disk()
+    end
+  end)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_polls, function()
+    if S.buffer_polls.state then S.buffer_polls.state:stop() end
+    if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
+    for slot = 1, NUM_BUFFERS do
+      cancel_buffer_recording_timer(slot)
+    end
+  end)
+
   M.valid_buffer_slot = valid_buffer_slot
-  M.cancel_buffer_recording_timer = cancel_buffer_recording_timer
   M.buffer_state_changed = buffer_state_changed
-  M.buffer_data_file = buffer_data_file
   return M
 end

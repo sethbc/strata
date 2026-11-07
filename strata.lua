@@ -23,19 +23,14 @@ local S = include("lib/state")()
 
 -- Constants (lib/constants.lua)
 S.constants = include("lib/constants")
-local NUM_VOICES = S.constants.NUM_VOICES
-local NUM_SCENES = S.constants.NUM_SCENES
-local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
-local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
 local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
-local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
-local NUM_BUFFERS = S.constants.NUM_BUFFERS
-local NUM_LFOS = S.constants.NUM_LFOS
-local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
-local SOURCE_INPUT = S.constants.SOURCE_INPUT
-local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 local UI_PAGES = S.constants.UI_PAGES
-local BUFFER_MUTATION_KEYS = S.constants.BUFFER_MUTATION_KEYS
+local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
+
+-- The modules, in dependency order. Each constructor's table is
+-- S.lib.<name> (lib/<dir>/<file>.lua: S.lib.<dir>_<file>); a module adds
+-- its records to S.registry (pages, params, grid layouts, cleanup steps) as
+-- it loads.
 
 -- Voices: S.voices (the voice definitions), S.frozen, S.master_density,
 -- S.selected_voice and the voice source helpers (lib/voices.lua). The
@@ -44,8 +39,7 @@ include("lib/voices")(S)
 
 -- Screen and arc redraws and the frame clock: request_redraw, draw_frame,
 -- start_frame_clock, stop_frame_clock; S.ui_page (lib/ui/frame.lua)
-S.lib = S.lib or {}
-S.lib.frame = include("lib/ui/frame")(S)
+S.lib.ui_frame = include("lib/ui/frame")(S)
 
 -- Param -> engine and voice start/sync: send_param_to_engine,
 -- engine_param_value, toggle_voice, toggle_freeze, sync_voice_to_engine,
@@ -60,10 +54,9 @@ S.lib.buffers = include("lib/buffers")(S)
 
 -- Global LFOs: S.lfos, S.selected_lfo, S.lfo_last_raw, S.LFO_DESTINATIONS,
 -- apply_lfo, restore_lfo_destination, lfo_phase_estimate and their params
--- (add_lfo_params, called from init) (lib/lfos.lua)
+-- (add_lfo_params, which lib/params_setup.lua's lfos record calls)
+-- (lib/lfos.lua)
 S.lib.lfos = include("lib/lfos")(S)
-
-local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
 -- Per-voice drift, randomize and mutations: randomize_voice, drift_update,
 -- gentle_mutate; S.drift_metro, S.mutation_metro, S.drift_writing,
@@ -147,8 +140,6 @@ S.lib.grid_layout_128h = include("lib/grid/layout_128h")(S)
 S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)
 S.lib.grid_layout_64 = include("lib/grid/layout_64")(S)
 
--- MIDI input: see lib/midi_in.lua (S.midi_device, S.midi_state)
-
 -- The pattern sequencer: S.patterns, S.pattern_position, S.pattern_playing,
 -- S.pattern_clock, pattern edits, the pattern clock and step_brightness
 -- (lib/sequencer.lua)
@@ -156,7 +147,8 @@ S.lib.sequencer = include("lib/sequencer")(S)
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
 -- later; clock is the start-up clock while it waits (cleanup() cancels it).
--- A global table: the main chunk is close to Lua's 200-local limit
+-- It stays here, beside init, the one function that starts it; a global
+-- table, where the tests read it
 STARTUP = {voice_delay_seconds = 0.5, clock = nil}
 
 function cancel_startup_clock()
@@ -165,6 +157,10 @@ function cancel_startup_clock()
     STARTUP.clock = nil
   end
 end
+
+S.register_cleanup(S.constants.CLEANUP_ORDER.startup_clock, function()
+  cancel_startup_clock()
+end)
 
 function init()
   -- Also keeps S an upvalue of init, where the test harness finds it
@@ -281,83 +277,15 @@ function redraw()
   screen.update()
 end
 
+-- Each module registers its own cleanup steps with S.register_cleanup;
+-- cleanup runs them in ascending order (S.constants.CLEANUP_ORDER lists the
+-- whole sequence). A step that fails stops the rest, so the first ones give
+-- norns back what Strata replaced (the tempo handler, the menu's set_mode)
 function cleanup()
-  restore_tempo_change_handler()
-
-  -- Give the norns menu its own set_mode back first, before anything below
-  -- can fail
-  unwatch_menu_opening()
-
-  -- Save scenes to disk before exiting, unless that would overwrite a scenes
-  -- file that failed to load and could not be moved aside
-  if S.scene_autosave_blocked then
-    print("scenes not auto-saved: " .. S.lib.scenes.scene_data_file .. " could not be loaded")
-  else
-    save_scenes_to_disk()
-  end
-
-  -- Remember each buffer's file or scratch take for the next start
-  if S.buffer_autosave_blocked then
-    print("buffer paths not auto-saved: " .. S.lib.buffers.buffer_data_file() .. " could not be loaded")
-  else
-    save_buffers_to_disk()
-  end
-
-  -- Stop metros and clocks
-  cancel_startup_clock()
-  stop_frame_clock()
-  if S.drift_metro then S.drift_metro:stop() end
-
-  -- Sync mutation metro state with param
-  if S.mutation_metro then
-    S.mutation_metro:stop()
-    -- Ensure param matches actual state
-    params:set("mutation_enabled", 0)
-  end
-
-  pattern_clock_stop()
-
-  -- Stop the scene sequencer through its param so param and state agree
-  params:set("scene_sequencer_enabled", 0)
-  scene_sequencer_stop()
-
-  -- Cancel any active transition clock
-  cancel_scene_transition()
-
-  -- Stop the LFOs (through their state params, like the library's menu) and
-  -- give their destinations back their stored values
-  for n = 1, NUM_LFOS do
-    S.lfos[n]:stop()
-    params:set("lfo_" .. n, 1)
-    restore_lfo_destination(n)
-  end
-
-  -- Stop the buffer polls and recording timers (the engine finishes or
-  -- frees any recording itself)
-  if S.buffer_polls.state then S.buffer_polls.state:stop() end
-  if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
-  for slot = 1, NUM_BUFFERS do
-    S.lib.buffers.cancel_buffer_recording_timer(slot)
-  end
-  cancel_buffer_page_flash_clock()
-
-  -- Stop listening to MIDI before the voices go off
-  if S.midi_device then S.midi_device.event = nil end
-
-  -- Turn off all voices
-  for i = 1, NUM_VOICES do
-    if S.voices[i].active then
-      engine.voiceOff(i - 1)
-    end
-  end
-
-  -- Leave connected controllers dark
-  for _, grid_port in pairs(S.grids) do
-    grid_port:all(0)
-    grid_port:refresh()
-  end
-  if S.arc_device then
-    S.arc_device:all(0)
-    S.arc_device:refresh()
+  local steps = {}
+  for index, record in ipairs(S.registry.cleanup) do steps[index] = record end
+  table.sort(steps, function(first, second) return first.order < second.order end)
+  for _, step in ipairs(steps) do
+    step.fn()
   end
 end

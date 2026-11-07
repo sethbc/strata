@@ -1,8 +1,9 @@
 -- lib/constants.lua
 -- The script's constants and fixed tables, as a plain table (the one module
 -- that is not a constructor). strata.lua runs
--- `S.constants = include("lib/constants")` and aliases the names it uses as
--- locals. strata.lua adds the frame and draw state to UI_PAGES at run time
+-- `S.constants = include("lib/constants")`, and each module aliases the
+-- names it uses as locals. lib/ui/frame.lua adds the frame and draw state
+-- to UI_PAGES at run time
 
 local NUM_VOICES = 7
 local NUM_SCENES = 8
@@ -96,6 +97,33 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- cleanup()'s steps in the order it runs them: each module registers its
+-- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
+-- The files are saved before anything stops (the LFOs, stopped later, give
+-- their destinations back first), MIDI is detached before the voices go
+-- off, and the controllers go dark last. Spaced by 10, so a new step can go
+-- between two others
+local CLEANUP_ORDER = {
+  tempo_handler = 10,       -- lib/params_setup.lua: the clock's tempo handler back
+  menu_watch = 20,          -- lib/ui/menu_watch.lua: the norns menu's set_mode back
+  scenes_save = 30,         -- lib/scenes.lua: scenes.data
+  buffer_paths_save = 40,   -- lib/buffers.lua: buffers.data
+  startup_clock = 50,       -- strata.lua: init's start-up clock
+  frame_clock = 60,         -- lib/ui/frame.lua
+  drift_metro = 70,         -- lib/mutation.lua
+  mutation_metro = 80,      -- lib/mutation.lua (and its param)
+  pattern_clock = 90,       -- lib/sequencer.lua
+  scene_sequencer = 100,    -- lib/scenes.lua (and its param)
+  scene_transition = 110,   -- lib/scenes.lua
+  lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
+  buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
+  buffer_page_flash = 140,  -- lib/pages/buffer.lua: the hint row's flash clock
+  midi_handler = 150,       -- lib/midi_in.lua
+  voices_off = 160,         -- lib/engine_sync.lua
+  grids_dark = 170,         -- lib/grid/core.lua
+  arc_dark = 180,           -- lib/arc/core.lua
+}
+
 return {
   NUM_VOICES = NUM_VOICES,
   NUM_SCENES = NUM_SCENES,
@@ -121,4 +149,5 @@ return {
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  CLEANUP_ORDER = CLEANUP_ORDER,
 }

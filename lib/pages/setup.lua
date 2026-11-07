@@ -68,8 +68,7 @@ return function(S)
     end
   end
 
-  -- SETUP E2: MIDI port, E3: channel mode (a global: the main chunk is near
-  -- Lua's local limit)
+  -- SETUP E2: MIDI port, E3: channel mode
   function setup_enc(n, d)
     if n == 2 then
       params:delta("midi_device", d)

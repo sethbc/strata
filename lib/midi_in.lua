@@ -2,7 +2,8 @@
 -- MIDI input: notes, velocity and pitchbend per voice, the vport hot-plug
 -- handlers and the held-note and bend state (S.midi_device, S.midi_state).
 -- The functions stay global. The MIDI constants are a field of this
--- module's table (S.lib.midi_in.MIDI) for the MIDI params in strata.lua.
+-- module's table (S.lib.midi_in.MIDI) for the MIDI params in
+-- lib/params_setup.lua. Registers the cleanup step that detaches MIDI.
 
 return function(S)
   local M = {}
@@ -10,7 +11,7 @@ return function(S)
   local musicutil = require "musicutil"
 
   -- MIDI input: notes, velocity and pitchbend per voice (CC is norns' own
-  -- PARAMS > MAP). Grouped in tables: the main chunk is near Lua's 200-local limit.
+  -- PARAMS > MAP): the MIDI constants, in one table.
   M.MIDI = {
     max_port = 4,             -- midi_device param range (vports 1-4)
     velocity_max = 127,       -- retrigger velocity = note velocity / 127
@@ -168,6 +169,11 @@ return function(S)
     midi_set_bend(previous_voice, 1)
     midi_set_bend(S.selected_voice, ratio)
   end
+
+  -- Stop listening to MIDI before the voices go off
+  S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
+    if S.midi_device then S.midi_device.event = nil end
+  end)
 
   return M
 end

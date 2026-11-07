@@ -14,7 +14,6 @@ return function(S)
   -- row): "L<n>", one cycle of its shape (64 px), a dot at the estimated phase
   -- and last raw value while it runs, then its destination and state/depth
   -- right-aligned
-  -- (one table: the script's main chunk is at Lua's 200-local limit)
   local LFO_PAGE = {
     row_first_y = 16,   -- top of LFO 1's row
     row_spacing = 15,

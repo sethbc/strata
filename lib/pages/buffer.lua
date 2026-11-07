@@ -245,5 +245,9 @@ return function(S)
     end
   end
 
+  S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_page_flash, function()
+    cancel_buffer_page_flash_clock()
+  end)
+
   return M
 end
