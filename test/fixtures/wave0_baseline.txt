@@ -28,6 +28,390 @@ engine.setModAmpAmt(0, 3, 0)
 engine.setModFreqAmt(0, 3, 0)
 engine.setModSpeed(0, 10)
 engine.setVoiceParam(0, "bend", 1)
+## params menu
+param 1 7 "LEVELS" "LEVELS" n=9
+param 2 3 "output_level" "output" min=-inf max=6 default=0
+param 3 3 "input_level" "input" min=-inf max=6 default=0
+param 4 3 "monitor_level" "monitor" min=-inf max=6 default=0
+param 5 3 "engine_level" "engine" min=-inf max=6 default=0
+param 6 3 "softcut_level" "softcut" min=-inf max=6 default=0
+param 7 3 "tape_level" "tape" min=-inf max=6 default=0
+param 8 0 "monitoring_separator" "monitoring"
+param 9 2 "monitor_mode" "monitor mode" options=2
+param 10 1 "headphone_gain" "headphone gain" min=0 max=63 default=40
+param 11 7 "REVERB" "REVERB" n=11
+param 12 2 "reverb" "reverb" options=2
+param 13 3 "rev_eng_input" "input engine" min=-inf max=18 default=-9
+param 14 3 "rev_cut_input" "input softcut" min=-inf max=18 default=-9
+param 15 3 "rev_monitor_input" "input monitor" min=-inf max=18 default=-inf
+param 16 3 "rev_tape_input" "input tape" min=-inf max=18 default=-inf
+param 17 3 "rev_return_level" "return level" min=-inf max=18 default=0
+param 18 3 "rev_pre_delay" "pre delay" min=20 max=100 default=60
+param 19 3 "rev_lf_fc" "lf fc" min=50 max=1000 default=200
+param 20 3 "rev_low_time" "low time" min=0.1 max=16 default=6
+param 21 3 "rev_mid_time" "mid time" min=0.1 max=16 default=6
+param 22 3 "rev_hf_damping" "hf damping" min=1500 max=20000 default=6000
+param 23 7 "COMPRESSOR" "COMPRESSOR" n=8
+param 24 2 "compressor" "compressor" options=2
+param 25 3 "comp_mix" "mix" min=0 max=1 default=1
+param 26 3 "comp_ratio" "ratio" min=1 max=20 default=4
+param 27 3 "comp_threshold" "threshold" min=-100 max=10 default=-18
+param 28 3 "comp_attack" "attack" min=1 max=1000 default=5
+param 29 3 "comp_release" "release" min=1 max=1000 default=50
+param 30 3 "comp_pre_gain" "pre gain" min=-20 max=60 default=0
+param 31 3 "comp_post_gain" "post gain" min=-20 max=60 default=9
+param 32 7 "SOFTCUT" "SOFTCUT" n=3
+param 33 3 "cut_input_adc" "input adc" min=-inf max=18 default=0
+param 34 3 "cut_input_eng" "input engine" min=-inf max=18 default=0
+param 35 3 "cut_input_tape" "input tape" min=-inf max=18 default=-inf
+param 36 7 "CLOCK" "CLOCK" n=29
+param 37 2 "clock_source" "source" options=4
+param 38 1 "clock_tempo" "tempo" min=1 max=300 default=120
+param 39 6 "clock_reset" "reset"
+param 40 0 "link_separator" "link"
+param 41 1 "link_quantum" "link quantum" min=1 max=32 default=4
+param 42 2 "link_start_stop_sync" "link start/stop sync" options=2
+param 43 0 "midi_clock_out_separator" "midi clock out"
+param 44 9 "clock_midi_out_1" "1. none"
+param 45 9 "clock_midi_out_2" "2. none"
+param 46 9 "clock_midi_out_3" "3. none"
+param 47 9 "clock_midi_out_4" "4. none"
+param 48 9 "clock_midi_out_5" "5. none"
+param 49 9 "clock_midi_out_6" "6. none"
+param 50 9 "clock_midi_out_7" "7. none"
+param 51 9 "clock_midi_out_8" "8. none"
+param 52 9 "clock_midi_out_9" "9. none"
+param 53 9 "clock_midi_out_10" "10. none"
+param 54 9 "clock_midi_out_11" "11. none"
+param 55 9 "clock_midi_out_12" "12. none"
+param 56 9 "clock_midi_out_13" "13. none"
+param 57 9 "clock_midi_out_14" "14. none"
+param 58 9 "clock_midi_out_15" "15. none"
+param 59 9 "clock_midi_out_16" "16. none"
+param 60 0 "midi_clock_in_separator" "midi clock in"
+param 61 2 "clock_midi_in" "midi clock in" options=18
+param 62 0 "crow_clock_separator" "crow"
+param 63 2 "clock_crow_out" "crow out" options=5
+param 64 1 "clock_crow_out_div" "crow out div" min=1 max=32 default=4
+param 65 1 "clock_crow_in_div" "crow in div" min=1 max=32 default=4
+param 66 0 "strata" "strata"
+param 67 3 "master_density" "master density" min=0.1 max=2 default=1
+param 68 1 "tempo" "tempo" min=1 max=300 default=120
+param 69 0 "strata_mutations" "strata_mutations"
+param 70 9 "mutation_enabled" "mutations enabled"
+param 71 3 "mutation_rate" "mutation rate" min=0.5 max=10 default=2
+param 72 3 "mutation_probability" "mutation probability" min=0 max=1 default=0.15
+param 73 3 "mutation_amount" "mutation amount" min=0 max=1 default=0.25
+param 74 0 "strata_scenes" "strata_scenes"
+param 75 9 "scene_sequencer_enabled" "scene sequencer"
+param 76 3 "scene_transition_time" "transition time" min=0 max=30 default=2
+param 77 3 "scene_duration" "scene duration" min=4 max=120 default=16
+param 78 1 "scene_sequence_length" "sequence length" min=1 max=8 default=4
+param 79 6 "save_scenes" "save scenes to disk"
+param 80 6 "load_scenes" "load scenes from disk"
+param 81 7 "strata_fx" "fx" n=11
+param 82 2 "filter_type" "filter type" options=3
+param 83 3 "filter_freq" "filter freq" min=20 max=20000 default=5000
+param 84 3 "filter_res" "filter res" min=0 max=1 default=0.5
+param 85 3 "filter_mix" "filter mix" min=0 max=1 default=0
+param 86 3 "delay_time" "delay time" min=0.01 max=2 default=0.375
+param 87 3 "delay_feedback" "delay feedback" min=0 max=0.95 default=0.4
+param 88 3 "delay_mix" "delay mix" min=0 max=1 default=0
+param 89 3 "reverb_mix" "reverb mix" min=0 max=1 default=0.3
+param 90 3 "reverb_size" "reverb size" min=0 max=1 default=0.8
+param 91 3 "reverb_damp" "reverb damping" min=0 max=1 default=0.5
+param 92 3 "drift_amount" "tape drift" min=0 max=0.1 default=0.01
+param 93 7 "strata_lfos" "lfo destinations" n=3
+param 94 2 "strata_lfo1_dest" "LFO 1 dest" options=68
+param 95 2 "strata_lfo2_dest" "LFO 2 dest" options=68
+param 96 2 "strata_lfo3_dest" "LFO 3 dest" options=68
+param 97 7 "lfo_group_1" "LFO 1" n=15
+param 98 2 "lfo_1" "lfo state" options=2
+param 99 2 "lfo_shape_1" "lfo shape" options=6
+param 100 1 "lfo_depth_1" "lfo depth" min=0 max=100 default=0
+param 101 1 "lfo_phase_1" "lfo phase" min=0 max=100 default=0
+param 102 1 "lfo_offset_1" "lfo offset" min=-50 max=50 default=0
+param 103 8 "lfo_scaled_1" "  scaled value"
+param 104 8 "lfo_raw_1" "  raw value"
+param 105 3 "lfo_min_1" "lfo min" min=-1 max=1 default=-1
+param 106 3 "lfo_max_1" "lfo max" min=-1 max=1 default=1
+param 107 2 "lfo_baseline_1" "lfo baseline" options=3
+param 108 2 "lfo_mode_1" "lfo mode" options=2
+param 109 2 "lfo_clocked_1" "lfo rate" options=22
+param 110 3 "lfo_free_1" "lfo rate" min=0.1 max=300 default=4
+param 111 6 "lfo_reset_1" "reset lfo"
+param 112 2 "lfo_reset_target_1" "reset lfo to" options=4
+param 113 7 "lfo_group_2" "LFO 2" n=15
+param 114 2 "lfo_2" "lfo state" options=2
+param 115 2 "lfo_shape_2" "lfo shape" options=6
+param 116 1 "lfo_depth_2" "lfo depth" min=0 max=100 default=0
+param 117 1 "lfo_phase_2" "lfo phase" min=0 max=100 default=0
+param 118 1 "lfo_offset_2" "lfo offset" min=-50 max=50 default=0
+param 119 8 "lfo_scaled_2" "  scaled value"
+param 120 8 "lfo_raw_2" "  raw value"
+param 121 3 "lfo_min_2" "lfo min" min=-1 max=1 default=-1
+param 122 3 "lfo_max_2" "lfo max" min=-1 max=1 default=1
+param 123 2 "lfo_baseline_2" "lfo baseline" options=3
+param 124 2 "lfo_mode_2" "lfo mode" options=2
+param 125 2 "lfo_clocked_2" "lfo rate" options=22
+param 126 3 "lfo_free_2" "lfo rate" min=0.1 max=300 default=4
+param 127 6 "lfo_reset_2" "reset lfo"
+param 128 2 "lfo_reset_target_2" "reset lfo to" options=4
+param 129 7 "lfo_group_3" "LFO 3" n=15
+param 130 2 "lfo_3" "lfo state" options=2
+param 131 2 "lfo_shape_3" "lfo shape" options=6
+param 132 1 "lfo_depth_3" "lfo depth" min=0 max=100 default=0
+param 133 1 "lfo_phase_3" "lfo phase" min=0 max=100 default=0
+param 134 1 "lfo_offset_3" "lfo offset" min=-50 max=50 default=0
+param 135 8 "lfo_scaled_3" "  scaled value"
+param 136 8 "lfo_raw_3" "  raw value"
+param 137 3 "lfo_min_3" "lfo min" min=-1 max=1 default=-1
+param 138 3 "lfo_max_3" "lfo max" min=-1 max=1 default=1
+param 139 2 "lfo_baseline_3" "lfo baseline" options=3
+param 140 2 "lfo_mode_3" "lfo mode" options=2
+param 141 2 "lfo_clocked_3" "lfo rate" options=22
+param 142 3 "lfo_free_3" "lfo rate" min=0.1 max=300 default=4
+param 143 6 "lfo_reset_3" "reset lfo"
+param 144 2 "lfo_reset_target_3" "reset lfo to" options=4
+param 145 7 "strata_buffers" "buffers" n=34
+param 146 3 "record_duration" "record duration" min=0.5 max=16 default=8
+param 147 3 "record_level" "record level" min=0 max=2 default=1
+param 148 4 "buf1_file" "buffer 1 file"
+param 149 6 "buf1_record" "buffer 1 record"
+param 150 6 "buf1_clear" "buffer 1 clear"
+param 151 6 "buf1_save" "buffer 1 save"
+param 152 4 "buf2_file" "buffer 2 file"
+param 153 6 "buf2_record" "buffer 2 record"
+param 154 6 "buf2_clear" "buffer 2 clear"
+param 155 6 "buf2_save" "buffer 2 save"
+param 156 4 "buf3_file" "buffer 3 file"
+param 157 6 "buf3_record" "buffer 3 record"
+param 158 6 "buf3_clear" "buffer 3 clear"
+param 159 6 "buf3_save" "buffer 3 save"
+param 160 4 "buf4_file" "buffer 4 file"
+param 161 6 "buf4_record" "buffer 4 record"
+param 162 6 "buf4_clear" "buffer 4 clear"
+param 163 6 "buf4_save" "buffer 4 save"
+param 164 4 "buf5_file" "buffer 5 file"
+param 165 6 "buf5_record" "buffer 5 record"
+param 166 6 "buf5_clear" "buffer 5 clear"
+param 167 6 "buf5_save" "buffer 5 save"
+param 168 4 "buf6_file" "buffer 6 file"
+param 169 6 "buf6_record" "buffer 6 record"
+param 170 6 "buf6_clear" "buffer 6 clear"
+param 171 6 "buf6_save" "buffer 6 save"
+param 172 4 "buf7_file" "buffer 7 file"
+param 173 6 "buf7_record" "buffer 7 record"
+param 174 6 "buf7_clear" "buffer 7 clear"
+param 175 6 "buf7_save" "buffer 7 save"
+param 176 4 "buf8_file" "buffer 8 file"
+param 177 6 "buf8_record" "buffer 8 record"
+param 178 6 "buf8_clear" "buffer 8 clear"
+param 179 6 "buf8_save" "buffer 8 save"
+param 180 7 "strata_midi" "midi" n=3
+param 181 1 "midi_device" "midi device" min=1 max=4 default=1
+param 182 2 "midi_channel_mode" "midi channels" options=2
+param 183 2 "midi_note_off" "midi note off" options=2
+param 184 0 "voice 1: resonator" "voice 1: resonator"
+param 185 3 "v1_freq" "freq" min=20 max=2000 default=100
+param 186 3 "v1_rq" "rq" min=0.01 max=1 default=0.1
+param 187 3 "v1_noise" "noise" min=0 max=1 default=0.5
+param 188 3 "v1_mod1" "mod1" min=0.01 max=1 default=0.1
+param 189 3 "v1_mod2" "mod2" min=0.01 max=1 default=0.15
+param 190 3 "v1_amp" "amp" min=0 max=1 default=0.3
+param 191 3 "v1_pan" "pan" min=-1 max=1 default=0
+param 192 0 "voice 1 granular" "voice 1 granular"
+param 193 2 "v1_source" "source" options=10
+param 194 3 "v1_buf_pos" "buffer position" min=0 max=1 default=0
+param 195 3 "v1_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 196 3 "v1_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 197 3 "v1_grain_size" "grain size" min=0.01 max=0.5 default=0.1
+param 198 3 "v1_grain_density" "grain density" min=1 max=100 default=20
+param 199 3 "v1_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 200 3 "v1_grain_spread" "position spread" min=0 max=1 default=0.5
+param 201 2 "v1_grain_env" "grain envelope" options=5
+param 202 2 "v1_grain_mode" "grain mode" options=2
+param 203 0 "voice 1 cross-modulation" "voice 1 cross-modulation"
+param 204 1 "v1_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 205 3 "v1_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 206 3 "v1_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 207 1 "v1_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 208 3 "v1_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 209 3 "v1_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 210 1 "v1_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 211 3 "v1_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 212 3 "v1_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 213 3 "v1_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 214 0 "voice 2: fm" "voice 2: fm"
+param 215 3 "v2_freq" "freq" min=20 max=2000 default=80
+param 216 3 "v2_ratio" "ratio" min=0.5 max=8 default=1.5
+param 217 3 "v2_index" "index" min=0 max=10 default=2
+param 218 3 "v2_modFreq" "modFreq" min=0.01 max=1 default=0.05
+param 219 3 "v2_amp" "amp" min=0 max=1 default=0.25
+param 220 3 "v2_pan" "pan" min=-1 max=1 default=0
+param 221 0 "voice 2 granular" "voice 2 granular"
+param 222 2 "v2_source" "source" options=10
+param 223 3 "v2_buf_pos" "buffer position" min=0 max=1 default=0
+param 224 3 "v2_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 225 3 "v2_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 226 3 "v2_grain_size" "grain size" min=0.01 max=0.5 default=0.15
+param 227 3 "v2_grain_density" "grain density" min=1 max=100 default=15
+param 228 3 "v2_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 229 3 "v2_grain_spread" "position spread" min=0 max=1 default=0.3
+param 230 2 "v2_grain_env" "grain envelope" options=5
+param 231 2 "v2_grain_mode" "grain mode" options=2
+param 232 0 "voice 2 cross-modulation" "voice 2 cross-modulation"
+param 233 1 "v2_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 234 3 "v2_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 235 3 "v2_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 236 1 "v2_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 237 3 "v2_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 238 3 "v2_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 239 1 "v2_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 240 3 "v2_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 241 3 "v2_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 242 3 "v2_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 243 0 "voice 3: folder" "voice 3: folder"
+param 244 3 "v3_freq" "freq" min=20 max=2000 default=60
+param 245 3 "v3_fold" "fold" min=0.1 max=5 default=1
+param 246 3 "v3_mod" "mod" min=0.01 max=2 default=0.2
+param 247 3 "v3_amp" "amp" min=0 max=1 default=0.3
+param 248 3 "v3_pan" "pan" min=-1 max=1 default=0
+param 249 0 "voice 3 granular" "voice 3 granular"
+param 250 2 "v3_source" "source" options=10
+param 251 3 "v3_buf_pos" "buffer position" min=0 max=1 default=0
+param 252 3 "v3_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 253 3 "v3_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 254 3 "v3_grain_size" "grain size" min=0.01 max=0.5 default=0.08
+param 255 3 "v3_grain_density" "grain density" min=1 max=100 default=25
+param 256 3 "v3_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 257 3 "v3_grain_spread" "position spread" min=0 max=1 default=0.4
+param 258 2 "v3_grain_env" "grain envelope" options=5
+param 259 2 "v3_grain_mode" "grain mode" options=2
+param 260 0 "voice 3 cross-modulation" "voice 3 cross-modulation"
+param 261 1 "v3_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 262 3 "v3_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 263 3 "v3_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 264 1 "v3_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 265 3 "v3_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 266 3 "v3_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 267 1 "v3_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 268 3 "v3_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 269 3 "v3_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 270 3 "v3_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 271 0 "voice 4: sub" "voice 4: sub"
+param 272 3 "v4_freq" "freq" min=20 max=2000 default=40
+param 273 3 "v4_drift" "drift" min=0.001 max=0.1 default=0.02
+param 274 3 "v4_amp" "amp" min=0 max=1 default=0.4
+param 275 0 "voice 4 granular" "voice 4 granular"
+param 276 2 "v4_source" "source" options=10
+param 277 3 "v4_buf_pos" "buffer position" min=0 max=1 default=0
+param 278 3 "v4_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 279 3 "v4_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 280 3 "v4_grain_size" "grain size" min=0.01 max=0.5 default=0.2
+param 281 3 "v4_grain_density" "grain density" min=1 max=100 default=10
+param 282 3 "v4_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 283 3 "v4_grain_spread" "position spread" min=0 max=1 default=0.2
+param 284 2 "v4_grain_env" "grain envelope" options=5
+param 285 2 "v4_grain_mode" "grain mode" options=2
+param 286 0 "voice 4 cross-modulation" "voice 4 cross-modulation"
+param 287 1 "v4_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 288 3 "v4_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 289 3 "v4_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 290 1 "v4_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 291 3 "v4_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 292 3 "v4_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 293 1 "v4_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 294 3 "v4_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 295 3 "v4_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 296 3 "v4_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 297 0 "voice 5: pulse" "voice 5: pulse"
+param 298 3 "v5_freq" "freq" min=20 max=2000 default=120
+param 299 3 "v5_width" "width" min=0.05 max=0.95 default=0.5
+param 300 3 "v5_cutoff" "cutoff" min=100 max=8000 default=2000
+param 301 3 "v5_res" "res" min=0.1 max=1 default=0.3
+param 302 3 "v5_amp" "amp" min=0 max=1 default=0.3
+param 303 3 "v5_pan" "pan" min=-1 max=1 default=0
+param 304 0 "voice 5 granular" "voice 5 granular"
+param 305 2 "v5_source" "source" options=10
+param 306 3 "v5_buf_pos" "buffer position" min=0 max=1 default=0
+param 307 3 "v5_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 308 3 "v5_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 309 3 "v5_grain_size" "grain size" min=0.01 max=0.5 default=0.12
+param 310 3 "v5_grain_density" "grain density" min=1 max=100 default=18
+param 311 3 "v5_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 312 3 "v5_grain_spread" "position spread" min=0 max=1 default=0.35
+param 313 2 "v5_grain_env" "grain envelope" options=5
+param 314 2 "v5_grain_mode" "grain mode" options=2
+param 315 0 "voice 5 cross-modulation" "voice 5 cross-modulation"
+param 316 1 "v5_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 317 3 "v5_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 318 3 "v5_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 319 1 "v5_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 320 3 "v5_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 321 3 "v5_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 322 1 "v5_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 323 3 "v5_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 324 3 "v5_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 325 3 "v5_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 326 0 "voice 6: karplus" "voice 6: karplus"
+param 327 3 "v6_freq" "freq" min=20 max=2000 default=200
+param 328 3 "v6_decay" "decay" min=0.5 max=10 default=4
+param 329 3 "v6_damping" "damping" min=0.1 max=0.9 default=0.5
+param 330 3 "v6_excite" "excite" min=0.1 max=2 default=0.3
+param 331 3 "v6_amp" "amp" min=0 max=1 default=0.35
+param 332 3 "v6_pan" "pan" min=-1 max=1 default=0
+param 333 0 "voice 6 granular" "voice 6 granular"
+param 334 2 "v6_source" "source" options=10
+param 335 3 "v6_buf_pos" "buffer position" min=0 max=1 default=0
+param 336 3 "v6_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 337 3 "v6_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 338 3 "v6_grain_size" "grain size" min=0.01 max=0.5 default=0.08
+param 339 3 "v6_grain_density" "grain density" min=1 max=100 default=22
+param 340 3 "v6_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 341 3 "v6_grain_spread" "position spread" min=0 max=1 default=0.25
+param 342 2 "v6_grain_env" "grain envelope" options=5
+param 343 2 "v6_grain_mode" "grain mode" options=2
+param 344 0 "voice 6 cross-modulation" "voice 6 cross-modulation"
+param 345 1 "v6_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 346 3 "v6_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 347 3 "v6_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 348 1 "v6_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 349 3 "v6_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 350 3 "v6_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 351 1 "v6_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 352 3 "v6_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 353 3 "v6_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 354 3 "v6_mod_speed" "mod speed" min=0.1 max=50 default=10
+param 355 0 "voice 7: ring" "voice 7: ring"
+param 356 3 "v7_freq" "freq" min=20 max=2000 default=300
+param 357 3 "v7_ratio" "ratio" min=0.5 max=8 default=1.618
+param 358 3 "v7_mod" "mod" min=0.01 max=2 default=0.2
+param 359 3 "v7_brightness" "brightness" min=0 max=1 default=0.5
+param 360 3 "v7_amp" "amp" min=0 max=1 default=0.25
+param 361 3 "v7_pan" "pan" min=-1 max=1 default=0
+param 362 0 "voice 7 granular" "voice 7 granular"
+param 363 2 "v7_source" "source" options=10
+param 364 3 "v7_buf_pos" "buffer position" min=0 max=1 default=0
+param 365 3 "v7_buf_rate" "buffer rate" min=0.25 max=4 default=1
+param 366 3 "v7_buf_scan" "buffer scan" min=-2 max=2 default=0
+param 367 3 "v7_grain_size" "grain size" min=0.01 max=0.5 default=0.1
+param 368 3 "v7_grain_density" "grain density" min=1 max=100 default=20
+param 369 3 "v7_grain_pitch" "grain pitch" min=0.25 max=4 default=1
+param 370 3 "v7_grain_spread" "position spread" min=0 max=1 default=0.4
+param 371 2 "v7_grain_env" "grain envelope" options=5
+param 372 2 "v7_grain_mode" "grain mode" options=2
+param 373 0 "voice 7 cross-modulation" "voice 7 cross-modulation"
+param 374 1 "v7_mod_source_1" "mod source 1" min=0 max=7 default=0
+param 375 3 "v7_mod_amp_amt_1" "amp mod 1" min=-2 max=2 default=0
+param 376 3 "v7_mod_freq_amt_1" "freq mod 1" min=-2 max=2 default=0
+param 377 1 "v7_mod_source_2" "mod source 2" min=0 max=7 default=0
+param 378 3 "v7_mod_amp_amt_2" "amp mod 2" min=-2 max=2 default=0
+param 379 3 "v7_mod_freq_amt_2" "freq mod 2" min=-2 max=2 default=0
+param 380 1 "v7_mod_source_3" "mod source 3" min=0 max=7 default=0
+param 381 3 "v7_mod_amp_amt_3" "amp mod 3" min=-2 max=2 default=0
+param 382 3 "v7_mod_freq_amt_3" "freq mod 3" min=-2 max=2 default=0
+param 383 3 "v7_mod_speed" "mod speed" min=0.1 max=50 default=10
 ## startup clock
 screen frame
   text 0 8 left 15 "MAIN"

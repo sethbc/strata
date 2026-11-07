@@ -889,6 +889,27 @@ local function golden_session(context)
 
   local ok, problem = xpcall(function()
     step("init", function() init(); context.check_param_groups() end)
+    -- the PARAMS menu, in order: index, type code, id and name, then a
+    -- group's size, an option's count, a number's or control's range and
+    -- default
+    step("params menu", function()
+      for index, param in ipairs(params.params) do
+        local fields = { golden_number(index), golden_scalar(param.t), golden_scalar(param.id), golden_scalar(param.name) }
+        if param.t == params.tGROUP then
+          table.insert(fields, "n=" .. golden_scalar(param.n))
+        elseif param.t == params.tOPTION then
+          table.insert(fields, "options=" .. golden_number(#param.options))
+        elseif param.t == params.tNUMBER then
+          table.insert(fields, string.format("min=%s max=%s default=%s", golden_scalar(param.min),
+            golden_scalar(param.max), golden_scalar(param.default)))
+        elseif param.t == params.tCONTROL then
+          local spec = param.controlspec
+          table.insert(fields, string.format("min=%s max=%s default=%s", golden_scalar(spec.minval),
+            golden_scalar(spec.maxval), golden_scalar(spec.default)))
+        end
+        emit("param " .. table.concat(fields, " "))
+      end
+    end)
     step("startup clock", function() finish_startup(context); next_frame(context) end)
 
     -- every page: its draw, then E2/E3 both ways, K2 and K3, and E1 to the next
