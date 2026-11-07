@@ -1,7 +1,8 @@
 -- lib/arc/scenes.lua
 -- The SCENES page's arc rings: ring 1 the scene cursor (S.cursors.scene)
 -- over the same stops as E2 (the eight slots, then the SCENES_FIELDS),
--- ARC_SCENES.ticks_per_stop ticks a stop carried under "scenes:1"; ring 2
+-- ARC_SCENES.ticks_per_stop ticks a stop carried under "scenes:1", moved
+-- through S.lib.pages_scenes.move_cursor as E2 moves it; ring 2
 -- the transition time; rings 3-4 dark (3.4's morph will take ring 3). Sets
 -- only the arc fields (arc_delta, arc_redraw) on SCENES's S.registry.pages
 -- record (lib/pages/scenes.lua).
@@ -17,23 +18,11 @@ return function(S)
     level = 12,
   }
 
-  -- A cursor move disarms a pending overwrite confirmation and clears its
-  -- hint-row prompt, as E2 does (S.scenes_page, lib/pages/scenes.lua)
-  local function move_cursor(steps)
-    local before = S.cursors.scene
-    S.lib.ui_cursors.move("scene", steps)
-    local page = S.scenes_page
-    if S.cursors.scene ~= before and page and page.armed_slot then
-      page.armed_slot = nil
-      page.armed_until = 0
-      S.lib.ui_flash.start("hints", nil)
-    end
-  end
-
   local function arc_scenes_delta(n, delta)
     if n == 1 then
       local steps = arc_whole_steps("scenes:1", delta, ARC_SCENES.ticks_per_stop)
-      if steps ~= 0 then move_cursor(steps) end
+      -- the page's own move, as E2's: it disarms a pending overwrite
+      if steps ~= 0 then S.lib.pages_scenes.move_cursor(S.cursors.scene + steps) end
     elseif n == 2 then
       arc_sweep_param("scene_transition_time", delta)
     end
