@@ -566,6 +566,16 @@ test("functions live in their module", function()
   end
 end)
 
+test("constants live in lib/constants.lua, a plain table", function()
+  load_strata()
+  local constants = local_value("S").constants
+  assert_equal(type(constants), "table", "S.constants is a table")
+  assert_equal(constants.NUM_VOICES, 7, "S.constants.NUM_VOICES")
+  assert_equal(constants.UI_PAGES[1], "MAIN", "S.constants.UI_PAGES")
+  local chunk = assert(loadfile(repo_root .. "/lib/constants.lua"))
+  assert_equal(type(chunk()), "table", "lib/constants.lua returns a plain table, not a constructor")
+end)
+
 ---------------------------------------------------------------------------
 -- Refactor safety nets (Wave 0): a golden-master log of one scripted
 -- session, a static check that every global read is defined, and a probe

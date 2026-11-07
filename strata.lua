@@ -24,39 +24,31 @@ local fileselect = require "fileselect"
 -- include per module, by its lib/ path, in this file only
 local S = include("lib/state")()
 
--- Constants
-local NUM_VOICES = 7
-local NUM_SCENES = 8
-local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
-local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
-local NUM_UI_PAGES = 5        -- Screen pages, selected with E1
-local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
-local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
-local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
-local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
-local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
-
--- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
--- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
--- engine's envelope buffers
-local GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}
-
--- Grain modes (v<i>_grain_mode option order), sent as grainMode n - 1:
--- 0 = continuous (grain density grains per second), 1 = triggered (one grain
--- per retrigger: pattern steps and MIDI notes)
-local GRAIN_MODE_OPTIONS = {"continuous", "triggered"}
-
--- Grain sources (v<i>_source option order): the voice's own synth, buffer
--- slots 1..NUM_BUFFERS, then the live input. Option n is sent to the engine
--- as setGrainSource n - 1 (0 = synth, 1-8 = buffer slot, 9 = input).
-local SOURCE_SYNTH = 1
-local SOURCE_INPUT = NUM_BUFFERS + 2
-local SOURCE_OPTIONS = {"synth"}
-for slot = 1, NUM_BUFFERS do
-  SOURCE_OPTIONS[slot + 1] = "buf " .. slot
-end
-SOURCE_OPTIONS[SOURCE_INPUT] = "input"
+-- Constants (lib/constants.lua)
+S.constants = include("lib/constants")
+local NUM_VOICES = S.constants.NUM_VOICES
+local NUM_SCENES = S.constants.NUM_SCENES
+local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+local SCENE_DATA_VERSION = S.constants.SCENE_DATA_VERSION
+local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
+local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
+local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
+local NUM_BUFFERS = S.constants.NUM_BUFFERS
+local BUFFER_SECONDS = S.constants.BUFFER_SECONDS
+local BUFFER_DATA_VERSION = S.constants.BUFFER_DATA_VERSION
+local NUM_LFOS = S.constants.NUM_LFOS
+local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
+local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
+local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
+local SOURCE_INPUT = S.constants.SOURCE_INPUT
+local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
+local UI_PAGES = S.constants.UI_PAGES
+local DISCRETE_GRAIN_KEYS = S.constants.DISCRETE_GRAIN_KEYS
+local BUFFER_MUTATION_KEYS = S.constants.BUFFER_MUTATION_KEYS
+local GRAIN_PARAM_IDS = S.constants.GRAIN_PARAM_IDS
+local MAIN_PARAMS = S.constants.MAIN_PARAMS
+local BUFFER_MAIN_PARAM = S.constants.BUFFER_MAIN_PARAM
+local INPUT_MAIN_PARAM = S.constants.INPUT_MAIN_PARAM
 
 -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
 -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
@@ -305,17 +297,6 @@ function voice_buffer_slot(voice_idx)
 end
 
 local selected_voice = 1
-local UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}
-UI_PAGES.MAIN_PAGE = 1  -- MAIN's index (arc_key tests the page by index, not by its title)
--- Arc pages follow the screen pages. Every continuous arc ring sweeps its
--- param's whole range in this many ticks: half a turn of the arc's 1024
--- ticks per revolution (monome arc spec; matron passes the deltas through)
-UI_PAGES.ARC_TICKS_PER_SWEEP = 512
-UI_PAGES.ARC_PORT = 1   -- preferred arc vport (arc.connect's default)
-UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
--- norns' Arc:segment reduces angles modulo 2*pi, so a full turn lights nothing;
--- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
-UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 local ui_page = 1  -- index into UI_PAGES
 
 -- Screen and arc redraws. Anything that changes what they show calls
@@ -2164,18 +2145,6 @@ function drift_update()
   forget_keys_held_through_menu()
 end
 
--- voices[i].grain keys holding an option index rather than a continuous
--- value, mapped to their option count: smooth transitions switch them at the
--- end instead of crossfading, mutation never touches them, and scenes must
--- store integers from 1 to the option count
-local DISCRETE_GRAIN_KEYS = {
-  env = #GRAIN_ENV_OPTIONS,
-  mode = #GRAIN_MODE_OPTIONS
-}
-
--- voices[i].grain keys gentle_mutate changes for buffer-sourced voices
-local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
-
 -- The value a mutation step lands on: delta (a fraction of the param's
 -- normalized 0-1 range) added to current, clamped to the range
 function mutated_value(spec, current, delta)
@@ -2305,19 +2274,6 @@ local VOICE_SCENE_DEFAULTS = {
 -- Top-level scene blocks added after format 1 (such as LFO or MIDI
 -- settings): {key = field of scene data, default = value}
 local SCENE_BLOCK_DEFAULTS = {}
-
--- voices[i].grain keys -> param id suffixes
-local GRAIN_PARAM_IDS = {
-  size = "grain_size",
-  density = "grain_density",
-  pitch = "grain_pitch",
-  spread = "grain_spread",
-  env = "grain_env",
-  mode = "grain_mode",
-  buf_pos = "buf_pos",
-  buf_rate = "buf_rate",
-  buf_scan = "buf_scan"
-}
 
 -- A smooth transition fades in `steps` steps. The scene sequencer holds a
 -- scene for max(scene duration, transition time), then, while the fade is
@@ -3007,22 +2963,6 @@ function validate_scene_data(scene_table)
   return true
 end
 
--- Per voice type, on MAIN: the synthesis param E3 and arc ring 2 adjust
--- (param id suffix, screen label and screen value format; the arc ring sweeps
--- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
--- and the short name the voice list shows (at most 5 characters, which a
--- test asserts, so the widest entry, "+ pulse [F]", ends well left of the
--- divider at x 62)
-local MAIN_PARAMS = {
-  resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},
-  fm = {key = "index", label = "index", format = "%.1f", list_name = "fm"},
-  folder = {key = "fold", label = "fold", format = "%.1f", list_name = "fold"},
-  sub = {key = "drift", label = "drift", format = "%.3f", list_name = "sub"},
-  pulse = {key = "width", label = "width", format = "%.2f", list_name = "pulse"},
-  karplus = {key = "decay", label = "decay", format = "%.1f s", list_name = "karp"},
-  ring = {key = "ratio", label = "ratio", format = "%.2f", list_name = "ring"}
-}
-
 -- MAIN's voice list: "+" for a running voice, "-" for a stopped one, then the
 -- type's short name and [F] when frozen. Plain ASCII, so the entries' width
 -- does not depend on the font drawing other glyphs (the details column shows
@@ -3040,11 +2980,6 @@ function update_voice_list()
   voice_list.active = true
   voice_list.index = selected_voice
 end
-
--- A buffer-sourced voice shows and adjusts its buffer position instead; an
--- input-sourced voice its grain size (its synth and buffer params do nothing)
-local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
-local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 function main_param_entry(voice_idx)
   if voice_uses_synth(voice_idx) then
