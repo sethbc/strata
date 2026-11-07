@@ -240,4 +240,56 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
+
+test("a scene saved on a hold redraws the screen (SETUP counts it)", function()
+  local context = load_strata(); finish_startup(context)
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return true end
+    end
+    return false
+  end
+  h.show_page("SETUP")
+  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
+  h.next_frame(context)
+  context.grid.press(1, 2, 3, 1)
+  h.next_frame(context)
+  assert_true(screen_has("scenes: 0/8 saved"), "nothing saved yet")
+  context.clock.run_for(0.5)
+  h.next_frame(context)
+  assert_true(screen_has("scenes: 1/8 saved"), "the save shows on the next frame")
+end)
+
+test("a third key sets only its own voice's held step", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 3, 1, 1)  -- voice 1 step 3
+  context.grid.press(1, 6, 2, 1)  -- voice 2 step 6
+  context.grid.press(1, 16, 1, 1)
+  assert_equal(patterns[1][3], 15, "voice 1's held step gets column 16's level")
+  context.grid.press(1, 16, 1, 0)
+  context.grid.press(1, 1, 1, 1)
+  assert_equal(patterns[1][3], 1, "voice 1's held step gets column 1's level")
+  assert_equal(patterns[2][6], 15, "voice 2's held step keeps its level")
+  assert_equal(patterns[1][16] + patterns[1][1], 0, "the level keys never toggled")
+end)
+
+test("step_key ignores voices, steps and positions out of range", function()
+  local context = load_strata(); finish_startup(context)
+  local core = grid_core()
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 3, 1, 1)  -- voice 1 step 3 held
+  core.step_key(1, 5, 1, 1, 1.5, 5, 5, 16)
+  core.step_key(1, 5, 1, 1, 1, 17, 5, 16)
+  core.step_key(1, 5, 1, 1, 1, 0, 5, 16)
+  core.step_key(1, 5, 1, 1, 1, 5, 17, 16)
+  core.step_key(1, 5, 1, 1, 1, 5, 0, 16)
+  core.step_key(1, 5, 1, 1, 8, 5, 5, 16)
+  assert_equal(patterns[1][3], 15, "no out-of-range call set the held step's level")
+  assert_equal(patterns[1][17], nil, "the pattern never grows")
+  assert_equal(patterns[8], nil)
+end)
+
 end

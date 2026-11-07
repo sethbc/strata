@@ -13,6 +13,7 @@
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
@@ -198,10 +199,13 @@ return function(S)
   -- A pattern key. The step toggles at press, unless another step key of the
   -- same voice is held on this port: then the most recently pressed of those
   -- gets this key's level (its position, 1..positions, along the voice's
-  -- shown steps) and both keys are consumed. Releases do nothing
+  -- shown steps) and both keys are consumed. Releases do nothing. A voice,
+  -- step or position out of range does nothing, so only valid steps are
+  -- ever recorded as held (and later take a level)
   function M.step_key(port, x, y, z, voice_idx, step, position, positions)
     if z ~= 1 then return end
-    if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+    if not whole_number_in(voice_idx, 1, NUM_VOICES) or not whole_number_in(step, 1, PATTERN_LENGTH) then return end
+    if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
     local held_step, held_x, held_y = latest_held_step(port, voice_idx, x, y)
     if held_step then
       S.patterns[voice_idx][held_step.step] = M.level_for_position(position, positions)
@@ -221,6 +225,7 @@ return function(S)
     M.on_hold(port, x, y, GRID_HOLD.scene_save_seconds, function()
       capture_scene(scene_num)
       grid_redraw()
+      request_redraw()  -- SETUP counts the saved scenes
     end)
   end
 
