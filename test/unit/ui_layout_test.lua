@@ -87,19 +87,19 @@ test("every page lays out with every voice, source, ALT state and flash", functi
   key(1, 0)
   S.lib.ui_flash.cancel_all()
   -- then each record's own states (none until the Wave 2 pages add them)
-  local own_states = check_layout_states(started_script)
-  local fx_record = local_value("S").registry.pages[local_value("S").constants.UI_PAGES.index.FX]
-  local fx_own_states = #(fx_record.layout_states or {})
+  local baseline = check_layout_states(started_script)
+  local fx_own = 0
   -- a state a record lists is drawn: a probe on FX
   local probed = 0
   local drawn = check_layout_states(function()
     local probe_context = started_script()
     local FX = local_value("S").constants.UI_PAGES.index.FX
+    fx_own = #(local_value("S").registry.pages[FX].layout_states or {})
     local_value("S").registry.pages[FX].layout_states = {
       { name = "probe", setup = function() probed = probed + 1; params:set("filter_mix", 0) end } }
     return probe_context
   end)
-  assert_equal(drawn, own_states - fx_own_states + 1, "the probe state is drawn, with the other pages' states")
+  assert_equal(drawn, baseline - fx_own + 1, "the probe state is drawn beside the other records' own")
   assert_equal(probed, 2, "with ALT up and down, each on a fresh script")
 end)
 
