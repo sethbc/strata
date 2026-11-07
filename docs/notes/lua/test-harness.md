@@ -8,6 +8,7 @@
 - Call engine commands only as `engine.<name>(...)`. Any other use of the global `engine` fails the sync check, which cannot see what it calls.
 - Only one engine check runs per scsynth port: runs on the same port collide.
 - `test/StrataTestNoBoot.sc.in` stays a `.sc.in` file: norns compiles every `.sc` under `~/dust`, and that test class disables Crone's boot.
+- CI's LuaJIT is built without Lua 5.2 compatibility, so `table.unpack`, `table.pack`, `table.move`, `math.type`, `math.tointeger`, `utf8.*`, `string.pack` and `string.unpack` are nil there, though a local LuaJIT may have them. Never use them in `lib/`, `test/` or `strata.lua` without a fallback in the same expression (`table.unpack or unpack`). A static check in `test/unit/structure_test.lua` fails any other use (comments and strings are skipped).
 
 ## Owns
 
