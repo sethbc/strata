@@ -344,7 +344,7 @@ end
 test("each FX param's controlspec lies within the engine's limit for its argument (#51)", function()
   local problems, compared = fx_specs_outside_engine_limits(load_strata())
   assert_equal(#problems, 0, table.concat(problems, "; "))
-  assert_equal(compared, 6, "filter freq, res and mix; delay time, feedback and mix compared")
+  assert_equal(compared, 7, "filter freq, res and mix; delay time, feedback and mix; reverb mix compared")
   local widened, count = patched_script('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
   assert_equal(count, 1, "delay feedback patch applies")
   problems = fx_specs_outside_engine_limits(load_strata(widened))

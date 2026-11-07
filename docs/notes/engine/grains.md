@@ -57,4 +57,4 @@ Each is a method in its own area file, registered as an area with no state, defs
 | `voiceFilter(sig, filterType, filterFreq, filterRes, filterMix)` → sig | `StrataMix.sc` (mix, 120) | `sig` |
 | `voiceOutput(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend)` | `StrataMix.sc` | `Out.ar(out, sig)` and `Out.ar(mirrorOut, sig × mirrorLevel)` |
 
-`voiceOutput` takes `out` besides the plan's arguments: the engine sets it to `mainBus`, and the engine check moves it to a private bus to measure one grain synth.
+`voiceOutput` takes `out` besides the plan's arguments: the engine sets it to `mainBus`, and the engine check moves it to a private bus to measure one grain synth. The mix area fills `voiceFilter` and `voiceOutput` (the voice filter, and `out` as the dry part beside the delay and reverb sends): see `docs/notes/engine/effects.md`.

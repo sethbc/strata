@@ -18,6 +18,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 - Delay mix (0 = dry, the default, to 1)
 - Reverb mix, size and damping
 - Tape drift amount (depth of the drift; 0 = none)
+- Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU and memory, and keep its mix (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
 
 ## LFOs
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
@@ -74,3 +75,4 @@ Each voice includes:
   - Amplitude modulation amount
   - Frequency modulation amount
   - Modulation speed
+- Voice filter type (lowpass, highpass, bandpass), freq (20-20000 Hz, default 5000), res (0-1, default 0.5) and mix (0 = off, the default, to 1), and delay and reverb sends (0-1, default 1; see [Each voice's filter and sends](effects.md#each-voices-filter-and-sends))

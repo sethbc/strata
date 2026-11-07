@@ -42,7 +42,7 @@ test("include stub loads lib modules and honors overrides", function()
     "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
     .. " lfo_destinations = {}, fx_params = {} }, lib = {}, register_start = function() end,"
-    .. " register_cleanup = function() end, register_voice_params = function() end,"
+    .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)

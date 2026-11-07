@@ -593,6 +593,8 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
     setFilter = function(args) return enumerated("filterType", args[3]) end,
     setMasterDrift = none, setReverb = none, setDelay = none,
+    -- effect 0 delay, 1 reverb (the engine ignores others; Lua never sends them)
+    setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end
