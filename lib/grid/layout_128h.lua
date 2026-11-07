@@ -1,6 +1,6 @@
 -- lib/grid/layout_128h.lua
--- The 16x8 grid: its four pages (1 patterns, 2 faders, 3 scenes, 4 sources
--- and buffer slots), keys and LEDs. Row 8 works on every page. Registers
+-- The 16x8 grid: its four pages (1 patterns, 2 faders, 3 scenes, 4 sources,
+-- freeze and buffer slots), keys and LEDs. Row 8 works on every page. Registers
 -- S.registry.grid_layouts["128h"]. The functions stay global.
 
 return function(S)
@@ -28,6 +28,9 @@ return function(S)
     -- page 4: voice v's sources on row v (columns 1-10, as the 256's rows
     -- 9-15), slots 1-4 then 5-8 on columns 13-16: record on rows 1-2,
     -- clear on rows 3-4
+    freeze_column = 12,       -- page 4: voice v's freeze key on row v (S.lib.freeze)
+    frozen_level = 15,
+    unfrozen_level = 3,
     slot_first_column = 13,
     slot_columns = 4,
     record_first_row = 1,
@@ -77,6 +80,8 @@ return function(S)
     local slot, records = slot_key(x, y)
     if slot then
       if records then grid_core.record_key(slot) else grid_core.clear_key(slot) end
+    elseif y >= 1 and y <= NUM_VOICES and x == LAYOUT_128H.freeze_column then
+      S.lib.freeze.toggle(y)
     elseif y >= 1 and y <= NUM_VOICES and x <= #SOURCE_OPTIONS then
       grid_core.source_key(y, x)
     end
@@ -180,13 +185,15 @@ return function(S)
   end
 
   -- Page 4: each voice's source (selected 15, empty buffers 2, others 4),
-  -- the record keys (15 recording, 8 holding audio, 2 empty) and the clear
+  -- its freeze key (15 frozen, 3 not), the record keys (15 recording, 8 holding audio, 2 empty) and the clear
   -- keys
   local function redraw_source_page(grid_device)
     for voice_idx = 1, NUM_VOICES do
       for option = 1, #SOURCE_OPTIONS do
         grid_device:led(option, voice_idx, grid_core.source_level(voice_idx, option))
       end
+      grid_device:led(LAYOUT_128H.freeze_column, voice_idx,
+        S.lib.freeze.is_frozen(voice_idx) and LAYOUT_128H.frozen_level or LAYOUT_128H.unfrozen_level)
     end
     for slot = 1, NUM_BUFFERS do
       local column, row = slot_position(slot)

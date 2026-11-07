@@ -155,18 +155,44 @@ test("toggle_lock locks and unlocks a voice", function()
   assert_true(toggle_freeze == nil, "toggle_freeze is gone")
 end)
 
--- 3.2 adds a real audio freeze ([F] on MAIN, freeze functions): that work must
--- narrow or replace this scan.
+-- 3.2's audio freeze (lib/freeze.lua) has its own names: S.lib.freeze.toggle
+-- and is_frozen, and [F] on MAIN's status row. The lock's old freeze names
+-- stay banned everywhere, and [F] is MAIN's alone.
 test("no Lua file says freeze for the lock feature", function()
-  local banned = { "toggle_freeze", "%[FREEZE%]", "%[F%]", "_freeze%(", "start_or_freeze" }
+  local banned = { "toggle_freeze", "%[FREEZE%]", "_freeze%(", "start_or_freeze" }
   for _, source in ipairs(h.read_lua_sources()) do
     if not source.path:match("^test/") then
       local code = source.text:gsub("%-%-[^\n]*", "")
       for _, pattern in ipairs(banned) do
         assert_true(not code:find(pattern), source.path .. " still says " .. pattern)
       end
+      if source.path ~= "lib/pages/main.lua" then
+        assert_true(not code:find("%[F%]"), source.path .. " says [F] (only MAIN's status row does)")
+      end
     end
   end
+end)
+
+test("the lock keeps its lock names and the freeze module never touches S.frozen", function()
+  local found = {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    if not source.path:match("^test/") then
+      local code = source.text:gsub("%-%-[^\n]*", "")
+      if code:find("function toggle_lock%(") then found.toggle_lock = true end
+      if code:find("S%.frozen%[") then found.state = true end
+      if source.path == "lib/pages/main.lua" and code:find("%[L%]") then found.mark = true end
+      if source.path == "lib/freeze.lua" then
+        found.freeze_module = true
+        assert_true(not code:find("frozen%s*%["), "lib/freeze.lua never reads or writes S.frozen")
+        assert_true(not code:find("S%.frozen"), "lib/freeze.lua never names S.frozen")
+        assert_true(not code:find("toggle_lock"), "lib/freeze.lua never locks")
+      end
+    end
+  end
+  assert_true(found.toggle_lock, "toggle_lock is defined")
+  assert_true(found.state, "the lock's state is S.frozen")
+  assert_true(found.mark, "MAIN shows the lock as [L]")
+  assert_true(found.freeze_module, "lib/freeze.lua was scanned")
 end)
 
 test("each effect remembers its last non-zero mix", function()

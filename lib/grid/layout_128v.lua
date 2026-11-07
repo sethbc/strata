@@ -1,5 +1,5 @@
 -- lib/grid/layout_128v.lua
--- The 8x16 grid: four pages (1 patterns, 2 faders, 3 scenes, 4 sources),
+-- The 8x16 grid: four pages (1 patterns, 2 faders, 3 scenes, 4 sources and freeze),
 -- cycled by (8,8), keys and LEDs. Column 8 rows 1-7 and 9 work on every
 -- page. Registers S.registry.grid_layouts["128v"]. The functions stay
 -- global.
@@ -35,9 +35,13 @@ return function(S)
     scene_sequencer_row = 1,
     scene_length_first_row = 9,    -- rows 9-16: lengths 1-8
     scene_position_level = 10,
-    -- sources page: rows 1-10 the source options, row 12 record, row 13 clear
+    -- sources page: rows 1-10 the source options, row 12 record, row 13
+    -- clear, row 14 each voice's freeze key (S.lib.freeze)
     record_row = 12,
     clear_row = 13,
+    freeze_row = 14,
+    frozen_level = 15,
+    unfrozen_level = 3,
   }
   M.LAYOUT = LAYOUT_128V
   local PAGES = LAYOUT_128V.pages
@@ -86,6 +90,8 @@ return function(S)
       grid_core.record_key(x)
     elseif y == LAYOUT_128V.clear_row then
       grid_core.clear_key(x)
+    elseif y == LAYOUT_128V.freeze_row and x <= NUM_VOICES then
+      S.lib.freeze.toggle(x)
     end
   end
 
@@ -180,6 +186,10 @@ return function(S)
     for slot = 1, NUM_BUFFERS do
       grid_device:led(slot, LAYOUT_128V.record_row, grid_core.record_level(slot))
       grid_device:led(slot, LAYOUT_128V.clear_row, grid_core.CLEAR_LEVEL)
+    end
+    for voice_idx = 1, NUM_VOICES do
+      grid_device:led(voice_idx, LAYOUT_128V.freeze_row,
+        S.lib.freeze.is_frozen(voice_idx) and LAYOUT_128V.frozen_level or LAYOUT_128V.unfrozen_level)
     end
   end
 

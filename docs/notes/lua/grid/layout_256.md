@@ -23,12 +23,12 @@ Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 para
 
 `LAYOUT_256.tempo_steps` maps columns 5-8 to -10, -1, +1, +10. A press calls `params:delta("tempo", step)` (the `tempo` param drives `clock_tempo`) and `header_flash(string.format("tempo %d", ...))` with the new tempo, so the screen's header shows it for 1.5 s on any page. `grid_redraw_256_transport` lights a held tempo key at 15 (`grid_core.held`), the others at 4.
 
-## Row 16: lock and copy/paste
+## Row 16: lock, freeze and copy/paste
 
 `grid_key_256_lock(port, x)`:
-- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked.
+- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked. While column 8 of row 16 is held on the port (`grid_core.held`), they are `S.lib.freeze.toggle(x)` instead, and their LEDs show the freeze (15 frozen, 3 not). Column 8 itself does nothing but hold; its LED is 15 while held, 4 otherwise. The grid redraws on every press and release, so the row flips back at once.
 - Columns 9-15 (voices 1-7), through the local `copy_paste_key(port, voice)`: with no clipboard, copy the voice's pattern (`clipboard = {voice = v, steps = <copy of S.patterns[v]>}`); with one, paste `clipboard.steps` onto the voice, unless it is the copied voice. The clipboard stays for more pastes.
-- Column 16: clear the clipboard. Column 8 does nothing.
+- Column 16: clear the clipboard.
 
 `grid_redraw_256_lock(port, grid_device)`: the copied voice's key 15, the other voice keys and column 16 at 4 while a pattern is copied; columns 9-16 at 2 with none. It works on pages 1, 2 and 4 (page 3 has no row 16).
 
@@ -69,7 +69,8 @@ It follows changes made anywhere (issue #49):
 - Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`; a bar at 8 up to the value, the value's column at 15).
   - The filter/delay param actions call `fx_fader_changed()` (`lib/params_setup.lua`), which redraws the grid while page 4 is shown, so the faders follow the screen, the arc and scene recalls.
   - During a smooth scene transition (`S.scene_transition_active`) it does not redraw: the transition loop redraws once per step.
-- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input). Columns 11-16 do nothing.
+- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input); column 12 (`LAYOUT_256.freeze_column`) is the voice's freeze key, `S.lib.freeze.toggle(voice)` (LED 15 frozen, 3 not). Columns 11 and 13-16 do nothing.
+  - The freeze param's action calls `grid_redraw()`, so a freeze from VOICE, MIDI or a scene shows at once.
   - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
   - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.
 - Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`).
