@@ -458,6 +458,29 @@ return function(S)
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
   S.finish_buffer_take = finish_buffer_take
 
+  -- init's start steps: the polls (valid seconds per buffer slot, and
+  -- failed loads, from the engine), and later, after the scenes, which may
+  -- use them, the restore. A start that fails before the restore leaves
+  -- S.buffers_loaded false, so cleanup() does not save (#72)
+  S.register_start(S.constants.START_ORDER.buffer_polls, function()
+    S.buffer_polls.state = poll.set("bufferState", buffer_state_changed)
+    if S.buffer_polls.state then
+      S.buffer_polls.state:start()
+    else
+      print("bufferState poll not found")
+    end
+    S.buffer_polls.load_failed = poll.set("bufferLoadFailed", buffer_load_failed)
+    if S.buffer_polls.load_failed then
+      S.buffer_polls.load_failed:start()
+    else
+      print("bufferLoadFailed poll not found")
+    end
+  end)
+  S.register_start(S.constants.START_ORDER.buffers_load, function()
+    -- Reload the buffers remembered on exit (after the scenes, which may use them)
+    load_buffers_from_disk()
+  end)
+
   -- cleanup()'s steps: remember each buffer's file or scratch take for the
   -- next start (unless the paths were never loaded in this session, a failed
   -- start, or the save would overwrite a buffers file that failed to load
