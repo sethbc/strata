@@ -73,10 +73,6 @@ After installation with either method, restart norns or run `;restart` in maiden
 - [Usage Tips](docs/user/tips.md) - workflows and starting points
 - [Technical Details](docs/user/technical.md) - architecture, signal flow and the development checks
 
-## Credits
-
-Created for experimental ambient electronic music production.
-
 ## License
 
 Strata is released under the MIT License; see [LICENSE](LICENSE).

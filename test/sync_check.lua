@@ -1,6 +1,7 @@
 -- test/sync_check.lua
 -- Static Lua <-> SuperCollider command sync check.
--- Extracts every engine.<name>(...) call from strata.lua and every
+-- Extracts every engine.<name>(...) call from strata.lua and lib/**/*.lua
+-- (the script's Lua files) and every
 -- this.addCommand(\<name>, "<sig>", ...) from lib/Engine_Strata.sc (skipping
 -- commented-out ones), then checks that the two name sets are equal and that
 -- every Lua call passes exactly as many arguments as its signature declares.
@@ -14,7 +15,9 @@
 --
 -- Standalone:  lua test/sync_check.lua   (exit status 1 on mismatch)
 -- As a module: require("sync_check").run(repo_root) -> ok, problems, summary
---              require("sync_check").check(lua_source, sc_source) -> the same
+--              require("sync_check").check_sources(lua_sources, sc_source) -> the same
+--                (lua_sources: { { path = "lib/x.lua", text = source }, ... })
+--              require("sync_check").check(lua_source, sc_source) -> the same, one source
 
 local sync_check = {}
 
@@ -202,25 +205,31 @@ function sync_check.sc_commands(sc_source)
   return stubs.engine_signatures_from_source(sc_source)
 end
 
-function sync_check.check(lua_source, sc_source)
-  local calls = sync_check.lua_calls(lua_source)
+-- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },
+-- the script's Lua files. Problems name the file and line (<path>:<line>);
+-- a command counts as called when any of the files calls it
+function sync_check.check_sources(lua_sources, sc_source)
   local commands = sync_check.sc_commands(sc_source)
   local problems = {}
   local lua_names = {}
+  local call_count = 0
 
-  for _, reference in ipairs(sync_check.lua_reference_problems(lua_source)) do
-    table.insert(problems, string.format("strata.lua:%d %s", reference.line, reference.text))
-  end
+  for _, source in ipairs(lua_sources) do
+    for _, reference in ipairs(sync_check.lua_reference_problems(source.text)) do
+      table.insert(problems, string.format("%s:%d %s", source.path, reference.line, reference.text))
+    end
 
-  for _, call in ipairs(calls) do
-    lua_names[call.name] = true
-    local signature = commands[call.name]
-    if not signature then
-      table.insert(problems, string.format("strata.lua:%d engine.%s has no addCommand in the engine",
-        call.line, call.name))
-    elseif #signature ~= call.arg_count then
-      table.insert(problems, string.format("strata.lua:%d engine.%s passes %d args, signature \"%s\" takes %d",
-        call.line, call.name, call.arg_count, signature, #signature))
+    for _, call in ipairs(sync_check.lua_calls(source.text)) do
+      call_count = call_count + 1
+      lua_names[call.name] = true
+      local signature = commands[call.name]
+      if not signature then
+        table.insert(problems, string.format("%s:%d engine.%s has no addCommand in the engine",
+          source.path, call.line, call.name))
+      elseif #signature ~= call.arg_count then
+        table.insert(problems, string.format("%s:%d engine.%s passes %d args, signature \"%s\" takes %d",
+          source.path, call.line, call.name, call.arg_count, signature, #signature))
+      end
     end
   end
 
@@ -229,17 +238,37 @@ function sync_check.check(lua_source, sc_source)
   table.sort(command_names)
   for _, name in ipairs(command_names) do
     if not lua_names[name] then
-      table.insert(problems, "engine command \\" .. name .. " is never called from strata.lua")
+      table.insert(problems, "engine command \\" .. name .. " is never called from the script's Lua files")
     end
   end
 
-  local summary = string.format("%d engine.* call sites, %d engine commands", #calls, #command_names)
+  local summary = string.format("%d engine.* call sites in %d Lua files, %d engine commands",
+    call_count, #lua_sources, #command_names)
   return #problems == 0, problems, summary
 end
 
-function sync_check.run(repo_root)
-  return sync_check.check(read_file(repo_root .. "/strata.lua"), read_file(repo_root .. "/lib/Engine_Strata.sc"))
+-- One Lua source, reported as strata.lua
+function sync_check.check(lua_source, sc_source)
+  return sync_check.check_sources({ { path = "strata.lua", text = lua_source } }, sc_source)
 end
+
+-- The script's Lua files under repo_root: strata.lua first, then every
+-- lib/**/*.lua in sorted order, as { path = <path from repo_root>, text = ... }
+function sync_check.lua_sources(repo_root)
+  local sources = { { path = "strata.lua", text = read_file(repo_root .. "/strata.lua") } }
+  local listing = assert(io.popen('cd "' .. repo_root .. '" && find lib -name "*.lua" | sort'))
+  for path in listing:read("*a"):gmatch("[^\n]+") do
+    table.insert(sources, { path = path, text = read_file(repo_root .. "/" .. path) })
+  end
+  listing:close()
+  return sources
+end
+
+function sync_check.run(repo_root)
+  return sync_check.check_sources(sync_check.lua_sources(repo_root), read_file(repo_root .. "/lib/Engine_Strata.sc"))
+end
+
+sync_check.sanitize_lua = sanitize_lua
 
 -- standalone use
 if arg and arg[0] and arg[0]:match("sync_check%.lua$") then

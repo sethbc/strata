@@ -61,6 +61,9 @@
 --     arc device keeps matron's LED levels (led/all with rel, segment as
 --     lua/core/arc.lua, through led)
 --   * tab.save/tab.load are lib/tabutil.lua's, ported unchanged
+--   * include(file) follows lua/core/startup.lua: dofile of the script
+--     folder's <file>.lua, every call (stubs.install's module_sources
+--     replaces a file's text)
 -- The engine stub validates every engine.* call against the addCommand
 -- signatures parsed from lib/Engine_Strata.sc, and range-checks indices,
 -- enumerated values, setVoiceParam/setGrainParam names and continuous values
@@ -1961,6 +1964,34 @@ local function make_fileselect()
   return fileselect
 end
 
+-- The script's folder: the repo root, the folder above this file's
+local script_folder = (debug.getinfo(1, "S").source:match("^@(.*)[/\\]") or ".") .. "/.."
+
+-- lua/core/startup.lua's include(file): runs <folder><file>.lua with dofile
+-- for the first of the script's folder (norns.state.path), _path.code and
+-- _path.extn that holds it, so every call runs the file again (a module
+-- included twice is two copies), and raises "MISSING INCLUDE" when none
+-- does. The stub looks in the script's folder only. module_sources[file],
+-- when set, is run in place of the file's text, under the file's chunk name
+local function make_include(module_sources)
+  return function(file)
+    local path = script_folder .. "/" .. file .. ".lua"
+    local source = module_sources[file]
+    if source then
+      print("including " .. path)
+      return assert(load(source, "@" .. path))()
+    end
+    local handle = io.open(path, "r")
+    if handle then
+      handle:close()
+      print("including " .. path)
+      return dofile(path)
+    end
+    print("### MISSING INCLUDE: " .. file)
+    error("MISSING INCLUDE: " .. file, 2)
+  end
+end
+
 ---------------------------------------------------------------------------
 -- install / reset
 ---------------------------------------------------------------------------
@@ -2057,6 +2088,8 @@ function stubs.install(options)
   end
 
   _G.engine = engine
+  -- options.module_sources: { ["lib/x"] = source } is run for include("lib/x")
+  _G.include = make_include(options.module_sources or {})
   _G.util = util
   _G.controlspec = controlspec
   _G.params = context.params

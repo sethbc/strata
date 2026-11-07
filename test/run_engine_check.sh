@@ -25,6 +25,15 @@ else
   sclang=$mac_sclang
 fi
 
+case ${STRATA_SC_PORT:-57110} in
+  ''|*[!0-9]*) bad_port=1 ;;
+  *) [ "${STRATA_SC_PORT:-57110}" -ge 1 ] && [ "${STRATA_SC_PORT:-57110}" -le 65535 ] && bad_port=0 || bad_port=1 ;;
+esac
+if [ "$bad_port" = 1 ]; then
+  echo "STRATA_SC_PORT must be a port number from 1 to 65535, got \"${STRATA_SC_PORT:-}\"" >&2
+  exit 2
+fi
+
 if [ ! -d "$norns_dir/sc/core" ]; then
   echo "norns source not found at $norns_dir (pass it as the first argument)" >&2
   exit 2
@@ -34,6 +43,9 @@ work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 mkdir "$work_dir/classes"
 cp "$script_dir/StrataTestNoBoot.sc.in" "$work_dir/classes/StrataTestNoBoot.sc"
+if [ "$(uname -s)" = Darwin ]; then
+  cp "$script_dir/StrataTestNoBootOSX.sc.in" "$work_dir/classes/StrataTestNoBootOSX.sc"
+fi
 
 cat > "$work_dir/sclang_conf.yaml" <<YAML
 includePaths:
