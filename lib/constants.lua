@@ -8,15 +8,23 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 3  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local LONG_PRESS_SECONDS = 0.6  -- K2/K3 hold for the ALT long-press fallback (lib/ui/alt.lua; unused while K1 is ALT)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
-local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
+local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standard tier (engine standardBufferSeconds)
+local BUFFER_SECONDS = STANDARD_BUFFER_SECONDS  -- Length of each buffer slot (engine bufferSeconds)
 local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
 local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
+
+-- The standard performance tier's values. S.performance starts as a copy
+-- (lib/params_setup.lua); 3.2's performance setting fills it at init, before
+-- any param is added. Every tier-dependent spec reads S.performance
+-- (record duration, history range), never these
+local STANDARD_PERFORMANCE = {tier = "standard", buffer_seconds = STANDARD_BUFFER_SECONDS, max_grains = 128,
+  history_seconds = 16}
 
 -- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
 -- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
@@ -133,6 +141,7 @@ local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
 -- Spaced by 10, so a new step can go between two others
 local START_ORDER = {
   voice_list = 10,       -- lib/pages/main.lua: MAIN's voice list
+  voice_layout_states = 15,  -- lib/pages/voice.lua: the registered voice params' layout states
   e1_settings = 20,      -- strata.lua: E1 steps pages (no acceleration)
   menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
   drift_metro = 40,      -- lib/mutation.lua: created and started
@@ -141,7 +150,7 @@ local START_ORDER = {
   arc = 70,              -- lib/arc/core.lua
   grids = 80,            -- lib/grid/core.lua
   midi = 90,             -- lib/midi_in.lua
-  scenes_load = 100,     -- lib/scenes.lua: scenes.data (sets S.scenes_loaded)
+  scenes_load = 100,     -- lib/scenes.lua: the registered scene fields, then scenes.data (sets S.scenes_loaded)
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   frame_clock = 130,     -- lib/ui/frame.lua
@@ -200,6 +209,8 @@ return {
   MAX_STEP_LEVEL = MAX_STEP_LEVEL,
   NUM_BUFFERS = NUM_BUFFERS,
   BUFFER_SECONDS = BUFFER_SECONDS,
+  STANDARD_BUFFER_SECONDS = STANDARD_BUFFER_SECONDS,
+  STANDARD_PERFORMANCE = STANDARD_PERFORMANCE,
   BUFFER_DATA_VERSION = BUFFER_DATA_VERSION,
   NUM_LFOS = NUM_LFOS,
   GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,

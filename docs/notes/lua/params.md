@@ -8,6 +8,11 @@
 - `redraw_on_param_changes()` runs once, after the last param is added. A param added, or an action set with `params:set_action`, after it runs requests no redraws.
 - The tempo handler is installed once (never chaining to itself) and given back only while the script's is still installed.
 - The script never bangs its params, so Lua defaults are what the engine plays, and the filter and delay SynthDef defaults must equal the Lua param defaults (a test checks).
+- The registries (`S.registry.voice_params`, `fx_params`, `param_filters`, `source_change`) are read at init, inside a params record's `add`, never at include time, so a module that registers can be included before or after this one.
+- A registered record's `add` adds exactly `count` params (an error names the record otherwise), and every key its `grain_keys`, `scene_defaults` and `voice_rows.rows` name is one of the params it added with `add_voice_extra`.
+- Registered voice params are never on the 256 fader pages (`fader` is never true) and never touched by randomize or mutations: they live in `S.voices[i].extras`, which neither reads.
+- The fx group's size is its 11 params plus every registered fx record's `count`, and the registered fx params follow tape drift.
+- `S.performance` is a copy of `S.constants.STANDARD_PERFORMANCE`, never the constant itself. A tier-dependent spec reads it when its param is added (`record_duration`'s maximum is `S.performance.buffer_seconds`).
 
 ## Owns
 
@@ -16,6 +21,8 @@
 - `add_voice_params`, `get_param_spec`, `redraw_on_param_changes`;
 - `S.fx_last_mix` (`{filter, delay, reverb}`: each mix action stores its last non-zero value; the FX page's K3 reads `.filter`) and `fx_fader_changed` (the grid's FX faders);
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
+- the readers of the voice-param, fx-param, param-filter and source-change registries (below), and `S.lib.params_setup.add_voice_extra`;
+- `S.performance` (the tier's values, standard until 3.2's performance setting fills it at init);
 - cleanup step 10: the tempo handler given back.
 
 ## Parameter system
@@ -29,7 +36,40 @@ Every adjustable value is a norns param:
 Menu order:
 - `strata` (master density, tempo), `strata_mutations`, `strata_scenes`;
 - the fx, lfo destinations, LFO 1-3, buffers and midi groups;
-- then each voice's synthesis, granular and cross-modulation sections.
+- then each voice's synthesis, granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
+
+## Registries
+
+`lib/state.lua` holds the registries and their register functions; each checks its argument and refuses a duplicate name. This module reads four of them at init (scenes, the LFOs and VOICE read the rest: `docs/notes/lua/scenes.md`, `docs/notes/lua/lfos.md`, `docs/notes/lua/ui-core.md`).
+
+**Voice params** (`S.register_voice_params(record)`, `S.registry.voice_params`). A module's per-voice params, as one record:
+
+```lua
+{ name = "freeze", count = 2, add = function(voice_idx) ... end,
+  grain_keys = { freeze = "freeze", freeze_mode = { name = "freezeMode", value = function(x) return x - 1 end } },
+  sync = nil,                  -- optional fn(voice_idx): the voice sync's sends after grain_keys
+  scene_defaults = { freeze = 0, freeze_mode = 1 },   -- each the param's default
+  discrete = { freeze = {0, 1}, freeze_mode = {1, 2} }, -- whole range; the other scene keys crossfade
+  voice_rows = { section = "mix", rows = {"freeze", "freeze_mode"}, when = nil, before = nil },
+  layout_states = nil,         -- optional {{name, setup = fn(context)}}
+  fader = false }
+```
+
+- `add_voice_params(i)` adds, after the cross-modulation params, a separator `voice <i> extras` and then each record's params, in registration order, through its `add(i)`. `add_counted` checks that it added `count` params.
+- `add` calls `S.lib.params_setup.add_voice_extra(voice_idx, record, key, param)` for each param: `param` is a `params:add` table without an `id` (its own `action`, if any, runs last). The param's id is `v<i>_<key>`. Its action:
+  1. runs `S.registry.param_filters[key]` (a changed value is written back with `params:set(id, v, true)`);
+  2. stores the value in `S.voices[i].extras[key]` (`add_voice_params` makes `extras` fresh at each init);
+  3. calls `note_param_edit` and `send_param_to_engine`;
+  4. runs the param's own action.
+- A key in `grain_keys` gets an `S.engine_senders` entry: `setGrainParam` with the engine name (and `value(x)`, if given), only while the voice runs. `sync_voice_values_to_engine` sends every record's grain keys (by key name) and then its `sync` (`docs/notes/lua/engine-sync.md`).
+
+**Param filters** (`S.register_param_filter(key, fn)`, one per key). `fn(voice_idx, value, previous) -> value` runs in the action of every `v<i>_<key>` voice param, the synthesis params (`param_order`) as well as registered ones, before the value is stored. `previous` is the value stored before. 3.2's quantized `freq` uses it.
+
+**Source change hooks** (`S.register_source_change(fn)`). `fn(voice_idx, source)` runs at the end of every `v<i>_source` action (after the source is stored and sent, the sync and the grid redraw), except while `S.scene_recall_in_progress`: a recall sets every value itself. 3.2's freeze clears itself through one.
+
+**Fx params** (`S.register_fx_params({name, count, add})`). The fx group's size is 11 plus every record's `count`; init runs each `add()` after tape drift, in registration order, and checks the count.
+
+**`S.performance`** (`{tier, buffer_seconds, max_grains, history_seconds}`). This module's constructor sets it to a copy of `S.constants.STANDARD_PERFORMANCE` (standard: 16 s buffers, 128 grains, 16 s of input history). 3.2's performance setting fills it at init, from a params record that runs before any param is added. Every tier-dependent spec reads it as its param is added: `record_duration` goes from 0.5 s to `S.performance.buffer_seconds`.
 
 ## Tempo
 

@@ -3,7 +3,8 @@
 -- (S.current_scene), capture and recall (instant, or a smooth transition
 -- on S.scene_transition_clock), the scene sequencer
 -- (S.scene_sequencer_clock), migration of older scene formats, validation,
--- and scenes.data on disk. The functions stay global. The tables tests and
+-- and scenes.data on disk, with the registered voice params (voices[i].extras)
+-- and scene fields (S.registry.scene_fields). The functions stay global. The tables tests and
 -- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir and move_aside_unloadable_file are fields of this
@@ -103,6 +104,49 @@ return function(S)
     {path = {"grain", "buf_scan"}, default = 0}
   }
 
+  -- The registered voice params' scene keys (S.registry.voice_params'
+  -- scene_defaults and discrete): key -> {default, range = {min, max} for a
+  -- discrete key, nil for one that crossfades}. Read at use, after init
+  local function registered_voice_scene_keys()
+    local keys = {}
+    for _, record in ipairs(S.registry.voice_params) do
+      for key, default in pairs(record.scene_defaults or {}) do
+        keys[key] = {default = default, range = record.discrete and record.discrete[key]}
+      end
+    end
+    return keys
+  end
+
+  -- A table's keys in order, so the extras are always set in one order
+  local function sorted_keys(entries)
+    local keys = {}
+    for key in pairs(entries) do table.insert(keys, key) end
+    table.sort(keys)
+    return keys
+  end
+
+  -- The registered scene fields (S.registry.scene_fields) join
+  -- S.SCENE_GLOBAL_PARAMS after its own entries, at init (the scenes load's
+  -- start step, before the file is read): read like the built-in ones,
+  -- discrete ones switching at a transition's end. Each id must be a param
+  local function add_registered_scene_fields()
+    local listed = {}
+    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do listed[global.id] = global end
+    for _, field in ipairs(S.registry.scene_fields) do
+      local existing = listed[field.id]
+      if existing and not existing.registered then
+        error("register_scene_field: " .. field.id .. " is already a scene field", 0)
+      elseif not existing then
+        if not params.lookup[field.id] then
+          error("register_scene_field: " .. field.id .. " is not a param", 0)
+        end
+        local global = {id = field.id, continuous = not field.discrete, default = field.default, registered = true}
+        table.insert(S.SCENE_GLOBAL_PARAMS, global)
+        listed[field.id] = global
+      end
+    end
+  end
+
   -- Top-level scene blocks added after format 1 (such as LFO or MIDI
   -- settings): {key = field of scene data, default = value}
   S.SCENE_BLOCK_DEFAULTS = {}
@@ -164,10 +208,17 @@ return function(S)
     end
 
     if type(data.voices) ~= "table" then return end
+    local extras = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
       if type(data.voices[i]) == "table" then
         for _, field in ipairs(S.VOICE_SCENE_DEFAULTS) do
           fill_scene_default(data.voices[i], field.path, field.default)
+        end
+        -- format 3 (3.2): the registered voice params' table, and every
+        -- registered voice param's default
+        fill_scene_default(data.voices[i], {"extras"}, {})
+        for key, entry in pairs(extras) do
+          fill_scene_default(data.voices[i], {"extras", key}, entry.default)
         end
       end
     end
@@ -187,14 +238,19 @@ return function(S)
     end
 
     -- Capture voice states
+    local extra_keys = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
       scene_data.voices[i] = {
         active = S.voices[i].active,
         source = S.voices[i].source,  -- the buffer's contents are not captured
         params = {},
         grain = {},
-        crossmod = {}
+        crossmod = {},
+        extras = {}   -- the registered voice params' scene keys
       }
+      for key in pairs(extra_keys) do
+        scene_data.voices[i].extras[key] = S.voices[i].extras[key]
+      end
 
       -- Copy all parameters
       for key, value in pairs(S.voices[i].params) do
@@ -267,6 +323,7 @@ return function(S)
       end
     end
 
+    local extra_keys = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
       local voice_data = scene_data.voices[i]
       local prefix = "v" .. i .. "_"
@@ -284,6 +341,10 @@ return function(S)
         add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
       end
       add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
+      -- the registered voice params that crossfade (discrete ones switch at the end)
+      for _, key in ipairs(sorted_keys(voice_data.extras)) do
+        if not extra_keys[key].range then add_target(prefix .. key, voice_data.extras[key]) end
+      end
     end
 
     return targets
@@ -416,6 +477,12 @@ return function(S)
           params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
         end
         params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
+
+        -- The registered voice params, after the source (a discrete one,
+        -- such as freeze, only now: a transition crossfades the others)
+        for _, key in ipairs(sorted_keys(voice_data.extras)) do
+          params:set(prefix .. key, voice_data.extras[key])
+        end
 
         S.frozen[i] = scene_data.frozen[i]
 
@@ -676,7 +743,15 @@ return function(S)
       -- option params (filter type, LFO shape, destination, ...) hold an index
       local param = params:lookup_param(global.id)
       if param.options and not is_integer_between(data[global.id], 1, param.count) then return false end
+      -- a registered discrete field holds a whole value in its param's range
+      if global.registered and not global.continuous then
+        local minval, maxval = -math.huge, math.huge
+        if param.t == params.tBINARY then minval, maxval = 0, 1 end
+        if param.t == params.tNUMBER then minval, maxval = param.min, param.max end
+        if not is_integer_between(data[global.id], minval, maxval) then return false end
+      end
     end
+    local extra_keys = registered_voice_scene_keys()
 
     if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
     if type(data.frozen) ~= "table" then return false end
@@ -707,6 +782,13 @@ return function(S)
         if not is_number(slot_data.amp_amt) or not is_number(slot_data.freq_amt) then return false end
       end
       if not is_number(voice_data.crossmod.speed) then return false end
+      -- the registered voice params: numbers, discrete ones whole and in range
+      if type(voice_data.extras) ~= "table" then return false end
+      for key, value in pairs(voice_data.extras) do
+        local entry = extra_keys[key]
+        if entry == nil or not is_number(value) then return false end
+        if entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
+      end
 
       if type(data.frozen[i]) ~= "boolean" then return false end
 
@@ -737,6 +819,7 @@ return function(S)
   -- init's start step: a start that fails in an earlier step never gets
   -- here, so S.scenes_loaded stays false and cleanup() does not save (#72)
   S.register_start(S.constants.START_ORDER.scenes_load, function()
+    add_registered_scene_fields()  -- before the file is read: it holds them
     -- Load saved scenes from disk
     load_scenes_from_disk()
   end)

@@ -93,20 +93,22 @@ return function(S)
   M.strip_y = strip_y
 
   -- The destination groups' first indices into S.LFO_DESTINATIONS: none (1),
-  -- the globals (2), then each voice's "v<i> main" and the destinations after
-  -- it, the same number per voice
+  -- the globals (2), each voice's "v<i> main" (found by label), then the
+  -- registered destinations after the built-in ones (lib/lfos.lua's
+  -- S.lib.lfos.BUILT_IN_DESTINATIONS), as one more group
   function lfo_dest_group_starts()
     local destinations = S.LFO_DESTINATIONS
     local starts = {1, 2}
-    local first_voice
+    local voice_starts = {}
     for index, destination in ipairs(destinations) do
-      if destination.label == "v1 main" then first_voice = index; break end
+      local voice = destination.label:match("^v(%d+) main$")
+      if voice then voice_starts[tonumber(voice)] = index end
     end
-    if not first_voice then return starts end
-    local per_voice = math.floor((#destinations - first_voice + 1) / NUM_VOICES)
     for voice = 1, NUM_VOICES do
-      table.insert(starts, first_voice + (voice - 1) * per_voice)
+      if voice_starts[voice] then table.insert(starts, voice_starts[voice]) end
     end
+    local built_in = S.lib.lfos.BUILT_IN_DESTINATIONS
+    if #destinations > built_in then table.insert(starts, built_in + 1) end
     return starts
   end
 

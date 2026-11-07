@@ -25,6 +25,39 @@ local function row_of(rows, param_id)
   error("no row for " .. param_id)
 end
 
+-- 3.1's rows only: rows without the registered voice params' rows
+-- (S.registry.voice_params' voice_rows) and without a section left with no
+-- field, so 3.1's layout is checked exactly whatever is registered
+local function built_in(rows)
+  local registered = {}
+  for _, record in ipairs(local_value("S").registry.voice_params) do
+    for _, key in ipairs(record.voice_rows and record.voice_rows.rows or {}) do registered[key] = true end
+  end
+  local kept = {}
+  for _, row in ipairs(rows) do
+    local key = row.param_id and row.param_id:match("^v%d+_(.+)$")
+    if not (key and registered[key]) then table.insert(kept, row) end
+  end
+  local result = {}
+  for index, row in ipairs(kept) do
+    local next_row = kept[index + 1]
+    if row.selectable ~= false or (next_row and next_row.selectable ~= false) then table.insert(result, row) end
+  end
+  return result
+end
+
+-- The param id of the first and of the last selectable row of rows
+local function first_field(rows)
+  for _, row in ipairs(rows) do
+    if row.selectable then return row.param_id end
+  end
+end
+local function last_field(rows)
+  for index = #rows, 1, -1 do
+    if rows[index].selectable then return rows[index].param_id end
+  end
+end
+
 local function count_selectable(rows)
   local count = 0
   for _, row in ipairs(rows) do
@@ -56,10 +89,11 @@ end
 test("VOICE rows for a synth voice", function()
   load_strata()
   local rows = voice_page_rows(1)
-  assert_equal(row_ids(rows), expected_rows(1, { "freq", "rq", "noise", "mod1", "mod2" },
+  assert_equal(row_ids(built_in(rows)), expected_rows(1, { "freq", "rq", "noise", "mod1", "mod2" },
     { "source", "amp", "pan" }), "voice 1's rows")
-  assert_equal(#rows, 28, "four label rows and 24 fields")
-  local kinds = { [params.tCONTROL] = "control", [params.tNUMBER] = "number", [params.tOPTION] = "option" }
+  assert_equal(#built_in(rows), 28, "3.1's four label rows and 24 fields")
+  local kinds = { [params.tCONTROL] = "control", [params.tNUMBER] = "number", [params.tOPTION] = "option",
+    [params.tBINARY] = "binary" }
   for index, row in ipairs(rows) do
     assert_true(type(row.section) == "string", "row " .. index .. " names its section")
     assert_true(type(row.label) == "string" and row.label ~= "", "row " .. index .. " has a label")
@@ -83,20 +117,21 @@ test("VOICE rows for a buffer and an input voice", function()
   load_strata()
   local C = local_value("S").constants
   params:set("v2_source", C.SOURCE_SYNTH + 1)  -- buf 1
-  assert_equal(row_ids(voice_page_rows(2)), expected_rows(2, { "buf_pos", "buf_rate", "buf_scan" },
+  assert_equal(row_ids(built_in(voice_page_rows(2))), expected_rows(2, { "buf_pos", "buf_rate", "buf_scan" },
     { "source", "amp", "pan" }), "a buffer voice's synth section holds its buffer params")
   params:set("v2_source", C.SOURCE_INPUT)
   local rows = voice_page_rows(2)
-  assert_equal(row_ids(rows), expected_rows(2, nil, { "source", "amp", "pan" }),
+  assert_equal(row_ids(built_in(rows)), expected_rows(2, nil, { "source", "amp", "pan" }),
     "an input voice has no synth section, label row included")
-  assert_equal(rows[1].section, "grain", "an input voice's rows start with the grain label")
-  assert_equal(rows[1].selectable, false)
+  assert_equal(built_in(rows)[1].section, "grain", "an input voice's built-in rows start with the grain label")
+  assert_equal(rows[1].selectable, false, "the rows start with a label")
+  for _, row in ipairs(rows) do assert_true(row.param_id ~= "v2_freq", "no synth row") end
 end)
 
 test("the Sub voice has no pan row", function()
   load_strata()
   local rows = voice_page_rows(4)
-  assert_equal(row_ids(rows), expected_rows(4, { "freq", "drift" }, { "source", "amp" }), "voice 4's rows")
+  assert_equal(row_ids(built_in(rows)), expected_rows(4, { "freq", "drift" }, { "source", "amp" }), "voice 4's rows")
   for _, row in ipairs(rows) do
     assert_true(row.param_id ~= "v4_pan", "no pan row for the Sub voice")
   end
@@ -110,13 +145,19 @@ test("the voice cursor is a row index on a selectable row", function()
   assert_equal(rows[S.cursors.voice].param_id, "v1_freq", "the cursor starts on the first field")
   assert_equal(S.cursors.seq_step, 1)
   assert_equal(S.cursors.scene, 1)
-  S.lib.ui_cursors.move("voice", 5)
-  assert_equal(rows[S.cursors.voice].param_id, "v1_grain_size", "five fields on: the grain label is skipped")
-  assert_equal(S.cursors.voice, 8)
+  local grain_size = row_of(rows, "v1_grain_size")
+  local synth_fields = 0  -- the selectable rows before grain size
+  for index = 1, grain_size - 1 do
+    if rows[index].selectable then synth_fields = synth_fields + 1 end
+  end
+  S.lib.ui_cursors.move("voice", synth_fields)
+  assert_equal(rows[S.cursors.voice].param_id, "v1_grain_size", "past the synth fields: the grain label is skipped")
+  assert_equal(S.cursors.voice, grain_size)
   S.lib.ui_cursors.move("voice", -1)
-  assert_equal(rows[S.cursors.voice].param_id, "v1_mod2", "back over the grain label")
+  assert_equal(rows[S.cursors.voice].param_id, rows[grain_size - 2].param_id, "back over the grain label")
+  assert_true(rows[grain_size - 1].selectable == false, "the grain label")
   S.lib.ui_cursors.move("voice", 100)
-  assert_equal(rows[S.cursors.voice].param_id, "v1_pan", "the cursor stops at the last row")
+  assert_equal(rows[S.cursors.voice].param_id, last_field(rows), "the cursor stops at the last row")
   S.lib.ui_cursors.move("voice", -100)
   assert_equal(S.cursors.voice, 2, "and at the first field, never on the label")
 end)
@@ -128,12 +169,31 @@ test("the voice cursor moves on the selected voice's rows", function()
   S.lib.ui_cursors.move("voice", 100)
   local rows = voice_page_rows(4)
   assert_equal(S.cursors.voice, #rows, "the last row of voice 4")
-  assert_equal(rows[S.cursors.voice].param_id, "v4_amp", "voice 4's last row is its level")
+  assert_equal(rows[S.cursors.voice].param_id, last_field(rows), "voice 4's last field")
+  assert_equal(last_field(built_in(rows)), "v4_amp", "3.1's last row of voice 4 is its level")
 end)
 
 test("voice_page_group returns the cursor's group of four selectable rows", function()
   load_strata()
-  local rows = voice_page_rows(1)
+  -- on every voice's whole rows (registered ones included): the group of
+  -- the cursor's k-th selectable row is ceil(k / 4), its rows the
+  -- selectables 4g-3 .. 4g (fewer only in the last group)
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
+    local all_rows = voice_page_rows(voice_idx)
+    local selectable = {}
+    for index, row in ipairs(all_rows) do
+      if row.selectable then table.insert(selectable, index) end
+    end
+    for k, cursor in ipairs(selectable) do
+      local group, indices = voice_page_group(all_rows, cursor)
+      assert_equal(group, math.ceil(k / 4), "voice " .. voice_idx .. " field " .. k .. "'s group")
+      local expected = {}
+      for position = 4 * group - 3, math.min(4 * group, #selectable) do table.insert(expected, selectable[position]) end
+      assert_equal(table.concat(indices, ","), table.concat(expected, ","), "voice " .. voice_idx .. " group " .. group)
+    end
+  end
+  -- 3.1's rows (voice_page_group takes any rows)
+  local rows = built_in(voice_page_rows(1))
   local function group_ids(group_rows, indices)
     local list = {}
     for index, row_index in ipairs(indices) do list[index] = group_rows[row_index].param_id end
@@ -150,18 +210,18 @@ test("voice_page_group returns the cursor's group of four selectable rows", func
   assert_equal(group, 6)
   assert_equal(group_ids(rows, indices), "v1_mod_freq_amt_3 v1_source v1_amp v1_pan")
   -- voice 2 (FM) has 23 fields: its last group has three
-  local fm_rows = voice_page_rows(2)
+  local fm_rows = built_in(voice_page_rows(2))
   assert_equal(count_selectable(fm_rows), 23)
   group, indices = voice_page_group(fm_rows, #fm_rows)
   assert_equal(group, 6)
   assert_equal(group_ids(fm_rows, indices), "v2_source v2_amp v2_pan", "voice 2's last group has three rows")
   -- voice 4 (Sub, no pan) has 20 fields, so 5 full groups; on input it has
   -- 18, and its last group two rows
-  local sub_rows = voice_page_rows(4)
+  local sub_rows = built_in(voice_page_rows(4))
   assert_equal(count_selectable(sub_rows), 20)
   assert_equal(#select(2, voice_page_group(sub_rows, #sub_rows)), 4)
   params:set("v4_source", local_value("S").constants.SOURCE_INPUT)
-  sub_rows = voice_page_rows(4)
+  sub_rows = built_in(voice_page_rows(4))
   group, indices = voice_page_group(sub_rows, #sub_rows)
   assert_equal(group, 5)
   assert_equal(group_ids(sub_rows, indices), "v4_source v4_amp", "voice 4's last group on input has two rows")
@@ -191,20 +251,21 @@ test("cursors clamp when the selected voice's rows shrink", function()
   -- on the last row of the shorter list
   params:set("v1_source", S.constants.SOURCE_SYNTH)
   S.lib.ui_cursors.move("voice", 100)
-  assert_equal(S.cursors.voice, 28)
+  local synth_rows = voice_page_rows(1)
+  assert_equal(S.cursors.voice, #synth_rows)
   params:set("v1_source", S.constants.SOURCE_INPUT)
   S.lib.ui_cursors.clamp_all()
   rows = voice_page_rows(1)
   assert_equal(S.cursors.voice, #rows)
-  assert_equal(rows[S.cursors.voice].param_id, "v1_pan")
+  assert_equal(rows[S.cursors.voice].param_id, last_field(rows))
 
   -- a cursor on a label row moves to the first field; the selected voice
   -- changing to one with fewer rows clamps too
   S.cursors.voice = 1
   S.lib.ui_cursors.clamp_all()
-  assert_equal(voice_page_rows(1)[S.cursors.voice].param_id, "v1_grain_size")
+  assert_equal(voice_page_rows(1)[S.cursors.voice].param_id, first_field(voice_page_rows(1)))
   params:set("v1_source", S.constants.SOURCE_SYNTH)
-  S.cursors.voice = 28
+  S.cursors.voice = #voice_page_rows(1)
   S.selected_voice = 4
   S.lib.ui_cursors.clamp_all()
   rows = voice_page_rows(4)

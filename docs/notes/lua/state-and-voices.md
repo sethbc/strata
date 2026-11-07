@@ -50,6 +50,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | Order | Step | Module |
 |-------|------|--------|
 | 10 | build MAIN's voice list (`update_voice_list`) | `lib/pages/main.lua` |
+| 15 | add every registered voice-param record's `layout_states` to VOICE's | `lib/pages/voice.lua` |
 | 20 | E1: acceleration off, `E1_TICKS_PER_PAGE` ticks per page | `strata.lua` |
 | 30 | watch the norns menu opening (`watch_menu_opening`) | `lib/ui/menu_watch.lua` |
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
@@ -58,7 +59,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 90 | listen for MIDI (`midi_init`) | `lib/midi_in.lua` |
-| 100 | load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
+| 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |

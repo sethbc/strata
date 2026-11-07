@@ -13,7 +13,8 @@
 `lib/engine_sync.lua` (`S.lib.engine_sync`):
 - `send_param_to_engine`, `send_engine_value`, `engine_param_value`, `with_lfo_offsets`;
 - the effects and master density senders (`send_filter_to_engine`, `send_delay_to_engine`, `send_reverb_to_engine`, `send_master_density_to_engine`), `engine_mod_source`;
-- the voice start and sync functions: `toggle_voice`, `toggle_lock`, `sync_voice_to_engine`, `sync_voice_values_to_engine`, `forget_sent_voice_values`;
+- the voice start and sync functions: `toggle_voice`, `toggle_lock`, `sync_voice_to_engine`, `sync_voice_values_to_engine`, `forget_sent_voice_values`, `send_registered_voice_values`;
+- `S.lib.engine_sync.grain_key_message(grain_key, value)`: a registered record's grain key and a stored value as the `setGrainParam` name and value (also used by `add_voice_extra`'s senders);
 - the shared state `S.engine_senders`, `S.engine_param_values`, and the LFO offsets `S.lfo_last_dest` and `S.lfo_scaled` (declared here, before `lib/lfos.lua` is included, because param actions read them);
 - cleanup step 160: `engine.voiceOff` for every running voice.
 
@@ -36,6 +37,7 @@ Commands that carry several params:
 Voice sync:
 - `sync_voice_values_to_engine` sends the voice's stored values. It calls `forget_sent_voice_values(voice_idx)` first, so an LFO re-applies its offset on its next step.
 - Its grain density uses the master density as sent.
+- It ends with the registered voice params (`send_registered_voice_values`): per `S.registry.voice_params` record, in registration order, each `grain_keys` entry (sorted by key) with the voice's `extras[key]`, then the record's `sync(voice_idx)` (`docs/notes/lua/params.md`).
 
 Adding a param that reaches the engine:
 - give it a sender in `S.engine_senders` and call `send_param_to_engine` from its action;

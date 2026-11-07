@@ -664,6 +664,7 @@ local function start_steps()
   table.insert(voice_sync, 1, "clock started")
   return {
     { "voice list", { "voice list built" } },
+    { "voice layout states", {} },
     { "E1 settings", { "encoder 1 accel false", "encoder 1 sens 4" } },
     { "menu watch", { "menu watched" } },
     { "drift metro", { "metro created", "drift metro started" } },

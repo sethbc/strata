@@ -40,7 +40,9 @@ test("include stub loads lib modules and honors overrides", function()
   -- load_strata passes them through
   load_strata { module_sources = { ["lib/state"] =
     "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
-    .. " grid_layouts = {} }, lib = {}, register_start = function() end, register_cleanup = function() end } end" } }
+    .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
+    .. " lfo_destinations = {}, fx_params = {} }, lib = {}, register_start = function() end,"
+    .. " register_cleanup = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
