@@ -146,7 +146,10 @@ test("the voice cursor is a row index on a selectable row", function()
   assert_equal(S.cursors.seq_step, 1)
   assert_equal(S.cursors.scene, 1)
   local grain_size = row_of(rows, "v1_grain_size")
-  local synth_fields = count_selectable({ table.unpack(rows, 1, grain_size - 1) })
+  local synth_fields = 0  -- the selectable rows before grain size
+  for index = 1, grain_size - 1 do
+    if rows[index].selectable then synth_fields = synth_fields + 1 end
+  end
   S.lib.ui_cursors.move("voice", synth_fields)
   assert_equal(rows[S.cursors.voice].param_id, "v1_grain_size", "past the synth fields: the grain label is skipped")
   assert_equal(S.cursors.voice, grain_size)
