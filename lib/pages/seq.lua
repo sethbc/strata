@@ -82,10 +82,6 @@ return function(S)
     screen.rect(SEQ_PAGE.cells_x + (cursor_step() - 1) * SEQ_PAGE.cell_spacing - 1, cursor_y - 1,
       SEQ_PAGE.cell_size + 2, SEQ_PAGE.cell_size + 2)
     screen.stroke()
-
-    -- the playing column moves without anything else asking for a redraw:
-    -- while the patterns play, each frame asks for the next
-    if playing then request_redraw() end
   end
 
   -- The hint row (redraw() draws it after the page)
