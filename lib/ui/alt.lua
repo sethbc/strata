@@ -35,8 +35,11 @@ return function(S)
   -- The long-press fallback's hook: key n (K2 or K3) has been held for
   -- LONG_PRESS_SECONDS. If it is still down on the page showing and is not
   -- already an ALT press, it becomes one: its ALT action runs now and its
-  -- release goes to alt_key_release, as an ALT press's does. Returns whether
-  -- the press became an ALT press. Unused while K1 works as ALT
+  -- release goes to alt_key_release, as an ALT press's does. The press is
+  -- marked ALT even when the page has no alt_key, so its plain key_release
+  -- is swallowed (a long press never also runs the short-press release).
+  -- Returns whether the press became an ALT press. Unused while K1 works as
+  -- ALT
   function M.long_press(n)
     if n ~= 2 and n ~= 3 then return false end
     if S.key_press_page[n] ~= S.ui_page or S.key_press_alt[n] then return false end
