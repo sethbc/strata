@@ -198,6 +198,51 @@ test("a scenes file that fails to load survives cleanup (fix round 1)", function
   file:close()
 end)
 
+-- #72: a start that failed before init loaded scenes.data must not let
+-- cleanup overwrite it with the empty in-memory scenes
+test("cleanup leaves scenes.data alone when init never loaded it (#72)", function()
+  local sentinel = "-- scenes saved by an earlier session\nreturn {}\n"
+  local started
+  local function write_sentinel(context)
+    started = context
+    os.execute("mkdir -p '" .. context.data_dir .. "strata/'")
+    local file = assert(io.open(context.data_dir .. "strata/scenes.data", "w"))
+    file:write(sentinel)
+    file:close()
+  end
+  local function scenes_file_text()
+    local file = assert(io.open(started.data_dir .. "strata/scenes.data", "r"))
+    local text = file:read("*a")
+    file:close()
+    return text
+  end
+
+  local before_loads, count = h.patched_script("%-%- Load saved scenes from disk",
+    'error("simulated init failure before the loads")')
+  assert_equal(count, 1, "init's scenes load found")
+  before_loads.before_load = write_sentinel
+  local failed_starts = {
+    { name = "init never ran", options = { before_load = write_sentinel,
+      before_init = function() error("simulated failure before init") end } },
+    { name = "init failed before the loads", options = before_loads },
+  }
+  for _, start in ipairs(failed_starts) do
+    local ok, load_error = pcall(load_strata, start.options)
+    assert_true(not ok and tostring(load_error):find("simulated", 1, true), start.name .. ": the start failed")
+    local cleaned, cleanup_error = pcall(cleanup)
+    assert_equal(scenes_file_text(), sentinel, start.name .. ": scenes.data unchanged by cleanup")
+    assert_true(cleaned, start.name .. ": cleanup runs after a failed start: " .. tostring(cleanup_error))
+  end
+
+  -- a start that loaded the file still saves on exit
+  load_strata({ before_load = write_sentinel })
+  capture_scene(2)
+  cleanup()
+  assert_true(scenes_file_text() ~= sentinel, "after a full start cleanup saves the scenes")
+  load_strata({ data_subdir = started.data_dir:match("([^/]+)/$") })
+  assert_true(local_value("scenes")[2].populated, "the captured scene was saved")
+end)
+
 test("scene transitions crossfade linearly from snapshotted start values (I6)", function()
   local context = load_strata(); finish_startup(context)  -- finish init's start-up coroutine
   params:set("v1_freq", 1000)
