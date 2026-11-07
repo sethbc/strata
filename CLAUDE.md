@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file gives Claude Code (claude.ai/code) guidance for working in this repository. It holds the rules and the engine interface. The detailed implementation reference is in separate files: read the section you need before changing that area.
+This file gives Claude Code (claude.ai/code) guidance for working in this repository. It is an index: the rules every change needs, the engine command interface and how to run the checks. Each module's details are in its own notes file (see the module table): read that file before changing the module.
 
 ## Project Overview
 
@@ -8,10 +8,10 @@ Strata is an ambient granular soundscape generator for monome norns. It has seve
 
 **Where things are documented:**
 - `docs/status.md`: **read first.** It lists open items (with GitHub issues), the decisions taken during development (each with what it costs if wrong) and how to run the checks. Update it at the end of each piece of work.
-- `docs/notes/engine.md`: the engine. Signal flow, cross-modulation, `voiceOn` sync, retrigger and accent, pitchbend, the grain/envelope/mode params, audio sources (buffers, input, mirror, replace-never-stack, kill fade), buffer commands and file writes, SynthDefs, buses, node ordering, synth lifecycle.
-- `docs/notes/lua.md`: the Lua side. The modules (each `lib/` file and what it owns), voice state, `send_param_to_engine`, the param system, LFOs, MIDI, mutations, scenes (transitions, migration, validation, persistence), buffers persistence, bounds checks, cleanup, grid, arc, screen pages and MAIN layout, plus the version history and future ideas.
-- `README.md`: user documentation (controls, grid/arc layouts, params). `CHANGELOG.md`: per-release changes.
-- `docs/design/3.0-design.md`: the 3.0 design, still the reference for behavior. Where the code differs from it, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how.
+- The Lua notes, one file per module under docs/notes/lua/ (the module table below names each). Each file opens with "Must not break", then what the module owns and how it works. `docs/notes/lua.md` only maps the old sections to the new files.
+- `docs/notes/engine.md`: the engine. Signal flow, cross-modulation, `voiceOn` sync, retrigger and accent, pitchbend, the grain/envelope/mode params, audio sources (buffers, input, mirror, replace-never-stack, kill fade), buffer commands and file writes, SynthDefs, buses, node ordering, synth lifecycle. It splits per module with the engine in 3.2.
+- `README.md`: a short overview, quick start and index of the user documentation, which is one page per area under docs/user/ (`docs/user/controls.md`, `docs/user/grid.md`, `docs/user/arc.md`, `docs/user/params.md`, ...). `CHANGELOG.md`: per-release changes.
+- `docs/design/3.0-design.md`: the 3.0 design, still the reference for behavior. Where the code differs from it, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how. `docs/design/3.1-design.md` is the 3.1 design, with its work packages (§9).
 
 ## Architecture
 
@@ -28,18 +28,45 @@ Buffer source:  Buffer pair (L/R) → strataGrainBuf → Main Bus (and mirrored 
 Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main Bus (and mirrored to the Voice Bus → Mod Synth)
 ```
 
+### Modules, notes and tests
+
+In include order. Unit test files are under test/unit/ (one per module).
+
+| Module | S.lib name | Notes | Unit tests |
+|--------|--------------|-------|------------|
+| `strata.lua` (entry points) | | `docs/notes/lua/state-and-voices.md` | strata_test.lua, structure_test.lua |
+| `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua |
+| `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
+| `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-and-pages.md` | ui_test.lua |
+| `lib/engine_sync.lua` | `engine_sync` | `docs/notes/lua/engine-sync.md` | engine_sync_test.lua |
+| `lib/buffers.lua` | `buffers` | `docs/notes/lua/buffers.md` | buffers_test.lua |
+| `lib/lfos.lua` | `lfos` | `docs/notes/lua/lfos.md` | lfos_test.lua |
+| `lib/mutation.lua` | `mutation` | `docs/notes/lua/mutation.md` | mutation_test.lua |
+| `lib/scenes.lua` | `scenes` | `docs/notes/lua/scenes.md` | scenes_test.lua |
+| `lib/midi_in.lua` | `midi_in` | `docs/notes/lua/midi.md` | midi_in_test.lua |
+| `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
+| `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-and-pages.md` | ui_test.lua |
+| `lib/pages/main.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/setup.lua` | `pages_main`, `pages_fx`, `pages_lfo`, `pages_buffer`, `pages_setup` | `docs/notes/lua/ui-and-pages.md` | pages_test.lua |
+| `lib/arc/core.lua`, `lib/arc/main.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/buffer.lua` | `arc_core`, `arc_main`, `arc_fx`, `arc_lfo`, `arc_buffer` | `docs/notes/lua/arc.md` | arc_test.lua |
+| `lib/grid/core.lua`, `lib/grid/faders.lua`, `lib/grid/layout_256.lua`, `lib/grid/layout_128h.lua`, `lib/grid/layout_128v.lua`, `lib/grid/layout_64.lua` | `grid_core`, `grid_faders`, `grid_layout_256`, `grid_layout_128h`, `grid_layout_128v`, `grid_layout_64` | `docs/notes/lua/grid-and-sequencer.md` | grid_test.lua |
+| `lib/sequencer.lua` | `sequencer` | `docs/notes/lua/grid-and-sequencer.md` | sequencer_test.lua |
+| `lib/Engine_Strata.sc` | | `docs/notes/engine.md` | `test/engine_check.scd` (the engine check) |
+| the test harness (`test/norns_stubs.lua`, `test/sync_check.lua`, ...) | | `docs/notes/lua/test-harness.md` | stubs_test.lua, docs_test.lua |
+
+The release history and future ideas are in `docs/notes/lua/version-history.md`.
+
 ### Lua modules and `S`
 
-`strata.lua` holds only the entry points: the shared table `S`, one `include("lib/<path>")` per module in dependency order, `init`, `redraw`, `enc`, `key`, `cleanup`, and init's start-up clock (`STARTUP`, `cancel_startup_clock`). Everything else is in `lib/`. The Modules section of `docs/notes/lua.md` lists each file, its `S.lib` name and what it owns.
+`strata.lua` holds only the entry points: the shared table `S`, one `include("lib/<path>")` per module in dependency order, `init`, `redraw`, `enc`, `key`, `cleanup`, and init's start-up clock (`STARTUP`, `cancel_startup_clock`). Everything else is in `lib/`.
 - **`S`** (`lib/state.lua`: `local S = include("lib/state")()`) is the table the script and its modules share. Each call builds a fresh one, so a script reload keeps nothing from the previous run. State that more than one module uses is a field of `S` under its plain name (`S.voices`, `S.scenes`, `S.ui_page`, `S.engine_senders`, ...); state only one module uses stays local to it. `S.constants` is `lib/constants.lua`, a plain table.
 - **Includes**: only `strata.lua` calls `include`, once per module, always as `include("lib/<path>")` (never `"strata/lib/..."`: the install folder may have another name). norns' `include` is `dofile`, so a second include would make a second copy with separate state. A test checks all three.
-- **A module** is a constructor, `return function(S) local M = {} ... return M end`, ending with exactly `  return M` and `end` (the locals probe relies on it). Its table is `S.lib.<name>`: `S.lib.scenes` for `lib/scenes.lua`, `S.lib.<dir>_<file>` in a subdirectory (`S.lib.ui_keys`, `S.lib.grid_layout_256`). A local function another module calls becomes a field of that table (`S.lib.ui_text.fit_text`). Functions that were global stay global, defined in their module (`MODULE_HOMES` in `test/run.lua` says where). Aliasing constants at the top of a constructor (`local NUM_VOICES = S.constants.NUM_VOICES`) is fine.
-- **Registries** (`S.registry`, filled as the modules load): `pages` (one record per screen page), `params` (init runs each record's `add`, in PARAMS menu order), `grid_layouts` (`{key, redraw}` per grid size) and `cleanup`. A module registers each thing it must stop or save on exit with `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)`, and `cleanup()` runs the steps in ascending order. `CLEANUP_ORDER` (`lib/constants.lua`) is the whole sequence: the norns handlers given back first, then the files saved, the clocks, metros and LFOs stopped, MIDI detached before the voices go off, and the grids and arc dark last. A new step takes a free order at its place in that sequence.
+- **A module** is a constructor, `return function(S) local M = {} ... return M end`, ending with exactly `  return M` and `end` (the locals probe relies on it). Its table is `S.lib.<name>`: `S.lib.scenes` for `lib/scenes.lua`, `S.lib.<dir>_<basename>` in a subfolder (`S.lib.ui_keys`, `S.lib.grid_layout_256`). A local function another module calls becomes a field of that table (`S.lib.ui_text.fit_text`). Functions that were global stay global, defined in their module (`MODULE_HOMES` in the tests says where). Aliasing constants at the top of a constructor (`local NUM_VOICES = S.constants.NUM_VOICES`) is fine.
+- **Registries** (`S.registry`, filled as the modules load): `pages` (one record per screen page), `params` (init runs each record's `add`, in PARAMS menu order), `grid_layouts` (`{key, redraw}` per grid size) and `cleanup`. "Working in parallel" below says how to add to each.
 - Tests reach script state with `local_value(name)` and `find_upvalue(name)`: a field of `S`, then of `S.constants`, then an upvalue of a global function.
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface. `test/run.lua` requires exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md, `docs/status.md` or `docs/notes/` may name a command the engine no longer has. Behavior details are in `docs/notes/engine.md`.
+**IMPORTANT**: this table is the engine command interface. The tests require exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in this file, README.md, `docs/status.md` or `docs/notes/` may name a command the engine no longer has. Behavior details are in `docs/notes/engine.md`.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
@@ -71,8 +98,9 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **The `voices` table is the only source of values.** The engine holds no per-voice defaults. `toggle_voice` calls `engine.voiceOn` and then `sync_voice_to_engine`, which sends `setGrainSource` first, then every synth, grain and crossmod value. Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
 
-### Invariants that are easy to break (details in `docs/notes/engine.md`)
+### Invariants that are easy to break
 
+The engine's (details in `docs/notes/engine.md`):
 - **Pattern steps and MIDI notes never create nodes.** They call `retrigger`. Velocity only scales the accent envelope's `levelScale` (sampled at trigger time), never a running signal. The engine check asserts that in every voice and grain SynthDef `velocity` feeds only `EnvGen` `levelScale` inputs; the one allowance is `\strataKarplus`, where it may multiply a `T2A` of the `t_trig` control (a single-sample pluck impulse), and that product may reach only the pluck excitation (a `Decay` input, the `Pluck` trigger). Bent copies compiled in the check must fail it.
 - **Replace, never stack.** A source switch replaces the grain synth. Earlier fading synths are cut with `cutSynth` (the `kill` fade), never a second `release` (EnvGen ignores it). New grain synths are placed with `startPlacedGrainSynth`, never relative to a releasing synth.
 - **`openedGate(gate)`** wraps every ASR gate, so a synth gated off in its first block still starts and frees. Never use `gate.max(...)`: it breaks forced releases.
@@ -87,24 +115,42 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - **NaN guards**: `\strataFilter` (before the effects) and `\strataMod` (input and output, so a voice that blows up never spreads through crossmod) replace bad values with `zeroBadValues`.
 - **File writes** go to a `<path>.<instanceTag>-<generation>.part` file and are renamed into place. Never open the final path for writing. `deleteStaleParts` deletes only `.part` files and `writeSlot`'s temporary float files older than `stalePartAge`.
 - **`\strataFilter`**: never compare a UGen with `==` (that is object identity); use `BinaryOpUGen('==', ...)`.
+
+The Lua side's, across modules (each module's own list opens its notes file):
 - **Param → engine** goes through `send_param_to_engine(id, value)` and an `S.engine_senders[id]` entry (this adds the LFO offsets). Never call `engine.*` from a control param's action directly. LFOs modulate around the stored value and never `params:set` their destination.
-- **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`scene_recall_in_progress`).
+- **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`S.scene_recall_in_progress`).
 - **Source tests**: use `voice_uses_synth(i)` / `voice_uses_buffer(i)`. Never use `not voice_uses_synth` (that includes input).
-- **Grid and arc handlers live on the vport only** (`grid.connect(port)`, `arc.connect`). Never store or attach to the raw device passed to `grid.add`.
-- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions are the LFO page's whole-value rings (depth at 10 ticks per percent, clocked rate at 20 ticks per rate).
-- **Arc drawing**: every ring is drawn through `arc_ring_fill` from `param_fraction`, never from a hardcoded range.
-- **Arc port**: Strata follows one arc, on the vport of the device (`device.port`, port 1 if unassigned; at init the first vport holding a device). While one is connected, `arc.add` of another arc is ignored and `arc.remove` disconnects only the connected one.
+- **Grid, arc and MIDI handlers live on the vport only** (`grid.connect(port)`, `arc.connect`, `midi.connect`). Never store or attach to the raw device passed to `grid.add`.
+- **Arc rings** sweep their range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param` and are drawn through `arc_ring_fill` from `param_fraction`. Strata follows one arc. The exceptions and details are in `docs/notes/lua/arc.md`.
+
+## Working in parallel
+
+Several pull requests are built at once, often by agents. The rule: a feature lives in files that only that feature's work edits, apart from one-line registrations.
+- **One worktree per pull request.** Branch from an up-to-date `main` in a worktree of its own; never share a checkout between two pieces of work. Engine checks in different worktrees can run at once on different `$STRATA_SC_PORT` ports (Development & Testing).
+- **Edit only the files your package owns.** A release's design lists its work packages and the files each owns (for 3.1, §9 of `docs/design/3.1-design.md`). Besides those, a package edits only registration lines (below), and its own notes file, unit test file and `docs/user/` page. Need a change in a file another package owns? Ask for it, or make it a separate pull request.
+- **Where things live**: a module's table is `S.lib.<name>` (top-level `lib/` files) or `S.lib.<dir>_<basename>` (subfolders); shared state is on `S` under its plain name; the registries are `S.registry.pages`, `S.registry.params`, `S.registry.cleanup` and `S.registry.grid_layouts`.
+- **Registering a page**: a new `lib/pages/<name>.lua` registers its record `{name, draw, enc, key, key_release}` at its index in `S.registry.pages` (it looks the index up by name). Add the name to `UI_PAGES` in `lib/constants.lua` (one line), bump `NUM_UI_PAGES` there to match (E1 clamps to it, and nothing checks it against `#UI_PAGES` yet; deriving it from `#UI_PAGES` would remove this step), and add its `include` to `strata.lua` (one line). Its rings, if any, go in a `lib/arc/<name>.lua` that sets `arc_delta`/`arc_redraw` on the record.
+- **Registering a param group**: one `register_params(name, add)` call in `lib/params_setup.lua`, at its place in the PARAMS menu (the registration order is the menu order). Keep the group's body in the owning module where you can, and call it from `add` (as the "lfos" record calls `add_lfo_params`).
+- **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.
+- **Registering a grid layout**: a `lib/grid/layout_<name>.lua` sets `S.registry.grid_layouts["<name>"] = {key = ..., redraw = ...}`, plus one `include` line in `strata.lua` and the size match in `grid_layout()` (`lib/grid/core.lua`).
+- **Start-up** still goes through `init` in `strata.lua` (metros, polls, devices, loading files, the frame clock). A start registry like the cleanup one is planned (issue #73); until then, a feature that must start something adds its lines to `init` and says so in its pull request.
+- **On a conflict in a registration line** (an include, a `UI_PAGES` entry, a `CLEANUP_ORDER` entry, a `register_params` call, a module table row in this file): keep both lines, in the order the sequence needs, and rerun the checks. Two `CLEANUP_ORDER` entries on the same number: give the later one a free number.
+- **Shared files** (CHANGELOG.md, `docs/status.md`, this file, README.md): edit them only where your package needs to. A feature pull request never edits CHANGELOG.md.
+- **Changelog**: every pull request adds a changelog fragment `changes/<branch-name>.md`; see `changes/README.md`. The release pull request merges the fragments into CHANGELOG.md.
 
 ## Development & Testing
 
 **On norns:** copy the project to `~/dust/code/`, then restart norns or run `;restart` in maiden. SuperCollider changes need a script restart. Watch the maiden console for errors.
 
 **Off-device checks** (run from the repo root before committing; CI runs all three, see `docs/status.md`):
-- `lua test/run.lua` and `luajit test/run.lua`: behavior tests against norns stubs (`test/norns_stubs.lua`). The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments. The run also includes the sync check, the CLAUDE.md table check, a docs check (no `engine.<name>(` in this file, README.md, `docs/status.md` or `docs/notes/` names a missing command, and every path under docs/, test/ or .github/ that they name in backticks exists), and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal the script's constants (`lib/constants.lua`; `BUFFER_STATE_STRIDE` is in `lib/buffers.lua`). Two module safety nets run too: the global-reference check (under Lua 5.3, which then needs `luac` or `luac5.3` on PATH and fails without one; LuaJIT skips it: every global any Lua file reads is written by a script file or provided by the stubs, so a bare name left behind by a move into a module fails here, not as a nil global on norns; with it, the duplicate-global check: no global is written by more than one file, except `key` and `enc`, which `lib/pages/buffer.lua` puts back) and the locals probe (it measures the free locals at the end of each file's main chunk, `strata.lua`'s included, and of each module's constructor function, and requires 30 in each). Tests also check the includes (one per module, from `strata.lua`, as `lib/<path>`), that a second load of the script shares no state with the first, the constructor shape, and `MODULE_HOMES` (each global function it lists is defined in the module it names).
+- `lua test/run.lua` and `luajit test/run.lua`: the behavior tests against norns stubs (`test/norns_stubs.lua`). Tests live in test/unit/<module>_test.lua (one file per module, discovered automatically). `lua test/run.lua` runs all (as CI does); `lua test/run.lua <filter>` runs the unit files whose name contains `<filter>` (`lua test/run.lua scenes`). Run your module's file while you work and the whole suite before pushing.
+  - The engine stub rejects any `engine.*` call whose name, argument count or types do not match the engine's `addCommand` signatures, whose index or enumerated arguments are out of the engine's range, or whose `setVoiceParam`/`setGrainParam` name is not a control of the engine's SynthDefs. Every parser of the engine source skips `//` and `/* */` comments.
+  - The run also includes the sync check, the CLAUDE.md table check, a docs check over the maintained docs (this file, README.md, `docs/status.md`, and every `.md` under docs/notes/, recursively, and docs/user/: no `engine.<name>(` names a missing command, every path under docs/, test/, .github/ or lib/ named in backticks exists, every relative Markdown link resolves from the doc's own folder, and every docs/notes/lua/ file's first heading is `## Must not break`), a check that every changelog fragment in changes/ has an Added, Changed or Fixed heading with a bullet, and checks that the FX SynthDefs' defaults equal the Lua param defaults and that `numVoices`, `numBuffers`, `bufferSeconds`, `bufferStateStride` and `numModSlots` equal the script's constants (`lib/constants.lua`; `BUFFER_STATE_STRIDE` is in `lib/buffers.lua`).
+  - Module safety nets: the global-reference and duplicate-global checks (Lua 5.3 with `luac` or `luac5.3` on PATH; LuaJIT skips them) and the locals probe (30 free locals in each file's main chunk and each constructor). Tests also check the includes, that a second load shares no state with the first, the constructor shape, and `MODULE_HOMES`. Details: `docs/notes/lua/test-harness.md`.
 - `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand` with the same argument count, and every command is used. Call engine commands only as `engine.<name>(...)`: any other use of `engine` (`engine[name](...)`, `local f = engine.voiceOn`, `local e = engine`) fails the check, which cannot see what it calls.
-- `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` (default `~/src/norns`, or `$NORNS_DIR`) and runs `test/engine_check.scd` on a silent local scsynth. It needs SuperCollider (`$SCLANG` overrides the path). Run only one at a time per machine (port 57110). It stops sclang after `$ENGINE_CHECK_TIMEOUT` s (570) and at once on a compile error, so a broken check never hangs. Besides a failed check it fails on any `ERROR`, `FAILURE`, `alloc failed`, `Too many grains` or `Strata invariant broken` line.
-- Add a test to `test/run.lua` for every behavior change. Script state is reached through `local_value()`/`find_upvalue()` (fields of `S`, then `S.constants`, then upvalues), so a name the tests use must stay a field of `S` or `S.constants` under that name.
-- The stubs mirror the real norns libraries (`~/src/norns/lua`): check behavior there before changing them. `param.t` holds numeric type codes (`params.tOPTION`, ...), so never compare it with a string (a test enforces this). The stubbed APIs and test helpers (`context.polls.fire`, `context.midi.plug`, `context.set_time`, `context.encoders.deliver`, ...) are listed under "Test harness details" in `docs/notes/lua.md`.
+- `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` (default `~/src/norns`, or `$NORNS_DIR`) and runs `test/engine_check.scd` on a silent local scsynth. It needs SuperCollider (`$SCLANG` overrides the path). Each run boots scsynth on `$STRATA_SC_PORT` (default 57110); runs on different ports (avoid 57120 and the few above it, used by sclang itself) can overlap; runs on the same port collide. It stops sclang after `$ENGINE_CHECK_TIMEOUT` s (570) and at once on a compile error, so a broken check never hangs. Besides a failed check it fails on any `ERROR`, `FAILURE`, `alloc failed`, `Too many grains` or `Strata invariant broken` line.
+- Add a test to the unit file of the module you change, for every behavior change. Script state is reached through `local_value()`/`find_upvalue()` (fields of `S`, then `S.constants`, then upvalues), so a name the tests use must stay a field of `S` or `S.constants` under that name.
+- The stubs mirror the real norns libraries (`~/src/norns/lua`): check behavior there before changing them. `param.t` holds numeric type codes (`params.tOPTION`, ...), so never compare it with a string (a test enforces this). The stubbed APIs and test helpers (`context.polls.fire`, `context.midi.plug`, `context.set_time`, `context.encoders.deliver`, ...) are listed in `docs/notes/lua/test-harness.md`.
 - `test/StrataTestNoBoot.sc.in` is deliberately not a `.sc` file: norns compiles every `.sc` under `~/dust`.
 
 **Common norns pitfalls:**
@@ -117,13 +163,13 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of each module that uses them): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (2), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (5), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `BUFFER_SECONDS` (16), `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers`, `bufferSeconds` and `numModSlots`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
-**Lua's 200-local limit applies to each function, checked by a test**: the locals probe in `test/run.lua` measures the free locals at the end of each file's main chunk and of each module's constructor function, and fails when any has fewer than 30 (`strata.lua`'s main chunk uses 5). Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) rather than adding many `local`s, and split a module that runs short.
+**Lua's 200-local limit applies to each function, checked by a test**: the locals probe measures the free locals at the end of each file's main chunk and of each module's constructor function, and fails when any has fewer than 30 (`strata.lua`'s main chunk uses 5). Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) rather than adding many `local`s, and split a module that runs short.
 
 **Descriptive names**: `selected_voice`, not `sv`; `master_density`, not `md`.
 
-**Bounds-check every index** (voice 1..`NUM_VOICES`, scene, step, slot, grid coordinates) before indexing, so tables never grow by accident. **Clean up** every metro, clock, poll and device handler on exit: the module that owns it registers a step with `S.register_cleanup` at its place in `S.constants.CLEANUP_ORDER` (never code in `cleanup()` itself). Cancel an existing clock before starting its replacement.
+**Bounds-check every index** (voice 1..`NUM_VOICES`, scene, step, slot, grid coordinates) before indexing, so tables never grow by accident. **Clean up** every metro, clock, poll and device handler on exit: the module that owns it registers a step with `S.register_cleanup` at its place in `S.constants.CLEANUP_ORDER` (never code in `cleanup()` itself; the sequence is in `docs/notes/lua/state-and-voices.md`). Cancel an existing clock before starting its replacement.
 
-**Keep docs current in the same change**: README.md (user-facing behavior), this file (rules, command table) and the matching `docs/notes/` file (implementation details), plus `docs/status.md`.
+**Keep docs current in the same change**: the `docs/user/` page for the area (user-facing behavior; README.md only for the overview, quick start and index), the module's notes file (implementation details, and its "Must not break" list), this file (rules, the command table, the module table) and `docs/status.md`.
 
 ### CRITICAL: keep Lua and the engine in sync
 
@@ -134,16 +180,18 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 ### IMPORTANT: update the UI with every feature (128×64 screen)
 
-- Pages: `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`. Each page file (`lib/pages/main.lua`, ...) registers one record `{name, draw, enc, key, key_release}` at its `UI_PAGES` index in `S.registry.pages`, which `enc`, `key` and `redraw` in `strata.lua` dispatch through. Its rings' file (`lib/arc/main.lua`, ...) adds `arc_delta` and `arc_redraw` to the record, which `arc_delta`/`arc_redraw` in `lib/arc/core.lua` dispatch through (a page without them, SETUP, ignores turns and leaves the rings off). A new page adds its file and record, and its arc file if it has rings. Change a page's draw function (`redraw_main`, ...), never `redraw()`.
-- **Redraws**: when state the screen or arc shows changes, call `request_redraw()`; never call `redraw()` or `arc_redraw()` from script code. The frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15), and every param action already requests one (details in `docs/notes/lua.md`, Redraws). Grid redraws stay direct (`grid_redraw()`).
+Details: `docs/notes/lua/ui-and-pages.md`.
+- Pages: `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`. Each page file (`lib/pages/main.lua`, ...) registers one record `{name, draw, enc, key, key_release}` at its `UI_PAGES` index in `S.registry.pages`, which `enc`, `key` and `redraw` in `strata.lua` dispatch through. Its rings' file (`lib/arc/main.lua`, ...) adds `arc_delta` and `arc_redraw` to the record, which `arc_delta`/`arc_redraw` in `lib/arc/core.lua` dispatch through (a page without them, SETUP, ignores turns and leaves the rings off). Change a page's draw function (`redraw_main`, ...), never `redraw()`.
+- **Redraws**: when state the screen or arc shows changes, call `request_redraw()`; never call `redraw()` or `arc_redraw()` from script code. The frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15), and every param action already requests one. Grid redraws stay direct (`grid_redraw()`).
 - Every page has the header at y=8 (`draw_header()`: title, `dens:`, `[M]` at x=98, scene `S1`-`S8` right-aligned at 127) and the hint row at y=62 (`draw_hints()`). On MAIN the voice list (x 0-60, `UI.ScrollingList`, 4 visible rows) sits left of the divider at x=62 and the selected voice's details at x 65-127. Status indicators use `[BRACKETS]`; levels are 15 bright, 4 dim, 1-2 subtle.
 - A new voice type needs a `MAIN_PARAMS` entry (E3, the MAIN display and arc ring 2 follow; `list_name` is its voice-list name, at most 5 characters) and `get_param_spec()` specs.
-- `test/run.lua` checks every page for overlapping strings, text off-screen, the hint row and the list's bottom edge, and that no MAIN string crosses the divider (width estimate: `stubs.text_width`). Keep it passing.
+- The layout tests check every page for overlapping strings, text off-screen, the hint row and the list's bottom edge, and that no MAIN string crosses the divider (width estimate: `stubs.text_width`). Keep them passing.
 - Before finishing, check that new values are visible with units, hints match the keys, all 7 voices fit, and nothing leaves 128×64.
 
 ### CRITICAL: keep grid and arc in step with the code
 
+Details: `docs/notes/lua/grid-and-sequencer.md` and `docs/notes/lua/arc.md`.
 - Grid layouts: `grid_key_256/128h/128v/64()` and `grid_redraw_*()`, one file per layout (`lib/grid/layout_256.lua`, ...), each registering `{key, redraw}` in `S.registry.grid_layouts`; `grid_key` and `grid_redraw` (`lib/grid/core.lua`) dispatch through it by the name `grid_layout()` picks from the exact `cols`/`rows`. The 256's faders are in `lib/grid/faders.lua`. Patterns are `S.patterns[voice][step]` (`lib/sequencer.lua`). Anything the grid shows must call `grid_redraw()` when it changes, wherever it changes (cheap without a grid).
 - New params in `param_order` appear on the 256 fader page automatically (`fader_param_ids`, `set_param_from_column`, which follows the controlspec warp). Review whether a feature needs grid buttons or LED feedback on every layout.
 - Arc: review whether new params belong on a page's rings (`lib/arc/main.lua`, ...: `arc_*_delta`/`arc_*_redraw`, `ARC_FX_RINGS`, `ARC_BUFFER_RINGS`). Ring feedback must use the same ranges as the param specs (`param_fraction`).
-- Everything must degrade gracefully when no grid, arc or MIDI device is connected. Update README's grid/arc sections and `docs/notes/lua.md` with new patterns.
+- Everything must degrade gracefully when no grid, arc or MIDI device is connected. Update `docs/user/grid.md`, `docs/user/arc.md` and the matching notes file with new patterns.
