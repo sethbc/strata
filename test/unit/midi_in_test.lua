@@ -221,8 +221,8 @@ test("omni pitchbend follows the selection: the old voice re-centers, the new on
   assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centered")
   assert_equal(last_bend(2), nil, "nothing sent to a stopped voice"); assert_near(bend[3], up, 1e-9)
   toggle_voice(3); assert_near(last_bend(2), up, 1e-9, "starting it sends the wheel")
-  -- BUFFER page E2 is the same selection
-  show_page("BUFFER"); context.clear_engine_calls()
+  -- MAIN's E2 again (BUFFER's E2 picks a slot since 3.1)
+  show_page("MAIN"); context.clear_engine_calls()
   enc(2, -1)
   assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centered"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
   -- E2 against the end of the list changes nothing
