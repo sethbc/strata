@@ -210,11 +210,14 @@ return function(S)
 
   -- Stop the LFOs (through their state params, like the library's menu) and
   -- give their destinations back their stored values
+  -- (a start that failed before init added the params built no LFOs)
   S.register_cleanup(S.constants.CLEANUP_ORDER.lfos, function()
     for n = 1, NUM_LFOS do
-      S.lfos[n]:stop()
-      params:set("lfo_" .. n, 1)
-      restore_lfo_destination(n)
+      if S.lfos[n] then
+        S.lfos[n]:stop()
+        params:set("lfo_" .. n, 1)
+        restore_lfo_destination(n)
+      end
     end
   end)
 

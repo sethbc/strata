@@ -374,6 +374,10 @@ return function(S)
   end
   -- Set when a buffers file could not be loaded and could not be moved aside
   S.buffer_autosave_blocked = false
+  -- Set once load_buffers_from_disk has run to its end in this session: a
+  -- start that failed before init's restore leaves it false, and cleanup()
+  -- then does not overwrite buffers.data with the empty paths (#72)
+  S.buffers_loaded = false
 
   function save_buffers_to_disk()
     if util.file_exists(S.lib.scenes.scene_data_dir) == false then
@@ -399,7 +403,7 @@ return function(S)
   -- missing or damaged file loads nothing and never stops init. A slot counts
   -- in buffers_restored once the engine reports audio in it
   -- (buffer_state_changed); a missing file's path is kept for the next save.
-  function load_buffers_from_disk()
+  local function restore_buffers_from_file()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
     if not util.file_exists(buffer_data_file()) then
@@ -445,15 +449,24 @@ return function(S)
     print(reloading .. " buffers reloading from " .. buffer_data_file())
   end
 
+  -- init's restore: from here on cleanup() saves the buffer paths
+  function load_buffers_from_disk()
+    restore_buffers_from_file()
+    S.buffers_loaded = true
+  end
+
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
   S.finish_buffer_take = finish_buffer_take
 
   -- cleanup()'s steps: remember each buffer's file or scratch take for the
-  -- next start (unless that would overwrite a buffers file that failed to
-  -- load and could not be moved aside), and later stop the polls and the
+  -- next start (unless the paths were never loaded in this session, a failed
+  -- start, or the save would overwrite a buffers file that failed to load
+  -- and could not be moved aside), and later stop the polls and the
   -- recording timers (the engine finishes or frees any recording itself)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_paths_save, function()
-    if S.buffer_autosave_blocked then
+    if not S.buffers_loaded then
+      print("buffer paths not auto-saved: they were not loaded from " .. buffer_data_file() .. " in this session")
+    elseif S.buffer_autosave_blocked then
       print("buffer paths not auto-saved: " .. buffer_data_file() .. " could not be loaded")
     else
       save_buffers_to_disk()

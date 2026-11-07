@@ -662,6 +662,60 @@ test("a buffers file that fails to load does not stop init and survives cleanup"
   file:close()
 end)
 
+-- #72: a start that failed before init restored the buffers must not let
+-- cleanup overwrite buffers.data with the empty in-memory paths
+test("cleanup leaves buffers.data alone when init never loaded it (#72)", function()
+  local saved_path = "/saved/by/an/earlier/session.wav"
+  local sentinel = tabutil_text({ version = 1, paths = { saved_path } })
+  local started
+  local function write_sentinel(context)
+    started = context
+    os.execute("mkdir -p '" .. context.data_dir .. "strata/'")
+    local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+    file:write(sentinel)
+    file:close()
+  end
+  local function buffers_file_text()
+    local file = assert(io.open(started.data_dir .. "strata/buffers.data", "r"))
+    local text = file:read("*a")
+    file:close()
+    return text
+  end
+
+  local before_loads, count = h.patched_script("%-%- Load saved scenes from disk",
+    'error("simulated init failure before the loads")')
+  assert_equal(count, 1, "init's scenes load found")
+  before_loads.before_load = write_sentinel
+  local between_loads
+  between_loads, count = h.patched_script("%-%- Reload the buffers remembered on exit[^\n]*",
+    'error("simulated init failure between the loads")')
+  assert_equal(count, 1, "init's buffers load found")
+  between_loads.before_load = write_sentinel
+  local failed_starts = {
+    { name = "init never ran", options = { before_load = write_sentinel,
+      before_init = function() error("simulated failure before init") end } },
+    { name = "init failed before the loads", options = before_loads },
+    { name = "init failed after the scenes load", options = between_loads },
+  }
+  for _, start in ipairs(failed_starts) do
+    local ok, load_error = pcall(load_strata, start.options)
+    assert_true(not ok and tostring(load_error):find("simulated", 1, true), start.name .. ": the start failed")
+    local cleaned, cleanup_error = pcall(cleanup)
+    assert_equal(buffers_file_text(), sentinel, start.name .. ": buffers.data unchanged by cleanup")
+    assert_true(cleaned, start.name .. ": cleanup runs after a failed start: " .. tostring(cleanup_error))
+  end
+
+  -- a start that loaded the file still saves on exit
+  local context = load_strata({ before_load = write_sentinel })
+  local recorded = context.audio_dir .. "new.wav"
+  io.open(recorded, "w"):close()
+  load_buffer(2, recorded)
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[1], saved_path, "the missing file's path is kept")
+  assert_equal(saved.paths[2], recorded, "after a full start cleanup saves the buffer paths")
+end)
+
 test("the same file loads again after a record or clear, from the BUFFER page and PARAMS", function()
   local context = load_strata(); finish_startup(context); show_page(4)
   params:set("v1_source", 2)  -- voice 1 reads buffer 1

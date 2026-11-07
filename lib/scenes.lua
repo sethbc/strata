@@ -543,6 +543,11 @@ return function(S)
   -- Set when a scenes file could not be loaded and could not be moved aside:
   -- cleanup() must then not overwrite it with the (empty) in-memory scenes
   S.scene_autosave_blocked = false
+  -- Set once load_scenes_from_disk has run to its end in this session. A
+  -- start that failed before init's load (the engine did not load, an error
+  -- earlier in init) leaves it false, and cleanup() then does not save, so
+  -- the empty in-memory scenes never replace the saved ones (#72)
+  S.scenes_loaded = false
 
   function save_scenes_to_disk()
     -- Ensure data directory exists
@@ -580,7 +585,7 @@ return function(S)
   -- Load scenes from disk. On any problem the current scenes (empty at
   -- startup) are kept, a message is printed and the file is preserved; a bad
   -- file never stops init.
-  function load_scenes_from_disk()
+  local function read_scenes_file()
     if not util.file_exists(scene_data_file) then
       print("no saved scenes file found")
       return
@@ -646,6 +651,12 @@ return function(S)
 
     -- Update grid display if grids are connected
     grid_redraw()
+  end
+
+  -- init's load (and the load_scenes trigger): from here on cleanup() saves
+  function load_scenes_from_disk()
+    read_scenes_file()
+    S.scenes_loaded = true
   end
 
   -- Check that one scene slot holds everything recall_scene_instant reads
@@ -720,11 +731,14 @@ return function(S)
     return true
   end
 
-  -- cleanup()'s steps: save the scenes before anything stops, unless that
+  -- cleanup()'s steps: save the scenes before anything stops, unless the
+  -- scenes were never loaded in this session (a failed start) or the save
   -- would overwrite a scenes file that failed to load and could not be
   -- moved aside
   S.register_cleanup(S.constants.CLEANUP_ORDER.scenes_save, function()
-    if S.scene_autosave_blocked then
+    if not S.scenes_loaded then
+      print("scenes not auto-saved: they were not loaded from " .. scene_data_file .. " in this session")
+    elseif S.scene_autosave_blocked then
       print("scenes not auto-saved: " .. scene_data_file .. " could not be loaded")
     else
       save_scenes_to_disk()
@@ -732,8 +746,9 @@ return function(S)
   end)
 
   -- Stop the scene sequencer through its param so param and state agree
+  -- (a start that failed before init added the params has no param to set)
   S.register_cleanup(S.constants.CLEANUP_ORDER.scene_sequencer, function()
-    params:set("scene_sequencer_enabled", 0)
+    if params.lookup["scene_sequencer_enabled"] then params:set("scene_sequencer_enabled", 0) end
     scene_sequencer_stop()
   end)
 
