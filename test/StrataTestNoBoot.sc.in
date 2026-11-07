@@ -11,3 +11,15 @@ StrataTestNoBoot {
         Crone.bootOnInit = false;
     }
 }
+
+// Concurrent engine checks must not share the system temp dir: the engine's
+// temporary float files carry the same instance tags in every sclang process,
+// so one run's files would count as another's leftovers. run_engine_check.sh
+// sets STRATA_CHECK_TMPDIR to its private work dir. Linux (UnixPlatform);
+// macOS' OSXPlatform has its own defaultTempDir and keeps the shared one.
++ UnixPlatform {
+    defaultTempDir {
+        var dir = "STRATA_CHECK_TMPDIR".getenv;
+        ^if(dir.notNil and: { dir.size > 0 }, { dir +/+ "" }, { ["/tmp/", this.userAppSupportDir +/+ ""].detect({ arg path; File.exists(path) }) })
+    }
+}
