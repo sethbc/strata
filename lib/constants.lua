@@ -102,6 +102,10 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- Grid holds (lib/grid/core.lua): a scene save key must be held this long
+-- to save; the 64's half toggle (column 1) switches halves after this hold
+local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
+
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
 
@@ -159,6 +163,7 @@ return {
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  GRID_HOLD = GRID_HOLD,
   UNDO_SECONDS = UNDO_SECONDS,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }

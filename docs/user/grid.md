@@ -53,7 +53,7 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 **Scene Page (Page 3)**
 - **Row 1**: Scene recall (instant) - Press to immediately load scenes 1-8
 - **Row 2**: Scene recall (with transition) - Press to smoothly crossfade into scenes 1-8
-- **Row 3**: Scene save - Press to capture current state to scenes 1-8
+- **Row 3**: Scene save - Hold for half a second to capture the current state to scenes 1-8. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene
 - **Row 5, Column 1**: Toggle scene sequencer on/off
 - **Row 5, Columns 3-10**: Set scene sequence length (1-8)
 - **Row 8, Columns 13-16**: Page selection (same as other pages)
@@ -90,7 +90,7 @@ Scene LED feedback:
 **Scenes page (row 8, column 7)**
 - Row 1: Scene recall (instant), scenes 1-8
 - Row 2: Scene recall (with transition)
-- Row 3: Scene save
+- Row 3: Scene save (hold for half a second, as on the 256)
 - Row 4: Set scene sequence length (1-8)
 - Row 5, Column 1: Toggle scene sequencer
 
@@ -124,10 +124,10 @@ Scene LED feedback:
 - **Pattern operations** - clear, randomize per voice
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
 - **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15
+- **Setting a step's level** - hold a step key and press another key of the same voice: the held step's level becomes that key's share of 15 along the voice's steps (column 16 = 15, column 8 = 8, column 1 = 1; on the 8×8, column 8 = 15 and column 4 = 8; on the 8×16, down the voice's column). The second key does not toggle its own step. Press more keys while still holding to try other levels
 
 ## Multi-Grid Support
 
 - Connect up to 4 grids simultaneously
-- Each grid shows the same interface
-- Hot-plug support - connect/disconnect grids while running
-- All grids stay synchronized
+- Each grid has its own page: one grid can show the patterns while another shows the scenes. Patterns, voices and everything else are shared
+- Hot-plug support - connect/disconnect grids while running. A grid plugged in starts on page 1; unplugging a grid while a scene save key is held saves nothing

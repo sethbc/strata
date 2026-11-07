@@ -6,13 +6,15 @@ return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local grid_core = S.lib.grid_core
 
   -- 8x16 grid layout (128 buttons vertical)
-  function grid_key_128v(x, y, z)
+  function grid_key_128v(port, x, y, z)
+    if z == 0 then return end  -- presses only
     if x >= 1 and x <= NUM_VOICES then
-      -- Columns 1-7: Pattern triggers
+      -- Columns 1-7: Pattern triggers (levels follow the 16 rows)
       if y <= PATTERN_LENGTH then
-        toggle_pattern_step(x, y)
+        grid_core.step_key(port, x, y, z, x, y, y, PATTERN_LENGTH)
       end
     elseif x == 8 then
       -- Column 8: Controls
@@ -27,7 +29,7 @@ return function(S)
     end
   end
 
-  function grid_redraw_128v(grid_device)
+  function grid_redraw_128v(port, grid_device)
     -- Draw patterns (columns 1-NUM_VOICES)
     for voice_idx = 1, NUM_VOICES do
       for step = 1, PATTERN_LENGTH do

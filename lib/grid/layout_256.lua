@@ -9,20 +9,22 @@ return function(S)
   local NUM_SCENES = S.constants.NUM_SCENES
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
-  local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
-  local GRID_LAYOUT = S.lib.grid_core.GRID_LAYOUT
+  local grid_core = S.lib.grid_core
+  local GRID_LAYOUT = grid_core.GRID_LAYOUT
 
   -- 16x16 grid layout
-  function grid_key_256(x, y, z)
+  function grid_key_256(port, x, y, z)
+    if z == 0 then return end  -- presses only
+    local page = grid_core.page(port)
     -- Handle page navigation first (always accessible from row 8)
     if y == 8 and x >= 13 and x <= 16 then
       -- Page selection (always accessible)
-      S.grid_page = x - 12
+      grid_core.set_page(port, x - 12)
       return
     end
 
-    if S.grid_page == 3 then
+    if page == 3 then
       -- Scene page
       if y == 1 and x <= NUM_SCENES then
         -- Row 1: Scene recall (instant)
@@ -31,8 +33,8 @@ return function(S)
         -- Row 2: Scene recall (with transition)
         recall_scene(x, params:get("scene_transition_time"))
       elseif y == 3 and x <= NUM_SCENES then
-        -- Row 3: Scene save
-        capture_scene(x)
+        -- Row 3: Scene save, once held
+        grid_core.scene_save_key(port, x, y, z, x)
       elseif y == 5 then
         -- Row 5: Scene sequencer controls
         if x == 1 then
@@ -44,22 +46,20 @@ return function(S)
           params:set("scene_sequence_length", x - 2)
         end
       end
-    elseif S.grid_page == 4 then
+    elseif page == 4 then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
       -- sources on rows 9-15; rows 8 and 16 work as on page 1
       local fx_param_id = GRID_LAYOUT.fx_fader_ids[y - GRID_LAYOUT.fx_first_row + 1]
       local source_voice = y - GRID_LAYOUT.source_first_row + 1
       if y == GRID_LAYOUT.buffer_record_row then
         -- record into buffer x, or stop its recording early
-        if x <= NUM_BUFFERS then record_buffer(x) end
+        grid_core.record_key(x)
       elseif y == GRID_LAYOUT.buffer_clear_row then
-        if x <= NUM_BUFFERS then clear_buffer(x) end
+        grid_core.clear_key(x)
       elseif fx_param_id then
         set_param_from_column(fx_param_id, x)
       elseif source_voice >= 1 and source_voice <= NUM_VOICES then
-        if x <= #SOURCE_OPTIONS then
-          params:set("v" .. source_voice .. "_source", x)
-        end
+        grid_core.source_key(source_voice, x)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
@@ -67,18 +67,18 @@ return function(S)
       end
     elseif y >= 1 and y <= NUM_VOICES then
       -- Rows 1-NUM_VOICES: Pattern triggers for each voice
-      toggle_pattern_step(y, x)
+      grid_core.step_key(port, x, y, z, y, x, x, PATTERN_LENGTH)
     elseif y == 8 then
       grid_key_256_transport(x)
     elseif y >= GRID_LAYOUT.fader_first_row and y < GRID_LAYOUT.fader_first_row + GRID_LAYOUT.fader_rows then
       -- Rows 9-12 (parameter page): one fader per row for the selected voice
-      if S.grid_page == 2 then
+      if page == 2 then
         local fader_index = (S.param_page - 1) * GRID_LAYOUT.fader_rows + (y - GRID_LAYOUT.fader_first_row + 1)
         set_fader_param(S.grid_voice_select, fader_index, x)
       end
     elseif y == GRID_LAYOUT.param_page_row then
       -- Row 13 (parameter page): choose which group of four faders is shown
-      if S.grid_page == 2 and x <= fader_page_count(S.grid_voice_select) then
+      if page == 2 and x <= fader_page_count(S.grid_voice_select) then
         S.param_page = x
       end
     elseif y == 14 then
@@ -128,8 +128,9 @@ return function(S)
     end
   end
 
-  function grid_redraw_256(grid_device)
-    if S.grid_page == 3 then
+  function grid_redraw_256(port, grid_device)
+    local page = grid_core.page(port)
+    if page == 3 then
       -- Scene page
       -- Row 1: Scene recall (instant)
       for i = 1, NUM_SCENES do
@@ -144,9 +145,9 @@ return function(S)
         grid_device:led(i, 2, brightness)
       end
 
-      -- Row 3: Scene save
+      -- Row 3: Scene save (15 while a save is held)
       for i = 1, NUM_SCENES do
-        grid_device:led(i, 3, 4)
+        grid_device:led(i, 3, grid_core.hold_pending(port, i, 3) and 15 or 4)
       end
 
       -- Row 5: Scene sequencer controls
@@ -166,8 +167,8 @@ return function(S)
         grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
       end
 
-      grid_redraw_256_page_row(grid_device)
-    elseif S.grid_page == 4 then
+      grid_redraw_256_page_row(port, grid_device)
+    elseif page == 4 then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
       -- sources on rows 9-15, rows 8 and 16 as on page 1
       grid_redraw_256_buffers(grid_device)
@@ -175,7 +176,7 @@ return function(S)
         grid_redraw_fader_row(grid_device, GRID_LAYOUT.fx_first_row + index - 1, param_id)
       end
       grid_redraw_256_sources(grid_device)
-      grid_redraw_256_transport(grid_device)
+      grid_redraw_256_transport(port, grid_device)
       grid_redraw_256_freeze(grid_device)
     else
       -- Patterns/parameters pages
@@ -187,10 +188,10 @@ return function(S)
         end
       end
 
-      grid_redraw_256_transport(grid_device)
+      grid_redraw_256_transport(port, grid_device)
 
       -- Rows 9-13 (parameter page): faders and fader page selection
-      if S.grid_page == 2 then
+      if page == 2 then
         grid_redraw_faders(grid_device)
       end
 
@@ -208,15 +209,8 @@ return function(S)
   -- above each slot's clear key
   function grid_redraw_256_buffers(grid_device)
     for slot = 1, NUM_BUFFERS do
-      local buffer = S.buffers[slot]
-      local level = 2
-      if buffer.recording then
-        level = 15
-      elseif buffer.loaded then
-        level = 8
-      end
-      grid_device:led(slot, GRID_LAYOUT.buffer_record_row, level)
-      grid_device:led(slot, GRID_LAYOUT.buffer_clear_row, 4)
+      grid_device:led(slot, GRID_LAYOUT.buffer_record_row, grid_core.record_level(slot))
+      grid_device:led(slot, GRID_LAYOUT.buffer_clear_row, grid_core.CLEAR_LEVEL)
     end
   end
 
@@ -226,27 +220,21 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do
       local y = GRID_LAYOUT.source_first_row + voice_idx - 1
       for source = 1, #SOURCE_OPTIONS do
-        local level = 4
-        local slot = source - SOURCE_SYNTH
-        if source == S.voices[voice_idx].source then
-          level = 15
-        elseif S.lib.buffers.valid_buffer_slot(slot) and not (S.buffers[slot].loaded or S.buffers[slot].recording) then
-          level = 2
-        end
-        grid_device:led(source, y, level)
+        grid_device:led(source, y, grid_core.source_level(voice_idx, source))
       end
     end
   end
 
   -- 256 row 8, columns 13-16: page indicators
-  function grid_redraw_256_page_row(grid_device)
+  function grid_redraw_256_page_row(port, grid_device)
+    local page = grid_core.page(port)
     for i = 1, 4 do
-      grid_device:led(12 + i, 8, i == S.grid_page and 15 or 2)
+      grid_device:led(12 + i, 8, i == page and 15 or 2)
     end
   end
 
   -- 256 row 8: pattern controls, tempo and page indicators
-  function grid_redraw_256_transport(grid_device)
+  function grid_redraw_256_transport(port, grid_device)
     -- columns 1-4 all act as play/stop
     for x = 1, 4 do
       grid_device:led(x, 8, S.pattern_playing and 15 or 4)
@@ -258,7 +246,7 @@ return function(S)
     grid_device:led(7, 8, 2)
     grid_device:led(8, 8, 2)
 
-    grid_redraw_256_page_row(grid_device)
+    grid_redraw_256_page_row(port, grid_device)
   end
 
   -- 256 row 16: freeze status

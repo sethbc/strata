@@ -18,7 +18,7 @@ Perfect for creating structured ambient compositions with multiple movements or 
 **Building a Scene-Based Composition**:
 1. Create your first sonic texture using voices, patterns, and parameters
 2. Navigate to grid page 3 (or use PARAMETERS menu)
-3. Press row 3 to save the scene (scenes 1-8)
+3. Hold a row 3 key for half a second to save the scene (scenes 1-8)
 4. Build a contrasting or complementary texture
 5. Save to another scene slot
 6. Repeat until you have 3-8 distinct scenes

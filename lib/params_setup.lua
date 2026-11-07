@@ -25,7 +25,7 @@ return function(S)
   -- transition sets them on every step and redraws the grid once per step
   -- itself.
   local function fx_fader_changed()
-    if S.grid_page == 4 and not S.scene_transition_active then grid_redraw() end
+    if S.lib.grid_core.any_page(4) and not S.scene_transition_active then grid_redraw() end
   end
 
   -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
