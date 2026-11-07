@@ -569,6 +569,9 @@ local MODULE_HOMES = {
     "validate_scene", "validate_scene_data", "save_scenes_to_disk", "load_scenes_from_disk",
     "scene_sequencer_start", "scene_sequencer_stop", "cancel_scene_transition", "with_traceback",
     "scene_transition_targets", "wait_for_scene_transition" },
+  ["lib/midi_in.lua"] = { "attach_midi", "midi_init", "midi_event", "midi_device_name",
+    "midi_bend_follow_selection", "reset_midi_input", "midi_target_voice", "midi_note_on", "midi_note_off_for",
+    "midi_pitchbend", "midi_set_bend" },
 }
 
 test("functions live in their module", function()
