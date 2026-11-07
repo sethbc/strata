@@ -13,7 +13,7 @@
 `lib/engine_sync.lua` (`S.lib.engine_sync`):
 - `send_param_to_engine`, `send_engine_value`, `engine_param_value`, `with_lfo_offsets`;
 - the effects and master density senders (`send_filter_to_engine`, `send_delay_to_engine`, `send_reverb_to_engine`, `send_master_density_to_engine`), `engine_mod_source`;
-- the voice start and sync functions: `toggle_voice`, `toggle_freeze`, `sync_voice_to_engine`, `sync_voice_values_to_engine`, `forget_sent_voice_values`;
+- the voice start and sync functions: `toggle_voice`, `toggle_lock`, `sync_voice_to_engine`, `sync_voice_values_to_engine`, `forget_sent_voice_values`;
 - the shared state `S.engine_senders`, `S.engine_param_values`, and the LFO offsets `S.lfo_last_dest` and `S.lfo_scaled` (declared here, before `lib/lfos.lua` is included, because param actions read them);
 - cleanup step 160: `engine.voiceOff` for every running voice.
 

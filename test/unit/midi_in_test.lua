@@ -136,7 +136,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
   context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
   assert_true(not voices[2].active, "K3: the note off stops the frozen voice")
   assert_nothing_held(2, 2, 62, "K3")
-  toggle_freeze(2)
+  toggle_lock(2)
   local stoppers = {
     { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 8 + 4, 14, 1) end },
     { name = "scene recall", voice = 6, stop = function() recall_scene(1, 0) end },

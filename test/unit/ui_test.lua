@@ -269,14 +269,14 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_drawn_on_next_frame(context, arc_hardware, "gentle_mutate", gentle_mutate)
 
   assert_drawn_on_next_frame(context, arc_hardware, "K3 on MAIN", function() key(3, 1); key(3, 0) end)
-  assert_true(screen_shows(context, "[FREEZE]"), "K3 froze voice 1")
+  assert_true(screen_shows(context, "[LOCK]"), "K3 froze voice 1")
   assert_drawn_on_next_frame(context, arc_hardware, "arc button", function()
     context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   end)
-  assert_true(not screen_shows(context, "[FREEZE]"), "the arc button unfroze voice 1")
+  assert_true(not screen_shows(context, "[LOCK]"), "the arc button unfroze voice 1")
   -- its callers (keys, arc, grid) ask for redraws too: call it directly
-  assert_drawn_on_next_frame(context, arc_hardware, "toggle_freeze", function() toggle_freeze(1) end)
-  assert_true(screen_shows(context, "[FREEZE]"), "toggle_freeze froze voice 1"); toggle_freeze(1)
+  assert_drawn_on_next_frame(context, arc_hardware, "toggle_lock", function() toggle_lock(1) end)
+  assert_true(screen_shows(context, "[LOCK]"), "toggle_lock froze voice 1"); toggle_lock(1)
   assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
     context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
   end)

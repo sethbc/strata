@@ -4,7 +4,7 @@
 -- buffers, midi, voices), and init runs each record's add in order. Also
 -- the voice params (add_voice_params, get_param_spec), the redraw-on-param
 -- wrapper (redraw_on_param_changes, called by init after the records) and
--- the tempo-follow handlers; these stay global. S.fx_filter_last_mix is
+-- the tempo-follow handlers; these stay global. S.fx_last_mix is
 -- read by the FX page's K3.
 
 return function(S)
@@ -17,9 +17,10 @@ return function(S)
   local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 
-  -- Last non-zero filter mix (set by the filter_mix action): FX page K3
-  -- restores it after a bypass
-  S.fx_filter_last_mix = 1
+  -- Last non-zero mix of each effect (set by its mix action): the FX page's K3
+  -- restores it after a bypass. The delay's 0.3 is a starting value (its
+  -- default mix is 0; 1 would be fully wet).
+  S.fx_last_mix = {filter = 1, delay = 0.3, reverb = 0.3}
 
   -- The filter and delay params are faders on the 256 grid's FX page. A scene
   -- transition sets them on every step and redraws the grid once per step
@@ -268,7 +269,7 @@ return function(S)
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
       action = function(x)
         -- FX page K3 brings back the last non-zero mix, however it was set
-        if x > 0 then S.fx_filter_last_mix = x end
+        if x > 0 then S.fx_last_mix.filter = x end
         send_param_to_engine("filter_mix", x)
       end
     }
@@ -301,6 +302,7 @@ return function(S)
       name = "delay mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
       action = function(x)
+        if x > 0 then S.fx_last_mix.delay = x end
         send_param_to_engine("delay_mix", x)
         fx_fader_changed()
       end
@@ -312,6 +314,7 @@ return function(S)
       name = "reverb mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
       action = function(x)
+        if x > 0 then S.fx_last_mix.reverb = x end
         send_param_to_engine("reverb_mix", x)
       end
     }

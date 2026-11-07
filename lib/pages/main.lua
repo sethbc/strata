@@ -1,8 +1,8 @@
 -- lib/pages/main.lua
 -- The MAIN page: the voice list (S.voice_list), the selected voice's
 -- details and main param, E2 voice, E3 main param, K2 randomize, K3
--- start/freeze. Registers its S.registry.pages record. The functions that
--- were global stay global; start_or_freeze_selected_voice is a field of
+-- start/lock. Registers its S.registry.pages record. The functions that
+-- were global stay global; start_or_lock_selected_voice is a field of
 -- this module's table (S.lib.pages_main) and the record's arc_button.
 
 return function(S)
@@ -18,15 +18,15 @@ return function(S)
   S.voice_list = nil  -- MAIN's UI.ScrollingList, rebuilt by update_voice_list
 
   -- MAIN's voice list: "+" for a running voice, "-" for a stopped one, then the
-  -- type's short name and [F] when frozen. Plain ASCII, so the entries' width
+  -- type's short name and [L] when locked. Plain ASCII, so the entries' width
   -- does not depend on the font drawing other glyphs (the details column shows
   -- the full name and ON/OFF).
   function update_voice_list()
     local items = {}
     for i = 1, NUM_VOICES do
       local status = S.voices[i].active and "+" or "-"
-      local freeze = S.frozen[i] and " [F]" or ""
-      items[i] = status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. freeze
+      local lock = S.frozen[i] and " [L]" or ""
+      items[i] = status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock
     end
     S.voice_list = UI.ScrollingList.new(0, 10, 1, items)
     S.voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
@@ -76,7 +76,7 @@ return function(S)
     if S.frozen[S.selected_voice] then
       screen.move(127, 26)
       screen.level(8)
-      screen.text_right("[FREEZE]")
+      screen.text_right("[LOCK]")
     end
 
     -- Modulation sources display
@@ -107,7 +107,7 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page)
   local function main_hints(alt_held)
-    return "K2:rand K3:" .. (S.voices[S.selected_voice].active and "freeze" or "start")
+    return "K2:rand K3:" .. (S.voices[S.selected_voice].active and "lock" or "start")
   end
 
   local function main_enc(n, d)
@@ -118,21 +118,21 @@ return function(S)
     end
   end
 
-  -- K3 on MAIN (and the arc button): start the selected voice, or freeze it
-  local function start_or_freeze_selected_voice()
+  -- K3 on MAIN (and the arc button): start the selected voice, or lock it
+  local function start_or_lock_selected_voice()
     if not S.voices[S.selected_voice].active then
       toggle_voice(S.selected_voice)
     else
-      toggle_freeze(S.selected_voice)
+      toggle_lock(S.selected_voice)
     end
   end
-  M.start_or_freeze_selected_voice = start_or_freeze_selected_voice
+  M.start_or_lock_selected_voice = start_or_lock_selected_voice
 
   local function main_key(n)
     if n == 2 then
       randomize_voice(S.selected_voice)
     elseif n == 3 then
-      start_or_freeze_selected_voice()
+      start_or_lock_selected_voice()
     end
   end
 
@@ -140,7 +140,7 @@ return function(S)
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/main.lua's
   S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
-    enc = main_enc, key = main_key, arc_button = start_or_freeze_selected_voice}
+    enc = main_enc, key = main_key, arc_button = start_or_lock_selected_voice}
 
   return M
 end

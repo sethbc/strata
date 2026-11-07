@@ -14,7 +14,7 @@
 `lib/params_setup.lua` (`S.lib.params_setup`):
 - the PARAMS menu: one `S.registry.params` record `{name, add}` per part (master, mutations, scenes, fx, lfos, buffers, midi, voices), added with its local `register_params(name, add)`;
 - `add_voice_params`, `get_param_spec`, `redraw_on_param_changes`;
-- `S.fx_filter_last_mix` (read by the FX page's K3) and `fx_fader_changed` (the grid's FX faders);
+- `S.fx_last_mix` (`{filter, delay, reverb}`: each mix action stores its last non-zero value; the FX page's K3 reads `.filter`) and `fx_fader_changed` (the grid's FX faders);
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
 - cleanup step 10: the tempo handler given back.
 

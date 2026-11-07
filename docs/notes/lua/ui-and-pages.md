@@ -113,13 +113,13 @@ Who asks for a redraw:
   - So PARAMS edits, PARAMS > MAP CCs, pset loads, scene fades and recalls, mutations, MIDI notes (they set freq or buf_rate) and the LFO page's E3/K2/K3 all arrive through param actions.
   - Left out: text params (the LFO library writes each LFO's scaled and raw values into `lfo_scaled_<n>`/`lfo_raw_<n>` on every step, shown nowhere), and the drift's 10 Hz writes (`S.drift_writing`; grain pitch is shown nowhere).
   - `drift_update` requests a redraw itself when it moves the selected voice's buffer position, which MAIN and the BUFFER arc ring show. Other voices' positions are shown nowhere, so they ask for none.
-- Explicit calls cover state that is not a param: `enc`, `key`, `arc_delta`, `arc_key` (MAIN), `grid_key`, `toggle_voice`, `toggle_freeze`, `randomize_voice`, `gentle_mutate`, each smooth-transition step, `recall_scene` and the end of `recall_scene_instant` (freeze and running states), the scene sequencer, `buffer_display_changed`/`buffer_state_changed`, the BUFFER flash's end and the file selector's callback, and the grid/arc/MIDI hot-plug callbacks.
+- Explicit calls cover state that is not a param: `enc`, `key`, `arc_delta`, `arc_key` (MAIN), `grid_key`, `toggle_voice`, `toggle_lock`, `randomize_voice`, `gentle_mutate`, each smooth-transition step, `recall_scene` and the end of `recall_scene_instant` (freeze and running states), the scene sequencer, `buffer_display_changed`/`buffer_state_changed`, the BUFFER flash's end and the file selector's callback, and the grid/arc/MIDI hot-plug callbacks.
 
 ## MAIN
 
 `redraw_main`, `main_enc`, `main_key`: the original screen.
 - E2 selects the voice, E3 adjusts its main parameter.
-- K2 randomizes. K3 starts a stopped voice or freezes/unfreezes a running one (`start_or_freeze_selected_voice`; it never stops a voice).
+- K2 randomizes. K3 starts a stopped voice or locks/unlocks a running one (`start_or_lock_selected_voice`; it never stops a voice).
 
 Main parameter:
 - `main_param_id(voice_idx)` returns the param E3 and arc ring 2 adjust: `v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring.
@@ -135,16 +135,16 @@ Voice list:
 - Each entry is plain ASCII, so its width does not depend on how the norns font draws other glyphs:
   - active status (`+` running, `-` stopped);
   - the voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF;
-  - freeze status (` [F]` suffix).
+  - lock status (` [L]` suffix).
 - The widest entry, `+ pulse [F]`, is 54 px by the harness estimate, so it ends 8 px before the divider.
 - The list puts the selected voice on row 2 (y=26, the ON/OFF row) except at the ends of the list (`num_above_selected` = 1), so entries must stay left of x=60 or they overlap the details.
 
 Layout (two columns):
 - **Header** (y=8, `draw_header()`, the same on every page): page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127.
 - **Left column** (0-60 px): the scrolling voice list (4 visible at a time, rows y=15-48).
-- **Right column** (65-128 px): the selected voice's details (name, status, main parameter at y=42/50). `[FREEZE]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42).
+- **Right column** (65-128 px): the selected voice's details (name, status, main parameter at y=42/50). `[LOCK]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42).
 - **Divider** (x=62): a subtle vertical line between the columns.
-- **Hint row** (y=62): `K2:rand K3:freeze|start`.
+- **Hint row** (y=62): `K2:rand K3:lock|start`.
 
 Header indicators:
 - `S1` to `S8` at the top right shows the current scene (`S.current_scene`): level 10 while the scene sequencer runs, 6 when static.
@@ -167,7 +167,7 @@ Layout tests (`test/unit/pages_test.lua`, through `assert_screen_layout` in `tes
 - A scrolling list of `S.FX_PAGE.rows` (`{label, param_id, format}`; `format` is a `string.format` pattern, or nil for the param's own string): density, tape drift, filter type/freq/res/mix, delay time/fdbk/mix, reverb mix/size/damp.
 - `S.FX_PAGE.visible_rows` (5) rows at y=18-50 (`first_row_y` 18, `row_spacing` 8). Label at x=0, value right-aligned at x=127. The selected row (`S.fx_row`) at level 15, the others at 4. The view keeps one row above the selection.
 - E2 selects the row, E3 is `params:delta` on its param.
-- K3 toggles `filter_mix` between 0 and `S.fx_filter_last_mix`, which the `filter_mix` param action records whenever the mix is set above 0 (from E3, PARAMS, scenes or K3; initially 1).
+- K3 toggles `filter_mix` between 0 and `S.fx_last_mix.filter`, which the `filter_mix` param action records whenever the mix is set above 0 (from E3, PARAMS, scenes or K3; initially 1).
 - Hint: `K3:filter bypass` when the mix is above 0, else `K3:filter on`.
 
 ## BUFFER

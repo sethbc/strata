@@ -26,7 +26,7 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
   - Any voice whose source is a buffer: buffer position (`pos`)
   - Any voice whose source is the input: grain size (`size`)
 - **K2** - Randomize selected voice parameters (buffer parameters for a buffer-sourced voice, only grain parameters for an input-sourced one)
-- **K3** - Start the selected voice if it is off; if it is running, freeze/unfreeze it (it never stops a voice and never fires a triggered grain: stop voices from the grid, a scene or a MIDI note off)
+- **K3** - Start the selected voice if it is off; if it is running, lock/unlock it (it never stops a voice and never fires a triggered grain: stop voices from the grid, a scene or a MIDI note off)
 
 The voice list on the left marks each voice `+` (running) or `-` (stopped), then its short name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[F]` when frozen. The right side shows the selected voice's full name, ON/OFF and its main parameter. `[TRIG]` on the main parameter row means the selected voice is in triggered grain mode.
 

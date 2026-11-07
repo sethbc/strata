@@ -20,7 +20,7 @@ Strata includes an optional mutation system for creating organic, evolving textu
 - **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance
 - **Visual Feedback** - `[M]` indicator appears on screen when mutations are enabled
 
-The mutation system works alongside the per-voice drift and the global LFOs, creating multiple layers of organic movement. Combine with the freeze feature to let some voices evolve while others remain stable.
+The mutation system works alongside the per-voice drift and the global LFOs, creating multiple layers of organic movement. Combine with the lock feature to let some voices evolve while others remain stable.
 
 ## Global LFOs
 

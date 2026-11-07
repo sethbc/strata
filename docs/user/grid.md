@@ -47,8 +47,8 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 - Columns 1-7: Clear pattern for each voice
 - Columns 9-15: Randomize pattern for each voice
 
-**Row 16: Voice Freeze**
-- Columns 1-7: Freeze/unfreeze each voice
+**Row 16: Voice Lock**
+- Columns 1-7: Lock/unlock each voice
 
 **Scene Page (Page 3)**
 - **Row 1**: Scene recall (instant) - Press to immediately load scenes 1-8
@@ -70,7 +70,7 @@ Scene LED feedback:
 - **Rows 3-7**: Faders for filter frequency, filter resonance, delay time, delay feedback and delay mix. Press a column to set the value (column 1 = minimum, column 16 = maximum; frequency and delay time are exponential); the row lights up to the current value and follows changes made on the screen, arc or by a scene
 - **Row 8**: Play/stop, tempo and page selection, as on page 1
 - **Rows 9-15**: One row per voice (row 9 = voice 1 ... row 15 = voice 7) choosing its source: column 1 = synth, columns 2-9 = buffer 1-8, column 10 = input. The selected source is lit 15, the others 4, empty buffers 2. Columns 11-16 do nothing
-- **Row 16**: Freeze/unfreeze each voice, as on page 1
+- **Row 16**: Lock/unlock each voice, as on page 1
 - The LEDs follow buffer and source changes made anywhere (screen, PARAMETERS, scenes, a recording finishing)
 - The 16×8, 8×16 and 8×8 layouts have no buffers / FX page: choose sources and manage buffers on the BUFFER screen page or in PARAMETERS
 
