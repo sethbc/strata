@@ -6,6 +6,7 @@
 - A page's `draw()` draws its body only; `redraw()` draws the hint row from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
 - Every page draws the header at y=8 and the hint row at y=62. No two strings on a row overlap, nothing leaves 128×64, and no MAIN string crosses the divider (end by x=60 or start at x=65). The layout tests check it.
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
+- Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call, so the long-press fallback can trigger it. A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`.
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
 - MAIN is found by index (`S.ui_page == UI_PAGES.MAIN_PAGE`), never by its title string.
@@ -16,7 +17,9 @@
 - `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_value_fraction`, `param_fraction`.
 - `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.
-- `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
+- `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp`, `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits). No page uses it yet.
+- `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
+- `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `long_press` (fields of `S.lib.ui_alt`). See ALT below.
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
 - `lib/pages/main.lua`, `lib/pages/voice.lua`, `lib/pages/seq.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/scenes.lua`, `lib/pages/setup.lua` (`S.lib.pages_main`, `S.lib.pages_voice`, ...): one screen page each and its `S.registry.pages` record.
   - VOICE, SEQ, SCENES: stubs for now (draw nothing, hint `E1:page`, ignore input).
@@ -35,13 +38,13 @@ The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAI
 Encoders and keys (`strata.lua`):
 - `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()` and the new one's `enter()`, if they have them.
 - At init a start step in `strata.lua` (`START_ORDER.e1_settings`) turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
-- `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`.
-- `key(1, z)` only sets `S.alt_held` (K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
+- `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`. With ALT held both go the ALT way instead (ALT below).
+- `key(1, z)` only sets ALT (`S.lib.ui_alt.set(z == 1)`; K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
 - Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page.
 
 Page records. Each page lives in its own file and creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]`:
 - Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
-- Optional: `alt_enc(n, d) -> handled`, `alt_key(n)`, `key_release(n)`, `alt_key_release(n)`, `enter()`, `leave()`, `arc_button()`, `header_status() -> string|nil`, `layout_states` (an array of `{name, setup = function(context)}` the layout tests also draw). The dispatch for the ALT fields, `arc_button` and `header_status` comes with the tasks that use them; today `key_release`, `enter` and `leave` are dispatched.
+- Optional: `alt_enc(n, d) -> handled`, `alt_key(n)`, `key_release(n)`, `alt_key_release(n)`, `enter()`, `leave()`, `arc_button()`, `header_status() -> string|nil`, `layout_states` (an array of `{name, setup = function(context)}` the layout tests also draw). `key_release`, `enter`, `leave` and the ALT fields (`alt_enc`, `alt_key`, `alt_key_release`) are dispatched; `arc_button` and `header_status` come with the tasks that use them.
 - Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)`.
 - Ownership: the page file sets every field but the arc fields; the arc file sets only those, on `S.registry.pages[UI_PAGES.index.<PAGE>]`. So a page and its rings never edit the same file. `strata.lua` includes every page file before every arc file.
 - `ignore_page_input` fills the handlers a page does not use.
@@ -52,17 +55,29 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list.
 - The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`. BUFFER's `hints` returns its flash text (the K2+K3 save result) while it shows.
 
+## ALT
+
+`lib/ui/alt.lua` (`S.lib.ui_alt`). ALT is K1 held: norns delivers K1 to a script only after `KEY1_HOLD_TIME` (0.25 s, `lua/core/menu.lua`), and a shorter press opens the norns menu, so K1 is a hold-only key (3.1 design §2).
+- `S.lib.ui_alt.set(held)` sets `S.alt_held` and requests a redraw (the hint row shows the page's ALT layer, `record.hints(true)`). `key(1, z)` calls it.
+- `alt_action(page, n)` (global) runs `S.registry.pages[page].alt_key(n)` and returns true, or returns false and does nothing when `n` is not 2 or 3, `page` is not a page index, or the record has no `alt_key`. It takes the page as an argument, so a caller can name a page that is not showing.
+- `key(n, 1)` with ALT held records the key's page (`S.key_press_page[n]`), marks it an ALT press (`S.key_press_alt[n] = true`) and calls `alt_action(S.ui_page, n)`; the record's `key` never runs. Without ALT it clears the mark and calls `key(n)`. A page without `alt_key` ignores ALT+K2/ALT+K3: they never fall through to `key`.
+- `key(n, 0)` clears both marks and, if the key went down on the page still showing, calls `alt_key_release(n)` for an ALT press and `key_release(n)` otherwise (each only if the record has it). The press decides, not the state of K1 at release: K1 down, K2 down, K1 up, K2 up releases through `alt_key_release`, so BUFFER's K2 release never opens the file selector after an ALT+K2; K2 down, K1 down, K2 up releases through `key_release`.
+- `enc(2|3, d)` with ALT held calls `alt_enc(n, d)` first; when the record has none or it returns false or nil (not handled), `enc(n, d)` runs. `enc(1, d)` steps the page with or without ALT and never reaches the record.
+- `forget_held_keys` (as the norns menu or the file selector takes the keys) clears `S.alt_held` and every `S.key_press_alt` mark with `S.key_press_page`.
+
+The long-press fallback (design §2): if the hardware check rejects K1 as ALT, a `LONG_PRESS_SECONDS` (0.6, `lib/constants.lua`) hold of K2 or K3 takes its ALT action. Only the hook is built: `S.lib.ui_alt.long_press(n)` is what the hold timer would call. If key `n` (2 or 3) is still down on the page showing and is not already an ALT press, it marks it one, calls `alt_action(S.ui_page, n)`, requests a redraw and returns true (its release then goes to `alt_key_release`); otherwise it returns false. Nothing calls it while K1 works as ALT. Switching to the fallback means starting a `LONG_PRESS_SECONDS` clock on each K2/K3 press that calls it (canceled on release and in cleanup), and moving each page's press actions to release where a long press must not also run them.
+
 ## Key releases and the norns menu
 
 Releases:
 - `key(n, 1)` records `S.key_press_page[n] = S.ui_page`.
-- `key(n, 0)` clears it and calls the page record's `key_release(n)` only if the key went down on the page still shown, so a key held across a page change does nothing when released.
+- `key(n, 0)` clears it and calls the page record's `key_release(n)` (or `alt_key_release(n)` for an ALT press, ALT above) only if the key went down on the page still shown, so a key held across a page change does nothing when released.
 - Only BUFFER has a `key_release`; on every other page releases do nothing.
 - "K2 is held on this page" is `S.key_press_page[2] == S.ui_page`.
 
 Keys held into the menu:
 - The norns menu (K1, PARAMS, its file selector) takes every key while open (`_menu.key` is the menu's handler), so a key released there never reaches `key()`.
-- `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page` and `S.buffer_saved_during_k2` whenever `norns.menu.status()` is true.
+- `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2` whenever `norns.menu.status()` is true.
 - Without it, a K2 released in the menu would stay held and every BUFFER K3 would save instead of record.
 - It also runs the moment the menu opens. Every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call.
 - So `watch_menu_opening()` (from its start step, `START_ORDER.menu_watch`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
@@ -70,7 +85,7 @@ Keys held into the menu:
 - `unwatch_menu_opening()`, cleanup's second step (after the tempo handler, before anything that can fail), puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper. Otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`).
 - The 10 Hz tick stays as a fallback.
 - norns has no key-state query.
-- A file selector opened from play mode, as BUFFER K2 does, keeps `norns.menu.status()` false and takes the keys through the global `key`. It opens on K2's release, so only a K3 held at that moment can be released there. `buffer_key_release` therefore calls `forget_held_keys()` just before `fileselect.enter`. `forget_held_keys` is a global: it clears `S.key_press_page` and `S.buffer_saved_during_k2`, and is also the body of `forget_keys_held_through_menu`.
+- A file selector opened from play mode, as BUFFER K2 does, keeps `norns.menu.status()` false and takes the keys through the global `key`. It opens on K2's release, so only a K3 or K1 (ALT) held at that moment can be released there. `buffer_key_release` therefore calls `forget_held_keys()` just before `fileselect.enter`. `forget_held_keys` is a global: it clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2`, and is also the body of `forget_keys_held_through_menu`.
 
 ## Redraws
 

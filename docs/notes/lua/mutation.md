@@ -7,19 +7,27 @@
 - The drift writes only through `set_drifted_param`, which sets `S.drift_writing` around each write inside an `xpcall`, so the flag always clears and an error is raised again with its traceback.
 - `mean_reverting_step` draws exactly one `math.random()` per call.
 - Cleanup stops the mutation metro and sets `mutation_enabled` to 0, so param and state agree.
+- Randomize undo: `randomize_voice` stores the previous value of every param it sets, through its local `randomize_param`, and only those. A param it starts setting needs a `note_param_edit(param_id)` call in its action (`lib/params_setup.lua`), or a manual edit would be overwritten by an undo.
+- The undo is one level and cleared by: a randomize (of any voice: a new one replaces it), a scene recall (`recall_scene` and `recall_scene_instant`), a `gentle_mutate` step that changes a param of the undo's voice (`set_mutated_param`), an edit of a stored param (`note_param_edit`) and the end of the window (`undo_clock`). The drift's writes (`S.drift_writing`) and randomize's and undo's own (`undo_writing`) never clear it.
+- `undo_writing` is set around the writes inside an `xpcall` (`write_as_undo`), so the flag always clears and an error is raised again with its traceback.
+- A locked voice returns from `randomize_voice` before anything is stored or cleared.
+- Every `clear_undo` cancels `undo_clock`; the clock sets `undo_clock` to nil before it clears the undo, so it never cancels itself.
 
 ## Owns
 
 `lib/mutation.lua` (`S.lib.mutation`):
 - the per-voice drift: `drift_update`, `mean_reverting_step`, `set_drifted_param` (`S.drift_metro`);
 - `randomize_voice`, `gentle_mutate` (`S.mutation_metro`), `mutated_value`;
+- the randomize undo: `S.undo`, `undo_available`, `undo_randomize`, `clear_undo`, `note_param_edit`, and the locals `undo_clock`, `undo_writing`, `write_as_undo`, `set_mutated_param`;
 - `S.drift_writing`, `S.grain_pitch_base` and `S.buf_pos_base`, on `S` because the grain pitch and buffer position param actions read them;
-- cleanup steps 70 (drift metro) and 80 (mutation metro).
+- cleanup steps 70 (drift metro), 80 (mutation metro) and 85 (the undo's expiry clock).
 
 Elsewhere:
 - Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
 - `drift_update` reads `S.grids` and `S.grid_page` (`lib/grid/core.lua`).
-- `DISCRETE_GRAIN_KEYS` and `BUFFER_MUTATION_KEYS` are in `lib/constants.lua`, aliased at the top of the constructor.
+- `DISCRETE_GRAIN_KEYS`, `BUFFER_MUTATION_KEYS` and `UNDO_SECONDS` are in `lib/constants.lua`, aliased at the top of the constructor.
+- The voice param actions that randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
+- MAIN's ALT+K2 (randomize, or undo while `undo_available`) and its hint are MAIN's (`lib/pages/main.lua`, Wave 2).
 - The mutation params are the "mutations" record of `lib/params_setup.lua`.
 
 ## Mutations
@@ -98,6 +106,18 @@ Lifecycle:
 - **Initialization**: its start step creates the metro at init but does not start it.
 - **Control**: the `mutation_enabled` action starts and stops the metro.
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
+
+## Randomize undo
+
+One level, for `UNDO_SECONDS` (5 s, `lib/constants.lua`):
+- `randomize_voice(i)` returns at once for an index outside 1..`NUM_VOICES` or a locked voice (an earlier undo stays). Otherwise it clears any undo, sets its params (synth params but `amp` for a synth source, `buf_pos`/`buf_rate`/`buf_scan` for a buffer source, nothing more for input; then `grain_size` and `grain_pitch`), storing each one's previous `params:get` value first, and sets `S.undo = {voice = i, values = {[param_id] = value}, until_time = util.time() + UNDO_SECONDS}`. The random draws are the same as before the undo existed.
+- `undo_available(i)`: `S.undo` is voice `i`'s and `util.time() < until_time`.
+- `undo_randomize()`: false when nothing is available; otherwise it clears the undo, then puts every stored value back through `params:set` (sorted by id, so the order is fixed), so the LFO offsets, the engine and the grid follow, and returns true. The grain pitch and buffer position actions take the restored values as the drift's new centers.
+- `clear_undo()` cancels the expiry clock, drops `S.undo` and requests a redraw.
+- `undo_clock` sleeps `UNDO_SECONDS` and clears the undo, which requests the redraw that puts MAIN's ALT hint back without input. Cleanup step 85 cancels it.
+- `note_param_edit(param_id)` is called from the actions of every param randomize sets. It clears the undo when `param_id` is stored, unless the drift (`S.drift_writing`) or randomize/undo (`undo_writing`) is writing. PARAMS edits, MIDI CC maps, pset loads, grid faders and arc rings all arrive through those actions.
+- `gentle_mutate` writes through `set_mutated_param(voice_idx, param_id, value)`, which clears the undo when the step changed a param of the undo's voice, stored or not (grain spread too).
+- A scene recall clears it: `recall_scene` (after validation, before a fade starts) and `recall_scene_instant` (so a fade's end does too).
 
 ## Drift and the other systems
 

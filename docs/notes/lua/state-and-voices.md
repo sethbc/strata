@@ -99,6 +99,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 60 | stop the frame clock | `lib/ui/frame.lua` |
 | 70 | stop the drift metro | `lib/mutation.lua` |
 | 80 | stop the mutation metro and set `mutation_enabled` to 0, so param and state agree | `lib/mutation.lua` |
+| 85 | cancel the randomize undo's expiry clock | `lib/mutation.lua` |
 | 90 | stop the pattern clock | `lib/sequencer.lua` |
 | 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
