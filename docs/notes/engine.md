@@ -12,3 +12,4 @@ The engine notes are one file per area of the engine check (`test/engine_check/<
 - [effects](engine/effects.md): `\strataFilter`, `\strataDelay`, `\strataReverb`, `\strataMaster`, the NaN guard before the effects
 - [performance](engine/performance.md): the values a performance tier sets
 - [rings](engine/rings.md): the voice and input rings, their writers, where a ring grain starts (the lookback, history), `ringReaders`
+- [variation](engine/variation.md): the per-grain draws (reverse, pitch jitter, intervals, pan and size jitter), the scale area (`setScale`, `scaleBuffer`) and grain quantize

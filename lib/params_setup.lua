@@ -458,6 +458,10 @@ return function(S)
     }
   end)
 
+  -- The global scale and root grains and quantized voices snap to
+  -- (lib/variation.lua), before the voices
+  register_params("scale", function() S.lib.variation.add_scale_params() end)
+
   register_params("voices", function()
     -- Add params for each voice
     for i = 1, NUM_VOICES do

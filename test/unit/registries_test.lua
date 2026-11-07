@@ -162,6 +162,7 @@ test("the register functions check their argument and refuse duplicates", functi
   -- source change hooks and param filters
   S.register_source_change(function() end)
   assert_true(refused(S.register_source_change, "x"), "a hook is a function")
+  S.registry.param_filters.freq = nil  -- lib/variation.lua's quantize filter; this test's in its place
   S.register_param_filter("freq", function(_, value) return value end)
   assert_true(refused(S.register_param_filter, "freq", function(_, value) return value end), "one filter per key")
   assert_true(refused(S.register_param_filter, "amp", nil), "a filter is a function")
@@ -208,6 +209,7 @@ test("a param filter changes the stored and shown value", function()
       table.insert(seen, { voice_idx = voice_idx, value = value, previous = previous })
       return math.min(value, 0.5)
     end)
+    S.registry.param_filters.freq = nil  -- lib/variation.lua's quantize filter; this test's in its place
     S.register_param_filter("freq", function(_, value) return util.round(value, 100) end)
   end)
   finish_startup(context)
@@ -360,7 +362,9 @@ test("registered rows appear in their VOICE section, new sections in place, bina
   assert_true(outline:find("grain:v1_grain_mode:option grain:v1_probe:control grain:v1_probe_switch:binary crossmod ",
     1, true), "probe rows end the grain section: " .. outline)
   assert_true(not outline:find("probe sect", 1, true), "a synth voice has no probe sect section")
-  assert_true(outline:find("mix:v1_pan:control tail tail:v1_tail_mode:option$"), "tail after mix: " .. outline)
+  -- (after mix and the sections registered before it: lib/variation.lua's)
+  assert_true(outline:find("mix:v1_pan:control ", 1, true) and outline:find(" tail tail:v1_tail_mode:option$"),
+    "tail after mix: " .. outline)
   params:set("v1_source", 2)   -- buffer 1
   outline = row_outline(1)
   assert_true(outline:find("grain:v1_probe_switch:binary probe sect probe sect:v1_sect_level:control crossmod ",
@@ -449,7 +453,7 @@ end
   assert_equal(params:get("v1_late"), 0, "the voice param exists")
   assert_equal(params:get("late_level"), 0.25, "the fx param exists")
   assert_equal(S.LFO_DESTINATIONS[#S.LFO_DESTINATIONS].label, "v7 late", "the LFO destination exists")
-  assert_true(row_outline(1):find("mix:v1_late:control$"), "the VOICE row exists")
+  assert_true((row_outline(1) .. " "):find("mix:v1_late:control ", 1, true), "the VOICE row exists")
   capture_scene(1)
   assert_equal(S.scenes[1].data.late_level, 0.25, "the scene field is captured")
   assert_equal(S.scenes[1].data.voices[1].extras.late, 0, "and the voice param")

@@ -1,0 +1,34 @@
+## Must not break
+
+- **3.1's sound by default**: reverse 0%, pitch, pan and size jitter 0, intervals off, interval probability 100%, quantize off, scale off, root C. These are the params' defaults and the scene migration's (`scene_defaults`).
+- **A quantized `freq` turned slowly moves by scale tones.** One encoder detent (0.8 semitone of raw travel) or one arc tick (0.16 semitone) moves less than a scale step, so the `freq` filter snaps a per-voice unsnapped shadow note, never the incoming value: a filter that snapped the new value to its nearest tone would stick forever on the encoder, and one that stepped a tone in the direction of motion would jump a tone per arc tick. The shadow moves by the change of the incoming value from the stored one and starts again from the incoming value when the stored value is not what the filter last returned, or when the value is already a tone (a MIDI note). Tested on E3 (`enc_param_delta`) and the arc (`arc_sweep_param`) in `test/unit/variation_test.lua`.
+- **`scaleNote` is never stale.** It is sent by the voice sync and on every change that moves it: the `freq` filter (every freq change, with the value it settled), the `root` action (every running voice), the `v<i>_quantize` action and a source change hook. An LFO on `freq` moves the sent frequency, never `scaleNote`, which follows the stored value.
+- **The engine gets the scale only through `engine.setScale(root - 1, mask)`**, from the `scale` and `root` actions; scale off sends the chromatic mask 4095, which is also the engine's default.
+- `intervals`, `quantize` and the five custom intervals are discrete scene keys (they switch at a transition's end); `scale` and `root` are discrete scene globals. Randomize, mutation and the 256 fader pages never touch any variation param (`fader = false`).
+- The filter is one per key (`S.register_param_filter("freq", ...)`): no other module may register a `freq` filter.
+
+## lib/variation.lua (`S.lib.variation`)
+
+One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/params.md`), `variation`, with twelve params per voice, stored in `S.voices[i].extras`:
+
+| Param | Kind, range, default | Engine |
+|-------|----------------------|--------|
+| `v<i>_reverse` | control 0-100 %, 0 | grain key `reverseProb`, as a fraction |
+| `v<i>_pitch_jitter` | control 0-12 st, 0 | `pitchJitter` |
+| `v<i>_pan_jitter` | control 0-1, 0 | `panJitter` |
+| `v<i>_size_jitter` | control 0-1, 0 | `sizeJitter` |
+| `v<i>_intervals` | option off/octaves/fifths/chord/custom, off | `interval1..8`, `intervalCount` (its action, and the sync) |
+| `v<i>_interval_prob` | control 0-100 %, 100 | `intervalProb`, as a fraction |
+| `v<i>_custom_interval_1..5` | number -24..24 st, -12, 0, 7, 12, 19 | `interval1..5` while the set is custom |
+| `v<i>_quantize` | binary off/on, off | `quantize` |
+
+- **Interval sets** (`M.interval_set(i)`): octaves -12, 0, 12; fifths -12, -5, 0, 7, 12; chord the scale's degrees 1, 3, 5 and 7 from the root (`musicutil.generate_scale(0, name, 2)`; 0, 4, 7, 11 with the scale off; a pentatonic's are 0, 4, 9, 14); custom the five custom intervals. `send_intervals` sends `interval1..8` (0 past the set) and `intervalCount` while the voice runs: from the `intervals` action, a custom interval's action (custom set only) and the `scale` action (chord voices). The record's `sync` sends them, and `scaleNote`, unconditionally (`toggle_voice` marks the voice running after its sync).
+- **`scaleNote`** (`M.scale_note(i, freq)`): a synth voice's `freq` as a fractional MIDI note (`69 + 12 log2(f / 440)`), or `root + 60` for buffer and input voices. `M.send_scale_note(i, freq)` sends it while the voice runs.
+- **Scale and root**: `M.add_scale_params()`, registered as `register_params("scale", ...)` before the voices (so a PSET sets the scale before any quantized freq), adds a `scale` separator, `scale` (off + every `musicutil.SCALES` name, off) and `root` (C-B, C). `M.scale_mask()` is the scale's pitch classes from the root as a 12-bit set (arithmetic, not Lua 5.3's bit operators: the tests run on LuaJIT too). Both are registered scene fields (`S.register_scene_field`, discrete).
+- **Snapping** (`M.snap_note(n)`): the scale tone nearest a note, a tie going down (the engine's rule for whole notes). The `freq` filter keeps the result inside the param's range (the nearest tone inside it at either end). A scene recall's values stand as saved (the filter does not snap during `S.scene_recall_in_progress`). Turning quantize on snaps the stored freq (not during a recall). A buffer or input voice's freq snaps too, though only the grains' quantize changes what it plays.
+- **MIDI** (`M.midi_note(i, note)`): `midi_note_on` (`lib/midi_in.lua`) snaps a quantized voice's note before it sets `freq` or `buf_rate` (`docs/notes/lua/midi.md`).
+- **VOICE**: a section `variation`, after `mix`, with the rows reverse, pitch jitter, pan jitter, size jitter, intervals, interval prob, custom 1-5 (only while the set is custom, the record's `when`) and quantize. Its `layout_states` draw every voice with the custom set on a synth, buffer or input source.
+
+`M.VARIATION` holds the constants (the sets, the ranges, the chromatic mask, the reference octave). The engine side (the draws, `scaleBuffer`, `setScale`, grain quantize) is in `docs/notes/engine/variation.md`.
+
+Tests: `test/unit/variation_test.lua` (defaults and sends, interval sets, chords, the quantized freq on E3 and the arc, quantize on every voice and never on the other main params, MIDI notes, the scale globals and `setScale`, `scaleNote`, the scene round trip, the VOICE rows and layout, randomize, mutation and the faders) and the MIDI case in `test/unit/midi_in_test.lua`.

@@ -5,6 +5,7 @@
 - A note off goes to the voice its note on played (`S.midi_state.note_voice`), even if the omni selection moved since.
 - After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly).
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
+- A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
 - Strata's code handles no CC: norns' PARAMS > MAP maps any CC to any param.
 
 ## Owns
@@ -57,6 +58,7 @@ Group `strata_midi`, 3 params:
 
 Note on (velocity > 0):
 - records the note in `held` and `note_voice`, then calls `midi_note_on(voice, note, vel)`;
+- a voice with `v<i>_quantize` on plays the scale tone nearest the note instead (`S.lib.variation.midi_note`, a tie going down; scale off quantizes to semitones, so nothing changes), before any of the below (`docs/notes/lua/variation.md`). The `freq` filter then keeps a note past the freq range on the scale's last tone inside it;
 - a synth source sets `v<i>_freq` to `musicutil.note_num_to_freq(note)`, clamped to `param_range`;
 - a buffer source sets `v<i>_buf_rate` to `2 ^ ((note - 60) / 12)`, clamped (0.25-4);
 - an input source takes no pitch;
