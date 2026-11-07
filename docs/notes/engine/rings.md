@@ -58,7 +58,7 @@ Most of it reads a timecode: a check synth writes the seconds since it started (
 - a NaN input writes zeros (the ring stays finite);
 - `GrainBuf` wraps forward across a buffer end and backward across frame 0 (on CI's SuperCollider 3.13, the recheck §2.1 of the design asked for);
 - no `PitchShift`, `DelayC` or other delay line in either grain SynthDef; `\strataGrainRing` runs two stereo `GrainBuf`s;
-- pitch is the rate: on the timecode, `pitchShift` 0.5, 1 and 2 read at rates 0.5, 1 and 2 (each grain's read so far over its time played, within 0.2%); on a 440 Hz sine they play 220, 440 and 880 Hz (`Pitch`, a sanity check within 2.5%: a semitone is 5.9%); a synth voice's bend (2, on an FM voice at index 0) is applied once (880 Hz within 2.5%, not 1760);
+- pitch is the rate: on the timecode, `pitchShift` 0.5, 1 and 2 read at rates 0.5, 1 and 2 (how far each grain's read moves from 10 ms into the grain, over the time since, within 0.2%); on a 440 Hz sine they play 220, 440 and 880 Hz (`Pitch`, a sanity check within 2.5%: a semitone is 5.9%); a synth voice's bend (2, on an FM voice at index 0) is applied once (880 Hz within 2.5%, not 1760);
 - at rate 4 and 0.5 s grains no grain reads ahead of the write head; a continuous grain keeps its 0.5 s length; a triggered one lasts 0.167 s and starts at most 0.505 s back (plus a block);
 - grains crossing the ring's end read on without a jump or a gap (rate 1, grains back to back for longer than the ring);
 - history never reaches a synth-sourced voice's grain synth; history 2 on an input voice reads from 2 s back (plus the margin and a block); `bufScan` reaches the ring grain synth but, with the neutral `ringScanOffset`, moves nothing;

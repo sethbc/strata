@@ -25,16 +25,21 @@ var rampBuffer, recordBuffer, wrapRead, other, otherRings, otherWriters, badBus,
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, longest grain, largest step between samples, seconds with no
 // grain, largest and smallest rate]. Reads only while the right channel (1
-// in the ring) is above 0.05. The rate is a grain's timecode read so far
-// over the time it has played (once it has played 50 ms): exact, where a
-// per-sample slope would drown in float rounding.
+// in the ring) is above 0.05. The rate is how far a grain's timecode read
+// has moved since 10 ms into the grain, over the time since then (once that
+// is 50 ms): exact, where a per-sample slope would drown in float rounding.
+// The reference point is taken well inside the grain (both the read and
+// the time latched by the same trigger), never on its first sample, where
+// a latch may hold the read from before the grain (0: SuperCollider 3.13).
 SynthDef(\strataCheckRingRead, { arg in, now, out, t_reset = 0;
     var sig = In.ar(in, 2), reset = T2A.ar(t_reset);
-    var on = sig[1] > 0.05, both = on * Delay1.ar(on), rise = on * (1 - Delay1.ar(on));
+    var on = sig[1] > 0.05, both = on * Delay1.ar(on);
     var read = sig[0] / sig[1].max(0.001);
     var lookback = In.ar(now, 1) - read;
     var elapsed = Sweep.ar(on, on);
-    var rate = (read - Latch.ar(read, rise)) / (elapsed + SampleDur.ir), timed = on * (elapsed > 0.05);
+    var mark = on * (elapsed > 0.01);
+    var rate = (read - Latch.ar(read, mark)) / ((elapsed - Latch.ar(elapsed, mark)) + SampleDur.ir);
+    var timed = on * (elapsed > 0.06);
     Out.kr(out, A2K.kr([
         RunningMax.ar(Select.ar(on, [DC.ar(-1000), lookback]), reset),
         RunningMin.ar(Select.ar(on, [DC.ar(1000), lookback]), reset),
