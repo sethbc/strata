@@ -183,9 +183,9 @@ local function tabutil_text(value)
 end
 
 -- The maintained docs (paths from the repo root): CLAUDE.md, README.md,
--- docs/status.md, every .md file under docs/notes (recursively) and docs/user. Their engine.<name>( mentions
--- must name commands the engine has, and the repo paths they name must
--- exist. CHANGELOG.md and docs/design/ are history: they describe a release
+-- docs/status.md, every .md file under docs/notes (recursively) and
+-- docs/user. Their engine.<name>( mentions must name commands the engine
+-- has, and the repo paths they name must exist. CHANGELOG.md and docs/design/ are history: they describe a release
 -- as it was, so they are not held to today's commands and files
 local function maintained_docs()
   local docs = { "CLAUDE.md", "README.md", "docs/status.md" }
@@ -228,8 +228,9 @@ end
 -- such as [CHANGELOG.md](CHANGELOG.md) (not code such as
 -- `PAGE_KEY[ui_page](n)`). A norns library is named by its path in the
 -- norns repo (`lua/lib/lfo.lua`), which is not checked. Link targets are
--- relative to doc_dir (the doc's folder from the repo root, "" for the root)
-local function doc_paths_missing(text, doc_dir)
+-- relative to the doc named by doc_name (a path from the repo root)
+local function doc_paths_missing(text, doc_name)
+  local doc_dir = doc_name and doc_name:match("^(.*)/[^/]*$") or ""
   local paths = {}
   for path in text:gmatch("`([%w%._/%-]+)`") do
     if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") or path:match("^lib/") then
@@ -244,9 +245,10 @@ local function doc_paths_missing(text, doc_dir)
   local missing = {}
   for _, path in ipairs(paths) do
     local base = (links[path] and doc_dir and doc_dir ~= "") and (doc_dir .. "/") or ""
-    -- a link also counts when it resolves from the repo root (docs/notes
-    -- files written before the folders moved name root files that way)
-    local handle = io.open(repo_root .. "/" .. base .. path, "r") or io.open(repo_root .. "/" .. path, "r")
+    local handle = io.open(repo_root .. "/" .. base .. path, "r")
+    -- Temporary: docs/notes/lua.md links root files from the repo root.
+    -- Delete this fallback once the notes split removes lua.md
+    if not handle and doc_name == "docs/notes/lua.md" then handle = io.open(repo_root .. "/" .. path, "r") end
     if handle then handle:close() else table.insert(missing, path) end
   end
   return missing, #paths

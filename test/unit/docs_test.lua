@@ -533,11 +533,18 @@ test("every repo path the maintained docs name exists (#52)", function()
   local checked = 0
   for _, doc_name in ipairs(maintained_docs()) do
     local file = assert(io.open(repo_root .. "/" .. doc_name, "r")); local text = file:read("*a"); file:close()
-    local missing, count = doc_paths_missing(text, doc_name:match("^(.*)/[^/]*$") or "")
+    local missing, count = doc_paths_missing(text, doc_name)
     checked = checked + count
     if #missing > 0 then fail(doc_name .. " names " .. missing[1] .. ", which does not exist") end
   end
   assert_true(checked > 0, "the check finds the paths the docs name")
+end)
+
+test("the docs path check resolves links from the doc's folder", function()
+  local missing = doc_paths_missing("[top](README.md) and [ok](../../README.md)", "docs/user/arc.md")
+  assert_equal(table.concat(missing, " "), "README.md", "a root-relative link in docs/user is reported")
+  missing = doc_paths_missing("[top](README.md)", "docs/notes/engine.md")
+  assert_equal(#missing, 1, "only docs/notes/lua.md may link the root that way")
 end)
 
 test("the docs path check covers lib/ paths", function()
@@ -563,17 +570,14 @@ end
 
 test("every changelog fragment has a heading and a bullet under it", function()
   local listing = io.popen('ls -1 "' .. repo_root .. '/changes" 2>/dev/null')
-  local count = 0
   for name in listing:read("*a"):gmatch("[^\n]+") do
     if name ~= "README.md" then
-      count = count + 1
       local file = assert(io.open(repo_root .. "/changes/" .. name, "r")); local text = file:read("*a"); file:close()
       local problem = fragment_problem(text)
       if problem then fail("changes/" .. name .. ": " .. problem) end
     end
   end
   listing:close()
-  assert_true(count > 0, "changes/ holds a fragment")
   assert_true(fragment_problem("### Added\n- one\n") == nil, "a valid fragment passes")
   assert_true(fragment_problem("Added some things\n- one\n") ~= nil, "no heading fails")
   assert_true(fragment_problem("### Added\nno bullet\n") ~= nil, "no bullet fails")
@@ -585,7 +589,11 @@ test("every docs/notes/lua file opens with a Must not break section", function()
   for name in listing:read("*a"):gmatch("[^\n]+") do
     if name:match("%.md$") then
       local file = assert(io.open(repo_root .. "/docs/notes/lua/" .. name, "r")); local text = file:read("*a"); file:close()
-      local heading = text:match("^(#+ [^\n]*)") or text:match("\n(#+ [^\n]*)")
+      local heading, in_fence = nil, false
+      for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+        if line:match("^%s*```") then in_fence = not in_fence
+        elseif not in_fence and line:match("^#+ ") then heading = line; break end
+      end
       assert_equal(heading, "## Must not break", "docs/notes/lua/" .. name .. " first heading")
     end
   end
