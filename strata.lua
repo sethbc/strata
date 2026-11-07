@@ -62,90 +62,12 @@ end
 -- module sets its S fields itself: S.voices is the voices table
 include("lib/voices")(S)
 
-local ui_page = 1  -- index into UI_PAGES
+-- Screen and arc redraws and the frame clock: request_redraw, draw_frame,
+-- start_frame_clock, stop_frame_clock; S.ui_page (lib/ui/frame.lua)
+S.lib = S.lib or {}
+S.lib.frame = include("lib/ui/frame")(S)
 
--- Screen and arc redraws. Anything that changes what they show calls
--- request_redraw(); the frame clock (started by init, canceled by cleanup)
--- then draws whichever is dirty, at most FRAMES_PER_SECOND times a second,
--- so a burst of arc turns, MIDI or param changes costs one frame. Handlers
--- never draw directly. The global redraw() still draws at once when norns
--- calls it (e.g. as its menu closes).
-UI_PAGES.FRAMES_PER_SECOND = 15
-UI_PAGES.screen_dirty = true  -- the first frame draws both
-UI_PAGES.arc_dirty = true
-UI_PAGES.frame_clock = nil
-
-function request_redraw()
-  UI_PAGES.screen_dirty = true
-  UI_PAGES.arc_dirty = true
-end
-
--- Run one draw of a frame (`part` names it: "screen" or "arc"). An error is
--- printed with its traceback instead of ending the frame clock, so one
--- failing frame never freezes the display: the next request draws again. A
--- draw that keeps failing with the same error prints it once, not on every
--- frame; another error, or the same one after a good draw, prints again.
-UI_PAGES.draw_errors = {}  -- per part: the error message it last printed
-
--- xpcall handler for a frame draw: a key that stays the same while the
--- error does, and the error with its traceback. A string error is its own
--- key. A table error is a new table each time, so its key is its `message`
--- field (also what is printed) or, without one, its type.
-function draw_error_report(message)
-  local text, key = tostring(message), type(message)
-  if type(message) == "string" then
-    key = message
-  elseif type(message) == "table" and type(message.message) == "string" then
-    text, key = message.message, message.message
-  end
-  return {message = key, traceback = debug.traceback(text, 2)}
-end
-
-function draw_frame_part(part, draw)
-  local drawn, report = xpcall(draw, draw_error_report)
-  if drawn then
-    UI_PAGES.draw_errors[part] = nil
-  elseif report.message ~= UI_PAGES.draw_errors[part] then
-    UI_PAGES.draw_errors[part] = report.message
-    print("strata: frame draw failed: " .. report.traceback)
-  end
-end
-
--- One frame. It calls the global redraw(), so norns' swaps apply: nothing
--- while its menu is open (redraw is norns.none then; norns redraws as the
--- menu closes), and the file list while the file selector is open (redraw()
--- never draws the page then). The LFO page draws every frame: its dots move.
--- Each flag clears before its draw, so a failed draw is not retried.
-function draw_frame()
-  if UI_PAGES[ui_page] == "LFO" then UI_PAGES.screen_dirty = true end
-  if UI_PAGES.screen_dirty then
-    UI_PAGES.screen_dirty = false
-    draw_frame_part("screen", redraw)
-  end
-  if UI_PAGES.arc_dirty then
-    UI_PAGES.arc_dirty = false
-    draw_frame_part("arc", arc_redraw)
-  end
-end
-
-function start_frame_clock()
-  stop_frame_clock()
-  UI_PAGES.frame_clock = clock.run(function()
-    while true do
-      clock.sleep(1 / UI_PAGES.FRAMES_PER_SECOND)
-      draw_frame()
-    end
-  end)
-end
-
-function stop_frame_clock()
-  if UI_PAGES.frame_clock then
-    clock.cancel(UI_PAGES.frame_clock)
-    UI_PAGES.frame_clock = nil
-  end
-end
-
-local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
+local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
 -- UI
 local voice_list
@@ -2767,7 +2689,7 @@ local HINT_ROW_Y = 62
 function draw_header()
   screen.level(15)
   screen.move(0, 8)
-  screen.text(UI_PAGES[ui_page])
+  screen.text(UI_PAGES[S.ui_page])
 
   -- Master density (after the page title; "BUFFER" ends near x=36)
   screen.move(40, 8)
@@ -3249,7 +3171,7 @@ local function buffer_key(n)
   elseif n == 3 then
     local slot = voice_buffer_slot(S.selected_voice)
     if not slot then return end
-    if key_press_page[2] == ui_page then
+    if key_press_page[2] == S.ui_page then
       -- a slot recording or awaiting its take is busy: nothing to save yet.
       -- Otherwise save_buffer saves only a slot the engine reports holding audio
       local buffer = buffers[slot]
@@ -3360,15 +3282,15 @@ local PAGE_KEY_RELEASE = {ignore_page_input, ignore_page_input, ignore_page_inpu
 
 -- Show another page (draw_frame redraws the LFO page on every frame)
 local function set_ui_page(page)
-  ui_page = page
+  S.ui_page = page
 end
 
 -- Encoders
 function enc(n, d)
   if n == 1 then
-    set_ui_page(util.clamp(ui_page + d, 1, NUM_UI_PAGES))
+    set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
   else
-    PAGE_ENC[ui_page](n, d)
+    PAGE_ENC[S.ui_page](n, d)
   end
   request_redraw()
 end
@@ -3426,13 +3348,13 @@ end
 -- key held across a page change does nothing when it comes up.
 function key(n, z)
   if z == 1 then
-    key_press_page[n] = ui_page
-    PAGE_KEY[ui_page](n)
+    key_press_page[n] = S.ui_page
+    PAGE_KEY[S.ui_page](n)
   else
     local press_page = key_press_page[n]
     key_press_page[n] = nil
-    if press_page == ui_page then
-      PAGE_KEY_RELEASE[ui_page](n)
+    if press_page == S.ui_page then
+      PAGE_KEY_RELEASE[S.ui_page](n)
     end
   end
   request_redraw()
@@ -3448,14 +3370,14 @@ function redraw()
   end
   screen.clear()
   draw_header()
-  PAGE_DRAW[ui_page]()
+  PAGE_DRAW[S.ui_page]()
   screen.update()
 end
 
 -- Arc functions
 
--- Arc pages follow the screen page: ARC_PAGE_DELTA[ui_page] handles ring
--- turns and ARC_PAGE_REDRAW[ui_page] draws the rings between arc_redraw's
+-- Arc pages follow the screen page: ARC_PAGE_DELTA[S.ui_page] handles ring
+-- turns and ARC_PAGE_REDRAW[S.ui_page] draws the rings between arc_redraw's
 -- clear and refresh.
 
 -- A continuous ring: UI_PAGES.ARC_TICKS_PER_SWEEP ticks sweep the control
@@ -3688,13 +3610,13 @@ function arc.remove(device)
 end
 
 function arc_delta(n, delta)
-  ARC_PAGE_DELTA[ui_page](n, delta)
+  ARC_PAGE_DELTA[S.ui_page](n, delta)
   request_redraw()
 end
 
 function arc_key(n, s)
   -- Button press (2025 arc): same as K3 on MAIN, nothing on other pages
-  if s == 1 and ui_page == UI_PAGES.MAIN_PAGE then
+  if s == 1 and S.ui_page == UI_PAGES.MAIN_PAGE then
     start_or_freeze_selected_voice()
     request_redraw()
   end
@@ -3704,7 +3626,7 @@ function arc_redraw()
   if arc_device == nil or arc_device.device == nil then return end
 
   arc_device:all(0)
-  ARC_PAGE_REDRAW[ui_page](arc_device)
+  ARC_PAGE_REDRAW[S.ui_page](arc_device)
   arc_device:refresh()
 end
 

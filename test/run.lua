@@ -554,6 +554,7 @@ end)
 -- module's entry before moving its functions
 local MODULE_HOMES = {
   ["lib/voices.lua"] = { "voice_uses_synth", "voice_uses_buffer", "voice_source_label", "voice_buffer_slot" },
+  ["lib/ui/frame.lua"] = { "request_redraw", "draw_frame", "start_frame_clock", "stop_frame_clock" },
 }
 
 test("functions live in their module", function()
