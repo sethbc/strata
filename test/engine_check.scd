@@ -468,6 +468,7 @@ server.waitForBoot({
         engine.bufferStatePoll.stop;
         freeEngine.(engine);
         server.sync;
+        check.(synthNames.(context.xg).size == 0, "free removes every node of the engine the areas ran on");
         extraContexts.do({ arg each;
             [each.ig, each.xg, each.og].do(_.free);
             (each.in_b ++ each.amp_in_b ++ each.amp_out_b ++ each.pitch_in_b ++ [each.out_b]).do(_.free);

@@ -746,7 +746,7 @@ test("the runner finds unit files and filters them", function()
   os.execute("rm -rf '" .. dir .. "'")
   -- the suite's own unit files
   local unit_dir = repo_root .. "/test/unit"
-  assert_equal(table.concat(unit_files(unit_dir, "scenes"), " "), "scenes_test.lua", "the scenes filter")
+  assert_equal(table.concat(unit_files(unit_dir, "lfos"), " "), "lfos_test.lua", "the lfos filter")
   local all = table.concat(unit_files(unit_dir), " ")
   assert_true(all:find("stubs_test.lua", 1, true) and all:find("structure_test.lua", 1, true), "every unit file: " .. all)
 end)

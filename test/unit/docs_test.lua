@@ -584,6 +584,78 @@ test("every changelog fragment has a heading and a bullet under it", function()
   assert_true(fragment_problem("### Other\n- one\n") ~= nil, "another heading fails")
 end)
 
+-- The .md files under `dir` (repo-relative), recursively, sorted, as
+-- repo-relative paths
+local function markdown_files(dir)
+  local listing = io.popen('cd "' .. repo_root .. '" && find "' .. dir .. '" -name "*.md" 2>/dev/null')
+  local found = {}
+  for path in listing:read("*a"):gmatch("[^\n]+") do table.insert(found, (path:gsub("^%./", ""))) end
+  listing:close()
+  table.sort(found)
+  return found
+end
+
+local function read_repo_file(path)
+  local file = assert(io.open(repo_root .. "/" .. path, "r")); local text = file:read("*a"); file:close()
+  return text
+end
+
+test("every docs/notes/lua file opens with a Must not break section", function()
+  local files = markdown_files("docs/notes/lua")
+  local nested = 0
+  for _, path in ipairs(files) do
+    if path:match("^docs/notes/lua/.+/") then nested = nested + 1 end
+    local heading, in_fence = nil, false
+    for line in (read_repo_file(path) .. "\n"):gmatch("([^\n]*)\n") do
+      if line:match("^%s*```") then in_fence = not in_fence
+      elseif not in_fence and line:match("^#+ ") then heading = line; break end
+    end
+    assert_equal(heading, "## Must not break", path .. " first heading")
+  end
+  -- the per-page and per-layout notes (docs/notes/lua/pages/, grid/) count
+  assert_true(nested >= 12, "the check reads the notes in subfolders (" .. nested .. " found)")
+end)
+
+test("every user page and grid layout doc is linked from its index", function()
+  local indexes = { pages = "docs/user/controls.md", grid = "docs/user/grid.md" }
+  local expected = { pages = 8, grid = 4 }
+  for folder, index in pairs(indexes) do
+    local index_text = read_repo_file(index)
+    local files = markdown_files("docs/user/" .. folder)
+    assert_true(#files >= expected[folder], #files .. " docs in docs/user/" .. folder .. "/")
+    for _, path in ipairs(files) do
+      local link = "(" .. folder .. "/" .. path:match("([^/]+)$") .. ")"
+      assert_true(index_text:find(link, 1, true), index .. " links " .. path)
+    end
+  end
+end)
+
+-- The user-facing places that say "freeze" (or frozen, unfrozen, ...) for
+-- the lock: every such word in `text`, unless written "freeze (3.2)", the
+-- audio freeze a later release adds
+local function freeze_words(text)
+  local found = {}
+  local lowered = text:lower()
+  for start, word, finish in lowered:gmatch("()(%a*froz%a*)()") do table.insert(found, { start, word, finish }) end
+  for start, word, finish in lowered:gmatch("()(%a*freez%a*)()") do
+    if lowered:sub(finish, finish + 5) ~= " (3.2)" then table.insert(found, { start, word, finish }) end
+  end
+  local words = {}
+  for _, hit in ipairs(found) do table.insert(words, hit[2]) end
+  return words
+end
+
+test("the user docs say lock, not freeze", function()
+  assert_equal(table.concat(freeze_words("Freeze the voice; frozen, unfrozen; freeze (3.2) later"), " "),
+    "frozen unfrozen freeze", "the scan finds every form but the 3.2 freeze")
+  local files = markdown_files("docs/user")
+  table.insert(files, "README.md")
+  for _, path in ipairs(files) do
+    local words = freeze_words(read_repo_file(path))
+    assert_true(#words == 0, path .. " says '" .. tostring(words[1]) .. "' (the feature is lock)")
+  end
+end)
+
 -- The names (without extension) of the files in a repo folder that end in
 -- `extension`, sorted
 local function names_in(dir, extension)
@@ -598,37 +670,21 @@ local function names_in(dir, extension)
   return names
 end
 
-local function read_repo_file(path)
-  local file = assert(io.open(repo_root .. "/" .. path, "r")); local text = file:read("*a"); file:close()
-  return text
-end
-
--- Every notes file in dir opens (outside code fences) with ## Must not break
-local function assert_notes_open_with_must_not_break(dir)
-  local names = names_in(dir, "md")
-  for _, name in ipairs(names) do
-    local text = read_repo_file(dir .. "/" .. name .. ".md")
-    local heading, in_fence = nil, false
-    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-      if line:match("^%s*```") then in_fence = not in_fence
-      elseif not in_fence and line:match("^#+ ") then heading = line; break end
-    end
-    assert_equal(heading, "## Must not break", dir .. "/" .. name .. ".md first heading")
-  end
-  return names
-end
-
-test("every docs/notes/lua file opens with a Must not break section", function()
-  assert_notes_open_with_must_not_break("docs/notes/lua")
-end)
-
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
   "effects", "performance", "rings", "freeze", "variation", "loops" }
 
 test("every engine notes file opens with Must not break", function()
-  local names = assert_notes_open_with_must_not_break("docs/notes/engine")
-  assert_true(#names >= 9, "docs/notes/engine holds the area notes (found " .. #names .. ")")
+  local files = markdown_files("docs/notes/engine")
+  for _, path in ipairs(files) do
+    local heading, in_fence = nil, false
+    for line in (read_repo_file(path) .. "\n"):gmatch("([^\n]*)\n") do
+      if line:match("^%s*```") then in_fence = not in_fence
+      elseif not in_fence and line:match("^#+ ") then heading = line; break end
+    end
+    assert_equal(heading, "## Must not break", path .. " first heading")
+  end
+  assert_true(#files >= 9, "docs/notes/engine holds the area notes (found " .. #files .. ")")
 end)
 
 test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names the area files", function()

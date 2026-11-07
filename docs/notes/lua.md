@@ -13,8 +13,10 @@ The Lua notes are now one short file per module, each opening with what you must
 | Probability-Based Mutation System (and the drift) | `docs/notes/lua/mutation.md` |
 | Scene System (transitions, sequencer, migration, validation, persistence) | `docs/notes/lua/scenes.md` |
 | Buffers persistence (buffers.data) | `docs/notes/lua/buffers.md` |
-| Grid Integration, the pattern sequencer, the grid's scene page | `docs/notes/lua/grid-and-sequencer.md` |
-| Arc Integration | `docs/notes/lua/arc.md` |
-| UI Updates: screen pages, redraws, main parameter, MAIN layout | `docs/notes/lua/ui-and-pages.md` |
+| Grid Integration | `docs/notes/lua/grid-core.md` (devices, holds, faders) and one file per layout under docs/notes/lua/grid/ (`docs/notes/lua/grid/layout_256.md`, ..., the 256's scene page included) |
+| The pattern sequencer | `docs/notes/lua/sequencer.md` |
+| Arc Integration | `docs/notes/lua/arc-core.md` (devices, dispatch, drawing) and `docs/notes/lua/arc-pages.md` (each page's rings) |
+| UI Updates: screen pages, redraws | `docs/notes/lua/ui-core.md` |
+| Main parameter, MAIN layout, and each other page | one file per page under docs/notes/lua/pages/ (`docs/notes/lua/pages/main.md`, ...) |
 | Future Extension Points, Version History | `docs/notes/lua/version-history.md` |
 | Test harness details | `docs/notes/lua/test-harness.md` |

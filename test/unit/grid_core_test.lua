@@ -4,8 +4,9 @@
 -- Run alone: lua test/run.lua grid_core
 
 return function(h)
-local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
-local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup, find_upvalue = h.load_strata, h.local_value, h.finish_startup, h.find_upvalue
+local wake, wake_buffer_clock = h.wake, h.wake_buffer_clock
 
 local function grid_core() return local_value("S").lib.grid_core end
 local function tap(context, port, x, y)
@@ -240,24 +241,18 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
-
-test("a scene saved on a hold redraws the screen (SETUP counts it)", function()
+test("a scene saved on a hold redraws the screen (SETUP no longer counts scenes)", function()
   local context = load_strata(); finish_startup(context)
-  local function screen_has(text)
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == text then return true end
-    end
-    return false
-  end
   h.show_page("SETUP")
   context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
   h.next_frame(context)
   context.grid.press(1, 2, 3, 1)
   h.next_frame(context)
-  assert_true(screen_has("scenes: 0/8 saved"), "nothing saved yet")
+  local counter = h.count_screen_draws()
   context.clock.run_for(0.5)
   h.next_frame(context)
-  assert_true(screen_has("scenes: 1/8 saved"), "the save shows on the next frame")
+  counter.restore()
+  assert_equal(counter.screen, 1, "the save shows on the next frame")
 end)
 
 test("a third key sets only its own voice's held step", function()
@@ -290,6 +285,33 @@ test("step_key ignores voices, steps and positions out of range", function()
   assert_equal(patterns[1][3], 15, "no out-of-range call set the held step's level")
   assert_equal(patterns[1][17], nil, "the pattern never grows")
   assert_equal(patterns[8], nil)
+end)
+
+test("hot-plugged grid and arc fire handlers once per event (I3)", function()
+  local context = load_strata()
+  context.grid.plug(3, 16, 16)
+  local calls = 0
+  local real_grid_key = grid_key
+  grid_key = function(...) calls = calls + 1; return real_grid_key(...) end
+  context.grid.press(3, 1, 1, 1)
+  assert_equal(calls, 1, "grid_key runs once per press")
+  context.grid.unplug(3)
+  context.grid.plug(3, 16, 16)
+  context.grid.press(3, 1, 2, 1)
+  assert_equal(calls, 2, "replugged grid still runs grid_key once per press")
+  grid_key = real_grid_key
+
+  -- compared on the raw 0-1 position: the 0.01 step quantizes the value
+  local density = params:lookup_param("master_density")
+  context.arc.plug(1)
+  local before = density.raw
+  context.arc.turn(1, 1, 20)  -- one delta of 20 -> 20/512 of the range
+  assert_near(density.raw - before, 20 / 512, 1e-9, "a turn is handled once")
+  context.arc.unplug(1)
+  context.arc.plug(1)
+  before = density.raw
+  context.arc.turn(1, 1, 20)
+  assert_near(density.raw - before, 20 / 512, 1e-9, "replugged arc handles a turn once")
 end)
 
 end

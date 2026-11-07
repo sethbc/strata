@@ -126,16 +126,16 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
     local channel_notes = midi_state.note_voice[channel]
     assert_equal(channel_notes and channel_notes[note], nil, where .. ": note " .. note .. " not mapped")
   end
-  -- K3 (and the arc button) never stop a running voice: on a held voice K3
-  -- freezes it, and the note off then stops it as voice off mode says
+  -- locking a held voice never stops it, and the note off then stops it as
+  -- voice off mode says (MAIN's K3 and the arc button lock through toggle_lock)
   local _, set_selected = find_upvalue("selected_voice"); set_selected(2)
   show_page("MAIN")
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
-  key(3, 1); key(3, 0)
-  assert_true(voices[2].active and local_value("frozen")[2], "K3 freezes the held voice, it does not stop it")
+  toggle_lock(2)
+  assert_true(voices[2].active and local_value("frozen")[2], "a lock keeps the held voice running")
   context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
-  assert_true(not voices[2].active, "K3: the note off stops the frozen voice")
-  assert_nothing_held(2, 2, 62, "K3")
+  assert_true(not voices[2].active, "lock: the note off stops the locked voice")
+  assert_nothing_held(2, 2, 62, "lock")
   toggle_lock(2)
   local stoppers = {
     { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 8 + 4, 14, 1) end },
@@ -221,8 +221,8 @@ test("omni pitchbend follows the selection: the old voice re-centers, the new on
   assert_near(last_bend(1), 1, 1e-12, "voice 2 re-centered")
   assert_equal(last_bend(2), nil, "nothing sent to a stopped voice"); assert_near(bend[3], up, 1e-9)
   toggle_voice(3); assert_near(last_bend(2), up, 1e-9, "starting it sends the wheel")
-  -- BUFFER page E2 is the same selection
-  show_page("BUFFER"); context.clear_engine_calls()
+  -- MAIN's E2 again (BUFFER's E2 picks a slot since 3.1)
+  show_page("MAIN"); context.clear_engine_calls()
   enc(2, -1)
   assert_near(last_bend(2), 1, 1e-12, "voice 3 re-centered"); assert_near(last_bend(1), up, 1e-9, "voice 2 bent again")
   -- E2 against the end of the list changes nothing
@@ -254,20 +254,21 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   assert_equal(params:string("midi_channel_mode"), "per voice")
   show_page("SETUP")
   assert_true(screen_has("midi 1: none"), "no device on port 1")
-  assert_true(screen_has("ch: per voice"), "channel mode shown")
+  enc(2, 1); redraw(); enc(2, -1); redraw()
+  assert_true(screen_has("per voice"), "channel mode shown")
   context.midi.plug(1, "keys"); next_frame(context)
   assert_true(screen_has("midi 1: keys"), "plugging a device redraws SETUP")
-  -- E2 selects the port; events on the old port no longer reach Strata
-  enc(2, 1); next_frame(context); assert_equal(params:get("midi_device"), 2)
+  -- E3 on the first field selects the port; events on the old port no longer reach Strata
+  enc(3, 1); next_frame(context); assert_equal(params:get("midi_device"), 2)
   assert_true(screen_has("midi 2: none"))
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_equal(#context.engine_calls, 0, "port 1 is no longer listened to")
   context.midi.send(2, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_true(#context.calls_named("retrigger") == 1, "port 2 is")
-  -- E3 sets the channel mode
-  enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
-  assert_true(screen_has("ch: omni to selected"))
+  -- E2 then E3 sets the channel mode
+  enc(2, 1); enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
+  assert_true(screen_has("omni to selected"))
   assert_true(screen_has("midi 2: stub midi"), "the device that played is shown")
   -- unplugging the selected port's device shows none on the next frame
   context.midi.unplug(2); next_frame(context)

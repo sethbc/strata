@@ -25,7 +25,7 @@ The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth
 | `startAllVoices`, `stopAllVoices(engine)` | every voice started as the check always has (voice 7 on buffer slot 4), and every voice stopped, put back on its synth source and cut until none of its synths is left |
 | `engine`, `server`, `context`, `tempDir`, `testDir`, `voiceDefs`, `grainDefs`, `allDefs`, `chainDefs`, `defaultScratchDir` | values |
 
-Each area stops the voices it started. After each area the runner checks `"<area>: leaves no voice, grain or mod synth running"`, clears every slot (so every area starts from empty slots, in a full run as alone) and posts `area <name>: <seconds> s`, which `test/run_engine_check.sh` prints. A full run takes about 3.5 minutes.
+Each area stops the voices it started. After each area the runner checks `"<area>: leaves no voice, grain or mod synth running"`, clears every slot (so every area starts from empty slots, in a full run as alone) and posts `area <name>: <seconds> s`, which `test/run_engine_check.sh` prints. A full run takes about 3.5 minutes. The areas still depend on running in `areaOrder`: `finishArea` resets the nodes (no voice, grain or mod synth left) and the slots, but not the rest of the engine's state. Grain controls a voice was given (`grainControls`: mode, envelope, buffer position, ...), crossmod settings, mod speeds and the effect settings carry into the areas after it, and structure must run first for its fresh-engine checks. Each area passes alone too, and a new area must not rely on what an earlier one left. At the end the runner frees the engine and checks that none of its nodes is left.
 
 | Area | Check file | Notes | What it covers |
 |------|------------|-------|----------------|

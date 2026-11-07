@@ -19,7 +19,7 @@
 - `S.lib.scenes.scene_data_dir` and `S.lib.scenes.move_aside_unloadable_file`, used by `lib/buffers.lua`;
 - cleanup steps 30 (save the scenes), 100 (the sequencer) and 110 (the transition).
 
-Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene page is in `docs/notes/lua/grid-and-sequencer.md`, the header's scene indicator in `docs/notes/lua/ui-and-pages.md`.
+Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `docs/notes/lua/grid/layout_256.md` and `docs/notes/lua/grid/layout_128h.md`, the header's scene indicator in `docs/notes/lua/ui-core.md`.
 
 ## What a scene holds
 

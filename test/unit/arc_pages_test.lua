@@ -1,13 +1,13 @@
--- test/unit/arc_test.lua
--- Arc: rings on every page (MAIN, FX, LFO, BUFFER), sweeps, drawing and
--- the one followed arc (lib/arc/)
--- Run alone: lua test/run.lua arc
+-- test/unit/arc_pages_test.lua
+-- The arc's rings on each page (lib/arc/main.lua, fx.lua, lfo.lua,
+-- buffer.lua, and the VOICE, SEQ and SCENES stubs): mappings, sweeps and
+-- drawing
+-- Run alone: lua test/run.lua arc_pages
 
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
-local load_strata, find_upvalue, local_value = h.load_strata, h.find_upvalue, h.local_value
-local next_frame, finish_startup, PAGE_TITLES = h.next_frame, h.finish_startup, h.PAGE_TITLES
-local show_page = h.show_page
+local load_strata, find_upvalue, local_value, next_frame = h.load_strata, h.find_upvalue, h.local_value, h.next_frame
+local finish_startup, PAGE_TITLES, show_page = h.finish_startup, h.PAGE_TITLES, h.show_page
 
 test("arc rings follow the page; MAIN mapping unchanged", function()
   local context = load_strata(); finish_startup(context)
@@ -104,87 +104,6 @@ test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings"
   end
 end)
 
-test("Strata follows one arc: any port, the first one plugged, removal of that one disconnects", function()
-  local function screen_has(context, text)
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == text then return true end
-    end
-    return false
-  end
-  local function setup_text(context)
-    local page = local_value("ui_page")
-    show_page("SETUP"); redraw()
-    local result = screen_has(context, "arc: connected") and "connected" or (screen_has(context, "arc: none") and "none" or "?")
-    show_page(page)
-    return result
-  end
-  -- the only arc is on port 2
-  local context = load_strata(); finish_startup(context)
-  context.arc.plug(2)
-  assert_equal(setup_text(context), "connected", "arc on port 2 connects")
-  local density = params:lookup_param("master_density")
-  local before = density.raw
-  context.arc.turn(2, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "arc on port 2 works")
-  context.arc.unplug(2)
-  assert_equal(setup_text(context), "none", "removing it disconnects")
-
-  -- already plugged at start: found on its port
-  context = load_strata(); finish_startup(context)
-  context.arc.plug(3)
-  context.arc.unplug(3)
-  context.arc.vports[4].device = {port = 4, segments = {}, all = function() end, refresh = function() end, segment = function() end, led = function() end}
-  arc_init()
-  assert_true(context.arc.vports[4].delta ~= nil, "init attaches the vport holding a device")
-
-  -- port 2 first, then port 1: Strata stays on 2
-  context = load_strata(); finish_startup(context)
-  density = params:lookup_param("master_density")
-  context.arc.plug(2)
-  context.arc.plug(1)
-  assert_equal(context.arc.vports[1].delta, nil, "a second arc gets no handler")
-  context.arc.unplug(1)
-  assert_equal(setup_text(context), "connected", "removing the other arc keeps Strata's")
-  before = density.raw
-  context.arc.turn(2, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "still handled on port 2")
-  context.arc.unplug(2)
-  assert_equal(setup_text(context), "none", "removing Strata's arc disconnects")
-
-  -- port 1 first, then 2
-  context = load_strata(); finish_startup(context)
-  context.arc.plug(1)
-  context.arc.plug(2)
-  assert_equal(context.arc.vports[2].delta, nil, "no handler on the second arc")
-  context.arc.unplug(2)
-  assert_equal(setup_text(context), "connected", "removing another port's arc keeps Strata's arc")
-  context.arc.unplug(1)
-  assert_equal(setup_text(context), "none", "removing Strata's arc disconnects it")
-
-  -- two arcs: unplugging the followed one moves to the other (#49). norns
-  -- clears the removed vport only after arc.remove returns, so it is skipped
-  context = load_strata(); finish_startup(context)
-  density = params:lookup_param("master_density")
-  context.arc.plug(1)
-  local second_arc = context.arc.plug(3)
-  context.arc.unplug(1)
-  assert_equal(setup_text(context), "connected", "the other arc is followed")
-  assert_true(context.arc.vports[3].delta ~= nil, "its vport gets the handlers")
-  assert_equal(context.arc.vports[1].delta, nil, "the removed arc's vport keeps none")
-  before = density.raw
-  context.arc.turn(3, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "turning the other arc works")
-  local refreshes = second_arc.refresh_count
-  next_frame(context)
-  assert_equal(second_arc.refresh_count, refreshes + 1, "its rings are drawn")
-  context.arc.plug(1)
-  assert_equal(context.arc.vports[1].delta, nil, "an arc plugged back in is not followed")
-  context.arc.unplug(3)
-  assert_true(context.arc.vports[1].delta ~= nil, "until the followed one goes")
-  context.arc.unplug(1)
-  assert_equal(setup_text(context), "none", "removing the last arc disconnects")
-end)
-
 test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
@@ -224,41 +143,6 @@ test("every continuous arc ring sweeps its param's range in 512 ticks, following
   -- LFO ring 4 in free mode (the selected LFO's period); its depth rings and
   -- clocked rate keep their whole steps (the arc LFO page test)
   sweep("LFO", 4, "lfo_free_1", "LFO ring 4, free period")
-end)
-
-test("the arc button finds MAIN by its page index, not its title", function()
-  local context = load_strata(); finish_startup(context)
-  context.arc.plug(1); show_page("MAIN")
-  local pages = local_value("UI_PAGES")
-  assert_equal(pages.MAIN_PAGE, 1, "MAIN_PAGE is MAIN's index")
-  assert_equal(pages[pages.MAIN_PAGE], "MAIN")
-  local _, set_selected = find_upvalue("selected_voice"); set_selected(3)
-  local voices = local_value("voices")
-  assert_true(not voices[3].active, "voice 3 starts stopped")
-  local title = pages[1]
-  pages[1] = "HOME"   -- a renamed title must not change what the button does
-  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
-  pages[1] = title
-  assert_true(voices[3].active, "the button starts the selected voice on page 1")
-end)
-
-test("the arc keeps drawing while the norns menu is open (#49)", function()
-  local context = load_strata(); finish_startup(context)
-  local arc_hardware = context.arc.plug(1)
-  next_frame(context)
-  _menu.set_mode(true)
-  -- norns' set_mode(true) swaps the global redraw for norns.none (the stub only tracks the mode)
-  local script_redraw = redraw
-  local screen_draws = 0
-  redraw = function() screen_draws = screen_draws + 1 end
-  local arc_refreshes = arc_hardware.refresh_count
-  local density = params:get("master_density")
-  params:set("master_density", density / 2)  -- PARAMS, a CC map or an LFO while the menu is open
-  next_frame(context)
-  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "the frame draws the arc's rings")
-  assert_equal(screen_draws, 1, "and calls the global redraw, which is norns.none in the menu")
-  redraw = script_redraw
-  _menu.set_mode(false)
 end)
 
 test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", function()
@@ -302,8 +186,8 @@ test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
   assert_equal(device.segments[1].level, 4, "not buffer-sourced: ring 1 dim")
   assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
   assert_equal(device.segments[4].level, 12, "record rings stay lit")
-  -- the selected voice follows E2
-  enc(2, 1)
+  -- the selected voice (picked on MAIN; BUFFER's E2 picks a slot) follows
+  show_page("MAIN"); enc(2, 1); show_page("BUFFER")
   local position = params:get("v2_buf_pos"); local voice1_position = params:get("v1_buf_pos")
   context.arc.turn(1, 1, 20)
   assert_true(params:get("v2_buf_pos") > position, "ring 1 follows the selected voice")
@@ -313,13 +197,13 @@ end)
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
-  show_page("LFO")
+  show_page("LFO"); for n = 1, 3 do params:set("lfo_depth_" .. n, 0) end   -- LFOs start at 25%
   context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
   context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
   context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
   next_frame(context)
   assert_near(device.segments[1].to, 0.1 * math.pi * 2, 1e-9, "ring 1 shows depth")
-  enc(2, 1)   -- LFO 2
+  key(3, 1); key(3, 0)   -- LFO 2
   local period = params:get("lfo_free_2")
   context.arc.turn(1, 4, 100); assert_true(params:get("lfo_free_2") > period, "ring 4: free period")
   assert_equal(params:get("lfo_free_1"), 4, "only the selected LFO")
@@ -338,12 +222,12 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
   for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
   local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
   context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_1"), rate_1, "15 ticks carried for LFO 1")
-  enc(2, 1)   -- LFO 2
+  key(3, 1); key(3, 0)   -- LFO 2
   context.arc.turn(1, 4, 5)
   assert_equal(params:get("lfo_clocked_2"), rate_2, "LFO 1's carried ticks do not step LFO 2")
   context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "20 of its own ticks do")
   -- away and back again also forgets them
-  context.arc.turn(1, 4, 15); enc(2, -1); enc(2, 1)
+  context.arc.turn(1, 4, 15); key(2, 1); key(2, 0); key(3, 1); key(3, 0)
   context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "reselecting forgets the carry")
   -- the selected LFO's mode changing forgets them
   context.arc.turn(1, 4, 10)   -- 15 carried
@@ -354,8 +238,30 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
   params:set("lfo_mode_3", 2)
   context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 2, "LFO 3's mode leaves LFO 2's carry")
   -- the depth rings keep their own remainders
-  context.arc.turn(1, 1, 5); enc(2, 1); context.arc.turn(1, 1, 5)
-  assert_equal(params:get("lfo_depth_1"), 1, "ring 1's carry survives a selection change")
+  context.arc.turn(1, 1, 5); key(3, 1); key(3, 0); context.arc.turn(1, 1, 5)
+  assert_equal(params:get("lfo_depth_1"), 26, "ring 1's carry survives a selection change")
+end)
+
+test("the stub pages' rings stay dark and ignore turns", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  for _, name in ipairs({ "VOICE", "SEQ", "SCENES" }) do
+    show_page(name)
+    local before = {}
+    for _, param_id in ipairs({ "master_density", "v1_grain_size", "tempo", "midi_device" }) do
+      before[param_id] = params:get(param_id)
+    end
+    for ring = 1, 4 do context.arc.turn(1, ring, 40) end
+    for param_id, value in pairs(before) do
+      assert_equal(params:get(param_id), value, name .. " rings leave " .. param_id)
+    end
+    arc_redraw()
+    for ring = 1, 4 do
+      for led = 1, 64 do
+        assert_equal(arc_hardware.rings[ring][led], 0, name .. " ring " .. ring .. " LED " .. led .. " dark")
+      end
+    end
+  end
 end)
 
 end

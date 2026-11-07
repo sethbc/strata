@@ -1,12 +1,12 @@
--- test/unit/grid_test.lua
--- Grid: every layout's keys and LEDs, the 256's fader pages, hot-plug
--- (lib/grid/)
--- Run alone: lua test/run.lua grid
+-- test/unit/grid_layout_256_test.lua
+-- The 16x16 grid layout (lib/grid/layout_256.lua): patterns, the fader
+-- page (lib/grid/faders.lua), the scene page and the buffers / FX page
+-- Run alone: lua test/run.lua grid_layout_256
 
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
-local load_strata, find_upvalue, local_value = h.load_strata, h.find_upvalue, h.local_value
-local finish_startup, wake, wake_buffer_clock = h.finish_startup, h.wake, h.wake_buffer_clock
+local load_strata, find_upvalue, local_value, finish_startup = h.load_strata, h.find_upvalue, h.local_value, h.finish_startup
+local wake, wake_buffer_clock = h.wake, h.wake_buffer_clock
 
 test("256-grid parameter page faders set values and show them (I8)", function()
   local context = load_strata()
@@ -139,51 +139,6 @@ test("bipolar grid faders have a column that sets exactly 0, and keep both ends 
   assert_near(params:get("v1_freq"), 20 * (2000 / 20) ^ (7 / 15), 1.0, "column 8 on an exp fader")
 end)
 
-local GRID_SIZES = {
-  { name = "256", cols = 16, rows = 16 },
-  { name = "128h", cols = 16, rows = 8 },
-  { name = "128v", cols = 8, rows = 16 },
-  { name = "64", cols = 8, rows = 8 },
-}
-
-test("every grid key on every layout and page runs without error", function()
-  for _, size in ipairs(GRID_SIZES) do
-    local context = load_strata()
-    local device = context.grid.plug(1, size.cols, size.rows)
-    -- 256 has four pages selected from row 8; other layouts are swept once
-    local pages = size.name == "256" and { 1, 2, 3, 4 } or { 1 }
-    for _, page in ipairs(pages) do
-      for y = 1, size.rows do
-        for x = 1, size.cols do
-          if size.name == "256" then context.grid.press(1, 12 + page, 8, 1) end
-          context.grid.press(1, x, y, 1)
-          context.grid.press(1, x, y, 0)
-          context.clock.advance()
-        end
-      end
-    end
-    assert_true(device.refresh_count > 0, size.name .. " grid was redrawn")
-  end
-end)
-
-test("grid_redraw draws every layout (I2) and a hot-plugged grid (I3)", function()
-  for _, size in ipairs(GRID_SIZES) do
-    local context = load_strata()
-    local device = context.grid.plug(2, size.cols, size.rows)
-    local refreshes = device.refresh_count
-    grid_redraw()
-    assert_equal(device.refresh_count, refreshes + 1, size.name .. " redraw reaches a hot-plugged grid")
-    -- voice 1 is running after init: its status LED must be lit on every layout
-    local lit = false
-    for x = 1, size.cols do
-      for y = 1, size.rows do
-        if device:get_led(x, y) >= 12 then lit = true end
-      end
-    end
-    assert_true(lit, size.name .. " layout drew something")
-  end
-end)
-
 test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", function()
   local context = load_strata()
   local device = context.grid.plug(1, 16, 16)
@@ -192,13 +147,12 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   assert_equal(device:get_led(13, 14), 12, "voice 5 on lights row 14")
   toggle_voice(5)
   assert_equal(device:get_led(13, 14), 2, "voice 5 off dims row 14")
-  local _, set_selected = find_upvalue("selected_voice")
-  set_selected(1)
-  key(3, 1)  -- voice 1 is active: K3 freezes it
-  assert_equal(device:get_led(1, 16), 12, "K3 freeze lights row 16")
-  context.arc.plug(1)
-  context.arc.push(1, 1, 1)
-  assert_equal(device:get_led(1, 16), 2, "arc button unfreeze dims row 16")
+  -- a lock from anywhere (MAIN's K3, the arc button, MIDI, a scene) goes
+  -- through toggle_lock, which redraws the grid
+  toggle_lock(1)
+  assert_equal(device:get_led(1, 16), 12, "a lock lights row 16")
+  toggle_lock(1)
+  assert_equal(device:get_led(1, 16), 2, "an unlock dims row 16")
 
   -- the highlighted step is the one that just played
   toggle_pattern_step(1, 1)
@@ -277,52 +231,6 @@ test("grid sequencer LEDs follow a length or start set outside the grid (#49)", 
   assert_equal(device:get_led(1, 5), 15, "the sequencer LED lights as it starts")
   params:set("scene_sequencer_enabled", 0)
   assert_equal(device:get_led(1, 5), 4, "and dims as it stops")
-end)
-
-test("hot-plugged grid and arc fire handlers once per event (I3)", function()
-  local context = load_strata()
-  context.grid.plug(3, 16, 16)
-  local calls = 0
-  local real_grid_key = grid_key
-  grid_key = function(...) calls = calls + 1; return real_grid_key(...) end
-  context.grid.press(3, 1, 1, 1)
-  assert_equal(calls, 1, "grid_key runs once per press")
-  context.grid.unplug(3)
-  context.grid.plug(3, 16, 16)
-  context.grid.press(3, 1, 2, 1)
-  assert_equal(calls, 2, "replugged grid still runs grid_key once per press")
-  grid_key = real_grid_key
-
-  -- compared on the raw 0-1 position: the 0.01 step quantizes the value
-  local density = params:lookup_param("master_density")
-  context.arc.plug(1)
-  local before = density.raw
-  context.arc.turn(1, 1, 20)  -- one delta of 20 -> 20/512 of the range
-  assert_near(density.raw - before, 20 / 512, 1e-9, "a turn is handled once")
-  context.arc.unplug(1)
-  context.arc.plug(1)
-  before = density.raw
-  context.arc.turn(1, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "replugged arc handles a turn once")
-end)
-
-test("play/stop columns 1-4 on row 8 all light with the state (256 and 16x8)", function()
-  for _, size in ipairs({ { 16, 16 }, { 16, 8 } }) do
-    local context = load_strata()
-    local device = context.grid.plug(1, size[1], size[2])
-    for x = 1, 4 do
-      assert_equal(device:get_led(x, 8), 4, size[2] .. " rows: play column " .. x .. " dim when stopped")
-    end
-    context.grid.press(1, 4, 8, 1)  -- column 4 starts the pattern
-    assert_true(local_value("pattern_playing"), "column 4 plays")
-    for x = 1, 4 do
-      assert_equal(device:get_led(x, 8), 15, size[2] .. " rows: play column " .. x .. " lit while playing")
-    end
-    context.grid.press(1, 3, 8, 1)  -- column 3 stops it
-    for x = 1, 4 do
-      assert_equal(device:get_led(x, 8), 4, size[2] .. " rows: play column " .. x .. " dim after stop")
-    end
-  end
 end)
 
 test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
@@ -468,6 +376,233 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   context.grid.press(1, 9, 1, 1); context.grid.press(1, 12, 2, 1); context.grid.press(1, 13, 11, 1)
   assert_equal(#context.engine_calls, 0, "columns past the buffers/sources send nothing")
   assert_equal(params:get("v3_source"), 1)
+end)
+
+test("every 256 grid key on every page runs without error", function()
+  local context = load_strata()
+  local device = context.grid.plug(1, 16, 16)
+  -- four pages selected from row 8
+  for page = 1, 4 do
+    for y = 1, 16 do
+      for x = 1, 16 do
+        context.grid.press(1, 12 + page, 8, 1)
+        context.grid.press(1, x, y, 1)
+        context.grid.press(1, x, y, 0)
+        context.clock.advance()
+      end
+    end
+  end
+  assert_true(device.refresh_count > 0, "256 grid was redrawn")
+end)
+
+test("grid_redraw draws the 256 layout (I2), on a hot-plugged grid too (I3)", function()
+  local context = load_strata()
+  local device = context.grid.plug(2, 16, 16)
+  local refreshes = device.refresh_count
+  grid_redraw()
+  assert_equal(device.refresh_count, refreshes + 1, "256 redraw reaches a hot-plugged grid")
+  -- voice 1 is running after init: its status LED must be lit
+  local lit = false
+  for x = 1, 16 do
+    for y = 1, 16 do
+      if device:get_led(x, y) >= 12 then lit = true end
+    end
+  end
+  assert_true(lit, "256 layout drew something")
+end)
+
+test("play/stop columns 1-4 on row 8 all light with the state (256)", function()
+  local context = load_strata()
+  local device = context.grid.plug(1, 16, 16)
+  for x = 1, 4 do
+    assert_equal(device:get_led(x, 8), 4, "16 rows: play column " .. x .. " dim when stopped")
+  end
+  context.grid.press(1, 4, 8, 1)  -- column 4 starts the pattern
+  assert_true(local_value("pattern_playing"), "column 4 plays")
+  for x = 1, 4 do
+    assert_equal(device:get_led(x, 8), 15, "16 rows: play column " .. x .. " lit while playing")
+  end
+  context.grid.press(1, 3, 8, 1)  -- column 3 stops it
+  for x = 1, 4 do
+    assert_equal(device:get_led(x, 8), 4, "16 rows: play column " .. x .. " dim after stop")
+  end
+end)
+
+
+-- 3.1 (Task 2h): copy/paste on row 16, tempo key feedback, the scene page's
+-- sequencer position and the lock keys
+
+local function S_table() return local_value("S") end
+local function tap(context, x, y)
+  context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0)
+end
+local function copy_of(steps)
+  local copy = {}
+  for step, level in ipairs(steps) do copy[step] = level end
+  return copy
+end
+
+test("row 16 copies a pattern and pastes it onto another voice", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local patterns = local_value("patterns")
+  for x = 9, 16 do assert_equal(device:get_led(x, 16), 2, "column " .. x .. " dim with no clipboard") end
+  patterns[1][1], patterns[1][4], patterns[1][9] = 15, 7, 1
+  local copied = copy_of(patterns[1])
+  tap(context, 9, 16)
+  local clipboard = S_table().lib.grid_core.port_state(1).clipboard
+  assert_equal(clipboard.voice, 1, "column 9 copies voice 1")
+  assert_equal(device:get_led(9, 16), 15, "the copied voice's key lights")
+  assert_equal(device:get_led(11, 16), 4, "the paste targets show")
+  assert_equal(device:get_led(16, 16), 4, "the clear key shows")
+  -- the clipboard is a snapshot: a later edit of voice 1 does not change it
+  patterns[1][16] = 15
+  tap(context, 11, 16)
+  for step = 1, 16 do
+    assert_equal(patterns[3][step], copied[step], "voice 3 step " .. step .. " pasted")
+  end
+  assert_true(patterns[3] ~= patterns[1], "the paste copies the levels, not the table")
+  assert_equal(patterns[2][1], 0, "voice 2 untouched")
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard.voice, 1, "the clipboard stays")
+  tap(context, 15, 16)
+  assert_equal(patterns[7][4], 7, "a second paste onto voice 7")
+  -- pasting into a voice and then editing it leaves the clipboard alone
+  patterns[7][4] = 0
+  tap(context, 12, 16)
+  assert_equal(patterns[4][4], 7, "the clipboard kept its own levels")
+  tap(context, 16, 16)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "column 16 clears the clipboard")
+  for x = 9, 16 do assert_equal(device:get_led(x, 16), 2, "column " .. x .. " back to 2") end
+  -- with the clipboard empty, column 16 does nothing and a voice key copies again
+  tap(context, 16, 16)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "clearing an empty clipboard")
+  tap(context, 10, 16)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard.voice, 2, "column 10 copies voice 2")
+end)
+
+test("pasting onto the copied voice changes nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local patterns = local_value("patterns")
+  patterns[2][3] = 15
+  tap(context, 10, 16)
+  patterns[2][5] = 9  -- an edit after the copy
+  tap(context, 10, 16)
+  assert_equal(patterns[2][5], 9, "the copied voice keeps its own pattern")
+  assert_equal(patterns[2][3], 15)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard.voice, 2, "the clipboard stays on voice 2")
+  assert_equal(device:get_led(10, 16), 15, "and stays lit")
+end)
+
+test("the clipboard is per grid, works on pages 2 and 4 and goes with the grid", function()
+  local context = load_strata(); finish_startup(context)
+  local first = context.grid.plug(1, 16, 16)
+  local second = context.grid.plug(2, 16, 16)
+  local patterns = local_value("patterns")
+  patterns[1][2] = 15
+  tap(context, 9, 16)
+  assert_equal(second:get_led(9, 16), 2, "the other grid has no clipboard")
+  context.grid.press(2, 11, 16, 1); context.grid.press(2, 11, 16, 0)
+  assert_equal(S_table().lib.grid_core.port_state(2).clipboard.voice, 3, "a key on grid 2 copies there")
+  assert_equal(patterns[3][2], 0, "and pastes nothing from grid 1's clipboard")
+  tap(context, 14, 8)  -- grid 1 page 2
+  tap(context, 12, 16)
+  assert_equal(patterns[4][2], 15, "page 2 pastes")
+  tap(context, 16, 8)  -- page 4
+  tap(context, 13, 16)
+  assert_equal(patterns[5][2], 15, "page 4 pastes")
+  assert_equal(first:get_led(9, 16), 15, "page 4 shows the clipboard")
+  tap(context, 15, 8)  -- page 3: row 16 is not part of the scene page
+  tap(context, 14, 16)
+  assert_equal(patterns[6][2], 0, "the scene page has no row 16")
+  context.grid.unplug(1)
+  first = context.grid.plug(1, 16, 16)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "unplugging forgets the clipboard")
+  assert_equal(first:get_led(9, 16), 2)
+end)
+
+test("tempo keys light while held and flash the new tempo in the header", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  params:set("tempo", 120)
+  for x = 5, 8 do assert_equal(device:get_led(x, 8), 4, "tempo key " .. x .. " at 4") end
+  context.grid.press(1, 8, 8, 1)
+  assert_equal(params:get("tempo"), 130, "column 8 adds 10")
+  assert_equal(device:get_led(8, 8), 15, "lit while held")
+  assert_equal(device:get_led(7, 8), 4, "the others stay at 4")
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 130")
+  context.grid.press(1, 8, 8, 0)
+  assert_equal(device:get_led(8, 8), 4, "back to 4 on release")
+  tap(context, 5, 8)
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 120", "column 5 subtracts 10")
+  tap(context, 6, 8)
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 119", "column 6 subtracts 1")
+  tap(context, 7, 8)
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 120", "column 7 adds 1")
+  -- page 4 has the same row 8
+  tap(context, 16, 8)
+  context.grid.press(1, 6, 8, 1)
+  assert_equal(device:get_led(6, 8), 15, "page 4 lights a held tempo key")
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 119")
+  context.grid.press(1, 6, 8, 0)
+  -- the play keys do not flash
+  context.clock.run_for(2)
+  tap(context, 1, 8)
+  assert_equal(S.lib.ui_flash.text("header"), nil, "play/stop shows no tempo")
+  tap(context, 1, 8)
+end)
+
+test("the scene page lights the sequencer position at 10 and the current scene at 15", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  tap(context, 15, 8)  -- page 3
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 0)
+  local S = S_table()
+  S.current_scene = 1; grid_redraw()
+  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
+  assert_equal(device:get_led(2, 1), 8, "a populated scene at 8")
+  assert_equal(device:get_led(4, 1), 2, "an empty scene at 2")
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(S.current_scene, 1, "the sequencer recalled scene 1")
+  -- it holds scene 1 for its duration, then recalls scene 2 and moves on
+  context.clock.run_for(4, 0.001)
+  assert_equal(S.current_scene, 2)
+  S.scene_sequencer_position = 3; grid_redraw()
+  assert_equal(device:get_led(3, 1), 10, "the sequencer position at 10")
+  assert_equal(device:get_led(2, 1), 15, "the current scene at 15")
+  assert_equal(device:get_led(1, 1), 8, "scene 1 back to populated")
+  S.scene_sequencer_position = 2; grid_redraw()
+  assert_equal(device:get_led(2, 1), 15, "the current scene wins over the position")
+  S.scene_sequencer_position = 5; grid_redraw()
+  assert_equal(device:get_led(5, 1), 10, "an empty scene at the position lights at 10 too")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(device:get_led(5, 1), 2, "a stopped sequencer shows no position")
+  assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
+end)
+
+test("row 16 columns 1-7 lock voices", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local frozen = local_value("frozen")
+  for voice_idx = 1, 7 do
+    tap(context, voice_idx, 16)
+    assert_true(frozen[voice_idx], "column " .. voice_idx .. " locks voice " .. voice_idx)
+    assert_equal(device:get_led(voice_idx, 16), 12, "a locked voice lights at 12")
+  end
+  tap(context, 3, 16)
+  assert_true(not frozen[3], "a second press unlocks")
+  assert_equal(device:get_led(3, 16), 2)
+  tap(context, 8, 16)
+  assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "column 8 does nothing")
+  assert_equal(device:get_led(8, 16), 0, "column 8 stays dark")
+  tap(context, 14, 8)  -- page 2
+  tap(context, 3, 16)
+  assert_true(frozen[3], "page 2 locks too")
 end)
 
 end

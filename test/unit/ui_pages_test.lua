@@ -1,7 +1,7 @@
 -- test/unit/ui_pages_test.lua
 -- The eight screen pages and their records (S.registry.pages): the page
--- order, E1, enter/leave, the hint row from the record, the stub pages, and
--- who sets which record field (lib/pages/ vs lib/arc/)
+-- order, E1, enter/leave, the hint row from the record, and who sets
+-- which record field (lib/pages/ vs lib/arc/)
 -- Run alone: lua test/run.lua ui_pages
 
 return function(h)
@@ -45,32 +45,6 @@ test("every page has a record with the required handlers", function()
     end
     assert_equal(type(record.hints(false)), "string", name .. " hints")
     assert_equal(type(record.hints(true)), "string", name .. " hints with ALT")
-  end
-end)
-
-test("the stub pages show E1:page, take no input and leave the arc dark", function()
-  local context = load_strata(); finish_startup(context)
-  local arc_hardware = context.arc.plug(1)
-  local S = local_value("S")
-  for _, name in ipairs({ "VOICE", "SEQ", "SCENES" }) do
-    show_page(name)
-    assert_equal(hint_text(context), "E1:page", name .. " hint row")
-    local before = {}
-    for _, param_id in ipairs({ "master_density", "v1_grain_size", "tempo", "midi_device" }) do
-      before[param_id] = params:get(param_id)
-    end
-    for n = 2, 3 do enc(n, 3); enc(n, -1); h.tap(n) end
-    for ring = 1, 4 do context.arc.turn(1, ring, 40) end
-    for param_id, value in pairs(before) do
-      assert_equal(params:get(param_id), value, name .. " leaves " .. param_id)
-    end
-    assert_equal(local_value("ui_page"), S.constants.UI_PAGES.index[name], "still on " .. name)
-    arc_redraw()
-    for ring = 1, 4 do
-      for led = 1, 64 do
-        assert_equal(arc_hardware.rings[ring][led], 0, name .. " ring " .. ring .. " LED " .. led .. " dark")
-      end
-    end
   end
 end)
 
