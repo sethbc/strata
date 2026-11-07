@@ -563,6 +563,8 @@ local MODULE_HOMES = {
     "load_buffers_from_disk" },
   ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "apply_lfo", "lfo_phase_estimate",
     "add_lfo_params" },
+  ["lib/mutation.lua"] = { "randomize_voice", "gentle_mutate", "drift_update", "mean_reverting_step",
+    "set_drifted_param", "mutated_value" },
 }
 
 test("functions live in their module", function()

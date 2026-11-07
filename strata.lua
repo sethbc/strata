@@ -79,23 +79,10 @@ local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 -- UI
 local voice_list
 
--- Per-voice drift (drift_update on the 10 Hz drift_metro): a slow random
--- walk of grain pitch and buffer position. Not the global LFOs (S.lfos).
-local drift_metro
-local DRIFT_PITCH_STEP = 0.004       -- width of each random grain pitch step (+/-0.002 per tick)
-local DRIFT_PITCH_REVERSION = 0.01   -- fraction of the offset from the base pitch removed per tick
-local grain_pitch_base = {}          -- last non-drift grain pitch per voice (the walk's center)
-local DRIFT_BUF_POS_STEP = 0.002     -- width of each random buffer position step (+/-0.001 per tick)
-local DRIFT_BUF_POS_REVERSION = 0.01 -- fraction of the offset from the base position removed per tick
-local buf_pos_base = {}              -- last non-drift buffer position per voice
-local drift_writing = false          -- true while drift_update sets params
-for i = 1, NUM_VOICES do
-  grain_pitch_base[i] = S.voices[i].grain.pitch
-  buf_pos_base[i] = S.voices[i].grain.buf_pos
-end
-
--- Mutation system
-local mutation_metro
+-- Per-voice drift, randomize and mutations: randomize_voice, drift_update,
+-- gentle_mutate; S.drift_metro, S.mutation_metro, S.drift_writing,
+-- S.grain_pitch_base, S.buf_pos_base (lib/mutation.lua)
+S.lib.mutation = include("lib/mutation")(S)
 
 -- Scene system
 local scenes = {}
@@ -115,7 +102,7 @@ local arc_connected = false
 
 -- Grid devices (support multiple grids)
 local MAX_GRID_PORTS = 4
-local grids = {}
+S.grids = {}
 
 -- MIDI input: notes, velocity and pitchbend per voice (CC is norns' own
 -- PARAMS > MAP). Grouped in tables: the main chunk is near Lua's 200-local limit.
@@ -271,9 +258,9 @@ function init()
     default = 0,
     action = function(x)
       if x == 1 then
-        mutation_metro:start()
+        S.mutation_metro:start()
       else
-        mutation_metro:stop()
+        S.mutation_metro:stop()
       end
     end
   }
@@ -284,7 +271,7 @@ function init()
     name = "mutation rate",
     controlspec = controlspec.new(0.5, 10, "lin", 0.1, 2, "s"),
     action = function(x)
-      mutation_metro.time = x
+      S.mutation_metro.time = x
     end
   }
 
@@ -583,15 +570,15 @@ function init()
   watch_menu_opening()
   
   -- Start the per-voice drift
-  drift_metro = metro.init()
-  drift_metro.time = 0.1
-  drift_metro.event = drift_update
-  drift_metro:start()
+  S.drift_metro = metro.init()
+  S.drift_metro.time = 0.1
+  S.drift_metro.event = drift_update
+  S.drift_metro:start()
 
   -- Initialize mutation system
-  mutation_metro = metro.init()
-  mutation_metro.time = params:get("mutation_rate")
-  mutation_metro.event = gentle_mutate
+  S.mutation_metro = metro.init()
+  S.mutation_metro.time = params:get("mutation_rate")
+  S.mutation_metro.event = gentle_mutate
   -- Don't start automatically - controlled by mutation_enabled param
 
   -- Valid seconds per buffer slot, and failed loads, from the engine
@@ -649,7 +636,7 @@ function redraw_on_param_changes()
     if param.t ~= params.tTEXT and type(action) == "function" then
       param.action = function(...)
         action(...)
-        if not drift_writing then request_redraw() end
+        if not S.drift_writing then request_redraw() end
       end
     end
   end
@@ -722,8 +709,8 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
     action = function(x)
       S.voices[voice_idx].grain.buf_pos = x
-      if not drift_writing then
-        buf_pos_base[voice_idx] = x
+      if not S.drift_writing then
+        S.buf_pos_base[voice_idx] = x
       end
       send_param_to_engine(prefix .. "buf_pos", x)
     end
@@ -796,8 +783,8 @@ function add_voice_params(voice_idx)
     controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
     action = function(x)
       S.voices[voice_idx].grain.pitch = x
-      if not drift_writing then
-        grain_pitch_base[voice_idx] = x
+      if not S.drift_writing then
+        S.grain_pitch_base[voice_idx] = x
       end
       send_param_to_engine(prefix .. "grain_pitch", x)
     end
@@ -1030,160 +1017,6 @@ function get_param_spec(param_name)
     brightness = controlspec.new(0, 1, "lin", 0.01, 0.5)
   }
   return specs[param_name] or controlspec.new(0, 1, "lin", 0.01, 0.5)
-end
-
-function randomize_voice(voice_idx)
-  if S.frozen[voice_idx] then return end
-  
-  local voice = S.voices[voice_idx]
-  local prefix = "v" .. voice_idx .. "_"
-
-  if voice_uses_synth(voice_idx) then
-    -- Randomize synth params
-    for key, _ in pairs(voice.params) do
-      if key ~= "amp" then -- Don't randomize amplitude
-        local spec = get_param_spec(key)
-        -- uniform in the normalized 0-1 range, so exp params (freq, cutoff)
-        -- spread evenly across octaves instead of piling up at the top
-        params:set(prefix .. key, spec:map(math.random()))
-      end
-    end
-  elseif voice_uses_buffer(voice_idx) then
-    -- Buffer source: the synth is not playing, so randomize the buffer
-    -- params instead (rate 0.5-2, even in octaves; gentle scan)
-    params:set(prefix .. "buf_pos", math.random())
-    params:set(prefix .. "buf_rate", 2 ^ (math.random() * 2 - 1))
-    params:set(prefix .. "buf_scan", math.random() - 0.5)
-  end
-  -- (input source: neither synth nor buffer params do anything; only the
-  -- grain params below are randomized)
-  
-  -- Randomize some grain params
-  params:set("v" .. voice_idx .. "_grain_size", math.random() * 0.3 + 0.05)
-  params:set("v" .. voice_idx .. "_grain_pitch", math.random() * 2 + 0.5)
-  
-  request_redraw()
-  grid_redraw()
-end
-
--- One step of the drift's walk: a random step of width step (+/- step / 2)
--- plus a pull back toward base, removing reversion of the offset per step
-function mean_reverting_step(current, base, step, reversion)
-  return current + ((math.random() - 0.5) * step - (current - base) * reversion)
-end
-
--- Set a param as the drift: its action sees drift_writing, so the write is
--- not taken as a new center for the walk. The flag must not outlive an
--- error in the action (every later edit would be taken for the drift's):
--- clear it, then raise the error again, with its traceback
-function set_drifted_param(param_id, value)
-  drift_writing = true
-  local set, set_error = xpcall(params.set, with_traceback, params, param_id, value)
-  drift_writing = false
-  if not set then error(set_error, 0) end
-end
-
-function drift_update()
-  -- Slow grain pitch drift for active, non-frozen voices: a small random
-  -- step plus a pull back toward the last user/scene/mutation-set pitch, so
-  -- the walk stays a subtle detune instead of wandering to the rails
-  for i = 1, NUM_VOICES do
-    if S.voices[i].active and not S.frozen[i] then
-      local pitch = mean_reverting_step(S.voices[i].grain.pitch, grain_pitch_base[i],
-        DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
-      set_drifted_param("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
-
-      -- Buffer sources also drift their position the same way
-      if voice_uses_buffer(i) then
-        local position = mean_reverting_step(S.voices[i].grain.buf_pos, buf_pos_base[i],
-          DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
-        set_drifted_param("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
-        -- MAIN and the BUFFER arc ring show the selected voice's position only
-        if i == S.selected_voice then request_redraw() end
-      end
-    end
-  end
-
-  -- Grain pitch is shown on the parameter fader page; this runs 10x/s, so
-  -- only redraw when a grid is actually showing that page
-  if next(grids) ~= nil and S.grid_page == 2 then
-    grid_redraw()
-  end
-
-  -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
-  forget_keys_held_through_menu()
-end
-
--- The value a mutation step lands on: delta (a fraction of the param's
--- normalized 0-1 range) added to current, clamped to the range
-function mutated_value(spec, current, delta)
-  return spec:map(util.clamp(spec:unmap(current) + delta, 0, 1))
-end
-
-function gentle_mutate()
-  -- Probability-based parameter mutations
-  local probability = params:get("mutation_probability")
-  local amount = params:get("mutation_amount")
-
-  for i = 1, NUM_VOICES do
-    -- Only mutate active, non-frozen voices
-    if S.voices[i].active and not S.frozen[i] then
-      local v = S.voices[i]
-
-      if voice_uses_synth(i) then
-        -- Iterate through synthesis parameters
-        for key, current_val in pairs(v.params) do
-          -- Skip amplitude and pan to preserve stability
-          if key ~= "amp" and key ~= "pan" then
-            -- Check if this parameter should mutate
-            if math.random() < probability then
-              local spec = get_param_spec(key)
-
-              -- Mutation delta as a fraction of the normalized range, so exp
-              -- params move evenly in octaves. Gaussian-like distribution by
-              -- averaging random values
-              local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-              params:set("v" .. i .. "_" .. key, mutated_value(spec, current_val, delta))
-            end
-          end
-        end
-      elseif voice_uses_buffer(i) then
-        -- Buffer sources mutate their buffer params instead of the (silent)
-        -- synthesis params. Input sources mutate only the grain params
-        -- below. The source itself never mutates.
-        for _, key in ipairs(BUFFER_MUTATION_KEYS) do
-          if not DISCRETE_GRAIN_KEYS[key] and math.random() < probability then
-            local param_id = "v" .. i .. "_" .. key
-            local spec = params:lookup_param(param_id).controlspec
-            -- delta across the normalized range, so exp buf_rate moves evenly
-            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-            params:set(param_id, mutated_value(spec, v.grain[key], delta))
-          end
-        end
-      end
-
-      -- Occasionally mutate granular parameters (lower probability: a
-      -- fraction of it, and a delta scale, per key). The discrete ones
-      -- (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
-      for _, mutation in ipairs({
-        {key = "size", param = "grain_size", chance = 0.5, scale = 0.2},
-        {key = "pitch", param = "grain_pitch", chance = 0.3, scale = 1.0},
-        {key = "spread", param = "grain_spread", chance = 0.2, scale = 0.3}
-      }) do
-        if not DISCRETE_GRAIN_KEYS[mutation.key] and math.random() < probability * mutation.chance then
-          local param_id = "v" .. i .. "_" .. mutation.param
-          local spec = params:lookup_param(param_id).controlspec
-          local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * mutation.scale
-          params:set(param_id, util.clamp(v.grain[mutation.key] + delta, spec.minval, spec.maxval))
-        end
-      end
-    end
-  end
-
-  -- Mutated values are shown on the screen, the arc and the 256 grid's
-  -- parameter faders
-  request_redraw()
-  grid_redraw()
 end
 
 -- Scene management functions
@@ -1995,7 +1828,7 @@ function redraw_setup()
   local grid_count = 0
   local grid_sizes = {}
   for port = 1, MAX_GRID_PORTS do
-    local grid_port = grids[port]
+    local grid_port = S.grids[port]
     if grid_port and grid_port.device then
       grid_count = grid_count + 1
       table.insert(grid_sizes, grid_port.cols .. "x" .. grid_port.rows)
@@ -3014,7 +2847,7 @@ end
 -- so also setting them on the device would run grid_key twice per press.
 local function attach_grid(port)
   local grid_port = grid.connect(port)
-  grids[port] = grid_port
+  S.grids[port] = grid_port
   grid_port.key = function(x, y, z)
     grid_key(port, x, y, z)
   end
@@ -3046,9 +2879,9 @@ end
 function grid.remove(device)
   local port = device.port
   if not port then return end
-  if grids[port] then
-    grids[port].key = nil
-    grids[port] = nil
+  if S.grids[port] then
+    S.grids[port].key = nil
+    S.grids[port] = nil
   end
   request_redraw()
   print("grid " .. port .. " disconnected")
@@ -3057,7 +2890,7 @@ end
 function grid_key(port, x, y, z)
   if z == 0 then return end  -- Only respond to key presses
 
-  local grid_port = grids[port]
+  local grid_port = S.grids[port]
   if not grid_port then return end
 
   local layout = grid_layout(grid_port)
@@ -3524,9 +3357,9 @@ function step_brightness(voice_idx, step)
 end
 
 function grid_redraw()
-  if next(grids) == nil then return end  -- no grids: nothing to do
+  if next(S.grids) == nil then return end  -- no grids: nothing to do
 
-  for _, grid_port in pairs(grids) do
+  for _, grid_port in pairs(S.grids) do
     if grid_port.device then
       local layout = grid_layout(grid_port)
 
@@ -3840,11 +3673,11 @@ function cleanup()
   -- Stop metros and clocks
   cancel_startup_clock()
   stop_frame_clock()
-  if drift_metro then drift_metro:stop() end
+  if S.drift_metro then S.drift_metro:stop() end
 
   -- Sync mutation metro state with param
-  if mutation_metro then
-    mutation_metro:stop()
+  if S.mutation_metro then
+    S.mutation_metro:stop()
     -- Ensure param matches actual state
     params:set("mutation_enabled", 0)
   end
@@ -3886,7 +3719,7 @@ function cleanup()
   end
 
   -- Leave connected controllers dark
-  for _, grid_port in pairs(grids) do
+  for _, grid_port in pairs(S.grids) do
     grid_port:all(0)
     grid_port:refresh()
   end
