@@ -139,6 +139,11 @@ return function(S)
     end
   end
 
+  -- Connect the grids at init
+  S.register_start(S.constants.START_ORDER.grids, function()
+    grid_init()
+  end)
+
   -- Leave every connected grid dark on exit
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
     for _, grid_port in pairs(S.grids) do

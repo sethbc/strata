@@ -731,6 +731,13 @@ return function(S)
     return true
   end
 
+  -- init's start step: a start that fails in an earlier step never gets
+  -- here, so S.scenes_loaded stays false and cleanup() does not save (#72)
+  S.register_start(S.constants.START_ORDER.scenes_load, function()
+    -- Load saved scenes from disk
+    load_scenes_from_disk()
+  end)
+
   -- cleanup()'s steps: save the scenes before anything stops, unless the
   -- scenes were never loaded in this session (a failed start) or the save
   -- would overwrite a scenes file that failed to load and could not be

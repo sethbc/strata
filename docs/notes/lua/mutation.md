@@ -17,7 +17,7 @@
 - cleanup steps 70 (drift metro) and 80 (mutation metro).
 
 Elsewhere:
-- `init` (`strata.lua`) creates `S.drift_metro` and `S.mutation_metro`.
+- Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
 - `drift_update` reads `S.grids` and `S.grid_page` (`lib/grid/core.lua`).
 - `DISCRETE_GRAIN_KEYS` and `BUFFER_MUTATION_KEYS` are in `lib/constants.lua`, aliased at the top of the constructor.
 - The mutation params are the "mutations" record of `lib/params_setup.lua`.
@@ -95,7 +95,7 @@ Recommended settings:
 - **Dramatic shift**: probability 0.25, amount 0.4, rate 1 s.
 
 Lifecycle:
-- **Initialization**: `init` creates the metro but does not start it.
+- **Initialization**: its start step creates the metro at init but does not start it.
 - **Control**: the `mutation_enabled` action starts and stops the metro.
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
 

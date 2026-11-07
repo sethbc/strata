@@ -129,6 +129,11 @@ return function(S)
     S.arc_device:refresh()
   end
 
+  -- Connect the arc at init
+  S.register_start(S.constants.START_ORDER.arc, function()
+    arc_init()
+  end)
+
   -- Leave the arc dark on exit, the last cleanup step
   S.register_cleanup(S.constants.CLEANUP_ORDER.arc_dark, function()
     if S.arc_device then

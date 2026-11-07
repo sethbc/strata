@@ -20,7 +20,7 @@
 
 ## Device lifecycle
 
-- `arc_init()`: attaches the first arc vport holding a device (`first_arc_port()`), else `UI_PAGES.ARC_PORT`, and sets up its callbacks through `attach_arc()`.
+- `arc_init()` (start step `START_ORDER.arc`): attaches the first arc vport holding a device (`first_arc_port()`), else `UI_PAGES.ARC_PORT`, and sets up its callbacks through `attach_arc()`.
 - `arc.add(device)`: norns' callback when an arc connects. It attaches the vport for `device.port` (`UI_PAGES.ARC_PORT` if unassigned), only while no arc is connected.
 - `arc.remove(device)`: norns' callback when an arc disconnects.
   - It acts only when the removed device is on the connected vport (`S.arc_device == arc.connect(port)`), so another arc neither replaces nor disconnects it.

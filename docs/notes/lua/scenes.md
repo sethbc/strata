@@ -195,7 +195,7 @@ In the PARAMS menu (strata_scenes section):
   - It preserves the file: it is renamed to `scenes.data.bak`, so the save in `cleanup()` cannot destroy it. If the rename fails, `S.scene_autosave_blocked` makes `cleanup()` skip the auto-save.
   - Missing slots in a valid file are filled with empty scenes.
 - **Auto-save**: `cleanup()` saves the scenes when the script exits (step 30), but only once `load_scenes_from_disk()` has run in this session (`S.scenes_loaded`, set when it returns). A start that failed before init's loads (the engine did not load, an error earlier in `init`) therefore never overwrites the saved file with the empty in-memory state (#72). buffers.data has the same guard (`docs/notes/lua/buffers.md`).
-- **Auto-load**: `init()` loads them on startup.
+- **Auto-load**: its start step (`START_ORDER.scenes_load`) loads them at init, before the buffers.
 - **Manual**: the PARAMS triggers "save scenes to disk" and "load scenes from disk"; SETUP K3 saves.
 - **What is saved**: all 8 slots, their populated state and their data. Scenes persist across reboots, building a library of sonic palettes.
 

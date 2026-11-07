@@ -36,6 +36,11 @@ return function(S)
     S.voice_list.index = S.selected_voice
   end
 
+  -- init's first start step: the list MAIN draws
+  S.register_start(S.constants.START_ORDER.voice_list, function()
+    update_voice_list()
+  end)
+
   function main_param_entry(voice_idx)
     if voice_uses_synth(voice_idx) then
       return MAIN_PARAMS[S.voices[voice_idx].name]
