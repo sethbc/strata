@@ -226,7 +226,9 @@ end
 -- name checks. Everything is read from the SC source, so a limit or control
 -- changed there needs no stub change:
 --   num_voices, num_buffers,  var <numVoices = N; var <numBuffers = N;
---   buffer_seconds,           var <>bufferSeconds = N;
+--   buffer_seconds,           var <>bufferSeconds = N; (its initial value: the
+--                             performance area sets the tier's at alloc)
+--   standard_buffer_seconds,  standardBufferSeconds { ^N } (the standard tier's)
 --   buffer_state_stride       bufferStateStride { ^N }
 --   num_mod_slots             var <numModSlots = N; (the slots the crossmod commands accept)
 --                             (each number is read as `var <name = N;`, with
@@ -377,6 +379,7 @@ function stubs.engine_spec_from_source(source)
     num_voices = engine_number(source, "numVoices"),
     num_buffers = engine_number(source, "numBuffers"),
     buffer_seconds = engine_number(source, "bufferSeconds"),
+    standard_buffer_seconds = engine_number(source, "standardBufferSeconds"),
     buffer_state_stride = engine_number(source, "bufferStateStride"),
     num_mod_slots = engine_number(source, "numModSlots"),
     synthdef_controls = {},
@@ -498,6 +501,7 @@ function stubs.engine_spec_problems(spec)
   need(spec.num_voices, "var <numVoices = N;")
   need(spec.num_buffers, "var <numBuffers = N;")
   need(spec.buffer_seconds, "var <>bufferSeconds = N;")
+  need(spec.standard_buffer_seconds, "standardBufferSeconds { ^N }")
   need(spec.buffer_state_stride, "bufferStateStride { ^N }")
   need(spec.num_mod_slots, "var <numModSlots = N;")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
@@ -526,8 +530,9 @@ local DOCUMENTED_LIMITS = {
 -- Each entry checks indices and enumerated values; every command's
 -- continuous arguments are then checked against spec.argument_limits (the
 -- limits the engine enforces) and DOCUMENTED_LIMITS (lookup_param(id) finds
--- the Lua param).
-local function engine_argument_checks(spec, lookup_param)
+-- the Lua param). buffer_seconds() is the slot length the engine runs (the
+-- test's performance_active.data: stubs.active_buffer_seconds).
+local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   local last_voice = spec.num_voices - 1
   local function range(what, value, low, high)
     if value < low or value > high then
@@ -581,7 +586,9 @@ local function engine_argument_checks(spec, lookup_param)
       return voice(args) or named_param(args, spec.grain_params, "the grain SynthDefs")
     end,
     setGrainSource = function(args) return voice(args) or range("source", args[2], 0, spec.input_source) end,
-    loadBuffer = slot, recordBuffer = slot, clearBuffer = slot, stopRecord = slot, saveBuffer = slot,
+    loadBuffer = slot, clearBuffer = slot, stopRecord = slot, saveBuffer = slot,
+    -- a take never asks for more than a slot holds on the running tier
+    recordBuffer = function(args) return slot(args) or float_range("seconds", args[2], 0, buffer_seconds()) end,
     setModSource = function(args) return voice_and_mod_slot(args) or range("mod source", args[3], -1, last_voice) end,
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
     setFilter = function(args) return enumerated("filterType", args[3]) end,
@@ -2154,6 +2161,26 @@ local function make_include(module_sources)
   end
 end
 
+-- The slot length the engine runs, as the engine stub sees it: the
+-- engine writes performance_active.data (in data_dir's strata/) at alloc,
+-- before the script starts, and allocates what it wrote, so the test's file
+-- (h.write_performance_active) is the engine's tier. The file is validated
+-- by the script's own parser (lib/performance.lua's parse_active_text, run
+-- on lib/constants.lua), so a file Lua rejects runs standard here too; no
+-- file, or an invalid one, gives the standard tier's length
+local performance_parser
+function stubs.active_buffer_seconds(spec, data_dir)
+  if not performance_parser then
+    local constants = dofile(script_folder .. "/lib/constants.lua")
+    performance_parser = dofile(script_folder .. "/lib/performance.lua")({ constants = constants })
+  end
+  local file = io.open((data_dir or "") .. "strata/performance_active.data", "r")
+  local text = file and file:read("*a")
+  if file then file:close() end
+  local active = performance_parser.parse_active_text(text)
+  return active and active.buffer_seconds or spec.standard_buffer_seconds
+end
+
 ---------------------------------------------------------------------------
 -- install / reset
 ---------------------------------------------------------------------------
@@ -2170,7 +2197,8 @@ function stubs.install(options)
   }
 
   local argument_checks = engine_argument_checks(assert(options.engine_spec, "stubs.install needs engine_spec"),
-    function(param_id) return context.params.lookup[param_id] end)
+    function(param_id) return context.params.lookup[param_id] end,
+    function() return stubs.active_buffer_seconds(options.engine_spec, options.data_dir) end)
   for command_name in pairs(context.signatures) do
     assert(argument_checks[command_name], "the engine stub has no argument check for engine." .. command_name)
   end
@@ -2265,7 +2293,9 @@ function stubs.install(options)
   _G.fileselect = nil  -- lib/fileselect.lua is a module (package.preload below)
   _G.poll = context.polls
   _G._menu = context.menu
-  _G.norns = { state = {}, enc = context.encoders.api, encoders = { callback = nil },
+  -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
+  -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it
+  _G.norns = { state = {}, platform = 0, enc = context.encoders.api, encoders = { callback = nil },
     -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
     -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
     menu = { status = function() return context.menu.mode end,

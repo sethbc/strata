@@ -216,7 +216,6 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   load_strata()
   assert_equal(engine_spec.num_voices, local_value("NUM_VOICES"), "numVoices = NUM_VOICES")
   assert_equal(engine_spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers = NUM_BUFFERS")
-  assert_equal(engine_spec.buffer_seconds, local_value("BUFFER_SECONDS"), "bufferSeconds = BUFFER_SECONDS")
   -- the crossmod commands accept slots 1..numModSlots, the modBus1..N of every voice SynthDef (#47)
   assert_equal(engine_spec.num_mod_slots, local_value("NUM_MOD_SLOTS"), "numModSlots = NUM_MOD_SLOTS")
   assert_equal(engine_spec.num_mod_slots, engine_spec.mod_slots, "numModSlots = the modBus1..N controls")
@@ -231,6 +230,17 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
     end
   end
   assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
+end)
+
+-- The slot length is a tier value (lib/performance.lua): only the standard
+-- tier's is a constant on both sides
+test("the engine's standard buffer length equals STANDARD_BUFFER_SECONDS", function()
+  load_strata()
+  assert_equal(engine_spec.standard_buffer_seconds, local_value("STANDARD_BUFFER_SECONDS"),
+    "standardBufferSeconds = STANDARD_BUFFER_SECONDS")
+  assert_equal(local_value("STANDARD_PERFORMANCE").buffer_seconds, engine_spec.standard_buffer_seconds,
+    "STANDARD_PERFORMANCE's length")
+  assert_equal(local_value("S").constants.BUFFER_SECONDS, nil, "BUFFER_SECONDS is no longer a constant")
 end)
 
 test("the engine stub's voice and slot limits follow numVoices and numBuffers in the engine source (#51)", function()

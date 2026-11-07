@@ -702,6 +702,8 @@ test("init runs every registered start step in today's order", function()
     owner[name] = function(...) observe(type(effect) == "function" and effect(...) or effect); return original(...) end
   end
   local S
+  -- the active file the engine writes at alloc (no file prints a line)
+  h.write_performance_active({ tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16 })
   local options = { data_subdir = first.data_dir:match("([^/]+)/$") }
   function options.before_load(context)
     context.grid.plug(1, 16, 16)

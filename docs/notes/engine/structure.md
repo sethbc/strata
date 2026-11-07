@@ -1,6 +1,6 @@
 ## Must not break
 
-- CLAUDE.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `bufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants.
+- CLAUDE.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `standardBufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants (`bufferSeconds` is a tier value: [performance.md](performance.md)).
 - Everything runs inside `context.xg`, in this order: `voiceGroup` (the input synth, voice synths, record synths), `processGroup` (grain synths, then mod synths), then filter, delay, reverb and master. Master runs last in `xg`, never after `og`.
 - `free` frees every node, bus and buffer the engine made, and nothing that waits for a fade runs afterward.
 - Each engine check area (`test/engine_check/<area>.scd`) has a notes file of the same name here and a place in the runner's `areaOrder` (`test/engine_check.scd`); the docs test checks both.
