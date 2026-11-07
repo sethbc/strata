@@ -9,7 +9,7 @@ return function(S)
   -- Screen pages. E1 selects the page; E2, E3, K2 and K3 go to the page's
   -- handlers in its S.registry.pages record (enc, key, key_release), and
   -- redraw() draws the shared header, then the record's draw function,
-  -- which ends with its hint row.
+  -- then the hint row with the text of the record's hints(alt_held).
 
   local HINT_ROW_Y = 62
 

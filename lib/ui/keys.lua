@@ -1,9 +1,9 @@
 -- lib/ui/keys.lua
 -- Page input the screen pages share: the page each held key went down on
--- (S.key_press_page, read by key() in strata.lua and the BUFFER page),
--- forgetting held keys (forget_held_keys, global), and ignore_page_input,
--- select_voice_by and set_ui_page, fields of this module's table
--- (S.lib.ui_keys).
+-- (S.key_press_page, read by key() in strata.lua and the BUFFER page), ALT
+-- (S.alt_held), forgetting held keys (forget_held_keys, global), and
+-- ignore_page_input, select_voice_by and set_ui_page (which runs the page
+-- records' leave and enter), fields of this module's table (S.lib.ui_keys).
 
 return function(S)
   local M = {}
@@ -13,12 +13,18 @@ return function(S)
   -- key() sends a release only to the page the key went down on.
   S.key_press_page = {}
 
-  -- Forget every held key (and the K2 save): for the norns menu and the file
-  -- selector, which take the keys while open, so releases never reach key()
+  -- ALT: true while K1 is held (key() in strata.lua sets it). Pages read it
+  -- through their hints(alt_held)
+  S.alt_held = false
+
+  -- Forget every held key, ALT and the K2 save: for the norns menu and the
+  -- file selector, which take the keys while open, so releases never reach
+  -- key()
   function forget_held_keys()
     for n in pairs(S.key_press_page) do
       S.key_press_page[n] = nil
     end
+    S.alt_held = false
     S.buffer_saved_during_k2 = false
   end
 
@@ -35,9 +41,16 @@ return function(S)
   end
   M.select_voice_by = select_voice_by
 
-  -- Show another page (draw_frame redraws the LFO page on every frame)
+  -- Show another page (draw_frame redraws the LFO page on every frame). On a
+  -- change only, the old page's record gets leave() and the new one's
+  -- enter(), when they have them
   local function set_ui_page(page)
+    if page == S.ui_page then return end
+    local old_record = S.registry.pages[S.ui_page]
+    if old_record and old_record.leave then old_record.leave() end
     S.ui_page = page
+    local new_record = S.registry.pages[page]
+    if new_record and new_record.enter then new_record.enter() end
   end
   M.set_ui_page = set_ui_page
 

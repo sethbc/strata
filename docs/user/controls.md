@@ -1,10 +1,10 @@
 # Screen Controls
 
-The five screen pages and what the encoders and keys do on each. Back to the [README](../../README.md).
+The screen pages and what the encoders and keys do on each. Back to the [README](../../README.md).
 
 ## Screen Pages
 
-The screen has five pages: **MAIN**, **FX**, **LFO**, **BUFFER** and **SETUP**.
+The screen has eight pages, in this order: **MAIN**, **VOICE**, **SEQ**, **FX**, **LFO**, **BUFFER**, **SCENES** and **SETUP**. VOICE, SEQ and SCENES are placeholders in this build: they show only their name and the hint `E1:page`, and ignore the encoders, keys and arc.
 
 - **E1** - Select the page (turn left toward MAIN, right toward SETUP; one page per short turn, without acceleration)
 

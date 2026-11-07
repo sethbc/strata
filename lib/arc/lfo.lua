@@ -64,15 +64,10 @@ return function(S)
 
   -- LFO's record (lib/pages/lfo.lua) gains its rings: arc_delta and
   -- arc_redraw in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
-  local found = false
-  for _, page in ipairs(S.registry.pages) do
-    if page.name == "LFO" then
-      page.arc_delta = arc_lfo_delta
-      page.arc_redraw = arc_lfo_redraw
-      found = true
-    end
-  end
-  assert(found, "lib/arc/lfo.lua: no LFO page record in S.registry.pages")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.LFO]
+  assert(record, "lib/arc/lfo.lua: no LFO page record in S.registry.pages")
+  record.arc_delta = arc_lfo_delta
+  record.arc_redraw = arc_lfo_redraw
 
   return M
 end

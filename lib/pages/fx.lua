@@ -46,8 +46,11 @@ return function(S)
       screen.move(127, y)
       screen.text_right(value)
     end
+  end
 
-    draw_hints("K3:filter " .. (params:get("filter_mix") > 0 and "bypass" or "on"))
+  -- The hint row (redraw() draws it after the page)
+  local function fx_hints(alt_held)
+    return "K3:filter " .. (params:get("filter_mix") > 0 and "bypass" or "on")
   end
 
   local function fx_enc(n, d)
@@ -66,13 +69,10 @@ return function(S)
   end
 
   -- The page's record, at FX's place in UI_PAGES: enc, key and redraw in
-  -- strata.lua dispatch through S.registry.pages[S.ui_page]
-  for index, name in ipairs(UI_PAGES) do
-    if name == "FX" then
-      S.registry.pages[index] = {name = name, draw = redraw_fx, enc = fx_enc, key = fx_key,
-        key_release = S.lib.ui_keys.ignore_page_input}
-    end
-  end
+  -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
+  -- are lib/arc/fx.lua's
+  S.registry.pages[UI_PAGES.index.FX] = {name = "FX", draw = redraw_fx, hints = fx_hints,
+    enc = fx_enc, key = fx_key}
 
   return M
 end

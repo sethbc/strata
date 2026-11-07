@@ -1,7 +1,8 @@
 -- strata.lua
 -- ambient granular layers
 --
--- E1: page (MAIN FX LFO BUFFER SETUP)
+-- E1: page (MAIN VOICE SEQ FX LFO
+--     BUFFER SCENES SETUP)
 -- MAIN: E2 select voice, E3 main param,
 --       K2 randomize, K3 start/freeze
 -- FX: E2 select row, E3 adjust,
@@ -46,25 +47,37 @@ S.lib.ui_text = include("lib/ui/text")(S)
 S.lib.ui_keys = include("lib/ui/keys")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
--- The screen pages: each registers its record {name, draw, enc, key,
--- key_release} at its UI_PAGES index in S.registry.pages, which enc, key
--- and redraw dispatch through
+-- The screen pages, in UI_PAGES order: each creates its record at
+-- S.registry.pages[UI_PAGES.index.<PAGE>] (every field but the four arc
+-- fields; docs/notes/lua/ui-and-pages.md lists them), which enc, key and
+-- redraw dispatch through
 S.lib.pages_main = include("lib/pages/main")(S)
+S.lib.pages_voice = include("lib/pages/voice")(S)
+S.lib.pages_seq = include("lib/pages/seq")(S)
 S.lib.pages_fx = include("lib/pages/fx")(S)
 S.lib.pages_lfo = include("lib/pages/lfo")(S)
 S.lib.pages_buffer = include("lib/pages/buffer")(S)
+S.lib.pages_scenes = include("lib/pages/scenes")(S)
 S.lib.pages_setup = include("lib/pages/setup")(S)
 for index, name in ipairs(UI_PAGES) do
-  assert(S.registry.pages[index] and S.registry.pages[index].name == name, "no page record for " .. name)
+  local record = S.registry.pages[index]
+  assert(record and record.name == name, "no page record for " .. name)
+  for _, field in ipairs({"draw", "hints", "enc", "key"}) do
+    assert(type(record[field]) == "function", name .. "'s page record has no " .. field)
+  end
 end
 
--- The arc: after the pages, since each page's rings set arc_delta and
--- arc_redraw on its page record (SETUP has none)
+-- The arc: after every page file, since each page's rings set only the arc
+-- fields (arc_delta, arc_redraw, arc_alt_delta, arc_alt_redraw) on its
+-- page record (SETUP has none)
 S.lib.arc_core = include("lib/arc/core")(S)
 S.lib.arc_main = include("lib/arc/main")(S)
+S.lib.arc_voice = include("lib/arc/voice")(S)
+S.lib.arc_seq = include("lib/arc/seq")(S)
 S.lib.arc_fx = include("lib/arc/fx")(S)
 S.lib.arc_lfo = include("lib/arc/lfo")(S)
 S.lib.arc_buffer = include("lib/arc/buffer")(S)
+S.lib.arc_scenes = include("lib/arc/scenes")(S)
 
 -- The grid: the core first, then the faders and one file per layout, each
 -- registering its {key, redraw} record in S.registry.grid_layouts
@@ -177,24 +190,30 @@ function enc(n, d)
   request_redraw()
 end
 
--- Keys. Presses go to the page record's key handler. A release goes to its
--- key_release only if the key went down on the page still showing, so a
--- key held across a page change does nothing when it comes up.
+-- Keys. K1 (which norns delivers only once held) is ALT: S.alt_held while
+-- it is down. K2 and K3 presses go to the page record's key handler. A
+-- release goes to its key_release (if it has one) only if the key went down
+-- on the page still showing, so a key held across a page change does
+-- nothing when it comes up.
 function key(n, z)
-  if z == 1 then
+  if n == 1 then
+    S.alt_held = z == 1
+  elseif z == 1 then
     S.key_press_page[n] = S.ui_page
     S.registry.pages[S.ui_page].key(n)
   else
     local press_page = S.key_press_page[n]
     S.key_press_page[n] = nil
-    if press_page == S.ui_page then
-      S.registry.pages[S.ui_page].key_release(n)
+    local record = S.registry.pages[S.ui_page]
+    if press_page == S.ui_page and record.key_release then
+      record.key_release(n)
     end
   end
   request_redraw()
 end
 
--- Redraw
+-- Redraw: the header, the page record's body (draw), then the hint row
+-- from its hints(alt_held)
 function redraw()
   -- the open file selector owns the screen: norns' own redraw() calls (as
   -- the norns menu closes) and Strata's draw the file list, never the page
@@ -202,9 +221,11 @@ function redraw()
     fileselect.redraw()
     return
   end
+  local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
-  S.registry.pages[S.ui_page].draw()
+  record.draw()
+  draw_hints(record.hints(S.alt_held))
   screen.update()
 end
 

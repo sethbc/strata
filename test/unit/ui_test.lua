@@ -17,7 +17,7 @@ test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
   local density = params:get("master_density")
   enc(1, 1); assert_equal(local_value("ui_page"), 2)
   assert_equal(params:get("master_density"), density, "E1 no longer changes density")
-  enc(1, 10); assert_equal(local_value("ui_page"), 5)
+  enc(1, 10); assert_equal(local_value("ui_page"), #PAGE_TITLES, "E1 stops at the last page")
   enc(1, -10); assert_equal(local_value("ui_page"), 1)
   enc(2, 1); assert_equal(local_value("selected_voice"), 2)
   local before = params:get(main_param_id(2)); enc(3, 1)
@@ -68,7 +68,7 @@ test("every encoder, key and arc control is safe on every page; arc button only 
     end
   end
   -- SETUP: arc rings do nothing
-  show_page(5)
+  show_page("SETUP")
   local density = params:get("master_density")
   context.arc.turn(1, 1, 40)
   assert_equal(params:get("master_density"), density, "arc ring 1 does not change density on SETUP")
@@ -144,7 +144,7 @@ test("a drifting buffer position redraws only for the selected voice (#49)", fun
     assert_equal(arc_hardware.refresh_count, arc_refreshes, PAGE_TITLES[page] .. ": nor the arc")
   end
   -- selected, its drift shows on MAIN and the BUFFER page's arc ring
-  show_page(1); enc(2, 1)
+  show_page("MAIN"); enc(2, 1)
   assert_equal(local_value("selected_voice"), 2)
   next_frame(context)
   local counter = count_screen_draws()
@@ -236,7 +236,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   local grid_device = context.grid.plug(1, 16, 16)
   context.midi.plug(1, "keys")
   local voices = local_value("voices")
-  show_page(1)
+  show_page("MAIN")
 
   assert_drawn_on_next_frame(context, arc_hardware, "the startup clock starting voice 2", function()
     context.clock.advance_until(STARTUP.clock)
@@ -284,19 +284,19 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_drawn_on_next_frame(context, arc_hardware, "arc turn", function() context.arc.turn(1, 2, 8) end)
   assert_drawn_on_next_frame(context, arc_hardware, "E3", function() enc(3, 1) end)
   assert_drawn_on_next_frame(context, arc_hardware, "E1 page change", function() enc(1, 1) end)
-  assert_true(screen_shows(context, "FX"), "E1 moved to the FX page")
+  assert_true(screen_shows(context, PAGE_TITLES[2]), "E1 moved to the next page")
 
-  show_page(2)
+  show_page("FX")
   assert_drawn_on_next_frame(context, arc_hardware, "params:set of an FX param", function()
     params:set("filter_freq", 1234)
   end)
   assert_true(screen_shows(context, "1234 Hz"), "FX shows the new filter freq")
 
-  show_page(3)
+  show_page("LFO")
   assert_drawn_on_next_frame(context, arc_hardware, "LFO page K3", function() key(3, 1); key(3, 0) end)
   assert_equal(params:string("lfo_1"), "on", "K3 started LFO 1")
 
-  show_page(4)
+  show_page("BUFFER")
   assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
     context.polls.fire("bufferState", 305)
   end)
@@ -315,7 +315,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
 
   -- hot-plugged devices: SETUP shows them
-  show_page(5)
+  show_page("SETUP")
   context.midi.unplug(1)
   assert_drawn_on_next_frame(context, arc_hardware, "midi.add", function() context.midi.plug(1, "pads") end)
   assert_true(screen_shows(context, "midi 1: pads"), "SETUP shows the new MIDI device")
@@ -337,7 +337,7 @@ end)
 test("many arc turns and encoder steps within one frame draw the screen and the arc once (#11)", function()
   local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
-  show_page(1)
+  show_page("MAIN")
   next_frame(context)
   local counter = count_screen_draws()
   local arc_refreshes = arc_hardware.refresh_count
@@ -357,7 +357,7 @@ test("many arc turns and encoder steps within one frame draw the screen and the 
 end)
 
 test("a K2 released inside the norns menu is forgotten: K3 records again (fix round 1)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   local drift_metro = local_value("drift_metro")
   context.clear_engine_calls(); context.fileselect.last = nil
@@ -386,7 +386,7 @@ end)
 test("opening the norns menu forgets held keys at once; cleanup restores _menu.set_mode", function()
   local stub_set_mode
   local context = load_strata({ before_init = function() stub_set_mode = _menu.set_mode end })
-  finish_startup(context); show_page(4)
+  finish_startup(context); show_page("BUFFER")
   assert_true(_menu.set_mode ~= stub_set_mode, "init watches _menu.set_mode")
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)
@@ -408,7 +408,7 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the selector")
   -- closing the menu forgets nothing (only an opening does)
   key(2, 1); _menu.set_mode(false)
-  assert_equal(local_value("key_press_page")[2], 4, "set_mode(false) keeps a held key")
+  assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "set_mode(false) keeps a held key")
   key(2, 0)
   -- cleanup gives norns its own set_mode back
   cleanup()
@@ -421,10 +421,10 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   _menu.set_mode = mod_set_mode
   cleanup()
   assert_equal(_menu.set_mode, mod_set_mode, "a later wrapper is left in place")
-  show_page(4); key(2, 1)
+  show_page("BUFFER"); key(2, 1)
   _menu.set_mode(true)
   assert_equal(norns.menu.status(), true, "the inert wrapper still passes the call on")
-  assert_equal(local_value("key_press_page")[2], 4, "and no longer touches the script's keys")
+  assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "and no longer touches the script's keys")
   _menu.set_mode(false)
 end)
 
@@ -432,14 +432,14 @@ test("key releases reach only the BUFFER page; other pages act once per press", 
   local context = load_strata(); finish_startup(context)
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(2)
-  show_page(1)
+  show_page("MAIN")
   key(3, 1); assert_true(local_value("frozen")[2], "K3 press freezes on MAIN")
   key(3, 0); assert_true(local_value("frozen")[2], "K3 release does not unfreeze")
-  show_page(2)
+  show_page("FX")
   local mix = params:get("filter_mix")
   key(3, 1); key(3, 0)
   assert_true(params:get("filter_mix") ~= mix, "FX K3 press bypasses once, the release does not undo it")
-  show_page(5); context.clear_engine_calls()
+  show_page("SETUP"); context.clear_engine_calls()
   local saved = 0
   local real_save = save_scenes_to_disk
   save_scenes_to_disk = function() saved = saved + 1 end

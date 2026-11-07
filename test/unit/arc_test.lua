@@ -13,8 +13,8 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
-  -- rings drawn (with at least one segment) on each page: SETUP none
-  local expected_rings = { 4, 4, 4, 4, 0 }
+  -- rings drawn (with at least one segment) on each page: SETUP and the stub pages none
+  local expected_rings = { MAIN = 4, VOICE = 0, SEQ = 0, FX = 4, LFO = 4, BUFFER = 4, SCENES = 0, SETUP = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -22,7 +22,7 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
       assert_true(ring >= 1 and ring <= 4, "ring " .. tostring(ring) .. " exists (" .. PAGE_TITLES[page] .. ")")
       drawn = drawn + 1
     end
-    assert_equal(drawn, expected_rings[page], PAGE_TITLES[page] .. " rings drawn")
+    assert_equal(drawn, expected_rings[PAGE_TITLES[page]], PAGE_TITLES[page] .. " rings drawn")
   end
 end)
 
@@ -58,14 +58,14 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
     end
   end
   local voice = local_value("selected_voice")
-  check(1, { "master_density", main_param_id(voice),
+  check("MAIN", { "master_density", main_param_id(voice),
              "v" .. voice .. "_grain_size", "v" .. voice .. "_grain_density" }, "MAIN")
-  check(2, { "filter_freq", "filter_res", "delay_time", "delay_mix" }, "FX")
+  check("FX", { "filter_freq", "filter_res", "delay_time", "delay_mix" }, "FX")
   local lfo = {}
   for n = 1, local_value("NUM_LFOS") do lfo[n] = "lfo_depth_" .. n end
   local selected_lfo = local_value("selected_lfo")
   lfo[4] = "lfo_free_" .. selected_lfo
-  check(3, lfo, "LFO")
+  check("LFO", lfo, "LFO")
   -- in clocked mode ring 4 shows the rate: an option param with an even
   -- number of rates has no middle index, so only its ends are checked
   params:set("lfo_mode_" .. selected_lfo, 1)
@@ -75,13 +75,13 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
   assert_equal(lit(4), 64, "LFO ring 4 (" .. clocked_id .. ") at maximum")
   params:set(clocked_id, 1); arc_redraw()
   assert_equal(lit(4), 0, "LFO ring 4 (" .. clocked_id .. ") at minimum")
-  check(4, { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
+  check("BUFFER", { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
 end)
 
 test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
-  show_page(1)
+  show_page("MAIN")
   local voice = local_value("selected_voice")
   local function lit(ring)
     local count = 0
@@ -113,7 +113,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   end
   local function setup_text(context)
     local page = local_value("ui_page")
-    show_page(5); redraw()
+    show_page("SETUP"); redraw()
     local result = screen_has(context, "arc: connected") and "connected" or (screen_has(context, "arc: none") and "none" or "?")
     show_page(page)
     return result
@@ -204,31 +204,31 @@ test("every continuous arc ring sweeps its param's range in 512 ticks, following
   end
   assert_equal(local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 512, "half of the arc's 1024 ticks per turn")
   -- MAIN: density, every voice's main param, grain size and density
-  sweep(1, 1, "master_density", "MAIN ring 1")
+  sweep("MAIN", 1, "master_density", "MAIN ring 1")
   for voice_idx = 1, 7 do
     set_selected(voice_idx)
-    sweep(1, 2, main_param_id(voice_idx), "MAIN ring 2, voice " .. voice_idx)
-    sweep(1, 3, "v" .. voice_idx .. "_grain_size", "MAIN ring 3, voice " .. voice_idx)
-    sweep(1, 4, "v" .. voice_idx .. "_grain_density", "MAIN ring 4, voice " .. voice_idx)
+    sweep("MAIN", 2, main_param_id(voice_idx), "MAIN ring 2, voice " .. voice_idx)
+    sweep("MAIN", 3, "v" .. voice_idx .. "_grain_size", "MAIN ring 3, voice " .. voice_idx)
+    sweep("MAIN", 4, "v" .. voice_idx .. "_grain_density", "MAIN ring 4, voice " .. voice_idx)
   end
   set_selected(1)
-  params:set("v1_source", 3); sweep(1, 2, "v1_buf_pos", "MAIN ring 2, buffer source")
-  params:set("v1_source", 10); sweep(1, 2, "v1_grain_size", "MAIN ring 2, input source")
+  params:set("v1_source", 3); sweep("MAIN", 2, "v1_buf_pos", "MAIN ring 2, buffer source")
+  params:set("v1_source", 10); sweep("MAIN", 2, "v1_grain_size", "MAIN ring 2, input source")
   params:set("v1_source", 1)
   for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
-    sweep(2, ring, param_id, "FX ring " .. ring)
+    sweep("FX", ring, param_id, "FX ring " .. ring)
   end
   for ring, param_id in ipairs({ "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }) do
-    sweep(4, ring, param_id, "BUFFER ring " .. ring)
+    sweep("BUFFER", ring, param_id, "BUFFER ring " .. ring)
   end
   -- LFO ring 4 in free mode (the selected LFO's period); its depth rings and
   -- clocked rate keep their whole steps (the arc LFO page test)
-  sweep(3, 4, "lfo_free_1", "LFO ring 4, free period")
+  sweep("LFO", 4, "lfo_free_1", "LFO ring 4, free period")
 end)
 
 test("the arc button finds MAIN by its page index, not its title", function()
   local context = load_strata(); finish_startup(context)
-  context.arc.plug(1); show_page(1)
+  context.arc.plug(1); show_page("MAIN")
   local pages = local_value("UI_PAGES")
   assert_equal(pages.MAIN_PAGE, 1, "MAIN_PAGE is MAIN's index")
   assert_equal(pages[pages.MAIN_PAGE], "MAIN")
@@ -264,7 +264,7 @@ end)
 test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", function()
   local context = load_strata()
   local device = context.arc.plug(1)
-  show_page(2)
+  show_page("FX")
   local density = params:get("master_density")
   for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
     local before = params:get(param_id)
@@ -279,7 +279,7 @@ test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", 
 end)
 
 test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local device = context.arc.plug(1)
   params:set("v1_source", 2)
   params:set("v1_buf_pos", 0.5); params:set("v1_buf_rate", 1)
@@ -313,7 +313,7 @@ end)
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
-  show_page(3)
+  show_page("LFO")
   context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
   context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
   context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
@@ -334,7 +334,7 @@ end)
 
 test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode changes", function()
   local context = load_strata(); finish_startup(context)
-  context.arc.plug(1); show_page(3)
+  context.arc.plug(1); show_page("LFO")
   for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
   local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
   context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_1"), rate_1, "15 ticks carried for LFO 1")

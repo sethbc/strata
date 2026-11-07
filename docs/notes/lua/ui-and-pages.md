@@ -2,7 +2,8 @@
 
 - Never call `redraw()` or `arc_redraw()` from script code. Call `request_redraw()`, and the frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15). Grid redraws stay direct (`grid_redraw()`).
 - Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`. While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page.
-- Each page file registers one record `{name, draw, enc, key, key_release}` at its `UI_PAGES` index in `S.registry.pages`. `strata.lua` asserts every `UI_PAGES` name has its record.
+- Each page file creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]` and sets every field but the four arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`), which only its `lib/arc/<page>.lua` sets. `strata.lua` includes every page file before every arc file and asserts every `UI_PAGES` name has its record with `draw`, `hints`, `enc` and `key`. A test checks who sets which field.
+- A page's `draw()` draws its body only; `redraw()` draws the hint row from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
 - Every page draws the header at y=8 and the hint row at y=62. No two strings on a row overlap, nothing leaves 128×64, and no MAIN string crosses the divider (end by x=60 or start at x=65). The layout tests check it.
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
@@ -15,9 +16,10 @@
 - `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_value_fraction`, `param_fraction`.
 - `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.
-- `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `forget_held_keys` (global); `set_ui_page`, `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
+- `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
-- `lib/pages/main.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/setup.lua` (`S.lib.pages_main`, `S.lib.pages_fx`, ...): one screen page each and its `S.registry.pages` record.
+- `lib/pages/main.lua`, `lib/pages/voice.lua`, `lib/pages/seq.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/scenes.lua`, `lib/pages/setup.lua` (`S.lib.pages_main`, `S.lib.pages_voice`, ...): one screen page each and its `S.registry.pages` record.
+  - VOICE, SEQ, SCENES: stubs for now (draw nothing, hint `E1:page`, ignore input).
   - MAIN: `S.voice_list`, `update_voice_list`, `main_param_id`, `main_param_entry`, `main_param_label`.
   - FX: `S.FX_PAGE`, `S.fx_row`.
   - LFO: `LFO_PAGE` (local).
@@ -28,34 +30,34 @@ The arc's rings for each page are in `docs/notes/lua/arc.md`.
 
 ## Pages and dispatch
 
-The screen has `NUM_UI_PAGES` (5) pages, named in `UI_PAGES = {"MAIN", "FX", "LFO", "BUFFER", "SETUP"}`. `S.ui_page` is the index of the shown page.
+The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}`. `UI_PAGES.index[name]` is a page's index (`UI_PAGES.index.FX == 4`); `UI_PAGES.MAIN_PAGE` stays 1. `S.ui_page` is the index of the shown page.
 
 Encoders and keys (`strata.lua`):
-- `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`). E1 does nothing else.
+- `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()` and the new one's `enter()`, if they have them.
 - `init` turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
-- `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` calls `S.registry.pages[S.ui_page].key(n)`.
+- `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`.
+- `key(1, z)` only sets `S.alt_held` (K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
 - Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page.
 
-Page files:
-- Each page lives in its own file and registers one record `{name, draw, enc, key, key_release}` at its `UI_PAGES` index in `S.registry.pages`. It looks its index up by name, so the include order does not matter.
-- `strata.lua` asserts every `UI_PAGES` name has its record.
+Page records. Each page lives in its own file and creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]`:
+- Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
+- Optional: `alt_enc(n, d) -> handled`, `alt_key(n)`, `key_release(n)`, `alt_key_release(n)`, `enter()`, `leave()`, `arc_button()`, `header_status() -> string|nil`, `layout_states` (an array of `{name, setup = function(context)}` the layout tests also draw). The dispatch for the ALT fields, `arc_button` and `header_status` comes with the tasks that use them; today `key_release`, `enter` and `leave` are dispatched.
+- Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)`.
+- Ownership: the page file sets every field but the arc fields; the arc file sets only those, on `S.registry.pages[UI_PAGES.index.<PAGE>]`. So a page and its rings never edit the same file. `strata.lua` includes every page file before every arc file.
 - `ignore_page_input` fills the handlers a page does not use.
-- To add a page:
-  - write its file with its draw/enc/key functions and record;
-  - include it from `strata.lua`;
-  - if it has rings, add an arc file like `lib/arc/fx.lua` that sets its record's `arc_delta`/`arc_redraw` (`docs/notes/lua/arc.md`).
+- To add a page: add its name to `UI_PAGES` (`NUM_UI_PAGES` follows), write its file and record, include it from `strata.lua` with the other pages, and, if it has rings, an arc file like `lib/arc/fx.lua` included after the pages (`docs/notes/lua/arc.md`). VOICE, SEQ and SCENES already have their page and arc files (stubs), so filling them in adds no include.
 
 `redraw()`:
-- `screen.clear(); draw_header(); S.registry.pages[S.ui_page].draw(); screen.update()`.
+- `screen.clear(); draw_header(); record.draw(); draw_hints(record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list.
-- Each page's draw function ends with `draw_hints(text)` (level 4, x=0, y=62).
+- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`. BUFFER's `hints` returns its flash text (the K2+K3 save result) while it shows.
 
 ## Key releases and the norns menu
 
 Releases:
 - `key(n, 1)` records `S.key_press_page[n] = S.ui_page`.
 - `key(n, 0)` clears it and calls the page record's `key_release(n)` only if the key went down on the page still shown, so a key held across a page change does nothing when released.
-- Every page but BUFFER has `ignore_page_input` there, so presses keep their meaning and releases do nothing.
+- Only BUFFER has a `key_release`; on every other page releases do nothing.
 - "K2 is held on this page" is `S.key_press_page[2] == S.ui_page`.
 
 Keys held into the menu:

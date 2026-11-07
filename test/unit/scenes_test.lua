@@ -884,7 +884,7 @@ end)
 test("a smooth scene transition reaches the screen and arc on every step and at its end (#11)", function()
   local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
-  show_page(1)
+  show_page("MAIN")
   -- the scene: voice 1 frozen at 100 Hz; now it plays 1000 Hz, unfrozen
   toggle_freeze(1); capture_scene(1); toggle_freeze(1)
   params:set("v1_freq", 1000)

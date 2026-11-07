@@ -74,7 +74,7 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
     for voice_idx = 1, 7 do
       set_selected(voice_idx)
       update_voice_list()
-      show_page(1)
+      show_page("MAIN")
       local where = string.format("MAIN, voice %d, active %s, frozen %s", voice_idx,
         tostring(state.active), tostring(state.frozen))
       assert_screen_layout(context, where)
@@ -122,10 +122,10 @@ end)
 
 test("every page draws within 128x64 with a header and hint row", function()
   local context = load_strata(); finish_startup(context)
-  for page = 1, 5 do
-    enc(1, page - local_value("ui_page")); redraw()
+  for page = 1, #PAGE_TITLES do
+    show_page(PAGE_TITLES[page])
     local texts = context.screen.texts
-    assert_equal(texts[1].text, ({"MAIN","FX","LFO","BUFFER","SETUP"})[page], "page title")
+    assert_equal(texts[1].text, PAGE_TITLES[page], "page title")
     for _, entry in ipairs(texts) do
       local left, right = text_span(entry)
       assert_true(left >= 0 and right <= 128 and entry.y <= 64, "text inside screen on page " .. page)
@@ -181,7 +181,7 @@ test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function
     end
     return false
   end
-  show_page(5)
+  show_page("SETUP")
   assert_true(screen_has("grid: 0 connected"), "no grids")
   assert_true(screen_has("arc: none"), "no arc")
   assert_true(screen_has("scenes: 0/8 saved"), "no scenes")
@@ -207,13 +207,13 @@ test("SETUP page shows grids, arc and scenes; K3 saves scenes to disk", function
 end)
 
 test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", function()
-  local context = load_strata(); enc(1, 1)
+  local context = load_strata(); show_page("FX")
   params:set("filter_mix", 0.8); key(3, 1); assert_equal(params:get("filter_mix"), 0)
   key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6)
   enc(2, 3); local before = params:get("filter_freq"); enc(3, 2)
   assert_true(params:get("filter_freq") > before, "row 4 is filter freq")
   -- K3 from a bypassed default turns the filter fully on
-  context = load_strata(); enc(1, 1)
+  context = load_strata(); show_page("FX")
   key(3, 1); assert_equal(params:get("filter_mix"), 1, "first K3 turns the filter on")
   local function hint_text()
     for _, entry in ipairs(context.screen.texts) do
@@ -225,7 +225,7 @@ test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", functio
 end)
 
 test("FX page K3 restores the last non-zero filter mix however it was set", function()
-  load_strata(); enc(1, 1)
+  load_strata(); show_page("FX")
   enc(2, 5)                                    -- row 6: filter mix
   enc(3, 50); assert_near(params:get("filter_mix"), 0.5, 1e-6, "E3 sets the mix to 0.5")
   enc(3, -50); assert_equal(params:get("filter_mix"), 0, "E3 brings it to 0")
@@ -238,7 +238,7 @@ test("FX page rows stay apart and inside 128x64 at every row and value", functio
   local context = load_strata()
   params:set("mutation_enabled", 1)
   capture_scene(8); recall_scene(8, 0)
-  show_page(2)
+  show_page("FX")
   local rows = local_value("FX_PAGE").rows
   assert_equal(#rows, 12, "density, drift, 4 filter, 3 delay, 3 reverb rows")
   local function screen_has(text)
@@ -298,30 +298,16 @@ test("MAIN layout holds for buffer- and input-sourced voices", function()
       params:set("v" .. voice_idx .. "_buf_pos", 1)
       params:set("v" .. voice_idx .. "_grain_mode", 2)
       if not local_value("frozen")[voice_idx] then toggle_freeze(voice_idx) end
-      show_page(1)
+      show_page("MAIN")
       assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
     end
   end
 end)
 
--- The drawn strings on row y, left to right
-local function texts_on_row(context, y)
-  local row = {}
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.y == y then table.insert(row, entry) end
-  end
-  table.sort(row, function(a, b) return select(1, text_span(a)) < select(1, text_span(b)) end)
-  return row
-end
-
-local function hint_text(context)
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 0 and entry.y == HINT_ROW_Y then return entry.text end
-  end
-end
+local texts_on_row, hint_text = h.texts_on_row, h.hint_text
 
 test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens the file selector", function()
-  local context = load_strata(); finish_startup(context); enc(1, 3)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   assert_equal(PAGE_TITLES[local_value("ui_page")], "BUFFER")
   enc(3, 2); assert_equal(params:get("v1_source"), 3)
   key(3, 1); assert_equal(context.calls_named("recordBuffer")[1].args[1], 1)
@@ -345,7 +331,7 @@ test("BUFFER page: E3 cycles source, K3 records into the voice's slot, K2 opens 
 end)
 
 test("the BUFFER page caches each slot's cut name (M3)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local measured = 0
   local text_extents = screen.text_extents
   screen.text_extents = function(text) measured = measured + 1; return text_extents(text) end
@@ -371,7 +357,7 @@ test("the BUFFER page caches each slot's cut name (M3)", function()
 end)
 
 test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- the engine reports buffer 3's audio
   context.clear_engine_calls(); context.fileselect.last = nil
@@ -389,14 +375,14 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", fun
   -- a K2 held across a page change is released elsewhere: no selector, and
   -- back on BUFFER K3 records
   context.fileselect.last = nil; context.clear_engine_calls()
-  key(2, 1); show_page(1); key(2, 0); show_page(4)
+  key(2, 1); show_page("MAIN"); key(2, 0); show_page("BUFFER")
   assert_equal(context.fileselect.last, nil, "K2 released on another page opens nothing")
   tap(3); assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records once K2 is up")
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
 test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
   context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
   context.set_time(100)
@@ -443,7 +429,7 @@ test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
 end)
 
 test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 4)
   local buffers = local_value("buffers")
   tap(3); assert_true(buffers[3].recording, "K3 records into buffer 3")
@@ -469,7 +455,7 @@ test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and save
 end)
 
 test("BUFFER K2's release forgets every held key as the file selector opens", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 4)
   local held_at_enter
   local stub_enter = context.fileselect.enter
@@ -488,7 +474,7 @@ test("BUFFER K2's release forgets every held key as the file selector opens", fu
 end)
 
 test("BUFFER K2 loads a file with no fileselect global: the script requires it (issue #10)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   assert_equal(rawget(_G, "fileselect"), nil, "norns has no fileselect global")
   params:set("v1_source", 2)  -- voice 1 reads buffer 1
   context.clear_engine_calls()
@@ -500,7 +486,7 @@ test("BUFFER K2 loads a file with no fileselect global: the script requires it (
 end)
 
 test("Strata's page never draws over the open file selector; redraws draw the selector (issue #10)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
   local draws = 0  -- Strata's page draws (the stub's fileselect.redraw draws nothing)
   local update = screen.update
@@ -551,7 +537,7 @@ test("Strata's page never draws over the open file selector; redraws draw the se
 end)
 
 test("a file selector that fails to open leaves the BUFFER page drawing (#49)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
   local stub_enter = context.fileselect.enter
   local script_key, script_enc = key, enc
@@ -584,7 +570,7 @@ test("a file selector that fails to open leaves the BUFFER page drawing (#49)", 
 end)
 
 test("a menu file selector opened over BUFFER K2's gives Strata its keys and page back as the menu closes (#49)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
   local page = local_value("BUFFER_PAGE")
   local selector = context.fileselect
@@ -649,7 +635,7 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
 end)
 
 test("the superseded-selector release acts only as the menu closes, and never breaks BUFFER K2 (#49)", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
   local page = local_value("BUFFER_PAGE")
   local selector = context.fileselect
@@ -694,7 +680,7 @@ test("the superseded-selector release acts only as the menu closes, and never br
 end)
 
 test("BUFFER page draws the voice, its source and eight buffer rows", function()
-  local context = load_strata(); finish_startup(context); show_page(4)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
   load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 116)
@@ -775,7 +761,7 @@ test("BUFFER page layout holds for every voice, source and buffer state", functi
       set_selected(voice_idx)
       for source = 1, 10 do
         params:set("v" .. voice_idx .. "_source", source)
-        show_page(4)
+        show_page("BUFFER")
         assert_screen_layout(context, "BUFFER, " .. state .. ", voice " .. voice_idx .. " source " .. source)
       end
     end
@@ -784,7 +770,7 @@ end)
 
 test("LFO page: E2 selects, E3 depth in percent, K3 enables, K2 cycles destination", function()
   local context = load_strata(); finish_startup(context)
-  show_page(3)
+  show_page("LFO")
   enc(2, 1); assert_equal(local_value("selected_lfo"), 2)
   enc(2, 5); assert_equal(local_value("selected_lfo"), 3, "clamped to 3 LFOs")
   enc(2, -1)
@@ -801,13 +787,13 @@ end)
 test("the LFO page redraws on every frame while it is shown, with no clock of its own", function()
   local context = load_strata(); finish_startup(context)
   local baseline = context.clock.pending_count()
-  show_page(3)
+  show_page("LFO")
   assert_equal(context.clock.pending_count(), baseline, "no page clock: the frame clock draws it")
   next_frame(context)
   local counter = count_screen_draws()
   next_frame(context); next_frame(context)
   assert_equal(counter.screen, 2, "each frame redraws, so the dots move")
-  show_page(4); next_frame(context)
+  show_page("BUFFER"); next_frame(context)
   counter.screen = 0
   next_frame(context)
   counter.restore()
@@ -836,7 +822,7 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
   context.set_time(100)
   params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
   context.lfo.tick(lfos[1], 0.25)
-  show_page(3)
+  show_page("LFO")
   -- three rows, each labeled, and every string inside the screen
   for n = 1, 3 do
     local row = lfo_row_drawing(context, n)
