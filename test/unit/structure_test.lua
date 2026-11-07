@@ -157,6 +157,7 @@ local MODULE_HOMES = {
   ["lib/ui/params.lua"] = { "param_range", "param_value_fraction", "param_fraction" },
   ["lib/ui/header.lua"] = { "draw_header", "draw_hints" },
   ["lib/ui/keys.lua"] = { "forget_held_keys" },
+  ["lib/ui/alt.lua"] = { "alt_action" },
   ["lib/ui/menu_watch.lua"] = { "forget_keys_held_through_menu", "watch_menu_opening", "unwatch_menu_opening" },
   ["lib/pages/main.lua"] = { "update_voice_list", "main_param_entry", "main_param_id", "main_param_label",
     "redraw_main" },

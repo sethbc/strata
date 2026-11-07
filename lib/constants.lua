@@ -11,6 +11,7 @@ local PATTERN_LENGTH = 16
 local SCENE_DATA_VERSION = 2  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
+local LONG_PRESS_SECONDS = 0.6  -- K2/K3 hold for the ALT long-press fallback (lib/ui/alt.lua; unused while K1 is ALT)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local BUFFER_SECONDS = 16     -- Length of each buffer slot (engine bufferSeconds)
@@ -136,6 +137,7 @@ return {
   NUM_MOD_SLOTS = NUM_MOD_SLOTS,
   NUM_UI_PAGES = NUM_UI_PAGES,
   E1_TICKS_PER_PAGE = E1_TICKS_PER_PAGE,
+  LONG_PRESS_SECONDS = LONG_PRESS_SECONDS,
   MAX_STEP_LEVEL = MAX_STEP_LEVEL,
   NUM_BUFFERS = NUM_BUFFERS,
   BUFFER_SECONDS = BUFFER_SECONDS,
