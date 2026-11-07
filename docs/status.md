@@ -1,6 +1,6 @@
 # Strata development status
 
-Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
+Last updated 2026-11-07, at the 3.1.1 release. This file is the hand-off between machines and sessions: what was decided, what is still open, and where the details live. Update it at the end of each piece of work.
 
 ## Where things are
 
@@ -9,6 +9,7 @@ Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
   - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
   - 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes (#115) and the release.
+  - 3.1.1, a fix release from `release/3.1.x`: saving a buffer no longer blocks engine commands ([#124](https://github.com/sethbc/strata/issues/124), the backport of the fix main carries for 3.2 in #126).
 - **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;

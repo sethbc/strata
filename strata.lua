@@ -1,6 +1,6 @@
 -- strata.lua
 -- ambient granular layers
--- v3.1.0
+-- v3.1.1
 --
 -- E1: page   K1 held: ALT
 -- MAIN: E2 voice, E3 field,

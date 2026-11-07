@@ -532,6 +532,35 @@ var checkStaleParts = {
     File.delete(savePath);
 };
 
+// A save never holds up the engine's commands (#124): with chunks that
+// take longer than writeChunkWait, a plain wait reschedules the interleave
+// in the past and SystemClock runs it again without releasing the language
+// lock, so no OSC message gets in until the save ends. A message sent once
+// the .part file exists must be handled while the save still runs (the
+// .part there, the file not yet in place). Slot 8 holds the 16 s file.
+var checkSaveYields = {
+    var savePath = scratchRoot +/+ "yield/long.wav", parts, ping, heard, partSeen, start, file;
+    parts = { (savePath ++ ".*.part").pathMatch };
+    ping = OSCFunc({ heard = parts.value.notEmpty and: { File.exists(savePath).not } }, '/strataCheckSavePing');
+    engine.writeChunkWait = 0.0001;        // shorter than any chunk's interleave
+    start = Main.elapsedTime;
+    command.(\saveBuffer, 7, savePath);
+    while { parts.value.isEmpty and: { File.exists(savePath).not } and: { (Main.elapsedTime - start) < 10 } } { 0.001.wait };
+    partSeen = parts.value.notEmpty;
+    NetAddr.localAddr.sendMsg('/strataCheckSavePing');
+    waitFor.({ File.exists(savePath) }, 20);
+    0.2.wait;
+    ping.free;
+    engine.writeChunkWait = 0.001;
+    check.(partSeen and: { heard == true },
+        "a message sent while a save interleaves is handled before it ends (.part seen %, heard during it %)".format(
+            partSeen, heard));
+    file = SoundFile.openRead(savePath);
+    check.(file.notNil and: { file.numFrames == engine.bufferFrames[7] }, "and the save holds every frame");
+    file !? { file.close };
+    File.delete(savePath);
+};
+
 // A file at another rate plays at its own pitch: a 1 kHz sine written at
 // 44.1 kHz, played by voice 7 (engine voice 6, reading slot 4) through
 // strataGrainBuf (every grain from one position, so overlapping grains stay
@@ -2238,7 +2267,8 @@ server.waitForBoot({
         info = tempFloatFiles.value - tempFilesBefore;
         check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
         checkStaleParts.value;
-        file = Engine_Strata.findMethod(\alloc);
+        checkSaveYields.value;
+        file =Engine_Strata.findMethod(\alloc);
         data = File.readAllString(file.filenameSymbol.asString);
         data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
         check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");
