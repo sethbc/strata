@@ -43,11 +43,12 @@ return function(S)
 
   -- Show another page (draw_frame redraws the LFO page on every frame). On a
   -- change only, the old page's record gets leave() and the new one's
-  -- enter(), when they have them
+  -- enter(), when they have them, and the arc's carried ticks are forgotten
   local function set_ui_page(page)
     if page == S.ui_page then return end
     local old_record = S.registry.pages[S.ui_page]
     if old_record and old_record.leave then old_record.leave() end
+    forget_arc_ticks()
     S.ui_page = page
     local new_record = S.registry.pages[page]
     if new_record and new_record.enter then new_record.enter() end

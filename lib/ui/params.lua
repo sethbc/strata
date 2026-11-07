@@ -19,6 +19,15 @@ return function(S)
     return param.min, param.max
   end
 
+  -- Whether a control or number param's range runs through 0 (min < 0 <
+  -- max): such a param's arc ring fills from 0 (arc_ring_fill_param). Option
+  -- params never do
+  function param_spans_zero(param_id)
+    if params:lookup_param(param_id).options then return false end
+    local minval, maxval = param_range(param_id)
+    return minval < 0 and maxval > 0
+  end
+
   -- A value as a fraction (0-1) of a param's range. Control params follow
   -- their controlspec warp (exp for freq, cutoff, mod speed); number params
   -- (mod sources) and option params (grain envelope) are linear.
