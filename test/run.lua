@@ -720,6 +720,10 @@ local GOLDEN_GRIDS = {
 local function golden_session(context)
   local log = {}
   local data_dir = context.data_dir
+  -- a sound file for the session's load (the stub engine never reads it),
+  -- written before the file recorders start
+  local load_path = context.audio_dir .. "golden.wav"
+  local sound_file = assert(io.open(load_path, "w")); sound_file:write("RIFF"); sound_file:close()
 
   local function normalize(text)
     local start = 1
@@ -861,9 +865,7 @@ local function golden_session(context)
       step("page " .. page .. " draw", function() set_ui_page(page); redraw() end)
       step("page " .. page .. " controls", function()
         enc(2, 1); enc(2, -1); enc(3, 1); enc(3, -1)
-        key(2, 1); key(2, 0)
-        if local_value("BUFFER_PAGE").file_selector_open then context.fileselect.close("/tmp/golden.wav") end
-        key(3, 1); key(3, 0)
+        key(2, 1); key(2, 0); key(3, 1); key(3, 0)
         next_frame(context)
       end)
       step("page " .. page .. " E1", function() enc(1, 1); next_frame(context) end)
@@ -885,6 +887,22 @@ local function golden_session(context)
       context.polls.fire("bufferState", params:get("record_duration"))
       next_frame(context)
       -- the BUFFER page shows the take
+      enc(1, 3); next_frame(context); enc(1, -3); next_frame(context)
+    end)
+    step("load buffer 2", function()
+      load_buffer(2, load_path); next_frame(context)
+      context.polls.fire("bufferState", 1 * 100 + 3.5)  -- slot 2 (index 1) holds 3.5 s
+      context.clock.run_for(1.5)
+      context.polls.fire("bufferState", 1 * 100 + 3.5)
+      next_frame(context)
+    end)
+    step("failed load into buffer 3", function()
+      load_buffer(3, context.audio_dir .. "missing.wav"); next_frame(context)
+      -- the engine's report: (load number * 2 + emptied 0) * NUM_BUFFERS + slot index 2
+      local load_number = local_value("buffers")[3].loads_sent
+      context.polls.fire("bufferLoadFailed", (load_number * 2) * local_value("NUM_BUFFERS") + 2)
+      next_frame(context)
+      -- the BUFFER page shows both slots
       enc(1, 3); next_frame(context); enc(1, -3); next_frame(context)
     end)
 
@@ -960,6 +978,15 @@ local function golden_session(context)
     end)
 
     step("cleanup", function() cleanup() end)
+    -- cleanup detached the handlers: input that arrives later reaches no
+    -- engine command
+    step("input after cleanup", function()
+      context.midi.send(1, { type = "note_on", ch = 1, note = 62, vel = 90 })
+      context.midi.send(1, { type = "note_off", ch = 1, note = 62, vel = 0 })
+      context.grid.press(1, 1, 1, 1); context.grid.press(1, 1, 1, 0)
+      context.arc.turn(1, 1, 10)
+      context.clock.run_for(1)
+    end)
   end, debug.traceback)
   io.open, os.rename, os.remove = real_open, real_rename, real_remove
   if not ok then error(problem, 0) end
@@ -1033,11 +1060,15 @@ test("the golden log normalizes what varies between runs and interpreters", func
   assert_true(first_difference("## s\na\n", "## s\nc\n"):find("line 2, in step s", 1, true), "the line and step")
 end)
 
+-- The global-reference check runs under Lua 5.3, norns' Lua, and is
+-- skipped only under another interpreter (LuaJIT has no luac)
+local GLOBAL_CHECK_RUNS = _VERSION == "Lua 5.3" and not rawget(_G, "jit")
+
 -- Lua 5.3's luac for the global-reference check: `luac`, or Debian's
 -- `luac5.3` (CI installs the lua5.3 package), when it reports 5.3; nil
--- under LuaJIT, which has none
+-- when there is none (the check then fails) or under another interpreter
 local function luac_53_command()
-  if _VERSION ~= "Lua 5.3" or rawget(_G, "jit") then return nil end
+  if not GLOBAL_CHECK_RUNS then return nil end
   for _, command in ipairs({ "luac", "luac5.3" }) do
     local pipe = io.popen(command .. " -v 2>&1")
     if pipe then
@@ -1149,10 +1180,14 @@ local function undefined_global_reads(root, sources, provided)
 end
 
 test("every global read is defined", function()
-  if not LUAC then
-    real_print("     (skipped: the global-reference check needs Lua 5.3 and its luac; LuaJIT has none)")
+  if not GLOBAL_CHECK_RUNS then
+    real_print("     (skipped: the global-reference check runs under Lua 5.3 only; " .. _VERSION
+      .. (rawget(_G, "jit") and ", LuaJIT" or "") .. " has no luac)")
     return
   end
+  -- under Lua 5.3 a missing luac is a failure, never a skip: this check
+  -- is what finds a bare name a module move left behind
+  assert_true(LUAC, "the global-reference check needs Lua 5.3's luac on PATH (`luac` or `luac5.3`, reporting 5.3)")
   local provided = stub_global_names()
   local problems = undefined_global_reads(repo_root, read_lua_sources(), provided)
   assert_equal(#problems, 0, "undefined globals:\n  " .. table.concat(problems, "\n  "))
@@ -1176,9 +1211,13 @@ test("every global read is defined", function()
   table.sort(names)
   assert_equal(table.concat(names, " "), "missing_early missing_in_module missing_late",
     "each undefined read is found, defined ones are not:\n  " .. table.concat(found, "\n  "))
+  -- in the main chunk, past its 300 constants, the keys are registers; the
+  -- nested function late has its own constants, so its keys are constants
   local reads, writes = global_accesses(scratch .. "/strata.lua", "strata.lua")
-  assert_true(reads.missing_late and reads.defined_b, "reads past 255 constants (register keys) are seen")
-  assert_true(writes.late_global and writes.late, "writes past 255 constants are seen")
+  assert_true(reads.print and reads.missing_early, "reads with a register key are seen")
+  assert_true(writes.late_global and writes.late, "writes with a register key are seen")
+  assert_true(writes.defined_a, "a write with a constant key is seen")
+  assert_true(reads.missing_late and reads.defined_b, "reads with a constant key in a nested function are seen")
 end)
 
 -- The number of locals that can still be declared at a point of a file:
@@ -1240,6 +1279,7 @@ end
 -- end of Wave 0 raises it to 30 (15 free once S was added; the margin is
 -- for the module moves, which may add an alias before code moves out)
 local STRATA_MIN_FREE_LOCALS = 14
+local PLAIN_TABLE_MODULE = "lib/constants.lua"  -- the one module that is not a constructor
 local MODULE_MIN_FREE_LOCALS = 30
 
 test("each file keeps 30 free locals", function()
@@ -1255,9 +1295,15 @@ test("each file keeps 30 free locals", function()
     local minimum = source.path == "strata.lua" and STRATA_MIN_FREE_LOCALS or MODULE_MIN_FREE_LOCALS
     local free, problem = free_locals(source.text, "@" .. source.path, probe_main_chunk(source.path))
     check(source.path .. "'s main chunk", free, problem, minimum)
-    if source.path ~= "strata.lua" and constructor_end(source.text) then
-      free, problem = free_locals(source.text, "@" .. source.path, probe_constructor)
-      check(source.path .. "'s constructor", free, problem, minimum)
+    -- every module but the plain table lib/constants.lua is a constructor
+    -- ending in `  return M\nend`, so none escapes the constructor probe
+    if source.path ~= "strata.lua" and source.path ~= PLAIN_TABLE_MODULE then
+      if constructor_end(source.text) then
+        free, problem = free_locals(source.text, "@" .. source.path, probe_constructor)
+        check(source.path .. "'s constructor", free, problem, minimum)
+      else
+        table.insert(problems, source.path .. " does not end in the constructor's `  return M\nend`")
+      end
     end
   end
   assert_equal(#problems, 0, table.concat(problems, "\n"))
