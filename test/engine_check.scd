@@ -34,9 +34,9 @@ var areas = if (missingAreas.notEmpty) {
 var context, engine, h;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
-var allDefs = voiceDefs ++ [\strataMod, \strataGrain, \strataGrainBuf, \strataInput, \strataRecord,
+var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataInput, \strataRecord, \strataRingWrite,
     \strataFilter, \strataDelay, \strataReverb, \strataMaster];
-var grainDefs = [\strataGrain, \strataGrainBuf];
+var grainDefs = [\strataGrainRing, \strataGrainBuf];
 var engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
 var pollMessages = List.new;
 // scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different
@@ -458,6 +458,21 @@ server.waitForBoot({
             probeFree: { arg self, count; probeFree.(count) },
             startEngine: { arg self, settings; startEngine.(settings) },
             freeEngine: { arg self, target; freeEngine.(target) },
+            // Free h.engine and build its replacement in the same context
+            // (settings: as startEngine's; nil builds the default engine),
+            // for a check that needs one engine alone on the server (the
+            // memory area's high run). The areas after it run on the new one.
+            replaceEngine: { arg self, settings;
+                engine.bufferStatePoll.stop;
+                freeEngine.(engine);
+                server.sync;
+                engine = buildEngine.(context, settings);
+                engine.scratchDir = scratchRoot +/+ "nested/scratch/";
+                engine.bufferStatePoll.start;
+                engine.bufferLoadFailedPoll.start;
+                self[\engine] = engine;
+                engine
+            },
             stopAllVoices: { arg self, target; stopAllVoices.(target) },
             startAllVoices: { arg self; startAllVoices.value }
         );

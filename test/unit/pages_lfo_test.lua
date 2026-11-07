@@ -60,7 +60,9 @@ end)
 
 test("group starts come from the destinations list", function()
   load_strata()
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61")
+  -- the registered destinations (lib/history.lua's) are one more group
+  local registered = #local_value("S").registry.lfo_destinations > 0
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61" .. (registered and " 69" or ""))
   local destinations = local_value("LFO_DESTINATIONS")
   for _, start in ipairs({ 13, 21, 61 }) do
     assert_true(destinations[start].label:find(" main$"), destinations[start].label .. " starts a voice group")
@@ -68,7 +70,7 @@ test("group starts come from the destinations list", function()
   assert_equal(lfo_dest_group_jump(1, -1), 1, "clamped at none")
   assert_equal(lfo_dest_group_jump(5, 1), 13, "next start above")
   assert_equal(lfo_dest_group_jump(5, -1), 2, "last start below")
-  assert_equal(lfo_dest_group_jump(61, 1), 61, "clamped at v7")
+  assert_equal(lfo_dest_group_jump(61, 1), registered and 69 or 61, "clamped at v7, or on to the registered group")
   assert_equal(lfo_dest_group_jump(68, -1), 61, "from v7 scan back to v7 main")
 end)
 
@@ -181,8 +183,9 @@ test("ALT+E3 on the destination jumps a group", function()
   params:set("strata_lfo1_dest", 15)
   alt_e3(-1); assert_equal(params:get("strata_lfo1_dest"), 13, "back to its group's start")
   alt_e3(-1); assert_equal(params:get("strata_lfo1_dest"), 2, "then the globals")
-  params:set("strata_lfo1_dest", 61); alt_e3(1)
-  assert_equal(params:get("strata_lfo1_dest"), 61, "clamped at v7")
+  local starts = lfo_dest_group_starts()
+  params:set("strata_lfo1_dest", starts[#starts]); alt_e3(1)
+  assert_equal(params:get("strata_lfo1_dest"), starts[#starts], "clamped at the last group (v7, or the registered ones)")
   -- on another field ALT+E3 is fine adjustment (a control) or whole steps
   strip_field("rate")
   params:set("lfo_free_1", 100)   -- long enough for a fine step to pass the 0.1 s step

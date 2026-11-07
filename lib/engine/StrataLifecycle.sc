@@ -25,20 +25,30 @@
     }
 
     // The voice-level (buffer and input sources) and grain controls a grain
-    // synth for the voice's current source takes
+    // synth for the voice's current source takes. The synth source reads its
+    // voice's 4 s ring at history 0, whatever history the voice keeps (that
+    // is for the input ring), so a voice that leaves the input never reads
+    // a wrapped ring.
     grainControlPairs { arg voice;
         var defName = this.grainDefFor(voice);
         var pairs = this.controlPairs(defName, grainControls[voice]);
         if (grainSource[voice] != 0) { pairs = this.controlPairs(defName, voiceControls[voice]) ++ pairs };
+        if (grainSource[voice] == 0) { pairs = pairs ++ [\history, 0] };
         ^pairs
     }
 
     // The grain synth for the voice's current source, with its current
     // grain controls. Buffer and input sources also take the voice-level
-    // controls the grain SynthDef has (level, pan, crossmod, bend). The mirror,
-    // accent, pan and (strataGrain) crossmod switches are always set explicitly.
-    // A strataGrainBuf is kept in grainSlots with its slot until it frees, so
-    // a slot change reaches it in its release too (bufferChanged).
+    // controls the grain SynthDef has (level, pan, crossmod, bend). The ring,
+    // mirror, accent, crossmod and rate switches are always set explicitly:
+    // the synth source's strataGrainRing reads the voice's ring with mirror,
+    // accent, amplitude crossmod, pan and rateLevel 0 (its voice synth
+    // already applies them; rateLevel 0 makes the bend and frequency
+    // crossmod term 1) and its mod buses on the silent bus; the input
+    // source's reads the input ring with all of them on, as a buffer
+    // source's strataGrainBuf does. A strataGrainRing is kept in ringReaders
+    // and a strataGrainBuf in grainSlots (with its slot, so a slot change
+    // reaches it in its release too: bufferChanged) until it frees.
     startGrainSynth { arg voice, target, addAction;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
@@ -48,17 +58,26 @@
         { source == 0 } {
             // crossmod off, and read from the silent bus, never control bus 0 (the
             // input amplitude follower on norns)
-            args = args ++ [\in, granBuses[voice], \mirrorLevel, 0, \accentAmt, 0, \modLevel, 0, \pan, 0,
-                \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
+            args = args ++ this.ringPairs(voice) ++ [\mirrorLevel, 0, \accentAmt, 0, \modLevel, 0, \rateLevel, 0,
+                \pan, 0, \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
         }
         { source == this.inputSource } {
-            args = args ++ [\in, inputBus, \mirrorLevel, 1, \accentAmt, 1, \modLevel, 1];
+            args = args ++ this.ringPairs(voice) ++ [\mirrorLevel, 1, \accentAmt, 1, \modLevel, 1, \rateLevel, 1];
         }
-        { args = args ++ [\mirrorLevel, 1] ++ this.bufferSlotPairs(voice) };
+        { args = args ++ [\mirrorLevel, 1, \accentAmt, 1, \modLevel, 1, \rateLevel, 1] ++ this.bufferSlotPairs(voice) };
         synth = this.watchVoiceSynth(voice, this.grainKey(voice),
             Synth(defName, args ++ this.grainControlPairs(voice), target, addAction));
-        if (defName == \strataGrainBuf) { grainSlots[synth] = source - 1 };
+        case
+        { defName == \strataGrainBuf } { grainSlots[synth] = source - 1 }
+        { defName == \strataGrainRing } { this.ringReaders[synth] = voice };
         ^synth
+    }
+
+    // The ring a synth- or input-sourced voice reads, as strataGrainRing
+    // controls (ringBuffersFor); empty for a buffer source
+    ringPairs { arg voice;
+        var ring = this.ringBuffersFor(voice, grainSource[voice]);
+        ^if (ring.isNil) { [] } { [\bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index] }
     }
 
     // A buffer-sourced voice's slot as strataGrainBuf controls (bufnums,
@@ -176,6 +195,7 @@
             fadingSynths[voice].remove(synth);
             cuttingSynths[voice].remove(synth);
             grainSlots.removeAt(synth);
+            this.ringReaders.removeAt(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case
@@ -198,11 +218,15 @@
     // handed over when it restarted the voice for another source) is cut
     // first (cutSynth: gone within switchCutTime), so once a switch has been
     // processed the voice has at most one fading grain synth and one fading
-    // voice synth.
+    // voice synth. A frozen voice is unfrozen first (the freeze area), and
+    // the switch counts as a ring change (ringChanges), so a ring copy still
+    // waiting for its fade no longer runs.
     replaceGrainSynth { arg voice;
-        var oldGrain = synths.removeAt(this.grainKey(voice));
-        var voiceSynth;
+        var oldGrain, voiceSynth;
 
+        this.unfreezeVoice(voice);
+        this.ringChanges[voice] = this.ringChanges[voice] + 1;
+        oldGrain = synths.removeAt(this.grainKey(voice));
         this.cutFadingSynths(voice);
         synths[this.grainKey(voice)] = this.startPlacedGrainSynth(voice);
         if (oldGrain.notNil) {

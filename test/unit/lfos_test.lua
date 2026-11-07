@@ -132,7 +132,9 @@ end)
 test("LFO params: library groups, a destination group, labels and resolvers", function()
   load_strata()
   local destinations = local_value("LFO_DESTINATIONS")
-  assert_equal(#destinations, 12 + 7 * 8, "12 globals, 8 per voice")
+  local S = local_value("S")
+  assert_equal(S.lib.lfos.BUILT_IN_DESTINATIONS, 12 + 7 * 8, "12 globals, 8 per voice")
+  assert_equal(#destinations, 12 + 7 * 8 + 7 * #S.registry.lfo_destinations, "then 7 per registered destination")
   local expected_ids = { [1] = nil, [2] = "master_density", [3] = "drift_amount", [4] = "filter_freq",
     [5] = "filter_res", [6] = "filter_mix", [7] = "delay_time", [8] = "delay_feedback", [9] = "delay_mix",
     [10] = "reverb_mix", [11] = "reverb_size", [12] = "reverb_damp", [13] = "v1_freq", [14] = "v1_grain_size",

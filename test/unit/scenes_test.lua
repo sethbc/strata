@@ -756,15 +756,24 @@ test("scene recall: one full sync per voice whose source changed, after its para
   -- a full sync (sync_voice_values_to_engine) ends with the voice's bend.
   -- MIDI pitchbend also sends setVoiceParam "bend", so this test must not
   -- send any pitchbend, or it would count as a sync
+  -- (then the registered records' grain keys, which a sync sends last)
   local function full_syncs(context, first_call, engine_voice)
     local count, last_sync, last_call = 0, nil, nil
+    local registered = {}
+    for _, record in ipairs(local_value("S").registry.voice_params) do
+      for _, grain_key in pairs(record.grain_keys or {}) do
+        registered[type(grain_key) == "table" and grain_key.name or grain_key] = true
+      end
+    end
     for index = first_call, #context.engine_calls do
       local call = context.engine_calls[index]
       if call.args[1] == engine_voice then
-        last_call = index
         if call.name == "setVoiceParam" and call.args[2] == "bend" then
           count = count + 1; last_sync = index
+        elseif call.name == "setGrainParam" and registered[call.args[2]] and last_sync and last_sync == last_call then
+          last_sync = index
         end
+        last_call = index
       end
     end
     return count, last_sync, last_call

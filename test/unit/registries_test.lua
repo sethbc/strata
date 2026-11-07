@@ -91,7 +91,13 @@ test("a registered voice param is added, stored, sent and synced", function()
   for index, param in ipairs(params.params) do position[param.id] = index end
   assert_true(position["voice 1 extras"], "a separator voice 1 extras")
   assert_true(position["v1_mod_speed"] < position["voice 1 extras"], "after the cross-modulation params")
-  assert_equal(position["v1_probe"], position["voice 1 extras"] + 1, "the record's params follow it")
+  -- after the script's own records' params (lib/history.lua's), registered at include
+  local before = 0
+  for _, record in ipairs(S.registry.voice_params) do
+    if record.name == "probe" then break end
+    before = before + record.count
+  end
+  assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
   assert_equal(position["v1_probe_switch"], position["v1_probe"] + 1)
 end)
 
@@ -243,7 +249,9 @@ test("built-in LFO destinations keep their indices", function()
   local labels = built_in_lfo_labels()
   load_strata()
   local destinations = local_value("LFO_DESTINATIONS")
-  assert_equal(#destinations, #labels, "no registration: 3.1's list exactly")
+  -- the script's own registrations (lib/history.lua's) follow 3.1's list
+  local own = 7 * #local_value("S").registry.lfo_destinations
+  assert_equal(#destinations, #labels + own, "3.1's list exactly, then the script's registered ones")
   for index, label in ipairs(labels) do assert_equal(destinations[index].label, label, "index " .. index) end
   -- two registered destinations go after every built-in one: by
   -- registration, then voice
@@ -256,18 +264,18 @@ test("built-in LFO destinations keep their indices", function()
   for index, label in ipairs(labels) do assert_equal(destinations[index].label, label, "still index " .. index) end
   local option_labels = params:lookup_param("strata_lfo1_dest").options
   for voice_idx = 1, 7 do
-    local first = #labels + voice_idx
-    local second = #labels + 7 + voice_idx
+    local first = #labels + own + voice_idx
+    local second = #labels + own + 7 + voice_idx
     assert_equal(destinations[first].label, "v" .. voice_idx .. " probe")
     assert_equal(destinations[first].resolve(), "v" .. voice_idx .. "_probe")
     assert_equal(destinations[second].label, "v" .. voice_idx .. " pswitch")
     assert_equal(destinations[second].resolve(), "v" .. voice_idx .. "_probe_switch")
     assert_equal(option_labels[first], "v" .. voice_idx .. " probe", "the dest param's options follow")
   end
-  assert_equal(#destinations, #labels + 14)
-  assert_equal(params:lookup_param("strata_lfo1_dest").count, #labels + 14)
+  assert_equal(#destinations, #labels + own + 14)
+  assert_equal(params:lookup_param("strata_lfo1_dest").count, #labels + own + 14)
   -- an LFO on a registered destination modulates it around its stored value
-  params:set("strata_lfo1_dest", #labels + 1)
+  params:set("strata_lfo1_dest", #labels + own + 1)
   assert_equal(lfo_destination_id(1), "v1_probe")
   -- a label already used by a built-in destination is refused at init
   local ok = pcall(load_with, function(S) S.register_lfo_destination("dens", "probe") end)
@@ -295,8 +303,11 @@ test("the LFO page's ALT+E3 groups keep each voice and add the registered destin
     table.insert(landed, S.LFO_DESTINATIONS[params:get("strata_lfo1_dest")].label)
   end
   key(1, 0)
+  -- the registered group starts at the first registered destination (the
+  -- script's own, lib/history.lua's, before the test's probe)
+  local first_registered = S.LFO_DESTINATIONS[built_in + 1].label
   assert_equal(table.concat(landed, ","),
-    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main,v1 probe,v1 probe")
+    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main," .. first_registered .. "," .. first_registered)
 end)
 
 test("registered fx params grow the fx group and follow its 11 params", function()
