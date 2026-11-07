@@ -197,13 +197,13 @@ end)
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
-  show_page("LFO")
+  show_page("LFO"); for n = 1, 3 do params:set("lfo_depth_" .. n, 0) end   -- LFOs start at 25%
   context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
   context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
   context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
   next_frame(context)
   assert_near(device.segments[1].to, 0.1 * math.pi * 2, 1e-9, "ring 1 shows depth")
-  enc(2, 1)   -- LFO 2
+  key(3, 1); key(3, 0)   -- LFO 2
   local period = params:get("lfo_free_2")
   context.arc.turn(1, 4, 100); assert_true(params:get("lfo_free_2") > period, "ring 4: free period")
   assert_equal(params:get("lfo_free_1"), 4, "only the selected LFO")
@@ -222,12 +222,12 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
   for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
   local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
   context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_1"), rate_1, "15 ticks carried for LFO 1")
-  enc(2, 1)   -- LFO 2
+  key(3, 1); key(3, 0)   -- LFO 2
   context.arc.turn(1, 4, 5)
   assert_equal(params:get("lfo_clocked_2"), rate_2, "LFO 1's carried ticks do not step LFO 2")
   context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "20 of its own ticks do")
   -- away and back again also forgets them
-  context.arc.turn(1, 4, 15); enc(2, -1); enc(2, 1)
+  context.arc.turn(1, 4, 15); key(2, 1); key(2, 0); key(3, 1); key(3, 0)
   context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "reselecting forgets the carry")
   -- the selected LFO's mode changing forgets them
   context.arc.turn(1, 4, 10)   -- 15 carried
@@ -238,8 +238,8 @@ test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode
   params:set("lfo_mode_3", 2)
   context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 2, "LFO 3's mode leaves LFO 2's carry")
   -- the depth rings keep their own remainders
-  context.arc.turn(1, 1, 5); enc(2, 1); context.arc.turn(1, 1, 5)
-  assert_equal(params:get("lfo_depth_1"), 1, "ring 1's carry survives a selection change")
+  context.arc.turn(1, 1, 5); key(3, 1); key(3, 0); context.arc.turn(1, 1, 5)
+  assert_equal(params:get("lfo_depth_1"), 26, "ring 1's carry survives a selection change")
 end)
 
 test("the stub pages' rings stay dark and ignore turns", function()

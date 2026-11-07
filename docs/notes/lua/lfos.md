@@ -5,6 +5,7 @@
 - The library owns every `lfo_*` param id and sizes its own group. Never pass a separator to `add_params` or wrap its params in a Strata group (norns groups cannot nest).
 - Every resolved destination is a control param, and every destination label fits the LFO page's right column (49 px).
 - `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them.
+- The offset survives on/off (#103): the library's `lfo_<n>` action re-bangs `lfo_baseline_<n>`, whose `change_offset` sets `lfo_offset_<n>` to 0, so the `lfo_<n>` wrapper's `before` saves the offset and its `after` sets it back when it changed (`params:set`, so the library's offset follows; the number param clamps it to the baseline's range). A baseline change itself still zeroes the offset, as the library intends. This covers every way the state is set: the LFO page, PARAMS, scene recalls, cleanup.
 - `LFO_PPQN` (48) and the send dedupe bound the message rate. The ceiling is the library's 10 Hz: anything faster belongs in the engine.
 
 ## Owns
@@ -25,8 +26,9 @@ Three LFOs (`NUM_LFOS`), built on norns' `lua/lib/lfo.lua` (`local LFO = require
 ## Construction
 
 `add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record):
-- `LFO:add{shape = "sine", min = -1, max = 1, depth = 0, mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`;
-- then `S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`.
+- `LFO:add{shape = "sine", min = -1, max = 1, depth = LFO_DEFAULT_DEPTH (0.25, since 3.1), mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`;
+- then `S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`;
+- then `lfo_depth_<n>`'s `default` and `value` are rounded to a whole 25: the library computes depth × 100, a float in Lua 5.3 that its formatter would show as `25.0%`. The scene migration default for `lfo_depth_<n>` stays 0 (`lib/scenes.lua`), so files without LFO depths keep silent LFOs.
 
 The library owns the params:
 - `lfo_<n>` (state, option off/on), `lfo_shape_<n>`, `lfo_depth_<n>` (a **number 0-100, percent**), `lfo_phase_<n>`, `lfo_offset_<n>`, `lfo_mode_<n>` (clocked/free), `lfo_clocked_<n>` (rate option), `lfo_free_<n>` (0.1-300 s), `lfo_reset_<n>`, ...;
@@ -51,7 +53,7 @@ The library owns the params:
 
 With min -1, max 1 and a center baseline, the library hands the action `scaled` in -depth..depth:
 - depth = percent / 100;
-- the library's `lfo_offset_<n>` param adds to it.
+- the library's `lfo_offset_<n>` param adds `(max - min) × offset / 100` to it (kept across on/off, see Must not break).
 
 Other library settings the user can change in PARAMS, `lfo_min_<n>`, `lfo_max_<n>` and `lfo_baseline_<n>` (`docs/user/params.md` tells users to keep the defaults):
 - a `min` baseline gives `scaled` in -1..-1 + 2 × depth (below the stored value, up to 50 % depth);
@@ -78,7 +80,7 @@ Other library settings the user can change in PARAMS, `lfo_min_<n>`, `lfo_max_<n
 
 Called from:
 - the `strata_lfo<n>_dest` action (destination changed);
-- wrappers installed with `wrap_param_action(id, before, after)` around the library's `lfo_<n>` action (state off) and `lfo_depth_<n>` action (depth 0).
+- wrappers installed with `wrap_param_action(id, before, after)` around the library's `lfo_<n>` action (state off; its `before`/`after` also keep the offset) and `lfo_depth_<n>` action (depth 0).
 - When a `main` destination re-resolves to a different param (the voice's source changed), `apply_lfo` restores the old id once, then modulates the new one.
 
 ## Dot phase estimate
