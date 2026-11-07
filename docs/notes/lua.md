@@ -348,7 +348,7 @@ params:set("scene_sequencer_enabled", 1)  -- Start sequencer
 - **File Format**: Lua table serialization using norns `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 2). Version 1 files (`{version = 1, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version 1`; the next save writes version 2. Any other version is rejected
 - **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`. It fills only what is missing, so it runs for every version: each global from its `SCENE_GLOBAL_PARAMS` entry's `default` (the param default), top-level blocks from `SCENE_BLOCK_DEFAULTS` (`{key, default}`), and per-voice fields from `VOICE_SCENE_DEFAULTS` (`{path = keys inside data.voices[i], default}`; filled only when the parent table exists). Malformed scenes are left for validation to reject. When a later feature adds a scene field, add its default to one of these tables (`VOICE_SCENE_DEFAULTS` holds the grain envelope and mode, `source` and the three buffer params; `SCENE_BLOCK_DEFAULTS` is empty: the LFO settings are globals in `SCENE_GLOBAL_PARAMS`)
 - **Robust Loading**: `tab.load` runs the file as Lua unprotected, so `load_scenes_from_disk()` calls it through `pcall`. On any failure (error, unknown version, invalid data after migration) it prints a message, keeps the current scenes (empty at startup) and preserves the file: it is renamed to `scenes.data.bak` so the save in `cleanup()` cannot destroy it, and if the rename fails `scene_autosave_blocked` makes `cleanup()` skip the auto-save. Missing slots in a valid file are filled with empty scenes
-- **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits
+- **Auto-save**: Scenes automatically saved to disk in `cleanup()` when script exits, but only once `load_scenes_from_disk()` has run in this session (`S.scenes_loaded`, set when it returns; `buffers.data` has `S.buffers_loaded`, set when `load_buffers_from_disk()` returns). A start that failed before init's loads (the engine did not load, an error earlier in `init`) therefore never overwrites the saved files with the empty in-memory state (#72)
 - **Auto-load**: Scenes automatically loaded from disk in `init()` on script startup
 - **Manual Controls**: PARAMS menu includes "save scenes to disk" and "load scenes from disk" trigger actions
 - **What's Saved**: Complete scenes table including all 8 scene slots, populated state, and scene data
@@ -439,16 +439,16 @@ end
 |-------|------|--------|
 | 10 | give the clock back the tempo handler found at init, if the script's is still installed (`restore_tempo_change_handler`) | `lib/params_setup.lua` |
 | 20 | give the norns menu its own `_menu.set_mode` back (`unwatch_menu_opening`), before anything that can fail | `lib/ui/menu_watch.lua` |
-| 30 | save the scenes (skipped, with a message, if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
-| 40 | save the buffer paths (skipped the same way for buffers.data) | `lib/buffers.lua` |
+| 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
+| 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |
 | 60 | stop the frame clock | `lib/ui/frame.lua` |
 | 70 | stop the drift metro | `lib/mutation.lua` |
 | 80 | stop the mutation metro and set `mutation_enabled` to 0, so param and state agree | `lib/mutation.lua` |
 | 90 | stop the pattern clock | `lib/sequencer.lua` |
-| 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0, then `scene_sequencer_stop`) | `lib/scenes.lua` |
+| 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
-| 120 | stop the LFOs (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
+| 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
 | 140 | cancel the BUFFER page's flash clock | `lib/pages/buffer.lua` |
 | 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
