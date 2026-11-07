@@ -134,12 +134,12 @@ test("ALT switches to the page's ALT rings", function()
   arc_redraw()
   assert_equal(alt_draws, 1, "and the FX rings are drawn")
   -- a page without ALT rings keeps its own under ALT
-  show_page("MAIN")
-  local density = params:get("master_density")
+  show_page("BUFFER")
+  local duration = params:get("record_duration")
   S.alt_held = true
-  context.arc.turn(1, 1, 20)
+  context.arc.turn(1, 3, 100)
   S.alt_held = false
-  assert_true(params:get("master_density") > density, "MAIN has no ALT rings: ring 1 stays density")
+  assert_true(params:get("record_duration") > duration, "BUFFER has no ALT rings: ring 3 stays record duration")
 end)
 
 test("the arc button calls the page's arc_button", function()
@@ -154,7 +154,7 @@ test("the arc button calls the page's arc_button", function()
   assert_equal(presses, 1, "a press calls arc_button")
   context.arc.push(1, 1, 0)
   assert_equal(presses, 1, "a release does not")
-  -- MAIN's arc_button is K3: start the selected voice (then lock it)
+  -- MAIN's arc_button is K3: it starts a stopped selected voice
   show_page("MAIN")
   assert_equal(type(S.registry.pages[S.constants.UI_PAGES.MAIN_PAGE].arc_button), "function", "MAIN has an arc_button")
   S.selected_voice = 3
