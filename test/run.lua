@@ -555,6 +555,8 @@ end)
 local MODULE_HOMES = {
   ["lib/voices.lua"] = { "voice_uses_synth", "voice_uses_buffer", "voice_source_label", "voice_buffer_slot" },
   ["lib/ui/frame.lua"] = { "request_redraw", "draw_frame", "start_frame_clock", "stop_frame_clock" },
+  ["lib/engine_sync.lua"] = { "send_param_to_engine", "engine_param_value", "toggle_voice", "toggle_freeze",
+    "sync_voice_to_engine", "sync_voice_values_to_engine" },
 }
 
 test("functions live in their module", function()

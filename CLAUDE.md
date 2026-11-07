@@ -78,7 +78,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 - **NaN guards**: `\strataFilter` (before the effects) and `\strataMod` (input and output, so a voice that blows up never spreads through crossmod) replace bad values with `zeroBadValues`.
 - **File writes** go to a `<path>.<instanceTag>-<generation>.part` file and are renamed into place. Never open the final path for writing. `deleteStaleParts` deletes only `.part` files and `writeSlot`'s temporary float files older than `stalePartAge`.
 - **`\strataFilter`**: never compare a UGen with `==` (that is object identity); use `BinaryOpUGen('==', ...)`.
-- **Param → engine** goes through `send_param_to_engine(id, value)` and an `engine_senders[id]` entry (this adds the LFO offsets). Never call `engine.*` from a control param's action directly. LFOs modulate around the stored value and never `params:set` their destination.
+- **Param → engine** goes through `send_param_to_engine(id, value)` and an `S.engine_senders[id]` entry (this adds the LFO offsets). Never call `engine.*` from a control param's action directly. LFOs modulate around the stored value and never `params:set` their destination.
 - **Scenes**: a new captured field needs `validate_scene` coverage and a migration default (`SCENE_GLOBAL_PARAMS.default`, `VOICE_SCENE_DEFAULTS` or `SCENE_BLOCK_DEFAULTS`). Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources) switch at the end of a transition, never crossfade. A recall sends one full sync per running voice whose source changed, after its params (`scene_recall_in_progress`).
 - **Source tests**: use `voice_uses_synth(i)` / `voice_uses_buffer(i)`. Never use `not voice_uses_synth` (that includes input).
 - **Grid and arc handlers live on the vport only** (`grid.connect(port)`, `arc.connect`). Never store or attach to the raw device passed to `grid.add`.
@@ -108,7 +108,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 
 **Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of `strata.lua`): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (2), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (5), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `BUFFER_SECONDS` (16), `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers`, `bufferSeconds` and `numModSlots`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
-**Lua's 200-local limit**: `strata.lua`'s main chunk uses 181 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
+**Lua's 200-local limit**: `strata.lua`'s main chunk uses 166 locals. Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) or use global functions; never add many top-level `local`s. To measure the headroom, append `local probe1, ..., probeN` to a copy of the script and run `luac -p` on it. The harness fails with "too many local variables" when the limit is hit.
 
 **Descriptive names**: `selected_voice`, not `sv`; `master_density`, not `md`.
 
@@ -119,7 +119,7 @@ Input source:   SoundIn → strataInput → Input Bus → strataGrain → Main B
 ### CRITICAL: keep Lua and the engine in sync
 
 - A new or changed `addCommand` needs: matching `engine.*` calls (same count and types; SC type codes i/f/s), the table row above, and the engine stub picks it up from the SC source.
-- A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam` and `GRAIN_PARAM_IDS`.
+- A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `S.engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam` and `GRAIN_PARAM_IDS`.
 - Lua defaults are what the engine plays (`sync_voice_to_engine` sends them). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
 - New voice-level controls that a buffer or input grain synth also needs belong in `voiceControls` / `grainControls` and `controlNameSets` (see Audio Sources in `docs/notes/engine.md`).
 

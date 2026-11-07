@@ -50,13 +50,6 @@ local MAIN_PARAMS = S.constants.MAIN_PARAMS
 local BUFFER_MAIN_PARAM = S.constants.BUFFER_MAIN_PARAM
 local INPUT_MAIN_PARAM = S.constants.INPUT_MAIN_PARAM
 
--- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
--- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
-local function engine_mod_source(source)
-  if source == 0 then return -1 end
-  return source - 1
-end
-
 -- Voices: S.voices (the voice definitions), S.frozen, S.master_density,
 -- S.selected_voice and the voice source helpers (lib/voices.lua). The
 -- module sets its S fields itself: S.voices is the voices table
@@ -66,6 +59,12 @@ include("lib/voices")(S)
 -- start_frame_clock, stop_frame_clock; S.ui_page (lib/ui/frame.lua)
 S.lib = S.lib or {}
 S.lib.frame = include("lib/ui/frame")(S)
+
+-- Param -> engine and voice start/sync: send_param_to_engine,
+-- engine_param_value, toggle_voice, toggle_freeze, sync_voice_to_engine,
+-- sync_voice_values_to_engine; S.engine_senders, S.engine_param_values,
+-- S.lfo_last_dest, S.lfo_scaled (lib/engine_sync.lua)
+S.lib.engine_sync = include("lib/engine_sync")(S)
 
 local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
@@ -122,14 +121,14 @@ local MIDI = {
   note_off_options = {"ignore", "voice off"},
 }
 local midi_device = nil     -- the MIDI vport (midi.connect) Strata listens to
-local midi_state = {
+S.midi_state = {
   bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
   held = {},                -- per voice: set of notes held on it
   note_voice = {},          -- per channel: note -> the voice its note on played
 }
 for i = 1, NUM_VOICES do
-  midi_state.bend[i] = 1
-  midi_state.held[i] = {}
+  S.midi_state.bend[i] = 1
+  S.midi_state.held[i] = {}
 end
 
 -- Pattern sequencer
@@ -510,107 +509,6 @@ function buffer_load_failed(value)
   buffer_display_changed()
 end
 
--- Param -> engine. A param action stores its value and calls
--- send_param_to_engine(id, value), which adds the offsets of any global LFO
--- modulating that param, so an edit (or the drift, a mutation, a scene fade)
--- never sends the plain value under a running LFO. The LFOs drive the
--- engine through the same path (send_engine_value). engine_senders[id]
--- holds the engine call for a param (gated on the voice running where the
--- engine needs that). engine_param_values remembers the last value sent per
--- param, so a command that carries several params (setFilter, setDelay,
--- setReverb, grain density x master density) sends the others as the engine
--- has them: an LFO on filter res and one on filter freq do not undo each
--- other.
-local engine_senders = {}
-local engine_param_values = {}
-local lfo_last_dest = {}   -- per LFO: param id it modulates now (nil = none)
-local lfo_scaled = {}      -- per LFO: its last scaled value (-depth..depth) at lfo_last_dest
-
--- The value the engine last got for a param (its stored value until sent)
-local function engine_param_value(param_id)
-  local value = engine_param_values[param_id]
-  if value == nil then return params:get(param_id) end
-  return value
-end
-
--- value plus scaled * half the range of every LFO on param_id (LFOs on one
--- destination add up), clamped to the range; value itself when no LFO is on it
-local function with_lfo_offsets(param_id, value)
-  local offset, modulated = 0, false
-  for n = 1, NUM_LFOS do
-    if lfo_last_dest[n] == param_id then
-      offset = offset + lfo_scaled[n]
-      modulated = true
-    end
-  end
-  if not modulated then return value end
-  local minval, maxval = param_range(param_id)
-  return util.clamp(value + offset * 0.5 * (maxval - minval), minval, maxval)
-end
-
--- Record the value as sent and run the param's engine call
-local function send_engine_value(param_id, value)
-  engine_param_values[param_id] = value
-  local sender = engine_senders[param_id]
-  if sender then sender(value) end
-end
-
--- A param's stored value, as modulated by the LFOs on it. Always sends.
-function send_param_to_engine(param_id, value)
-  send_engine_value(param_id, with_lfo_offsets(param_id, value))
-end
-
--- sync_voice_values_to_engine sends a voice's stored values: forget what
--- was sent for its params before
-local function forget_sent_voice_values(voice_idx)
-  local prefix = "v" .. voice_idx .. "_"
-  for param_id in pairs(engine_param_values) do
-    if param_id:sub(1, #prefix) == prefix then
-      engine_param_values[param_id] = nil
-    end
-  end
-end
-
--- Effects chain (filter -> delay -> reverb -> master). Each filter, delay or
--- reverb param sends its whole command, with the values the engine has for
--- the others.
-local function send_filter_to_engine()
-  engine.setFilter(engine_param_value("filter_freq"), engine_param_value("filter_res"),
-    engine_param_value("filter_type") - 1, engine_param_value("filter_mix"))
-end
-
-local function send_delay_to_engine()
-  engine.setDelay(engine_param_value("delay_time"), engine_param_value("delay_feedback"),
-    engine_param_value("delay_mix"))
-end
-
-local function send_reverb_to_engine()
-  engine.setReverb(engine_param_value("reverb_mix"), engine_param_value("reverb_size"),
-    engine_param_value("reverb_damp"))
-end
-
--- Master density scales every running voice's grain density
-local function send_master_density_to_engine(density)
-  for i = 1, NUM_VOICES do
-    if S.voices[i].active then
-      engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)
-    end
-  end
-end
-
-engine_senders.master_density = send_master_density_to_engine
-engine_senders.filter_type = send_filter_to_engine
-engine_senders.filter_freq = send_filter_to_engine
-engine_senders.filter_res = send_filter_to_engine
-engine_senders.filter_mix = send_filter_to_engine
-engine_senders.delay_time = send_delay_to_engine
-engine_senders.delay_feedback = send_delay_to_engine
-engine_senders.delay_mix = send_delay_to_engine
-engine_senders.reverb_mix = send_reverb_to_engine
-engine_senders.reverb_size = send_reverb_to_engine
-engine_senders.reverb_damp = send_reverb_to_engine
-engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
-
 -- Global LFOs, built on norns' lib/lfo.lua. Each LFO runs from -1 to 1
 -- around a center baseline, so the library applies depth and its action
 -- gets a scaled value in -depth..depth. apply_lfo sends the destination's
@@ -618,7 +516,8 @@ engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 -- send_param_to_engine; the param itself is never written. The library
 -- stops calling the action when an LFO is turned off or its depth is 0, so
 -- Strata re-sends the stored value then, and when the destination changes.
--- (lfo_last_dest and lfo_scaled are declared with send_param_to_engine.)
+-- (S.lfo_last_dest and S.lfo_scaled are declared with send_param_to_engine,
+-- in lib/engine_sync.lua.)
 local lfos = {}
 local selected_lfo = 1     -- LFO page and arc ring 4
 local lfo_last_raw = {}    -- per LFO: last raw shape value (0..1), for the LFO page dot
@@ -679,10 +578,10 @@ end
 -- LFO n stops modulating its destination: the engine gets the stored value
 -- back (plus any other LFO's offset on it). Always sends.
 function restore_lfo_destination(n)
-  local param_id = lfo_last_dest[n]
+  local param_id = S.lfo_last_dest[n]
   if not param_id then return end
-  lfo_last_dest[n] = nil
-  lfo_scaled[n] = nil
+  S.lfo_last_dest[n] = nil
+  S.lfo_scaled[n] = nil
   send_param_to_engine(param_id, params:get(param_id))
 end
 
@@ -692,18 +591,18 @@ function apply_lfo(n, scaled, raw)
   local param_id = lfo_destination_id(n)
   -- a "main" destination re-resolves to another param when the voice's
   -- source changes: give the old one back first
-  if param_id ~= lfo_last_dest[n] then restore_lfo_destination(n) end
+  if param_id ~= S.lfo_last_dest[n] then restore_lfo_destination(n) end
   if not param_id then return end
-  lfo_last_dest[n] = param_id
-  lfo_scaled[n] = scaled
-  local value = with_lfo_offsets(param_id, params:get(param_id))
+  S.lfo_last_dest[n] = param_id
+  S.lfo_scaled[n] = scaled
+  local value = S.lib.engine_sync.with_lfo_offsets(param_id, params:get(param_id))
   -- skip steps too small to matter (a slow LFO moves very little per step)
-  local last_sent = engine_param_values[param_id]
+  local last_sent = S.engine_param_values[param_id]
   if last_sent ~= nil then
     local minval, maxval = param_range(param_id)
     if math.abs(value - last_sent) < (maxval - minval) * LFO_SEND_THRESHOLD then return end
   end
-  send_engine_value(param_id, value)
+  S.lib.engine_sync.send_engine_value(param_id, value)
 end
 
 -- LFO page dot: the library's running phase is internal (get("phase") is
@@ -1295,7 +1194,7 @@ function add_voice_params(voice_idx)
   -- A voice param's engine call runs only while the voice is running
   -- (sync_voice_to_engine sends everything when it starts)
   local function add_voice_sender(param_id, send)
-    engine_senders[param_id] = function(value)
+    S.engine_senders[param_id] = function(value)
       if S.voices[voice_idx].active then send(value) end
     end
   end
@@ -1501,7 +1400,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       S.voices[voice_idx].crossmod.slot1.source = x
       if S.voices[voice_idx].active then
-        engine.setModSource(voice_idx - 1, 1, engine_mod_source(x))
+        engine.setModSource(voice_idx - 1, 1, S.lib.engine_sync.engine_mod_source(x))
       end
     end
   }
@@ -1548,7 +1447,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       S.voices[voice_idx].crossmod.slot2.source = x
       if S.voices[voice_idx].active then
-        engine.setModSource(voice_idx - 1, 2, engine_mod_source(x))
+        engine.setModSource(voice_idx - 1, 2, S.lib.engine_sync.engine_mod_source(x))
       end
     end
   }
@@ -1595,7 +1494,7 @@ function add_voice_params(voice_idx)
     action = function(x)
       S.voices[voice_idx].crossmod.slot3.source = x
       if S.voices[voice_idx].active then
-        engine.setModSource(voice_idx - 1, 3, engine_mod_source(x))
+        engine.setModSource(voice_idx - 1, 3, S.lib.engine_sync.engine_mod_source(x))
       end
     end
   }
@@ -1662,87 +1561,6 @@ function get_param_spec(param_name)
     brightness = controlspec.new(0, 1, "lin", 0.01, 0.5)
   }
   return specs[param_name] or controlspec.new(0, 1, "lin", 0.01, 0.5)
-end
-
-function toggle_voice(voice_idx)
-  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-  local voice = S.voices[voice_idx]
-  
-  if voice.active then
-    engine.voiceOff(voice_idx - 1)
-    voice.active = false
-  else
-    engine.voiceOn(
-      voice_idx - 1,
-      voice.params.freq,
-      voice.params.amp,
-      voice.params.pan or 0,
-      voice.grain.size,
-      -- the values the engine has (as the grain density sender sends them)
-      engine_param_value("v" .. voice_idx .. "_grain_density") * engine_param_value("master_density"),
-      voice.grain.pitch
-    )
-    sync_voice_to_engine(voice_idx)
-    voice.active = true
-  end
-  
-  update_voice_list()
-  request_redraw()
-  grid_redraw()
-end
-
-function toggle_freeze(voice_idx)
-  if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-  S.frozen[voice_idx] = not S.frozen[voice_idx]
-  update_voice_list()
-  request_redraw()
-  grid_redraw()
-end
-
--- Push the complete Lua-side state of a voice to its freshly started engine
--- synths. voiceOn only carries the initial freq/amp/pan and grain values, and
--- param actions only reach the engine while a voice is active, so without this
--- edits made while a voice was off (and scene recalls) would be lost. The
--- source goes first (the engine ignores it when unchanged).
-function sync_voice_to_engine(voice_idx)
-  engine.setGrainSource(voice_idx - 1, S.voices[voice_idx].source - 1)
-  sync_voice_values_to_engine(voice_idx)
-end
-
--- Everything sync_voice_to_engine sends after the source: synthesis, grain
--- (including the buffer params) and crossmod values
-function sync_voice_values_to_engine(voice_idx)
-  local voice = S.voices[voice_idx]
-  local engine_voice = voice_idx - 1
-  local engine_master_density = engine_param_value("master_density")
-  -- the engine now gets this voice's stored values (LFOs re-apply theirs
-  -- on their next step)
-  forget_sent_voice_values(voice_idx)
-
-  for key, value in pairs(voice.params) do
-    engine.setVoiceParam(engine_voice, key, value)
-  end
-
-  engine.setGrainParam(engine_voice, "grainSize", voice.grain.size)
-  engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * engine_master_density)
-  engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
-  engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
-  engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
-  engine.setGrainParam(engine_voice, "grainMode", voice.grain.mode - 1)
-  engine.setGrainParam(engine_voice, "bufPos", voice.grain.buf_pos)
-  engine.setGrainParam(engine_voice, "bufRate", voice.grain.buf_rate)
-  engine.setGrainParam(engine_voice, "bufScan", voice.grain.buf_scan)
-
-  for slot = 1, NUM_MOD_SLOTS do
-    local slot_state = voice.crossmod["slot" .. slot]
-    engine.setModSource(engine_voice, slot, engine_mod_source(slot_state.source))
-    engine.setModAmpAmt(engine_voice, slot, slot_state.amp_amt)
-    engine.setModFreqAmt(engine_voice, slot, slot_state.freq_amt)
-  end
-
-  engine.setModSpeed(engine_voice, voice.crossmod.speed)
-  -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
-  engine.setVoiceParam(engine_voice, "bend", midi_state.bend[voice_idx])
 end
 
 function randomize_voice(voice_idx)
@@ -3675,13 +3493,13 @@ end
 -- bend returns for them will not arrive
 function reset_midi_input()
   for i = 1, NUM_VOICES do
-    midi_state.held[i] = {}
-    if midi_state.bend[i] ~= 1 then
-      midi_state.bend[i] = 1
+    S.midi_state.held[i] = {}
+    if S.midi_state.bend[i] ~= 1 then
+      S.midi_state.bend[i] = 1
       if S.voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
     end
   end
-  midi_state.note_voice = {}
+  S.midi_state.note_voice = {}
 end
 
 -- The voice a MIDI channel addresses, or nil
@@ -3696,19 +3514,19 @@ function midi_event(data)
   if msg.type == "note_on" and msg.vel > 0 then
     local voice_idx = midi_target_voice(msg.ch)
     if voice_idx then
-      midi_state.note_voice[msg.ch] = midi_state.note_voice[msg.ch] or {}
-      midi_state.note_voice[msg.ch][msg.note] = voice_idx
-      midi_state.held[voice_idx][msg.note] = true
+      S.midi_state.note_voice[msg.ch] = S.midi_state.note_voice[msg.ch] or {}
+      S.midi_state.note_voice[msg.ch][msg.note] = voice_idx
+      S.midi_state.held[voice_idx][msg.note] = true
       midi_note_on(voice_idx, msg.note, msg.vel)
     end
   elseif msg.type == "note_on" or msg.type == "note_off" then
     -- the voice this note's note on played (in omni mode the selection may
     -- have moved since), or the channel's voice for a note it never saw
-    local channel_notes = midi_state.note_voice[msg.ch]
+    local channel_notes = S.midi_state.note_voice[msg.ch]
     local voice_idx = (channel_notes and channel_notes[msg.note]) or midi_target_voice(msg.ch)
     if channel_notes then channel_notes[msg.note] = nil end
     if voice_idx then
-      midi_state.held[voice_idx][msg.note] = nil
+      S.midi_state.held[voice_idx][msg.note] = nil
       midi_note_off_for(voice_idx)
     end
   elseif msg.type == "pitchbend" then
@@ -3739,7 +3557,7 @@ end
 -- releasing synths).
 function midi_note_off_for(voice_idx)
   if params:get("midi_note_off") ~= 2 or not S.voices[voice_idx].active then return end
-  if next(midi_state.held[voice_idx]) ~= nil then return end
+  if next(S.midi_state.held[voice_idx]) ~= nil then return end
   toggle_voice(voice_idx)
 end
 
@@ -3752,7 +3570,7 @@ function midi_pitchbend(voice_idx, value)
 end
 
 function midi_set_bend(voice_idx, ratio)
-  midi_state.bend[voice_idx] = ratio
+  S.midi_state.bend[voice_idx] = ratio
   if S.voices[voice_idx].active then engine.setVoiceParam(voice_idx - 1, "bend", ratio) end
 end
 
@@ -3762,7 +3580,7 @@ end
 -- when it starts). Per voice mode leaves bends with their channels' voices.
 function midi_bend_follow_selection(previous_voice)
   if params:get("midi_channel_mode") ~= 2 then return end
-  local ratio = midi_state.bend[previous_voice]
+  local ratio = S.midi_state.bend[previous_voice]
   if ratio == 1 then return end
   midi_set_bend(previous_voice, 1)
   midi_set_bend(S.selected_voice, ratio)
