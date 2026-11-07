@@ -29,7 +29,8 @@ return function(S)
   -- number at slot_x, the name from name_x, the seconds (or REC) right-
   -- aligned at value_right; the cursor row also lists the voices reading
   -- the slot, right-aligned before its seconds, at most voices_max_width
-  -- wide. Strings in a row stay column_gap px apart.
+  -- wide and never into the name's first name_min_width px (the voices
+  -- shorten to "v2+" first). Strings in a row stay column_gap px apart.
   S.BUFFER_PAGE = {
     name_y = 16,
     field_first_y = 24,
@@ -56,6 +57,7 @@ return function(S)
     value_right = 124,      -- clear of the scroll marker at x 127
     column_gap = 3,
     voices_max_width = 25,  -- "v2 v6" under the layout test's width estimate
+    name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
@@ -191,7 +193,8 @@ return function(S)
       if selected then name_right = value_right - text_width(seconds) - PAGE.column_gap end
     end
     if selected then
-      local voices = slot_voices_text(slot, math.min(PAGE.voices_max_width, name_right - PAGE.name_x))
+      local voices_room = name_right - PAGE.name_x - PAGE.name_min_width - PAGE.column_gap
+      local voices = slot_voices_text(slot, math.min(PAGE.voices_max_width, voices_room))
       if voices ~= "" then
         screen.move(name_right, y)
         screen.text_right(voices)
@@ -284,7 +287,10 @@ return function(S)
   local function stop_input_meter()
     for _, name in ipairs(INPUT_POLLS) do
       local input_poll = meter.polls[name]
-      if input_poll then input_poll:stop() end
+      if input_poll then
+        input_poll:stop()
+        input_poll.callback = nil  -- a value already on its way after leave asks for no redraw
+      end
     end
   end
 

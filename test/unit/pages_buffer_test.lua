@@ -308,7 +308,9 @@ test("slots sit 7 px apart, six at a time, with a scroll marker", function()
   enc(2, 2); redraw()
   slots, rows = shown_slots()
   assert_equal(table.concat(slots, " "), "2 3 4 5 6 7", "one row above the cursor stays in view")
-  assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows v2 v6")
+  -- under the layout test's width estimate the name keeps its minimum width, so
+  -- the voices shorten to "v2+" (the full list shows with a narrower font, below)
+  assert_equal(slot_row_text(context, rows[3]), "3 x v2+ 2.5s", "the cursor row shows its voices, shortened")
   for _, entry in ipairs(texts_on_row(context, rows[3])) do
     if entry.x >= page.slot_x then assert_equal(entry.level, 15, "the cursor row is bright") end
   end
@@ -384,6 +386,8 @@ test("the input polls stop when BUFFER is left and in cleanup", function()
   assert_equal((meter_state(context)), 8)
   show_page("SCENES")
   assert_true(not left.running and not right.running, "stopped when BUFFER is left")
+  assert_equal(left.callback, nil, "a late value after leave reaches no callback")
+  assert_equal(right.callback, nil)
   show_page("BUFFER")
   assert_true(left.running and right.running, "running again on BUFFER")
   redraw()
@@ -885,6 +889,34 @@ test("opening the norns menu forgets held keys at once; cleanup restores _menu.s
   assert_equal(norns.menu.status(), true, "the inert wrapper still passes the call on")
   assert_equal(local_value("key_press_page")[2], local_value("UI_PAGES").index.BUFFER, "and no longer touches the script's keys")
   _menu.set_mode(false)
+end)
+
+
+test("the cursor row lists the voices in full when they fit, and keeps the name's minimum width", function()
+  -- a font narrower than the layout estimate (4 px a character), from before the
+  -- first draw, so nothing is measured with the estimate
+  local context = load_strata(); finish_startup(context)
+  local text_extents = screen.text_extents
+  screen.text_extents = function(text) return 4 * #tostring(text), 8 end
+  local page = local_value("BUFFER_PAGE")
+  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 202.5)
+  params:set("v2_source", 4); params:set("v6_source", 4)   -- voices 2 and 6 read slot 3
+  local_value("buffer_page").slot = 3
+  show_page("BUFFER")
+  local rows = slot_rows(context)
+  assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows v2 v6")
+  -- a long name with every voice on the slot: the voices shorten, the name keeps its room
+  load_buffer(3, "/tmp/a_long_name_for_the_slot.wav"); context.polls.fire("bufferState", 216)
+  for voice = 1, 7 do params:set("v" .. voice .. "_source", 4) end
+  redraw()
+  local name, voices
+  for _, entry in ipairs(texts_on_row(context, rows[3])) do
+    if entry.x == page.name_x then name = entry.text end
+    if entry.text:match("^v%d") then voices = entry end
+  end
+  screen.text_extents = text_extents
+  assert_true(name ~= nil and 4 * #name >= page.name_min_width - 4, "the name keeps about its minimum width: " .. tostring(name))
+  assert_true(voices ~= nil and voices.text:sub(-1) == "+", "the voices are shortened with +: " .. tostring(voices and voices.text))
 end)
 
 end

@@ -7,7 +7,7 @@
 - BUFFER's flashes go through `buffer_page_flash` (the shared "hints" flash, owned by BUFFER), never a clock of the page's own; they show only while BUFFER is up.
 - A save while the slot is `recording` or `finishing` saves nothing (`buf <n> busy`).
 - `fileselect` is required (`require "fileselect"`), never read as a global.
-- The input meter's polls (`amp_in_l`, `amp_in_r`) run only while BUFFER shows: the record's `enter` starts them, `leave` and cleanup step `input_meter` (135) stop them. They are looked up with `poll.set` at each `enter`, never kept from an earlier one or from load time (norns replaces its poll objects when it re-registers the polls). A norns without them leaves the meter dark.
+- The input meter's polls (`amp_in_l`, `amp_in_r`) run only while BUFFER shows: the record's `enter` starts them, `leave` and cleanup step `input_meter` (135) stop them and clear their callbacks, so a value already on its way asks for no redraw. They are looked up with `poll.set` at each `enter`, never kept from an earlier one or from load time (norns replaces its poll objects when it re-registers the polls). A norns without them leaves the meter dark.
 - A poll value asks for a redraw only when the drawn level or held peak changes. The peak's expiry is checked at draw time, so it goes out even with no new poll value.
 - The slot list scrolls (six of eight rows visible). Rows and the scroll marker go through `S.lib.ui_field_list.draw`; no slot text reaches x 127 (the marker), and nothing in the left column crosses the divider.
 - A redraw measures no text it measured before: slot names are cut once per name and width, the voice name once, and the seconds and voices texts' widths are memoized.
@@ -32,7 +32,7 @@
   - slot number at x 59;
   - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name (`name == "empty"`);
   - seconds (`%.1fs`) or `REC`, right-aligned at x 124; none for an empty slot (no name, no reported audio, not recording);
-  - names in other rows end 3 px before the widest seconds column (`16.0s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`), dropping whole voices from the end with `+` when they do not fit, and the name gets what is left (possibly nothing).
+  - names in other rows end 3 px before the widest seconds column (`16.0s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` when they do not fit (`v2+`), and the name gets what is left. Under the layout test's width estimate a two-voice list always shortens to `v2+`; the norns font is narrower.
 - Row level: the cursor row 15, a loaded or recording slot 6, others 2.
 - `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), each field, long names with every voice on one slot, every slot recording, the saved, busy, empty and load-failed flashes, the meter with a held peak.
 
