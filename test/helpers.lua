@@ -183,17 +183,23 @@ local function tabutil_text(value)
 end
 
 -- The maintained docs (paths from the repo root): CLAUDE.md, README.md,
--- docs/status.md and every docs/notes file. Their engine.<name>( mentions
--- must name commands the engine has, and the repo paths they name must
--- exist. CHANGELOG.md and docs/design/ are history: they describe a release
+-- docs/status.md, every .md file under docs/notes (recursively) and
+-- docs/user. Their engine.<name>( mentions must name commands the engine
+-- has, and the repo paths they name must exist. CHANGELOG.md and docs/design/ are history: they describe a release
 -- as it was, so they are not held to today's commands and files
 local function maintained_docs()
   local docs = { "CLAUDE.md", "README.md", "docs/status.md" }
-  local listing = io.popen('ls "' .. repo_root .. '/docs/notes" 2>/dev/null')
-  for name in listing:read("*a"):gmatch("[^\n]+") do
-    if name:match("%.md$") then table.insert(docs, "docs/notes/" .. name) end
+  local prefix = repo_root .. "/"
+  local found = {}
+  for _, dir in ipairs({ "docs/notes", "docs/user" }) do
+    local listing = io.popen('find "' .. prefix .. dir .. '" -name "*.md" 2>/dev/null')
+    for path in listing:read("*a"):gmatch("[^\n]+") do
+      if path:sub(1, #prefix) == prefix then table.insert(found, path:sub(#prefix + 1)) end
+    end
+    listing:close()
   end
-  listing:close()
+  table.sort(found)
+  for _, path in ipairs(found) do table.insert(docs, path) end
   return docs
 end
 
@@ -221,20 +227,28 @@ end
 -- `lib/...` in backticks, and relative Markdown link targets to a file,
 -- such as [CHANGELOG.md](CHANGELOG.md) (not code such as
 -- `PAGE_KEY[ui_page](n)`). A norns library is named by its path in the
--- norns repo (`lua/lib/lfo.lua`), which is not checked
-local function doc_paths_missing(text)
+-- norns repo (`lua/lib/lfo.lua`), which is not checked. Link targets are
+-- relative to the doc named by doc_name (a path from the repo root)
+local function doc_paths_missing(text, doc_name)
+  local doc_dir = doc_name and doc_name:match("^(.*)/[^/]*$") or ""
   local paths = {}
   for path in text:gmatch("`([%w%._/%-]+)`") do
     if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") or path:match("^lib/") then
       table.insert(paths, path)
     end
   end
+  local links = {}
   for target in text:gmatch("%]%(([%w%._/%-]+%.%a+)%)") do
     table.insert(paths, target)
+    links[target] = true
   end
   local missing = {}
   for _, path in ipairs(paths) do
-    local handle = io.open(repo_root .. "/" .. path, "r")
+    local base = (links[path] and doc_dir and doc_dir ~= "") and (doc_dir .. "/") or ""
+    local handle = io.open(repo_root .. "/" .. base .. path, "r")
+    -- Temporary: docs/notes/lua.md links root files from the repo root.
+    -- Delete this fallback once the notes split removes lua.md
+    if not handle and doc_name == "docs/notes/lua.md" then handle = io.open(repo_root .. "/" .. path, "r") end
     if handle then handle:close() else table.insert(missing, path) end
   end
   return missing, #paths
