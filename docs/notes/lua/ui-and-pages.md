@@ -10,6 +10,7 @@
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
 - MAIN is found by index (`S.ui_page == UI_PAGES.MAIN_PAGE`), never by its title string.
+- `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `clamp_all()` first.
 
 ## Owns
 
@@ -21,6 +22,8 @@
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `long_press` (fields of `S.lib.ui_alt`). See ALT below.
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
+- `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
+- `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors`; `move`, `clamp_all` (fields).
 - `lib/pages/main.lua`, `lib/pages/voice.lua`, `lib/pages/seq.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/scenes.lua`, `lib/pages/setup.lua` (`S.lib.pages_main`, `S.lib.pages_voice`, ...): one screen page each and its `S.registry.pages` record.
   - VOICE, SEQ, SCENES: stubs for now (draw nothing, hint `E1:page`, ignore input).
   - MAIN: `S.voice_list`, `update_voice_list`, `main_param_id`, `main_param_entry`, `main_param_label`.
@@ -37,7 +40,7 @@ The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAI
 
 Encoders and keys (`strata.lua`):
 - `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()` and the new one's `enter()`, if they have them.
-- `init` turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
+- At init a start step in `strata.lua` (`START_ORDER.e1_settings`) turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
 - `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`. With ALT held both go the ALT way instead (ALT below).
 - `key(1, z)` only sets ALT (`S.lib.ui_alt.set(z == 1)`; K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
 - Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page.
@@ -54,6 +57,25 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - `screen.clear(); draw_header(); record.draw(); draw_hints(record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list.
 - The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`. BUFFER's `hints` returns its flash text (the K2+K3 save result) while it shows.
+
+## Cursors and VOICE rows
+
+`S.cursors` (`lib/ui/cursors.lua`) holds the cursors more than one page or ring set uses:
+- `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row (row 2: row 1 is the first section's label).
+- `seq_step`: 1..`PATTERN_LENGTH`.
+- `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (12): the eight scene slots, then the four `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`).
+
+`S.lib.ui_cursors.move(name, d)` moves one by `d` stops, clamped at its ends (no wrap): `voice` through `S.lib.ui_field_list.move` on the selected voice's rows (section labels take no stop), the others with `util.clamp`. An unknown name is an error. `S.lib.ui_cursors.clamp_all()` puts each cursor back on a real stop: `voice` through `field_list.clamp` (the nearest selectable row at or before it, else the first), the others within their range. `redraw()` and `arc_redraw()` run it first, so a source switched by the grid, MIDI or a scene recall, or another selected voice, never leaves the cursor past the end or on a label row. Neither function requests a redraw: their callers (`enc`, `key`, `arc_delta`) do.
+
+`voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists every param of a voice in four sections, each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"` or `"option"` from the param's type.
+- `synth`: `param_order` without `amp` and `pan`; for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
+- `grain`: `grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env`, `grain_mode`.
+- `crossmod`: `mod_speed`, then per slot `mod_source_<s>`, `mod_amp_amt_<s>`, `mod_freq_amt_<s>`.
+- `mix`: `source`, `amp`, and `pan` when the voice has one (Sub has none).
+
+The rows are built on each call from the voice's current source, so they follow a source change at once. Voice 1 has 28 rows (24 fields); a voice index outside 1..`NUM_VOICES` is an error. The 256's fader pages keep their own list (`fader_param_ids`).
+
+`voice_page_group(rows, cursor) -> group, row_indices` (global) gives the arc's ring group: with `k` the cursor's position among the selectable rows (`field_list.ordinal`), `group = ceil(k / 4)` and `row_indices` the row indices of selectable rows `4 * group - 3 .. 4 * group`, fewer in a last group that is not full (voice 2 has 23 fields: its sixth group is source, amp, pan). VOICE's screen marks these rows and the rings 1-4 edit them in order.
 
 ## ALT
 
@@ -80,7 +102,7 @@ Keys held into the menu:
 - `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2` whenever `norns.menu.status()` is true.
 - Without it, a K2 released in the menu would stay held and every BUFFER K3 would save instead of record.
 - It also runs the moment the menu opens. Every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call.
-- So `watch_menu_opening()` (from `init`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
+- So `watch_menu_opening()` (from its start step, `START_ORDER.menu_watch`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
 - The wrapper holds norns' function and `forget_keys_held_through_menu` as upvalues (no script-global lookup).
 - `unwatch_menu_opening()`, cleanup's second step (after the tempo handler, before anything that can fail), puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper. Otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`).
 - The 10 Hz tick stays as a fallback.
@@ -91,7 +113,7 @@ Keys held into the menu:
 
 Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - Anything that changes what the screen or the arc shows calls the global `request_redraw()`, which sets `UI_PAGES.screen_dirty` and `UI_PAGES.arc_dirty`.
-- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` at the end of `init`, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
+- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in init's last start step, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
 - `draw_frame()` clears each dirty flag and calls the global `redraw()` and/or `arc_redraw()`. A burst of arc turns, encoder steps, MIDI or param changes costs one screen draw and one arc redraw per frame, and an idle frame draws nothing.
 - Both flags start set, so the first frame draws the screen and any arc connected at start.
 - On the LFO page `draw_frame` marks the screen dirty every frame, so the dots move. The LFO page has no clock of its own.

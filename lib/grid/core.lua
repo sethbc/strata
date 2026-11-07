@@ -377,6 +377,11 @@ return function(S)
     end
   end
 
+  -- Connect the grids at init
+  S.register_start(S.constants.START_ORDER.grids, function()
+    grid_init()
+  end)
+
   -- On exit cancel every pending hold (no scene save during cleanup), forget
   -- the held keys and leave every connected grid dark
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()

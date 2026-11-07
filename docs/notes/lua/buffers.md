@@ -12,7 +12,7 @@
 `lib/buffers.lua` (`S.lib.buffers`):
 - the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine.md`, Audio Sources, Lua side), `S.buffer_polls`, `S.buffer_record_clocks`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
 - recording, loading, clearing and saving (`record_buffer`, `load_buffer`, `clear_buffer`, `save_buffer`, ...);
-- the `bufferState` and `bufferLoadFailed` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`), whose polls `init` starts into `S.buffer_polls`;
+- the `bufferState` and `bufferLoadFailed` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
 - two cleanup steps: 40 (save the buffer paths) and 130 (the polls and recording timers).
 
@@ -28,7 +28,7 @@ Saving (`save_buffers_to_disk()`):
 - per slot, the loaded file or scratch take, or a remembered file that was missing on start;
 - `cleanup()` calls it after the scenes save (step 40), but only once `load_buffers_from_disk()` has run in this session (`S.buffers_loaded`, set when it returns), so a start that failed before init's restore never overwrites the saved paths with empty slots (#72).
 
-Loading (`load_buffers_from_disk()`, from `init` after `load_scenes_from_disk()`):
+Loading (`load_buffers_from_disk()`, from its start step `START_ORDER.buffers_load`, after the scenes load):
 - resets `S.buffers_restored` and `S.buffer_autosave_blocked` first;
 - `load_buffer`s each non-empty path that `util.file_exists`, and marks the slot `restoring`;
 - `S.buffers_restored` counts only the slots the poll then confirms holding audio.

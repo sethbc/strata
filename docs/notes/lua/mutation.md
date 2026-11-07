@@ -23,7 +23,7 @@
 - cleanup steps 70 (drift metro), 80 (mutation metro) and 85 (the undo's expiry clock).
 
 Elsewhere:
-- `init` (`strata.lua`) creates `S.drift_metro` and `S.mutation_metro`.
+- Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
 - `drift_update` redraws the grid only while a grid shows page 2 (`S.lib.grid_core.any_page(2)`, `lib/grid/core.lua`).
 - `DISCRETE_GRAIN_KEYS`, `BUFFER_MUTATION_KEYS` and `UNDO_SECONDS` are in `lib/constants.lua`, aliased at the top of the constructor.
 - The voice param actions that randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
@@ -103,7 +103,7 @@ Recommended settings:
 - **Dramatic shift**: probability 0.25, amount 0.4, rate 1 s.
 
 Lifecycle:
-- **Initialization**: `init` creates the metro but does not start it.
+- **Initialization**: its start step creates the metro at init but does not start it.
 - **Control**: the `mutation_enabled` action starts and stops the metro.
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
 
