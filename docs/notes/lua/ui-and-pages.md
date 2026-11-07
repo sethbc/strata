@@ -52,7 +52,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 `redraw()`:
 - `screen.clear(); draw_header(); record.draw(); draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list.
-- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (on whatever page is up), else the record's hints.
+- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints.
 
 ## Header and flashes
 
@@ -67,12 +67,12 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Nothing calls for a redraw on its own here: the indicators' state changes already ask for one (param actions, `grid_key`/`key` around `pattern_toggle`, `buffer_display_changed`).
 
 Flashes (`lib/ui/flash.lua`, `S.lib.ui_flash`):
-- Two slots, `"header"` and `"hints"` (`S.lib.ui_flash.slots[slot]`: `text`, `ends_at`, `clock`). Another slot name is an error.
-- `S.lib.ui_flash.start(slot, text, seconds)` (seconds default `HEADER.flash_seconds`, 1.5): cancels the slot's running clock, stores the text and `ends_at = util.time() + seconds`, starts a clock that sleeps `seconds`, clears the text and calls `request_redraw()`, and asks for a redraw itself. So one clock per slot runs at a time.
-- `S.lib.ui_flash.text(slot)`: the text while `util.time() < ends_at`, else nil (so a clock that wakes late changes nothing on screen).
+- Two slots, `"header"` and `"hints"` (`S.lib.ui_flash.slots[slot]`: `text`, `ends_at`, `page`, `clock`). Another slot name is an error.
+- `S.lib.ui_flash.start(slot, text, seconds, page)` (seconds default `HEADER.flash_seconds`, 1.5; `page` a `UI_PAGES` index or nil): cancels the slot's running clock, stores the text, the page and `ends_at = util.time() + seconds`, starts a clock that sleeps `seconds`, clears the text and calls `request_redraw()`, and asks for a redraw itself. So one clock per slot runs at a time. A nil text only ends the flash showing (never draws `nil`).
+- `S.lib.ui_flash.text(slot)`: the text while `util.time() < ends_at` and, for a flash with a page, while that page is up (`S.ui_page`); else nil (so a clock that wakes late changes nothing on screen, and a prompt such as SCENES' "K3 again" never shows over another page's keys).
 - `S.lib.ui_flash.cancel_all()`: cleanup step 140 cancels both clocks and clears the texts.
 - `header_flash(text)` (global) = `start("header", text, 1.5)`. While it shows, the header draws the text at x 40 (`flash_x`), level 15, cut with `fit_text` to 74 px (`flash_width`, so it ends by x 114, before a right-aligned `S8`), instead of the dots and indicators (and a `header_status`). The title and scene stay.
-- `buffer_page_flash(text)` = `start("hints", text, 1.5)`. `redraw()` draws the "hints" flash on the hint row of any page (a failed load reported while another page is up shows there too).
+- `buffer_page_flash(text)` = `start("hints", text, 1.5, UI_PAGES.index.BUFFER)`: it shows on BUFFER's hint row only, as before (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s).
 
 ## Key releases and the norns menu
 
@@ -203,7 +203,7 @@ Controls:
 - With no buffer source (synth, input) K2 and K3 do nothing.
 - Hints: `K2:load K3:rec K2+3:save` (`K3:stop` while the slot records, `K3:...` while it is `finishing`), or `K2:- K3:- E3:source`.
 
-The flash: `buffer_page_flash(text)` starts the shared "hints" flash for 1.5 s (see Header and flashes). `redraw()` draws it on the hint row instead of the key hints while it shows; its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it.
+The flash: `buffer_page_flash(text)` starts the shared "hints" flash for 1.5 s, owned by BUFFER (see Header and flashes). `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows; its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it.
 
 ### The file selector (K2 release)
 

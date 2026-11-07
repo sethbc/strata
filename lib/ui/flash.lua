@@ -1,7 +1,9 @@
 -- lib/ui/flash.lua
 -- Transient texts (S.lib.ui_flash). Two slots: "header" replaces the
 -- header's page dots and indicators (draw_header), "hints" replaces the
--- hint row on every page (redraw() in strata.lua). header_flash and
+-- hint row (redraw() in strata.lua). A flash started for a page shows only
+-- while that page is up, so a prompt never sits over another page's keys.
+-- header_flash and
 -- buffer_page_flash (lib/pages/buffer.lua) start them; the functions that
 -- are global stay global.
 
@@ -10,7 +12,8 @@ return function(S)
   local HEADER = S.constants.HEADER
 
   -- Per slot: the text (nil when none), ends_at (util.time() when it stops
-  -- showing) and the clock that ends it. Tests read the clocks here
+  -- showing), page (the UI_PAGES index it belongs to, nil for every page)
+  -- and the clock that ends it. Tests read the clocks here
   M.slots = {header = {ends_at = 0}, hints = {ends_at = 0}}
 
   local function slot_state(slot)
@@ -26,15 +29,23 @@ return function(S)
     end
   end
 
-  -- Show `text` in `slot` for `seconds` (HEADER.flash_seconds if nil). A new
-  -- flash in a slot replaces the one showing and cancels its clock first.
-  -- text() stops returning it at ends_at; the clock clears it (even if it
-  -- wakes a little early) and asks for a redraw, so it goes away untouched.
-  function M.start(slot, text, seconds)
+  -- Show `text` in `slot` for `seconds` (HEADER.flash_seconds if nil), on
+  -- page `page` only (a UI_PAGES index; nil: whatever page is up). A new
+  -- flash in a slot replaces the one showing and cancels its clock first; a
+  -- nil text just ends the one showing. text() stops returning it at
+  -- ends_at; the clock clears it (even if it wakes a little early) and asks
+  -- for a redraw, so it goes away untouched.
+  function M.start(slot, text, seconds, page)
     local state = slot_state(slot)
     seconds = seconds or HEADER.flash_seconds
     cancel_clock(state)
+    request_redraw()
+    if text == nil then
+      state.text, state.page = nil, nil
+      return
+    end
     state.text = tostring(text)
+    state.page = page
     state.ends_at = util.time() + seconds
     state.clock = clock.run(function()
       clock.sleep(seconds)
@@ -42,14 +53,15 @@ return function(S)
       state.text = nil
       request_redraw()
     end)
-    request_redraw()
   end
 
-  -- The slot's text while it shows, else nil
+  -- The slot's text while it shows (and its page, if it has one, is up),
+  -- else nil
   function M.text(slot)
     local state = slot_state(slot)
-    if state.text and util.time() < state.ends_at then return state.text end
-    return nil
+    if not state.text or util.time() >= state.ends_at then return nil end
+    if state.page and state.page ~= S.ui_page then return nil end
+    return state.text
   end
 
   function M.cancel_all()

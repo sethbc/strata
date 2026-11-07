@@ -315,17 +315,49 @@ test("the BUFFER hint flash still shows on the hint row for 1.5 s", function()
   assert_equal(slot.clock, nil)
 end)
 
-test("the hints flash shows on the hint row of whatever page is up", function()
+test("a hints flash shows only on its owning page", function()
   local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local BUFFER = S.constants.UI_PAGES.index.BUFFER
   for page = 1, #PAGE_TITLES do
     show_page(page)
     buffer_page_flash("buf 2 load failed"); redraw()
-    assert_equal(hint_text(context), "buf 2 load failed", PAGE_TITLES[page] .. " shows the hints flash")
-    assert_screen_layout(context, PAGE_TITLES[page] .. " with a hints flash")
+    if page == BUFFER then
+      assert_equal(hint_text(context), "buf 2 load failed", "BUFFER shows its flash")
+    else
+      assert_equal(hint_text(context), S.registry.pages[page].hints(false),
+        PAGE_TITLES[page] .. " shows its own hints, not BUFFER's flash")
+    end
+    assert_screen_layout(context, PAGE_TITLES[page] .. " with BUFFER's hints flash")
   end
+  -- raised on SETUP, then BUFFER shown within 1.5 s: it shows there
+  show_page("SETUP"); buffer_page_flash("buf 2 load failed")
+  show_page("BUFFER"); assert_equal(hint_text(context), "buf 2 load failed", "BUFFER shows it once up")
+  show_page("SETUP"); assert_equal(hint_text(context), "E2:port E3:ch K3:save", "SETUP never does")
+  -- a page-owned prompt (as SCENES will raise) stays on its page
+  local SCENES = S.constants.UI_PAGES.index.SCENES
+  show_page("SCENES"); S.lib.ui_flash.start("hints", "K3 again: overwrite S3", 2, SCENES); redraw()
+  assert_equal(hint_text(context), "K3 again: overwrite S3")
+  show_page("SETUP"); assert_equal(hint_text(context), "E2:port E3:ch K3:save", "not over SETUP's keys")
+  -- without a page, a hints flash shows on whatever page is up
+  S.lib.ui_flash.start("hints", "anywhere", 1.5); redraw()
+  assert_equal(hint_text(context), "anywhere", "an unowned flash shows on SETUP")
   context.clock.run_for(1.51); next_frame(context)
+  assert_equal(hint_text(context), "E2:port E3:ch K3:save", "the page's hints come back")
+end)
+
+test("a nil flash text ends the flash instead of showing nil", function()
+  local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  assert_equal(hint_text(context), S.registry.pages[#PAGE_TITLES].hints(false), "the page's hints come back")
+  header_flash("a"); local running = S.lib.ui_flash.slots.header.clock
+  header_flash(nil); redraw()
+  assert_equal(S.lib.ui_flash.text("header"), nil, "no flash")
+  assert_equal(header_text(context, "nil"), nil, "never the text nil")
+  assert_equal(context.clock.threads[running], nil, "the running flash's clock is canceled")
+  assert_equal(S.lib.ui_flash.slots.header.clock, nil, "and none started")
+  assert_equal(#page_dots(context), 8, "the dots show")
+  show_page("BUFFER"); buffer_page_flash(nil); redraw()
+  assert_true(hint_text(context) ~= "nil", "the hint row never shows nil")
 end)
 
 test("a long flash text is cut to end before the scene indicator", function()

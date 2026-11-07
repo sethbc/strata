@@ -25,12 +25,13 @@ return function(S)
     script_enc = nil
   }
 
-  -- Show `text` (the K2+K3 save result, a failed load) in the hint row for
-  -- HEADER.flash_seconds (1.5 s), through the shared "hints" flash
-  -- (lib/ui/flash.lua): redraw() draws it there instead of the page's key
-  -- hints, and its clock asks for a redraw when it ends
+  -- Show `text` (the K2+K3 save result, a failed load) in BUFFER's hint row
+  -- for HEADER.flash_seconds (1.5 s), through the shared "hints" flash
+  -- (lib/ui/flash.lua), owned by BUFFER: redraw() draws it there instead of
+  -- the key hints while BUFFER is up (other pages keep their own hints), and
+  -- its clock asks for a redraw when it ends
   function buffer_page_flash(text)
-    S.lib.ui_flash.start("hints", text, S.constants.HEADER.flash_seconds)
+    S.lib.ui_flash.start("hints", text, S.constants.HEADER.flash_seconds, UI_PAGES.index.BUFFER)
   end
 
   -- A buffer's name for the screen: the file name without its extension, cut
