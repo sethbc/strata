@@ -5,7 +5,7 @@
 -- Run alone: lua test/run.lua docs
 
 return function(h)
-local test, repo_root, stubs, sync_check, SC_PATH = h.test, h.repo_root, h.stubs, h.sync_check, h.SC_PATH
+local test, repo_root, stubs, sync_check, engine_sources = h.test, h.repo_root, h.stubs, h.sync_check, h.engine_sources
 local signatures, engine_polls, engine_spec = h.signatures, h.engine_polls, h.engine_spec
 local data_root, fail, assert_true, assert_equal = h.data_root, h.fail, h.assert_true, h.assert_equal
 local assert_near, load_strata, local_value = h.assert_near, h.load_strata, h.local_value
@@ -44,7 +44,7 @@ test("sync_check fails on engine uses it cannot check: engine[...], references, 
   assert_equal(calls[1].name, "retrigger"); assert_equal(calls[1].arg_count, 2, "a spaced call is counted")
   -- the whole check fails when one of the script's files holds one
   local lua_sources = read_lua_sources()
-  local file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
+  local sc_source = engine_sources()
   assert_true((sync_check.check_sources(lua_sources, sc_source)), "the script's files pass as they are")
   for _, patch in ipairs({ "local f = engine.voiceOn", 'engine["voiceOff"](0)', "local e = engine" }) do
     local patched = {}
@@ -91,7 +91,7 @@ test("sync_check accepts a table key or parameter named engine and #engine (#51)
 end)
 
 test("sync check reports a bad engine call in a module file", function()
-  local file = assert(io.open(SC_PATH, "r")); local sc_source = file:read("*a"); file:close()
+  local sc_source = engine_sources()
   local function problems_of(sources)
     local ok, problems = sync_check.check_sources(sources, sc_source)
     return ok, table.concat(problems, "\n")
@@ -121,7 +121,7 @@ test("the engine source parsers skip // and /* */ comments (#25)", function()
   assert_equal(stripped, 'a = "x // y /* z"; b = \'s//\'; c = $"; ' .. string.rep(" ", #"// gone")
     .. "\nd " .. string.rep(" ", #"/* e /* f */ g */") .. " h",
     "comments become spaces (newlines kept); strings, symbols and characters are not comments")
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   -- the 3.0.1 review's mutation: \stopRecord wrapped in a block comment
   local start = assert(source:find("this.addCommand(\\stopRecord", 1, true), "stopRecord found")
   local finish = assert(source:find("this.addCommand(", start + 1, true), "next command found")
@@ -166,7 +166,7 @@ test("strip_sc_comments fails on an unterminated string, symbol or block comment
   assert_strip_fails('a = 1; /* open /* nested */ still open', "block comment", 1)
   assert_strip_fails('a = "ends in an escape\\"', "string", 1)
   -- a SynthDef whose { never closes: the error names its line too
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   local _, lines = source:gsub("\n", "")
   local ok, message = pcall(stubs.engine_spec_from_source, source .. "\nSynthDef(\\open, { arg x; x = 1;\n")
   assert_true(not ok and tostring(message):find("unbalanced { from line " .. (lines + 2), 1, true),
@@ -186,7 +186,7 @@ end
 
 test("the engine stub reads its limits and controls from the engine source (#24)", function()
   load_strata()
-  local spec = stubs.parse_engine_spec(SC_PATH)
+  local spec = stubs.parse_engine_spec(engine_sources())
   assert_equal(spec.num_voices, local_value("NUM_VOICES"), "numVoices")
   assert_equal(spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers")
   assert_equal(spec.input_source, local_value("NUM_BUFFERS") + 1, "inputSource")
@@ -206,7 +206,7 @@ test("the engine stub reads its limits and controls from the engine source (#24)
   assert_equal(spec.enumerations.filterType[1], 0, "filterType from lowpass")
   assert_equal(spec.enumerations.filterType[2], 2, "filterType to bandpass")
   -- a control added to a grain SynthDef is picked up without stub changes
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   local extended, count = source:gsub("SynthDef%(\\strataGrain, {%s*arg ", "%0newGrainControl=0, ")
   assert_equal(count, 1, "test patch applies")
   assert_true(stubs.engine_spec_from_source(extended).grain_params.newGrainControl, "new grain control accepted")
@@ -234,17 +234,14 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
 end)
 
 test("the engine stub's voice and slot limits follow numVoices and numBuffers in the engine source (#51)", function()
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   local patched, count = source:gsub("var <numVoices = %d+;", "var <numVoices = 6;")
   assert_equal(count, 1, "numVoices patch applies")
   patched, count = patched:gsub(",%s*\\strataRing%]", "]")
   assert_equal(count, 1, "voiceSynthDefs patch applies")
   patched, count = patched:gsub("var <numBuffers = %d+;", "var <numBuffers = 4;")
   assert_equal(count, 1, "numBuffers patch applies")
-  local path = data_root .. "Engine_Patched.sc"
-  file = assert(io.open(path, "w")); file:write(patched); file:close()
-  local spec = stubs.parse_engine_spec(path)
-  os.remove(path)
+  local spec = stubs.parse_engine_spec(patched)
   assert_equal(spec.num_voices, 6, "numVoices read from the patched copy")
   assert_equal(spec.num_buffers, 4, "numBuffers read from the patched copy")
   assert_equal(spec.input_source, 5, "inputSource follows numBuffers")
@@ -345,7 +342,7 @@ test("each FX param's controlspec lies within the engine's limit for its argumen
 end)
 
 test("fx_commands reads every setSynth in a command body (#51)", function()
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   -- \setFilter split into two setSynth calls, and \setReverb also setting the master's drift
   local patched, count = source:gsub(
     "this%.setSynth%(\\filter, \\freq, msg%[1%], \\res, msg%[2%], \\filterType, msg%[3%], \\mix, msg%[4%]%);",
@@ -452,7 +449,7 @@ test("the engine stub range-checks continuous arguments at the engine's own limi
   check_limits("setDelay", {0.375, 0.4, 0}, 3, "mix", engine_limit("setDelay", 3, "mix"))
   check_limits("retrigger", {0, 1}, 2, "velocity", engine_limit("retrigger", 2, "velocity"))
   -- the limits follow the engine source
-  local file = assert(io.open(SC_PATH, "r")); local source = file:read("*a"); file:close()
+  local source = engine_sources()
   local patched, count = source:gsub("feedback%.clip%(0, 0%.95%)", "feedback.clip(0, 0.5)")
   assert_equal(count, 1, "feedback patch applies")
   patched, count = patched:gsub("msg%[2%]%.clip%(0, 1%)", "msg[2].clip(0, 0.8)")
@@ -461,7 +458,7 @@ test("the engine stub range-checks continuous arguments at the engine's own limi
   assert_equal(patched_limits.setDelay[2].high, 0.5, "the delay feedback limit is read from \\strataDelay")
   assert_equal(patched_limits.retrigger[2].high, 0.8, "the velocity limit is read from \\retrigger")
   -- documented, not clipped: the Lua param's controlspec, which CLAUDE.md's row states
-  file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
+  local file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
   local documented = {
     { command = "setModAmpAmt", args = {6, 3, 0}, index = 3, param = "v7_mod_amp_amt_3", range = "%g to %g" },
     { command = "setModFreqAmt", args = {0, 1, 0}, index = 3, param = "v1_mod_freq_amt_1", range = "%g to %g" },
@@ -478,7 +475,7 @@ end)
 
 test("the engine stub rejects param names the SynthDefs do not have (#24)", function()
   load_strata()
-  local spec = stubs.parse_engine_spec(SC_PATH)
+  local spec = stubs.parse_engine_spec(engine_sources())
   -- ratio is a strataFM control (voice 1), not one of strataResonator (voice 0)
   assert_engine_rejects("ratio", "setVoiceParam", 0, "ratio", 1.5)
   engine.setVoiceParam(1, "ratio", 1.5)
@@ -709,9 +706,9 @@ local function spelling_files()
   local files = {}
   for path in listing:gmatch("[^\n]+") do
     local scanned = path == "strata.lua" or path == "README.md" or path == "CLAUDE.md"
-      or path == "CHANGELOG.md" or path == "lib/Engine_Strata.sc"
+      or path == "CHANGELOG.md" or path:match("^lib/.*%.sc$")
       or path:match("^lib/.*%.lua$") or path:match("^test/.*%.lua$")
-      or path:match("^test/[^/]*%.scd$") or path:match("^test/[^/]*%.sh$")
+      or path:match("^test/.*%.scd$") or path:match("^test/[^/]*%.sh$")
       or path:match("^test/[^/]*%.sc%.in$") or path:match("^docs/.*%.md$")
       or path:match("^changes/[^/]*%.md$") or path:match("^%.github/workflows/[^/]*%.yml$")
     if scanned and not SPELLING_SKIP[path] then table.insert(files, path) end

@@ -751,4 +751,34 @@ test("the runner finds unit files and filters them", function()
   assert_true(all:find("stubs_test.lua", 1, true) and all:find("structure_test.lua", 1, true), "every unit file: " .. all)
 end)
 
+test("engine_sources reads Engine_Strata.sc first, then lib/engine sorted", function()
+  local text = h.engine_sources()
+  local files = {}; for path in text:gmatch("// file: (%S+)") do files[#files + 1] = path end
+  assert_equal(files[1], "lib/Engine_Strata.sc")
+  assert_true(#files > 2, "lib/engine/*.sc are read: " .. table.concat(files, " "))
+  for i = 2, #files do assert_true(files[i]:match("^lib/engine/[^/]+%.sc$"), "an engine file: " .. files[i]) end
+  for i = 3, #files do assert_true(files[i - 1] < files[i], "sorted") end
+end)
+
+test("a command defined in lib/engine is found with its file", function()
+  local text = h.engine_sources()
+  local at = text:find("addCommand%(\\voiceOn"); local before = text:sub(1, at)
+  assert_equal(before:match(".*// file: (%S+)"), "lib/engine/StrataVoices.sc")
+  assert_equal(stubs.parse_engine_signatures(text).voiceOn, "iffffff")
+  -- the harness, sync_check and the CLAUDE.md table check read the same text
+  assert_equal(signatures.voiceOn, "iffffff", "the stub's signatures")
+  assert_equal(h.sync_check.sc_commands(text).loadBuffer, "is", "sync_check's commands")
+  -- a parse error names the file it is in
+  local ok, message = pcall(stubs.parse_engine_spec, text .. "\nSynthDef(\\open, { arg x;\n")
+  assert_true(not ok and tostring(message):find("lib/engine/StrataVoices.sc", 1, true), "error names the file: " .. tostring(message))
+end)
+
+test("the stub reads a constant given as a method", function()
+  assert_equal(stubs.parse_engine_spec("bufferStateStride { ^100 }").buffer_state_stride, 100)
+  assert_equal(stubs.parse_engine_spec("var <>bufferSeconds = 16;").buffer_seconds, 16, "a writable var")
+  assert_equal(engine_spec.buffer_state_stride, 100, "the engine's stride")
+  assert_true(engine_spec.grain_params.envShape, "a grainParamHandlers key is a grain param")
+  assert_true(engine_spec.grain_params.bufPos and engine_spec.grain_params.posSpread, "both grainDefs' controls are grain params")
+end)
+
 end
