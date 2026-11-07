@@ -381,52 +381,8 @@ test("BUFFER page: K2+K3 saves, K2 release then does not open the selector", fun
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
-test("BUFFER page K2+K3 confirms the save in the hint row for 1.5 s", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
-  context.set_time(100)
-  key(2, 1); tap(3); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
-  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
-  assert_screen_layout(context, "BUFFER with the save confirmation")
-  key(2, 0); next_frame(context); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
-  context.set_time(101.4); redraw()
-  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
-  context.set_time(101.5); redraw()
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the normal hint after 1.5 s")
-  -- an empty buffer: nothing saved, the hint says so
-  context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
-  context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
-  assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
-  assert_screen_layout(context, "BUFFER with the empty-buffer flash")
-  -- one clock ends the flash: it sleeps 1.5 s, clears the flash (even if it
-  -- woke a little early) and asks for a redraw
-  local page = local_value("BUFFER_PAGE")
-  local flash_clock = page.flash_clock
-  assert_true(flash_clock ~= nil, "the flash has a clock")
-  local flash_sleep
-  for _, entry in ipairs(context.clock.sleep_log) do
-    if entry.id == flash_clock then flash_sleep = entry.amount end
-  end
-  assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
-  key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
-  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is canceled")
-  flash_clock = page.flash_clock
-  context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
-  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
-  assert_equal(page.flash_clock, nil)
-  next_frame(context)
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the next frame shows the normal hint")
-  -- cleanup cancels a pending flash clock
-  key(2, 1); tap(3); key(2, 0)
-  flash_clock = page.flash_clock
-  cleanup()
-  assert_equal(context.clock.threads[flash_clock], nil, "cleanup cancels the flash clock")
-  assert_equal(page.flash_clock, nil)
-end)
+-- The save confirmation's 1.5 s flash: test/unit/ui_header_test.lua ("the
+-- BUFFER hint flash still shows on the hint row for 1.5 s")
 
 test("BUFFER page K2+K3 on a recording or finishing buffer flashes busy and saves nothing", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
@@ -695,7 +651,7 @@ test("BUFFER page draws the voice, its source and eight buffer rows", function()
   assert_equal(left_name, "KARPLUS"); assert_equal(left_source, "src: buf 2")
   local rows = {}
   for _, entry in ipairs(context.screen.texts) do
-    if entry.x >= 65 then
+    if entry.x >= 65 and entry.y > 8 then   -- below the header (its REC: slot 7 records)
       rows[entry.y] = rows[entry.y] or {}
       table.insert(rows[entry.y], entry)
     end

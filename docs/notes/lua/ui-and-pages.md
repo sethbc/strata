@@ -3,30 +3,35 @@
 - Never call `redraw()` or `arc_redraw()` from script code. Call `request_redraw()`, and the frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15). Grid redraws stay direct (`grid_redraw()`).
 - Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`. While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page.
 - Each page file creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]` and sets every field but the four arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`), which only its `lib/arc/<page>.lua` sets. `strata.lua` includes every page file before every arc file and asserts every `UI_PAGES` name has its record with `draw`, `hints`, `enc` and `key`. A test checks who sets which field.
-- A page's `draw()` draws its body only; `redraw()` draws the hint row from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
+- A page's `draw()` draws its body only; `redraw()` draws the hint row from the "hints" flash while one shows, else from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
+- Transient texts go through `S.lib.ui_flash` (one clock per slot, canceled before a new flash in that slot starts, and at cleanup). Never give a page its own flash clock.
 - Every page draws the header at y=8 and the hint row at y=62. No two strings on a row overlap, nothing leaves 128×64, and no MAIN string crosses the divider (end by x=60 or start at x=65). The layout tests check it.
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
 - Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call, so the long-press fallback can trigger it. A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`.
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
 - MAIN is found by index (`S.ui_page == UI_PAGES.MAIN_PAGE`), never by its title string.
+- `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `clamp_all()` first.
 
 ## Owns
 
 - `lib/ui/frame.lua` (`S.lib.ui_frame`): `S.ui_page`; `request_redraw`, `draw_frame`, `draw_frame_part`, `draw_error_report` and the frame clock (`start_frame_clock`, `stop_frame_clock`; cleanup step 60). The runtime fields (`screen_dirty`, `arc_dirty`, `frame_clock`, `draw_errors`) are on the shared `S.constants.UI_PAGES` table.
 - `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_value_fraction`, `param_fraction`.
-- `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`.
+- `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`. Its positions are `S.constants.HEADER` (`lib/constants.lua`).
+- `lib/ui/flash.lua` (`S.lib.ui_flash`): the flashes, `S.lib.ui_flash.start`, `.text`, `.cancel_all`, `.slots`, and `header_flash` (global); cleanup step 140.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.
 - `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp`, `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits). No page uses it yet.
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter`), `select_voice_by`, `ignore_page_input` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `long_press` (fields of `S.lib.ui_alt`). See ALT below.
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
+- `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
+- `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors`; `move`, `clamp_all` (fields).
 - `lib/pages/main.lua`, `lib/pages/voice.lua`, `lib/pages/seq.lua`, `lib/pages/fx.lua`, `lib/pages/lfo.lua`, `lib/pages/buffer.lua`, `lib/pages/scenes.lua`, `lib/pages/setup.lua` (`S.lib.pages_main`, `S.lib.pages_voice`, ...): one screen page each and its `S.registry.pages` record.
   - VOICE, SEQ, SCENES: stubs for now (draw nothing, hint `E1:page`, ignore input).
   - MAIN: `S.voice_list`, `update_voice_list`, `main_param_id`, `main_param_entry`, `main_param_label`.
   - FX: `S.FX_PAGE`, `S.fx_row`.
   - LFO: `LFO_PAGE` (local).
-  - BUFFER: `S.BUFFER_PAGE`, the file selector, the flash (its clock is cleanup step 140).
+  - BUFFER: `S.BUFFER_PAGE`, the file selector, `buffer_page_flash` (on the shared "hints" flash).
   - SETUP: `setup_enc` (global).
 
 The arc's rings for each page are in `docs/notes/lua/arc.md`.
@@ -37,10 +42,10 @@ The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAI
 
 Encoders and keys (`strata.lua`):
 - `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()` and the new one's `enter()`, if they have them.
-- `init` turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
+- At init a start step in `strata.lua` (`START_ORDER.e1_settings`) turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
 - `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`. With ALT held both go the ALT way instead (ALT below).
 - `key(1, z)` only sets ALT (`S.lib.ui_alt.set(z == 1)`; K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
-- Master density left E1. It is on the FX page's first row, MAIN's arc ring 1, in params, and in the header on every page.
+- Master density left E1. It is on the FX page's first row, MAIN's arc ring 1 and in params. The header no longer shows it.
 
 Page records. Each page lives in its own file and creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]`:
 - Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
@@ -51,9 +56,48 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - To add a page: add its name to `UI_PAGES` (`NUM_UI_PAGES` follows), write its file and record, include it from `strata.lua` with the other pages, and, if it has rings, an arc file like `lib/arc/fx.lua` included after the pages (`docs/notes/lua/arc.md`). VOICE, SEQ and SCENES already have their page and arc files (stubs), so filling them in adds no include.
 
 `redraw()`:
-- `screen.clear(); draw_header(); record.draw(); draw_hints(record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
+- `screen.clear(); draw_header(); record.draw(); draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list.
-- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`. BUFFER's `hints` returns its flash text (the K2+K3 save result) while it shows.
+- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints.
+
+## Header and flashes
+
+`draw_header()` (`lib/ui/header.lua`), y=8, positions in `S.constants.HEADER`:
+- Page title at x 0, level 15.
+- Eight page dots: 2×2 filled rects (`dot_size`) at y 4 (`dot_y`) from x 40 (`dots_x`), 4 px apart (`dot_spacing`), so x 40-69. The current page's at level 15 (`current_dot_level`), the rest at 3 (`dot_level`).
+- Indicators, each only while active: `[M]` at x 76 (`mutation_x`, level 6) while `mutation_enabled` is 1; the play mark at x 90 (`play_x`) while `S.pattern_playing`; `REC` at x 96 (`rec_x`, level 15) while any `S.buffers[slot].recording`.
+- The play mark is a filled 3×5 triangle pointing right: three 1-px-wide rects, 5, 3 and 1 px tall, from y 3 (`play_y`), level 15.
+- A record with `header_status()` returning a string: the text at x 79 (`status_x`, level 10, cut with `fit_text` to end by x 114) and the play mark at x 74 (`status_play_x`, while patterns play) replace `[M]`, the play mark and `REC`. Returning nil keeps the indicators. The dots stay.
+- Scene indicator `S1`-`S8` right-aligned at x 127 (`scene_right`): level 10 while the scene sequencer runs, 6 when static.
+- The design's x 80/94/100 put `REC` over a right-aligned `S8` under the layout test's width estimate; 76/90/96 keep the same order and spacing and fit.
+- Nothing calls for a redraw on its own here: the indicators' state changes already ask for one (param actions, `grid_key`/`key` around `pattern_toggle`, `buffer_display_changed`).
+
+Flashes (`lib/ui/flash.lua`, `S.lib.ui_flash`):
+- Two slots, `"header"` and `"hints"` (`S.lib.ui_flash.slots[slot]`: `text`, `ends_at`, `page`, `clock`). Another slot name is an error.
+- `S.lib.ui_flash.start(slot, text, seconds, page)` (seconds default `HEADER.flash_seconds`, 1.5; `page` a `UI_PAGES` index or nil): cancels the slot's running clock, stores the text, the page and `ends_at = util.time() + seconds`, starts a clock that sleeps `seconds`, clears the text and calls `request_redraw()`, and asks for a redraw itself. So one clock per slot runs at a time. A nil text only ends the flash showing (never draws `nil`).
+- `S.lib.ui_flash.text(slot)`: the text while `util.time() < ends_at` and, for a flash with a page, while that page is up (`S.ui_page`); else nil (so a clock that wakes late changes nothing on screen, and a prompt such as SCENES' "K3 again" never shows over another page's keys).
+- `S.lib.ui_flash.cancel_all()`: cleanup step 140 cancels both clocks and clears the texts.
+- `header_flash(text)` (global) = `start("header", text, 1.5)`. While it shows, the header draws the text at x 40 (`flash_x`), level 15, cut with `fit_text` to 74 px (`flash_width`, so it ends by x 114, before a right-aligned `S8`), instead of the dots and indicators (and a `header_status`). The title and scene stay.
+- `buffer_page_flash(text)` = `start("hints", text, 1.5, UI_PAGES.index.BUFFER)`: it shows on BUFFER's hint row only, as before (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s).
+
+## Cursors and VOICE rows
+
+`S.cursors` (`lib/ui/cursors.lua`) holds the cursors more than one page or ring set uses:
+- `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row (row 2: row 1 is the first section's label).
+- `seq_step`: 1..`PATTERN_LENGTH`.
+- `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (12): the eight scene slots, then the four `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`).
+
+`S.lib.ui_cursors.move(name, d)` moves one by `d` stops, clamped at its ends (no wrap): `voice` through `S.lib.ui_field_list.move` on the selected voice's rows (section labels take no stop), the others with `util.clamp`. An unknown name is an error. `S.lib.ui_cursors.clamp_all()` puts each cursor back on a real stop: `voice` through `field_list.clamp` (the nearest selectable row at or before it, else the first), the others within their range. `redraw()` and `arc_redraw()` run it first, so a source switched by the grid, MIDI or a scene recall, or another selected voice, never leaves the cursor past the end or on a label row. Neither function requests a redraw: their callers (`enc`, `key`, `arc_delta`) do.
+
+`voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists every param of a voice in four sections, each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"` or `"option"` from the param's type.
+- `synth`: `param_order` without `amp` and `pan`; for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
+- `grain`: `grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env`, `grain_mode`.
+- `crossmod`: `mod_speed`, then per slot `mod_source_<s>`, `mod_amp_amt_<s>`, `mod_freq_amt_<s>`.
+- `mix`: `source`, `amp`, and `pan` when the voice has one (Sub has none).
+
+The rows are built on each call from the voice's current source, so they follow a source change at once. Voice 1 has 28 rows (24 fields); a voice index outside 1..`NUM_VOICES` is an error. The 256's fader pages keep their own list (`fader_param_ids`).
+
+`voice_page_group(rows, cursor) -> group, row_indices` (global) gives the arc's ring group: with `k` the cursor's position among the selectable rows (`field_list.ordinal`), `group = ceil(k / 4)` and `row_indices` the row indices of selectable rows `4 * group - 3 .. 4 * group`, fewer in a last group that is not full (voice 2 has 23 fields: its sixth group is source, amp, pan). VOICE's screen marks these rows and the rings 1-4 edit them in order.
 
 ## ALT
 
@@ -80,7 +124,7 @@ Keys held into the menu:
 - `forget_keys_held_through_menu()`, called at the end of `drift_update` (the 10 Hz `S.drift_metro` tick), clears `S.key_press_page`, `S.key_press_alt`, `S.alt_held` and `S.buffer_saved_during_k2` whenever `norns.menu.status()` is true.
 - Without it, a K2 released in the menu would stay held and every BUFFER K3 would save instead of record.
 - It also runs the moment the menu opens. Every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call.
-- So `watch_menu_opening()` (from `init`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
+- So `watch_menu_opening()` (from its start step, `START_ORDER.menu_watch`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
 - The wrapper holds norns' function and `forget_keys_held_through_menu` as upvalues (no script-global lookup).
 - `unwatch_menu_opening()`, cleanup's second step (after the tempo handler, before anything that can fail), puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper. Otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`).
 - The 10 Hz tick stays as a fallback.
@@ -91,7 +135,7 @@ Keys held into the menu:
 
 Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - Anything that changes what the screen or the arc shows calls the global `request_redraw()`, which sets `UI_PAGES.screen_dirty` and `UI_PAGES.arc_dirty`.
-- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` at the end of `init`, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
+- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in init's last start step, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
 - `draw_frame()` clears each dirty flag and calls the global `redraw()` and/or `arc_redraw()`. A burst of arc turns, encoder steps, MIDI or param changes costs one screen draw and one arc redraw per frame, and an idle frame draws nothing.
 - Both flags start set, so the first frame draws the screen and any arc connected at start.
 - On the LFO page `draw_frame` marks the screen dirty every frame, so the dots move. The LFO page has no clock of its own.
@@ -113,7 +157,7 @@ Who asks for a redraw:
   - So PARAMS edits, PARAMS > MAP CCs, pset loads, scene fades and recalls, mutations, MIDI notes (they set freq or buf_rate) and the LFO page's E3/K2/K3 all arrive through param actions.
   - Left out: text params (the LFO library writes each LFO's scaled and raw values into `lfo_scaled_<n>`/`lfo_raw_<n>` on every step, shown nowhere), and the drift's 10 Hz writes (`S.drift_writing`; grain pitch is shown nowhere).
   - `drift_update` requests a redraw itself when it moves the selected voice's buffer position, which MAIN and the BUFFER arc ring show. Other voices' positions are shown nowhere, so they ask for none.
-- Explicit calls cover state that is not a param: `enc`, `key`, `arc_delta`, `arc_key` (MAIN), `grid_key`, `toggle_voice`, `toggle_lock`, `randomize_voice`, `gentle_mutate`, each smooth-transition step, `recall_scene` and the end of `recall_scene_instant` (freeze and running states), the scene sequencer, `buffer_display_changed`/`buffer_state_changed`, the BUFFER flash's end and the file selector's callback, and the grid/arc/MIDI hot-plug callbacks.
+- Explicit calls cover state that is not a param: `enc`, `key`, `arc_delta`, `arc_key` (MAIN), `grid_key`, `toggle_voice`, `toggle_lock`, `randomize_voice`, `gentle_mutate`, each smooth-transition step, `recall_scene` and the end of `recall_scene_instant` (lock and running states), the scene sequencer, `buffer_display_changed`/`buffer_state_changed`, a flash's start and end (`S.lib.ui_flash.start` and its clock) and the BUFFER file selector's callback, and the grid/arc/MIDI hot-plug callbacks.
 
 ## MAIN
 
@@ -140,7 +184,7 @@ Voice list:
 - The list puts the selected voice on row 2 (y=26, the ON/OFF row) except at the ends of the list (`num_above_selected` = 1), so entries must stay left of x=60 or they overlap the details.
 
 Layout (two columns):
-- **Header** (y=8, `draw_header()`, the same on every page): page title at x=0 (04B_03 capitals advance ~6 px, so the longest title `BUFFER` ends near x=36), `dens:1.00` at x=40, `[M]` at x=98, scene indicator `S1`-`S8` right-aligned at x=127.
+- **Header** (y=8, `draw_header()`, the same on every page; see Header and flashes): page title at x=0 (04B_03 capitals advance ~6 px, so the longest titles `BUFFER` and `SCENES` end near x=36), page dots from x=40, `[M]` at x=76, the play mark at x=90, `REC` at x=96, scene indicator `S1`-`S8` right-aligned at x=127.
 - **Left column** (0-60 px): the scrolling voice list (4 visible at a time, rows y=15-48).
 - **Right column** (65-128 px): the selected voice's details (name, status, main parameter at y=42/50). `[LOCK]` is right-aligned at x=127 on the status row (y=26), `[TRIG]` (triggered grain mode) right-aligned at x=127 on the main-parameter label row (y=42).
 - **Divider** (x=62): a subtle vertical line between the columns.
@@ -148,17 +192,19 @@ Layout (two columns):
 
 Header indicators:
 - `S1` to `S8` at the top right shows the current scene (`S.current_scene`): level 10 while the scene sequencer runs, 6 when static.
-- The mutation indicator is abbreviated to `[M]` to make room for the scene indicator.
+- The mutation indicator is abbreviated to `[M]` to make room for the play mark, `REC` and the scene indicator.
 
 Layout tests (`test/unit/pages_test.lua`, through `assert_screen_layout` in `test/helpers.lua`), on every page and for every selected voice:
 - no two strings on a row overlap, and nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise);
-- `dens:` starts at least 4 px after the page title;
+- the page title at 0,8, then the eight page dots (2×2 rects at x 40, 44, ..., 68, the first at least 4 px after the title), or, while a header flash shows (`S.lib.ui_flash.text("header")`), its text at 40,8 and no dots;
+- no header rect (a dot, the play mark: rects above y 9) lies under a header string;
 - a hint row is drawn at y=62;
 - the voice list's last row ends above the hint row;
 - on MAIN every string between the header and the hint row ends by x=60 or starts at x=65 or later (never across the divider);
 - a separate test draws the list for every voice, selection and running/frozen state.
 - Keep them passing when adding text. The width estimate is `stubs.text_width` in `test/norns_stubs.lua` (it counts UTF-8 characters, not bytes), which the screen stub also uses for `screen.text_extents` (returns width, 8).
-- The stub records each string's `x`, `y`, `align` (`left`, `right`, `center`) and `level`.
+- The stub records each string's `x`, `y`, `align` (`left`, `right`, `center`) and `level`, and each rect and line with `filled` (true after `screen.fill()`, false after `screen.stroke()`).
+- The header and flash tests are in `test/unit/ui_header_test.lua`.
 - The stub's `UI.ScrollingList:redraw` is the real one from `lua/lib/ui.lua`, so the list's entries are recorded like any other text (an empty string where the list scrolls past an end).
 
 ## FX
@@ -194,11 +240,7 @@ Controls:
 - With no buffer source (synth, input) K2 and K3 do nothing.
 - Hints: `K2:load K3:rec K2+3:save` (`K3:stop` while the slot records, `K3:...` while it is `finishing`), or `K2:- K3:- E3:source`.
 
-The flash:
-- stores `S.BUFFER_PAGE.flash_text` and `flash_until = util.time() + S.BUFFER_PAGE.flash_seconds` (1.5);
-- `redraw_buffer` draws it in the hint row instead of the key hints while `util.time() < flash_until`;
-- `S.BUFFER_PAGE.flash_clock` (a `clock.run` that sleeps 1.5 s, clears the text and asks for a redraw) makes it go away untouched;
-- a new flash cancels the previous clock; `cleanup` cancels it (`cancel_buffer_page_flash_clock`, step 140).
+The flash: `buffer_page_flash(text)` starts the shared "hints" flash for 1.5 s, owned by BUFFER (see Header and flashes). `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows; its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it.
 
 ### The file selector (K2 release)
 

@@ -8,7 +8,7 @@ The screen has eight pages, in this order: **MAIN**, **VOICE**, **SEQ**, **FX**,
 
 - **E1** - Select the page (turn left toward MAIN, right toward SETUP; one page per short turn, without acceleration)
 
-Every page shows the page name, master density (`dens:`), the `[M]` mutation indicator and the `S1`-`S8` scene indicator at the top, and the page's key hints on the bottom row. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)).
+Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records, and the `S1`-`S8` scene indicator. A short message (a saved buffer, a failed load, ...) can take the bottom row for 1.5 s, and a changed value can take the dots' and indicators' place in the header for 1.5 s. The bottom row shows the page's key hints. E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)).
 
 Master density is no longer on E1: adjust it on the first row of the FX page, with arc ring 1 on the MAIN page, or in the PARAMETERS menu.
 

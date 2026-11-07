@@ -27,7 +27,7 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 
 ## Device lifecycle
 
-- `grid_init()`: connects up to 4 grid ports at startup.
+- `grid_init()`: connects up to 4 grid ports at init (start step `START_ORDER.grids`).
 - `grid.add(device)`: norns' callback when a grid connects (hot-plug).
 - `grid.remove(device)`: norns' callback when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot.
 - `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`.

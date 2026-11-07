@@ -23,7 +23,7 @@
 - cleanup steps 70 (drift metro), 80 (mutation metro) and 85 (the undo's expiry clock).
 
 Elsewhere:
-- `init` (`strata.lua`) creates `S.drift_metro` and `S.mutation_metro`.
+- Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
 - `drift_update` reads `S.grids` and `S.grid_page` (`lib/grid/core.lua`).
 - `DISCRETE_GRAIN_KEYS`, `BUFFER_MUTATION_KEYS` and `UNDO_SECONDS` are in `lib/constants.lua`, aliased at the top of the constructor.
 - The voice param actions that randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
@@ -103,7 +103,7 @@ Recommended settings:
 - **Dramatic shift**: probability 0.25, amount 0.4, rate 1 s.
 
 Lifecycle:
-- **Initialization**: `init` creates the metro but does not start it.
+- **Initialization**: its start step creates the metro at init but does not start it.
 - **Control**: the `mutation_enabled` action starts and stops the metro.
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
 
@@ -129,4 +129,4 @@ One level, for `UNDO_SECONDS` (5 s, `lib/constants.lua`):
   - Buffer-sourced voices also drift `buf_pos` with the same helper (`DRIFT_BUF_POS_STEP` 0.002, `DRIFT_BUF_POS_REVERSION` 0.01, center `S.buf_pos_base[i]`, `buf_pos` step 0).
 - **Lock** (stored as `frozen`): locked voices are stable. Neither the drift nor mutations affect them (buffer params included), and `randomize_voice` returns for a frozen voice.
 - **Cross-modulation**: mutations never touch the crossmod sources or amounts. The routing a voice has (set by hand or by a scene) keeps modulating the mutated params.
-- **UI feedback**: `[M]` appears in the header (x=98) while mutations are on.
+- **UI feedback**: `[M]` appears in the header (x=76) while mutations are on.

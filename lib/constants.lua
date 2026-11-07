@@ -56,6 +56,25 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
+-- The header every page shares (lib/ui/header.lua, y 8): the eight 2x2 px
+-- page dots from dots_x, dot_spacing apart (the current page's at
+-- current_dot_level, the rest at dot_level), [M] at mutation_x, the play
+-- mark (a filled 3x5 triangle, top row play_y) at play_x, REC at rec_x and
+-- the scene right-aligned at scene_right. A page's header_status text
+-- replaces the three indicators: the text at status_x, the play mark at
+-- status_play_x. A header flash (lib/ui/flash.lua) replaces the dots and
+-- indicators for flash_seconds, its text at flash_x cut to flash_width px,
+-- so it ends before a right-aligned S8. (The 3.1 design's x 80/94/100 put
+-- REC over S8 under the layout test's width estimate; these keep the same
+-- order and spacing and fit.)
+local HEADER = {dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
+  dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
+  status_play_x = 74, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
+
+-- The params the SCENES page lists after the eight slots: its cursor's stops
+-- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)
+local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration"}
+
 -- voices[i].grain keys holding an option index rather than a continuous
 -- value, mapped to their option count: smooth transitions switch them at the
 -- end instead of crossfading, mutation never touches them, and scenes must
@@ -102,6 +121,28 @@ local MAIN_PARAMS = {
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
+-- init()'s start steps in the order it runs them, after the params are
+-- added and their actions wrapped: each module registers its own with
+-- S.register_start(START_ORDER.<step>, fn) (lib/state.lua). The UI first,
+-- then the metros and polls, the controllers and MIDI, the files (the
+-- scenes before the buffers, which they may use), and the clocks last.
+-- Spaced by 10, so a new step can go between two others
+local START_ORDER = {
+  voice_list = 10,       -- lib/pages/main.lua: MAIN's voice list
+  e1_settings = 20,      -- strata.lua: E1 steps pages (no acceleration)
+  menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
+  drift_metro = 40,      -- lib/mutation.lua: created and started
+  mutation_metro = 50,   -- lib/mutation.lua: created; its param starts it
+  buffer_polls = 60,     -- lib/buffers.lua: bufferState and bufferLoadFailed
+  arc = 70,              -- lib/arc/core.lua
+  grids = 80,            -- lib/grid/core.lua
+  midi = 90,             -- lib/midi_in.lua
+  scenes_load = 100,     -- lib/scenes.lua: scenes.data (sets S.scenes_loaded)
+  buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
+  startup_clock = 120,   -- strata.lua: voices 1 and 2
+  frame_clock = 130,     -- lib/ui/frame.lua
+}
+
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
 
@@ -126,7 +167,7 @@ local CLEANUP_ORDER = {
   scene_transition = 110,   -- lib/scenes.lua
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
-  buffer_page_flash = 140,  -- lib/pages/buffer.lua: the hint row's flash clock
+  ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
   midi_handler = 150,       -- lib/midi_in.lua
   voices_off = 160,         -- lib/engine_sync.lua
   grids_dark = 170,         -- lib/grid/core.lua
@@ -153,12 +194,15 @@ return {
   SOURCE_INPUT = SOURCE_INPUT,
   SOURCE_OPTIONS = SOURCE_OPTIONS,
   UI_PAGES = UI_PAGES,
+  HEADER = HEADER,
+  SCENES_FIELDS = SCENES_FIELDS,
   DISCRETE_GRAIN_KEYS = DISCRETE_GRAIN_KEYS,
   BUFFER_MUTATION_KEYS = BUFFER_MUTATION_KEYS,
   GRAIN_PARAM_IDS = GRAIN_PARAM_IDS,
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
+  START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
   CLEANUP_ORDER = CLEANUP_ORDER,
 }

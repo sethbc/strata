@@ -37,7 +37,7 @@ Group `strata_midi`, 3 params:
 
 ## Device lifecycle
 
-- `midi_init()` (from `init`, after `grid_init`) calls `attach_midi(params:get("midi_device"))`.
+- `midi_init()` (from its start step, `START_ORDER.midi`, after the grids) calls `attach_midi(params:get("midi_device"))`.
 - `attach_midi` clears the old vport's `event` and sets `S.midi_device = midi.connect(port); S.midi_device.event = midi_event`.
 - The handler lives on the vport only: norns fires both `device.event` and `vports[port].event`, as for grids and arc.
 - `midi.add(device)` re-attaches, requests a redraw (SETUP) and prints.
