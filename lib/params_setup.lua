@@ -474,6 +474,7 @@ return function(S)
         controlspec = spec,
         action = function(x)
           S.voices[voice_idx].params[key] = x
+          note_param_edit(param_id)  -- randomize sets it: an edit ends its undo
           send_param_to_engine(param_id, x)
         end
       }
@@ -517,6 +518,7 @@ return function(S)
         if not S.drift_writing then
           S.buf_pos_base[voice_idx] = x
         end
+        note_param_edit(prefix .. "buf_pos")
         send_param_to_engine(prefix .. "buf_pos", x)
       end
     }
@@ -531,6 +533,7 @@ return function(S)
       controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
       action = function(x)
         S.voices[voice_idx].grain.buf_rate = x
+        note_param_edit(prefix .. "buf_rate")
         send_param_to_engine(prefix .. "buf_rate", x)
       end
     }
@@ -545,6 +548,7 @@ return function(S)
       controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
       action = function(x)
         S.voices[voice_idx].grain.buf_scan = x
+        note_param_edit(prefix .. "buf_scan")
         send_param_to_engine(prefix .. "buf_scan", x)
       end
     }
@@ -559,6 +563,7 @@ return function(S)
       controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
       action = function(x)
         S.voices[voice_idx].grain.size = x
+        note_param_edit(prefix .. "grain_size")
         send_param_to_engine(prefix .. "grain_size", x)
       end
     }
@@ -591,6 +596,7 @@ return function(S)
         if not S.drift_writing then
           S.grain_pitch_base[voice_idx] = x
         end
+        note_param_edit(prefix .. "grain_pitch")
         send_param_to_engine(prefix .. "grain_pitch", x)
       end
     }
