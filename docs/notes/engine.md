@@ -13,3 +13,4 @@ The engine notes are one file per area of the engine check (`test/engine_check/<
 - [performance](engine/performance.md): the values a performance tier sets
 - [rings](engine/rings.md): the voice and input rings, their writers, where a ring grain starts (the lookback, history), `ringReaders`
 - [freeze](engine/freeze.md): freeze per source (hold, spectral), the input copy and its fade, the frozen read point, the spectral writer
+- [loops](engine/loops.md): loop regions, where a buffer grain starts (`slotGrainPos`), forward and reverse grains kept inside the valid region
