@@ -1075,10 +1075,17 @@ var checkResonatorCeiling = {
 // the master limiter, at reachable extremes in the thousands, so it crushed
 // every other voice). resonatorGain and a mono limiter at voiceCeiling (1,
 // before the pan) fix it:
-// - eight Resonators at their defaults (amp 0.3, no accents) have a median
-//   RMS of 0.045-0.2 (measured about 0.1; a gain left 3x too high gives
-//   about 0.29, which the limiter does not hide the way it hides peaks)
-//   and peak at most 0.75 per channel;
+// - 32 Resonators at their defaults (amp 0.3, no accents) have a median
+//   RMS of 0.07-0.22, and 32 with a gain 3x too high (amp 0.9: amp scales
+//   the same product as resonatorGain) a median above 0.22, which the
+//   limiter does not hide the way it hides peaks; the defaults peak at most
+//   0.75 per channel. One Resonator's RMS over the meter's 1.5 s spreads
+//   widely (0.06-0.34 at the defaults, 0.2-0.47 at 3x, in 256 of each),
+//   because the cutoff's 1-4 noise factor and the amplitude wobbles move
+//   at 0.1-0.15 Hz: a median of eight passed 0.2 about once in 100 runs
+//   (#91). Bootstrapped from those 256, a median of 32 has mean 0.127 and
+//   SD 0.009 at the defaults (range 0.09-0.18) and mean 0.327 and SD 0.012
+//   at 3x (0.27-0.37), so 0.22 sits about 9 SD from both;
 // - at the extremes Lua allows (freq 20-2000, rq 0.01 or 1, noise 1, amp 1,
 //   amplitude and frequency crossmod at full, accents at velocity 1 every
 //   0.25 s), centered, no channel passes 0.75 (the limiter's 1 x Pan2's
@@ -1092,9 +1099,15 @@ var checkResonatorLevel = {
         [\freq, freq, \rq, rq, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2]
     }) }).flatten(1);
     var panned = [\freq, 20, \rq, 0.01, \noise, 1, \amp, 1, \modAmpAmt1, 2, \modFreqAmt2, 2, \pan, 1];
-    var defaultCount = 8, cases = (defaultCount.collect({ defaults }) ++ extremes ++ [panned]);
+    var tripled = defaults ++ [\amp, 0.9];     // /s_new sets controls in order: the later amp wins
+    var defaultCount = 32, rmsCeiling = 0.22;
+    var cases = (defaultCount.collect({ defaults }) ++ defaultCount.collect({ tripled }) ++ extremes ++ [panned]);
     var buses = cases.collect({ Bus.audio(server, 2) }), peakBus = Bus.control(server, 2 * cases.size);
-    var rmsBus = Bus.control(server, defaultCount), synths, peaks, rms, defaultPeak, extremePeak, pannedPeaks;
+    var rmsBus = Bus.control(server, 2 * defaultCount), synths, peaks, rms, tripledRms, defaultPeak, extremePeak, pannedPeaks;
+    var extremeStart = 2 * defaultCount;
+    var median = { arg values; values[defaultCount div: 2] };
+    var show = { arg value; value !? { value.round(0.001) } };
+    var spread = { arg values; "%-%".format(show.(values.first), show.(values.last)) };
     // Limiter delays its output by twice its lookahead (dur): its default
     // 0.01 s put the Resonator 20 ms behind the other voices (#47)
     var lookaheads = SynthDescLib.global.at(\strataResonator).def.children.select({ arg ugen; ugen.isKindOf(Limiter) })
@@ -1108,26 +1121,31 @@ var checkResonatorLevel = {
     });
     cases.do({ arg args, index;
         Synth(\strataCheckChannelPeaks, [\in, buses[index], \out, peakBus.index + (2 * index)], group, \addToTail);
-        if (index < defaultCount) { Synth(\strataCheckRms, [\in, buses[index], \out, rmsBus.index + index], group, \addToTail) };
+        if (index < extremeStart) { Synth(\strataCheckRms, [\in, buses[index], \out, rmsBus.index + index], group, \addToTail) };
     });
     server.sync; 4.5.wait;                     // past the 4 s attack
     group.set(\t_reset, 1);
     4.wait;                                    // the RMS meters have forgotten the attack
-    rms = readBus.(rmsBus).sort;
+    rms = readBus.(rmsBus);
+    tripledRms = rms.copyRange(defaultCount, extremeStart - 1).sort;
+    rms = rms.copyRange(0, defaultCount - 1).sort;
     defaultPeak = readBus.(peakBus).copyRange(0, (2 * defaultCount) - 1).maxItem;
     group.set(\t_reset, 1);
     8.do({ synths.do({ arg synth; synth.set(\velocity, 1, \t_trig, 1) }); 0.25.wait });
     peaks = readBus.(peakBus).clump(2);
-    extremePeak = peaks.copyRange(defaultCount, defaultCount + extremes.size - 1).flatten.maxItem;
+    extremePeak = peaks.copyRange(extremeStart, extremeStart + extremes.size - 1).flatten.maxItem;
     pannedPeaks = peaks.last;
-    check.((rms.size == defaultCount) and: { rms[defaultCount div: 2] >= 0.045 } and: { rms[defaultCount div: 2] <= 0.2 },
-        "the Resonator at its defaults has a median RMS of 0.045-0.2 (got %, all %)".format(
-            rms[defaultCount div: 2], rms.collect({ arg value; value.round(0.001) })));
+    check.((rms.size == defaultCount) and: { median.(rms) >= 0.07 } and: { median.(rms) <= rmsCeiling },
+        "% Resonators at their defaults have a median RMS of 0.07-% (got %, range %)".format(
+            defaultCount, rmsCeiling, show.(median.(rms)), spread.(rms)));
+    check.((tripledRms.size == defaultCount) and: { median.(tripledRms) > rmsCeiling },
+        "% Resonators with a gain 3x too high (amp 0.9) have a median RMS above % (got %, range %)".format(
+            defaultCount, rmsCeiling, show.(median.(tripledRms)), spread.(tripledRms)));
     check.(defaultPeak.notNil and: { defaultPeak > 0.05 } and: { defaultPeak <= 0.75 },
         "the Resonator at its defaults peaks at most 0.75 per channel (got %)".format(defaultPeak));
     check.(extremePeak.notNil and: { extremePeak <= 0.75 },
         "the Resonator at reachable extremes, centered, never peaks past 0.75 per channel (got %; per case %)".format(extremePeak,
-            peaks.copyRange(defaultCount, defaultCount + extremes.size - 1).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
+            peaks.copyRange(extremeStart, extremeStart + extremes.size - 1).collect(_.maxItem).collect({ arg value; value.round(0.01) })));
     check.(pannedPeaks.notNil and: { pannedPeaks[1] >= 0.9 } and: { pannedPeaks[1] <= 1.05 } and: { pannedPeaks[0] < 0.001 },
         "a Resonator extreme panned hard right peaks at its limiter's level, 0.9-1.05 (got %)".format(pannedPeaks));
     group.free; modBus.free; peakBus.free; rmsBus.free; buses.do(_.free);

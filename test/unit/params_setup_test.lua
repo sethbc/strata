@@ -260,7 +260,8 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   for _, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do
     in_scene[global.id] = global
     assert_true(type(global.default) == "number", global.id .. " has a default")
-    if global.id ~= "tempo" then
+    -- (old scene files without LFO depths keep silent LFOs: 0, not the 25% the params start at)
+    if global.id ~= "tempo" and not global.id:find("^lfo_depth_") then
       local param = params:lookup_param(global.id)
       local param_default = param.controlspec and param.controlspec.default or param.default
       assert_near(global.default, param_default, 1e-9, global.id .. " scene default")

@@ -1,5 +1,94 @@
 # Strata Changelog
 
+## Version 3.1.0 - 2026-11-07
+
+Makes Strata playable from the norns alone, with the grid and arc as accelerators: three new screen pages (VOICE, SEQ and SCENES), K1 held as ALT on every page, lock in place of freeze, one level of randomize undo, fine adjustment and center detents, arc rings on every page but SETUP, and small grids that catch up with the 256. Underneath, `strata.lua` is split into modules built for parallel work. No engine command, param or file format changes, and no sound changes: scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.0.2 load unchanged. One default changes, the LFO depth (see Changed Defaults). Many keys moved (see Upgrade Notes).
+
+### Screen Pages
+
+- **Eight pages.** E1 steps through MAIN, VOICE, SEQ, FX, LFO, BUFFER, SCENES and SETUP and stops at both ends; FX, LFO, BUFFER and SETUP moved one to three places right.
+- **Header.** Every page shows eight page dots (the current page bright), a play triangle while the patterns play and `REC` while a buffer records, beside `[M]` and the scene. A changed value (the grid's tempo keys, for example) can take the place of the dots and indicators for 1.5 s. The header no longer shows master density: it is on the FX page's first row and MAIN's arc ring 1.
+- **MAIN.** The selected voice shows three fields with their units (its main parameter, grain size and grain density; for an input voice grain size, density and pitch): K2 moves the cursor between them and E3 adjusts the one under it. K3 starts and stops the selected voice. ALT+K2 randomizes it, and ALT+K2 again within 5 seconds undoes that (the hint reads `K2:undo` while it can); ALT+K3 locks it. The details show the voice's source (`synth`, `buf 2`, `input`) next to its name, and `[L]` (locked) and `[T]` (triggered grains) on the ON/OFF row; a locked voice's values are no longer dimmed. Voice-list entries start with the voice number (`3- fold [L]`), and the list keeps four voices in view at both ends. The crossmod sources moved to VOICE.
+- **VOICE (new).** Every parameter of the selected voice in four sections (synth, grain, crossmod, mix), each value with its own text and unit, and crossmod sources by voice name (`3 fold`). E2 moves through the rows and on into the next section, E3 edits, K2/K3 jump to the previous/next section, ALT+K2 resets the row to its default and ALT+K3 locks the voice. The section and position show at the top right (`grain 2/4`). When the voice's source or the selected voice changes, the cursor stays on its parameter if the new rows still have it.
+- **SEQ (new).** All seven patterns at once, each step drawn at its level (empty steps as outlines), with a step cursor. E2 moves the step, E3 sets its level (0-15), K3 turns it on or off and K2 plays and stops the patterns. ALT+E2 moves to another voice's row, ALT+E3 changes the tempo, ALT+K2 clears and ALT+K3 randomizes the voice's pattern. The sounding column is brighter while the patterns play, and the header shows the tempo.
+- **FX.** Rows sit under dim section labels (master, filter, delay, reverb) that take no cursor stop, with a scroll marker at the right edge. K3 bypasses or restores the effect of the row under the cursor, each effect at its own last mix (`K3:delay bypass`; `E3:value` on the master rows). Filter mix, delay feedback and mix, and reverb mix and damping read in percent.
+- **LFO.** A line under the selected LFO shows all its settings (destination, shape, mode, rate, depth, offset, on/off) and scrolls, with `<` and `>` when settings lie off either end. K2/K3 select the previous/next LFO, E2 moves along the line and E3 changes the setting under the cursor (the hint names it). The destination steps both ways and stops at the ends; ALT+E3 on it jumps a group (none, the global destinations, then voice 1 to voice 7). ALT+K2 resets the setting and ALT+K3 turns the LFO on or off.
+- **BUFFER.** E2 moves a cursor over the eight buffers, and K2 (load, on release), K3 (record/stop), ALT+K2 (clear) and ALT+K3 (save, with the `saved`, `busy` and `empty` confirmations) act on the buffer under it, whatever the voices play. The left column has three fields, source, record duration and record level: ALT+E2 picks one and E3 changes it. An input meter (`in`, eight segments of 6 dB from -48 dB, the louder channel, the highest segment held for 1 s) helps set the record level before recording. The cursor's row lists the voices playing that buffer (`v2 v6`). Rows are 7 px apart and scroll six at a time with a scroll bar; an empty buffer shows `-`, and names use the width up to the length column.
+- **SCENES (new).** The eight scene slots in two columns (a filled box when populated, the current scene bright, a mark at the sequencer position), and the transition time, sequencer on/off, sequence length and scene duration as fields. K2 recalls with the transition, K3 at once, ALT+K3 saves; saving over a populated slot asks for a second ALT+K3 within 2 seconds (`K3 again: overwrite S<n>`). Moving the cursor cancels the question, and if another message has replaced the prompt, the press asks again instead of saving.
+- **SETUP.** A scrolling list of fields: MIDI port, channel mode, mutations on/off, rate, probability and amount, save scenes and load scenes. E2 moves, E3 changes the value and K3 runs save or load. The grid, arc and buffer status lines sit below; the grid size line appears only while a grid is connected, and the saved-scene count is gone.
+
+### Keys and ALT
+
+- **K1 held is ALT.** norns hands K1 to a script only after a quarter-second hold, so ALT is always a hold. With K1 held, K2 and K3 take the page's ALT actions (never their plain ones; where a page has none they do nothing), E2 and E3 its ALT turns, and the hint row shows the ALT keys. A key pressed with K1 held stays an ALT press until it is released, even if K1 comes up first, so on BUFFER it never opens the file browser.
+- **Fine adjustment.** ALT+E3 moves a continuous value a tenth as far per detent (the MAIN fields, the VOICE and FX rows, the record level, the LFO rate). Values in whole steps (sources, envelopes, MIDI settings) still step whole values. ALT+E2 and the arc are never fine.
+- **Center detents.** A value whose range runs through 0 (pan, buffer scan, the crossmod amounts) stops at exactly 0 when a turn reaches or crosses it, even a fast one, and holds there for the next 3 encoder detents or 24 arc ticks, for at most a second, so a hold left from an earlier turn never swallows a later one.
+- **Lock replaces freeze** wherever you see it: `[L]` in the voice list and on MAIN, the ALT+K3 hints and the grid's lock keys. A locked voice is still safe from randomize and mutation and can still be edited. Scenes keep storing it as `frozen`, so saved scenes load unchanged; "freeze" is kept for a real audio freeze in a later release.
+- **Randomize undo.** For 5 seconds after a voice is randomized, its previous values can be put back (MAIN's ALT+K2). Randomizing another voice, recalling a scene, a mutation of that voice or editing one of the randomized params ends the window; the pitch drift does not.
+
+### Grid
+
+- **Every size:** each connected grid shows and changes its own page. Hold a step key and press another key of the same voice to set the held step's level (its share of 15 along the voice's steps). Scene saves (row 3 of the scene page on the 16×16 and 16×8) need a half-second hold; the key lights while held, and a shorter press, or unplugging the grid mid-hold, saves nothing.
+- **16×16:** row 16, columns 9-15 copy a voice's pattern and paste it onto other voices; column 16 clears the copy. The tempo keys (row 8, columns 5-8) light while held, and the header shows the new tempo. On the scene page, while the scene sequencer runs, the next scene lights at brightness 10 beside the current one at 15.
+- **16×8:** page 2 is a fader page for the selected voice (four faders in rows 1-4, the fader page selector in row 5, voice select in row 6, voice lock in row 7). A new sources page (row 8, column 8) sets each voice's source (rows 1-7, columns 1-10) and records into and clears the eight buffers (columns 13-16). Row 8, column 16 still cycles the selected voice.
+- **8×16:** four pages (patterns, faders, scenes, sources), stepped by row 8 of column 8, whose brightness shows the page. The faders page has four upright faders for the selected voice (row 16 minimum, row 1 maximum), a fader page selector in column 5 and voice select in column 8. The scenes page has instant recall, recall with a transition, save on a half-second hold, the scene sequencer on/off and its length; the sources page each voice's source (synth, buffers 1-8, input) and record and clear keys for the eight buffers.
+- **8×8:** row 8 column 1 plays or stops when you let go of it, and holding it for half a second switches between steps 1-8 and 9-16 (the shown half's playhead lights, and column 1 blinks while the other half plays). Columns 2-8 toggle voices 1-7, so every voice is reachable.
+
+### Arc
+
+- **Rings on every page but SETUP.** VOICE: the four rings edit the cursor's group of four rows, which the screen marks; choices and numbers step one value per 20 ticks, and rings past the last row are dark. SEQ: the step cursor, the step's level (the grid follows), the tempo and the voice row. SCENES: the scene cursor (moving it cancels a pending overwrite question) and the transition time. On MAIN, ring 3 is grain pitch for an input-sourced voice, whose ring 2 already is grain size.
+- **ALT rings on MAIN:** with K1 held, the rings set the selected voice's grain pitch, grain spread, level and pan (dark for Sub).
+- **Rings through 0** fill from 12 o'clock, clockwise for positive values and counter-clockwise for negative ones; at exactly 0 one dim LED stays lit.
+- **The button acts per page:** start/stop on MAIN and VOICE, play/stop on SEQ, record/stop on BUFFER, instant recall of the cursor slot on SCENES, and the selected LFO on/off on LFO. It does nothing on FX and SETUP.
+- Turns too small for a whole step (LFO depth, the clocked rate, the whole-step rings) are forgotten when the page changes, so they never step a param on another page.
+
+### Changed Defaults
+
+- **LFOs start at 25% depth**, so turning one on is audible straight away. Scenes keep the depth they stored, and scene files without LFO settings still recall silent LFOs.
+
+### Fixes
+
+- **An LFO keeps its offset** when it is turned on or off, from the LFO page, PARAMETERS or a scene recall; norns' LFO library set it back to 0 on every on/off. Changing the baseline still resets it. Fixes part of #103 (scenes storing the offset waits for 3.2).
+- **A failed start no longer loses saved scenes.** A start that failed before loading the saved scenes and buffer paths (the engine did not load, or an error earlier in `init`) no longer lets `cleanup()` overwrite `scenes.data` and `buffers.data` with empty state, and cleanup no longer stops on the missing params and LFOs after such a start. (#72)
+- **The engine check's Resonator level test no longer fails at random:** it takes the median RMS of 32 default Resonators instead of 8 (bound 0.07-0.22) and checks that 32 with a gain 3× too high stay above 0.22. (#91)
+- **The engine check's port:** a non-numeric `$STRATA_SC_PORT` is refused instead of becoming port 0, and concurrent runs on macOS no longer share the system temp folder. (#67, #68)
+
+### Internals and Development
+
+- **Modules.** `strata.lua` holds only the entry points; every part of the script is a module under `lib/` (with `lib/pages/`, `lib/arc/`, `lib/grid/` and `lib/ui/`) sharing one table, `S`, with registries for pages, params, grid layouts, start steps and cleanup steps. Start-up runs through the start registry in the order `START_ORDER` lists, and `init` no longer lists the steps itself; nothing starts in a different order. (#73)
+- **One file per page, grid layout and arc page,** each with its own user page (`docs/user/pages/`, `docs/user/grid/`), notes file (under `docs/notes/lua/`, each opening with what must not break) and unit test file (under `test/unit/`, run by `test/run.lua`). CLAUDE.md is an index with a module table and rules for working in parallel; the README is split into user guides under `docs/user/`.
+- **Shared UI helpers** for the pages: a field list with section labels and a scroll marker, cursors that stay on a real field when a voice's source changes, and one flash for the header and the hint row. SEQ's moving playhead redraws through the frame clock, screen only, so a connected arc does not redraw at 15 fps while the patterns play.
+- **Process.** Each pull request adds a changelog fragment under `changes/` (see `changes/README.md`). The engine check runs on a configurable port (`$STRATA_SC_PORT`), so several can run on one machine. Strata is released under the MIT license.
+- **Checks.** A test fails on common British spellings in code, tests, docs and fragments. The docs check covers every file under `docs/notes/` and `docs/user/`. Page renders for reviewing the screen by eye: `lua test/render_pages.lua <dir>` writes each page state's drawing as JSON and `python3 test/render_pages.py <dir>` draws them as PNGs. Two agent task reports committed by mistake are removed, and `TASK-*-REPORT.md` is ignored.
+- `lua test/run.lua` / `luajit test/run.lua` grew from 210 to 462 tests.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/status.md`. The ones users notice:
+- **K1 held is ALT.** If it feels wrong on hardware, a long press of K2 or K3 (0.6 s) can take the ALT actions instead: the hook is built (every ALT action goes through `alt_action`), the timer is not wired yet.
+- **MAIN's K3 starts and stops**, and lock moved to ALT+K3; a stopped voice is one press from running again.
+- **BUFFER's E2 picks a buffer, not a voice:** the selected voice comes from MAIN or VOICE.
+- **Lock is a new name only:** the state and the scene field stay `frozen`, so scenes need no migration.
+- **The only default change is the LFO depth** (25%), and scenes keep the depth they stored.
+
+### Check on Hardware
+
+Tracked on [#6](https://github.com/sethbc/strata/issues/6). New in 3.1:
+- K1 held as ALT in play (the hold before ALT engages is norns' menu timer), before deciding on the long-press fallback
+- The page dots, `[L]` and `[T]`, the SEQ step rows and the BUFFER input meter on the real screen and font
+- The input meter's levels against a recorded take
+- The arc's whole-step rings (20 ticks per value) and the 24-tick center detent
+- Grid half-second holds (scene saves, the 8×8 half switch) and step levels
+
+### Upgrade Notes
+
+- **MAIN:** K2 moves the field cursor and K3 starts *and* stops the voice. Randomize moved from K2 to ALT+K2, and lock (freeze) from K3 to ALT+K3. The arc button follows K3.
+- **LFO:** K2/K3 select the LFO (E2 did), ALT+K3 turns it on or off (K3 did), and E3 edits the setting under the cursor instead of always the depth.
+- **BUFFER:** E2 picks the buffer instead of the voice (pick the voice on MAIN or VOICE); saving moved from K2+K3 to ALT+K3.
+- **SETUP:** E2 moves through the fields instead of setting the MIDI port.
+- **E1** reaches eight pages, so FX, LFO, BUFFER and SETUP sit further right; master density is no longer in the header.
+- **Grid:** scene saves need a half-second hold. On the 8×8, row 8 column 1 acts on release, and the voice keys moved from columns 3-7 (voices 1-5) to columns 2-8 (voices 1-7).
+- New LFOs start at 25% depth; saved scenes recall the depth they stored.
+
 ## Version 3.0.2 - 2026-11-05
 
 Fixes every finding of a whole-codebase review of 3.0.1 and of a final review of those fixes, plus the corrupt-load issue left open in 3.0.1 (issue #5). The numbers in brackets after each fix are its pull requests. No engine command, param or file format changes: scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.0.1 load unchanged. The engine gains one poll, `bufferLoadFailed`. Two fixes change the sound: the Resonator's level, and the pitch of buffers loaded from files that are not at 48 kHz (see Upgrade Notes).

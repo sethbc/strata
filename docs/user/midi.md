@@ -6,7 +6,7 @@ A MIDI keyboard or sequencer plays the voices: one channel per voice (or every c
 
 ## Playing the voices
 
-A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page (E2) or in PARAMETERS > midi; the port numbers are the norns SYSTEM > DEVICES > MIDI slots 1-4. Devices can be plugged in and out while Strata runs.
+A MIDI keyboard or sequencer plays the voices. Choose the port on the SETUP page (the first field; E3 changes it) or in PARAMETERS > midi; the port numbers are the norns SYSTEM > DEVICES > MIDI slots 1-4. Devices can be plugged in and out while Strata runs.
 
 - **Channels** - In **per voice** mode (the default) MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored. In **omni to selected** mode every channel plays the voice selected with E2
 - **Notes** - A note sets the voice's pitch: its frequency for a synth voice (exact equal temperament, limited to 20 Hz-2 kHz), its buffer rate for a buffer-sourced voice (note 60 plays at rate 1, an octave up doubles it, limited to 0.25x-4x); an input-sourced voice takes no pitch. A voice that is off starts; then the note accents it at the note's velocity (Karplus plucks its string, a triggered-mode voice fires a grain). Voices keep their slow attacks: Strata is not a fast-attack synth, the velocity lands on the accent

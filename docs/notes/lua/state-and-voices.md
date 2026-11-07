@@ -142,4 +142,4 @@ Check before indexing:
 - grid button coordinates;
 - parameter ranges.
 
-The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes/lua/grid-and-sequencer.md`.
+The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes/lua/sequencer.md`.

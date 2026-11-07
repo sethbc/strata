@@ -1,0 +1,287 @@
+-- test/unit/grid_layout_128v_test.lua
+-- The 8x16 grid layout (lib/grid/layout_128v.lua): pages 1-4 (patterns,
+-- faders, scenes, sources) cycled by (8,8)
+-- Run alone: lua test/run.lua grid_layout_128v
+
+return function(h)
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
+
+local function grid_core() return local_value("S").lib.grid_core end
+local function tap(context, port, x, y)
+  context.grid.press(port, x, y, 1); context.grid.press(port, x, y, 0)
+end
+-- (8,8) until the port shows the page
+local function show_grid_page(context, port, page)
+  for _ = 1, 4 do
+    if grid_core().page(port) == page then return end
+    tap(context, port, 8, 8)
+  end
+  assert_equal(grid_core().page(port), page, "reached grid page " .. page)
+end
+
+test("every 128v grid key runs without error", function()
+  local context = load_strata()
+  local device = context.grid.plug(1, 8, 16)
+  for page = 1, 4 do
+    show_grid_page(context, 1, page)
+    for y = 1, 16 do
+      for x = 1, 8 do
+        if not (x == 8 and y == 8) then
+          context.grid.press(1, x, y, 1)
+          context.grid.press(1, x, y, 0)
+          context.clock.advance()
+        end
+      end
+    end
+    assert_equal(grid_core().page(1), page, "only (8,8) changes the page")
+  end
+  assert_true(device.refresh_count > 0, "128v grid was redrawn")
+end)
+
+test("grid_redraw draws the 128v layout (I2), on a hot-plugged grid too (I3)", function()
+  local context = load_strata()
+  local device = context.grid.plug(2, 8, 16)
+  local refreshes = device.refresh_count
+  grid_redraw()
+  assert_equal(device.refresh_count, refreshes + 1, "128v redraw reaches a hot-plugged grid")
+  -- voice 1 is running after init: its status LED must be lit
+  local lit = false
+  for x = 1, 8 do
+    for y = 1, 16 do
+      if device:get_led(x, y) >= 12 then lit = true end
+    end
+  end
+  assert_true(lit, "128v layout drew something")
+end)
+
+test("128v (8,8) cycles four pages and shows the page in its LED", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local levels = {4, 8, 12, 15}
+  assert_equal(grid_core().page(1), 1, "a grid starts on the patterns page")
+  for _, page in ipairs({1, 2, 3, 4, 1}) do
+    assert_equal(grid_core().page(1), page)
+    assert_equal(device:get_led(8, 8), levels[page], "page " .. page .. " LED level")
+    tap(context, 1, 8, 8)
+  end
+  -- pages are per grid
+  local other = context.grid.plug(2, 8, 16)
+  assert_equal(grid_core().page(2), 1, "a second grid keeps its own page")
+  assert_equal(other:get_led(8, 8), 4)
+  assert_equal(grid_core().page(1), 2)
+end)
+
+test("128v column 8: voices and play on every page, voice select on pages 1-3", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local voices = local_value("voices")
+  for page = 1, 4 do
+    show_grid_page(context, 1, page)
+    local was_active = voices[5].active
+    tap(context, 1, 8, 5)
+    assert_true(voices[5].active ~= was_active, "page " .. page .. ": (8,5) toggles voice 5")
+    assert_equal(device:get_led(8, 5), voices[5].active and 12 or 4)
+    local playing = local_value("pattern_playing")
+    tap(context, 1, 8, 9)
+    assert_true(local_value("pattern_playing") ~= playing, "page " .. page .. ": (8,9) plays or stops")
+    assert_equal(device:get_led(8, 9), local_value("pattern_playing") and 15 or 4)
+    if local_value("pattern_playing") then pattern_toggle() end
+    if page <= 3 then
+      tap(context, 1, 8, 10 + page)
+      assert_equal(local_value("grid_voice_select"), 1 + page, "page " .. page .. ": rows 10-16 select")
+      assert_equal(device:get_led(8, 10 + page), 15, "the selected voice is lit")
+      assert_equal(device:get_led(8, 10), 2, "the others dim")
+    end
+  end
+  -- on the sources page column 8 rows 10-16 select no voice
+  show_grid_page(context, 1, 4)
+  local selected = local_value("grid_voice_select")
+  for _, y in ipairs({10, 11, 14, 15, 16}) do
+    tap(context, 1, 8, y)
+    assert_equal(device:get_led(8, y), 0, "row " .. y .. " is dark on the sources page")
+  end
+  assert_equal(local_value("grid_voice_select"), selected, "no voice select on the sources page")
+end)
+
+test("128v patterns page: steps down each voice's column", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local patterns = local_value("patterns")
+  tap(context, 1, 3, 12)
+  assert_equal(patterns[3][12], 15, "(3,12) toggles voice 3 step 12")
+  assert_equal(device:get_led(3, 12), 15)
+  context.grid.press(1, 3, 12, 1); context.grid.press(1, 3, 4, 1)
+  assert_equal(patterns[3][12], 4, "with step 12 held, row 4 of 16 sets its level to 4")
+  assert_equal(patterns[3][4], 0, "the level key does not toggle")
+  context.grid.press(1, 3, 4, 0); context.grid.press(1, 3, 12, 0)
+  -- other pages do not edit patterns
+  show_grid_page(context, 1, 2)
+  tap(context, 1, 6, 6)
+  show_grid_page(context, 1, 3)
+  tap(context, 1, 6, 6)
+  show_grid_page(context, 1, 4)
+  tap(context, 1, 6, 14)
+  assert_equal(patterns[6][6] + patterns[6][14], 0, "columns 1-7 edit steps on the patterns page only")
+end)
+
+test("128v sources page", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local buffers = local_value("buffers")
+  show_grid_page(context, 1, 4)
+  tap(context, 1, 2, 5)
+  assert_equal(params:get("v2_source"), 5, "(2,5) -> buffer 4")
+  assert_equal(device:get_led(2, 5), 15, "the selected source at 15")
+  tap(context, 1, 2, 10)
+  assert_equal(params:get("v2_source"), 10, "(2,10) -> input")
+  tap(context, 1, 2, 1)
+  assert_equal(params:get("v2_source"), 1, "(2,1) -> synth")
+  for x = 1, 7 do
+    for y = 1, 10 do
+      assert_equal(device:get_led(x, y), grid_core().source_level(x, y), "source LED " .. x .. "," .. y)
+    end
+    assert_equal(device:get_led(x, 11), 0, "row 11 is dark")
+  end
+  -- row 12 records, row 13 clears; column 8 is slot 8
+  tap(context, 1, 3, 12)
+  assert_equal(context.calls_named("recordBuffer")[1].args[1], 2, "(3,12) records slot 3")
+  assert_true(buffers[3].recording)
+  assert_equal(device:get_led(3, 12), 15, "a recording slot at 15")
+  assert_equal(device:get_led(4, 12), grid_core().record_level(4))
+  tap(context, 1, 8, 12)
+  assert_equal(context.calls_named("recordBuffer")[2].args[1], 7, "(8,12) records slot 8")
+  assert_equal(device:get_led(8, 12), 15)
+  tap(context, 1, 8, 13)
+  assert_equal(context.calls_named("clearBuffer")[1].args[1], 7, "(8,13) clears slot 8")
+  assert_true(not buffers[8].recording, "the clear ends slot 8's recording")
+  for x = 1, 8 do
+    assert_equal(device:get_led(x, 13), grid_core().CLEAR_LEVEL, "clear key " .. x)
+  end
+  assert_equal(device:get_led(8, 12), 2, "slot 8 empty again")
+end)
+
+test("128v faders page: vertical faders, page selector, voice select", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  show_grid_page(context, 1, 2)
+  tap(context, 1, 8, 11)  -- voice 2 (fm)
+  assert_equal(local_value("grid_voice_select"), 2)
+  local ids = fader_param_ids(2)
+  tap(context, 1, 1, 16)
+  local freq_min, freq_max = param_range(ids[1])
+  assert_near(params:get(ids[1]), freq_min, 1e-6, "(1,16) sets fader 1 to its minimum")
+  assert_equal(device:get_led(1, 16), 15, "the value's row at 15")
+  assert_equal(device:get_led(1, 15), 0, "nothing above it")
+  tap(context, 1, 1, 1)
+  assert_near(params:get(ids[1]), freq_max, 1e-6, "(1,1) sets fader 1 to its maximum")
+  assert_equal(device:get_led(1, 1), 15)
+  assert_equal(device:get_led(1, 16), 8, "the bar below the value")
+  -- row y sets what column 17 - y sets on the 256
+  set_param_from_column(ids[3], 8)
+  local expected = params:get(ids[3])
+  set_param_from_column(ids[3], 1)
+  tap(context, 1, 3, 9)  -- fader 3, the 256's column 8
+  assert_near(params:get(ids[3]), expected, 1e-9, "row 9 sets the 256's column 8 value")
+  assert_equal(device:get_led(3, 9), 15)
+  assert_equal(device:get_led(3, 10), 8)
+  assert_equal(device:get_led(3, 8), 0)
+  -- column 5: the fader page selector
+  assert_equal(device:get_led(5, 1), 15, "fader page 1 selected")
+  assert_equal(device:get_led(5, fader_page_count(2)), 4, "the last fader page available")
+  assert_equal(device:get_led(5, fader_page_count(2) + 1), 0, "no page past the last")
+  tap(context, 1, 5, 2)
+  assert_equal(local_value("param_page"), 2, "(5,2) fader page 2")
+  assert_equal(device:get_led(5, 2), 15)
+  tap(context, 1, 5, fader_page_count(2) + 1)
+  assert_equal(local_value("param_page"), 2, "a page past the last does nothing")
+  tap(context, 1, 4, 16)
+  local fader_8_min = param_range(ids[8])
+  assert_near(params:get(ids[8]), fader_8_min, 1e-6, "page 2's fader 4 is fader 8")
+  -- columns 6-7 are dark
+  for y = 1, 16 do
+    assert_equal(device:get_led(6, y) + device:get_led(7, y), 0, "columns 6-7 dark, row " .. y)
+  end
+  -- column 8 rows 10-16 select the voice
+  tap(context, 1, 8, 12)
+  assert_equal(local_value("grid_voice_select"), 3, "(8,12) selects voice 3")
+  local folder_ids = fader_param_ids(3)
+  local param_page = local_value("param_page")
+  local shown = folder_ids[(param_page - 1) * 4 + 1]
+  assert_equal(device:get_led(1, 17 - fader_position(shown)), 15, "the faders show voice 3")
+end)
+
+test("128v scenes page", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local scenes = local_value("scenes")
+  capture_scene(3)
+  show_grid_page(context, 1, 3)
+  assert_equal(device:get_led(1, 3), 8, "a populated scene at 8")
+  assert_equal(device:get_led(1, 4), 2, "an empty one at 2")
+  assert_equal(device:get_led(2, 3), 6)
+  assert_equal(device:get_led(2, 4), 2)
+  tap(context, 1, 1, 3)
+  assert_equal(local_value("current_scene"), 3, "(1,3) recalls S3 instantly")
+  assert_true(not local_value("scene_transition_active"), "no transition")
+  assert_equal(device:get_led(1, 3), 15, "the current scene at 15")
+  params:set("scene_transition_time", 2)
+  tap(context, 1, 2, 3)
+  assert_true(local_value("scene_transition_active"), "(2,3) recalls S3 with a transition")
+  context.clock.run_for(2.5)
+  -- (3,y) saves on a hold
+  assert_equal(device:get_led(3, 5), 4, "save key idle")
+  context.grid.press(1, 3, 5, 1)
+  assert_equal(device:get_led(3, 5), 15, "a pending save at 15")
+  context.clock.run_for(0.3)
+  context.grid.press(1, 3, 5, 0)
+  assert_true(not scenes[5].populated, "released early: nothing saved")
+  context.grid.press(1, 3, 5, 1)
+  context.clock.run_for(0.51)
+  assert_true(scenes[5].populated, "(3,5) held 0.5 s saves S5")
+  context.grid.press(1, 3, 5, 0)
+  -- column 4: the sequencer and its length
+  assert_equal(device:get_led(4, 1), 4, "sequencer off")
+  tap(context, 1, 4, 1)
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "(4,1) turns the sequencer on")
+  assert_equal(device:get_led(4, 1), 15)
+  tap(context, 1, 4, 1)
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "and off")
+  for length = 1, 8 do
+    tap(context, 1, 4, 8 + length)
+    assert_equal(params:get("scene_sequence_length"), length, "(4," .. (8 + length) .. ") length " .. length)
+  end
+  tap(context, 1, 4, 11)
+  for length = 1, 8 do
+    assert_equal(device:get_led(4, 8 + length), length <= 3 and 8 or 2, "length LED " .. length)
+  end
+  -- the sequencer position at 10 while it runs, the current scene beats it
+  local S = local_value("S")
+  S.scene_sequencer_enabled = true
+  S.scene_sequencer_position = 2; S.current_scene = 1
+  grid_redraw()
+  assert_equal(device:get_led(1, 2), 10, "the sequencer position at 10")
+  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
+  S.scene_sequencer_position = 1
+  grid_redraw()
+  assert_equal(device:get_led(1, 1), 15, "the current scene beats the position")
+  S.scene_sequencer_enabled = false
+  S.scene_sequencer_position = 2
+  grid_redraw()
+  assert_equal(device:get_led(1, 2), 2, "no position while the sequencer is off")
+end)
+
+test("128v removing the grid mid-save saves nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local scenes = local_value("scenes")
+  context.grid.plug(1, 8, 16)
+  show_grid_page(context, 1, 3)
+  context.grid.press(1, 3, 6, 1)
+  context.grid.unplug(1)
+  context.clock.run_for(1)
+  assert_true(not scenes[6].populated, "no save after the grid is removed")
+  context.grid.plug(1, 8, 16)
+  assert_equal(grid_core().page(1), 1, "a grid plugged back starts on page 1")
+end)
+
+end

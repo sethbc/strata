@@ -912,7 +912,8 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
   end
   assert_equal(steps, local_value("SCENE_TRANSITION").steps + 1, "every step, then the end")
   assert_true(screen_shows(context, "100 Hz"), "the end shows the scene's freq")
-  assert_true(screen_shows(context, "[LOCK]"), "and its lock")
+  -- its lock (the MAIN page's own lock mark is tested in pages_main_test.lua)
+  assert_true(local_value("frozen")[1], "and its lock")
 end)
 
 test("v1 scene file migrates to v2 with fx defaults", function()

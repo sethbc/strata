@@ -23,6 +23,8 @@ Perfect for creating structured ambient compositions with multiple movements or 
 5. Save to another scene slot
 6. Repeat until you have 3-8 distinct scenes
 
+**From the screen**: the [SCENES page](pages/scenes.md) saves and recalls scenes without a grid. E2 picks a slot, K2 recalls it with the transition time, K3 recalls it at once, and ALT+K3 saves (a slot that already holds a scene asks for a second ALT+K3 within 2 seconds). The same page sets the transition time, sequencer on/off, sequence length and scene duration.
+
 **Manual Scene Performance**:
 - Press row 1 buttons for instant scene changes (good for rhythmic switching)
 - Press row 2 buttons for smooth crossfades (good for ambient transitions). Saving into the scene a crossfade is heading for stores the sound as it is at that moment; the crossfade still ends on the scene as it was recalled
@@ -32,7 +34,7 @@ Perfect for creating structured ambient compositions with multiple movements or 
 - Set scene sequence length (how many scenes to cycle through). Shortened while a scene past the new end plays, the sequence wraps to scene 1
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
-- Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, freeze, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is canceled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
+- Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, locks, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is canceled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
 - Press row 5, column 1 to start/stop the sequencer
 - Loading a PSET saved with the sequencer on, while the sequencer is off, starts it once the whole PSET has loaded, from scene 1, with the PSET's transition time, duration and length. A sequencer that is already running keeps its place
 - Loading scenes from disk stops a running transition where it is

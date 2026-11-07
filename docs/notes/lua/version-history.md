@@ -31,6 +31,20 @@
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
 
+## Version 3.1.0 (2026-11-07)
+
+Playable from the norns alone (design: `docs/design/3.1-design.md`). No engine, command, param or scene format change; the one default change is LFO depth 25%. Highlights:
+- Module split: `strata.lua` holds the entry points; every part of the script is a constructor module under `lib/` sharing `S`, with registries (`S.registry.pages`, `params`, `grid_layouts`, `start`, `cleanup`) so work packages own disjoint files. `init` runs `START_ORDER` steps (#73).
+- Pages: eight page records (`UI_PAGES`), VOICE, SEQ and SCENES new; the header's page dots and `header_flash`; `S.lib.ui_flash` for the header and the hint row; `S.lib.ui_field_list`, `S.lib.ui_cursors` and `S.lib.ui_voice_rows` for row pages.
+- Keys: K1 held as ALT (`S.alt_held`, `alt_action`, `S.key_press_alt`, a `long_press` hook for the fallback); fine adjustment on ALT+E3 (`FINE_DIVISOR`); center detents (`delta_with_detent`, `enc_param_delta`); lock as the UI name of `frozen` (`toggle_lock`); randomize undo (`UNDO_SECONDS` 5).
+- Arc: `arc_ring_fill_bipolar`, ALT rings (`arc_alt_delta`, `arc_alt_redraw`), a per-page `arc_button`, `arc_whole_steps` carries forgotten on a page change; page rings in `lib/arc/<page>.lua`.
+- Grid: pages and held keys per port (`S.lib.grid_core.page`, `S.grid_held`), `step_key` step levels, `scene_save_key` half-second holds through `on_hold`; fader and sources pages on the 16×8 and 8×16, pattern halves on the 8×8, copy/paste on the 16×16.
+- LFOs keep their offset across on/off (`wrap_param_action`, part of #103).
+- Process: changelog fragments in `changes/`, one notes file, user page and unit test file per page and grid layout, the US-spelling test, page renders (`test/render_pages.lua`).
+- Tests: 462 Lua tests.
+
+See CHANGELOG.md and `docs/status.md`.
+
 ## Version 3.0.2 (2026-11-05)
 
 Fixes the whole-codebase review of 3.0.1, its final review and #5. No command, param or file format changes (one new poll, `bufferLoadFailed`). Highlights:

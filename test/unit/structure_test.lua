@@ -532,7 +532,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "buffer polls and timers", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+  "lfos", "buffer polls and timers", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -549,6 +549,7 @@ test("cleanup runs every registered step in today's order", function()
   buffer_page_flash("flash")
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
   header_flash("flash")
+  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.BUFFER)  -- its input meter polls run
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -605,6 +606,7 @@ test("cleanup runs every registered step in today's order", function()
   for n = 1, local_value("NUM_LFOS") do watch_method(S.lfos[n], "stop", "lfos") end
   watch_method(S.buffer_polls.state, "stop", "buffer polls and timers")
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
+  for _, input_poll in pairs(S.lib.pages_buffer.meter.polls) do watch_method(input_poll, "stop", "input meter") end
   watch_field(S.midi_device, "event", "midi handler")
   local real_voice_off = engine.voiceOff
   engine.voiceOff = function(...) observe("voices off"); return real_voice_off(...) end

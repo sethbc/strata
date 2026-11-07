@@ -1,7 +1,8 @@
 -- lib/ui/detent.lua
 -- Every encoder and arc ring change of a param goes through here: center
 -- detents (a param whose range spans 0 holds at 0 for DETENT.encoder_detents
--- detents, or DETENT.arc_ticks arc ticks, after reaching or crossing it) and
+-- detents, or DETENT.arc_ticks arc ticks, after reaching or crossing it, for
+-- at most DETENT.hold_seconds) and
 -- ALT+E3 fine adjustment (a control param moves 1 / FINE_DIVISOR of its raw
 -- step). delta_with_detent and enc_param_delta are global; pages call
 -- enc_param_delta from enc, rings call arc_sweep_param (lib/arc/core.lua).
@@ -19,7 +20,8 @@ return function(S)
   -- and an encoder finishes (or the other way) lasts as long either way
   local HOLD_UNITS = DETENT.encoder_detents * DETENT.arc_ticks
 
-  -- Per param id: the hold units left while it sits at 0 (nil: no hold)
+  -- Per param id: {units = the hold units left while it sits at 0, started =
+  -- util.time() when it reached 0} (nil: no hold)
   local detent_holds = {}
 
   -- Whether a move from old to new reaches or passes 0 (old is not 0)
@@ -37,7 +39,9 @@ return function(S)
   -- encoder delta of 2-5 included), and holds there for a whole hold: each
   -- later change while it is still 0 uses up |d| detents or |n| ticks, and the
   -- change that uses up more than is left applies in full. A hold ends when
-  -- the value is found away from 0 (something else moved it)
+  -- the value is found away from 0 (something else moved it) or
+  -- DETENT.hold_seconds after it started (so a hold left over from a turn
+  -- long ago never swallows a detent, even if the value is back at 0)
   function delta_with_detent(param_id, d, opts)
     opts = opts or {}
     local param = params:lookup_param(param_id)
@@ -70,15 +74,16 @@ return function(S)
     local hold = detent_holds[param_id]
     if hold then
       detent_holds[param_id] = nil
-      if old == 0 then
-        if hold - units >= 0 then
-          detent_holds[param_id] = hold - units  -- still held: the value stays 0
+      if old == 0 and util.time() - hold.started < DETENT.hold_seconds then
+        if hold.units - units >= 0 then
+          hold.units = hold.units - units  -- still held: the value stays 0
+          detent_holds[param_id] = hold
           return
         end
         apply()  -- the hold is used up: this change applies, from 0
         return
       end
-      -- moved away from 0 by something else: the hold has ended
+      -- moved away from 0 by something else, or expired: the hold has ended
     end
 
     local new
@@ -89,7 +94,7 @@ return function(S)
     end
     if old ~= 0 and reaches_zero(old, new) then
       params:set(param_id, 0)
-      detent_holds[param_id] = HOLD_UNITS
+      detent_holds[param_id] = {units = HOLD_UNITS, started = util.time()}
     else
       apply()
     end

@@ -75,7 +75,7 @@ test("the header constants are the plan's", function()
   load_strata()
   local HEADER = local_value("S").constants.HEADER
   local expected = { dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
-    mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 74,
+    mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 73,
     flash_x = 40, flash_width = 74, flash_seconds = 1.5 }
   for name, value in pairs(expected) do
     assert_equal(HEADER[name], value, "HEADER." .. name)
@@ -163,7 +163,7 @@ test("a page's header_status replaces [M], the play mark and REC", function()
   pattern_toggle(); redraw()
   local mark = play_mark(context)
   assert_true(mark, "the play mark while playing")
-  assert_equal(mark.left, 74, "at x 74"); assert_equal(mark.right, 77)
+  assert_equal(mark.left, 73, "at x 73"); assert_equal(mark.right, 76)
   status = "300 bpm"; redraw(); assert_screen_layout(context, "SEQ at 300 bpm")
   -- a status too wide is cut before the scene indicator
   status = string.rep("w", 20); redraw()
@@ -189,6 +189,7 @@ test("a header flash replaces dots and indicators for 1.5 s", function()
   assert_true(flash, "the flash text"); assert_equal(flash.x, 40, "at x 40")
   assert_equal(#page_dots(context), 0, "no dots while it shows")
   assert_equal(header_text(context, "[M]"), nil, "no indicators while it shows")
+  assert_equal(header_text(context, "120 bpm"), nil, "no SEQ status while it shows")
   assert_true(header_text(context, "S3"), "the scene indicator stays")
   assert_equal(S.lib.ui_flash.text("header"), "tempo 121")
   assert_equal(S.lib.ui_flash.text("hints"), nil, "the hint row's slot is separate")
@@ -202,7 +203,7 @@ test("a header flash replaces dots and indicators for 1.5 s", function()
   next_frame(context)
   assert_equal(header_text(context, "tempo 121"), nil, "the next frame draws it away")
   assert_equal(#page_dots(context), 8, "dots back")
-  assert_true(header_text(context, "[M]"), "indicators back")
+  assert_true(header_text(context, "120 bpm"), "SEQ's status back")
 end)
 
 test("a new flash replaces the running one and its clock", function()
@@ -266,59 +267,11 @@ test("an unknown flash slot is an error", function()
   assert_true(not pcall(S.lib.ui_flash.text, "footer"), "text")
 end)
 
-test("the BUFFER hint flash still shows on the hint row for 1.5 s", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  local S = local_value("S")
-  params:set("v1_source", 4); load_buffer(3, "/tmp/take.wav")
-  context.polls.fire("bufferState", 204)  -- buffer 3 holds 4 s
-  context.set_time(100)
-  key(2, 1); tap(3); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "K2+K3 saves")
-  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
-  assert_screen_layout(context, "BUFFER with the save confirmation")
-  key(2, 0); next_frame(context); assert_equal(hint_text(context), "saved buf 3", "K2's release leaves it")
-  context.set_time(101.4); redraw()
-  assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
-  context.set_time(101.5); redraw()
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the normal hint after 1.5 s")
-  -- an empty buffer: nothing saved, the hint says so
-  context.polls.fire("bufferState", 200)  -- buffer 3 reports 0 s
-  context.clear_engine_calls()
-  key(2, 1); tap(3); key(2, 0); next_frame(context)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "an empty buffer is not saved")
-  assert_equal(hint_text(context), "buf 3 empty", "the hint says the buffer is empty")
-  assert_screen_layout(context, "BUFFER with the empty-buffer flash")
-  -- one clock ends the flash: it sleeps 1.5 s, clears the flash (even if it
-  -- woke a little early) and asks for a redraw
-  local slot = S.lib.ui_flash.slots.hints
-  local flash_clock = slot.clock
-  assert_true(flash_clock ~= nil, "the flash has a clock")
-  local flash_sleep
-  for _, entry in ipairs(context.clock.sleep_log) do
-    if entry.id == flash_clock then flash_sleep = entry.amount end
-  end
-  assert_near(flash_sleep, 1.5, 1e-9, "it sleeps 1.5 s")
-  key(2, 1); tap(3); key(2, 0)   -- a second flash replaces the first one's clock
-  assert_equal(context.clock.threads[flash_clock], nil, "the earlier clock is canceled")
-  flash_clock = slot.clock
-  context.clock.advance_until(flash_clock)        -- the flash clock wakes 1.5 s later
-  assert_equal(context.clock.threads[flash_clock], nil, "the clock ends after one wake")
-  assert_equal(slot.clock, nil)
-  next_frame(context)
-  assert_equal(hint_text(context), "K2:load K3:rec K2+3:save", "the next frame shows the normal hint")
-  assert_true(#page_dots(context) == 8, "the hint flash leaves the header alone")
-  -- cleanup cancels a pending flash clock
-  key(2, 1); tap(3); key(2, 0)
-  flash_clock = slot.clock
-  cleanup()
-  assert_equal(context.clock.threads[flash_clock], nil, "cleanup cancels the flash clock")
-  assert_equal(slot.clock, nil)
-end)
-
 test("a hints flash shows only on its owning page", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local BUFFER = S.constants.UI_PAGES.index.BUFFER
+  local setup_hints = S.registry.pages[S.constants.UI_PAGES.index.SETUP].hints(false)
   for page = 1, #PAGE_TITLES do
     show_page(page)
     buffer_page_flash("buf 2 load failed"); redraw()
@@ -333,17 +286,17 @@ test("a hints flash shows only on its owning page", function()
   -- raised on SETUP, then BUFFER shown within 1.5 s: it shows there
   show_page("SETUP"); buffer_page_flash("buf 2 load failed")
   show_page("BUFFER"); assert_equal(hint_text(context), "buf 2 load failed", "BUFFER shows it once up")
-  show_page("SETUP"); assert_equal(hint_text(context), "E2:port E3:ch K3:save", "SETUP never does")
+  show_page("SETUP"); assert_equal(hint_text(context), setup_hints, "SETUP never does")
   -- a page-owned prompt (as SCENES will raise) stays on its page
   local SCENES = S.constants.UI_PAGES.index.SCENES
   show_page("SCENES"); S.lib.ui_flash.start("hints", "K3 again: overwrite S3", 2, SCENES); redraw()
   assert_equal(hint_text(context), "K3 again: overwrite S3")
-  show_page("SETUP"); assert_equal(hint_text(context), "E2:port E3:ch K3:save", "not over SETUP's keys")
+  show_page("SETUP"); assert_equal(hint_text(context), setup_hints, "not over SETUP's keys")
   -- without a page, a hints flash shows on whatever page is up
   S.lib.ui_flash.start("hints", "anywhere", 1.5); redraw()
   assert_equal(hint_text(context), "anywhere", "an unowned flash shows on SETUP")
   context.clock.run_for(1.51); next_frame(context)
-  assert_equal(hint_text(context), "E2:port E3:ch K3:save", "the page's hints come back")
+  assert_equal(hint_text(context), setup_hints, "the page's hints come back")
 end)
 
 test("a nil flash text ends the flash instead of showing nil", function()

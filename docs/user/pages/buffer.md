@@ -1,0 +1,20 @@
+# BUFFER
+
+Where the eight sample buffers are filled, cleared and saved, and where the selected voice's source is chosen, so it all works without a grid. Back to [Screen Controls](../controls.md).
+
+**Left column.** The selected voice (picked on MAIN), then three fields: its source (`src`: synth, `buf 1` ... `buf 8` or input), the record duration (`dur`) and the record level (`lvl`). A small `>` marks the field E3 edits. Below them, `in` is a meter of the live input: eight segments, about 6 dB each from -48 dB, showing the louder of the two channels; the highest segment reached stays lit for 1 s. The meter runs only while this page shows.
+
+**Right column.** The eight buffers, six at a time (the list scrolls as the cursor moves; a thin bar at the right edge shows where you are). Each row shows the buffer's number, its name (the file name, shortened, or `take <n>` for a recording; `-` when the buffer is empty) and its length in seconds, or `REC` while recording. An empty buffer shows no length. The row under the cursor is bright and also lists the voices playing that buffer (`v2 v6`; `+` when more do than fit). Buffers holding audio are mid, empty ones dim.
+
+A take shows `REC` until the engine reports what it captured (a moment after the recording ends): then it becomes `take <n>`, or `-` if nothing was captured (a stop right after the start; a take or file the engine reports late, such as a slow read at start, is still picked up, unless the buffer was cleared, loaded or recorded into meanwhile). A loaded file shows its name at once. If the file cannot be loaded (missing, unreadable, an unsupported format, empty, or damaged so that it stops decoding part way), the buffer goes back to what it held before (the earlier file and its audio, or empty; if the file disappears in the moment between the checks and the read, as when a drive is unplugged, the buffer is left empty), the hint row shows `buf <n> load failed` for 1.5 s, and the file is not reloaded at the next start.
+
+- **E2** - Move the cursor to a buffer (1-8). It stays there when you change pages
+- **ALT+E2** - Move the field cursor: source, duration, level
+- **E3** - Change the field under the field cursor (ALT+E3 in finer steps for the level)
+- **K3** - Record the input into the buffer under the cursor for the record duration (replacing what was there), whether or not a voice plays it; press again while recording to stop early and keep what was captured. Voices playing that buffer are silent while it records and play the new take as soon as it is done. The arc's button does the same
+- **K2** - Load a sound file into the buffer under the cursor: K2 acts when released and opens the file browser at `~/dust/audio`
+- **ALT+K2** - Clear the buffer under the cursor. It never opens the file browser, even if K1 is let go before K2
+- **ALT+K3** - Save the buffer under the cursor to `~/dust/audio/strata/<date-time>-buf<n>.wav`. For 1.5 s the hint row confirms it with `saved buf <n>`, shows `buf <n> busy` while the buffer is recording or waiting for its take, or `buf <n> empty` when the buffer holds no audio; nothing is saved in the last two cases
+- The hint row reads `K2:load K3:rec` (`K3:stop` while the buffer under the cursor records, `K3:...` while a take that has ended waits for the engine; K3 does nothing then). With K1 (ALT) held it reads `K2:clear K3:save`
+
+Record duration and level are also on arc rings 3 and 4 of this page (and in PARAMETERS > buffers). Buffers, saving and restoring are described in [Audio Sources and Buffers](../sources-and-buffers.md).
