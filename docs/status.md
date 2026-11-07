@@ -131,7 +131,7 @@ Each was taken during development without a design review, and lists what it cos
 From the 3.1 design's "Cost if wrong" and the calls made while building it:
 - **K1 held as ALT:** norns hands K1 to a script only after its menu hold (0.25 s), so ALT is always a hold. Every ALT+K2/ALT+K3 action goes through `alt_action`, so a long-press fallback (0.6 s) can call the same actions; the hook is built, the timer is not. If wrong: wire a timer to `S.lib.ui_alt.long_press`, a small change.
 - **MAIN's K3 starts and stops** the selected voice; lock moved to ALT+K3 and randomize to ALT+K2. If wrong: a stopped voice is one press from running again, and each page's keys are one function.
-- **Eight pages:** E1 travels further (seven turns end to end at 4 ticks per page). If wrong: reorder `UI_PAGES`, one line.
+- **Eight pages:** E1 travels further (seven page steps end to end, at 4 ticks per page). If wrong: reorder `UI_PAGES`, one line.
 - **BUFFER's E2 picks a buffer, not a voice:** the selected voice comes from MAIN or VOICE, and every BUFFER key acts on the cursor's buffer. If wrong: ALT+E2 could pick the voice instead of the field cursor.
 - **Lock is a UI name only:** the state, the code and the scene field stay `frozen`, so scenes need no migration. If wrong: none; the 3.2 audio freeze gets its own field name.
 - **The only default change is LFO depth 25%:** new LFOs are audible when turned on; scenes keep their stored depth, and scene files without LFO settings recall silent LFOs. If wrong: one constant.
