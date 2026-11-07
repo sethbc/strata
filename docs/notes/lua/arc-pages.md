@@ -12,7 +12,7 @@
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
 - Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
-- VOICE's rings read the cursor only after `S.lib.pages_voice.sync_cursor()` (the page's re-anchoring, guarded until the VOICE page provides it; `S.lib.ui_cursors.clamp_all()` otherwise), in `arc_delta` and `arc_redraw` alike: after a source switch the raw `S.cursors.voice` can sit past the last row or on a section label.
+- VOICE's rings read the cursor only from `S.lib.pages_voice.sync_cursor()` (the page's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw: after a source switch the raw cursor can sit past the last row or on a section label. Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
 - A ring move of the SCENES cursor disarms a pending overwrite confirmation (`S.scenes_page.armed_slot`) and clears its hint-row prompt (`S.lib.ui_flash.start("hints", nil)`), as E2 does.
 

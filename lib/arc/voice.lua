@@ -27,15 +27,9 @@ return function(S)
   -- frame: the VOICE page's sync_cursor puts it back on its param (or
   -- clamps it), so a turn sees the cursor the screen will show
   local function voice_ring_rows()
-    local page = S.lib.pages_voice
-    if page and page.sync_cursor then
-      page.sync_cursor()
-    else
-      S.lib.ui_cursors.clamp_all()
-    end
-    local rows = voice_page_rows(S.selected_voice)
-    local _, row_indices = voice_page_group(rows, S.cursors.voice)
-    return rows, row_indices
+    local rows, cursor = S.lib.pages_voice.sync_cursor()
+    local _, row_indices = voice_page_group(rows, cursor)
+    return rows, row_indices, cursor
   end
 
   local function arc_voice_delta(n, delta)
@@ -57,9 +51,9 @@ return function(S)
   end
 
   local function arc_voice_redraw(arc_port)
-    local rows, row_indices = voice_ring_rows()
+    local rows, row_indices, cursor = voice_ring_rows()
     for n, index in ipairs(row_indices) do
-      local level = index == S.cursors.voice and ARC_VOICE.cursor_level or ARC_VOICE.level
+      local level = index == cursor and ARC_VOICE.cursor_level or ARC_VOICE.level
       arc_ring_fill_param(arc_port, n, rows[index].param_id, level)
     end
   end

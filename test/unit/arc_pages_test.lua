@@ -271,16 +271,10 @@ local function assert_ring_dark(device, ring, where)
   assert_equal(lit(device, ring), 0, where .. ": every LED dark")
 end
 
--- Put the VOICE cursor on row index: through the VOICE page's place_cursor
--- (which moves its anchor, so sync_cursor keeps it there) when it has one
+-- Put the VOICE cursor on row index through the VOICE page's place_cursor
+-- (which moves its anchor, so sync_cursor keeps it there)
 local function place_voice_cursor(index)
-  local S = local_value("S")
-  local page = S.lib.pages_voice
-  if page and page.place_cursor then
-    page.place_cursor(index)
-  else
-    S.cursors.voice = index
-  end
+  local_value("S").lib.pages_voice.place_cursor(index)
 end
 
 test("MAIN's ALT rings are pitch, spread, level and pan", function()
