@@ -38,7 +38,8 @@
                 },
                 freezeMode: { arg voice, value; this.setFreezeMode(voice, value); false }
             ),
-            stop: { areaState[\freeze][\stopped] = true }
+            stop: { areaState[\freeze][\stopped] = true },
+            free: { this.freeSpectralBuffers }
         )
     }
 
@@ -49,8 +50,13 @@
     // (ring readers a pending copy set to ringLevel 0). \inputReaders: the
     // input grain synths set to read their voice ring -> (voice, until: nil
     // while they do, the time they stop counting once set back).
+    // \spectralBuffers: on the high tier, each voice's [left, right] FFT
+    // buffers for its spectral writer (see addFreezeDefs), else empty.
     allocFreezeState {
         var state = areaState[\freeze], historyHandler;
+        state[\spectralBuffers] = if (tier == \high) {
+            Array.fill(numVoices, { Array.fill(2, { Buffer.alloc(context.server, this.spectralFrames, 1) }) })
+        } { [] };
         state[\frozen] = Array.fill(numVoices, false);
         state[\mode] = Array.newClear(numVoices);
         state[\source] = Array.newClear(numVoices);
@@ -81,19 +87,24 @@
     // IFFT's latency, and PV_MagFreeze then holds a real spectrum), then
     // crossfades over 10 ms to the held spectrum, so the ring never gets a
     // gap. Both the input and the output go through zeroBadValues.
+    // The FFT buffers are the voice's \spectralBuffers (fftL, fftR), never
+    // a LocalBuf: building a LocalBuf into this def corrupts sclang 3.13's
+    // garbage collector (norns' version), which then aborts sclang a little
+    // later. One writer per voice (Synth.replace), so a voice's pair is
+    // never shared.
     addFreezeDefs {
         var window = this.spectralFrames;
         if (tier != \high) { ^this };
         SynthDef(\strataRingWriteSpectral, {
-            arg in, bufL, bufR, phaseOut;
+            arg in, bufL, bufR, phaseOut, fftL, fftR;
             var dry = In.ar(in, 2).collect({ arg channel; this.zeroBadValues(channel) });
             var settle = 2 * window * SampleDur.ir;
             var held = Line.kr(0, 1, settle) >= 1;
             // the analysis gets a dither about 100 dB down: on exact digital
             // silence PV_MagFreeze would hold zero phases (a buzz at the hop
             // rate); under any real sound it is inaudible
-            var wet = dry.collect({ arg channel;
-                var chain = FFT(LocalBuf(window), channel + WhiteNoise.ar(this.spectralDither), 0.5);
+            var wet = [dry, [fftL, fftR]].flop.collect({ arg pair;
+                var chain = FFT(pair[1], pair[0] + WhiteNoise.ar(this.spectralDither), 0.5);
                 this.zeroBadValues(IFFT(PV_MagFreeze(chain, held)))
             });
             var mix = EnvGen.kr(Env([0, 0, 1], [settle, 0.01]));
@@ -240,11 +251,21 @@
     // one starts from the phase on its bus
     replaceRingWriter { arg voice, defName, in;
         var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0), writer;
+        var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2]], fft;
         if (old.isNil or: { areaState[\freeze][\stopped] ? false }) { ^this };
-        writer = Synth.replace(old, defName,
-            [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2]]);
+        if (defName == \strataRingWriteSpectral) {
+            fft = areaState[\freeze][\spectralBuffers][voice];
+            if (fft.isNil) { ^this };
+            args = args ++ [\fftL, fft[0], \fftR, fft[1]];
+        };
+        writer = Synth.replace(old, defName, args);
         synths[key] = writer;
         areaState[\rings][\writers][voice] = writer;
+    }
+
+    freeSpectralBuffers {
+        areaState[\freeze][\spectralBuffers].do({ arg pair; pair.do(_.free) });
+        areaState[\freeze][\spectralBuffers] = [];
     }
 
     // The voice's ring readers that read its own ring, playing: its
