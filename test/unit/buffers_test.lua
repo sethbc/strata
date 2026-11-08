@@ -986,6 +986,57 @@ test("a long file's load waits for the engine's check before it settles", functi
   assert_equal(buffers[7].name, "long.wav"); assert_equal(buffers[7].checking_from, 0, "the long load still checks")
 end)
 
+-- A check no report ends never leaves the row at "...": after
+-- check_fallback_seconds the slot shows what it held before the load (#171)
+test("a long file's check that no report ends falls back to the slot's previous state", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local settle
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(local_value("finish_buffer_take"), index)
+    if not name then break end
+    if name == "BUFFER_SETTLE" then settle = value end
+  end
+  assert_equal(settle.check_fallback_seconds, 30, "a named bound, well past a 300 s check on a Pi")
+  assert_equal(settle.server_rate, 48000, "norns' server rate: Lua has no way to read the engine's")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  context.set_time(100)
+  load_buffer(1, "/tmp/old.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/long.wav")
+  context.set_time(110); context.polls.fire("bufferState", 8)   -- the periodic poll: still the old length
+  context.clock.run_for(19.9)
+  assert_equal(buffers[1].checking_from, 8, "still checking just before the bound")
+  context.set_time(129.9); context.polls.fire("bufferState", 8)
+  context.clock.run_for(0.2)
+  assert_equal(buffers[1].checking_from, nil, "the check is given up")
+  assert_equal(buffers[1].name, "old.wav", "the slot shows what it held")
+  assert_equal(buffers[1].path, "/tmp/old.wav"); assert_true(buffers[1].loaded)
+  assert_equal(params:get("buf1_file"), "/tmp/old.wav", "and its file param")
+  assert_equal(#buffers[1].pending_loads, 1, "the given-up load is forgotten (only the first load is left)")
+  -- over an empty slot with no poll at all: back to empty
+  load_buffer(2, "/tmp/long.wav")
+  context.clock.run_for(30.1)
+  assert_equal(buffers[2].checking_from, nil); assert_equal(buffers[2].name, "empty")
+  assert_true(not buffers[2].loaded); assert_equal(buffers[2].path, nil)
+  -- a check that ends cancels its fallback
+  load_buffer(3, "/tmp/long.wav")
+  context.polls.fire("bufferState", 2120)
+  context.clock.run_for(40)
+  assert_equal(buffers[3].name, "long.wav", "the load that took effect stays"); assert_true(buffers[3].loaded)
+  -- a short load that fails while a long one checks starts the long one's fallback again
+  load_buffer(4, "/tmp/long.wav")
+  context.clock.run_for(20)
+  load_buffer(4, "/tmp/bad.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 2))
+  assert_equal(buffers[4].checking_from, 0, "the long load checks again")
+  context.clock.run_for(29.9)
+  assert_equal(buffers[4].checking_from, 0, "with a whole bound from the failure")
+  context.clock.run_for(0.2)
+  assert_equal(buffers[4].checking_from, nil); assert_equal(buffers[4].name, "empty", "then the slot is as before")
+end)
+
 test("a standard tier never checks a load, whatever the file", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
