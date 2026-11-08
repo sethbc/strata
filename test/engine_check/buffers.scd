@@ -3,7 +3,9 @@
 // bufferState and bufferLoadFailed polls, stopRecord, clearBuffer, loads
 // (stereo, mono, too long, missing, unreadable, damaged) and their failure
 // reports, a file's rate and pitch, and fade before zeroing (every
-// interleaving inside the fade wait, releasing and fading grain synths).
+// interleaving inside the fade wait, releasing and fading grain synths),
+// and the high tier's 60 s slots: loads checked in a routine and what
+// wins over them, on a high engine of their own.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -463,6 +465,195 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     engine.bufferFadeWait = defaultFadeWait;
 };
 
+// The high tier's long slots, on an engine of their own (h.startEngine with
+// a high setting of 60 s, a Pi 4 model and plenty of memory). A file longer
+// than 16 s at the server rate is checked in a routine that yields between
+// chunks (fileDecodes), so its load takes effect only after the check.
+// Commands go to it through h.commandTo; its poll reports arrive as the
+// default engine's (one poll per name).
+var startHighEngine = { arg name;
+    var root = scratchRoot +/+ name;
+    var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
+    File.mkdir(root);
+    write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
+    write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
+    write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+    h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"))
+};
+
+// A stereo 16-bit file of `seconds` at the server rate, written a second at
+// a time: left levelFor.(second), right its negative
+var writeLongFile = { arg path, seconds, levelFor;
+    var rate = server.sampleRate.asInteger;
+    var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    file.openWrite(path);
+    seconds.do({ arg second;
+        var level = levelFor.(second);
+        file.writeData(FloatArray.fill(rate * 2, { arg i; if (i.even) { level } { level.neg } }));
+    });
+    file.close;
+};
+
+// A 20 s mono FLAC of noise (longer than 16 s, so it is checked
+// asynchronously) overwritten from a third of the way in: its header is
+// sound, but it stops decoding early (as writeDamagedFlac)
+var writeDamagedLongFlac = { arg path;
+    var rate = server.sampleRate.asInteger, bytes, start;
+    var file = SoundFile.new.headerFormat_("FLAC").sampleFormat_("int16").numChannels_(1).sampleRate_(rate);
+    file.openWrite(path);
+    20.do({ file.writeData(FloatArray.fill(rate, { 1.0.rand2 * 0.5 })) });
+    file.close;
+    file = File(path, "rb"); bytes = Int8Array.newClear(file.length); file.read(bytes); file.close;
+    start = bytes.size div: 3;
+    bytes.overWrite(Int8Array.newClear(bytes.size - start).fill(0x55), start);
+    file = File(path, "wb"); file.write(bytes); file.close;
+};
+
+// A 60 s slot loads a 60 s file, records a take longer than a standard slot
+// holds (stopped early), saves and clears
+var checkLongSlotCommands = { arg other, path60;
+    var rate = server.sampleRate.asInteger, cmd = { arg name ... args; h.commandTo(other, name, *args) };
+    var loaded, recorded, saved, cleared, savePath = scratchRoot +/+ "long-slots/saved/sixty.wav", file, duration;
+    cmd.(\loadBuffer, 0, path60);
+    loaded = waitFor.({ other.bufferFrames[0] == (60 * rate) }, 10)
+        and: { (bufferSample.(other.buffersL[0], (59.5 * rate).asInteger) - 0.6).abs < 0.001 }
+        and: { (bufferSample.(other.buffersR[0], (10.5 * rate).asInteger) + 0.11).abs < 0.001 }
+        and: { waitFor.({ bufferStateSeen.(0, 60) }) };
+    cmd.(\recordBuffer, 1, 20, 1.0); 0.3.wait; server.sync;
+    duration = other.recordSynths[1] !? { arg synth; getControl.(synth, \duration) };
+    cmd.(\stopRecord, 1); 0.5.wait; server.sync;
+    recorded = duration.notNil and: { (duration - 20).abs < 0.001 } and: { other.bufferFrames[1] > 0 };
+    cmd.(\saveBuffer, 0, savePath);
+    saved = waitFor.({ File.exists(savePath) }, 60);
+    file = if (saved) { SoundFile.openRead(savePath) };
+    saved = file.notNil and: { file.numFrames == (60 * rate) } and: { file.numChannels == 2 } and: { file.sampleFormat == "int16" };
+    file !? { file.close };
+    cmd.(\clearBuffer, 0); server.sync;
+    cleared = other.bufferFrames[0] == 0 and: { bufferSample.(other.buffersL[0], (59.5 * rate).asInteger) == 0 };
+    check.(loaded and: { recorded } and: { saved } and: { cleared },
+        "buffers: a 60 s slot loads, records, clears and saves (loaded %, recorded % (duration %), saved %, cleared %)".format(
+            loaded, recorded, duration, saved, cleared));
+    cmd.(\clearBuffer, 1); server.sync;
+};
+
+// A load, record or clear sent while a long file is checked wins: the
+// checked load is dropped silently (a damaged file is then never reported).
+// A later load wins whichever check ends first; a later load that fails
+// leaves the checked one to apply (Lua then puts that load's name back).
+var checkAsyncDecodeOrder = { arg other, path60, path20, damaged;
+    var rate = server.sampleRate.asInteger, cmd = { arg name ... args; h.commandTo(other, name, *args) };
+    var before, immediate, settle = { 1.5.wait; server.sync };
+    before = loadFailures.value.size;
+    cmd.(\loadBuffer, 2, damaged);
+    immediate = loadFailures.value.size == before;
+    check.(immediate and: { waitFor.({ loadFailures.value.size > before }, 10) }
+        and: { loadFailures.value.drop(before) == [(other.bufferLoads[2] * 2) * other.numBuffers + 2] },
+        "buffers: a damaged long file is reported once its check ends (got %)".format(loadFailures.value.drop(before)));
+    cmd.(\loadBuffer, 2, path20);
+    waitFor.({ other.bufferFrames[2] == (20 * rate) }, 10);
+    before = loadFailures.value.size;
+    cmd.(\loadBuffer, 2, damaged);
+    cmd.(\clearBuffer, 2);
+    settle.value; 0.5.wait;
+    check.(loadFailures.value.size == before and: { other.bufferFrames[2] == 0 }
+        and: { bufferSample.(other.buffersL[2], rate) == 0 },
+        "buffers: an async decode loses to a later clear and reports nothing (% reports, % frames)".format(
+            loadFailures.value.size - before, other.bufferFrames[2]));
+    cmd.(\loadBuffer, 3, path60); cmd.(\clearBuffer, 3); settle.value;
+    check.(other.bufferFrames[3] == 0 and: { bufferSample.(other.buffersL[3], 100) == 0 },
+        "buffers: a long file's load loses to a clear sent during its check (% frames)".format(other.bufferFrames[3]));
+    cmd.(\loadBuffer, 3, path60); cmd.(\recordBuffer, 3, 0.3, 1.0); settle.value;
+    check.(other.bufferFrames[3] == (0.3 * rate).round.asInteger and: { other.recordSynths[3].isNil },
+        "buffers: a recording sent during a long file's check wins (% frames)".format(other.bufferFrames[3]));
+    cmd.(\loadBuffer, 3, path60); cmd.(\loadBuffer, 3, stereoPath); settle.value;
+    check.(other.bufferFrames[3] == 11025 and: { (bufferSample.(other.buffersL[3], 100) - 0.5).abs < 0.001 },
+        "buffers: a short load sent during a long file's check wins (% frames)".format(other.bufferFrames[3]));
+    cmd.(\loadBuffer, 3, path60); cmd.(\loadBuffer, 3, path20); settle.value;
+    check.(other.bufferFrames[3] == (20 * rate) and: { (bufferSample.(other.buffersL[3], 100) - 0.7).abs < 0.001 },
+        "buffers: of two long loads the later wins when its check ends first (% frames)".format(other.bufferFrames[3]));
+    cmd.(\loadBuffer, 3, path20); cmd.(\loadBuffer, 3, path60); settle.value;
+    check.(other.bufferFrames[3] == (60 * rate) and: { (bufferSample.(other.buffersL[3], (30.5 * rate).asInteger) - 0.31).abs < 0.001 },
+        "buffers: of two long loads the later wins when its check ends last (% frames)".format(other.bufferFrames[3]));
+    [2, 3].do({ arg slot; cmd.(\clearBuffer, slot) }); server.sync;
+};
+
+// bufferLoads counts every loadBuffer at the command, so a load rejected
+// while an earlier one is still checked is reported under its own number
+// at once, and the earlier load still applies
+var checkAsyncLoadNumbers = { arg other, path60;
+    var rate = server.sampleRate.asInteger, cmd = { arg name ... args; h.commandTo(other, name, *args) };
+    var before = loadFailures.value.size, loads = other.bufferLoads[5], counted, reported;
+    cmd.(\loadBuffer, 5, path60);
+    counted = other.bufferLoads[5] == (loads + 1);
+    cmd.(\loadBuffer, 5, scratchRoot +/+ "missing.wav");
+    reported = waitFor.({ loadFailures.value.size > before }) and: { other.bufferFrames[5] == 0 };
+    check.(counted and: { reported } and: { other.bufferLoads[5] == (loads + 2) }
+        and: { loadFailures.value.drop(before) == [((loads + 2) * 2) * other.numBuffers + 5] },
+        "buffers: bufferLoads counts at the command during an async decode (reports %)".format(loadFailures.value.drop(before)));
+    check.(waitFor.({ other.bufferFrames[5] == (60 * rate) }, 10),
+        "buffers: a load rejected during a long file's check leaves that load to apply (% frames)".format(other.bufferFrames[5]));
+    cmd.(\clearBuffer, 5); server.sync;
+};
+
+// A long check yields between its chunks: a message sent 5 ms after it
+// begins (by a task scheduled then, which runs only if the check yields) is
+// handled before it ends, which takes about 50 ms here (with no yield, or
+// one that falls behind its clock, sclang would hold every command and
+// task until the check is over)
+var checkDecodeYields = { arg other, path60;
+    var file = SoundFile.openRead(path60), done = false, result, heard, ping;
+    ping = OSCFunc({ heard = done.not }, '/strataCheckDecodePing');
+    fork({
+        SystemClock.sched(0.005, { NetAddr.localAddr.sendMsg('/strataCheckDecodePing'); nil });
+        result = other.fileDecodes(file, file.numFrames, true);
+        done = true;
+    }, SystemClock);
+    waitFor.({ done }, 10);
+    0.1.wait;
+    file.close; ping.free;
+    check.(result == true and: { heard == true },
+        "buffers: a long file's check lets commands in between its chunks (decodes %, heard during it %)".format(result, heard));
+};
+
+// ... and loadBuffer runs that check yielding: a message sent 5 ms after a
+// long file's loadBuffer is handled while the check still runs (the load
+// has not taken effect: slotChanges unchanged)
+var checkLoadYields = { arg other, path60;
+    var change = other.slotChanges[7], heard, ping;
+    ping = OSCFunc({ heard = other.slotChanges[7] == change }, '/strataCheckLoadPing');
+    h.commandTo(other, \loadBuffer, 7, path60);
+    SystemClock.sched(0.005, { NetAddr.localAddr.sendMsg('/strataCheckLoadPing'); nil });
+    waitFor.({ other.bufferFrames[7] == (60 * server.sampleRate) }, 10);
+    0.1.wait;
+    ping.free;
+    check.(heard == true and: { other.slotChanges[7] != change },
+        "buffers: a message sent during a long file's loadBuffer check is handled before the load takes effect (heard during it %)".format(heard));
+    h.commandTo(other, \clearBuffer, 7); server.sync;
+};
+
+var checkLongSlots = {
+    var other, path60 = scratchRoot +/+ "sixty.wav", path20 = scratchRoot +/+ "twenty.wav";
+    var damaged = scratchRoot +/+ "twenty-damaged.flac";
+    writeLongFile.(path60, 60, { arg second; (second + 1) * 0.01 });
+    writeLongFile.(path20, 20, { 0.7 });
+    writeDamagedLongFlac.(damaged);
+    other = startHighEngine.("long-slots");
+    check.(other.tier == \high and: { other.bufferSeconds == 60 }
+        and: { (other.buffersL ++ other.buffersR).every({ arg buffer; buffer.numFrames == (60 * server.sampleRate) }) },
+        "buffers: the high engine has 60 s slots (tier %, % s)".format(other.tier, other.bufferSeconds));
+    checkLongSlotCommands.(other, path60);
+    checkAsyncDecodeOrder.(other, path60, path20, damaged);
+    checkAsyncLoadNumbers.(other, path60);
+    checkDecodeYields.(other, path60);
+    checkLoadYields.(other, path60);
+    // freed during a check: nothing applies to the freed buffers
+    h.commandTo(other, \loadBuffer, 6, path60);
+    h.freeEngine(other);
+    1.0.wait; server.sync;
+    check.(other.bufferFrames[6] == 0, "buffers: an engine freed during a long file's check applies nothing");
+    [path60, path20, damaged].do({ arg path; File.delete(path) });
+};
+
 // Buffer slots
 check.(engine.buffersL.size == 8 and: { engine.buffersR.size == 8 }, "eight stereo slots as L/R pairs");
 check.(engine.buffersL.every({ arg buffer; buffer.numChannels == 1 })
@@ -630,4 +821,5 @@ command.(\clearBuffer, 2);
 command.(\setGrainSource, 1, 0);
 2.5.wait; server.sync;
 h.stopAllVoices;
+checkLongSlots.value;
 }

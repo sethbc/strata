@@ -65,7 +65,7 @@ Menu order:
 
 **Param filters** (`S.register_param_filter(key, fn)`, one per key). `fn(voice_idx, value, previous) -> value` runs in the action of every `v<i>_<key>` voice param, the synthesis params (`param_order`) as well as registered ones, before the value is stored. `previous` is the value stored before. 3.2's quantized `freq` uses it.
 
-**Source change hooks** (`S.register_source_change(fn)`). `fn(voice_idx, source)` runs at the end of every `v<i>_source` action (after the source is stored and sent, the sync and the grid redraw), except while `S.scene_recall_in_progress`: a recall sets every value itself. 3.2's freeze clears itself through one.
+**Source change hooks** (`S.register_source_change(fn)`). `fn(voice_idx, source)` runs in every `v<i>_source` action right after the source is stored and sent, before the voice's sync and the grid redraw (so the sync sends what the hooks set: a switch never sends the old freeze first), except while `S.scene_recall_in_progress`: a recall sets every value itself. 3.2's freeze clears itself through one.
 
 **Fx params** (`S.register_fx_params({name, count, add})`). The fx group's size is 11 plus every record's `count`; init runs each `add()` after tape drift, in registration order, and checks the count.
 

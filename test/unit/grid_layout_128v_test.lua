@@ -284,4 +284,26 @@ test("128v removing the grid mid-save saves nothing", function()
   assert_equal(grid_core().page(1), 1, "a grid plugged back starts on page 1")
 end)
 
+test("128h page 4 column 12 and 128v row 14 toggle freeze", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local device = context.grid.plug(1, 8, 16)
+  for _ = 1, 3 do tap(context, 1, 8, 8) end  -- page 4, the sources page
+  assert_equal(grid_core().page(1), 4)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(device:get_led(voice_idx, 14), 3, "voice " .. voice_idx .. " not frozen: 3")
+    tap(context, 1, voice_idx, 14)
+    assert_equal(params:get("v" .. voice_idx .. "_freeze"), 1, "row 14 column " .. voice_idx .. " freezes it")
+    assert_equal(device:get_led(voice_idx, 14), 15, "frozen: 15")
+  end
+  tap(context, 1, 5, 14)
+  assert_equal(params:get("v5_freeze"), 0, "a second press unfreezes")
+  assert_equal(device:get_led(5, 14), 3)
+  assert_equal(device:get_led(8, 14), 0, "column 8 row 14 has no freeze key")
+  -- the patterns page shows steps there
+  tap(context, 1, 8, 8)
+  assert_equal(grid_core().page(1), 1)
+end)
+
 end

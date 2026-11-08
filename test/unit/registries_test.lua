@@ -363,8 +363,8 @@ test("registered rows appear in their VOICE section, new sections in place, bina
     1, true), "probe rows end the grain section: " .. outline)
   assert_true(not outline:find("probe sect", 1, true), "a synth voice has no probe sect section")
   -- (after mix and the sections registered before it: lib/variation.lua's)
-  assert_true(outline:find("mix:v1_pan:control ", 1, true) and outline:find(" tail tail:v1_tail_mode:option$"),
-    "tail after mix: " .. outline)
+  assert_true(outline:find("mix:v1_pan:control mix:v1_freeze:binary ", 1, true)
+    and outline:find(" tail tail:v1_tail_mode:option$"), "tail after mix: " .. outline)
   params:set("v1_source", 2)   -- buffer 1
   outline = row_outline(1)
   assert_true(outline:find("grain:v1_probe_switch:binary probe sect probe sect:v1_sect_level:control crossmod ",

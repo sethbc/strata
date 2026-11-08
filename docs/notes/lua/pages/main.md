@@ -8,6 +8,7 @@
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
 - Every ALT action goes through the record's `alt_key` (`alt_action`): ALT+K2 undoes only while `undo_available(S.selected_voice)`, else randomizes; ALT+K3 is `toggle_lock`. The ALT hint reads the same two conditions, so it never offers an undo the key would not run.
 - A locked voice's fields are drawn at the same levels as an unlocked one's (the selected field 15, the others 4); `[L]` is drawn at 15.
+- The status row (y 26) holds `OFF [L] [T] [F]` at its widest, ending by x 127 (fixed x: 65, 84, 99, 113). `[F]` comes from `S.lib.freeze.is_frozen` (3.2's audio freeze, `docs/notes/lua/freeze.md`), never from `S.frozen` (the lock); the voice list has no room for it.
 - The name on y 18 is cut with `fit_text` to end `LAYOUT.name_gap` px before the right-aligned source, so the two never overlap. Under the harness estimate RESONATOR and KARPLUS are cut; with the norns font only RESONATOR is (`RESONAT`).
 
 ## Owns
@@ -53,11 +54,11 @@ Two columns under the header (`draw_header()`, the same on every page: `docs/not
 - **Divider** (x=62, y 10-52): a subtle vertical line.
 - **Right column** (65-127 px), the selected voice:
   - y=18: the full name (level 15, cut to fit) and the source right-aligned at 127 (`voice_source_label`: `synth`, `buf 1`-`buf 8`, `input`; level 4);
-  - y=26: `ON`/`OFF` (level 4) at x=65, `[L]` at x=87 (level 15) when locked, `[T]` at x=105 (level 8) in triggered grain mode. Fixed x, so nothing shifts as they come and go;
+  - y=26: `ON`/`OFF` (level 4) at x=65, `[L]` at x=84 (level 15) when locked, `[T]` at x=99 (level 8) in triggered grain mode, `[F]` at x=113 (level 15) while frozen (`S.lib.freeze.is_frozen`). Fixed x, so nothing shifts as they come and go;
   - y=34, 42, 50: the three fields: the cursor `>` at x=65 on the selected one, the label at x=71, the value with its unit right-aligned at 127. The selected field is at 15, the others at 4, locked or not.
 - `mod:` (crossmod sources) is not on MAIN; the VOICE page shows them.
 - **Hint row** (y=62): see Keys.
 
-`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked and triggered with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; and voice 1 on the input.
+`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked, triggered and frozen with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; and voice 1 on the input.
 
 Layout tests: `test/unit/pages_main_test.lua` draws the list for every voice, selection and running/locked state, MAIN for buffer- and input-sourced voices, and the fields at their minimum and maximum values for every voice, source and cursor position; `test/unit/ui_layout_test.lua` draws MAIN with every voice, source, ALT state and flash, and the layout states.

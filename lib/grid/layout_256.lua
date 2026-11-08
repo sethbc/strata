@@ -2,7 +2,9 @@
 -- The 16x16 grid: its four pages (1 patterns, 2 parameters, 3 scenes,
 -- 4 buffers / FX), keys and LEDs. Registers S.registry.grid_layouts["256"].
 -- Row 16 columns 9-15 copy and paste patterns through a clipboard kept per
--- port (grid_core.port_state(port).clipboard). The functions stay global.
+-- port (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze): page
+-- 4's column 12 on each voice's source row, and row 16 columns 1-7 while
+-- column 8 of row 16 is held. The functions stay global.
 
 return function(S)
   local M = {}
@@ -27,6 +29,12 @@ return function(S)
     paste_level = 4,        -- the other voices' keys and column 16 while a pattern is copied
     empty_level = 2,        -- columns 9-16 with nothing copied
     sequencer_position_level = 10,
+    freeze_column = 12,     -- page 4: voice v's freeze key on its source row (8 + v)
+    freeze_hold_column = 8, -- row 16: held, columns 1-7 freeze instead of lock
+    frozen_level = 15,
+    unfrozen_level = 3,
+    freeze_hold_level = 15, -- column 8 of row 16 while held
+    freeze_key_level = 4,   -- and while not
   }
 
   -- 16x16 grid layout
@@ -75,7 +83,11 @@ return function(S)
       elseif fx_param_id then
         set_param_from_column(fx_param_id, x)
       elseif source_voice >= 1 and source_voice <= NUM_VOICES then
-        grid_core.source_key(source_voice, x)
+        if x == LAYOUT_256.freeze_column then
+          S.lib.freeze.toggle(source_voice)
+        else
+          grid_core.source_key(source_voice, x)
+        end
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
@@ -148,10 +160,22 @@ return function(S)
     end
   end
 
-  -- 256 row 16: lock (columns 1-7), copy/paste (9-15), clear the clipboard (16)
+  -- Whether row 16's freeze key (column 8) is held on this port: columns
+  -- 1-7 then freeze instead of lock
+  local function freeze_held(port)
+    return grid_core.held(port, LAYOUT_256.freeze_hold_column, 16) ~= nil
+  end
+
+  -- A freeze key's LED: 15 frozen, 3 not
+  local function freeze_level(voice_idx)
+    return S.lib.freeze.is_frozen(voice_idx) and LAYOUT_256.frozen_level or LAYOUT_256.unfrozen_level
+  end
+
+  -- 256 row 16: lock (columns 1-7; freeze while column 8 is held),
+  -- copy/paste (9-15), clear the clipboard (16)
   function grid_key_256_lock(port, x)
     if x <= NUM_VOICES then
-      toggle_lock(x)
+      if freeze_held(port) then S.lib.freeze.toggle(x) else toggle_lock(x) end
     elseif x == LAYOUT_256.clear_column then
       grid_core.port_state(port).clipboard = nil
     elseif x >= LAYOUT_256.copy_first_column then
@@ -242,13 +266,14 @@ return function(S)
   end
 
   -- 256 page 4, rows 9-15: each voice's source (selected 15, others 4, empty
-  -- buffers 2)
+  -- buffers 2) and, in column 12, its freeze key
   function grid_redraw_256_sources(grid_device)
     for voice_idx = 1, NUM_VOICES do
       local y = GRID_LAYOUT.source_first_row + voice_idx - 1
       for source = 1, #SOURCE_OPTIONS do
         grid_device:led(source, y, grid_core.source_level(voice_idx, source))
       end
+      grid_device:led(LAYOUT_256.freeze_column, y, freeze_level(voice_idx))
     end
   end
 
@@ -276,13 +301,20 @@ return function(S)
     grid_redraw_256_page_row(port, grid_device)
   end
 
-  -- 256 row 16: lock status (columns 1-7) and the clipboard (9-16): the
-  -- copied voice 15, the paste targets and the clear key 4, 2 with nothing
-  -- copied
+  -- 256 row 16: lock status (columns 1-7; while column 8 is held, freeze
+  -- status), the freeze key (8) and the clipboard (9-16): the copied voice
+  -- 15, the paste targets and the clear key 4, 2 with nothing copied
   function grid_redraw_256_lock(port, grid_device)
+    local holding = freeze_held(port)
     for i = 1, NUM_VOICES do
-      grid_device:led(i, 16, S.frozen[i] and 12 or 2)
+      if holding then
+        grid_device:led(i, 16, freeze_level(i))
+      else
+        grid_device:led(i, 16, S.frozen[i] and 12 or 2)
+      end
     end
+    grid_device:led(LAYOUT_256.freeze_hold_column, 16,
+      holding and LAYOUT_256.freeze_hold_level or LAYOUT_256.freeze_key_level)
     local clipboard = grid_core.port_state(port).clipboard
     for voice_idx = 1, NUM_VOICES do
       local level = LAYOUT_256.empty_level

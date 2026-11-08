@@ -57,6 +57,7 @@ return function(S)
     column_gap = 3,
     voices_max_width = 25,  -- "v2 v6" under the layout test's width estimate
     name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
+    minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
@@ -168,6 +169,25 @@ return function(S)
     return text
   end
 
+  -- A slot's length: seconds to a tenth ("16.5s") below a minute, minutes
+  -- and whole seconds ("1:05") from 60 s on (a length that rounds to 60.0
+  -- is a minute, never "60.0s")
+  local function slot_seconds_text(seconds)
+    if seconds < PAGE.minute_from then return string.format("%.1fs", seconds) end
+    local whole = math.floor(seconds + 0.5)
+    return string.format("%d:%02d", math.floor(whole / 60), whole % 60)
+  end
+  M.slot_seconds_text = slot_seconds_text
+
+  -- The widest length a slot of this tier shows: its buffer length, or below
+  -- a minute ("59.9s", wider than "5:00") when the tier's slots reach one
+  local function widest_seconds_width()
+    local longest = S.performance.buffer_seconds
+    local width = text_width(slot_seconds_text(longest))
+    if longest >= PAGE.minute_from then width = math.max(width, text_width(slot_seconds_text(59.9))) end
+    return width
+  end
+
   -- One slot row at y: slot number, name and seconds (or REC); the cursor
   -- row is bright and also lists the voices reading the slot
   local function draw_slot_row(row, y, selected, value_right)
@@ -183,11 +203,11 @@ return function(S)
     screen.level(level)
     screen.move(PAGE.slot_x, y)
     screen.text(tostring(slot))
-    -- names end before the seconds column (the widest seconds: the tier's
-    -- buffer length, "16.0s" on standard)
-    local name_right = value_right - text_width(string.format("%.1fs", S.performance.buffer_seconds)) - PAGE.column_gap
+    -- names end before the seconds column (the widest seconds: "16.0s" on
+    -- standard, "59.9s" once the tier's slots reach a minute)
+    local name_right = value_right - widest_seconds_width() - PAGE.column_gap
     if not empty then
-      local seconds = buffer.recording and "REC" or string.format("%.1fs", buffer.seconds)
+      local seconds = buffer.recording and "REC" or slot_seconds_text(buffer.seconds)
       screen.move(value_right, y)
       screen.text_right(seconds)
       if selected then name_right = value_right - text_width(seconds) - PAGE.column_gap end
@@ -505,6 +525,23 @@ return function(S)
     for voice = 1, count do params:set("v" .. voice .. "_source", slot + 1) end
   end
 
+  -- As on a high tier with 300 s slots: the page reads S.performance, and
+  -- the duration's range ends at the slot length (the script's own start
+  -- read a standard tier)
+  local function as_300_s_tier()
+    S.performance = {tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60, reason = "high: setting"}
+    -- the param keeps its position in the range: put its value back
+    local duration = params:get("record_duration")
+    params:lookup_param("record_duration").controlspec.maxval = 300
+    params:set("record_duration", duration)
+  end
+
+  -- Every slot reports `seconds` (load_long_names, then the new length)
+  local function slots_report(context, seconds)
+    load_long_names(context)
+    for slot = 1, NUM_BUFFERS do context.polls.fire("bufferState", (slot - 1) * 1000 + seconds) end
+  end
+
   local BUFFER_INDEX = UI_PAGES.index.BUFFER
   local layout_states = {
     {name = "slot 1", setup = function(context) load_long_names(context); voices_on_slot(1, 2) end},
@@ -526,6 +563,17 @@ return function(S)
     {name = "meter peak", setup = function(context)
       context.polls.fire("amp_in_l", 1); context.polls.fire("amp_in_r", 0.2)
       context.polls.fire("amp_in_l", 0.05)
+    end},
+    {name = "eight slots of 4:59 (high, 300 s)", setup = function(context)
+      as_300_s_tier(); slots_report(context, 299.4); voices_on_slot(1, 2)
+      S.buffer_page.field = 2; params:set("record_duration", 300)
+    end},
+    {name = "a recording at 1:05 (high, 300 s)", setup = function(context)
+      as_300_s_tier(); slots_report(context, 299.4)
+      context.polls.fire("bufferState", 1065)   -- slot 2 holds 1:05
+      record_buffer(1)                           -- slot 1 records (for the default 8 s)
+      voices_on_slot(2, NUM_VOICES); S.buffer_page.slot = 2
+      S.buffer_page.field = 2; params:set("record_duration", 65)
     end},
   }
 

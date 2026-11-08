@@ -29,7 +29,7 @@ The left column lists the voices, four at a time: each entry is the voice number
 
 The right column shows the selected voice:
 - its full name and its source on the right (`synth`, `buf 1`-`buf 8`, `input`). A long name is shortened where it would run into the source;
-- `ON` or `OFF`, then `[L]` when locked and `[T]` when its grains are in triggered mode;
+- `ON` or `OFF`, then `[L]` when locked and `[T]` when its grains are in triggered mode. Last comes `[F]` while the voice's audio is frozen: its grains keep playing the same few seconds (freeze is on the [VOICE](voice.md) page, the grid and MIDI);
 - three fields, each with its unit. The cursor (`>`) marks the one E3 adjusts:
   - the main parameter, then grain size (`size`, seconds) and grain density (`dens`, grains per second). The main parameter is:
     - Resonator: frequency (`freq`)

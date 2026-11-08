@@ -36,6 +36,14 @@ On the high tier the **buffer length** field sets how long each buffer is. The b
 
 Both fields are settings of the norns, not of a patch: no PSET or scene holds them. They are saved at once to `performance.data` in Strata's data folder (`~/dust/data/strata/`) and take effect the next time the script starts (restart the script, or norns, to apply them); until then SETUP shows `(next start)`. The status line `running: high, 60 s` or `running: standard` shows what runs now. The engine writes what it chose to `performance_active.data` beside it, which the script reads as it starts. If that file cannot be written, Strata runs standard.
 
+## Long buffers
+
+On the high tier each buffer holds up to the buffer length (60 s by default, up to 300 s). Recording, loading, clearing and saving work as on the standard tier, with a few differences:
+- **Loading** a file longer than 16 s checks it first (decoding it, to catch a damaged file) without stopping the rest of Strata: the buffer keeps what it held until the check is done, then fades and loads the new file. Load, record into or clear the buffer meanwhile and the later action wins. A longer file than the buffer holds loads its first part (a 300 s file on 60 s buffers loads its first 60 s).
+- **Saving** a long buffer takes a while (a 300 s buffer about 2 s on a desktop computer, several seconds on the norns; the file appears when it is complete) and needs room for two temporary files of about 58 MB each.
+- The BUFFER page shows lengths of a minute and more as minutes and seconds (`1:05`).
+- Buffer scan moves in buffer lengths per second, so a setting that drifts gently through a 16 s buffer covers a full 300 s buffer at the same pace in buffer lengths, about 19 times as many seconds of audio per second: use small values.
+
 ## Audio Signal Flow
 
 ```

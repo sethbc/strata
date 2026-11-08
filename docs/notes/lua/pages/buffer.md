@@ -25,16 +25,16 @@
 ## Layout
 
 `S.BUFFER_PAGE` holds every position.
-- Left column (x 0-54): the selected voice's name in capitals at y 16 (cut to the column with `fit_text`); the three fields at y 24, 32, 40 (`field_first_y`, `field_spacing` 8): `>` at x 0 on the field cursor's row, the label (`src`, `dur`, `lvl`) at x 5, the value right-aligned at x 54 (`voice_source_label`, `%.1fs`, `%.2f`). The cursor's row at level 15, the others 4.
+- Left column (x 0-54): the selected voice's name in capitals at y 16 (cut to the column with `fit_text`); the three fields at y 24, 32, 40 (`field_first_y`, `field_spacing` 8): `>` at x 0 on the field cursor's row, the label (`src`, `dur`, `lvl`) at x 5, the value right-aligned at x 54 (`voice_source_label`, `%.1fs`, `%.2f`; the duration keeps `%.1fs` up to `300.0s`, since its 0.5 s steps matter). The cursor's row at level 15, the others 4.
 - Input meter on y 49: `in` at x 5, then eight 3x5 px filled segments from x 17, 1 px apart (x 17-48): lit segments at level 10, the held peak segment (when above the level) at 15, the rest at 1.
 - Divider at x 56, y 10-52 (level 1).
 - Right column: `S.lib.ui_field_list.draw` with six visible rows from y 16, 7 px apart (y 16-51), one row above the cursor kept in view, the scroll marker at x 127 (y 10 to 52). Each row:
   - slot number at x 59;
   - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name (`name == "empty"`);
-  - seconds (`%.1fs`) or `REC`, right-aligned at x 124; none for an empty slot (no name, no reported audio, not recording);
-  - names in other rows end 3 px before the widest seconds column (`16.0s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` when they do not fit (`v2+`), and the name gets what is left. Under the layout test's width estimate a two-voice list always shortens to `v2+`; the norns font is narrower.
+  - the length or `REC`, right-aligned at x 124; none for an empty slot (no name, no reported audio, not recording). `slot_seconds_text` (`S.lib.pages_buffer.slot_seconds_text`): below `minute_from` (59.95 s) `%.1fs` (`16.5s`), from there on minutes and whole seconds (`1:05`, `4:59`, `5:00`), so a length that rounds to 60.0 shows `1:00`, never `60.0s`;
+  - names in other rows end 3 px before the widest length the tier shows (`widest_seconds_width`: `16.0s` on standard; on a tier of 60 s and more the wider of its buffer length as `m:ss` and `59.9s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` when they do not fit (`v2+`), and the name gets what is left. Under the layout test's width estimate a two-voice list always shortens to `v2+`; the norns font is narrower.
 - Row level: the cursor row 15, a loaded or recording slot 6, others 2.
-- `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), each field, long names with every voice on one slot, every slot recording, the saved, busy, empty and load-failed flashes, the meter with a held peak.
+- `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), each field, long names with every voice on one slot, every slot recording, the saved, busy, empty and load-failed flashes, the meter with a held peak, and two as on a 300 s tier (`as_300_s_tier` sets `S.performance` and the duration's range): eight slots of 4:59 with the duration at `300.0s`, and a recording beside a 1:05 take read by every voice, with the duration at `65.0s`.
 
 ## Controls
 

@@ -916,6 +916,23 @@ test("every engine file is named Strata*.sc and defines each strataArea method o
   end
 end)
 
+-- A LocalBuf built into a SynthDef corrupts sclang 3.13's garbage collector
+-- (norns runs 3.13), which crashes sclang a little later (an assertion in
+-- its collector). Engine SynthDefs take server buffers as controls instead.
+local function uses_local_buf(text)
+  return stubs.strip_sc_comments(text):match("%f[%w_]LocalBuf%f[^%w_]") ~= nil
+end
+
+test("no engine SynthDef uses LocalBuf (it crashes sclang 3.13)", function()
+  assert_true(uses_local_buf("var chain = FFT(LocalBuf(2048), in);"), "caught: LocalBuf(2048)")
+  assert_true(uses_local_buf("var b = LocalBuf.new(8);"), "caught: LocalBuf.new")
+  assert_true(not uses_local_buf("// never a LocalBuf here\nvar x = 1; /* LocalBuf */"), "comments are skipped")
+  assert_true(not uses_local_buf("var myLocalBufs = 1; var LocalBuffer = 2;"), "other names are not LocalBuf")
+  for _, file in ipairs(engine_files()) do
+    assert_true(not uses_local_buf(file.text), file.path .. " uses no LocalBuf")
+  end
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',
