@@ -6,8 +6,8 @@
 -- previous/next section, ALT+K2 resets the field to its default, ALT+K3
 -- locks the voice; the arc button starts and stops it. Registers its
 -- S.registry.pages record (every field but the arc fields, which are
--- lib/arc/voice.lua's). sync_cursor is a field of this module's table
--- (S.lib.pages_voice).
+-- lib/arc/voice.lua's). The cursor and its anchor are lib/ui/cursors.lua's;
+-- sync_cursor and place_cursor (fields of S.lib.pages_voice) call it.
 
 return function(S)
   local M = {}
@@ -37,56 +37,22 @@ return function(S)
   }
   local LAYOUT = M.LAYOUT
 
-  -- The cursor's anchor: the param it was deliberately put on (its id
-  -- without the "v<i>_" prefix) and that row's index. Only deliberate moves
-  -- set it (E2, K2/K3, place_cursor); sync_cursor only reads it, so a
-  -- source or voice change and back (A -> B -> A) finds the param again.
-  local anchor = {key = nil, index = nil}
-
+  -- The row's param key: its id without the "v<i>_" prefix
   local function param_key(row)
     return row and row.param_id and row.param_id:match("^v%d+_(.+)$")
   end
 
-  local function anchor_on(rows, cursor)
-    anchor.key, anchor.index = param_key(rows[cursor]), cursor
-  end
-
-  -- Put S.cursors.voice on the selected voice's current rows and return
-  -- them with the cursor: on the anchored param's row when the rows have it
-  -- (grain pitch stays grain pitch when the synth section goes, comes back
-  -- or another voice is selected), otherwise clamped from the anchored
-  -- index. Idempotent: it never moves the anchor (before the first
-  -- deliberate move it anchors where the cursor is), so calling it any
-  -- number of times, from the page or the rings, gives the same cursor
-  -- until the rows or a deliberate move change. Every VOICE handler and
-  -- draw calls it before reading the cursor; lib/arc/voice.lua calls it in
-  -- arc_delta and arc_redraw.
+  -- The VOICE cursor's sync and deliberate placement are the cursor
+  -- module's (S.lib.ui_cursors.sync("voice"), .place("voice", index)),
+  -- which keeps its anchor; these are the page's names for them.
+  -- sync_cursor() returns rows, cursor; every VOICE handler and the draw
+  -- call it before reading the cursor
   function M.sync_cursor()
-    local rows = voice_page_rows(S.selected_voice)
-    if anchor.key == nil then
-      anchor_on(rows, field_list.clamp(rows, S.cursors.voice))
-    end
-    local cursor
-    for index, row in ipairs(rows) do
-      if param_key(row) == anchor.key then
-        cursor = index
-        break
-      end
-    end
-    cursor = cursor or field_list.clamp(rows, anchor.index)
-    S.cursors.voice = cursor
-    return rows, cursor
+    return S.lib.ui_cursors.sync("voice")
   end
 
-  -- Put the VOICE cursor on row index of the selected voice's current rows
-  -- (clamped) and anchor it there: a deliberate move. Code that sets the
-  -- VOICE cursor outside VOICE's handlers uses this; a bare
-  -- S.cursors.voice = index is taken back to the anchored param by the
-  -- next sync_cursor.
   function M.place_cursor(index)
-    local rows = voice_page_rows(S.selected_voice)
-    anchor_on(rows, field_list.clamp(rows, index))
-    return M.sync_cursor()
+    return S.lib.ui_cursors.place("voice", index)
   end
 
   -- The row index of param_id in the selected voice's current rows, or nil
@@ -202,8 +168,7 @@ return function(S)
   local function voice_enc(n, d)
     local rows, cursor = M.sync_cursor()
     if n == 2 then
-      S.lib.ui_cursors.move("voice", d)
-      M.place_cursor(S.cursors.voice)
+      S.lib.ui_cursors.move("voice", d)  -- anchors where it lands
     elseif n == 3 then
       local row = rows[cursor]
       if row.kind == "binary" then

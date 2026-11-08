@@ -35,10 +35,11 @@ return function(S)
   end
 
 
-  -- A pattern edit: the grid shows the patterns, so it follows at once
+  -- A pattern edit: the grid shows the patterns, so it follows at once. (The
+  -- screen needs nothing here: enc and key in strata.lua request its redraw
+  -- after every handler)
   local function pattern_changed()
     grid_redraw()
-    request_redraw()
   end
 
   local function draw_cell(x, y, level, playing)

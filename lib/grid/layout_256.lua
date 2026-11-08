@@ -146,7 +146,8 @@ return function(S)
   -- Row 16, columns 9-15 (voices 1-7): with nothing copied, copy the voice's
   -- pattern (a snapshot of its levels); with a pattern copied, paste it onto
   -- the voice (the copied voice itself changes nothing). The clipboard stays
-  -- for further pastes until column 16 clears it
+  -- for further pastes until column 16 clears it. A paste ends the voice's
+  -- step-level gesture on every grid (a step held from before takes no level)
   local function copy_paste_key(port, voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     local state = grid_core.port_state(port)
@@ -157,6 +158,7 @@ return function(S)
       state.clipboard = {voice = voice_idx, steps = steps}
     elseif clipboard.voice ~= voice_idx then
       for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = clipboard.steps[step] end
+      grid_core.end_step_gestures(voice_idx)
     end
   end
 
@@ -326,7 +328,9 @@ return function(S)
     grid_device:led(LAYOUT_256.clear_column, 16, clipboard and LAYOUT_256.paste_level or LAYOUT_256.empty_level)
   end
 
-  S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256}
+  -- fx_faders_page: the page with the FX faders (rows 3-7 of page 4), so FX
+  -- changes redraw the grids only while a 256 shows it (grid_core.any_fx_faders)
+  S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256, fx_faders_page = 4}
 
   return M
 end

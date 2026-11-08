@@ -167,12 +167,33 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(1, 8), 3, "beat 2 dim")
   S.pattern_playing = false
   grid_redraw()
-  assert_equal(device:get_led(1, 8), 4)
+  assert_equal(device:get_led(1, 8), 8, "stopped on half 2: column 1 at 8")
   -- with the sequencer running for real
   pattern_toggle()
   context.clock.advance()
   assert_true(device:get_led(1, 8) == 15 or device:get_led(1, 8) == 12 or device:get_led(1, 8) == 3, "playing")
   pattern_toggle()
+end)
+
+test("64 column 1 shows which half is up while the patterns are stopped", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 8)
+  local other = context.grid.plug(2, 8, 8)
+  assert_true(not local_value("pattern_playing"), "stopped")
+  assert_equal(device:get_led(1, 8), 4, "steps 1-8: column 1 at 4")
+  switch_half(context, 1)
+  assert_equal(device:get_led(1, 8), 8, "steps 9-16: column 1 at 8")
+  assert_equal(other:get_led(1, 8), 4, "each grid shows its own half")
+  switch_half(context, 1)
+  assert_equal(device:get_led(1, 8), 4, "back on steps 1-8: 4 again")
+  -- playing, the playhead rules apply in either half; stopping shows the half again
+  switch_half(context, 1)
+  pattern_toggle()  -- step 1 sounds: the other half
+  assert_equal(device:get_led(1, 8), 12, "playing: half 1's beat blinks")
+  pattern_toggle()
+  assert_equal(device:get_led(1, 8), 8, "stopped on steps 9-16: 8")
+  local levels = local_value("S").lib.grid_layout_64.LAYOUT.stopped_levels
+  assert_equal(levels[1], 4); assert_equal(levels[2], 8)
 end)
 
 test("64 lights the sounding step between steps, in its own half (#113)", function()
@@ -205,7 +226,7 @@ test("64 lights the sounding step between steps, in its own half (#113)", functi
   assert_equal(S.lib.sequencer.sounding_step(), 1, "wrapped to step 1")
   assert_equal(device:get_led(1, 8), 12, "half 1 plays again: column 1 blinks (beat 1)")
   pattern_toggle()
-  assert_equal(device:get_led(1, 8), 4, "stopped: column 1 dim")
+  assert_equal(device:get_led(1, 8), 8, "stopped on steps 9-16: column 1 at 8")
 end)
 
 end

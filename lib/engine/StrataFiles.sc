@@ -73,14 +73,16 @@
     // shortfall allowed is one default FLAC block (4096 frames, 85 ms at
     // 48 kHz), more than an MP3's encoder delay and padding (under 2 x 1152
     // frames), so a header count that overshoots by a codec's padding still
-    // loads, while damage before the last block is caught. One chunk array
-    // serves the whole file (the last read may run past `frames`).
+    // loads, while damage before the last block is caught. Each read gets a
+    // fresh chunk array (the last read may run past `frames`): see
+    // freshReadArray.
     // yielding: called inside a routine, which yields after every chunk
     // (yieldToCommands), so a long file (a 300 s FLAC takes seconds on a Pi)
     // never holds up the commands meanwhile.
     fileDecodes { arg file, frames, yielding = false;
-        var remaining = frames, chunk = FloatArray.newClear(loadCheckFrames * file.numChannels), decoded;
+        var remaining = frames, chunk, decoded;
         while { remaining > 0 } {
+            chunk = this.freshReadArray(loadCheckFrames * file.numChannels);
             file.readData(chunk);  // shrinks chunk to the samples decoded
             decoded = chunk.size div: file.numChannels;
             remaining = remaining - decoded;
@@ -88,6 +90,17 @@
             if (yielding and: { remaining > 0 }) { this.yieldToCommands(0) };
         };
         ^true
+    }
+
+    // A new FloatArray of `size` for one SoundFile readData. Every readData
+    // reads into a fresh array, never one an earlier read filled: reusing
+    // one across reads makes sclang 3.13 (norns' version) abort a while
+    // later in its garbage collector (a count assertion). On 3.13 the
+    // engine check's buffers, files and effects areas crashed 11 of 12 runs
+    // with the arrays reused and 1 of 8 with fresh ones (#131). A structure
+    // test checks every readData in the engine reads into one.
+    freshReadArray { arg size;
+        ^FloatArray.newClear(size)
     }
 
     // Inside a routine: wait `wait` seconds, and at least until commandGap
@@ -282,9 +295,8 @@
             ^false
         };
 
-        left = FloatArray.newClear(chunkFrames);
-        right = FloatArray.newClear(chunkFrames);
-        while { finished and: { sources[0].readData(left); left.size > 0 } } {
+        while { finished and: { left = this.freshReadArray(chunkFrames); sources[0].readData(left); left.size > 0 } } {
+            right = this.freshReadArray(chunkFrames);
             sources[1].readData(right);
             // A per-frame loop: faster here than an array-level lace, which
             // only descends into Arrays, so each chunk would be converted

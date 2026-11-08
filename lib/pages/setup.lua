@@ -23,18 +23,20 @@ return function(S)
     xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
   }
 
-  -- The fields, in cursor order. kind "param": E3 edits param_id, shown with
-  -- format (a string.format pattern, or the param's own string); kind
-  -- "action": K3 calls the named global function and hint names the K3 hint
+  -- The fields, in cursor order. Each row starts with its label. kind
+  -- "param": E3 edits param_id, shown with format (a string.format pattern,
+  -- or the param's own string); the MIDI port's row reads "<label> <port>:
+  -- <device>". kind "action": K3 calls run and hint names the K3 hint (run
+  -- looks the scenes function up as it runs, so a test can stand in for it)
   local SETUP_FIELDS = {
-    {label = "midi port", kind = "param", param_id = "midi_device"},
+    {label = "midi", kind = "param", param_id = "midi_device"},
     {label = "channels", kind = "param", param_id = "midi_channel_mode"},
     {label = "mutations", kind = "param", param_id = "mutation_enabled"},
     {label = "mutation rate", kind = "param", param_id = "mutation_rate", format = "%.1f s"},
     {label = "mutation prob", kind = "param", param_id = "mutation_probability", format = "%.2f"},
     {label = "mutation amt", kind = "param", param_id = "mutation_amount", format = "%.2f"},
-    {label = "save scenes", kind = "action", action = "save_scenes_to_disk", hint = "save"},
-    {label = "load scenes", kind = "action", action = "load_scenes_from_disk", hint = "load"},
+    {label = "save scenes", kind = "action", run = function() save_scenes_to_disk() end, hint = "save"},
+    {label = "load scenes", kind = "action", run = function() load_scenes_from_disk() end, hint = "load"},
   }
   M.SETUP_FIELDS = SETUP_FIELDS
 
@@ -97,7 +99,7 @@ return function(S)
   -- The fields, then the status lines (no cursor stops). The sizes line
   -- exists only while a grid is connected. Restored buffers are confirmed by
   -- the engine; missing files are remembered paths not found on start
-  local function setup_rows()
+  function M.setup_rows()
     local rows = {}
     for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
     add_performance_rows(rows)
@@ -118,6 +120,7 @@ return function(S)
       or ("buffers: " .. S.buffers_restored .. " restored")})
     return rows
   end
+  local setup_rows = M.setup_rows
 
   local function field_value(field)
     if field.kind == "performance" then
@@ -135,9 +138,9 @@ return function(S)
       screen.level(row.dim and 4 or 10)
       screen.text(row.text)
     elseif row.param_id == "midi_device" then
-      -- the selected port and its device, cut to end by x value_right
+      -- the label, the selected port and its device, cut to end by x value_right
       screen.level(selected and 15 or 4)
-      local prefix = "midi " .. params:get("midi_device") .. ": "
+      local prefix = row.label .. " " .. params:get("midi_device") .. ": "
       screen.text(prefix .. S.lib.ui_text.fit_text(midi_device_name(), value_right - screen.text_extents(prefix)))
     else
       screen.level(selected and 15 or 4)
@@ -168,7 +171,7 @@ return function(S)
   local function setup_key(n)
     if n == 3 then
       local field = setup_rows()[S.setup_cursor]
-      if field and field.kind == "action" then _G[field.action]() end
+      if field and field.kind == "action" then field.run() end
     end
   end
 

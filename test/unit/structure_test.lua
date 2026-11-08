@@ -933,6 +933,36 @@ test("no engine SynthDef uses LocalBuf (it crashes sclang 3.13)", function()
   end
 end)
 
+-- Reusing a FloatArray across SoundFile readData calls makes sclang 3.13
+-- (norns) abort in its garbage collector (#131): every readData in the
+-- engine reads into an array freshReadArray made for it, in the same
+-- statement or the line before
+local function stale_reads(text)
+  local stale, previous = {}, ""
+  for line in (stubs.strip_sc_comments(text) .. "\n"):gmatch("([^\n]*)\n") do
+    for target in line:gmatch("%.readData%(%s*([%w_]+)%s*%)") do
+      local fresh = target .. "%s*=%s*this%.freshReadArray%("
+      if not (line:match(fresh) or previous:match(fresh)) then table.insert(stale, target .. ": " .. line) end
+    end
+    previous = line
+  end
+  return stale
+end
+
+test("every engine readData reads into a fresh array (#131)", function()
+  assert_equal(#stale_reads("chunk = this.freshReadArray(8);\nfile.readData(chunk);"), 0, "allowed: fresh on the line before")
+  assert_equal(#stale_reads("while { a = this.freshReadArray(8); f.readData(a); a.size > 0 } { }"), 0, "allowed: the same statement")
+  assert_equal(#stale_reads("chunk = FloatArray.newClear(8);\nwhile { true } {\nfile.readData(chunk);\n}"), 1, "caught: reused")
+  assert_equal(#stale_reads("file.readData(data); // this.freshReadArray("), 1, "caught: a comment is not an allocation")
+  local total = 0
+  for _, file in ipairs(engine_files()) do
+    local stale = stale_reads(file.text)
+    assert_equal(#stale, 0, file.path .. ": " .. table.concat(stale, "; "))
+    for _ in stubs.strip_sc_comments(file.text):gmatch("%.readData%(") do total = total + 1 end
+  end
+  assert_true(total >= 3, "the engine's reads are found (" .. total .. ")")
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',
