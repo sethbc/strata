@@ -175,6 +175,8 @@ test("the register functions check their argument and refuse duplicates", functi
   assert_true(refused(S.register_voice_params, probe_record({ name = "p2", count = 0 })), "count >= 1")
   assert_true(refused(S.register_voice_params, probe_record({ name = "p2", add = "x" })), "add is a function")
   assert_true(refused(S.register_voice_params, probe_record({ name = "p2", fader = true })), "never on the faders")
+  assert_true(refused(S.register_voice_params, probe_record({ name = "p2", normalize_scene = 1 })),
+    "normalize_scene is a function")
   assert_true(refused(S.register_voice_params, probe_record({ name = "p2", discrete = { probe = { 0 } } })),
     "a discrete range is {min, max}")
   assert_true(refused(S.register_voice_params, probe_record({ name = "p2", discrete = { other = { 0, 1 } } })),

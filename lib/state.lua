@@ -143,6 +143,8 @@ return function()
     require_arg(all_entries(record.layout_states, function(_, state)
       return type(state) == "table" and type(state.name) == "string" and type(state.setup) == "function"
     end), where, "layout_states lists {name, setup = fn}")
+    require_arg(record.normalize_scene == nil or type(record.normalize_scene) == "function", where,
+      "normalize_scene is a function")
     require_arg(record.fader ~= true, where, "registered params stay off the 256 fader pages (fader = false)")
     table.insert(M.registry.voice_params, record)
   end
