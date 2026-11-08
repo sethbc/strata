@@ -3,6 +3,7 @@
 - Grid handlers live on the vport only (`grid.connect(port)`, through `attach_grid`). Never store the raw device passed to `grid.add`, and never set `key` on it.
 - `grid_layout()` matches the exact `cols`/`rows`. Never test `rows >= 16`, which also catches 8×16.
 - Anything the grid shows calls `grid_redraw()` when it changes, wherever it changes. It is cheap without a grid.
+- A grid key repaints each grid once (#161): while `grid_key` handles a key, `grid_redraw()` calls from its actions return at once, and `grid_key` paints when the handler returns. The handler runs in an `xpcall`, so a failing key still repaints, the hold on redraws always ends, and the error is raised after the repaint.
 - Bounds-check every voice, step and grid coordinate before indexing `S.patterns`.
 - Faders follow each controlspec's warp (`set_param_from_column`), and a range that spans 0 has a zero column that sets exactly 0.
 - Pages are per port (`S.lib.grid_core.page(port)`, `set_page`); a check for a page shown anywhere uses `any_page(n)`, and one for the FX faders `any_fx_faders()` (page 4 is FX only on the 256). There is no global grid page.
@@ -28,6 +29,7 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 
 - `grid_init()`: connects up to 4 grid ports at init (start step `START_ORDER.grids`).
 - `grid.add(device)`: norns' callback when a grid connects (hot-plug).
+- `grid_key(port, x, y, z)`: norns' key callback (on the vport). It ignores a port with no grid and a key outside the grid, runs the press or release through the layout (`handle_key`) with `grid_redraw()` held (`key_repaint.handling`), then repaints every grid once and requests a screen redraw.
 - `grid.remove(device)`: norns' callback when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot, and forgets the port (`forget_port`): its pending holds are canceled, its held, consumed and step keys, its `port_state` and its page are dropped. `grid.add` forgets the port too, so a grid plugged in starts with no held keys, on page 1.
 - `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`.
 - Why never the raw device: devices have no `.device` field (so `grid_redraw` would skip them), and norns fires both `device.key` and `vports[port].key`, so handlers on both would run every press twice. The arc uses the same vport-only pattern (`attach_arc`).

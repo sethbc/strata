@@ -361,15 +361,12 @@ return function(S)
     print("grid " .. port .. " disconnected")
   end
 
-  -- Presses and releases. A press is held (S.grid_held) before the layout
-  -- sees it. A release cancels the key's hold, reaches the layout unless the
-  -- key was consumed, then forgets the key. Layouts get key(port, x, y, z)
-  -- and return on z == 0 unless they handle releases
-  function grid_key(port, x, y, z)
-    local grid_port = S.grids[port]
-    if not grid_port then return end
-    if x < 1 or x > grid_port.cols or y < 1 or y > grid_port.rows then return end
+  -- While grid_key handles a key, grid_redraw() calls from its actions (a
+  -- param action that redraws, toggle_voice, ...) only wait: grid_key
+  -- paints each grid once when the key is handled (#161)
+  local key_repaint = {handling = false}
 
+  local function handle_key(port, grid_port, x, y, z)
     local layout = S.registry.grid_layouts[grid_layout(grid_port)]
     if z == 1 then
       press_key(port, x, y)
@@ -379,9 +376,25 @@ return function(S)
       if layout and not M.consumed(port, x, y) then layout.key(port, x, y, 0) end
       release_key(port, x, y)
     end
+  end
+
+  -- Presses and releases. A press is held (S.grid_held) before the layout
+  -- sees it. A release cancels the key's hold, reaches the layout unless the
+  -- key was consumed, then forgets the key. Layouts get key(port, x, y, z)
+  -- and return on z == 0 unless they handle releases. One repaint per key,
+  -- also when the handler fails (its error is raised after the repaint)
+  function grid_key(port, x, y, z)
+    local grid_port = S.grids[port]
+    if not grid_port then return end
+    if x < 1 or x > grid_port.cols or y < 1 or y > grid_port.rows then return end
+
+    key_repaint.handling = true
+    local handled, key_error = xpcall(handle_key, debug.traceback, port, grid_port, x, y, z)
+    key_repaint.handling = false
 
     grid_redraw()
     request_redraw()
+    if not handled then error(key_error, 0) end
   end
 
   function select_grid_voice(voice_idx)
@@ -392,6 +405,7 @@ return function(S)
 
   function grid_redraw()
     if next(S.grids) == nil then return end  -- no grids: nothing to do
+    if key_repaint.handling then return end  -- grid_key paints once the key is handled
 
     for port, grid_port in pairs(S.grids) do
       if grid_port.device then
