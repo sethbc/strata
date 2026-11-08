@@ -3,7 +3,7 @@
 - E3 edits through `enc_param_delta` (never `params:delta`), so ALT+E3 is fine and the center detents apply.
 - K3 on a delay or reverb row toggles that effect's bypass param (`delay_bypass`, `reverb_bypass`, `S.lib.voice_mix.BYPASS`) through `params:set` and never touches its mix; only that param frees the engine node. K3 on a filter row keeps 3.1's mix toggle (the filter is never freed).
 - The filter's restore value is `S.fx_last_mix.filter`, which `filter_mix`'s action records whenever the mix is set above 0, however it was set (E3, PARAMS, scenes, K3). Never record it from the page alone.
-- Section labels (`selectable = false` rows) take no cursor stop: always move through `S.lib.ui_field_list` (`move`, `clamp`), and clamp `S.fx_row` before use.
+- Section labels (`selectable = false` rows) take no cursor stop: always move through `S.lib.ui_field_list` (`move`, `clamp`), and clamp `S.fx_row` before use. Select a row by its param id (the layout states use `row_of`), never by a hard-coded index (#114).
 - K3 acts on the effect of the row under the cursor (`row.effect`); master rows (density, drift) do nothing, and their hint is `E3:value`.
 - Every row stays inside 128×64 at both ends of its range and every row position, `byp` included (the FX layout test and `layout_states`).
 

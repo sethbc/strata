@@ -112,7 +112,7 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (about 61 and 66 KB with 3.2's voice filter and sends, the mix area's)
+    // (about 69 and 75 KB with 2b's draws and 3.2's voice filter and sends)
     check.(sizes.every({ arg size; (size > 0) and: { size < 80 } }),
         "memory: each grain synth takes under 80 KB of the pool (% KB, by allocation probes)".format(
             [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", ")));

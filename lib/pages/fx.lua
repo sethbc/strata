@@ -50,6 +50,15 @@ return function(S)
   }
   S.fx_row = 2               -- selected FX_PAGE.rows index (density)
 
+  -- The FX_PAGE.rows index of a param's row (the layout states select rows
+  -- by param id, so a row added above never moves them onto another; #114)
+  local function row_of(param_id)
+    for index, row in ipairs(S.FX_PAGE.rows) do
+      if row.param_id == param_id then return index end
+    end
+    error("FX_PAGE has no row for " .. tostring(param_id))
+  end
+
   local function draw_fx_row(row, y, selected, value_right)
     if not row.param_id then
       screen.level(S.FX_PAGE.section_level)
@@ -133,18 +142,18 @@ return function(S)
   S.registry.pages[UI_PAGES.index.FX] = {name = "FX", draw = redraw_fx, hints = fx_hints,
     enc = fx_enc, key = fx_key,
     layout_states = {
-      {name = "first row", setup = function() S.fx_row = 2 end},
+      {name = "first row", setup = function() S.fx_row = row_of("master_density") end},
       {name = "last row", setup = function()
         params:set("reverb_damp", 1); params:set("reverb_mix", 1)
         S.fx_row = #S.FX_PAGE.rows
       end},
       {name = "filter freq", setup = function()
-        params:set("filter_freq", 20000); S.fx_row = 6
+        params:set("filter_freq", 20000); S.fx_row = row_of("filter_freq")
       end},
       -- both section rows in view (the cursor on delay time), each with byp
       {name = "delay and reverb bypassed", setup = function()
         params:set("delay_bypass", 1); params:set("reverb_bypass", 1); params:set("delay_mix", 1)
-        S.fx_row = 10
+        S.fx_row = row_of("delay_time")
       end}
     }}
 

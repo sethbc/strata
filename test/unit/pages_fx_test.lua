@@ -245,6 +245,23 @@ test("FX layout states include the delay and reverb bypassed", function()
   assert_screen_layout(context, "FX " .. state.name)
 end)
 
+test("FX layout states find their rows by param id, wherever the rows sit (#114)", function()
+  local context = load_strata(); show_page("FX")
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
+  -- a row inserted at the top moves every index: a hard-coded one lands elsewhere
+  table.insert(S.FX_PAGE.rows, 1, {label = "extra", selectable = false})
+  local expected = {["first row"] = "master_density", ["filter freq"] = "filter_freq",
+    ["delay and reverb bypassed"] = "delay_time"}
+  for _, state in ipairs(record.layout_states) do
+    if expected[state.name] then
+      state.setup(context)
+      assert_equal(S.FX_PAGE.rows[S.fx_row].param_id, expected[state.name], state.name .. " selects its row")
+    end
+  end
+  table.remove(S.FX_PAGE.rows, 1)
+end)
+
 test("ALT+E3 on FX is fine", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
