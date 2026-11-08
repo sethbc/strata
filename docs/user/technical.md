@@ -1,6 +1,6 @@
 # Technical Details
 
-Architecture and signal flow of the engine, and the off-device checks, for the curious. Developers should also read CLAUDE.md and the files in docs/notes/. Back to the [README](../../README.md).
+Architecture and signal flow of the engine, and the off-device checks, for the curious. Developers should also read AGENTS.md and the files in docs/notes/. Back to the [README](../../README.md).
 
 ## Architecture
 
@@ -71,6 +71,6 @@ QT_QPA_PLATFORM=offscreen test/run_engine_check.sh ~/src/norns
 
 Run only one engine check at a time per machine (it uses scsynth's port 57110).
 
-`test/run.lua` also checks that CLAUDE.md's engine command table lists exactly the engine's commands, and that the docs name no engine command or repository file that no longer exists.
+`test/run.lua` also checks that AGENTS.md's engine command table lists exactly the engine's commands, and that the docs name no engine command or repository file that no longer exists.
 
 GitHub Actions (`.github/workflows/test.yml`) runs all three on every pull request and on pushes to `main`: the Lua tests under Lua 5.3 (the version norns runs) and LuaJIT, and the engine check on Ubuntu with SuperCollider, a dummy JACK server and `monome/norns` at a pinned commit. Both jobs (`lua`, `engine`) are required to pass before a pull request can merge into `main`.

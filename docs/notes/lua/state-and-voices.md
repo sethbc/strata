@@ -14,7 +14,7 @@
 - `strata.lua`: the entry points only.
   - `S`, the includes, `init`, `redraw`, `enc`, `key`, `cleanup`.
   - init's start-up clock (`STARTUP`, `cancel_startup_clock`) and its start step, and E1's start step (`enc` lives here too).
-  - The module rules (constructor shape, `S`, `S.lib` names, includes, registries) are in CLAUDE.md, "Lua modules and `S`". CLAUDE.md's module table lists the files in include order.
+  - The module rules (constructor shape, `S`, `S.lib` names, includes, registries) are in AGENTS.md, "Lua modules and `S`". AGENTS.md's module table lists the files in include order.
 - `lib/state.lua`: `S` itself.
   - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`), `S.register_start`, `S.register_cleanup`, `S.lib`.
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.

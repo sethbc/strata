@@ -1,6 +1,6 @@
 ## Must not break
 
-- CLAUDE.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `standardBufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants (`bufferSeconds` is a tier value: [performance.md](performance.md)).
+- AGENTS.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `standardBufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants (`bufferSeconds` is a tier value: [performance.md](performance.md)).
 - Everything runs inside `context.xg`, in this order: `voiceGroup` (the input synth, voice synths, record synths), `processGroup` (grain synths, then mod synths), then filter, delay, reverb and master. Master runs last in `xg`, never after `og`.
 - `free` frees every node, bus and buffer the engine made, and nothing that waits for a fade runs afterward.
 - Each engine check area (`test/engine_check/<area>.scd`) has a notes file of the same name here and a place in the runner's `areaOrder` (`test/engine_check.scd`), and each notes file here has an area of its name; the docs test checks all three. An on-demand area (`onDemandAreas`: the soak) has no notes file, is in no CI shard and is documented where it is run.
@@ -83,7 +83,7 @@ Each of the 7 voices follows this path (synth source; see Audio Sources in `docs
 
 ## Lua ↔ SuperCollider details
 
-The command table itself is in CLAUDE.md (the docs test reads it there).
+The command table itself is in AGENTS.md (the docs test reads it there).
 
 ## SynthDef Organization
 

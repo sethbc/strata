@@ -1,7 +1,7 @@
 -- test/unit/docs_test.lua
 -- The Lua <-> engine interface and the docs: sync_check, the engine source
 -- parsers and the engine stub's limits, the shared constants and FX
--- defaults, the CLAUDE.md command table, doc paths and CI
+-- defaults, the AGENTS.md command table, doc paths and CI
 -- Run alone: lua test/run.lua docs
 
 return function(h)
@@ -129,7 +129,7 @@ test("the engine source parsers skip // and /* */ comments (#25)", function()
     .. '\n// this.addCommand(\\ghostLine, "i", { arg msg; });'
     .. '\n/* outer /* nested */ this.addCommand(\\ghostNested, "i", { arg msg; }); */'
     .. '\n// this.addPoll(\\ghostPoll, { 0 });'
-  -- the engine stub's (which the CLAUDE.md table check uses) and sync_check's
+  -- the engine stub's (which the AGENTS.md table check uses) and sync_check's
   for parser_name, parse in pairs({ stub = stubs.engine_signatures_from_source, sync_check = sync_check.sc_commands }) do
     local commands = parse(commented)
     for _, name in ipairs({"stopRecord", "ghostLine", "ghostNested"}) do
@@ -463,7 +463,7 @@ end)
 -- Continuous limits come from where the engine enforces them: a control its
 -- FX SynthDef clips (feedback.clip(0, 0.95), freq.lag(0.05).clip(20, 20000))
 -- or an argument the command clips (msg[2].clip(0, 1)). The engine clips no
--- crossmod depth or mod speed itself; CLAUDE.md's command table documents
+-- crossmod depth or mod speed itself; AGENTS.md's command table documents
 -- their ranges, and the stub reads them from the spec of the Lua param that
 -- sends the value.
 test("the engine stub range-checks continuous arguments at the engine's own limits (#51)", function()
@@ -503,8 +503,8 @@ test("the engine stub range-checks continuous arguments at the engine's own limi
   local patched_limits = stubs.engine_spec_from_source(patched).argument_limits
   assert_equal(patched_limits.setDelay[2].high, 0.5, "the delay feedback limit is read from \\strataDelay")
   assert_equal(patched_limits.retrigger[2].high, 0.8, "the velocity limit is read from \\retrigger")
-  -- documented, not clipped: the Lua param's controlspec, which CLAUDE.md's row states
-  local file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
+  -- documented, not clipped: the Lua param's controlspec, which AGENTS.md's row states
+  local file = assert(io.open(repo_root .. "/AGENTS.md", "r")); local doc = file:read("*a"); file:close()
   local documented = {
     { command = "setModAmpAmt", args = {6, 3, 0}, index = 3, param = "v7_mod_amp_amt_3", range = "%g to %g" },
     { command = "setModFreqAmt", args = {0, 1, 0}, index = 3, param = "v1_mod_freq_amt_1", range = "%g to %g" },
@@ -515,7 +515,7 @@ test("the engine stub range-checks continuous arguments at the engine's own limi
     check_limits(entry.command, entry.args, entry.index, entry.param, spec.minval, spec.maxval)
     local row = doc:match("\n| `engine%." .. entry.command .. "%(.-\n")
     assert_true(row and row:find(string.format(entry.range, spec.minval, spec.maxval), 1, true),
-      "CLAUDE.md documents engine." .. entry.command .. "'s range as " .. entry.param .. "'s spec")
+      "AGENTS.md documents engine." .. entry.command .. "'s range as " .. entry.param .. "'s spec")
   end
 end)
 
@@ -534,14 +534,23 @@ test("the engine stub rejects param names the SynthDefs do not have (#24)", func
   engine.setGrainParam(0, "envShape", 0)
 end)
 
-test("CLAUDE.md command table lists exactly the engine's commands", function()
-  local file = assert(io.open(repo_root .. "/CLAUDE.md", "r")); local doc = file:read("*a"); file:close()
+test("AGENTS.md is the only agent instructions file", function()
+  local agents = io.open(repo_root .. "/AGENTS.md", "r")
+  assert_true(agents ~= nil, "AGENTS.md is at the repository root")
+  if agents then agents:close() end
+  local old = io.open(repo_root .. "/CLAUDE.md", "r")
+  if old then old:close() end
+  assert_true(old == nil, "CLAUDE.md is gone: the instructions live in AGENTS.md alone")
+end)
+
+test("AGENTS.md command table lists exactly the engine's commands", function()
+  local file = assert(io.open(repo_root .. "/AGENTS.md", "r")); local doc = file:read("*a"); file:close()
   -- table rows: | `engine.<name>(<args>)` | `"<signature>"` | purpose |
   local rows = {}
   for line in doc:gmatch("[^\n]+") do
     local name, args, signature = line:match('^| `engine%.(%w+)%((.-)%)` | `"(%a*)"` |')
     if name then
-      assert_true(rows[name] == nil, "CLAUDE.md documents engine." .. name .. " twice")
+      assert_true(rows[name] == nil, "AGENTS.md documents engine." .. name .. " twice")
       local arg_count = 0
       if args:match("%S") then arg_count = select(2, args:gsub(",", ",")) + 1 end
       rows[name] = { signature = signature, arg_count = arg_count }
@@ -549,14 +558,14 @@ test("CLAUDE.md command table lists exactly the engine's commands", function()
   end
   for name, signature in pairs(signatures) do
     local row = rows[name]
-    assert_true(row ~= nil, "CLAUDE.md command table documents engine." .. name)
-    assert_equal(row.signature, signature, "CLAUDE.md signature of engine." .. name)
-    assert_equal(row.arg_count, #signature, "CLAUDE.md argument count of engine." .. name)
+    assert_true(row ~= nil, "AGENTS.md command table documents engine." .. name)
+    assert_equal(row.signature, signature, "AGENTS.md signature of engine." .. name)
+    assert_equal(row.arg_count, #signature, "AGENTS.md argument count of engine." .. name)
   end
   for name in pairs(rows) do
-    assert_true(signatures[name] ~= nil, "CLAUDE.md command table lists engine." .. name .. ", which the engine does not have")
+    assert_true(signatures[name] ~= nil, "AGENTS.md command table lists engine." .. name .. ", which the engine does not have")
   end
-  -- no engine command mentioned anywhere in CLAUDE.md, README.md,
+  -- no engine command mentioned anywhere in AGENTS.md, README.md,
   -- docs/status.md or docs/notes is gone
   local doc_names = maintained_docs()
   for _, note in ipairs({"docs/status.md", "docs/notes/engine.md", "docs/notes/lua.md"}) do
@@ -756,7 +765,7 @@ test("every engine notes file opens with Must not break", function()
   assert_true(#files >= 9, "docs/notes/engine holds the area notes (found " .. #files .. ")")
 end)
 
-test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names the area files", function()
+test("docs/notes/engine.md only indexes docs/notes/engine and AGENTS.md names the area files", function()
   local index = read_repo_file("docs/notes/engine.md")
   local linked = {}
   for line in (index .. "\n"):gmatch("([^\n]*)\n") do
@@ -771,13 +780,13 @@ test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names th
   for target in index:gmatch("%]%(([^)]+)%)") do
     assert_true(target:match("^engine/[%w%-]+%.md$") ~= nil, "docs/notes/engine.md links only area files, not " .. target)
   end
-  local claude = read_repo_file("CLAUDE.md")
+  local instructions = read_repo_file("AGENTS.md")
   for _, name in ipairs(names_in("docs/notes/engine", "md")) do
     assert_true(linked[name], "docs/notes/engine.md links docs/notes/engine/" .. name .. ".md")
-    assert_true(claude:find("`docs/notes/engine/" .. name .. ".md`", 1, true) ~= nil,
-      "CLAUDE.md names docs/notes/engine/" .. name .. ".md")
+    assert_true(instructions:find("`docs/notes/engine/" .. name .. ".md`", 1, true) ~= nil,
+      "AGENTS.md names docs/notes/engine/" .. name .. ".md")
   end
-  assert_true(claude:find("STRATA_ENGINE_CHECK_AREAS", 1, true) ~= nil, "CLAUDE.md names STRATA_ENGINE_CHECK_AREAS")
+  assert_true(instructions:find("STRATA_ENGINE_CHECK_AREAS", 1, true) ~= nil, "AGENTS.md names STRATA_ENGINE_CHECK_AREAS")
 end)
 
 -- Both ways (#155): every area has its notes file, and every notes file
@@ -937,7 +946,7 @@ local function spelling_files()
   local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
   local files = {}
   for path in listing:gmatch("[^\n]+") do
-    local scanned = path == "strata.lua" or path == "README.md" or path == "CLAUDE.md"
+    local scanned = path == "strata.lua" or path == "README.md" or path == "AGENTS.md"
       or path == "CHANGELOG.md" or path:match("^lib/.*%.sc$")
       or path:match("^lib/.*%.lua$") or path:match("^test/.*%.lua$")
       or path:match("^test/.*%.scd$") or path:match("^test/[^/]*%.sh$")

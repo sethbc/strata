@@ -798,7 +798,7 @@ test("a command defined in lib/engine is found with its file", function()
   local at = text:find("addCommand%(\\voiceOn"); local before = text:sub(1, at)
   assert_equal(before:match(".*// file: (%S+)"), "lib/engine/StrataVoices.sc")
   assert_equal(stubs.parse_engine_signatures(text).voiceOn, "iffffff")
-  -- the harness, sync_check and the CLAUDE.md table check read the same text
+  -- the harness, sync_check and the AGENTS.md table check read the same text
   assert_equal(signatures.voiceOn, "iffffff", "the stub's signatures")
   assert_equal(h.sync_check.sc_commands(text).loadBuffer, "is", "sync_check's commands")
   -- a parse error names the file it is in
