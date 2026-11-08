@@ -117,7 +117,7 @@ var checkStaleTempFiles = {
 // running in another engine instance (a script reload in the same sclang
 // session runs alloc while the old engine writes).
 var checkStaleParts = {
-    var info, data, savePath, file;
+    var info, data, savePath, file, count;
     info = [engine.scratchDir, engine.scratchDir.withoutTrailingSlash.dirname];
     info.do({ arg dir;
         File.mkdir(dir);
@@ -140,6 +140,7 @@ var checkStaleParts = {
     // to one path never share a .part file
     engine.writeChunkWait = 0.02;          // the 16 s interleave now takes about 2 s
     savePath = engine.scratchDir +/+ "running.wav";
+    count = saveResults.value.size;
     command.(\saveBuffer, 7, savePath);
     0.5.wait;
     data = PathName(engine.scratchDir).files.collect(_.fileName).select({ arg name; name.endsWith(".part") });
@@ -148,6 +149,8 @@ var checkStaleParts = {
         "a .part name carries the engine instance's tag (got %)".format(data));
     engine.tryPerform(\deleteStaleParts);
     check.(waitFor.({ File.exists(savePath) }, 10), "a write in progress survives deleteStaleParts");
+    // its report arrives a moment after the rename: wait, so no later window counts it
+    waitFor.({ saveReportsAfter.(count).notEmpty });
     engine.writeChunkWait = 0.001;
     file = SoundFile.openRead(savePath);
     check.(file.notNil and: { file.numFrames == engine.bufferFrames[7] }, "and holds every frame");
@@ -385,11 +388,16 @@ check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills s
 check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 7016 }) }),
     "slot 8 holding 16 s reports 7016 through bufferState");
 savePath = scratchRoot +/+ "long/saved.wav";
+reports = saveResults.value.size;
 writeStart = Main.elapsedTime;
 command.(\saveBuffer, 7, savePath);
 info = waitFor.({ File.exists(savePath) }, 30);
 writeSeconds = Main.elapsedTime - writeStart;
 check.(info, "a 16 s write completes (% frames at % Hz in % s)".format(frames, server.sampleRate, writeSeconds.round(0.01)));
+// its report is sent just after the rename and arrives as an OSC message a
+// moment later: wait for it, so it never lands in a later check's window
+check.(waitFor.({ saveReportsAfter.(reports).notEmpty }) and: { saveReportsAfter.(reports) == [[7, savesSent.(7), false]] },
+    "the 16 s write is reported written (got %)".format(saveReportsAfter.(reports)));
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames }, "the 16 s file holds every frame");
 if (file.notNil) {
