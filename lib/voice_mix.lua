@@ -1,0 +1,135 @@
+-- lib/voice_mix.lua
+-- Each voice's own filter and effect sends, and the effects' bypass. A
+-- registered voice-param record (S.register_voice_params), voice_mix:
+-- v<i>_filter_type, _filter_freq, _filter_res and _filter_mix (the voice
+-- filter after its grains; mix 0, the default, leaves it out) and
+-- v<i>_delay_send and _reverb_send (0-1, default 1: 3.1's chain). They are
+-- grain params, scene fields (the type switches at a transition's end), a
+-- VOICE section "filter & sends" and LFO destinations (the cutoff and both
+-- sends). Two fx params (S.register_fx_params), delay_bypass and
+-- reverb_bypass, free and re-create the effect's engine node
+-- (engine.setBypass); PSETs store them, scenes never do. Randomize,
+-- mutation and the fader pages never touch any of them. See
+-- docs/notes/lua/voice-mix.md.
+
+return function(S)
+  local M = {}
+
+  -- The voice params: key, engine grain param, and the LFO labels
+  M.VOICE_MIX = {
+    section = "filter & sends",   -- VOICE's last section, after mix
+    filter_types = {"lowpass", "highpass", "bandpass"},
+    keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send"},
+    lfo = {{label = "vfilt", key = "filter_freq"}, {label = "dsend", key = "delay_send"},
+      {label = "rsend", key = "reverb_send"}},
+  }
+
+  -- The bypass params, by effect: the param id and engine.setBypass's
+  -- effect number (0 delay, 1 reverb)
+  M.BYPASS = {
+    delay = {param_id = "delay_bypass", name = "delay bypass", engine_effect = 0},
+    reverb = {param_id = "reverb_bypass", name = "reverb bypass", engine_effect = 1},
+  }
+  M.BYPASS_ORDER = {"delay", "reverb"}
+
+  -- Whether an effect ("delay", "reverb") is bypassed; the filter never is
+  function M.bypassed(effect)
+    local bypass = M.BYPASS[effect]
+    return bypass ~= nil and params:get(bypass.param_id) == 1
+  end
+
+  -- The params' specs (a params:add table without an id), by key
+  local function voice_mix_param(key)
+    if key == "filter_type" then
+      return {type = "option", name = "filter type", options = M.VOICE_MIX.filter_types, default = 1}
+    elseif key == "filter_freq" then
+      return {type = "control", name = "filter freq", controlspec = controlspec.new(20, 20000, "exp", 0, 5000, "Hz")}
+    elseif key == "filter_res" then
+      return {type = "control", name = "filter res", controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5)}
+    elseif key == "filter_mix" then
+      return {type = "control", name = "filter mix", controlspec = controlspec.new(0, 1, "lin", 0.01, 0)}
+    elseif key == "delay_send" then
+      return {type = "control", name = "delay send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1)}
+    end
+    return {type = "control", name = "reverb send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1)}
+  end
+
+  -- VOICE's layout tests and page renders: each source, the cursor on the
+  -- section's first and last row, at the values that draw widest
+  local function layout_state(voice_idx, source_name, source_option, edge)
+    return {
+      name = string.format("v%d %s filter & sends %s", voice_idx, source_name, edge),
+      setup = function()
+        local prefix = "v" .. voice_idx .. "_"
+        S.selected_voice = voice_idx
+        params:set(prefix .. "source", source_option)
+        params:set(prefix .. "filter_type", #M.VOICE_MIX.filter_types)
+        params:set(prefix .. "filter_freq", 20000)
+        local key = edge == "first" and M.VOICE_MIX.keys[1] or M.VOICE_MIX.keys[#M.VOICE_MIX.keys]
+        S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of(prefix .. key))
+      end,
+    }
+  end
+  local layout_states = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for _, source in ipairs({{"synth", S.constants.SOURCE_SYNTH}, {"buf 1", S.constants.SOURCE_SYNTH + 1},
+      {"input", S.constants.SOURCE_INPUT}}) do
+      for _, edge in ipairs({"first", "last"}) do
+        table.insert(layout_states, layout_state(voice_idx, source[1], source[2], edge))
+      end
+    end
+  end
+
+  local record
+  record = {
+    name = "voice_mix",
+    count = #M.VOICE_MIX.keys,
+    add = function(voice_idx)
+      for _, key in ipairs(M.VOICE_MIX.keys) do
+        S.lib.params_setup.add_voice_extra(voice_idx, record, key, voice_mix_param(key))
+      end
+    end,
+    grain_keys = {
+      filter_type = {name = "filterType", value = function(option) return option - 1 end},
+      filter_freq = "filterFreq",
+      filter_res = "filterRes",
+      filter_mix = "filterMix",
+      delay_send = "delaySend",
+      reverb_send = "reverbSend",
+    },
+    scene_defaults = {filter_type = 1, filter_freq = 5000, filter_res = 0.5, filter_mix = 0, delay_send = 1,
+      reverb_send = 1},
+    discrete = {filter_type = {1, #M.VOICE_MIX.filter_types}},
+    voice_rows = {section = M.VOICE_MIX.section, rows = M.VOICE_MIX.keys},
+    layout_states = layout_states,
+    fader = false,
+  }
+  S.register_voice_params(record)
+  for _, destination in ipairs(M.VOICE_MIX.lfo) do
+    S.register_lfo_destination(destination.label, destination.key)
+  end
+
+  -- The bypass params, at the end of the fx group. Each sends
+  -- engine.setBypass through its engine sender; neither touches the mix
+  -- (the FX page's K3 toggles them, lib/pages/fx.lua)
+  S.register_fx_params({
+    name = "bypass",
+    count = #M.BYPASS_ORDER,
+    add = function()
+      for _, effect in ipairs(M.BYPASS_ORDER) do
+        local bypass = M.BYPASS[effect]
+        params:add{
+          type = "binary",
+          id = bypass.param_id,
+          name = bypass.name,
+          behavior = "toggle",
+          default = 0,
+          action = function(x) send_param_to_engine(bypass.param_id, x) end,
+        }
+        S.engine_senders[bypass.param_id] = function(value) engine.setBypass(bypass.engine_effect, value) end
+      end
+    end,
+  })
+
+  return M
+end

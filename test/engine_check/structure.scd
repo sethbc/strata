@@ -98,8 +98,8 @@ names = synthNames.(context.xg);
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;
-check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + 4),
-    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, filter, delay, reverb and master (got %)".format(
+check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + 6),
+    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, filter x3, delay, reverb and master (got %)".format(
         engine.numVoices - 1, names.size));
 check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
 check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");

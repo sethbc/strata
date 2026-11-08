@@ -91,12 +91,14 @@ test("a registered voice param is added, stored, sent and synced", function()
   for index, param in ipairs(params.params) do position[param.id] = index end
   assert_true(position["voice 1 extras"], "a separator voice 1 extras")
   assert_true(position["v1_mod_speed"] < position["voice 1 extras"], "after the cross-modulation params")
-  -- after the script's own records' params (lib/history.lua's), registered at include
+  -- after the script's own records' params (lib/history.lua's), registered
+  -- at include, less those their add_first put ahead of the synthesis params
   local before = 0
   for _, record in ipairs(S.registry.voice_params) do
     if record.name == "probe" then break end
     before = before + record.count
   end
+  before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 1)
   assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
   assert_equal(position["v1_probe_switch"], position["v1_probe"] + 1)
 end)
@@ -136,6 +138,32 @@ test("a record's add must add exactly count params", function()
   assert_true(not ok and tostring(problem):find("probe fx", 1, true), "an fx record too: " .. tostring(problem))
 end)
 
+-- norns reads a PSET in param order (#125)
+test("a record's add_first params come before the voice's synthesis params, counted with its add's", function()
+  local record = probe_record({ count = 3 })
+  function record.add_first(voice_idx)
+    local_value("S").lib.params_setup.add_voice_extra(voice_idx, record, "probe_first",
+      { type = "control", name = "probe first", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+  end
+  load_with(function(S) S.register_voice_params(record) end)
+  local S = local_value("S")
+  local position = {}
+  for index, param in ipairs(params.params) do position[param.id] = index end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local prefix = "v" .. voice_idx .. "_"
+    assert_true(position[prefix .. "probe_first"] < position[prefix .. S.voices[voice_idx].param_order[1]],
+      prefix .. "probe_first before the synthesis params")
+    assert_true(position["voice " .. voice_idx .. ": " .. S.voices[voice_idx].name] < position[prefix .. "probe_first"],
+      "inside voice " .. voice_idx .. "'s block")
+    assert_true(position[prefix .. "probe"] > position["voice " .. voice_idx .. " extras"], "add's params in extras")
+  end
+  params:set("v2_probe_first", 0.3)
+  assert_near(S.voices[2].extras.probe_first, 0.3, 1e-9, "stored like any registered param")
+  local ok, problem = pcall(load_with, function(S2) S2.register_voice_params(probe_record({ add_first = record.add_first })) end)
+  assert_true(not ok and tostring(problem):find("add_first", 1, true), "its params count: " .. tostring(problem))
+  assert_true(not pcall(S.register_voice_params, probe_record({ name = "p3", add_first = 1 })), "add_first is a function")
+end)
+
 test("the register functions check their argument and refuse duplicates", function()
   load_strata()
   local S = local_value("S")
@@ -162,6 +190,7 @@ test("the register functions check their argument and refuse duplicates", functi
   -- source change hooks and param filters
   S.register_source_change(function() end)
   assert_true(refused(S.register_source_change, "x"), "a hook is a function")
+  S.registry.param_filters.freq = nil  -- lib/variation.lua's quantize filter; this test's in its place
   S.register_param_filter("freq", function(_, value) return value end)
   assert_true(refused(S.register_param_filter, "freq", function(_, value) return value end), "one filter per key")
   assert_true(refused(S.register_param_filter, "amp", nil), "a filter is a function")
@@ -208,6 +237,7 @@ test("a param filter changes the stored and shown value", function()
       table.insert(seen, { voice_idx = voice_idx, value = value, previous = previous })
       return math.min(value, 0.5)
     end)
+    S.registry.param_filters.freq = nil  -- lib/variation.lua's quantize filter; this test's in its place
     S.register_param_filter("freq", function(_, value) return util.round(value, 100) end)
   end)
   finish_startup(context)
@@ -317,10 +347,15 @@ test("registered fx params grow the fx group and follow its 11 params", function
       params:add_binary("probe_other", "probe other", "toggle", 0)
     end })
   end)
-  assert_equal(params:lookup_param("strata_fx").n, 13, "11 plus the registered count")
+  -- the script's own registered fx params (lib/voice_mix.lua's bypass) come first
+  local own = 0
+  for _, record in ipairs(local_value("S").registry.fx_params) do
+    if record.name ~= "probe fx" then own = own + record.count end
+  end
+  assert_equal(params:lookup_param("strata_fx").n, 13 + own, "11 plus the registered count")
   local position = {}
   for index, param in ipairs(params.params) do position[param.id] = index end
-  assert_equal(position["probe_bypass"], position["drift_amount"] + 1, "after the 11, tape drift last of them")
+  assert_equal(position["probe_bypass"], position["drift_amount"] + own + 1, "after the 11, tape drift last of them")
   assert_equal(position["probe_other"], position["probe_bypass"] + 1)
 end)
 
@@ -360,7 +395,9 @@ test("registered rows appear in their VOICE section, new sections in place, bina
   assert_true(outline:find("grain:v1_grain_mode:option grain:v1_probe:control grain:v1_probe_switch:binary crossmod ",
     1, true), "probe rows end the grain section: " .. outline)
   assert_true(not outline:find("probe sect", 1, true), "a synth voice has no probe sect section")
-  assert_true(outline:find("mix:v1_pan:control mix:v1_freeze:binary tail tail:v1_tail_mode:option$"), "tail after mix: " .. outline)
+  -- (after mix and the sections registered before it: lib/variation.lua's)
+  assert_true(outline:find("mix:v1_pan:control mix:v1_freeze:binary ", 1, true)
+    and outline:find(" tail tail:v1_tail_mode:option$"), "tail after mix: " .. outline)
   params:set("v1_source", 2)   -- buffer 1
   outline = row_outline(1)
   assert_true(outline:find("grain:v1_probe_switch:binary probe sect probe sect:v1_sect_level:control crossmod ",
@@ -449,7 +486,7 @@ end
   assert_equal(params:get("v1_late"), 0, "the voice param exists")
   assert_equal(params:get("late_level"), 0.25, "the fx param exists")
   assert_equal(S.LFO_DESTINATIONS[#S.LFO_DESTINATIONS].label, "v7 late", "the LFO destination exists")
-  assert_true(row_outline(1):find("mix:v1_late:control$"), "the VOICE row exists")
+  assert_true((row_outline(1) .. " "):find("mix:v1_late:control ", 1, true), "the VOICE row exists")
   capture_scene(1)
   assert_equal(S.scenes[1].data.late_level, 0.25, "the scene field is captured")
   assert_equal(S.scenes[1].data.voices[1].extras.late, 0, "and the voice param")

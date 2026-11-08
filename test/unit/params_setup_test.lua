@@ -250,7 +250,8 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   end
   assert_true(group_index, "strata_fx group exists")
   assert_equal(params.params[group_index].t, params.tGROUP)
-  assert_equal(params.params[group_index].n, #FX_PARAM_IDS, "group size")
+  -- then the registered fx params (lib/voice_mix.lua's two bypass params)
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
   end

@@ -134,26 +134,75 @@ test("FX draws a scroll marker at x 127", function()
   assert_true(context.screen.lines[1].y1 > top, "the marker moves down with the view")
 end)
 
-test("K3 bypasses and restores the effect under the cursor", function()
-  load_strata(); show_page("FX")
+test("K3 on the FX delay and reverb rows toggles the bypass; the filter row keeps its mix toggle", function()
+  local context = load_strata(); show_page("FX")
   local S = local_value("S")
-  S.fx_row = row_index("delay_time")
-  params:set("delay_mix", 0.6); key(3, 1); assert_equal(params:get("delay_mix"), 0)
-  key(3, 1); assert_near(params:get("delay_mix"), 0.6, 1e-6)
-  load_strata(); show_page("FX"); S = local_value("S")
-  S.fx_row = row_index("delay_mix"); key(3, 1)
-  assert_near(params:get("delay_mix"), 0.3, 1e-6, "never set: K3 gives 0.3")
-  assert_equal(params:get("filter_mix"), 0, "the other effects are untouched")
-  load_strata(); show_page("FX"); S = local_value("S")
-  S.fx_row = row_index("reverb_size")
-  params:set("reverb_mix", 0.8); key(3, 1); assert_equal(params:get("reverb_mix"), 0)
-  key(3, 1); assert_near(params:get("reverb_mix"), 0.8, 1e-6)
-  load_strata(); show_page("FX"); S = local_value("S")
+  for _, effect in ipairs({ "delay", "reverb" }) do
+    for _, param_id in ipairs(effect == "delay" and { "delay_time", "delay_feedback", "delay_mix" }
+      or { "reverb_mix", "reverb_size", "reverb_damp" }) do
+      S.fx_row = row_index(param_id)
+      params:set(effect .. "_mix", 0.6)
+      context.clear_engine_calls()
+      key(3, 1); key(3, 0)
+      assert_equal(params:get(effect .. "_bypass"), 1, "K3 on " .. param_id .. " bypasses the " .. effect)
+      assert_near(params:get(effect .. "_mix"), 0.6, 1e-6, "and keeps its mix")
+      local calls = context.calls_named("setBypass")
+      assert_equal(#calls, 1, "one setBypass"); assert_equal(calls[1].args[2], 1)
+      key(3, 1); key(3, 0)
+      assert_equal(params:get(effect .. "_bypass"), 0, "a second K3 lifts it")
+      assert_near(params:get(effect .. "_mix"), 0.6, 1e-6, "at the same mix")
+    end
+  end
+  -- the filter: 3.1's mix toggle, and never a bypass param
+  S.fx_row = row_index("filter_res")
+  params:set("filter_mix", 0.7); key(3, 1)
+  assert_equal(params:get("filter_mix"), 0, "K3 on a filter row sets its mix to 0")
+  key(3, 1); assert_near(params:get("filter_mix"), 0.7, 1e-6, "and back")
+  assert_equal(params:get("delay_bypass") + params:get("reverb_bypass"), 0, "the filter K3 bypasses no effect")
+  -- the master rows do nothing
   S.fx_row = row_index("drift_amount")
   local snapshot = {params:get("filter_mix"), params:get("delay_mix"), params:get("reverb_mix"), params:get("drift_amount")}
   key(3, 1); S.fx_row = row_index("master_density"); key(3, 1)
   assert_equal(params:get("filter_mix"), snapshot[1]); assert_equal(params:get("delay_mix"), snapshot[2])
   assert_equal(params:get("reverb_mix"), snapshot[3]); assert_equal(params:get("drift_amount"), snapshot[4])
+  assert_equal(params:get("delay_bypass") + params:get("reverb_bypass"), 0, "nor any bypass")
+end)
+
+test("a bypassed row shows byp and keeps its mix", function()
+  local context = load_strata(); show_page("FX")
+  local S = local_value("S")
+  S.fx_row = row_index("delay_time")  -- the view shows the delay and reverb labels
+  local function byp_entries()
+    local found = {}
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == "byp" then table.insert(found, entry) end
+    end
+    return found
+  end
+  local function label_y(name)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == name and entry.level == 2 then return entry.y end
+    end
+  end
+  context.screen.clear(); redraw()
+  assert_equal(#byp_entries(), 0, "nothing is bypassed: no byp")
+  params:set("delay_mix", 0.45); params:set("delay_bypass", 1)
+  context.screen.clear(); redraw()
+  local found = byp_entries()
+  assert_equal(#found, 1, "the delay row shows byp")
+  assert_equal(found[1].y, label_y("delay"), "on the delay's section row")
+  assert_equal(found[1].level, 4, "at level 4")
+  assert_true(h.screen_shows(context, "45%"), "the delay mix still shows its value")
+  params:set("reverb_bypass", 1)
+  context.screen.clear(); redraw()
+  found = byp_entries()
+  assert_equal(#found, 2, "both rows show byp")
+  assert_equal(found[2].y, label_y("reverb"), "the second on the reverb's section row")
+  assert_screen_layout(context, "FX delay and reverb bypassed")
+  -- a mix of 0 is not a bypass
+  params:set("delay_bypass", 0); params:set("reverb_bypass", 0); params:set("delay_mix", 0)
+  context.screen.clear(); redraw()
+  assert_equal(#byp_entries(), 0, "a mix of 0 shows no byp")
 end)
 
 test("FX hints name the effect", function()
@@ -165,13 +214,52 @@ test("FX hints name the effect", function()
       if entry.y == 62 then return entry.text end
     end
   end
-  S.fx_row = row_index("delay_fdbk") or row_index("delay_feedback")
+  S.fx_row = row_index("delay_feedback")
   params:set("delay_mix", 0.5); assert_equal(hint_text(), "K3:delay bypass")
-  params:set("delay_mix", 0); assert_equal(hint_text(), "K3:delay on")
+  params:set("delay_mix", 0); assert_equal(hint_text(), "K3:delay bypass", "a mix of 0 is still not bypassed")
+  params:set("delay_bypass", 1); assert_equal(hint_text(), "K3:delay on")
   S.fx_row = row_index("reverb_mix"); params:set("reverb_mix", 0.2)
   assert_equal(hint_text(), "K3:reverb bypass")
+  params:set("reverb_bypass", 1); assert_equal(hint_text(), "K3:reverb on")
+  S.fx_row = row_index("filter_mix"); params:set("filter_mix", 0.4)
+  assert_equal(hint_text(), "K3:filter bypass")
+  params:set("filter_mix", 0); assert_equal(hint_text(), "K3:filter on")
   S.fx_row = row_index("master_density"); assert_equal(hint_text(), "E3:value")
   S.fx_row = row_index("drift_amount"); assert_equal(hint_text(), "E3:value")
+end)
+
+test("FX layout states include the delay and reverb bypassed", function()
+  local context = load_strata(); show_page("FX")
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
+  local state
+  for _, each in ipairs(record.layout_states) do
+    if each.name == "delay and reverb bypassed" then state = each end
+  end
+  assert_true(state ~= nil, "the FX record has the state")
+  state.setup(context)
+  context.screen.clear(); redraw()
+  local count = 0
+  for _, entry in ipairs(context.screen.texts) do if entry.text == "byp" then count = count + 1 end end
+  assert_equal(count, 2, "byp on both rows")
+  assert_screen_layout(context, "FX " .. state.name)
+end)
+
+test("FX layout states find their rows by param id, wherever the rows sit (#114)", function()
+  local context = load_strata(); show_page("FX")
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
+  -- a row inserted at the top moves every index: a hard-coded one lands elsewhere
+  table.insert(S.FX_PAGE.rows, 1, {label = "extra", selectable = false})
+  local expected = {["first row"] = "master_density", ["filter freq"] = "filter_freq",
+    ["delay and reverb bypassed"] = "delay_time"}
+  for _, state in ipairs(record.layout_states) do
+    if expected[state.name] then
+      state.setup(context)
+      assert_equal(S.FX_PAGE.rows[S.fx_row].param_id, expected[state.name], state.name .. " selects its row")
+    end
+  end
+  table.remove(S.FX_PAGE.rows, 1)
 end)
 
 test("ALT+E3 on FX is fine", function()

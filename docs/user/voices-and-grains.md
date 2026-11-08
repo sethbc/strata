@@ -27,6 +27,23 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 
 Every voice's grains read audio that is already there: a synth voice writes its synth into a 4-second loop of its own, an input voice reads the last seconds of the input, and a buffer voice reads its buffer. So a synth or input voice's grains start a few milliseconds in the past. Raising the pitch makes a grain read faster than the audio arrives, so it starts further back: at pitch 2 a grain length back, and at the extremes (pitch 4, 0.5 s grains) 1.5 s back. In triggered mode a grain instead stays close to the trigger: above pitch 2 it is shortened (at pitch 4 a 0.5 s grain lasts 0.17 s), so an accent never arrives late. Input voices now follow pitchbend and frequency cross-modulation, as buffer voices do.
 
+### Grain variation
+
+Each grain can differ from the one before it. These are the rows of the VOICE page's **variation** section (and PARAMETERS > voice n extras, except quantize, which is listed above the voice's freq); at their defaults every grain plays as in 3.1:
+- **reverse** (0-100%, 0): the chance that a grain plays backward
+- **pitch jitter** (0-12 st, 0): each grain's pitch moves at random up to that many semitones either way
+- **pan jitter** (0-1, 0): each grain moves at random across the stereo field, up to fully across at 1, on top of the slow pan wander
+- **size jitter** (0-1, 0): each grain's length is the grain size times up to 2 either way (at 1, half to double), but never longer than 0.5 s
+- **intervals** (off, octaves, fifths, chord, custom; off): each grain adds one interval from the set, picked at random. Octaves are -12, 0 and +12 semitones; fifths -12, -5, 0, +7 and +12; chord the root, third, fifth and seventh of the scale (0, 4, 7 and 11 semitones with the scale off); custom the five **custom** rows, -24 to +24 semitones each (-12, 0, 7, 12 and 19 to start), shown only while the set is custom
+- **interval prob** (0-100%, 100%): the chance that a grain takes an interval at all; the others play at the voice's pitch
+- **quantize** (off/on, off): every grain's pitch (with its jitter and interval) lands on a tone of the scale. For a synth voice the freq param snaps to the scale too, turned by E3 or the arc one scale tone at a time (about a semitone of turning per tone), and MIDI notes play the nearest tone (a note between two tones plays the lower)
+
+Scenes capture all of them; intervals, quantize and the custom intervals switch at the end of a fade, the rest fade. Randomize and mutations leave them alone, and they are not on the grid's fader pages.
+
+### Scales
+
+PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Natural Minor, Dorian, the pentatonics, ...) and its **root** (C-B), which every quantizing voice shares. With the scale off, quantize rounds to semitones. A synth voice quantizes around its own pitch; a buffer or input voice, whose key Strata cannot know, takes its audio to be in the root (C4 for root C). A buffer voice played at another rate (a MIDI note, its buffer rate) is transposed by it and its grains still land on the scale. Changing the scale or root moves every quantizing voice's pitch to the nearest tone of the new scale (not while a scene is recalled or fading). Scenes capture the scale and root and switch them at the end of a fade. A PSET loads every voice's saved pitch exactly, whatever its quantize was set to before.
+
 ## Performance Features
 
 - **Randomization** - Generate new parameter sets for each voice
