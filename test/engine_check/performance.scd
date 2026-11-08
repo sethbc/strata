@@ -267,7 +267,7 @@ check.((FloatArray[7300.0][0] == 7300) and: { (FloatArray[7299.99][0] - 7299.99)
     and: { FloatArray[2016.5][0] == 2016.5 },
     "performance: the largest value, 7 * 1000 + 300 s, keeps 0.01 s in a 32-bit float");
 // ... and, after the slots, the slot length: numBuffers * 1000 + bufferSeconds
-check.(engine.bufferLengthValue == 8016 and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 8016).abs < 0.001 }) }, 3) },
+check.(engine.bufferLengthValue == 8016 and: { engine.bufferLengthValue.isKindOf(Float) } and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 8016).abs < 0.001 }) }, 3) },
     "performance: the periodic bufferState also sends the slot length, 8 * 1000 + 16 (got %)".format(
         h.pollValues(\bufferState).select({ arg value; value >= 8000 }).asSet));
 h.command(\clearBuffer, 2);

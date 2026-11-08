@@ -135,8 +135,9 @@
     // The slots' length (bufferSeconds) as a bufferState message for the
     // slot index after the last slot: numBuffers * bufferStateStride +
     // seconds. Lua caps its slot length to it (an old active file the
-    // engine could not replace may name more than it allocated, #153)
-    bufferLengthValue { ^(numBuffers * this.bufferStateStride) + bufferSeconds }
+    // engine could not replace may name more than it allocated, #153). A
+    // Float, as every bufferState value (matron's /poll/value is typed "if")
+    bufferLengthValue { ^((numBuffers * this.bufferStateStride) + bufferSeconds).asFloat }
 
     // One float, as bufferState (matron's /poll/value is typed "if"):
     // (load * 2 + emptied) * numBuffers + slot index, where load is the
