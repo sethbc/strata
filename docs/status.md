@@ -63,7 +63,6 @@ CHANGELOG.md has every change. In short:
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
   - A buffer slot's internal `restoring` flag can stay set after a restore that never gets audio. Nothing reads it except when audio is confirmed.
-  - Pressing a sequence-length key on the grid repaints the grid twice (one extra 128-LED refresh).
   - The arc keeps redrawing while the norns menu is open (the screen does not), so a param changed from PARAMS, a CC map or an LFO moves the rings at once.
   - The engine check's timeout kills sclang's child processes through `pgrep`. On a machine without `pgrep` and without `timeout`, a hung scsynth may outlive the check.
 - **Limits to keep in mind:**
