@@ -20,9 +20,9 @@ What a grain synth takes, at 48 kHz:
 | | 3.0.2 / 3.1 (scsynth 3.14) | 3.2 standard (scsynth 3.14.1, local) |
 |---|---|---|
 | engine idle (effects chain, input, writers; delay 2 s stereo = 1 MB, master `PitchShift` 0.2 s = 256 KB, `FreeVerb2`) | about 1460 | about 1500-1526 |
-| one synth grain synth | 274 (`\strataGrain`) | 47.6-47.7 (`\strataGrainRing`) |
-| one buffer grain synth | 152 | 51.4 |
-| the worst case (below), with its cutting synths | about 6920 (1270 free) | 2758-2786 (about 5.4 MB free), standard and high alike until 2a and 2d add spectral freeze and the FDN reverb |
+| one synth grain synth | 274 (`\strataGrain`) | 57.3 (`\strataGrainRing`, with 2c's loops and 2b's draws; 47.6-47.7 before them) |
+| one buffer grain synth | 152 | 63.2 (`\strataGrainBuf`; 51.4 before 2c and 2b), 0.8 KB under the 64 KB per-synth limit |
+| the worst case (below), with its cutting synths | about 6920 (1270 free) | standard: about 5.1-5.2 MB free (5140-5190 KB); high, with 2a's spectral freeze on every voice: about 4.6 MB free (4610 KB; 5130 KB in the scene-recall case, which engages no spectral writer). 2d's FDN reverb and grain-path UGens (about 13 KB per grain synth) are not in these figures |
 
 CI runs the same check on SuperCollider 3.13.0 (norns' version); its lines carry its own figures.
 
@@ -37,7 +37,7 @@ The engine check boots its server with `memSize = 8192` (norns' value, set expli
 ## The floors, and what 3.5 needs
 
 The floors replace 3.1's 1 MB rule, sized for 3.5's note streams (`docs/design/3.2-design.md` §2.7): a note stream is one grain synth, and under today's lifecycle rule (a switch keeps a full fading set) each note beyond the first adds 21 grain synths and about 14 voice synths across the seven voices.
-- The design estimated about 35 KB per stream (24 KB of grain tables plus 11 KB of graph). Measured on scsynth 3.14.1 it is about 48-51 KB (26 KB of tables plus about 21-25 KB of graph), so each extra note costs about 21 × 50 + 250 ≈ 1.3 MB rather than 1.0 MB.
-- **Standard** (2 notes): 1.3 MB plus the 1 MB rule = 2.3 MB, inside the 3 MB floor; the measured worst case leaves about 5.4 MB free.
+- The design estimated about 35 KB per stream (24 KB of grain tables plus 11 KB of graph). Measured on scsynth 3.14.1 it was about 48-51 KB at 1b (26 KB of tables plus about 21-25 KB of graph), so each extra note cost about 21 × 50 + 250 ≈ 1.3 MB rather than 1.0 MB. With 2c's loops and 2b's draws it is 57-63 KB (about 1.5 MB a note), and 2d adds about 13 KB more: the 3.5 design re-measures before it settles the note count.
+- **Standard** (2 notes): 1.3 MB plus the 1 MB rule = 2.3 MB, inside the 3 MB floor; the measured worst case leaves about 5.1 MB free.
 - **High**: both floors are kept. Under today's lifecycle rule high fits three 3.5 notes (2 × 1.3 + 1 = 3.6 MB, inside the 4 MB floor); four (3 × 1.3 + 1 = 4.9 MB) need a lifecycle change (a switch that does not keep a full fading set of notes) or a smaller grain graph. The design (§2.7) records this; the 3.5 design re-measures on norns' own scsynth (the hardware check, #6) before it settles the note count.
 - If a floor ever fails, find which estimate was wrong before cutting anything.

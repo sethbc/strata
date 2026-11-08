@@ -9,8 +9,8 @@
 // a grain reads, and how far the start is from 3.1's rule. The reads come
 // from a voice on a slot whose frames outside the region under test hold 1
 // and inside it 0, so any grain reading outside is heard; reverse grains
-// (no Lua param gives them before the variation area) through a check-only
-// def built with slotGrainReader at rate -1.
+// through a check-only def built with slotGrainReader at rate -1, and end
+// to end through the real def at reverseProb 1 (the variation area).
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
@@ -224,7 +224,24 @@ engine.synths[grainKey].set(\out, privateBus.index);
         "loops: a loop shorter than a grain never reads past the valid region (strataGrainBuf, % s region, loop %/%, 0.2 s grains at rate %; peak %)"
             .format(grainCase[0], grainCase[1], grainCase[2], grainCase[3], peak));
 });
-[[\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
+// every grain reverse (the variation area's reverseProb 1), with the real
+// def: a loop shorter than the slot, near its end or its start, never reads
+// the zeroed tail (1 past the region, where a reverse read before frame 0
+// would wrap to)
+[[0.5, 0.999, 0.001], [0.5, 0.8, 0.1], [0.5, 0, 0.05], [0.25, 0, 0.001], [0.05, 0.5, 0.1]].do({ arg grainCase;
+    loadSlot.(grainCase[0]);
+    peak = playSlot.([\reverseProb, 1, \loopStart, grainCase[1], \loopLength, grainCase[2], \bufRate, 1, \bufPos, 0.7,
+        \bufScan, 0.9, \posSpread, 1]);
+    check.(quietFor.(peak),
+        "loops: reverseProb 1 in a short loop never reads the zeroed tail (strataGrainBuf, % s region, loop %/%, 0.2 s grains; peak %)"
+            .format(grainCase[0], grainCase[1], grainCase[2], peak));
+});
+// ... and those reverse grains play: over a region of 1s they are heard
+[engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(0, buffer.numFrames, 1) });
+server.sync;
+peak = playSlot.([\loopStart, 0.8, \loopLength, 0.1]);
+check.(peak > 0.05, "loops: the reverseProb 1 grains play (peak %)".format(peak));
+[[\reverseProb, 0], [\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
     command.(\setGrainParam, voice, *pair)
 });
 engine.synths[grainKey].set(\out, engine.mainBus.index);

@@ -301,4 +301,36 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   assert_equal(midi.connect(2).event, nil, "cleanup detaches the MIDI handler")
 end)
 
+
+test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer rate", function()
+  local context = load_strata(); finish_startup(context)
+  local function option_index(param_id, name)
+    for index, option in ipairs(params:lookup_param(param_id).options) do if option == name then return index end end
+  end
+  local function freq_of(note) return 13.75 * 2 ^ ((note - 9) / 12) end
+  params:set("scale", option_index("scale", "Minor Pentatonic"))  -- C, Eb, F, G, Bb
+  params:set("v4_quantize", 1)
+  local expected = { [60] = 60, [61] = 60, [62] = 63, [64] = 63, [66] = 65, [68] = 67, [69] = 70, [71] = 70, [72] = 72 }
+  for note, tone in pairs(expected) do
+    context.midi.send(1, { type = "note_on", note = note, vel = 100, ch = 4 })
+    assert_near(params:get("v4_freq"), freq_of(tone), 1e-6, "note " .. note .. " plays " .. tone)
+  end
+  -- a note past the freq range plays the scale's last tone inside it (Bb6: 2000 Hz is note 95.2)
+  context.midi.send(1, { type = "note_on", note = 127, vel = 100, ch = 4 })
+  assert_near(params:get("v4_freq"), freq_of(94), 1e-6, "a high note plays the highest tone in range")
+  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 4 })
+  assert_near(params:get("v4_freq"), freq_of(17), 1e-6, "a low note plays the lowest (F0: 20 Hz is note 15.5)")
+  -- a buffer voice: rate from the snapped note
+  params:set("v5_source", 3); params:set("v5_quantize", 1)
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 5 })
+  assert_near(params:get("v5_buf_rate"), 2 ^ (5 / 12), 0.006, "F#4 reads at F4's rate (the rate's 0.01 step)")
+  -- quantize off: exact notes; scale off with quantize on: semitones
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 6 })
+  assert_near(params:get("v6_freq"), freq_of(66), 1e-6, "an unquantized voice plays F#4")
+  params:set("scale", 1)
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 4 })
+  assert_near(params:get("v4_freq"), freq_of(66), 1e-6, "scale off quantizes to semitones: F#4 stays")
+  local rt = context.calls_named("retrigger"); assert_equal(rt[#rt].args[1], 3, "and the note still accents")
+end)
+
 end

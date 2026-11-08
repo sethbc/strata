@@ -50,7 +50,7 @@ jobs:
           - buffers
           - lifecycle,memory,structure,performance
           - loops,freeze,grains
-          - rings,files,voices,effects
+          - rings,files,voices,effects,variation
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes)
