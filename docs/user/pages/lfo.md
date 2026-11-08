@@ -15,6 +15,6 @@ Under the selected LFO's row, one line shows its settings, left to right: destin
 
 LFOs start at 25 % depth, so turning one on is audible straight away. A scene saved with another depth (0 included) recalls its own depth.
 
-The offset shifts the LFO's swing up or down (-50 to 50 % with the "from center" baseline). Turning an LFO on or off keeps its offset, wherever you do it; changing the baseline in PARAMETERS sets it back to 0. Scenes do not store the offset. Phase, baseline, min/max and the reset settings stay in PARAMETERS > LFO 1-3.
+The offset shifts the LFO's swing up or down (-50 to 50 % with the "from center" baseline). Turning an LFO on or off keeps its offset, wherever you do it; changing the baseline in PARAMETERS sets it back to 0. Scenes store the offset and crossfade it in a transition; a scene saved before they did recalls an offset of 0. Phase, baseline, min/max and the reset settings stay in PARAMETERS > LFO 1-3.
 
 What the LFOs modulate is described in [Modulation](../modulation.md).

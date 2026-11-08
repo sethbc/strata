@@ -9,6 +9,7 @@
 - `load_scenes_from_disk` runs `tab.load` through `pcall`. On any failure it keeps the current scenes and moves the file aside, or blocks the autosave (`S.scene_autosave_blocked`), so a bad file is never overwritten.
 - Bounds-check the scene number (1..`NUM_SCENES`) and check the slot is populated before recalling.
 - The registered fields are read at init, never at include time: `S.registry.scene_fields` joins `S.SCENE_GLOBAL_PARAMS` in the scenes load's start step (before the file is read), and the voice params' scene keys (`S.registry.voice_params`) are read at each capture, transition, recall, migration and validation.
+- Each LFO's `lfo_offset_<n>` is set before its `lfo_<n>` (#103). The state switch (at a transition's end, or in an instant recall) re-bangs the library's baseline, which zeroes the offset, and `lib/lfos.lua`'s `lfo_<n>` wrapper puts the recalled offset back. Never drop that wrapper or move the offset after the state without a test.
 - A registered voice param's scene key needs its default in `scene_defaults` (the param's default; a test checks), and a key that must not crossfade needs a whole `{min, max}` in `discrete`. Discrete extras are set at a transition's end, after the voice's source.
 
 ## Owns
@@ -30,8 +31,8 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `
   - every voice parameter (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents);
   - voice active and lock states (stored as `frozen`);
   - pattern data (all 7 voices × 16 steps);
-  - global parameters: master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, destination and state;
-  - format 3 (3.2): each voice's registered params (`data.voices[i].extras[key]`, the keys of every record's `scene_defaults`) and the registered global fields (`S.registry.scene_fields`, stored like the other globals).
+  - global parameters: master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, offset, destination and state;
+  - format 3 (3.2): each voice's registered params (`data.voices[i].extras[key]`, the keys of every record's `scene_defaults`), the registered global fields (`S.registry.scene_fields`, stored like the other globals) and each LFO's offset (`lfo_offset_<n>`, #103).
 - **Sequencer**: automatic scene progression with configurable timing.
 - **Transitions**: instant recall, or a smooth crossfade between scenes.
 
@@ -112,9 +113,9 @@ A failed instant recall keeps the previous scene current (`docs/status.md`, Deci
 
 ### Smooth transitions
 
-- `scene_transition_targets(scene_data)` snapshots `{id, start, target, step}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift).
+- `scene_transition_targets(scene_data)` snapshots `{id, start, target, step}` for every continuous param *once*, before the fade: voice params, grain params, crossmod amp/freq amounts, mod speed, and the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift, and per LFO the free period, depth and offset).
 - 20 steps whatever the transition time. Step k sets `util.linlin(0, 1, start, target, k / 20)`, so the fade is linear over the whole time. Never re-read the current value inside the loop: that makes the fade front-loaded.
-- A number param (`step` 1: the LFO depths `lfo_depth_<n>`, which do not round themselves) is rounded to whole numbers during the fade, so arc and E3 depth steps land on whole percents again. The end applies the scene's exact value.
+- A number param (`step` 1: the LFO depths `lfo_depth_<n>` and offsets `lfo_offset_<n>`, which do not round themselves) is rounded to whole numbers during the fade, so arc and E3 depth and offset steps land on whole percents again. The end applies the scene's exact value.
 - Not interpolated: mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), lock and active states, tempo, filter type and mutation settings, a registered voice param's discrete keys (`discrete`) and a registered field with `discrete = true`. They switch at the end through `recall_scene_instant()`, which also lands every param exactly on its target.
 - The registered voice params that are not discrete crossfade like the built-in ones (`scene_transition_targets`, by key name); a registered field without `discrete` crossfades with the continuous globals.
 - `recall_scene_instant` sets a voice's extras (by key name) after its source, params, grain and crossmod values, so a discrete one such as freeze lands after the source it belongs to.
@@ -188,7 +189,8 @@ In the PARAMS menu (strata_scenes section):
 - **Location**: `~/dust/data/strata/scenes.data`.
 - **Format**: a Lua table serialized with norns' `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 3, since 3.2).
   - Version 1 and 2 files (`{version = 1, ...}` or `{version = 2, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version <n>`. The next save writes version 3.
-  - Version 3 adds each voice's `extras` (the registered voice params) and the registered global fields. With nothing registered, a migrated voice gets an empty `extras`.
+  - Version 3 adds each voice's `extras` (the registered voice params), the registered global fields and the LFO offsets. With nothing registered, a migrated voice gets an empty `extras`.
+  - When to bump `SCENE_DATA_VERSION`: once per release that adds scene fields, never per field. Migration fills whatever is missing whatever the file's version, so a field added within an unreleased format (the LFO offsets joined format 3 before 3.2 shipped) needs only its default; a version 3 file written without them migrates like an older one.
   - Any other version is rejected.
 - **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`.
   - It fills only what is missing, so it runs for every version.
@@ -216,8 +218,9 @@ Always validate scene data before using it, so a corrupted file cannot crash the
 
 ```lua
 -- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*,
---   drift_amount, and per LFO lfo_shape/mode/clocked/free/depth_<n>, strata_lfo<n>_dest, lfo_<n>);
---   an option param's value is an integer from 1 to its option count
+--   drift_amount, and per LFO lfo_shape/mode/clocked/free/depth/offset_<n>, strata_lfo<n>_dest, lfo_<n>);
+--   an option param's value is an integer from 1 to its option count; an entry with a range
+--   ({min, max}: lfo_offset_<n>, -100..100) holds a value inside it
 -- data.voices: NUM_VOICES tables, each with
 --   active (boolean), source (integer 1..#SOURCE_OPTIONS), params (only known keys, numbers),
 --   grain (only GRAIN_PARAM_IDS keys, numbers; env/mode integers 1..option count),

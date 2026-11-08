@@ -593,6 +593,10 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
     setFilter = function(args) return enumerated("filterType", args[3]) end,
     setMasterDrift = none, setReverb = none, setDelay = none,
+    -- effect 0 delay, 1 reverb (the engine ignores others; Lua never sends them)
+    setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
+    -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
+    setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end
@@ -2103,6 +2107,109 @@ end
 -- so a second enter (from a PARAMS file param) replaces the first's.
 ---------------------------------------------------------------------------
 
+-- lib/musicutil.lua's scale data and generate_scale (the scales' chord
+-- tables left out), with note_num_to_freq
+local function make_musicutil()
+  local musicutil = {}
+  musicutil.NOTE_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+  musicutil.SCALES = {
+    {name = "Major", alt_names = {"Ionian"}, intervals = {0, 2, 4, 5, 7, 9, 11, 12}},
+    {name = "Natural Minor", alt_names = {"Minor", "Aeolian"}, intervals = {0, 2, 3, 5, 7, 8, 10, 12}},
+    {name = "Harmonic Minor", intervals = {0, 2, 3, 5, 7, 8, 11, 12}},
+    {name = "Melodic Minor", intervals = {0, 2, 3, 5, 7, 9, 11, 12}},
+    {name = "Dorian", intervals = {0, 2, 3, 5, 7, 9, 10, 12}},
+    {name = "Phrygian", intervals = {0, 1, 3, 5, 7, 8, 10, 12}},
+    {name = "Lydian", intervals = {0, 2, 4, 6, 7, 9, 11, 12}},
+    {name = "Mixolydian", intervals = {0, 2, 4, 5, 7, 9, 10, 12}},
+    {name = "Locrian", intervals = {0, 1, 3, 5, 6, 8, 10, 12}},
+    {name = "Whole Tone", intervals = {0, 2, 4, 6, 8, 10, 12}},
+    {name = "Major Pentatonic", alt_names = {"Gagaku Ryo Sen Pou"}, intervals = {0, 2, 4, 7, 9, 12}},
+    {name = "Minor Pentatonic", alt_names = {"Zokugaku Yo Sen Pou"}, intervals = {0, 3, 5, 7, 10, 12}},
+    {name = "Major Bebop", intervals = {0, 2, 4, 5, 7, 8, 9, 11, 12}},
+    {name = "Altered Scale", intervals = {0, 1, 3, 4, 6, 8, 10, 12}},
+    {name = "Dorian Bebop", intervals = {0, 2, 3, 4, 5, 7, 9, 10, 12}},
+    {name = "Mixolydian Bebop", intervals = {0, 2, 4, 5, 7, 9, 10, 11, 12}},
+    {name = "Blues Scale", alt_names = {"Blues"}, intervals = {0, 3, 5, 6, 7, 10, 12}},
+    {name = "Diminished Whole Half", intervals = {0, 2, 3, 5, 6, 8, 9, 11, 12}},
+    {name = "Diminished Half Whole", intervals = {0, 1, 3, 4, 6, 7, 9, 10, 12}},
+    {name = "Neapolitan Major", intervals = {0, 1, 3, 5, 7, 9, 11, 12}},
+    {name = "Hungarian Major", intervals = {0, 3, 4, 6, 7, 9, 10, 12}},
+    {name = "Harmonic Major", intervals = {0, 2, 4, 5, 7, 8, 11, 12}},
+    {name = "Hungarian Minor", intervals = {0, 2, 3, 6, 7, 8, 11, 12}},
+    {name = "Lydian Minor", intervals = {0, 2, 4, 6, 7, 8, 10, 12}},
+    {name = "Neapolitan Minor", alt_names = {"Byzantine"}, intervals = {0, 1, 3, 5, 7, 8, 11, 12}},
+    {name = "Major Locrian", intervals = {0, 2, 4, 5, 6, 8, 10, 12}},
+    {name = "Leading Whole Tone", intervals = {0, 2, 4, 6, 8, 10, 11, 12}},
+    {name = "Six Tone Symmetrical", intervals = {0, 1, 4, 5, 8, 9, 11, 12}},
+    {name = "Balinese", intervals = {0, 1, 3, 7, 8, 12}},
+    {name = "Persian", intervals = {0, 1, 4, 5, 6, 8, 11, 12}},
+    {name = "East Indian Purvi", intervals = {0, 1, 4, 6, 7, 8, 11, 12}},
+    {name = "Oriental", intervals = {0, 1, 4, 5, 6, 9, 10, 12}},
+    {name = "Double Harmonic", intervals = {0, 1, 4, 5, 7, 8, 11, 12}},
+    {name = "Enigmatic", intervals = {0, 1, 4, 6, 8, 10, 11, 12}},
+    {name = "Overtone", intervals = {0, 2, 4, 6, 7, 9, 10, 12}},
+    {name = "Eight Tone Spanish", intervals = {0, 1, 3, 4, 5, 6, 8, 10, 12}},
+    {name = "Prometheus", intervals = {0, 2, 4, 6, 9, 10, 12}},
+    {name = "Gagaku Rittsu Sen Pou", intervals = {0, 2, 5, 7, 9, 10, 12}},
+    {name = "In Sen Pou", intervals = {0, 1, 5, 2, 8, 12}},
+    {name = "Okinawa", intervals = {0, 4, 5, 7, 11, 12}},
+    {name = "Chromatic", intervals = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}},
+  }
+  -- same formula as lib/musicutil.lua
+  function musicutil.note_num_to_freq(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end
+  -- lib/musicutil.lua's lookup_data: an index, or a name or alt name (any case)
+  local function lookup_data(lookup_table, search)
+    if type(search) == "string" then
+      search = string.lower(search)
+      for i = 1, #lookup_table do
+        if string.lower(lookup_table[i].name) == search then
+          search = i
+          break
+        elseif lookup_table[i].alt_names then
+          local found = false
+          for j = 1, #lookup_table[i].alt_names do
+            if string.lower(lookup_table[i].alt_names[j]) == search then
+              search = i
+              found = true
+              break
+            end
+          end
+          if found then break end
+        end
+      end
+    end
+    return lookup_table[search]
+  end
+  local function generate_scale_array(root_num, scale_data, length)
+    local out_array = {}
+    local scale_len = #scale_data.intervals
+    local note_num
+    local i = 0
+    while #out_array < length do
+      if i > 0 and i % scale_len == 0 then
+        root_num = root_num + scale_data.intervals[scale_len]
+      else
+        note_num = root_num + scale_data.intervals[i % scale_len + 1]
+        if note_num > 127 then break
+        else table.insert(out_array, note_num) end
+      end
+      i = i + 1
+    end
+    return out_array
+  end
+  -- MIDI notes of a scale from root_num, octaves octaves long (lib/musicutil.lua)
+  function musicutil.generate_scale(root_num, scale_type, octaves)
+    if type(root_num) ~= "number" or root_num < 0 or root_num > 127 then return nil end
+    scale_type = scale_type or 1
+    octaves = octaves or 1
+    local scale_data = lookup_data(musicutil.SCALES, scale_type)
+    if not scale_data then return nil end
+    local length = octaves * #scale_data.intervals - (math.floor(octaves + 0.5) - 1)  -- util.round(octaves)
+    return generate_scale_array(root_num, scale_data, length)
+  end
+  return musicutil
+end
+
 local function make_fileselect()
   local fileselect = { last = nil, redraws = 0 }
   local entered = false  -- tests reset `last`; the real module keeps its list
@@ -2254,10 +2361,7 @@ function stubs.install(options)
   context.lfo.library = require("stub_lfo")(context.lfo)
   context.fileselect = make_fileselect()
   context.polls = make_poll(options.engine_polls)
-  context.musicutil = {
-    -- same formula as lib/musicutil.lua
-    note_num_to_freq = function(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end,
-  }
+  context.musicutil = make_musicutil()
   -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
   -- in play mode _menu.key and norns.encoders.callback route the hardware
   -- keys and encoders to the script (set_mode(false) copies them from the

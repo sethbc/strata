@@ -18,7 +18,7 @@ return function(S)
     play_level = 15,          -- playing in the shown half
     blink_levels = {12, 3},   -- playing in the other half: odd / even beats
     steps_per_beat = 4,       -- a step is a sixteenth note: the blink follows quarter notes
-    stopped_level = 4,
+    stopped_levels = {4, 8},  -- stopped: steps 1-8 shown dim, steps 9-16 brighter
   }
   M.LAYOUT = LAYOUT_64
 
@@ -81,11 +81,14 @@ return function(S)
     end
   end
 
-  -- Column 1 of row 8: stopped dim; the sounding step in the shown half
-  -- bright; in the other half, a blink that alternates with the beat (every
-  -- four steps). Playing with no step sounded yet counts as step 1
+  -- Column 1 of row 8: stopped, the shown half's level (4 for steps 1-8, 8
+  -- for 9-16); the sounding step in the shown half bright; in the other
+  -- half, a blink that alternates with the beat (every four steps). Playing
+  -- with no step sounded yet counts as step 1
   local function play_level(port, cols)
-    if not S.pattern_playing then return LAYOUT_64.stopped_level end
+    if not S.pattern_playing then
+      return LAYOUT_64.stopped_levels[M.shown_half(port)] or LAYOUT_64.stopped_levels[1]
+    end
     local sounding = S.lib.sequencer.sounding_step() or 1
     local playing_half = math.ceil(sounding / visible_steps(cols))
     if playing_half == M.shown_half(port) then return LAYOUT_64.play_level end

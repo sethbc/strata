@@ -37,8 +37,11 @@ return function(S)
     return cursor
   end
 
-  -- The nearest selectable row at or before cursor, else the first one
+  -- The nearest selectable row at or before cursor, else the first one (also
+  -- for a cursor that is nil, not a number or NaN: a page's cursor before
+  -- its first draw)
   function M.clamp(rows, cursor)
+    if type(cursor) ~= "number" or cursor ~= cursor then return first_selectable(rows) end
     local index = math.min(math.floor(cursor), #rows)
     while index >= 1 do
       if selectable(rows, index) then return index end
@@ -67,11 +70,15 @@ return function(S)
 
   -- A 1 px vertical line at x 127 between top and bottom: its top at top
   -- when first == 1, its bottom at bottom when the last row shows. Nothing
-  -- when every row fits.
+  -- when every row fits (or the track has no length). It never leaves
+  -- top..bottom and is always at least 1 px shorter than the track, so even
+  -- a list one row longer than the view moves it between its two views.
   function M.draw_marker(first, visible, count, top, bottom)
     if count <= visible then return end
     local track = bottom - top
+    if track < 1 then return end
     local length = math.max(MARKER_MIN_LENGTH, math.floor(track * visible / count + 0.5))
+    length = math.max(math.min(length, track - 1), 1)
     local travel = track - length
     local fraction = math.min(math.max((first - 1) / (count - visible), 0), 1)
     local y = top + math.floor(travel * fraction + 0.5)

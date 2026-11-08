@@ -33,11 +33,12 @@ return function(S)
   -- default mix is 0; 1 would be fully wet).
   S.fx_last_mix = {filter = 1, delay = 0.3, reverb = 0.3}
 
-  -- The filter and delay params are faders on the 256 grid's FX page. A scene
+  -- The filter and delay params are faders on the 256 grid's FX page: redraw
+  -- only while a grid shows it (no other layout shows them). A scene
   -- transition sets them on every step and redraws the grid once per step
   -- itself.
   local function fx_fader_changed()
-    if S.lib.grid_core.any_page(4) and not S.scene_transition_active then grid_redraw() end
+    if S.lib.grid_core.any_fx_faders() and not S.scene_transition_active then grid_redraw() end
   end
 
   -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
@@ -458,6 +459,10 @@ return function(S)
     }
   end)
 
+  -- The global scale and root grains and quantized voices snap to
+  -- (lib/variation.lua), before the voices
+  register_params("scale", function() S.lib.variation.add_scale_params() end)
+
   register_params("voices", function()
     -- Add params for each voice
     for i = 1, NUM_VOICES do
@@ -557,12 +562,39 @@ return function(S)
     extra_keys[record.name][key] = true
   end
 
-  -- Each record's add for voice voice_idx, counted, then a check that every
-  -- key it names (grain keys, scene keys, rows) is one of its params
-  local function add_registered_voice_params(voice_idx)
+  -- Per record name: how many params its add_first added for the voice
+  -- being added (counted with its add's)
+  local first_added = {}
+
+  -- Each record's add_first for voice voice_idx, ahead of the voice's
+  -- built-in params: norns reads a PSET line by line in param order, so a
+  -- param a built-in param's filter reads (variation's quantize, read by the
+  -- freq filter) must come first, or the filter would apply the current
+  -- value, not the PSET's, to the built-in param (#125)
+  local function add_first_voice_params(voice_idx)
     for _, record in ipairs(S.registry.voice_params) do
       extra_keys[record.name] = {}
-      add_counted("voice params", record, voice_idx)
+      first_added[record.name] = 0
+      if record.add_first then
+        local before = #params.params
+        record.add_first(voice_idx)
+        first_added[record.name] = #params.params - before
+      end
+    end
+  end
+
+  -- Each record's add for voice voice_idx, counted with its add_first's,
+  -- then a check that every key it names (grain keys, scene keys, rows) is
+  -- one of its params
+  local function add_registered_voice_params(voice_idx)
+    for _, record in ipairs(S.registry.voice_params) do
+      local before = #params.params
+      record.add(voice_idx)
+      local added = first_added[record.name] + #params.params - before
+      if added ~= record.count then
+        error(string.format("voice params %s: add%s added %d params, but its count is %d", record.name,
+          record.add_first and " and add_first" or "", added, record.count), 0)
+      end
       for _, keys in ipairs({record.grain_keys or {}, record.scene_defaults or {}}) do
         for key in pairs(keys) do
           if not extra_keys[record.name][key] then
@@ -588,6 +620,10 @@ return function(S)
     local function add_sender(param_id, send) add_voice_sender(voice_idx, param_id, send) end
 
     params:add_separator("voice " .. voice_idx .. ": " .. v.name)
+
+    -- The registered params a PSET must read before the built-in ones
+    -- (each record's add_first), then the synthesis params
+    add_first_voice_params(voice_idx)
 
     -- Voice params (in param_order so the menu order is stable)
     for _, key in ipairs(v.param_order) do
