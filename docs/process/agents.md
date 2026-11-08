@@ -13,7 +13,7 @@ How a session runs a release's work packages (or a batch of fixes) through agent
 - The ledger (the record of dispatches, rulings and progress) is `.superpowers/sdd/<plan>/progress.md` in the main checkout, untracked (`.superpowers/` is in `.git/info/exclude`). The plan's folder also holds the briefs (`task-<N>-brief.md`), the common instructions and the review diffs.
 - Never inside a worktree: a worktree is removed when its work is done, and the ledger with it.
 - When resuming, read the ledger's tail first.
-- Record each ruling with its reason and what it costs if wrong, as `docs/status.md` records decisions.
+- Record each ruling with its reason and what it costs if wrong, as `docs/decisions.md` records decisions.
 
 ## Briefs
 

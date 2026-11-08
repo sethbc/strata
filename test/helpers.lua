@@ -248,7 +248,7 @@ end
 -- has, and the repo paths they name must exist. CHANGELOG.md and docs/design/ are history: they describe a release
 -- as it was, so they are not held to today's commands and files
 local function maintained_docs()
-  local docs = { "CLAUDE.md", "README.md", "docs/status.md" }
+  local docs = { "CLAUDE.md", "README.md", "docs/status.md", "docs/decisions.md" }
   local prefix = repo_root .. "/"
   local found = {}
   for _, dir in ipairs({ "docs/notes", "docs/user", "docs/process" }) do
