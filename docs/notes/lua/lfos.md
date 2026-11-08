@@ -5,7 +5,7 @@
 - The library owns every `lfo_*` param id and sizes its own group. Never pass a separator to `add_params` or wrap its params in a Strata group (norns groups cannot nest).
 - Every resolved destination is a control param, and every destination label fits the LFO page's right column (49 px).
 - `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them.
-- The offset survives on/off (#103): the library's `lfo_<n>` action re-bangs `lfo_baseline_<n>`, whose `change_offset` sets `lfo_offset_<n>` to 0, so the `lfo_<n>` wrapper's `before` saves the offset and its `after` sets it back when it changed (`params:set`, so the library's offset follows; the number param clamps it to the baseline's range). A baseline change itself still zeroes the offset, as the library intends. This covers every way the state is set: the LFO page, PARAMS, scene recalls, cleanup.
+- The offset survives on/off (#103): the library's `lfo_<n>` action re-bangs `lfo_baseline_<n>`, whose `change_offset` sets `lfo_offset_<n>` to 0, so the `lfo_<n>` wrapper's `before` saves the offset and its `after` sets it back when it changed (`params:set`, so the library's offset follows; the number param clamps it to the baseline's range). A baseline change itself still zeroes the offset, as the library intends. This covers every way the state is set: the LFO page, PARAMS, scene recalls, cleanup. Scenes rely on it: they set the recalled `lfo_offset_<n>` before `lfo_<n>`, so without the wrapper the state switch at a transition's end would zero it.
 - Destination indices are stored in PSETs and scenes (`strata_lfo<n>_dest`), so the 68 built-in destinations never move. Registered destinations (`S.registry.lfo_destinations`) go after all of them, by registration and then voice 1-7, so a later registration only appends. The list is built at init (`add_lfo_params`), never at include time.
 - `LFO_PPQN` (48) and the send dedupe bound the message rate. The ceiling is the library's 10 Hz: anything faster belongs in the engine.
 
@@ -14,7 +14,7 @@
 `lib/lfos.lua` (`S.lib.lfos`):
 - `S.lfos`, `S.selected_lfo`, `S.lfo_last_raw`, `S.LFO_DESTINATIONS`;
 - `lfo_destination_id`, `restore_lfo_destination`, `apply_lfo`, the phase estimate (`lfo_phase_estimate`), `wrap_param_action`, `add_lfo_params`;
-- `LFO_DEFAULT_PERIOD` as `S.lib.lfos.LFO_DEFAULT_PERIOD`, for the scene defaults;
+- `LFO_DEFAULT_PERIOD` as `S.lib.lfos.LFO_DEFAULT_PERIOD`, for the scene defaults, and `LFO_OFFSET_RANGE` (`{-100, 100}`, the library's offset range for every baseline) as `S.lib.lfos.LFO_OFFSET_RANGE`, for scene validation;
 - cleanup step 120: the LFOs stopped, their destinations restored.
 
 Elsewhere:
@@ -105,8 +105,9 @@ The library's running phase is internal (`get("phase")` is the phase offset sett
 
 ## Scenes
 
-- `SCENE_GLOBAL_PARAMS` holds per LFO `lfo_shape_<n>`, `lfo_mode_<n>`, `lfo_clocked_<n>` (default 13, the library's index for a period of 4), `lfo_free_<n>` and `lfo_depth_<n>` (continuous), `strata_lfo<n>_dest`, then `lfo_<n>` last, so an LFO starts with its settings in place.
-- Scenes without them migrate to the defaults (LFOs off).
+- `SCENE_GLOBAL_PARAMS` holds per LFO `lfo_shape_<n>`, `lfo_mode_<n>`, `lfo_clocked_<n>` (default 13, the library's index for a period of 4), `lfo_free_<n>`, `lfo_depth_<n>` and `lfo_offset_<n>` (continuous), `strata_lfo<n>_dest`, then `lfo_<n>` last, so an LFO starts with its settings in place.
+- The offset (#103, format 3) crossfades in whole percents like the depth. Its entry's `range` (`LFO_OFFSET_RANGE`) is what `validate_scene` accepts; a recalled offset outside the current baseline's range (a scene saved with another baseline) is clamped by the param. Its state switch at the end keeps it (see Must not break).
+- Scenes without them migrate to the defaults (LFOs off, offsets 0).
 
 ## Cleanup
 
