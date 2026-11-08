@@ -343,15 +343,26 @@ return function(S)
   -- A source change moves a buffer or input voice's reference to the root
   S.register_source_change(function(voice_idx) M.send_scale_note(voice_idx) end)
 
+  -- Every quantized voice's stored freq onto the scale (a scale or root
+  -- change), so the freq a PSET or scene captures is a tone of it; never
+  -- during a scene recall or transition, whose values stand as saved
+  local function snap_quantized_freqs()
+    if S.scene_recall_in_progress or S.scene_transition_active then return end
+    for voice_idx = 1, NUM_VOICES do
+      if M.quantizes(voice_idx) then snap_freq(voice_idx) end
+    end
+  end
+
   -- The global scale and root (PARAMS, before the voices, so a PSET sets
-  -- the scale before any quantized freq): their actions send setScale; a
-  -- scale change also resends every chord, a root change every running
-  -- voice's scaleNote
+  -- the scale before any quantized freq): their actions send setScale and
+  -- snap every quantized freq to the new scale; a scale change also resends
+  -- every chord, a root change every running voice's scaleNote
   function M.add_scale_params()
     params:add_separator("strata_scale", "scale")
     params:add{type = "option", id = "scale", name = "scale", options = M.scale_options(), default = 1,
       action = function()
         M.send_scale()
+        snap_quantized_freqs()
         for voice_idx = 1, NUM_VOICES do
           if S.voices[voice_idx].extras.intervals == V.set_index.chord then M.send_intervals(voice_idx) end
         end
@@ -359,6 +370,7 @@ return function(S)
     params:add{type = "option", id = "root", name = "root", options = musicutil.NOTE_NAMES, default = 1,
       action = function()
         M.send_scale()
+        snap_quantized_freqs()
         for voice_idx = 1, NUM_VOICES do M.send_scale_note(voice_idx) end
       end}
   end

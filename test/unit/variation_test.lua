@@ -535,4 +535,38 @@ test("a PSET whose quantize differs from the current value loads the voice's exa
   assert_near(last_grain(context, 0, "scaleNote"), 73, 1e-9, "scaleNote follows the saved pitch")
 end)
 
+
+-- A scale or root change moves a quantized voice's stored freq onto the
+-- new scale, so a PSET saved after it holds a tone and loads exactly
+test("a scale or root change re-snaps a quantized freq, and a PSET saved after it loads exactly", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1); params:set("v2_quantize", 0)
+  params:set("v1_freq", freq_of(64)); params:set("v2_freq", freq_of(64))       -- E4
+  params:set("scale", option_index("scale", "Natural Minor"))
+  assert_near(params:get("v1_freq"), freq_of(63), 1e-9, "E4 snaps to Eb4 in C minor (a tie goes down)")
+  assert_near(S.voices[1].params.freq, freq_of(63), 1e-9, "stored snapped")
+  assert_near(params:get("v2_freq"), freq_of(64), 1e-9, "a voice without quantize keeps E4")
+  local pset_path = context.data_dir .. "strata-03.pset"
+  params:write(pset_path)
+  params:set("v1_freq", freq_of(67))                                            -- G4
+  params:read(pset_path)
+  assert_near(params:get("v1_freq"), freq_of(63), 1e-9, "the PSET loads its saved Eb4")
+  -- a root change too: C minor to D minor moves Eb4 to D4 (a tie goes down)
+  params:set("root", 3)
+  assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "Eb4 snaps to D4 in D minor")
+  -- a scene recall's and a transition's values stand as saved (D4 is in
+  -- neither C# minor nor C# major)
+  S.scene_recall_in_progress = true
+  params:set("root", 2)
+  S.scene_recall_in_progress = false
+  assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "no re-snap during a scene recall")
+  S.scene_transition_active = true
+  params:set("scale", option_index("scale", "Major"))
+  S.scene_transition_active = false
+  assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "nor during a scene transition")
+end)
+
 end

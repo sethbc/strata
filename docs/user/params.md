@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-Everything is in the PARAMETERS menu. The menu shows the master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **buffers** and **midi** groups, then one section per voice. Grouped by topic:
+Everything is in the PARAMETERS menu. The menu shows the master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **buffers** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 ## Master
 - Master density
@@ -58,8 +58,12 @@ Scenes capture the FX settings too; smooth transitions crossfade every FX value 
 
 Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade. LFO depths and free periods crossfade too; the other LFO settings switch at the end.
 
+## Scale
+- Scale (off, or any of norns' scales; default off) and root (C-B, default C), shared by every voice that quantizes ([voices and grains](voices-and-grains.md#scales))
+
 ## Per-Voice Sections
 Each voice includes:
+- Quantize (off/on, default off), first, right after the voice's heading and above its freq, so a PSET sets it before the freq
 - Synthesis parameters (varies by voice type)
 - Source (synth, buf 1-8, input; default synth)
 - Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0)
