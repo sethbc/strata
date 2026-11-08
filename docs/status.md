@@ -13,7 +13,8 @@ Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
   - the rules apply to admins too;
-  - force pushes and deleting `main` are blocked.
+  - force pushes and deleting `main` are blocked;
+  - history must be linear: pull requests merge by rebase (or squash), never with a merge commit, and branches are updated by rebasing on `main`.
 - **CI pins:** norns commit `227aa044` (the engine is compiled against its `sc/core`), SuperCollider `1:3.13.0+repack-1ubuntu3` (Ubuntu 24.04's package; norns ships 3.13.0) and `actions/checkout` by commit. The workflow's comments say how to move each pin.
 - **Docs layout:**
   - CLAUDE.md is an index: the rules every change needs, the engine command table, how to run the checks, the "Working in parallel" rules, and a table mapping each module to its notes file and its unit tests. Keep it short: put module details in that module's notes file.
