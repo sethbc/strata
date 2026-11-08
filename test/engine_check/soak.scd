@@ -6,9 +6,11 @@
 // adds up as hours of play would: sclang 3.13, norns' version, can fail in
 // its garbage collector under heavy allocation (#131;
 // docs/notes/engine/files.md). Each round loads a long file into the next
-// slot, saves the slot, checks the saved file in every frame and clears the
-// slot.
+// slot, saves the slot, checks that the saved file equals the source in
+// every frame and clears the slot.
 //   STRATA_SOAK_ROUNDS: the rounds (40 by default)
+//   STRATA_SOAK_CHECK: frames (the default) or length (only the saved
+//   file's length: the engine's own allocation, without the check's reads)
 //   STRATA_SOAK_SECONDS: the file and slot length, one of the high tier's
 //   lengths (60 by default; 120 or 300, which allocates 8 x 2 x 300 s of
 //   server buffers, about 920 MB at 48 kHz)
@@ -24,6 +26,10 @@ var root = scratchRoot +/+ "soak", rate = server.sampleRate.asInteger;
 var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
 var ramp = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 }, period;
 var sourcePath = root +/+ "ramp.wav", file, other, frames, failed = List.new, start, times = List.new;
+var checkFrames = ("STRATA_SOAK_CHECK".getenv ? "frames") != "length";
+// A saved file against the source in every sample (h.sameFrames: the int16
+// samples come back exactly): [the largest difference, the frames compared]
+var sameAsSource = { arg savedFile; h.sameFrames(savedFile, sourcePath) };
 // bufferSaveResult reports so far as [slot index, failed]: value =
 // (save * 2 + failed) * numBuffers + slot index
 var saveReports = {
@@ -67,11 +73,14 @@ rounds.do({ arg round;
     saved = waitFor.({ saveReports.value.size > reports }, 120)
         and: { saveReports.value.copyToEnd(reports) == [[slot, false]] };
     savedFile = if (saved) { SoundFile.openRead(savePath) };
-    deviation = if (savedFile.notNil) { h.rampDeviation(savedFile, period) } { [1, 0] };
+    deviation = case
+        { savedFile.isNil } { [1, 0] }
+        { checkFrames.not } { [0, savedFile.numFrames] }
+        { sameAsSource.(savedFile) };
     savedFile !? { savedFile.close };
     h.commandTo(other, \clearBuffer, slot); server.sync;
     times.add(Main.elapsedTime - roundStart);
-    if (loaded.not or: { saved.not } or: { deviation[0] >= 0.001 } or: { deviation[1] != frames }) {
+    if (loaded.not or: { saved.not } or: { deviation[0] != 0 } or: { deviation[1] != frames }) {
         failed.add(round);
         ("soak: round % failed (loaded %, saved %, largest error %, % of % frames)".format(
             round + 1, loaded, saved, deviation[0], deviation[1], frames)).postln;

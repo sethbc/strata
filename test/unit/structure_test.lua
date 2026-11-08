@@ -964,7 +964,7 @@ test("every engine readData reads into a fresh array (#131)", function()
 end)
 
 -- A per-sample sclang loop (a function called per sample or frame) piles
--- up work for sclang 3.13's garbage collector until it fails (#131): the
+-- up work for sclang's garbage collector until it fails (#131): the
 -- engine's sample paths use C primitives only. The body of method `name`
 -- in SC source (comments stripped), without its braces and its own
 -- argument list, or nil

@@ -225,21 +225,24 @@ var writeConstantFrames = { arg file, frames, values;
     };
 };
 
-// An open stereo file checked in every frame against a periodic signal:
-// left `period` (an Array of one period's values, as periodic takes),
-// right its negative. Read 65536 frames at a time, each into a fresh array,
-// and compared with Signal arithmetic (copySeries, -, peak: C primitives).
-// Returns [the largest difference, the frames read].
-var rampDeviation = { arg file, period;
-    var deviation = 0, frame = 0, chunk, count, expected;
-    while { chunk = Signal.newClear(65536 * 2); file.readData(chunk); chunk.size > 1 } {
-        count = chunk.size div: 2;
-        expected = periodic.(period, frame, count);
-        deviation = deviation.max((chunk.copySeries(0, 2, (count * 2) - 2) - expected).peak)
-            .max((chunk.copySeries(1, 3, (count * 2) - 1) + expected).peak);
-        frame = frame + count;
-    };
-    [deviation, frame]
+// An open sound file compared in every sample with the file at `path`
+// (a saved int16 file against the int16 source it was loaded from: the
+// samples come back exactly). Both are read 65536 frames at a time, each
+// chunk into a fresh Signal, and compared with Signal arithmetic (-, peak:
+// C primitives, no Array of slots for the collector to scan). Returns [the
+// largest difference (1 where the chunks differ in size), the frames compared].
+var sameFrames = { arg file, path;
+    var other = SoundFile.openRead(path), deviation = 0, frames = 0, ours, theirs;
+    if (other.isNil) { [1, 0] } {
+        while { ours = Signal.newClear(65536 * file.numChannels); file.readData(ours); ours.size > 0 } {
+            theirs = Signal.newClear(65536 * other.numChannels);
+            other.readData(theirs);
+            deviation = deviation.max(if (theirs.size == ours.size) { (ours - theirs).peak } { 1 });
+            frames = frames + (ours.size div: file.numChannels);
+        };
+        other.close;
+        [deviation, frames]
+    }
 };
 
 // Write a test sound file of constant per-channel values
@@ -524,7 +527,7 @@ server.waitForBoot({
             rampSignal: { arg self, size; rampSignal.(size) },
             periodic: { arg self, period, startFrame, frames; periodic.(period, startFrame, frames) },
             noise: { arg self, size, level; noise.(size, level) },
-            rampDeviation: { arg self, file, period; rampDeviation.(file, period) },
+            sameFrames: { arg self, file, path; sameFrames.(file, path) },
             writeConstantFrames: { arg self, file, frames, values; writeConstantFrames.(file, frames, values) },
             bufferSample: { arg self, buffer, frame; bufferSample.(buffer, frame) },
             getControl: { arg self, synth, control; getControl.(synth, control) },

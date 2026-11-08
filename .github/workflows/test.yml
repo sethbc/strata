@@ -39,10 +39,7 @@ jobs:
   # slowest shard instead of the sum of every area. The
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
-  # (test/unit/docs_test.lua checks it), except the on-demand soak, which CI
-  # never runs. Rebalance when an area grows. freeze and memory, the two
-  # heaviest high-tier areas, stay in different shards: on sclang 3.13 each
-  # shard's allocation adds up in one sclang (#131).
+  # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
   # Area times on 3.14.1 (s): buffers 95, lifecycle 61, variation 46, loops 45,
   # freeze 31, effects 30, rings 30, memory 21, grains 20, files 20, voices 15,
   # structure 2, performance 1: buffers alone, then about 106-108 s a shard.
@@ -55,8 +52,8 @@ jobs:
         areas:
           - buffers
           - lifecycle,loops,structure
-          - variation,freeze,rings
-          - effects,memory,grains,files,voices,performance
+          - variation,effects,rings,performance
+          - freeze,memory,grains,files,voices
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes)

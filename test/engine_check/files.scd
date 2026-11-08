@@ -17,7 +17,6 @@ var bufferSample = { arg buffer, frame; h.bufferSample(buffer, frame) };
 var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, longPath = h.longPath, textPath = h.textPath;
 var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, rampPeriod, reports;
-var rampDeviation = { arg file, period; h.rampDeviation(file, period) };
 
 // bufferSaveResult reports received so far, each decoded as [slot index,
 // the slot's save number, failed]: value = (save * 2 + failed) * numBuffers + slot index
@@ -223,11 +222,11 @@ var checkLongSave = {
         "files: a message sent while a long save interleaves is handled before it ends (.part seen %, heard during it %)".format(
             partSeen, heard));
     file = SoundFile.openRead(savePath);
-    // every frame, read in chunks (never one 23 MB array)
-    data = if (file.notNil) { rampDeviation.(file, period) } { [1, 0] };
+    // every frame equals the source's, read in chunks (never one 23 MB array)
+    data = if (file.notNil) { h.sameFrames(file, sourcePath) } { [1, 0] };
     file !? { file.close };
     check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames } and: { file.sampleFormat == "int16" }
-        and: { file.sampleRate == rate } and: { data[0] < 0.001 } and: { data[1] == frames },
+        and: { file.sampleRate == rate } and: { data[0] == 0 } and: { data[1] == frames },
         "files: a 60 s save writes 60 s of stereo 16-bit, every frame in place (% frames in % s; largest error %)".format(
             file !? _.numFrames, seconds.round(0.01), data[0]));
     h.freeEngine(other);
@@ -412,10 +411,10 @@ check.(waitFor.({ saveReportsAfter.(reports).notEmpty }) and: { saveReportsAfter
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames }, "the 16 s file holds every frame");
 if (file.notNil) {
-    data = rampDeviation.(file, rampPeriod);
+    data = h.sameFrames(file, longWritePath);
     file.close;
-    check.((data[0] < 0.001) and: { data[1] == frames },
-        "the 16 s file interleaves every frame in place (chunk boundaries included; largest error %, % frames)".format(
+    check.((data[0] == 0) and: { data[1] == frames },
+        "the 16 s file interleaves every frame in place, equal to the loaded file (chunk boundaries included; largest error %, % frames)".format(
             data[0], data[1]));
 };
 File.delete(longWritePath);
