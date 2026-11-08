@@ -758,6 +758,34 @@ test("the runner's area order names every area file", function()
   end
 end)
 
+-- CI runs the engine check in parallel shards (.github/workflows/test.yml):
+-- every area in exactly one, so none is skipped or run twice
+test("CI's engine shards run every engine check area exactly once", function()
+  local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
+  local block = workflow:match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  assert_true(block ~= nil, "the engine-shard matrix lists its areas")
+  local seen, shards = {}, 0
+  for shard in block:gmatch("%-%s*([%w,]+)") do
+    shards = shards + 1
+    for name in shard:gmatch("[^,]+") do
+      assert_true(seen[name] == nil, name .. " is in two shards")
+      seen[name] = shards
+    end
+  end
+  assert_true(shards >= 2, "the check is sharded (" .. shards .. " shards)")
+  -- the areas with a file (areaOrder may name one not written yet; the
+  -- runner refuses a name with no file, so a shard may not list it)
+  local files = {}
+  for _, name in ipairs(names_in("test/engine_check", "scd")) do
+    files[name] = true
+    assert_true(seen[name], name .. " (test/engine_check/" .. name .. ".scd) is in a shard")
+  end
+  for name in pairs(seen) do assert_true(files[name], "shard area " .. name .. " has an area file") end
+  -- the required check is still one job named engine, which needs every shard
+  assert_true(workflow:find("\n  engine:\n    name: engine\n    needs: engine%-shard\n    if: always%(%)") ~= nil,
+    "an engine job gathers the shards")
+end)
+
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
   local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
   local setting = workflow:match("\n%s*cancel%-in%-progress:%s*([^\n]-)%s*\n")
