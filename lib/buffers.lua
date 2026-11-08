@@ -1,7 +1,7 @@
 -- lib/buffers.lua
 -- The sample buffers: what each slot holds (S.buffers), recording, loading,
--- clearing and saving them, the engine's bufferState and bufferLoadFailed
--- polls (S.buffer_polls; init starts them), and the buffer paths kept in
+-- clearing and saving them, the engine's bufferState, bufferLoadFailed and
+-- bufferSaveResult polls (S.buffer_polls; init starts them), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
 -- valid_buffer_slot (for lib/grid/layout_256.lua) and buffer_state_changed
 -- (the bufferState poll's handler, which init sets) are fields of this
@@ -34,16 +34,20 @@ return function(S)
   -- engine counts them too and names one in its bufferLoadFailed report);
   -- pending_loads holds the newest of them, oldest first, each with the state
   -- it replaced, so a failed load can be undone (buffer_load_failed).
+  -- saves_sent counts the slot's saveBuffer commands (the engine counts them
+  -- too and names one in its bufferSaveResult report); pending_saves holds
+  -- the newest of them, oldest first, each with its path, until the engine
+  -- reports how it ended (buffer_save_result).
   S.buffers = {}
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
-      loads_sent = 0, pending_loads = {}}
+      loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}}
   end
   -- per slot: clock that ends the recording state, then the finishing fallback
   S.buffer_record_clocks = {}
-  -- the engine's bufferState and bufferLoadFailed polls (nil if missing)
-  S.buffer_polls = {state = nil, load_failed = nil}
+  -- the engine's bufferState, bufferLoadFailed and bufferSaveResult polls (nil if missing)
+  S.buffer_polls = {state = nil, load_failed = nil, save_result = nil}
   -- confirm_seconds: a report of 0 s settles a take or load only this long
   -- after the change (the periodic poll can carry a value read before the
   -- engine finished: the recording timer ends just before the engine's take
@@ -52,7 +56,10 @@ return function(S)
   -- last known seconds. tracked_loads: a slot's newest loads a bufferLoadFailed
   -- report can still undo (a report arrives within a fade wait and a read, so
   -- more than one is only ever pending for loads sent back to back).
-  local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4}
+  -- tracked_saves: a slot's newest saves whose bufferSaveResult report is
+  -- still awaited (a 16 s save ends in a fraction of a second, so more than
+  -- one is only ever awaited for saves sent back to back).
+  local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4}
   S.buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
   local buffer_audio_dir = _path.audio .. "strata/"
   local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
@@ -265,18 +272,66 @@ return function(S)
     return buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. ".wav"
   end
 
+  -- Send a save of the slot; true when it was sent. The engine reports how
+  -- it ended (bufferSaveResult, buffer_save_result), so nothing here says it
+  -- saved: the file is written a moment later, or not at all (a full disk).
   function save_buffer(slot)
-    if not valid_buffer_slot(slot) then return end
+    if not valid_buffer_slot(slot) then return false end
+    local buffer = S.buffers[slot]
     -- seconds comes from the engine's poll: a load is loaded optimistically
     -- until the poll settles it, and a recording reads 0 s until it completes
-    if S.buffers[slot].seconds <= 0 then
+    if buffer.seconds <= 0 then
       print("buffer " .. slot .. " is empty, nothing to save")
-      return
+      return false
     end
     util.make_dir(buffer_audio_dir)
     local path = buffer_save_path(slot)
+    buffer.saves_sent = buffer.saves_sent + 1
+    if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
+    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path})
     engine.saveBuffer(slot - 1, path)
-    print("buffer " .. slot .. " saved to " .. path)
+    print("buffer " .. slot .. " saving to " .. path)
+    return true
+  end
+
+  -- bufferSaveResult poll: how one of the slot's saves ended. value = (save
+  -- number * 2 + failed) * NUM_BUFFERS + slot index; the engine and
+  -- save_buffer count a slot's saves alike, from 1. failed is 1 when the
+  -- engine wrote nothing (the slot was empty by then, the folder could not be
+  -- made, the disk filled: a file already at the path stays), 0 when the
+  -- file is in place. A save abandoned for a newer write to the same path is
+  -- never reported; the newer one is. The console names the file either way;
+  -- the BUFFER page flashes the result only for the slot's newest save, so a
+  -- late report never corrects a newer save (still writing, or reported
+  -- already). A repeated report, or one for a save no longer tracked, finds
+  -- nothing. Loads, clears and recordings leave the tracked saves alone: a
+  -- report is about the file written, not what the slot holds now.
+  function buffer_save_result(value)
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
+      or value ~= math.floor(value) then return end
+    local slot = math.floor(value % NUM_BUFFERS) + 1
+    local save_and_failed = math.floor(value / NUM_BUFFERS)
+    local failed = save_and_failed % 2 == 1
+    local save_number = math.floor(save_and_failed / 2)
+    if not valid_buffer_slot(slot) then return end
+    local buffer = S.buffers[slot]
+    local found = nil
+    for index, save in ipairs(buffer.pending_saves) do
+      if save.number == save_number then
+        found = index
+        break
+      end
+    end
+    if not found then return end
+    local save = table.remove(buffer.pending_saves, found)
+    if failed then
+      print("buffer " .. slot .. ": cannot save " .. save.path .. " (the engine wrote nothing; a file already there is kept)")
+    else
+      print("buffer " .. slot .. " saved to " .. save.path)
+    end
+    if save.number == buffer.saves_sent then
+      buffer_page_flash(failed and ("buf " .. slot .. " save failed") or ("saved buf " .. slot))
+    end
   end
 
   -- bufferState poll: one slot per message, slot index * 1000 + seconds. It
@@ -460,8 +515,8 @@ return function(S)
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
   S.finish_buffer_take = finish_buffer_take
 
-  -- init's start steps: the polls (valid seconds per buffer slot, and
-  -- failed loads, from the engine), and later, after the scenes, which may
+  -- init's start steps: the polls (valid seconds per buffer slot, failed
+  -- loads and save results, from the engine), and later, after the scenes, which may
   -- use them, the restore. A start that fails before the restore leaves
   -- S.buffers_loaded false, so cleanup() does not save (#72)
   S.register_start(S.constants.START_ORDER.buffer_polls, function()
@@ -476,6 +531,12 @@ return function(S)
       S.buffer_polls.load_failed:start()
     else
       print("bufferLoadFailed poll not found")
+    end
+    S.buffer_polls.save_result = poll.set("bufferSaveResult", buffer_save_result)
+    if S.buffer_polls.save_result then
+      S.buffer_polls.save_result:start()
+    else
+      print("bufferSaveResult poll not found")
     end
   end)
   S.register_start(S.constants.START_ORDER.buffers_load, function()
@@ -500,6 +561,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_polls, function()
     if S.buffer_polls.state then S.buffer_polls.state:stop() end
     if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
+    if S.buffer_polls.save_result then S.buffer_polls.save_result:stop() end
     for slot = 1, NUM_BUFFERS do
       cancel_buffer_recording_timer(slot)
     end

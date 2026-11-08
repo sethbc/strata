@@ -1,16 +1,66 @@
 // StrataFiles.sc
 // The files area: checking a file decodes before a load, writing a slot
-// to a WAV (saveBuffer and the scratch takes) and deleting what an
-// interrupted write left. See docs/notes/engine/files.md.
+// to a WAV (saveBuffer, its bufferSaveResult poll, and the scratch takes)
+// and deleting what an interrupted write left. See docs/notes/engine/files.md.
 
 + Engine_Strata {
     // The files area (order 50)
     strataAreaFiles {
         ^(
             order: 50,
+            // per slot, the saveBuffer commands received (bufferSaves); then
             // the files a write interrupted by a crash or power cut left
-            allocState: { this.deleteStaleParts }
+            allocState: {
+                areaState[\files][\saves] = Array.fill(numBuffers, 0);
+                this.deleteStaleParts
+            },
+            addCommands: { this.addFileCommands }
         )
+    }
+
+    addFileCommands {
+        // msg: slot index, path of the stereo 16-bit WAV to write
+        this.addCommand(\saveBuffer, "is", { arg msg;
+            this.saveSlot(msg[1], msg[2].asString);
+        });
+
+        // How a save ended: one message per saveBuffer whose write ends,
+        // written or failed (bufferSaveResultValue: the slot, that slot's save
+        // number and failed), so Lua confirms a save only once its file is in
+        // place and a late report never speaks for a newer save. A write
+        // abandoned for a newer write to the same path reports nothing (the
+        // newer one reports). Not periodic; a value request resends the last
+        // report (Lua ignores a repeat).
+        areaState[\files][\saveResultPoll] = this.addPoll(\bufferSaveResult, {
+            this.bufferSaveResultPoll.value ? 0.0
+        }, false);
+    }
+
+    bufferSaveResultPoll { ^areaState[\files][\saveResultPoll] }
+
+    // Per slot: the saveBuffer commands received, counted from 1 (Lua's
+    // save_buffer counts the same), named in bufferSaveResult
+    bufferSaves { ^areaState[\files][\saves] }
+
+    // One float, as bufferLoadFailed (matron's /poll/value is typed "if"):
+    // (save * 2 + failed) * numBuffers + slot index, where save is the slot's
+    // save number (counted from 1) and failed is 1 when the engine wrote
+    // nothing, 0 when the file is in place. Exact for the first 2^20 saves of
+    // a slot (a float32 holds integers exactly up to 2^24).
+    bufferSaveResultValue { arg index, save, failed;
+        ^((((save * 2) + failed.binaryValue) * numBuffers) + index).asFloat
+    }
+
+    // saveBuffer: count the save and write the slot, reporting how the write
+    // ended on bufferSaveResult (an abandoned write reports nothing)
+    saveSlot { arg index, path;
+        var save;
+        if (this.validBuffer(index).not) { ^this };
+        save = this.bufferSaves[index] + 1;
+        this.bufferSaves[index] = save;
+        this.writeSlot(index, path, { arg written;
+            this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
+        });
     }
 
     // true when libsndfile decodes the first `frames` frames of the open
@@ -129,13 +179,18 @@
     // and two writes never mix. instanceTag keeps another engine instance's
     // files apart. Samples beyond ±1 (a take recorded at a level above 1)
     // are clipped symmetrically to ±int16Peak, never wrapped. Temporary
-    // files are deleted in every case. Creates no synth nodes.
-    writeSlot { arg index, path;
+    // files are deleted in every case. Creates no synth nodes. done (nil, or
+    // a function of written, a Boolean) is called once when the write ends:
+    // true once the file is in place, false when nothing was written (an
+    // empty slot, at once; a folder that cannot be made, a short write or a
+    // failed rename); never for a write a newer one abandoned.
+    writeSlot { arg index, path, done;
         var frames = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
         var generation, tempPaths, partPath;
         if (frames < 1) {
             postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
+            done.value(false);
             ^this
         };
         path = path.standardizePath;
@@ -150,22 +205,23 @@
         buffersR[index].write(tempPaths[1], "wav", "float", frames);
         fork({
             var current = { writeGenerations[path] == generation };
-            var written;
+            var written, moved;
             context.server.sync;
             written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
             tempPaths.do({ arg tempPath; File.delete(tempPath) });
             // no yield between this check and the rename. The newest write
-            // forgets its generation whether it succeeded or failed; an
-            // abandoned one leaves the newer write's entry alone.
+            // forgets its generation whether it succeeded or failed, and
+            // reports how it ended (done); an abandoned one leaves the newer
+            // write's entry alone and reports nothing.
             if (current.value) {
-                if (written) {
-                    if (("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0) {
-                        postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
-                    } {
-                        postln("strata: cannot move " ++ partPath ++ " to " ++ path);
-                    };
+                moved = written and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
+                if (moved) {
+                    postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
+                } {
+                    if (written) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
                 };
                 writeGenerations.removeAt(path);
+                done.value(moved);
             };
             if (File.exists(partPath)) { File.delete(partPath) };
         }, SystemClock);

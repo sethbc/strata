@@ -6,6 +6,7 @@
 - Every key and the arc button act on the slot cursor (`S.buffer_page.slot`), never on the selected voice's buffer: K3 records into it whether or not a voice reads it.
 - BUFFER's flashes go through `buffer_page_flash` (the shared "hints" flash, owned by BUFFER), never a clock of the page's own; they show only while BUFFER is up.
 - A save while the slot is `recording` or `finishing` saves nothing (`buf <n> busy`).
+- A save never shows `saved buf <n>` before the engine's `bufferSaveResult` report says the file is written (#127): ALT+K3 shows `saving buf <n>`, and `buffer_save_result` the result.
 - `fileselect` is required (`require "fileselect"`), never read as a global.
 - The input meter's polls (`amp_in_l`, `amp_in_r`) run only while BUFFER shows: the record's `enter` starts them, `leave` and cleanup step `input_meter` (135) stop them and clear their callbacks, so a value already on its way asks for no redraw. They are looked up with `poll.set` at each `enter`, never kept from an earlier one or from load time (norns replaces its poll objects when it re-registers the polls). A norns without them leaves the meter dark.
 - A poll value asks for a redraw only when the drawn level or held peak changes. The peak's expiry is checked at draw time, so it goes out even with no new poll value.
@@ -42,10 +43,11 @@
 - K3 press and the arc button (`arc_button`): `record_buffer(slot)` (toggles: stops early while recording; does nothing while `finishing`).
 - K2 release: the file selector for the cursor slot (below). K2's press does nothing; K3 while K2 is held just records.
 - ALT+K2 (`alt_key(2)`): `clear_buffer(slot)`.
-- ALT+K3 (`alt_key(3)`): saves, confirmed by `buffer_page_flash(text)`:
+- ALT+K3 (`alt_key(3)`): saves, shown by `buffer_page_flash(text)`:
   - `buf <n> busy` (and no `save_buffer` call) while the slot is `recording` or `finishing`;
-  - else `saved buf <n>` when the slot reports audio (`seconds > 0`, the rule `save_buffer` saves by);
+  - else `saving buf <n>` when `save_buffer` sent the save (it returns true when the slot reports audio, `seconds > 0`);
   - else `buf <n> empty`.
+- `buffer_save_result` (`lib/buffers.lua`) flashes `saved buf <n>` or `buf <n> save failed` when the engine reports how the slot's newest save ended (`bufferSaveResult`); a report of an older save flashes nothing.
 - `buffer_load_failed` flashes `buf <n> load failed` when the engine reports a failed load (see the buffers table in `docs/notes/engine.md`).
 - Hints: `K2:load K3:rec` (`K3:stop` while the cursor slot records, `K3:...` while it is `finishing`); with ALT `K2:clear K3:save`.
 
