@@ -1009,4 +1009,53 @@ test("no Lua 5.2+ name that CI's LuaJIT lacks is used without a fallback (#119)"
   assert_equal(#problems, 0, table.concat(problems, "; "))
 end)
 
+-- Recursive deletes (#134): code runs `rm -r` only at the three guarded
+-- sites, each of which checks its path first and passes it after "--":
+-- h.remove_tree, the engine check's scratch cleanup and the runner's trap
+local GUARDED_RECURSIVE_DELETES = {
+  ["test/helpers.lua"] = 'os.execute("rm -rf -- " .. shell_quote(target))',
+  ["test/engine_check.scd"] = '("rm -rf -- " ++ scratchRoot.shellQuote).systemCmd;',
+  ["test/run_engine_check.sh"] = '[ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;',
+}
+
+local function recursive_delete(line)
+  return line:match("%f[%w]rm%s+%-%-?[%a]*[rR]") ~= nil or line:match("%f[%w]rm%s+%-%-recursive") ~= nil
+    or line:match("rmtree") ~= nil or line:match("deleteAll") ~= nil
+end
+
+test("recursive deletes happen only at the guarded sites", function()
+  for _, line in ipairs({ "rm -rf /x", "rm -r dir", "rm -fr dir", 'os.execute("rm -Rf " .. d)', "rm --recursive d",
+      "shutil.rmtree(p)", "File.deleteAll(p)" }) do
+    assert_true(recursive_delete(line), "caught: " .. line)
+  end
+  for _, line in ipairs({ "rm file.txt", "os.remove(path)", "File.delete(path)", "-- a firm -r flag", "perform -r" }) do
+    assert_true(not recursive_delete(line), "allowed: " .. line)
+  end
+  local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
+  local seen = {}
+  for path in listing:gmatch("[^\n]+") do
+    -- this file is skipped: its samples above are what the scan looks for
+    if path ~= "test/unit/structure_test.lua" and (path:match("%.lua$") or path:match("%.sc$")
+        or path:match("%.scd$") or path:match("%.sh$") or path:match("%.py$") or path:match("%.yml$")
+        or path:match("%.in$")) then
+      local file = io.open(repo_root .. "/" .. path, "r")
+      if file then
+        local number = 0
+        for line in file:lines() do
+          number = number + 1
+          local stripped = line:gsub("^%s+", ""):gsub("%s+$", "")
+          if recursive_delete(line) and not stripped:match("^%-%-") and not stripped:match("^//") and not stripped:match("^#") then
+            local allowed = GUARDED_RECURSIVE_DELETES[path]
+            assert_true(allowed ~= nil and line:find(allowed, 1, true) ~= nil,
+              path .. ":" .. number .. " deletes recursively outside the guarded sites: " .. stripped)
+            seen[path] = true
+          end
+        end
+        file:close()
+      end
+    end
+  end
+  for path in pairs(GUARDED_RECURSIVE_DELETES) do assert_true(seen[path], "the guarded delete in " .. path .. " is still there") end
+end)
+
 end
