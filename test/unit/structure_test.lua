@@ -1187,7 +1187,7 @@ end)
 -- holding only the tools it needs.
 local RUNNER_TOOLS = { "dirname", "mktemp", "cp", "mkdir", "uname", "cat", "grep", "sleep", "rm", "ps", "awk", "date" }
 
-local function run_runner_without_tools(case)
+local function run_runner_without_tools(case, timeout)
   local shell_quote, root = h.shell_quote, data_root .. "runner-" .. case
   os.execute("mkdir -p " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
   local function tool_path(tool)
@@ -1211,6 +1211,10 @@ local function run_runner_without_tools(case)
   if case == "compile-error" then
     lines[#lines + 1] = 'echo "ERROR: syntax error, unexpected"'
     lines[#lines + 1] = "sleep 60"
+  elseif case == "hang" then
+    -- a sclang that stops running: its own deadline never posts its FAIL line
+    lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
+    lines[#lines + 1] = "sleep 60"
   else
     lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
     lines[#lines + 1] = "kill -KILL $$"
@@ -1220,7 +1224,7 @@ local function run_runner_without_tools(case)
   sclang:close()
   os.execute("chmod +x " .. shell_quote(root .. "/sclang"))
   local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(root .. "/bin")
-    .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=30 TMPDIR=" .. shell_quote(root)
+    .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
     .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1")
   local output = pipe:read("*a")
   pipe:close()
@@ -1239,6 +1243,16 @@ test("the engine check runner stops sclang's scsynth without pgrep or timeout (#
   assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
   assert_true(output:find("sclang reported a compile error", 1, true) ~= nil, "the runner stopped sclang: " .. output)
   assert_true(not alive, "the server sclang started is stopped with it")
+end)
+
+-- 1 s timeout: without a timeout command the runner's own loop stops it
+-- 15 s later
+test("the engine check runner tells a hung sclang from a slow check (#131)", function()
+  local output, pid, alive = run_runner_without_tools("hang", 1)
+  assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
+  assert_true(output:find("ENGINE CHECK FAILED: no result within 1 s, and its own deadline never fired: sclang hung", 1, true) ~= nil,
+    "the run fails, naming a hang: " .. output)
+  assert_true(not alive, "the server is stopped with it: " .. output)
 end)
 
 test("the engine check runner stops the scsynth a crashed sclang left behind (#152)", function()
