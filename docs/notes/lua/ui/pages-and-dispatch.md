@@ -1,0 +1,36 @@
+## Must not break
+
+- Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`. While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page.
+- Each page file creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]` and sets every field but the four arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`), which only its `lib/arc/<page>.lua` sets. `strata.lua` includes every page file before every arc file and asserts every `UI_PAGES` name has its record with `draw`, `hints`, `enc` and `key`. A test checks who sets which field.
+- A page's `draw()` draws its body only; `redraw()` draws the hint row from the "hints" flash while one shows, else from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
+- A page change goes through `S.lib.ui_keys.set_ui_page`, which runs the records' `leave`/`enter` and forgets every carried arc tick (`forget_arc_ticks()`). Never set `S.ui_page` directly.
+
+## Pages and dispatch
+
+The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}`. `UI_PAGES.index[name]` is a page's index (`UI_PAGES.index.FX == 4`); `UI_PAGES.MAIN_PAGE` stays 1. `S.ui_page` is the index of the shown page.
+
+Encoders and keys (`strata.lua`):
+- `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()`, forgets every carried arc tick (`forget_arc_ticks()`, so ticks turned on one page never step a param on another), sets `S.ui_page` and calls the new one's `enter()`, if the records have them.
+- At init a start step in `strata.lua` (`START_ORDER.e1_settings`) turns E1's acceleration off and sets its sensitivity to `E1_TICKS_PER_PAGE` (4) with `norns.enc.accel(1, false)` / `norns.enc.sens(1, ...)`, so a fast turn steps pages instead of skipping to SETUP. norns resets these on every script load, so cleanup restores nothing.
+- `enc(2|3, d)` calls `S.registry.pages[S.ui_page].enc(n, d)`, and `key(n, 1)` (K2, K3) calls `S.registry.pages[S.ui_page].key(n)`. With ALT held both go the ALT way instead (`docs/notes/lua/ui/alt-and-keys.md`).
+- `key(1, z)` only sets ALT (`S.lib.ui_alt.set(z == 1)`; K1 held is ALT; norns delivers K1 to a script only once held). `forget_held_keys` clears it.
+- Master density left E1. It is on the FX page's first row, MAIN's arc ring 1 and in params. The header no longer shows it.
+
+Page records. Each page lives in its own file and creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]`:
+- Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
+- Optional, every one dispatched today:
+  - `alt_enc(n, d) -> handled`, `alt_key(n)`, `alt_key_release(n)`: the ALT layer (`docs/notes/lua/ui/alt-and-keys.md`);
+  - `key_release(n)`: a plain key's release, on the page it went down on;
+  - `enter()`, `leave()`: run by `set_ui_page` on a page change;
+  - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_stop_selected_voice` (K3; VOICE's is `start_or_stop_selected_voice`, and `toggle_lock` locks);
+  - `header_status() -> string|nil`: a text that replaces the header's indicators (`docs/notes/lua/ui/header-and-flashes.md`);
+  - `layout_states`: an array of `{name, setup = function(context)}` the layout tests (`test/unit/ui_layout_test.lua`) and the page renders draw, each on a fresh script with the page shown.
+- Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)` (`docs/notes/lua/arc-core.md`).
+- Ownership: the page file sets every field but the arc fields; the arc file sets only those, on `S.registry.pages[UI_PAGES.index.<PAGE>]`. So a page and its rings never edit the same file. `strata.lua` includes every page file before every arc file.
+- `ignore_page_input` fills the handlers a page does not use.
+- To add a page: add its name to `UI_PAGES` (`NUM_UI_PAGES` follows), write its file and record, include it from `strata.lua` with the other pages, and, if it has rings, an arc file like `lib/arc/fx.lua` included after the pages (`docs/notes/lua/arc-pages.md`). VOICE, SEQ and SCENES already have their page and arc files (stubs), so filling them in adds no include.
+
+`redraw()`:
+- `screen.clear(); draw_header(); record.draw(); draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`.
+- Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list (`docs/notes/lua/pages/buffer.md`).
+- The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints.

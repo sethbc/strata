@@ -49,7 +49,7 @@
 
 ## Layout
 
-Two columns under the header (`draw_header()`, the same on every page: `docs/notes/lua/ui-core.md`), positions in `S.lib.pages_main.LAYOUT`:
+Two columns under the header (`draw_header()`, the same on every page: `docs/notes/lua/ui/header-and-flashes.md`), positions in `S.lib.pages_main.LAYOUT`:
 - **Left column** (0-60 px): the voice list.
 - **Divider** (x=62, y 10-52): a subtle vertical line.
 - **Right column** (65-127 px), the selected voice:

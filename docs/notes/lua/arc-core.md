@@ -57,7 +57,7 @@ The arc follows the screen page (`S.ui_page`):
 ## Drawing
 
 - `arc_redraw()` updates every ring to show the current page's values.
-- The frame clock draws it when `UI_PAGES.arc_dirty` is set (`request_redraw()`, see Redraws in `docs/notes/lua/ui-core.md`): at most 15 times a second however fast the rings turn.
+- The frame clock draws it when `UI_PAGES.arc_dirty` is set (`request_redraw()`, see `docs/notes/lua/ui/redraws.md`): at most 15 times a second however fast the rings turn.
 - The arc keeps drawing while the norns menu is open, by design (#169): norns' menu takes only the screen, the keys and the encoders (`_menu.set_mode` in `lua/core/menu.lua` swaps `redraw`, `refresh`, the key handler and the encoder callback), so arc turns still reach the script, as grid presses do. `draw_frame` calls `arc_redraw()` directly, whereas the screen goes through the global `redraw`, which norns swaps for `norns.none` in the menu. An arc turn, a param changed from PARAMS or a CC map while the menu is open moves the rings at once, the grid repaints as usual, and closing the menu changes nothing on the rings (tests pin all three).
 - Rings are drawn with `S.arc_device:segment(ring, from, to, level)`, always through `arc_ring_fill(arc_port, ring, fraction, level)`, never a bare `segment`:
   - norns' `Arc:segment` reduces both angles modulo 2*pi, so a full turn (0 to 2*pi) lights nothing;

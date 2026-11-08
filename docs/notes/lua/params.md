@@ -40,7 +40,7 @@ Menu order:
 
 ## Registries
 
-`lib/state.lua` holds the registries and their register functions; each checks its argument and refuses a duplicate name. This module reads four of them at init (scenes, the LFOs and VOICE read the rest: `docs/notes/lua/scenes.md`, `docs/notes/lua/lfos.md`, `docs/notes/lua/ui-core.md`).
+`lib/state.lua` holds the registries and their register functions; each checks its argument and refuses a duplicate name. This module reads four of them at init (scenes, the LFOs and VOICE read the rest: `docs/notes/lua/scenes.md`, `docs/notes/lua/lfos.md`, `docs/notes/lua/ui/field-list-and-cursors.md`).
 
 **Voice params** (`S.register_voice_params(record)`, `S.registry.voice_params`). A module's per-voice params, as one record:
 

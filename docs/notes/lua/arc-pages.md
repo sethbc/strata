@@ -36,7 +36,7 @@ MAIN (`arc_main_delta`/`arc_main_redraw`, with ALT `arc_main_alt_delta`/`arc_mai
 VOICE (`arc_voice_delta`/`arc_voice_redraw`):
 - `voice_page_group(voice_page_rows(S.selected_voice), S.cursors.voice)` gives up to four row indices; ring n edits the n-th. Control rows sweep (`arc_sweep_param`), option and number rows (grain envelope and mode, the mod sources, the source) step one whole value per `ARC_VOICE.ticks_per_step` (20) ticks, under `"voice:<n>"`. A local `carried_param[n]` remembers the param ring n's ticks were turned on and forgets them (`forget_arc_ticks`) when the row is another param (the cursor's group or the selected voice changed).
 - Drawn through `arc_ring_fill_param`: the cursor row's ring at 15, the others at 12; rings past the group's rows dark. A binary row's ring is `arc_ring_fill(port, n, value, level)`: a binary param has no range for `param_fraction`.
-- Registered rows (`S.registry.voice_params`, `docs/notes/lua/ui-core.md`) reach the rings through `voice_page_rows`, with nothing to add here.
+- Registered rows (`S.registry.voice_params`, `docs/notes/lua/ui/field-list-and-cursors.md`) reach the rings through `voice_page_rows`, with nothing to add here.
 
 SEQ (`arc_seq_delta`/`arc_seq_redraw`, `ARC_SEQ`):
 - Ring 1: the step cursor, `S.lib.ui_cursors.move("seq_step", steps)` (clamped at 1 and `PATTERN_LENGTH`).
