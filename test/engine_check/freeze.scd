@@ -321,7 +321,7 @@ command.(\voiceOff, 3);
 rampPath = h.tempDir +/+ "freeze-ramp.wav";
 rampFile = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(sampleRate.asInteger);
 rampFile.openWrite(rampPath);
-rampFile.writeData(FloatArray.fill(sampleRate.asInteger * 2, { arg i; if (i.odd) { 1.0 } { (i div: 2) / sampleRate } }));
+rampFile.writeData(h.stereoOf(h.rampSignal(sampleRate.asInteger) / sampleRate, h.repeating(sampleRate.asInteger, [1.0])));
 rampFile.close;
 command.(\loadBuffer, 5, rampPath);
 h.waitFor({ engine.bufferFrames[5] > 0 }, 3);

@@ -92,15 +92,41 @@
         ^true
     }
 
-    // A new FloatArray of `size` for one SoundFile readData. Every readData
-    // reads into a fresh array, never one an earlier read filled: reusing
-    // one across reads makes sclang 3.13 (norns' version) abort a while
-    // later in its garbage collector (a count assertion). On 3.13 the
-    // engine check's buffers, files and effects areas crashed 11 of 12 runs
-    // with the arrays reused and 1 of 8 with fresh ones (#131). A structure
-    // test checks every readData in the engine reads into one.
+    // A new Signal (a FloatArray) of `size` for one SoundFile readData.
+    // Every readData reads into a fresh array, never one an earlier read
+    // filled: reusing one across reads makes sclang 3.13 (norns' version)
+    // abort a while later in its garbage collector (a count assertion). On
+    // 3.13 the engine check's buffers, files and effects areas crashed 11 of
+    // 12 runs with the arrays reused and 1 of 8 with fresh ones (#131). A
+    // structure test checks every readData in the engine reads into one. A
+    // Signal, so the interleave can clip a chunk with a C primitive.
     freshReadArray { arg size;
-        ^FloatArray.newClear(size)
+        ^Signal.newClear(size)
+    }
+
+    // The indices interleaveChunk needs for a chunk of `size` frames, each
+    // an Array the series primitive fills: the left channel's samples in
+    // the stereo chunk (0, 2, ...), the right's (1, 3, ...) and a mono
+    // chunk's frames (0 .. size - 1)
+    interleaveKeys { arg size;
+        ^[(0, 2 .. (size * 2) - 2), (1, 3 .. (size * 2) - 1), (0 .. size - 1)]
+    }
+
+    // One interleaved chunk of a left and a right chunk (Signals, as
+    // freshReadArray makes them; a right one shorter than the left is
+    // padded with silence), each clipped to ±peak, using C primitives only:
+    // no sclang function runs per sample, which on sclang 3.13 piles up
+    // garbage-collector work (#131). The Signal clip, at with an index
+    // Array (which returns an Array of Floats) and putEach (which reads
+    // its keys and values as Arrays: never pass it a FloatArray or Signal,
+    // whose samples it would misread). keys: the interleaveKeys of
+    // left.size. Byte for byte what a per-frame loop wrote.
+    interleaveChunk { arg left, right, keys, peak;
+        var size = left.size, interleaved = FloatArray.newClear(size * 2);
+        if (right.size < size) { right = right.extend(size, 0.0) };
+        interleaved.putEach(keys[0], left.clip(peak.neg, peak).at(keys[2]));
+        interleaved.putEach(keys[1], right.clip(peak.neg, peak).at(keys[2]));
+        ^interleaved
     }
 
     // Inside a routine: wait `wait` seconds, and at least until commandGap
@@ -286,8 +312,8 @@
     // ends the routine; on any normal return they are closed here.
     interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames, openFiles;
         var chunkFrames = 8192, sources;
-        var output, left, right, interleaved, finished = true, written;
-        var peak = int16Peak, negativePeak = int16Peak.neg;
+        var output, left, right, finished = true, written;
+        var keys = this.interleaveKeys(chunkFrames);
         var opened = { arg file; if (file.notNil) { openFiles.add(file) }; file };
 
         openFiles = openFiles ?? { List.new };
@@ -312,15 +338,9 @@
         while { finished and: { left = this.freshReadArray(chunkFrames); sources[0].readData(left); left.size > 0 } } {
             right = this.freshReadArray(chunkFrames);
             sources[1].readData(right);
-            // A per-frame loop: faster here than an array-level lace, which
-            // only descends into Arrays, so each chunk would be converted
-            // FloatArray -> Array -> FloatArray (about twice as slow in sclang 3.13)
-            interleaved = FloatArray.newClear(left.size * 2);
-            left.size.do({ arg frame;
-                interleaved[frame * 2] = left[frame].clip(negativePeak, peak);
-                interleaved[(frame * 2) + 1] = (right[frame] ? 0).clip(negativePeak, peak);
-            });
-            output.writeData(interleaved);
+            // the last chunk is shorter: its own keys
+            if (left.size != keys[0].size) { keys = this.interleaveKeys(left.size) };
+            output.writeData(this.interleaveChunk(left, right, keys, int16Peak));
             // from the real time: a long save's chunks outlast a 1 ms wait
             this.yieldToCommands(writeChunkWait);
             finished = keepGoing.value;
