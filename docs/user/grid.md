@@ -30,7 +30,7 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **16-step patterns** per voice (a 64-button grid shows steps 1-8 or 9-16, as you choose)
 - **Per-voice patterns** - each voice has independent pattern
 - **Real-time recording** - toggle steps while playing
-- **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty)
+- **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty): the same step the SEQ page shows, until the next one plays
 - **Tempo control** - 1-300 BPM, the range of norns' clock tempo (adjustable via grid or PARAMS)
 - **Pattern operations** - clear, randomize per voice
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain

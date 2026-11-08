@@ -249,4 +249,27 @@ test("SEQ hints", function()
   assert_true(not S.pattern_playing)
 end)
 
+test("SEQ's playing column is the sequencer's sounding step, the one the grid lights (#113)", function()
+  local context, S = started_on_seq()
+  local device = context.grid.plug(1, 16, 8)
+  S.patterns[1][2] = 9
+  tap(2)  -- plays step 1 at once
+  redraw()
+  assert_equal(cell(context, 2, 1).level, 4, "just started: column 1 plays")
+  assert_equal(cell(context, 2, 16).level, 1, "never the last column")
+  h.wake(context, "pattern_clock")  -- step 2 plays
+  context.grid.press(1, 3, 3, 1); context.grid.press(1, 3, 3, 0)  -- a key press between steps redraws the grid
+  redraw()
+  assert_equal(cell(context, 1, 2).level, 13, "SEQ: column 2 plays")
+  assert_equal(device:get_led(2, 1), 15, "the grid lights the same step")
+  assert_equal(device:get_led(2, 2), 4, "an empty step in that column at 4")
+  assert_equal(device:get_led(3, 2), 0, "and not the next step")
+  assert_equal(cell(context, 2, 3).level, 1, "SEQ: column 3 does not play either")
+  -- no sounding step: no playing column, though the transport runs
+  S.pattern_sounding_step = nil
+  redraw()
+  assert_equal(cell(context, 1, 2).level, 9, "nothing sounding: no playing column")
+  tap(2)
+end)
+
 end
