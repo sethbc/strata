@@ -3,7 +3,7 @@
 - The page file sets every record field but the arc fields; SEQ's rings are `lib/arc/seq.lua`'s (`docs/notes/lua/arc-pages.md`).
 - Pattern edits go through the sequencer's functions or write `S.patterns[voice][step]` within bounds (voice 1..`NUM_VOICES`, step 1..`PATTERN_LENGTH`, level 0..`MAX_STEP_LEVEL`), and call `grid_redraw()`, so the grid follows. `lib/sequencer.lua` is consumed, never edited.
 - An empty step (0) is drawn as an outline, never as a filled cell at level 0 or 1, so a level-1 step never reads as empty.
-- The playing column is the step that sounded last (`(S.pattern_position - 2) % PATTERN_LENGTH + 1`): the pattern clock plays `S.pattern_position` and then advances it. It is the column the grid lights on each step.
+- The playing column is `S.lib.sequencer.sounding_step()`, the step that sounded last (nil while stopped and before the first step): the pattern clock plays `S.pattern_position` and then advances it, so never draw from `S.pattern_position`. Every grid layout lights the same step, between steps too (#113).
 - While the patterns play, the frame clock redraws SEQ's screen every frame (screen only, never the arc; the rule is in `docs/notes/lua/ui-core.md`), so the column moves. `draw()` requests no redraw. When they stop or another page shows, nothing extra draws.
 - ALT+K2/ALT+K3 are the record's `alt_key` (reached through `alt_action`), never handled in `key`. ALT+E3 changes `tempo` through `enc_param_delta` (a number param: whole BPM).
 - The arc button (`arc_button`) plays/stops, like K2; K3 is the step's on/off (design §7 lists SEQ play/stop for the button).
@@ -18,7 +18,7 @@
 Drawing (`redraw_seq`, design §5):
 - One row per voice, rows 6 px apart from y 13 (the row's top). The voice number at x 0, baseline 5 px below the top, level 15 for the selected voice and 4 for the others; `+` (running) or `-` (stopped) right-aligned at x 127, level 4.
 - Sixteen cells of 4×4 px, 6 px apart from x 10 (so x 10-103). A step at level L (1-15) is a filled rect at level L; an empty step a 4×4 outline at level 1.
-- The playing column (while `S.pattern_playing`): outlines at level 4, filled cells at `min(15, L + 4)`.
+- The playing column (the sounding step, while the patterns play): outlines at level 4, filled cells at `min(15, L + 4)`.
 - The cursor: a 6×6 outline at level 15 around the selected voice's step (`S.cursors.seq_step`, clamped to 1..`PATTERN_LENGTH`).
 - `header_status()` returns `"<tempo> bpm"`; `draw_header` draws it at x 79 with the play mark at x 74 while the patterns play.
 - The renders stroke the cells' outlines on whole-pixel rects, as the other pages' lines do; on the OLED cairo centers a 1 px stroke on the path, which the 3.1 hardware check should look at.
