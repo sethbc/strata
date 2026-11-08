@@ -25,6 +25,7 @@ Timeouts and processes:
 - The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 570 s; a normal run takes about 2 minutes) with line-buffered output (`stdbuf`).
 - It stops sclang as soon as the output shows a compile error (a syntax error in `engine_check.scd`, `Library has not been compiled successfully`): sclang never exits by itself then, and would hold the machine and CI's job until killed.
 - `timeout` signals the whole process group, so the scsynth sclang booted goes too. Without a `timeout` command, the script's own watch loop enforces the limit.
+- It stops the scsynth too, even after a sclang crash (through the PID the check writes to its work dir, #152), without needing `pgrep` or `timeout`.
 - The script's own stop signals sclang and every descendant (`kill_tree`, children first), so no scsynth is left on its port. Exit 124 or 137 (timeout's `--kill-after` SIGKILL) reports as a timeout.
 
 Ports:

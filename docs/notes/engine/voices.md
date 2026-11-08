@@ -1,7 +1,7 @@
 ## Must not break
 
-- **Pattern steps and MIDI notes never create nodes.** They call `retrigger`. Velocity only scales the accent envelope's `levelScale`, never a running signal; the one allowance is `\strataKarplus`'s `T2A` pluck impulse, which may reach only the pluck excitation. Bent copies compiled in the check must fail the velocity check.
-- **Silent bus**: an unrouted mod slot reads `silentBus`, never control bus 0.
+- **Pattern steps and MIDI notes never create nodes.** They call `retrigger`. Velocity only scales the accent envelope's `levelScale` (sampled at trigger time), never a running signal. The engine check asserts that in every voice and grain SynthDef `velocity` feeds only `EnvGen` `levelScale` inputs; the one allowance is `\strataKarplus`, where it may multiply a `T2A` of the `t_trig` control (a single-sample pluck impulse), and that product may reach only the pluck excitation (a `Decay` input, the `Pluck` trigger). Bent copies compiled in the check must fail it.
+- **Silent bus**: an unrouted mod slot reads `silentBus`, never control bus 0 (norns allocates the input follower there).
 - The Lua `voices` table is the only source of values: the engine holds no per-voice defaults.
 - The crossmod commands ignore a slot outside 1..`numModSlots`.
 - The Resonator's `RLPF` cutoff stays below `filterCeiling` × the sample rate, and its level goes through `resonatorGain` and its voice limiter.

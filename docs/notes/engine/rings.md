@@ -1,10 +1,11 @@
 ## Must not break
 
+- **Ring writers** (`\strataRingWrite`) are one per voice, reading `granBuses[i]`, and one reading `inputBus`.
 - **Writers run last in `voiceGroup`** (after the voice, input and record synths), so a voice writer records only its voice synth: mirroring grain synths write the voice bus later, in `processGroup`. They are persistent (started in the rings area's `start`, never released) and their keys (`ringWrite0`..`ringWrite6`, `ringWriteInput`) are `effectKeys`, so they get plain messages.
 - **A writer's input goes through `zeroBadValues`** before its `BufWr`s: a voice that blows up never writes NaN into a ring that frozen or later grains replay.
 - **Rings only ever append.** Any other write into a voice ring (3.2's freeze copy) fades the voice's ring readers first (`ringLevel 0`, waiting `bufferFadeWait` when one plays) and runs only if `ringChanges[voice]` is unchanged, as `slotChanges` guards the slots.
 - **`ringReaders`** holds every `\strataGrainRing` with its voice until it frees (set in `startGrainSynth`, cleared in `watchVoiceSynth`'s `onFree`).
-- **The lookback bound.** Ring rates are clipped to ±`ringMaxRate` (4) and grains are at most `grainMaxSeconds` (0.5 s), so no grain reads further back than margin + history + spread + 2.5 s: inside a 4 s voice ring, and inside the input ring's `ringGuardSeconds` (4) + 1 s past `historySeconds`. A forward grain never overtakes the write head.
+- **The lookback bound.** Ring rates are clipped to ±`ringMaxRate` (4) and grains are at most `grainMaxSeconds` (0.5 s), so no grain reads further back than margin + history + spread + 2.5 s: inside a 4 s voice ring, and inside the input ring's `ringGuardSeconds` (4) + 1 s past `historySeconds`. A ring grain reads behind the write head by margin + history + spread + max(r − 1, 0) × dur, so it never overtakes the head and never reads past the ring.
 - **Bufnums never change.** The rings are allocated once in `allocState` (not in the real-time pool) and freed in `free`.
 
 ## The rings
