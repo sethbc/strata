@@ -61,9 +61,8 @@ Engine_Strata : CroneEngine {
     var <loadShortfallFrames = 4096; // Frames a file may decode short of its header's count and still load (fileDecodes)
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
-    // Real-time memory (see docs/notes/engine/memory.md). Both
-    // are built into the grain SynthDefs in alloc, so later changes do nothing.
-    var <pitchShiftWindow = 0.1;  // Grain PitchShift window (s): fixed, never the grain size (its delay line is allocated at that size)
+    // Real-time memory (see docs/notes/engine/memory.md). Built into the
+    // grain SynthDefs in alloc, so later changes do nothing.
     var <>maxGrains = 128;        // Grain table of every GrainIn/GrainBuf: Lua's largest overlap is 0.5 s x 200 grains/s = 100 (set by the performance area)
     // Built into the SynthDefs in alloc too (see Signal safety in docs/notes/engine/structure.md)
     var <filterCeiling = 0.45;    // Highest Resonator cutoff, as a fraction of the sample rate: below Nyquist, so RLPF stays stable

@@ -881,6 +881,46 @@ test("Engine_Strata.sc defines only *new, alloc and free", function()
   assert_equal(#probe[1].methods, 2, "both methods, nested braces and strings skipped")
 end)
 
+-- The variables Engine_Strata.sc declares at class level (before *new):
+-- every var and classvar statement's names, comments stripped
+local function engine_class_variables(text)
+  local head = stubs.strip_sc_comments(text)
+  head = head:sub(1, (head:find("%*new") or (#head + 1)) - 1)
+  local names = {}
+  for _, keyword in ipairs({ "classvar", "var" }) do
+    for statement in head:gmatch("%f[%w_]" .. keyword .. "%s+([^;]+);") do
+      statement = statement:gsub("=[^,]*", "")
+      for name in statement:gmatch("[<>]*%s*([%a_][%w_]*)") do names[#names + 1] = name end
+    end
+  end
+  return names
+end
+
+-- A variable nothing reads is a leftover (pitchShiftWindow outlived the
+-- PitchShift stage 3.2 removed, #151): every class-level variable is named
+-- again somewhere in the engine's code
+test("every variable Engine_Strata.sc declares is used in the engine's code", function()
+  local files = engine_files()
+  local code = {}
+  for _, file in ipairs(files) do code[#code + 1] = stubs.strip_sc_comments(file.text) end
+  code = table.concat(code, "\n")
+  local function uses(name)
+    local count = 0
+    for _ in code:gmatch("%f[%w_]" .. name .. "%f[^%w_]") do count = count + 1 end
+    return count
+  end
+  local names = engine_class_variables(files[1].text)
+  assert_true(#names > 50, "the class variables are found (" .. #names .. ")")
+  local unused = {}
+  for _, name in ipairs(names) do
+    if uses(name) < 2 then unused[#unused + 1] = name end
+  end
+  assert_true(#unused == 0, "declared but never used: " .. table.concat(unused, ", "))
+  -- the scan sees a variable declared and never used
+  local probe = engine_class_variables("Engine_Strata : CroneEngine {\n    classvar <>a;\n    var <b = 1, c;  // x\n    *new { var d; }\n}")
+  assert_equal(table.concat(probe, " "), "a b c", "classvar and var names, not a method's locals")
+end)
+
 -- The engine areas and their orders (the 3.2 design, §0)
 local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70 }
 
