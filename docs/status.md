@@ -31,7 +31,7 @@ Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between
 - **Engine:** `test/run_engine_check.sh [path/to/norns]` compiles the engine against a norns checkout's `sc/core` and runs `test/engine_check.scd` on a silent local scsynth with norns' 8192 KB real-time pool.
   - It needs SuperCollider and a norns checkout (`git clone https://github.com/monome/norns ~/src/norns`, or set `$NORNS_DIR`; CI uses commit `227aa044`).
   - It uses `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app.
-  - It stops after `$ENGINE_CHECK_TIMEOUT` seconds (570 by default, below CI's 600) and at once on a compile error.
+  - It stops after `$ENGINE_CHECK_TIMEOUT` seconds (570 by default, below CI's 600) and at once on a compile error. Stopping sclang also stops its scsynth (descendants found with POSIX `ps`, so neither `pgrep` nor `timeout` is needed), and a scsynth that outlives a crashed sclang is stopped through the PID the check writes to its work dir (#152).
   - Each run boots scsynth on the UDP port in `$STRATA_SC_PORT` (57110 by default). Runs on different ports can overlap, for example one per worktree (`STRATA_SC_PORT=57141 test/run_engine_check.sh`); avoid 57120 and the few ports above it, which sclang takes for itself when several run. Two runs on the same port collide, so on a shared machine give each its own port or wrap the runs in a lock, for example `flock /tmp/strata-engine-check.lock test/run_engine_check.sh`.
 - **Page renders** (on demand, not in CI): `lua test/render_pages.lua <dir>` then `python3 test/render_pages.py <dir> --font ~/src/norns/resources/norns.ttf` (needs Pillow) draws every page state as a PNG. The layout tests catch overlaps on one baseline and text off-screen; the renders are the check for text over a line or box and for strings crowding on nearby baselines.
 - **Engine check on Linux:** install `supercollider-language`, `supercollider-server` and `jackd2`. scsynth needs a JACK server, and a dummy driver needs no sound card. Start one in the background, then run the check headless:
@@ -63,7 +63,6 @@ CHANGELOG.md has every change. In short:
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
   - The arc keeps redrawing while the norns menu is open (the screen does not), so a param changed from PARAMS, a CC map or an LFO moves the rings at once.
-  - The engine check's timeout kills sclang's child processes through `pgrep`. On a machine without `pgrep` and without `timeout`, a hung scsynth may outlive the check.
 - **Limits to keep in mind:**
   - Lua's 200-local limit applies to each function: the locals probe in `test/run.lua` measures the free locals at the end of each file's main chunk and of each module's constructor function, and requires 30 in each (`strata.lua`'s main chunk uses 5). Group new constants into tables, and split a module that runs short.
   - LFOs top out at 10 Hz, the norns `lfo` library's ceiling. Anything faster belongs in the engine.
