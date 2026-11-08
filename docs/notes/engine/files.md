@@ -1,5 +1,6 @@
 ## Must not break
 
+- **Every `readData` reads into a fresh array** (`freshReadArray`), never one an earlier read filled: reusing a `FloatArray` across reads makes sclang 3.13 (norns' version) abort a while later in its garbage collector (#131). This covers `fileDecodes` (each decode chunk) and `interleaveFiles` (each left and right chunk). A structure test checks every `readData` in the engine.
 - **File writes** go to a `<path>.<instanceTag>-<generation>.part` file and are renamed into place. Never open the final path for writing. The newest write to a path wins, and two writes never mix.
 - `deleteStaleParts` deletes only `.part` files and `writeSlot`'s temporary float files older than `stalePartAge`, and only in absolute directories below the root (`stalePartDirs`: `scratchDir`, its parent and the settings folder the performance area used).
 - A write clips samples beyond ±1 symmetrically to ±`int16Peak`, never wraps.
