@@ -201,6 +201,8 @@ Several pull requests are built at once, often by agents. The rule: a feature li
 
 **Bounds-check every index** (voice 1..`NUM_VOICES`, scene, step, slot, grid coordinates) before indexing, so tables never grow by accident. **Clean up** every metro, clock, poll and device handler on exit: the module that owns it registers a step with `S.register_cleanup` at its place in `S.constants.CLEANUP_ORDER` (never code in `cleanup()` itself; the sequence is in `docs/notes/lua/state-and-voices.md`). Cancel an existing clock before starting its replacement.
 
+**No unguarded recursive deletes**, in code or in the shell commands you run. Lua tests delete only through `h.remove_tree` (inside `h.data_root`); the engine check and `test/run_engine_check.sh` delete only folders matching their own templates, and a structure test fails on any other `rm -r`. In your own commands, quote the path, fail on an empty variable and pass it after `--` (`rm -rf -- "${dir:?}"`), spell out an absolute prefix rather than a bare `$var/...`, and remove a worktree with `git worktree remove`, never `rm`.
+
 **Keep docs current in the same change**: the `docs/user/` page for the area (user-facing behavior; README.md only for the overview, quick start and index), the module's notes file (implementation details, and its "Must not break" list), this file (rules, the command table, the module table) and `docs/status.md`.
 
 ### CRITICAL: keep Lua and the engine in sync

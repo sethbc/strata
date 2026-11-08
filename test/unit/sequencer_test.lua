@@ -65,4 +65,69 @@ test("restarting the pattern clock leaves one pattern clock running", function()
   pattern_clock_stop()
 end)
 
+test("sounding_step is the step played last: nil stopped, 1 at once on start, never the next step (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local sequencer = S.lib.sequencer
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  assert_equal(sequencer.sounding_step(), nil, "stopped: no sounding step")
+  pattern_toggle()  -- plays step 1 at once
+  assert_equal(sequencer.sounding_step(), 1, "just started: step 1, never the last step")
+  assert_equal(S.pattern_position, 2, "the position is already the next step")
+  for expected = 2, 2 * PATTERN_LENGTH + 1 do
+    wake(context, "pattern_clock")
+    local step = (expected - 1) % PATTERN_LENGTH + 1
+    assert_equal(sequencer.sounding_step(), step, "between steps: the step that played")
+    assert_equal(sequencer.sounding_step(), (S.pattern_position - 2) % PATTERN_LENGTH + 1,
+      "the position before the next one")
+  end
+  pattern_toggle()
+  assert_equal(sequencer.sounding_step(), nil, "stopped again: none")
+  pattern_clock_start()
+  assert_equal(sequencer.sounding_step(), 1, "a restart begins at step 1, not where it stopped")
+  pattern_clock_stop()
+  -- out of range state never reaches a caller
+  S.pattern_playing = true; S.pattern_sounding_step = PATTERN_LENGTH + 1
+  assert_equal(sequencer.sounding_step(), nil, "a step past PATTERN_LENGTH is no step")
+  S.pattern_playing = false; S.pattern_sounding_step = nil
+end)
+
+test("step_brightness lights the sounding step, not the next one (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.patterns[1][2] = 9; S.patterns[1][3] = 6
+  assert_equal(step_brightness(1, 2), 9, "stopped: the stored level")
+  pattern_toggle(); wake(context, "pattern_clock")  -- steps 1 and 2 played
+  assert_equal(S.pattern_position, 3)
+  assert_equal(step_brightness(1, 2), 15, "the sounding active step at 15")
+  assert_equal(step_brightness(2, 2), 4, "the sounding empty step at 4")
+  assert_equal(step_brightness(1, 3), 6, "the next step keeps its level")
+  assert_equal(step_brightness(2, 3), 0, "the next empty step stays dark")
+  pattern_toggle()
+  assert_equal(step_brightness(1, 2), 9, "stopped: no playhead")
+end)
+
+test("every grid redraw while a step plays shows that step, a started voice's too (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local voices = local_value("voices")
+  assert_true(not voices[3].active, "voice 3 is stopped")
+  S.patterns[3][1] = 15; S.patterns[3][2] = 15  -- step 1 starts voice 3 (toggle_voice redraws the grid)
+  local seen = {}
+  local original_redraw = grid_redraw
+  grid_redraw = function()
+    seen[#seen + 1] = S.lib.sequencer.sounding_step()
+    original_redraw()
+  end
+  pattern_toggle(); wake(context, "pattern_clock")
+  grid_redraw = original_redraw
+  pattern_toggle()
+  assert_true(#seen >= 3, "the step redraws and the voice start's redraw (" .. #seen .. ")")
+  assert_equal(seen[1], 1, "the first redraw, while step 1 starts voice 3, shows step 1")
+  assert_equal(seen[#seen], 2, "the last shows step 2")
+  for _, step in ipairs(seen) do
+    assert_true(step == 1 or step == 2, "never the last step or the next one (" .. tostring(step) .. ")")
+  end
+end)
+
 end

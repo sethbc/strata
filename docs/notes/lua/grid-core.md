@@ -62,7 +62,7 @@ Several grids:
 ## LEDs
 
 - **Active steps**: at their level (15 for steps set by hand).
-- **Current playback position**: 15 if the step is active, 4 if empty (`step_brightness()`).
+- **Current playback position** (the sounding step, `S.lib.sequencer.sounding_step()`, the one SEQ draws): 15 if the step is active, 4 if empty (`step_brightness()`).
 - **Voice active**: 12. **Voice inactive**: 2-4.
 - **Page indicators**: 15 selected, 2 unselected.
 - Always call `grid_port:refresh()` after updating LEDs, and `grid_port:all(0)` to clear them before redrawing.

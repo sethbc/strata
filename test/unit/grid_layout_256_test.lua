@@ -677,4 +677,30 @@ test("256 page 1: holding row 16 column 8 turns row 16 columns 1-7 into freeze k
   end
 end)
 
+test("256 lights the sounding step between steps, as SEQ does (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local device = context.grid.plug(1, 16, 16)
+  local function led(voice_idx, step) return device:get_led(step, voice_idx) end
+  S.patterns[1][2] = 9
+  grid_redraw()
+  assert_equal(led(1, 2), 9, "stopped: the stored level")
+  assert_equal(led(2, 1), 0, "stopped: no playhead")
+  pattern_toggle()  -- step 1 plays at once
+  grid_redraw()
+  assert_equal(led(2, 1), 4, "just started: step 1 is the playhead")
+  assert_equal(led(2, PATTERN_LENGTH), 0, "never the last step")
+  h.wake(context, "pattern_clock")  -- step 2 plays; the position is now 3
+  grid_redraw()  -- a redraw between steps (a key press)
+  assert_equal(S.pattern_position, 3)
+  assert_equal(led(1, 2), 15, "the sounding active step at 15")
+  assert_equal(led(2, 2), 4, "the sounding empty step at 4")
+  assert_equal(led(2, 3), 0, "not the next step")
+  assert_equal(S.lib.sequencer.sounding_step(), 2, "the step SEQ draws")
+  pattern_toggle()
+  assert_equal(led(1, 2), 9, "stopped: the stored level again")
+  assert_equal(led(2, 2), 0)
+end)
+
 end

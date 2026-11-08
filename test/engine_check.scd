@@ -506,7 +506,13 @@ server.waitForBoot({
         running !? { ("FAIL (in area %)".format(running)).postln };
     };
 
-    ("rm -rf " ++ scratchRoot.shellQuote).systemCmd;
+    // Delete only the check's own scratch folder: strata-engine-check-<stamp>-<port>
+    // directly inside an absolute temp dir (#134)
+    if ((scratchRoot.dirname.withoutTrailingSlash == Platform.defaultTempDir.withoutTrailingSlash)
+        and: { scratchRoot.beginsWith("/") }
+        and: { PathName(scratchRoot).fileName.beginsWith("strata-engine-check-") }) {
+        ("rm -rf -- " ++ scratchRoot.shellQuote).systemCmd;
+    } { ("strata check: left " ++ scratchRoot ++ " in place (not the check's scratch folder)").postln };
     if (failures == 0) { "ENGINE CHECK PASSED".postln; exitCode = 0 } {
         ("ENGINE CHECK FAILED: % failures".format(failures)).postln; exitCode = 1 };
     server.quit;
