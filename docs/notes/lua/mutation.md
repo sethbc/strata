@@ -10,7 +10,7 @@
 - Randomize undo: `randomize_voice` stores the previous value of every param it sets, through its local `randomize_param`, and only those. A param it starts setting needs a `note_param_edit(param_id)` call in its action (`lib/params_setup.lua`), or a manual edit would be overwritten by an undo.
 - The undo is one level and cleared by: a randomize (of any voice: a new one replaces it), a scene recall (`recall_scene` and `recall_scene_instant`), a `gentle_mutate` step that changes a param of the undo's voice (`set_mutated_param`), an edit of a stored param (`note_param_edit`) and the end of the window (`undo_clock`). The drift's writes (`S.drift_writing`) and randomize's and undo's own (`undo_writing`) never clear it.
 - `undo_writing` is set around the writes inside an `xpcall` (`write_as_undo`), so the flag always clears and an error is raised again with its traceback.
-- A locked voice returns from `randomize_voice` before anything is stored or cleared.
+- A locked voice returns from `randomize_voice` before anything is stored or cleared. It can still be edited.
 - Every `clear_undo` cancels `undo_clock`; the clock sets `undo_clock` to nil before it clears the undo, so it never cancels itself.
 
 ## Owns

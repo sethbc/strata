@@ -98,3 +98,7 @@ Columns:
 - Each side of the zero column sweeps its part of the range (in the warp's terms) evenly over its own columns, so column 1 is still the minimum and column 16 the maximum.
 - `fader_position()` is the inverse: `param_fraction(id) * 15 + 1`, piecewise around a zero column, so 0 shows there. `param_fraction` is `param_value_fraction(id, params:get(id))`: `spec:unmap(value)`, or the linear fraction of a number or option param's range.
 - Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`: a bar at 8 up to the value, the value's column at 15.
+
+## Registering a grid layout
+
+- **Registering a grid layout**: a `lib/grid/layout_<name>.lua` sets `S.registry.grid_layouts["<name>"] = {key = ..., redraw = ...}`, plus one `include` line in `strata.lua` and the size match in `grid_layout()` (`lib/grid/core.lua`).

@@ -42,4 +42,8 @@ The Wave 0 golden master (a logged scripted session compared with a fixture) pro
 - Every repo path the maintained docs name in backticks (under docs/, test/, .github/ and lib/) must exist, from the repo root. A relative Markdown link target must exist relative to the doc's own folder (`doc_paths_missing(text, doc_name)`); `docs/notes/lua.md` alone may still link root files from the repo root, a fallback to delete with that file. A norns library is named by its path in the norns repo (`lua/lib/lfo.lua`), which is not checked.
 - Every file in docs/notes/lua/ must have `## Must not break` as its first heading (headings inside code fences do not count).
 - Every changelog fragment in changes/ (`changes/README.md` aside) must hold an `### Added`, `### Changed` or `### Fixed` heading with a bullet under it.
+- Every docs/notes/engine/ file's first heading is `## Must not break` too; `docs/notes/engine.md` only indexes docs/notes/engine/, and AGENTS.md names every engine notes file and `STRATA_ENGINE_CHECK_AREAS`; every engine check area has a notes file of the same name and a place in the runner's `areaOrder`, and every docs/notes/engine/ file has an area.
+- Every `docs/user/pages/` and `docs/user/grid/` file is linked from `docs/user/controls.md` or `docs/user/grid.md`.
+- No docs/user/ page or README.md sentence says "freeze" with lock, `[L]`, params or values unless it contrasts them ("unlike").
+- US spelling: the `text uses US spelling` test scans the tracked text files; extend its word list.
 - These checks are in `test/unit/docs_test.lua`.
