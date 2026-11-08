@@ -722,6 +722,20 @@ local function make_controlspec(util)
     return util.round(mapped, self.step)
   end
 
+  -- core/controlspec.lua's copy: a new spec with the same range, warp,
+  -- step, default, units and quantum (norns' copy leaves out wrap)
+  function ControlSpec:copy()
+    local spec = setmetatable({}, ControlSpec)
+    spec.minval = self.minval
+    spec.maxval = self.maxval
+    spec.warp_name = self.warp_name
+    spec.step = self.step
+    spec.default = self.default
+    spec.units = self.units
+    spec.quantum = self.quantum
+    return spec
+  end
+
   function ControlSpec:unmap(value)
     local clamped = util.clamp(util.round(value, self.step), math.min(self.minval, self.maxval),
       math.max(self.minval, self.maxval))
@@ -2367,6 +2381,18 @@ function stubs.install(options)
   -- keys and encoders to the script (set_mode(false) copies them from the
   -- globals key and enc)
   context.menu = { rebuilds = 0, mode = false, key = nil }
+  -- lua/core/audio.lua's file_info(path) -> channels, frames, sample rate
+  -- (matron's snd_file_inspect: 0, 0, 0 for a file libsndfile cannot open).
+  -- A test lists the files it knows: context.audio.files[path] = {channels,
+  -- frames, rate}; any other path reads as unopenable
+  context.audio = { files = {} }
+  context.audio.api = {
+    file_info = function(path)
+      local info = context.audio.files[path]
+      if info then return info[1], info[2], info[3] end
+      return 0, 0, 0
+    end,
+  }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
   -- lua/core/menu.lua: _menu.set_mode(true) opens the menu (K1, a script
@@ -2396,6 +2422,7 @@ function stubs.install(options)
   _G.midi = context.midi
   _G.fileselect = nil  -- lib/fileselect.lua is a module (package.preload below)
   _G.poll = context.polls
+  _G.audio = context.audio.api
   _G._menu = context.menu
   -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
   -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it

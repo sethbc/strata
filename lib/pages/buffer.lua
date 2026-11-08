@@ -58,6 +58,7 @@ return function(S)
     voices_max_width = 25,  -- "v2 v6" under the layout test's width estimate
     name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
     minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
+    checking_text = "...",  -- the length of a slot whose long file the engine is still checking
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
@@ -207,7 +208,9 @@ return function(S)
     -- standard, "59.9s" once the tier's slots reach a minute)
     local name_right = value_right - widest_seconds_width() - PAGE.column_gap
     if not empty then
-      local seconds = buffer.recording and "REC" or slot_seconds_text(buffer.seconds)
+      -- "..." while the engine checks a long file (the old length is still reported)
+      local seconds = buffer.recording and "REC"
+        or (buffer.checking_from ~= nil and PAGE.checking_text or slot_seconds_text(buffer.seconds))
       screen.move(value_right, y)
       screen.text_right(seconds)
       if selected then name_right = value_right - text_width(seconds) - PAGE.column_gap end
@@ -527,12 +530,16 @@ return function(S)
 
   -- As on a high tier with 300 s slots: the page reads S.performance, and
   -- the duration's range ends at the slot length (the script's own start
-  -- read a standard tier)
+  -- read a standard tier). The param gets a copy of its spec with the wider
+  -- range, so the spec it was built with never changes
   local function as_300_s_tier()
     S.performance = {tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60, reason = "high: setting"}
     -- the param keeps its position in the range: put its value back
     local duration = params:get("record_duration")
-    params:lookup_param("record_duration").controlspec.maxval = 300
+    local param = params:lookup_param("record_duration")
+    local spec = param.controlspec:copy()
+    spec.maxval = 300
+    param.controlspec = spec
     params:set("record_duration", duration)
   end
 
@@ -588,6 +595,18 @@ return function(S)
       record_buffer(1)                           -- slot 1 records (for the default 8 s)
       voices_on_slot(2, NUM_VOICES); S.buffer_page.slot = 2
       S.buffer_page.field = 2; params:set("record_duration", 65)
+    end},
+    -- long files the engine is still checking: "..." for their length, over
+    -- a slot that held 4:59 (the cursor's, with every voice) and over the rest
+    {name = "long files checking (high, 300 s)", setup = function(context)
+      as_300_s_tier(); slots_report(context, 299.4)
+      for slot = 1, 3 do
+        local path = "/tmp/" .. LONG_NAMES[slot]
+        context.audio.files[path] = {2, 48000 * 240, 48000}
+        load_buffer(slot, path)
+      end
+      voices_on_slot(1, NUM_VOICES)
+      params:set("record_duration", 240)
     end},
   }
 

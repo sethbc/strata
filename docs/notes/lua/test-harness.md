@@ -126,7 +126,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 - `set_action`, `hide`/`show`/`visible`.
 - `params:write(path)`/`params:read(path, silent)` as in `lua/core/paramset.lua`, absolute paths only. Read sets each param in file order through its own `set`, so actions fire mid-read as on norns. `params:set_save(id, false)` keeps a param out of the file, as norns does for most system params.
 - Strings as `core/params/*.lua`: a control without a formatter shows `util.round(value, 0.01) .. " " .. units`; a number or binary returns its value, a number.
-- A ControlSpec made without a default has `default` nil, and its control starts at raw 0.
+- A ControlSpec made without a default has `default` nil, and its control starts at raw 0. `spec:copy()` is `core/controlspec.lua`'s: range, warp, step, default, units and quantum (not `wrap`, as on norns).
 - `params:get_raw(id)`/`params:set_raw(id, v, silent)` as `core/params/control.lua`, for control params only (the stub errors on any other type): `set_raw` wraps a wrapping spec or clamps to 0-1, stores the raw value unrounded and fires the action on a change unless silent; `get` maps raw and rounds to the step.
 - Warps: `exp`, `db` and `lin`.
 - norns' system params come first (`audio.add_params` and `clock.add_params`: the LEVELS, REVERB, COMPRESSOR, SOFTCUT and CLOCK groups with their types, ranges and factory defaults, `clock_tempo` 120). Every id of `core/paramset.lua`'s `system_param_ids` is there but `clock_midi_out`, which norns never adds (its params are `clock_midi_out_1..16`). So a script param with a system id fails as a collision.
@@ -138,6 +138,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
   - The library's `lfo_*` params and actions; `reset_phase` and `set("period")` reset and rescale `phase_counter` as the library does.
   - Nothing runs on its own: `context.lfo.tick(instance, raw)` performs one library step, with `raw` 0..1 as the shape output.
 - `midi`: `test/stub_midi.lua`. 16 vports, `to_msg`/`to_data`. Helpers `context.midi.plug(port, name)`, `unplug(port)`, `send(port, msg)`.
+- `audio.file_info(path)`: `lua/core/audio.lua`'s (matron's `sound_file_inspect`): channels, frames and sample rate of a file a test lists in `context.audio.files[path] = {channels, frames, rate}`; any other path returns 0, 0, 0, as for a file libsndfile cannot open.
 - `poll.set`: the system polls plus the engine's `addPoll` names; unknown names return nil. `context.polls.fire(name, value)` reaches started polls.
 - `require("fileselect")`: a module through `package.preload`, never a global, so a script that relies on a `fileselect` global fails.
   - `enter` records `context.fileselect.last`, and its callback in `fileselect.callback` (as `fs.enter` keeps it in `fs.callback`, so a second `enter` replaces the first's).

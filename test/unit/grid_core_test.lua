@@ -241,6 +241,52 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
+-- A key whose action redraws the grid too (scene_sequence_length's) still
+-- paints each grid once per press (#161)
+test("a sequence-length key repaints the grid once", function()
+  local context = load_strata(); finish_startup(context)
+  local core = grid_core()
+  -- each layout's scene page and the key that sets length 3
+  local cases = {
+    {cols = 16, rows = 16, page = 3, x = 5, y = 5},
+    {cols = 16, rows = 8, page = 3, x = 3, y = 4},
+    {cols = 8, rows = 16, page = 3, x = 4, y = 11},
+  }
+  for index, case in ipairs(cases) do
+    local device = context.grid.plug(1, case.cols, case.rows)
+    core.set_page(1, case.page)
+    params:set("scene_sequence_length", 1)
+    local before = device.refresh_count
+    context.grid.press(1, case.x, case.y, 1)
+    local name = case.cols .. "x" .. case.rows
+    assert_equal(params:get("scene_sequence_length"), 3, name .. ": the key sets length 3")
+    assert_equal(device.refresh_count - before, 1, name .. ": one repaint for the press")
+    context.grid.press(1, case.x, case.y, 0)
+    assert_equal(device.refresh_count - before, 2, name .. ": and one for the release")
+    params:set("scene_sequence_length", 5)
+    assert_equal(device.refresh_count - before, 3, name .. ": a change from PARAMS still repaints")
+    context.grid.unplug(1)
+  end
+end)
+
+-- An error in a layout's key handler still repaints and leaves later
+-- redraws working (grid_key holds them only while it handles a key)
+test("a key handler that fails still repaints, and later redraws work", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local layouts = local_value("S").registry.grid_layouts
+  local layout = layouts["256"]
+  local key = layout.key
+  layout.key = function() grid_redraw(); error("broken key") end
+  local before = device.refresh_count
+  local ok, message = pcall(context.grid.press, 1, 1, 1, 1)
+  layout.key = key
+  assert_true(not ok and tostring(message):find("broken key", 1, true) ~= nil, "the error reaches the caller")
+  assert_equal(device.refresh_count - before, 1, "the failed key still repaints once")
+  grid_redraw()
+  assert_equal(device.refresh_count - before, 2, "a redraw after it paints")
+end)
+
 test("an FX change redraws the grids only while one shows the FX faders", function()
   local context = load_strata(); finish_startup(context)
   local core = grid_core()

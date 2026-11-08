@@ -243,6 +243,42 @@ test("the engine's standard buffer length equals STANDARD_BUFFER_SECONDS", funct
   assert_equal(local_value("S").constants.BUFFER_SECONDS, nil, "BUFFER_SECONDS is no longer a constant")
 end)
 
+-- A "Must match <NAME> in <file>" comment in the engine names a constant
+-- that file still declares, so a moved or removed constant (BUFFER_SECONDS,
+-- now a tier value) never leaves a stale pointer behind
+test("every engine \"must match <NAME> in <file>\" comment names a constant that file declares", function()
+  local files = {"lib/Engine_Strata.sc"}
+  local listing = io.popen('ls "' .. repo_root .. '/lib/engine"')
+  for name in listing:lines() do
+    if name:match("%.sc$") then table.insert(files, "lib/engine/" .. name) end
+  end
+  listing:close()
+  local function read(path)
+    local file = io.open(repo_root .. "/" .. path, "r")
+    if not file then return nil end
+    local text = file:read("*a")
+    file:close()
+    return text
+  end
+  local stale, seen = {}, 0
+  for _, path in ipairs(files) do
+    for line in read(path):gmatch("[^\n]+") do
+      local comment = line:match("//(.*)$")
+      if comment then
+        for name, target in comment:gmatch("[Mm]ust match ([%u_][%u%d_]*) in ([%w_/%.%-]+%.lua)") do
+          seen = seen + 1
+          local text = read(target)
+          if not (text and text:match("\nlocal " .. name .. "%s*=")) then
+            table.insert(stale, path .. ": " .. name .. " in " .. target)
+          end
+        end
+      end
+    end
+  end
+  assert_true(seen >= 3, "the engine's constant comments are found (" .. seen .. ")")
+  assert_true(#stale == 0, "comments naming a constant the file does not declare:\n" .. table.concat(stale, "\n"))
+end)
+
 test("the engine stub's voice and slot limits follow numVoices and numBuffers in the engine source (#51)", function()
   local source = engine_sources()
   local patched, count = source:gsub("var <numVoices = %d+;", "var <numVoices = 6;")
@@ -744,16 +780,22 @@ test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names th
   assert_true(claude:find("STRATA_ENGINE_CHECK_AREAS", 1, true) ~= nil, "CLAUDE.md names STRATA_ENGINE_CHECK_AREAS")
 end)
 
-test("every engine check area has a notes file of the same name", function()
-  local notes, on_demand = {}, on_demand_areas()
-  for _, name in ipairs(names_in("docs/notes/engine", "md")) do notes[name] = true end
-  local areas = names_in("test/engine_check", "scd")
-  assert_true(#areas >= 9, "test/engine_check holds the area files (found " .. #areas .. ")")
-  for _, name in ipairs(areas) do
-    -- an on-demand area tests other areas' code: documented where it is run (next test)
+-- Both ways (#155): every area has its notes file, and every notes file
+-- belongs to an area. An on-demand area (the soak) tests other areas'
+-- code: it has no notes file and is documented where it is run (next test)
+test("the engine check areas and the engine notes files match one to one", function()
+  local notes, areas, on_demand = {}, {}, on_demand_areas()
+  local note_names, area_names = names_in("docs/notes/engine", "md"), names_in("test/engine_check", "scd")
+  for _, name in ipairs(note_names) do notes[name] = true end
+  for _, name in ipairs(area_names) do areas[name] = true end
+  assert_true(#area_names >= 9, "test/engine_check holds the area files (found " .. #area_names .. ")")
+  for _, name in ipairs(area_names) do
     if not on_demand[name] then
       assert_true(notes[name], "test/engine_check/" .. name .. ".scd has docs/notes/engine/" .. name .. ".md")
     end
+  end
+  for _, name in ipairs(note_names) do
+    assert_true(areas[name], "docs/notes/engine/" .. name .. ".md has test/engine_check/" .. name .. ".scd")
   end
 end)
 

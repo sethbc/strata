@@ -15,7 +15,7 @@ Engine_Strata : CroneEngine {
     // check sets them before it builds an engine
     classvar <>settingsDir, <>modelPath, <>meminfoPath;
 
-    var <numVoices = 7;  // Must match NUM_VOICES in strata.lua
+    var <numVoices = 7;  // Must match NUM_VOICES in lib/constants.lua
     var <voiceSynthDefs;
     var <synths;
     var <granBuses;
@@ -31,9 +31,9 @@ Engine_Strata : CroneEngine {
 
     // Audio sources: grainSource[voice] is 0 = the voice's synth,
     // 1..numBuffers = buffer slot, numBuffers + 1 = live input
-    var <numBuffers = 8;      // Must match NUM_BUFFERS in strata.lua
-    var <>bufferSeconds = 16;  // Must match BUFFER_SECONDS in strata.lua (set by the performance area)
-    var <numModSlots = 3;     // Crossmod slots per voice (modBus1..3): must match NUM_MOD_SLOTS in strata.lua
+    var <numBuffers = 8;      // Must match NUM_BUFFERS in lib/constants.lua
+    var <>bufferSeconds = 16;  // A tier value: allocPerformance sets it (standard 16 s, high up to 300 s); Lua reads it from performance_active.data
+    var <numModSlots = 3;     // Crossmod slots per voice (modBus1..3): must match NUM_MOD_SLOTS in lib/constants.lua
     var <buffersL, <buffersR; // One mono buffer per channel per slot (GrainBuf reads mono only)
     var <bufferFrames;        // Valid (loaded or recorded) frames per slot; 0 = empty
     var <bufferSampleRates;   // Sample rate of each slot's content (valid seconds = frames / rate)
@@ -61,9 +61,8 @@ Engine_Strata : CroneEngine {
     var <loadShortfallFrames = 4096; // Frames a file may decode short of its header's count and still load (fileDecodes)
     var <grainRelease = 2;        // Release time of both grain SynthDefs
     var <switchCutTime = 0.05;    // Length of the kill fade (cutSynth); built into the SynthDefs in alloc, so later changes do nothing
-    // Real-time memory (see docs/notes/engine/memory.md). Both
-    // are built into the grain SynthDefs in alloc, so later changes do nothing.
-    var <pitchShiftWindow = 0.1;  // Grain PitchShift window (s): fixed, never the grain size (its delay line is allocated at that size)
+    // Real-time memory (see docs/notes/engine/memory.md). Built into the
+    // grain SynthDefs in alloc, so later changes do nothing.
     var <>maxGrains = 128;        // Grain table of every GrainIn/GrainBuf: Lua's largest overlap is 0.5 s x 200 grains/s = 100 (set by the performance area)
     // Built into the SynthDefs in alloc too (see Signal safety in docs/notes/engine/structure.md)
     var <filterCeiling = 0.45;    // Highest Resonator cutoff, as a fraction of the sample rate: below Nyquist, so RLPF stays stable

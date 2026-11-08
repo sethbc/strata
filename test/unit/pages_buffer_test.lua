@@ -971,4 +971,44 @@ test("BUFFER shows 65 s as 1:05 and 16.5 s as today", function()
   end
 end)
 
+
+-- The 300 s layout states widen the duration's range on a copy of its
+-- spec, never on the spec the param was built with (#157)
+test("BUFFER's 300 s layout states leave the duration's own spec alone", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local param = params:lookup_param("record_duration")
+  local original = param.controlspec
+  for _, state in ipairs(S.registry.pages[local_value("UI_PAGES").index.BUFFER].layout_states) do
+    if state.name:find("300 s", 1, true) then
+      param.controlspec = original
+      state.setup(context)
+      assert_equal(original.maxval, 16, state.name .. ": the spec the param was built with still ends at 16 s")
+      assert_true(param.controlspec ~= original, state.name .. ": the param reads a copy")
+      assert_equal(param.controlspec.maxval, 300, state.name .. ": the copy ends at 300 s")
+      assert_equal(param.controlspec.step, original.step, state.name .. ": the copy keeps the step")
+    end
+  end
+  assert_true(params:get("record_duration") > 16, "the state's duration is past the standard range")
+end)
+
+-- While the engine checks a long file the row shows "..." for its length,
+-- never the old one beside the new name (#171)
+test("BUFFER shows a long file the engine is checking as loading", function()
+  write_high_tier(300)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(1, "/tmp/old.wav"); context.polls.fire("bufferState", 8)
+  redraw()
+  local rows = slot_rows(context)
+  assert_equal(slot_row_text(context, rows[1]), "1 old 8.0s")
+  load_buffer(1, "/tmp/long.wav"); context.polls.fire("bufferState", 8)
+  redraw()
+  assert_equal(slot_row_text(context, rows[1]), "1 long ...", "the new name, loading")
+  assert_screen_layout(context, "BUFFER with a long file checking")
+  context.polls.fire("bufferState", 0); context.polls.fire("bufferState", 120)
+  redraw()
+  assert_equal(slot_row_text(context, rows[1]), "1 long 2:00", "then its own length")
+end)
+
 end
