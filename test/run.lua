@@ -29,7 +29,7 @@ for _, entry in ipairs(h.tests) do
   end
 end
 
-os.execute("rm -rf '" .. h.data_root .. "'")
+h.remove_tree(h.data_root)
 
 h.real_print(string.format("\n%d tests, %d failures", #h.tests, failures))
 os.exit(failures == 0 and 0 or 1)

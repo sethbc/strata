@@ -46,8 +46,16 @@ if [ ! -d "$norns_dir/sc/core" ]; then
   exit 2
 fi
 
-work_dir=$(mktemp -d)
-trap 'rm -rf "$work_dir"' EXIT
+# The run's temporary folder; the exit trap deletes it, and only a folder
+# made from this template (#134)
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/strata-engine-run.XXXXXX") || exit 2
+remove_work_dir() {
+  case $work_dir in
+    /*/strata-engine-run.??????) [ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;
+    *) echo "left $work_dir in place (not this run's temporary folder)" >&2 ;;
+  esac
+}
+trap remove_work_dir EXIT
 mkdir "$work_dir/classes"
 cp "$script_dir/StrataTestNoBoot.sc.in" "$work_dir/classes/StrataTestNoBoot.sc"
 if [ "$(uname -s)" = Darwin ]; then
