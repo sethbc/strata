@@ -48,12 +48,15 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
+      # memory runs alone: sharing a shard with freeze (both build high
+      # tier engines), it was where sclang's garbage collector crashed (#131)
       matrix:
         areas:
           - buffers
           - lifecycle,loops,structure
           - variation,effects,rings,performance
-          - freeze,memory,grains,files,voices
+          - freeze,grains,files,voices
+          - memory
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes)
