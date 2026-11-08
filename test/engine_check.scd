@@ -45,7 +45,18 @@ var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \stra
     \strataFilter, \strataDelay, \strataReverb, \strataMaster];
 var grainDefs = [\strataGrainRing, \strataGrainBuf];
 var engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
-var pollMessages = List.new;
+// Every /poll/value message the run receives, and each poll's values as
+// they arrive, by poll index (a List each): the helpers read one poll's
+// values instead of scanning every message, which grow all run long. Each
+// List is made with room for pollListCapacity entries, so it never grows
+// while the run receives messages: on sclang 3.13 a List that grows past
+// 128 entries (its Array then becomes a big object) inside an OSC handler
+// while a long save allocates corrupted the collector (a count assertion), every
+// time, once about 128 polls had arrived (the 300 s soak's tenth round,
+// #131). The end of the run checks that none outgrew it.
+var pollListCapacity = 16384;
+var pollMessages = List.new(pollListCapacity);
+var pollValueLists = IdentityDictionary.new(16);
 // scsynth's UDP port: STRATA_SC_PORT (default 57110), so checks in different
 // worktrees can run side by side on one machine
 var scPortText = "STRATA_SC_PORT".getenv;
@@ -243,6 +254,17 @@ var sameFrames = { arg file, path;
         other.close;
         [deviation, frames]
     }
+};
+
+// Write `seconds` seconds at `rate` of a stereo signal to an open SoundFile,
+// a second at a time: left repeating `period` (an Array, as periodic takes),
+// right its negative. When a second holds whole periods (a 1000-frame period
+// at 48 kHz) every second is the same, so one is built and written each
+// time: a long file then allocates one second's arrays, not every second's
+var writePeriodicSeconds = { arg file, period, seconds, rate;
+    var build = { arg second; var left = periodic.(period, second * rate, rate); stereoOf.(left, left.neg) };
+    var same = if ((rate % period.size) == 0) { build.(0) };
+    seconds.do({ arg second; file.writeData(same ?? { build.(second) }) });
 };
 
 // Write a test sound file of constant per-channel values
@@ -485,7 +507,12 @@ server.waitForBoot({
 
         // Polls send to Crone.remoteAddr (matron on norns); capture them here
         Crone.remoteAddr = NetAddr.localAddr;
-        OSCFunc({ arg msg; pollMessages.add(msg) }, '/poll/value');
+        OSCFunc({ arg msg;
+            var values = pollValueLists[msg[1]];
+            pollMessages.add(msg);
+            if (values.isNil) { values = List.new(pollListCapacity); pollValueLists[msg[1]] = values };
+            values.add(msg[2]);
+        }, '/poll/value');
 
         engine = buildEngine.(context);
         "compiled and allocated Engine_Strata".postln;
@@ -521,9 +548,23 @@ server.waitForBoot({
             synthTree: { arg self, group; synthNodes.(group) },
             voiceSynths: { arg self, voice; voiceTrio.(voice) },
             controlFeedsAUGen: { arg self, defName, controlName; controlFeedsAUGen.(defName, controlName) },
+            // a poll's values so far, oldest first (an Array of just those,
+            // copied from its List's room for pollListCapacity)
             pollValues: { arg self, pollName;
                 var poll = CronePollRegistry.getPollFromName(pollName);
-                pollMessages.select({ arg msg; poll.notNil and: { msg[1] == poll.index } }).collect({ arg msg; msg[2] })
+                var values = poll !? { pollValueLists[poll.index] };
+                if (values.isNil or: { values.isEmpty }) { [] } { values.array.copyRange(0, values.size - 1) }
+            },
+            // true once some value of the poll was within `tolerance` of
+            // `target` (exclusive), tested with Signal arithmetic over all of
+            // its values: no function per value, however long the run (#131)
+            pollValueNear: { arg self, pollName, target, tolerance;
+                var poll = CronePollRegistry.getPollFromName(pollName);
+                var values = poll !? { pollValueLists[poll.index] }, size = values !? _.size ? 0, signal;
+                if (size < 1) { false } {
+                    signal = Signal.newClear(size).putEach((0 .. size - 1), values.array);
+                    (((signal - target).abs.neg + tolerance).max(0).peak > 0)
+                }
             },
             writeTestFile: { arg self, path, sampleRate, frames, values; writeTestFile.(path, sampleRate, frames, values) },
             // test sound from C primitives (#131): see repeating and the helpers after it
@@ -532,6 +573,7 @@ server.waitForBoot({
             rampSignal: { arg self, size; rampSignal.(size) },
             periodic: { arg self, period, startFrame, frames; periodic.(period, startFrame, frames) },
             noise: { arg self, size, level; noise.(size, level) },
+            writePeriodicSeconds: { arg self, file, period, seconds, rate; writePeriodicSeconds.(file, period, seconds, rate) },
             sameFrames: { arg self, file, path; sameFrames.(file, path) },
             writeConstantFrames: { arg self, file, frames, values; writeConstantFrames.(file, frames, values) },
             bufferSample: { arg self, buffer, frame; bufferSample.(buffer, frame) },
@@ -578,6 +620,9 @@ server.waitForBoot({
         freeEngine.(engine);
         server.sync;
         check.(synthNames.(context.xg).size == 0, "free removes every node of the engine the areas ran on");
+        // a List past its capacity grows inside the OSC handler: raise pollListCapacity
+        check.(([pollMessages] ++ pollValueLists.values.asArray).every({ arg list; list.size < pollListCapacity }),
+            "the poll lists never grew past pollListCapacity (% messages of %)".format(pollMessages.size, pollListCapacity));
         extraContexts.do({ arg each;
             [each.ig, each.xg, each.og].do(_.free);
             (each.in_b ++ each.amp_in_b ++ each.amp_out_b ++ each.pitch_in_b ++ [each.out_b]).do(_.free);

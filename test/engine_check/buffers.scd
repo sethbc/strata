@@ -16,23 +16,19 @@ var synthNames = { arg group; h.synthNames(group) };
 var getControl = { arg synth, control; h.getControl(synth, control) };
 var bufferSample = { arg buffer, frame; h.bufferSample(buffer, frame) };
 var readBusValue = { arg bus; h.readBusValue(bus) };
-var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
+var scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, monoPath = h.monoPath, longPath = h.longPath, textPath = h.textPath;
 var before, scratchFile, file, frames, info, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
 
 // bufferState poll value: slot index * 1000 + valid seconds
-var decodeBufferState = { arg value; var slot = (value / 1000).floor; [slot.asInteger, value - (slot * 1000)] };
-var bufferStateSeen = { arg slot, seconds;
-    pollMessages.any({ arg msg; var decoded = decodeBufferState.(msg[2]);
-        (msg[1] == engine.bufferStatePoll.index) and: { decoded[0] == slot }
-            and: { (decoded[1] - seconds).abs < 0.011 } })
-};
-// bufferState poll messages received so far
-var bufferStateMessages = { pollMessages.select({ arg msg; msg[1] == engine.bufferStatePoll.index }) };
+// (seconds below 1000, so slot * 1000 + seconds names one slot); checked
+// over the poll's values with Signal arithmetic (h.pollValueNear), never a
+// function per message: the run's messages grow all run long (#131)
+var bufferStateSeen = { arg slot, seconds; h.pollValueNear(\bufferState, (slot * 1000) + seconds, 0.011) };
+// bufferState poll values received so far
+var bufferStateValues = { h.pollValues(\bufferState) };
 // bufferLoadFailed poll values received so far
-var loadFailures = {
-    pollMessages.select({ arg msg; msg[1] == engine.bufferLoadFailedPoll.index }).collect({ arg msg; msg[2] })
-};
+var loadFailures = { h.pollValues(\bufferLoadFailed) };
 
 // Buffer and file checks in functions of their own, called from the check
 // routine: its function is near sclang's per-function selector table limit
@@ -489,10 +485,12 @@ var startHighEngine = { arg name;
 var writeLongFile = { arg path, seconds, levelFor;
     var rate = server.sampleRate.asInteger;
     var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    // +1, -1, ... once; each second is it scaled (Signal arithmetic)
+    var signs = h.repeating(rate * 2, [1.0, -1.0]);
     file.openWrite(path);
     seconds.do({ arg second;
         var level = levelFor.(second);
-        file.writeData(h.repeating(rate * 2, [level, level.neg]));
+        file.writeData(signs * level);
     });
     file.close;
 };
@@ -677,9 +675,9 @@ check.(getControl.(engine.synths[\grain1], \bufFrames) == engine.bufferFrames[2]
     "a voice reading the slot gets the new valid length");
 check.(synthNames.(context.xg).size == before, "recording into a slot a voice is reading adds no lasting nodes");
 check.(waitFor.({ bufferStateSeen.(2, 0.3) }), "the bufferState poll reports the recorded seconds");
-check.(bufferStateMessages.value.notEmpty and: { bufferStateMessages.value.every({ arg msg; msg[2].isKindOf(Float) }) },
+check.(bufferStateValues.value.notEmpty and: { bufferStateValues.value.every({ arg value; value.isKindOf(Float) }) },
     "bufferState is sent as a float value poll (matron's /poll/value is typed if)");
-check.(waitFor.({ (0..7).every({ arg slot; pollMessages.any({ arg msg; decodeBufferState.(msg[2])[0] == slot }) }) }),
+check.(waitFor.({ (0..7).every({ arg slot; h.pollValueNear(\bufferState, (slot * 1000) + 499.95, 500) }) }),
     "the periodic bufferState poll reports every slot");
 scratchFile = engine.scratchDir +/+ "buf3.wav";
 check.(waitFor.({ File.exists(scratchFile) }), "a completed recording writes the scratch take buf3.wav");

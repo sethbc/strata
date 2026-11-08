@@ -25,7 +25,9 @@ var seconds = ("STRATA_SOAK_SECONDS".getenv ? "60").asInteger;
 var root = scratchRoot +/+ "soak", rate = server.sampleRate.asInteger;
 var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
 var ramp = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 }, period;
-var sourcePath = root +/+ "ramp.wav", file, other, frames, failed = List.new, start, times = List.new;
+// failed and times are made with room for every round, so they never grow
+// during the rounds (a List past 128 entries: see pollListCapacity in the runner)
+var sourcePath = root +/+ "ramp.wav", file, other, frames, failed = List.new(rounds), start, times = List.new(rounds);
 var checkFrames = ("STRATA_SOAK_CHECK".getenv ? "frames") != "length";
 // A saved file against the source in every sample (h.sameFrames: the int16
 // samples come back exactly): [the largest difference, the frames compared]
@@ -49,13 +51,10 @@ File.mkdir(root);
 write.(root +/+ "performance.data", "performance high\nbuffer_seconds %\n".format(seconds));
 write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
 write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
-// the long file: left a ramp, right its negative, a second at a time
+// the long file: left a ramp, right its negative (one second built once at 48 kHz)
 file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
 file.openWrite(sourcePath);
-seconds.do({ arg second;
-    var left = h.periodic(period, second * rate, rate);
-    file.writeData(h.stereoOf(left, left.neg));
-});
+h.writePeriodicSeconds(file, period, seconds, rate);
 file.close;
 
 other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));

@@ -260,7 +260,7 @@ h.freeEngine(other);
 check.(engine.bufferStateStride == 1000, "performance: bufferStateStride is 1000");
 h.command(\loadBuffer, 2, h.stereoPath);
 check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateValue(2) == 2000.5 }
-    and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 2000.5).abs < 0.001 }) }, 3) },
+    and: { h.waitFor({ h.pollValueNear(\bufferState, 2000.5, 0.001) }, 3) },
     "performance: bufferState carries slot * 1000 + seconds (got %)".format(engine.bufferStateValue(2)));
 // matron's poll float is 32 bits: 0.01 s steps survive up to 7 * 1000 + 300 s
 check.((FloatArray[7300.0][0] == 7300) and: { (FloatArray[7299.99][0] - 7299.99).abs < 0.001 }
