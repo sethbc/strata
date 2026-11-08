@@ -1,7 +1,7 @@
 -- test/unit/ui_alt_test.lua
 -- ALT (K1 held, lib/ui/alt.lua) and its dispatch in strata.lua's key and
 -- enc: alt_action, the ALT press and its release, alt_enc falling through to
--- enc, the norns menu forgetting ALT, and the long-press fallback hook
+-- enc, and the norns menu forgetting ALT
 -- Run alone: lua test/run.lua ui_alt
 
 return function(h)
@@ -45,7 +45,6 @@ test("K1 held is ALT and its release clears it", function()
   assert_true(S.constants.UI_PAGES.screen_dirty, "set requests a redraw (the hint row shows the ALT layer)")
   S.lib.ui_alt.set(false)
   assert_true(not S.alt_held, "set(false) clears it")
-  assert_equal(S.constants.LONG_PRESS_SECONDS, 0.6, "the long-press fallback's hold time")
 end)
 
 test("ALT+K2 and ALT+K3 go to the page's alt_key through alt_action", function()
@@ -144,22 +143,15 @@ test("E1 ignores ALT", function()
   assert_equal(#log, 0, "and no page handler ran: " .. table.concat(log, ","))
 end)
 
-test("the long-press fallback hook runs alt_action for a held key", function()
+-- K1 held as ALT is confirmed on hardware: the long-press fallback was
+-- never wired, and its hook and hold time are gone (#159)
+test("ALT has no long-press fallback: K1 held is the only way in", function()
   load_strata()
   local log = logging_fx_record()
   local S = local_value("S")
-  assert_true(not S.lib.ui_alt.long_press(2), "K2 is not held: nothing runs")
-  assert_equal(#log, 0)
-  key(2, 1)
-  assert_true(S.lib.ui_alt.long_press(2), "K2 held: its ALT action runs")
-  assert_true(not S.lib.ui_alt.long_press(2), "once per press")
-  key(2, 0)
-  assert_equal(table.concat(log, ","), "key 2,alt_key 2,alt_key_release 2",
-    "and the release goes through the ALT path")
-  for index in pairs(log) do log[index] = nil end
-  key(3, 1); show_page("MAIN")
-  assert_true(not S.lib.ui_alt.long_press(3), "a key held into another page has no long press")
-  key(3, 0)
-  assert_equal(table.concat(log, ","), "key 3", "and nothing else ran")
+  assert_equal(S.lib.ui_alt.long_press, nil, "no long-press hook")
+  assert_equal(S.constants.LONG_PRESS_SECONDS, nil, "no long-press hold time")
+  key(2, 1); key(2, 0)
+  assert_equal(table.concat(log, ","), "key 2,key_release 2", "a K2 press and release without ALT stay plain")
 end)
 end

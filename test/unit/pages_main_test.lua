@@ -295,7 +295,7 @@ test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", func
   tap(2)  -- randomizes again, never undoes the expired one
   assert_true(undo_available(1), "ALT+K2 after the window randomizes again")
   key(1, 0)
-  -- the same actions through alt_action (the long-press fallback's path)
+  -- the same actions through alt_action, which every ALT press goes through
   local MAIN = local_value("S").constants.UI_PAGES.MAIN_PAGE
   assert_true(alt_action(MAIN, 3), "MAIN has ALT actions")
   assert_true(frozen[1], "alt_action(MAIN, 3) locks")
