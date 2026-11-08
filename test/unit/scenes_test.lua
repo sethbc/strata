@@ -1054,4 +1054,120 @@ test("scenes capture and recall the LFOs; old files load with LFOs off", functio
   assert_equal(params:get("strata_lfo2_dest"), 1); assert_equal(params:string("lfo_mode_1"), "free")
 end)
 
+-- #103 step 2: scenes store each LFO's offset. It sits before lfo_<n> in
+-- SCENE_GLOBAL_PARAMS, so the state switch at a transition's end (the
+-- library's on/off re-bangs the baseline, which zeroes the offset) runs
+-- after the offset is set: lib/lfos.lua's wrapper must keep it
+test("scenes store the LFO offsets; the LFO on/off switch at a transition's end keeps them (#103)", function()
+  local context = load_strata(); finish_startup(context)
+  local globals, position = {}, {}
+  for index, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do
+    globals[global.id] = global; position[global.id] = index
+  end
+  for n = 1, 3 do
+    local offset = globals["lfo_offset_" .. n]
+    assert_true(offset ~= nil, "lfo_offset_" .. n .. " is a scene global")
+    assert_equal(offset.continuous, true, "lfo_offset_" .. n .. " crossfades")
+    assert_equal(offset.default, 0, "lfo_offset_" .. n .. " migrates to 0")
+    assert_true(position["lfo_offset_" .. n] < position["lfo_" .. n], "lfo_offset_" .. n .. " is set before lfo_" .. n)
+  end
+
+  -- LFO 1 on with +30 %, LFO 2 off with -20 %
+  params:set("lfo_1", 2); params:set("lfo_offset_1", 30)
+  params:set("lfo_offset_2", -20)
+  capture_scene(1)
+  local data = local_value("scenes")[1].data
+  assert_equal(data.lfo_offset_1, 30, "LFO 1's offset captured")
+  assert_equal(data.lfo_offset_2, -20, "LFO 2's offset captured")
+  assert_equal(data.lfo_offset_3, 0, "LFO 3's offset captured")
+  -- the other way round: LFO 1 off, LFO 2 on
+  params:set("lfo_1", 1); params:set("lfo_offset_1", -10)
+  params:set("lfo_2", 2); params:set("lfo_offset_2", 40)
+
+  recall_scene(1, 20)  -- 20 steps; the first runs immediately, the switch after the last
+  for step = 1, 20 do
+    local mix = step / 20
+    for n, fade in ipairs({ { from = -10, to = 30 }, { from = 40, to = -20 } }) do
+      local offset = params:get("lfo_offset_" .. n)
+      assert_equal(offset, math.floor(offset), "LFO " .. n .. " offset is a whole percent at step " .. step)
+      assert_near(offset, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " offset at step " .. step)
+    end
+    assert_equal(params:string("lfo_1"), "off", "LFO 1 switches only at the end (step " .. step .. ")")
+    assert_equal(params:string("lfo_2"), "on", "LFO 2 switches only at the end (step " .. step .. ")")
+    wake(context, "scene_transition_clock")
+  end
+  assert_equal(local_value("scene_transition_active"), false, "transition finished")
+  assert_equal(params:string("lfo_1"), "on", "LFO 1 turned on at the end")
+  assert_equal(params:string("lfo_2"), "off", "LFO 2 turned off at the end")
+  assert_equal(params:get("lfo_offset_1"), 30, "turning LFO 1 on kept the recalled offset")
+  assert_equal(params:get("lfo_offset_2"), -20, "turning LFO 2 off kept the recalled offset")
+  local lfos = local_value("lfos")
+  assert_near(lfos[1]:get("offset"), 0.30, 1e-9, "the library's LFO 1 offset follows")
+  assert_near(lfos[2]:get("offset"), -0.20, 1e-9, "the library's LFO 2 offset follows")
+
+  -- an instant recall that switches the LFOs keeps the offsets too
+  params:set("lfo_1", 1); params:set("lfo_offset_1", 5)
+  params:set("lfo_2", 2); params:set("lfo_offset_2", 5)
+  recall_scene(1, 0)
+  assert_equal(params:string("lfo_1"), "on"); assert_equal(params:string("lfo_2"), "off")
+  assert_equal(params:get("lfo_offset_1"), 30, "instant recall: LFO 1's offset")
+  assert_equal(params:get("lfo_offset_2"), -20, "instant recall: LFO 2's offset")
+end)
+
+test("LFO offsets in scenes: save and load, migration of older scenes, validation (#103)", function()
+  local context = load_strata({ data_subdir = "lfo_offsets" }); finish_startup(context)
+  params:set("lfo_3", 2); params:set("lfo_offset_3", -35); params:set("lfo_offset_1", 12)
+  capture_scene(2)
+  save_scenes_to_disk()
+  local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
+  assert_equal(saved.scenes[2].data.lfo_offset_3, -35, "the offset is saved")
+
+  -- a fresh script loads it and recalls it
+  context = load_strata({ data_subdir = "lfo_offsets" }); finish_startup(context)
+  assert_equal(local_value("scenes")[2].data.lfo_offset_3, -35, "the offset is loaded")
+  params:set("lfo_offset_1", -40)
+  recall_scene(2, 0)
+  assert_equal(params:string("lfo_3"), "on")
+  assert_equal(params:get("lfo_offset_3"), -35, "LFO 3's offset recalled after a reload")
+  assert_equal(params:get("lfo_offset_1"), 12, "LFO 1's offset recalled after a reload")
+
+  -- scenes saved without offsets (version 2, and version 3 before #103) load with offsets 0
+  local old = deep_copy(local_value("scenes")[2])
+  for n = 1, 3 do old.data["lfo_offset_" .. n] = nil end
+  for _, version in ipairs({ 2, 3 }) do
+    tab.save({ version = version, scenes = { [2] = deep_copy(old) } }, context.data_dir .. "strata/scenes.data")
+    load_scenes_from_disk()
+    local loaded = local_value("scenes")[2]
+    assert_true(loaded.populated, "a version " .. version .. " scene without offsets loads")
+    for n = 1, 3 do
+      assert_equal(loaded.data["lfo_offset_" .. n], 0, "version " .. version .. ": offset " .. n .. " migrates to 0")
+    end
+    params:set("lfo_offset_3", 25)
+    recall_scene(2, 0)
+    assert_equal(params:get("lfo_offset_3"), 0, "version " .. version .. ": the migrated offset is recalled")
+  end
+
+  -- validation covers the offset's range (-100..100, every baseline's)
+  capture_scene(1)
+  local scene = deep_copy(local_value("scenes")[1])
+  for _, good in ipairs({ -100, -50, 0, 12.5, 100 }) do
+    scene.data.lfo_offset_2 = good
+    assert_true(validate_scene(scene), "offset " .. good .. " accepted")
+  end
+  for _, bad in ipairs({ 101, -100.5, 150, 0 / 0, "20%", {} }) do
+    scene.data.lfo_offset_2 = bad
+    assert_true(not validate_scene(scene), "offset " .. tostring(bad) .. " rejected")
+  end
+  scene.data.lfo_offset_2 = nil
+  assert_true(not validate_scene(scene), "a missing offset is rejected (migration fills it)")
+  -- a file with a bad offset is not loaded
+  scene.data.lfo_offset_2 = 250
+  tab.save({ version = 3, scenes = { scene } }, context.data_dir .. "strata/scenes.data")
+  local captured_offset = local_value("scenes")[1].data.lfo_offset_2
+  load_scenes_from_disk()
+  assert_equal(local_value("scenes")[1].data.lfo_offset_2, captured_offset, "the bad file is not loaded")
+  assert_true(local_value("scenes")[2].populated, "the current scenes stay")
+  assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
+end)
+
 end
