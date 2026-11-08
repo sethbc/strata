@@ -19,6 +19,7 @@
 - `lua test/run.lua` and `luajit test/run.lua` load every `test/unit/*_test.lua` (listed and sorted by `load_unit_files` in `test/helpers.lua`, so a new unit file needs no runner edit) and run their tests. With an argument (`lua test/run.lua scenes`) they load only the unit files whose name contains it.
 - Each unit file is `return function(h) ... end`: it registers its tests with `h.test(name, fn)` and takes the helpers from `h`.
 - `test/helpers.lua` holds the harness: the stubs, the test registry and `run_test`, the assertions, `load_strata`, `find_upvalue`/`local_value`, the clock drivers and the helpers several unit files share.
+- **Temporary folders.** Every test writes below `h.data_root` (a fresh `os.tmpname()` folder) and deletes only through `h.remove_tree(path)`, which refuses (raises, deletes nothing) any path that is not `h.data_root` or inside it, is relative or has a `.` or `..` segment, and quotes the path for the shell (`h.shell_quote`) after `rm -rf --`. Never call `rm` through `os.execute` directly. The engine check deletes only `<temp dir>/strata-engine-check-*`, and `test/run_engine_check.sh` only its own `strata-engine-run.XXXXXX` folder (#134).
 - The tests load `strata.lua` into norns stubs (`test/norns_stubs.lua`). The run exits non-zero on failure and includes the static sync check.
 
 ### Engine stub

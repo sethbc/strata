@@ -31,6 +31,29 @@ local data_root = os.tmpname()
 os.remove(data_root)
 os.execute("mkdir -p '" .. data_root .. "'")
 data_root = data_root .. "/"
+-- an absolute folder at least two levels down (os.tmpname gives /tmp/lua_XXXXXX)
+assert(data_root:match("^/[^/]+/.*[^/]/$"), "unexpected temporary folder: " .. data_root)
+
+-- A string quoted for /bin/sh: single quotes, each ' written as '\''
+local function shell_quote(text)
+  return "'" .. (tostring(text):gsub("'", "'\\''")) .. "'"
+end
+
+-- Delete a folder tree the suite made: data_root itself or a path inside
+-- it, absolute, with no "." or ".." segment. Any other path raises an error
+-- and deletes nothing.
+local function remove_tree(path)
+  if type(path) ~= "string" then error("remove_tree: not a path: " .. tostring(path), 2) end
+  local target, root = path:gsub("/+$", ""), data_root:gsub("/+$", "")
+  if target:sub(1, 1) ~= "/" then error("remove_tree: not an absolute path: " .. path, 2) end
+  for segment in target:gmatch("[^/]+") do
+    if segment == "." or segment == ".." then error("remove_tree: a . or .. segment: " .. path, 2) end
+  end
+  if target ~= root and target:sub(1, #root + 1) ~= root .. "/" then
+    error("remove_tree: outside the suite's temporary folder (" .. data_root .. "): " .. path, 2)
+  end
+  os.execute("rm -rf -- " .. shell_quote(target))
+end
 
 local tests = {}
 local function test(name, func) table.insert(tests, { name = name, func = func }) end
@@ -562,6 +585,8 @@ return {
   engine_polls = engine_polls,
   engine_spec = engine_spec,
   data_root = data_root,
+  shell_quote = shell_quote,
+  remove_tree = remove_tree,
   tests = tests,
   test = test,
   fail = fail,
