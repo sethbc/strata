@@ -26,9 +26,10 @@ return function(S)
   -- marks it, until then), and a file load, shown at once, stays loaded only
   -- if the engine reports audio. confirm_since is the util.time() of the
   -- change awaiting that report (nil = settled); restoring marks a load from
-  -- load_buffers_from_disk (until the engine reports its audio);
-  -- settled_empty is "take" or "load" when that settled without audio (a later
-  -- report of audio adopts it: a slow take or file read), else false;
+  -- load_buffers_from_disk until it settles, with or without audio;
+  -- settled_empty is "take", "load" or "restore" when that settled without
+  -- audio (a later report of audio adopts it: a slow take or file read, and a
+  -- restore then counts in buffers_restored), else false;
   -- missing_path is a remembered file that was not found on start (kept in
   -- buffers.data). loads_sent counts the slot's loadBuffer commands (the
   -- engine counts them too and names one in its bufferLoadFailed report);
@@ -91,25 +92,26 @@ return function(S)
 
   -- A take or load in the slot holds audio: loaded (a take named take <n>,
   -- its path the scratch take; a load keeps its name), and a restored slot
-  -- counts in buffers_restored
+  -- (restoring, or a restore that settled empty and is adopted now) counts
+  -- in buffers_restored
   function confirm_buffer_audio(slot, is_take)
     local buffer = S.buffers[slot]
+    local restored = buffer.restoring or buffer.settled_empty == "restore"
     buffer.loaded = true
     buffer.settled_empty = false
+    buffer.restoring = false
     if is_take then
       buffer.name = "take " .. slot
       buffer.path = scratch_take_path(slot)
     end
-    if buffer.restoring then
-      buffer.restoring = false
-      S.buffers_restored = S.buffers_restored + 1
-    end
+    if restored then S.buffers_restored = S.buffers_restored + 1 end
   end
 
   -- Settle a take or load awaiting the engine (confirm_since set) from the
   -- slot's seconds (confirm_buffer_audio). Without audio a take leaves the slot
   -- empty and a load is not loaded (keeping its name); settled_empty records
-  -- which, so a later report of audio still adopts it. Cancels the finishing
+  -- which ("restore" for a restore), so a later report of audio still adopts
+  -- it, and restoring clears: the slot has settled. Cancels the finishing
   -- fallback.
   function settle_buffer_slot(slot)
     local buffer = S.buffers[slot]
@@ -124,7 +126,8 @@ return function(S)
       confirm_buffer_audio(slot, is_take)
     else
       buffer.loaded = false
-      buffer.settled_empty = is_take and "take" or "load"
+      buffer.settled_empty = is_take and "take" or (buffer.restoring and "restore" or "load")
+      buffer.restoring = false
       if is_take then
         buffer.name = "empty"
         buffer.path = nil

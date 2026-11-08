@@ -205,6 +205,41 @@ test("a load settled empty adopts audio the engine reports later; restores count
   assert_equal(buffers[5].name, "second.wav", "a new load replaces the old one")
 end)
 
+-- A restore that settles empty is no longer restoring; a late report of
+-- audio still adopts it and counts it once (#163)
+test("a restore that settles empty clears restoring, and late audio still counts once", function()
+  local subdir = "restore-settles-empty-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  util.make_dir(context.audio_dir)
+  local slow = context.audio_dir .. "slow.wav"
+  io.open(slow, "w"):close()
+  load_buffer(2, slow)
+  cleanup()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local buffers = local_value("buffers")
+  assert_true(buffers[2].restoring, "restoring until the engine reports")
+  context.set_time(5); context.polls.fire("bufferState", 1000)   -- 0 s, past the settle time
+  assert_true(not buffers[2].loaded, "settled empty")
+  assert_true(not buffers[2].restoring, "a settled slot is no longer restoring")
+  assert_equal(buffers[2].settled_empty, "restore", "the settle remembers it was a restore")
+  assert_equal(buffer_state_before_load(2).restoring, false, "a later load's undo state is not restoring")
+  context.polls.fire("bufferState", 1012); context.polls.fire("bufferState", 1012)
+  assert_true(buffers[2].loaded, "the late read is adopted")
+  assert_equal(buffers[2].name, "slow.wav", "under its file name")
+  assert_equal(buffers[2].settled_empty, false)
+  assert_equal(local_value("buffers_restored"), 1, "and counted once")
+  -- a restore that gets audio at once counts and clears restoring too
+  load_buffer(3, slow); buffers[3].restoring = true   -- as load_buffers_from_disk does
+  context.polls.fire("bufferState", 2004)
+  assert_true(not buffers[3].restoring); assert_equal(local_value("buffers_restored"), 2)
+  -- a plain load that settles empty is still a load
+  load_buffer(4, slow)
+  context.set_time(10); context.polls.fire("bufferState", 3000)
+  assert_equal(buffers[4].settled_empty, "load")
+  context.polls.fire("bufferState", 3004)
+  assert_equal(local_value("buffers_restored"), 2, "a plain load never counts as restored")
+end)
+
 test("a finishing take settles from the last known seconds when no report comes", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
