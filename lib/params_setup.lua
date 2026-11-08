@@ -4,7 +4,7 @@
 -- buffers, midi, voices), and init runs each record's add in order. Also
 -- the voice params (add_voice_params, get_param_spec), the redraw-on-param
 -- wrapper (redraw_on_param_changes, called by init after the records) and
--- the tempo-follow handlers; these stay global. S.fx_last_mix is
+-- the tempo-follow handlers; these stay global. S.fx_last_mix.filter is
 -- read by the FX page's K3. Reads, at init, the registered voice params
 -- (added through S.lib.params_setup.add_voice_extra), fx params, param
 -- filters and source change hooks (lib/state.lua), and sets S.performance
@@ -28,10 +28,10 @@ return function(S)
   S.performance = {}
   for key, value in pairs(S.constants.STANDARD_PERFORMANCE) do S.performance[key] = value end
 
-  -- Last non-zero mix of each effect (set by its mix action): the FX page's K3
-  -- restores it after a bypass. The delay's 0.3 is a starting value (its
-  -- default mix is 0; 1 would be fully wet).
-  S.fx_last_mix = {filter = 1, delay = 0.3, reverb = 0.3}
+  -- The filter's last non-zero mix (set by filter_mix's action): the FX
+  -- page's K3 sets the mix to 0 and back to it. The delay and reverb need
+  -- none: K3 toggles their bypass params, which keep the mix
+  S.fx_last_mix = {filter = 1}
 
   -- The filter and delay params are faders on the 256 grid's FX page: redraw
   -- only while a grid shows it (no other layout shows them). A scene
@@ -333,7 +333,6 @@ return function(S)
       name = "delay mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
       action = function(x)
-        if x > 0 then S.fx_last_mix.delay = x end
         send_param_to_engine("delay_mix", x)
         fx_fader_changed()
       end
@@ -345,7 +344,6 @@ return function(S)
       name = "reverb mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
       action = function(x)
-        if x > 0 then S.fx_last_mix.reverb = x end
         send_param_to_engine("reverb_mix", x)
       end
     }

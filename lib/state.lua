@@ -32,7 +32,7 @@ return function()
     grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw, fx_faders_page?}
     voice_params = {},  -- per-voice param records (register_voice_params), in registration order
     scene_fields = {},  -- global scene fields {id, default, discrete} (register_scene_field)
-    source_change = {}, -- fn(voice_idx, source), run after a v<i>_source action
+    source_change = {}, -- fn(voice_idx, source), run by each v<i>_source action before its sync, never in a scene recall
     param_filters = {}, -- per voice param key: fn(voice_idx, value, previous) -> value
     lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, after the built-in ones
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
@@ -160,8 +160,9 @@ return function()
     table.insert(M.registry.scene_fields, {id = field.id, default = field.default, discrete = field.discrete == true})
   end
 
-  -- fn(voice_idx, source) runs after every v<i>_source action (the source
-  -- stored and sent), except during a scene recall
+  -- fn(voice_idx, source) runs in every v<i>_source action, once the source
+  -- is stored and sent and before the voice's sync, except during a scene
+  -- recall
   function M.register_source_change(fn)
     require_arg(type(fn) == "function", "register_source_change", "a hook is a function")
     table.insert(M.registry.source_change, fn)
