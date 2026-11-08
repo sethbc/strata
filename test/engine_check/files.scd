@@ -258,6 +258,42 @@ var checkShortWrite = { arg stereoPath;
     command.(\clearBuffer, 6); server.sync;
     File.delete(savePath);
 };
+// An sclang error inside a write's routine (injected through
+// interleaveFaultHook, which interleaveFiles runs first) still ends the save:
+// one failed report, its writeGenerations entry gone, no temporary float or
+// .part file left. Slot 5 (index 4) holds the stereo file.
+var checkWriteFault = {
+    var dir = scratchRoot +/+ "fault", savePath = dir +/+ "broken.wav", count, temps = tempFloatFiles.value, left;
+    File.mkdir(dir);
+    count = saveResults.value.size;
+    engine.tryPerform(\interleaveFaultHook_, { Error("injected write fault").throw });
+    command.(\saveBuffer, 4, savePath);
+    1.0.wait;
+    engine.tryPerform(\interleaveFaultHook_, nil);
+    left = (tempFloatFiles.value - temps).asArray ++ PathName(dir).files.collect(_.fileName);
+    check.(saveReportsAfter.(count) == [[4, savesSent.(4), true]],
+        "files: a save whose routine throws is reported failed, once (got %)".format(saveReportsAfter.(count)));
+    check.(engine.writeGenerations[savePath.standardizePath].isNil and: { left.isEmpty },
+        "files: and leaves no writeGenerations entry, temporary or .part file (left: %)".format(left));
+};
+// A save onto a folder (mv -f would move the file into it) fails: one
+// failed report, the folder and its contents unchanged, no .part beside it
+var checkSaveOntoFolder = {
+    var dir = scratchRoot +/+ "onto-folder", savePath = dir +/+ "taken.wav", count, inside, beside;
+    File.mkdir(savePath);
+    File.use(savePath +/+ "inside.txt", "w", { arg text; text.write("keep") });
+    count = saveResults.value.size;
+    command.(\saveBuffer, 4, savePath);
+    1.0.wait;
+    inside = PathName(savePath).files.collect(_.fileName);
+    beside = PathName(dir).files.collect(_.fileName);
+    check.(saveReportsAfter.(count) == [[4, savesSent.(4), true]],
+        "files: a save onto a folder is reported failed (got %)".format(saveReportsAfter.(count)));
+    check.(PathName(savePath).isFolder and: { inside == ["inside.txt"] } and: { beside.isEmpty }
+        and: { engine.writeGenerations[savePath.standardizePath].isNil },
+        "files: and leaves the folder as it was, with no .part beside it (inside %, beside %)".format(inside, beside));
+    File.delete(savePath +/+ "inside.txt"); File.delete(savePath);
+};
 var tempFilesBefore = tempFloatFiles.value;
 
 check.(engine.tryPerform(\bufferSaveResultValue, 3, 2, true) == (((2 * 2) + 1) * engine.numBuffers + 3).asFloat
@@ -418,5 +454,7 @@ check.(saveReportsAfter.(reports).isEmpty and: { (0 .. engine.numBuffers - 1).co
     "a save of a slot out of range counts and reports nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
 checkShortWrite.(stereoPath);
+checkWriteFault.value;
+checkSaveOntoFolder.value;
 checkLongSave.value;
 }

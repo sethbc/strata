@@ -205,27 +205,53 @@
         buffersR[index].write(tempPaths[1], "wav", "float", frames);
         fork({
             var current = { writeGenerations[path] == generation };
-            var written, moved;
-            context.server.sync;
-            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
-            tempPaths.do({ arg tempPath; File.delete(tempPath) });
-            // no yield between this check and the rename. The newest write
-            // forgets its generation whether it succeeded or failed, and
-            // reports how it ended (done); an abandoned one leaves the newer
-            // write's entry alone and reports nothing.
-            if (current.value) {
-                moved = written and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
-                if (moved) {
-                    postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
-                } {
-                    if (written) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
+            // done runs at most once, whatever happens below
+            var reported = false, finish = { arg ok; if (reported.not) { reported = true; done.value(ok) } };
+            var deleteIfThere = { arg file; try { if (File.exists(file)) { File.delete(file) } } };
+            var written, moved, folder;
+            try {
+                context.server.sync;
+                written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
+                tempPaths.do({ arg tempPath; File.delete(tempPath) });
+                // no yield between this check and the rename. The newest write
+                // forgets its generation whether it succeeded or failed, and
+                // reports how it ended (finish); an abandoned one leaves the
+                // newer write's entry alone and reports nothing. A folder at
+                // the path fails the write: mv -f would move the file into it.
+                if (current.value) {
+                    folder = written and: { PathName(path).isFolder };
+                    if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
+                    moved = written and: { folder.not }
+                        and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
+                    if (moved) {
+                        postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
+                    } {
+                        if (written and: { folder.not }) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
+                    };
+                    writeGenerations.removeAt(path);
+                    finish.(moved);
                 };
-                writeGenerations.removeAt(path);
-                done.value(moved);
+                if (File.exists(partPath)) { File.delete(partPath) };
+            } { arg error;
+                // an sclang error inside the write (a read, a delete, the
+                // interleave) still ends it: nothing left behind, and the
+                // newest write still reports, failed. Never posted with the
+                // word the engine check fails on: the check injects this.
+                postln("strata: cannot write % (%)".format(path, error.class.name));
+                tempPaths.do(deleteIfThere);
+                deleteIfThere.(partPath);
+                if (current.value) {
+                    writeGenerations.removeAt(path);
+                    finish.(false);
+                };
             };
-            if (File.exists(partPath)) { File.delete(partPath) };
         }, SystemClock);
     }
+
+    // A test hook (nil on norns): a function interleaveFiles calls first with
+    // the output path, so the engine check can throw inside a write's routine
+    interleaveFaultHook { ^areaState[\files][\interleaveFaultHook] }
+    interleaveFaultHook_ { arg hook; areaState[\files][\interleaveFaultHook] = hook }
 
     // Called inside a routine. Returns false (and writes nothing more) as
     // soon as keepGoing is false, i.e. a newer write to the same path began,
@@ -235,11 +261,12 @@
     // short is a failed write, posted as one, so writeSlot never renames a
     // truncated file over the old one.
     interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames;
-        var chunkFrames = 8192;
-        var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
+        var chunkFrames = 8192, sources;
         var output, left, right, interleaved, finished = true, written;
         var peak = int16Peak, negativePeak = int16Peak.neg;
 
+        this.interleaveFaultHook.value(path);  // the engine check's fault, before any file opens
+        sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
         if (sources.includes(nil).not and: { sources.any({ arg source; source.numFrames < frames }) }) {
             postln("strata: cannot write " ++ path ++ " (a temporary file holds % of % frames: is the disk full?)".format(
                 sources.collect(_.numFrames).minItem, frames));

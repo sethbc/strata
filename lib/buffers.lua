@@ -57,8 +57,10 @@ return function(S)
   -- report can still undo (a report arrives within a fade wait and a read, so
   -- more than one is only ever pending for loads sent back to back).
   -- tracked_saves: a slot's newest saves whose bufferSaveResult report is
-  -- still awaited (a 16 s save ends in a fraction of a second, so more than
-  -- one is only ever awaited for saves sent back to back).
+  -- still awaited. On the high tier a 300 s save takes seconds, so saves can
+  -- overlap; keeping only the newest 4 is still safe: the flash depends only
+  -- on saves_sent, and dropping an older entry only loses that save's console
+  -- line.
   local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4}
   S.buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
   local buffer_audio_dir = _path.audio .. "strata/"
