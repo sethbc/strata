@@ -213,7 +213,8 @@ readOnlyRun = { arg name, stale, settingText, meminfo = "meminfo";
     if (writable.not) {
         engineThere = h.startEngine((settingsDir: folder, modelPath: root +/+ "model", meminfoPath: root +/+ meminfo));
         outcome = [engineThere.tier, engineThere.bufferSeconds, engineThere.areaState[\performance][\decision][\reason],
-            readText.(folder +/+ "performance_active.data"), (folder +/+ "*.part").pathMatch];
+            readText.(folder +/+ "performance_active.data"), (folder +/+ "*.part").pathMatch,
+            engineThere.bufferLengthValue];
         h.freeEngine(engineThere);
     };
     ("chmod 755 " ++ folder.shellQuote).systemCmd;
@@ -231,6 +232,7 @@ if (fields.isNil) {
         "performance high\nbuffer_seconds 300\n", "meminfo-1350000");
     check.(fields[0] == \high and: { fields[1] == 60 } and: { fields[2].contains("300 s -> 60 s (memory)") },
         "performance: an old high 300 s file runs high with the memory step-down (got %)".format(fields));
+    check.(fields[5] == 8060, "performance: and reports its 60 s slots to Lua as bufferState 8 * 1000 + 60 (got %)".format(fields[5]));
     fields = readOnlyRun.("standard", "tier standard\nbuffer_seconds 16\nmax_grains 128\nhistory_seconds 16\nreason x\n",
         "performance high\nbuffer_seconds 60\n");
     check.(fields[0] == \standard and: { fields[1] == 16 },
@@ -264,6 +266,10 @@ check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateVal
 check.((FloatArray[7300.0][0] == 7300) and: { (FloatArray[7299.99][0] - 7299.99).abs < 0.001 }
     and: { FloatArray[2016.5][0] == 2016.5 },
     "performance: the largest value, 7 * 1000 + 300 s, keeps 0.01 s in a 32-bit float");
+// ... and, after the slots, the slot length: numBuffers * 1000 + bufferSeconds
+check.(engine.bufferLengthValue == 8016 and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 8016).abs < 0.001 }) }, 3) },
+    "performance: the periodic bufferState also sends the slot length, 8 * 1000 + 16 (got %)".format(
+        h.pollValues(\bufferState).select({ arg value; value >= 8000 }).asSet));
 h.command(\clearBuffer, 2);
 server.sync;
 }

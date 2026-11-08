@@ -110,6 +110,34 @@ return function(S)
     S.performance_start_setting = M.setting()
   end
 
+  -- The slot length the engine reports (bufferState's slot index
+  -- NUM_BUFFERS, lib/buffers.lua). Normally it equals S.performance's; an old
+  -- active file the engine could not replace may name more than memory let
+  -- it allocate (#153), and then the engine's shorter length wins: the slot
+  -- length, the record duration's maximum (and a longer duration) follow it,
+  -- with one console line. Anything but a shorter length of the running
+  -- tier is ignored
+  function M.engine_slot_seconds(seconds)
+    local current = S.performance and S.performance.buffer_seconds
+    local allowed = S.performance and PERFORMANCE.tiers[S.performance.tier]
+    if not current or not allowed or seconds >= current or not includes(allowed.buffer_seconds, seconds) then
+      return false
+    end
+    print(string.format("strata: the engine's slots hold %d s, not the %d s %s names; using %d s",
+      seconds, current, PERFORMANCE.active_file, seconds))
+    S.performance.buffer_seconds = seconds
+    local duration = params:lookup_param("record_duration")
+    if duration then
+      -- a control param stores its value normalized to its range: read it
+      -- before the range changes, and set it again after
+      local before = params:get("record_duration")
+      duration.controlspec.maxval = seconds
+      params:set("record_duration", math.min(before, seconds))
+    end
+    request_redraw()
+    return true
+  end
+
   -- A valid performance.data line
   local function valid_setting_line(key, value)
     if key == "performance" then return includes(PERFORMANCE.choices, value) end

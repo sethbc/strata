@@ -85,9 +85,9 @@
     // that could not be removed (#153) is what Lua reads at init, so the
     // engine runs what it says, read by Lua's rules (parseActivePerformance):
     // standard for an invalid or standard file; for high, N s the high tier
-    // at N s, stepped down as usual when memory is short (Lua then shows
-    // N s; the slots' size caps every load and recording). Posts what it
-    // runs and how to clear it
+    // at N s, stepped down as usual when memory is short (Lua then caps its
+    // slot length to the engine's, which bufferState reports:
+    // bufferLengthValue). Posts what it runs and how to clear it
     unwrittenPerformance { arg model, memKB, sampleRate;
         var path = this.activePerformancePath, text, old, decision;
         if (File.exists(path).not) {
@@ -109,7 +109,7 @@
             ++ "). Remove the file by hand to use the setting");
         if (old.notNil and: { decision[\bufferSeconds] < old[\bufferSeconds] }) {
             postln("strata: memory allows " ++ decision[\bufferSeconds] ++ " s slots, not the "
-                ++ old[\bufferSeconds] ++ " s the file names");
+                ++ old[\bufferSeconds] ++ " s the file names; the script takes the slots' length from bufferState");
         };
         ^decision
     }

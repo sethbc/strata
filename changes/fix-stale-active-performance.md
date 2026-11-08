@@ -1,2 +1,2 @@
 ### Fixed
-- When the engine cannot replace an old `performance_active.data` (a read-only data folder), it now runs the tier that file names, the one the script reads at start, and says the file must be removed by hand. Before, the engine ran standard while the script could show the high tier (#153).
+- When the engine cannot replace an old `performance_active.data` (a read-only data folder), it now runs the tier that file names, the one the script reads at start, and says the file must be removed by hand. Before, the engine ran standard while the script could show the high tier. If memory only allows shorter slots than the file names, the script learns the engine's slot length within a few seconds and uses it for SETUP, BUFFER and the record duration (#153).

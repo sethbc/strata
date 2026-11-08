@@ -445,6 +445,11 @@ return function(S)
   local function buffer_state_changed(value)
     local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
     local slot = slot_index + 1
+    -- slot index NUM_BUFFERS: the engine's slot length, not a slot (#153)
+    if slot_index == NUM_BUFFERS then
+      S.lib.performance.engine_slot_seconds(value - slot_index * BUFFER_STATE_STRIDE)
+      return
+    end
     if not valid_buffer_slot(slot) then return end
     local seconds = value - slot_index * BUFFER_STATE_STRIDE
     local buffer = S.buffers[slot]

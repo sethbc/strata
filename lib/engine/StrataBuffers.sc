@@ -90,10 +90,14 @@
         // Valid seconds per slot. matron only accepts single-float value
         // polls (/poll/value is typed "if"), so each message carries one
         // slot: slot index * bufferStateStride + seconds. The periodic poll
-        // cycles through the slots; every change is also sent at once.
+        // cycles through the slots and then the slot length
+        // (bufferLengthValue: slot index numBuffers); every change is also
+        // sent at once.
         bufferStatePoll = this.addPoll(\bufferState, {
-            var value = this.bufferStateValue(bufferStateCursor);
-            bufferStateCursor = (bufferStateCursor + 1) % numBuffers;
+            var value = if (bufferStateCursor < numBuffers) {
+                this.bufferStateValue(bufferStateCursor)
+            } { this.bufferLengthValue };
+            bufferStateCursor = (bufferStateCursor + 1) % (numBuffers + 1);
             value
         });
 
@@ -127,6 +131,12 @@
     bufferStateValue { arg index;
         ^(index * this.bufferStateStride) + (bufferFrames[index] / bufferSampleRates[index]).round(0.01)
     }
+
+    // The slots' length (bufferSeconds) as a bufferState message for the
+    // slot index after the last slot: numBuffers * bufferStateStride +
+    // seconds. Lua caps its slot length to it (an old active file the
+    // engine could not replace may name more than it allocated, #153)
+    bufferLengthValue { ^(numBuffers * this.bufferStateStride) + bufferSeconds }
 
     // One float, as bufferState (matron's /poll/value is typed "if"):
     // (load * 2 + emptied) * numBuffers + slot index, where load is the
