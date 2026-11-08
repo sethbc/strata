@@ -1,10 +1,10 @@
 # Lua implementation notes (moved)
 
-The Lua notes are now one short file per module, each opening with what you must not break. CLAUDE.md's module table maps every `lib/` file to its notes file and its unit tests. This page only points old links at the new files.
+The Lua notes are now one short file per module, each opening with what you must not break. AGENTS.md's module table maps every `lib/` file to its notes file and its unit tests. This page only points old links at the new files.
 
 | Old section | Now in |
 |-------------|--------|
-| Modules | CLAUDE.md's module table, and the Owns section of each file below |
+| Modules | AGENTS.md's module table, and the Owns section of each file below |
 | Voice State Management, Resource Management and Cleanup, Bounds Checking, Async Initialization | `docs/notes/lua/state-and-voices.md` |
 | Param -> engine: `send_param_to_engine` | `docs/notes/lua/engine-sync.md` |
 | Parameter System (and the tempo handler) | `docs/notes/lua/params.md` |

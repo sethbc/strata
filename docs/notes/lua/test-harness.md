@@ -12,7 +12,7 @@
 
 ## Owns
 
-`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; CLAUDE.md's module table names each), `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/run_engine_check_313.sh` and its image (`test/docker/sc313/Dockerfile`, `test/docker/sc313/check.sh`), `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`.
+`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; AGENTS.md's module table names each), `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/run_engine_check_313.sh` and its image (`test/docker/sc313/Dockerfile`, `test/docker/sc313/check.sh`), `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`.
 
 ## The Lua test run
 
@@ -35,7 +35,7 @@ Continuous arguments are checked where the engine enforces a limit (`argument_li
 - an FX control its SynthDef clips as it is (`feedback.clip(0, 0.95)`, `freq.lag(0.05).clip(20, 20000)`: the filter's freq, res and mix, the delay's time, feedback and mix);
 - or an argument the command clips itself (`msg[2].clip(0, 1)`: `retrigger`'s velocity);
 - a rounding error of 1e-12 of the limit passes (a 0.01 step makes 0.95 into 0.9500000000000001).
-- The engine clips no crossmod depth or mod speed, but CLAUDE.md's table documents their ranges. So `setModAmpAmt`, `setModFreqAmt` and `setModSpeed` are checked against the controlspec of the Lua param that sends them (`DOCUMENTED_LIMITS`, read at call time). A test checks that CLAUDE.md's row states that range.
+- The engine clips no crossmod depth or mod speed, but AGENTS.md's table documents their ranges. So `setModAmpAmt`, `setModFreqAmt` and `setModSpeed` are checked against the controlspec of the Lua param that sends them (`DOCUMENTED_LIMITS`, read at call time). A test checks that AGENTS.md's row states that range.
 
 Param names:
 - A `setVoiceParam` name must be a control of that voice's SynthDef (`bend` is one).
@@ -46,7 +46,7 @@ Keeping it current:
 - A control added to a SynthDef needs no stub change, and the voice, slot and source limits follow `numVoices` and `numBuffers` (a test parses a patched copy of the engine).
 
 Comments:
-- Every parser of the engine source (the stub's `engine_signatures_from_source`, `engine_polls_from_source` and `engine_spec_from_source`, `sync_check.lua`, which uses the stub's, and the CLAUDE.md table check) first runs `stubs.strip_sc_comments`.
+- Every parser of the engine source (the stub's `engine_signatures_from_source`, `engine_polls_from_source` and `engine_spec_from_source`, `sync_check.lua`, which uses the stub's, and the AGENTS.md table check) first runs `stubs.strip_sc_comments`.
 - It blanks `//` and (nested) `/* */` comments but not strings, quoted symbols or `$x` characters, so a commented-out command, poll, SynthDef, argument or `Env` is never counted.
 - An unterminated string, symbol or block comment is an error naming its line (it would otherwise swallow the rest of the file).
 
@@ -77,8 +77,8 @@ Tests built on it:
 
 ### Docs checks
 
-- CLAUDE.md's command table under "Lua ↔ SuperCollider Communication" must have exactly one row per engine `addCommand`, with the same signature and argument count. Update the table in the same commit as the engine.
-- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are CLAUDE.md, README.md, `docs/status.md`, `docs/decisions.md` and every `.md` under docs/notes/ (recursively), docs/user/ and docs/process/ (`maintained_docs` in `test/helpers.lua`).
+- AGENTS.md's command table under "Lua ↔ SuperCollider Communication" must have exactly one row per engine `addCommand`, with the same signature and argument count. Update the table in the same commit as the engine.
+- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are AGENTS.md, README.md, `docs/status.md`, `docs/decisions.md` and every `.md` under docs/notes/ (recursively), docs/user/ and docs/process/ (`maintained_docs` in `test/helpers.lua`).
 - Every repo path the maintained docs name in backticks (under docs/, test/, .github/ and lib/) must exist, from the repo root. A relative Markdown link target must exist relative to the doc's own folder (`doc_paths_missing(text, doc_name)`); `docs/notes/lua.md` alone may still link root files from the repo root, a fallback to delete with that file. A norns library is named by its path in the norns repo (`lua/lib/lfo.lua`), which is not checked.
 - Every file in docs/notes/lua/ must have `## Must not break` as its first heading (headings inside code fences do not count).
 - Every changelog fragment in changes/ (`changes/README.md` aside) must hold an `### Added`, `### Changed` or `### Fixed` heading with a bullet under it.

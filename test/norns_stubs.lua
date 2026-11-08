@@ -71,7 +71,7 @@
 -- lib/engine/*.sc, stubs.engine_sources), and range-checks indices,
 -- enumerated values, setVoiceParam/setGrainParam names and continuous values
 -- against the limits and SynthDef controls parsed from the same source
--- (stubs.parse_engine_spec), plus the ranges CLAUDE.md documents for
+-- (stubs.parse_engine_spec), plus the ranges AGENTS.md documents for
 -- arguments the engine does not clip (DOCUMENTED_LIMITS).
 
 local stubs = {}
@@ -147,7 +147,7 @@ end
 -- swallow the rest of the file, and sclang would not compile it either).
 -- Every parser of the engine source goes through it: the ones below,
 -- engine_spec_from_source, sync_check.lua (which uses
--- engine_signatures_from_source) and the CLAUDE.md table check (which uses
+-- engine_signatures_from_source) and the AGENTS.md table check (which uses
 -- parse_engine_signatures). engine_sources' "// file: <path>" lines are
 -- kept, so the parsers can tell where a file ends and name it in errors.
 function stubs.strip_sc_comments(source)
@@ -511,7 +511,7 @@ function stubs.engine_spec_problems(spec)
   return problems
 end
 
--- Limits CLAUDE.md's command table documents for arguments the engine does
+-- Limits AGENTS.md's command table documents for arguments the engine does
 -- not clip itself: the crossmod depths ("-2 to 2") and the mod speed
 -- ("0.1-50"). The numbers are not copied here: each check reads, when the
 -- command is called, the controlspec of the Lua param that sends the
@@ -559,7 +559,7 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
       end
       local spec_range = param.controlspec
       local problem = float_range(documented.name, args[documented.argument], spec_range.minval, spec_range.maxval)
-      if problem then return problem .. " (" .. param_id .. "'s range, which CLAUDE.md documents)" end
+      if problem then return problem .. " (" .. param_id .. "'s range, which AGENTS.md documents)" end
     end
   end
   local function enumerated(name, value)
