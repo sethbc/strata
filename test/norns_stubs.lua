@@ -722,6 +722,20 @@ local function make_controlspec(util)
     return util.round(mapped, self.step)
   end
 
+  -- core/controlspec.lua's copy: a new spec with the same range, warp,
+  -- step, default, units and quantum (norns' copy leaves out wrap)
+  function ControlSpec:copy()
+    local spec = setmetatable({}, ControlSpec)
+    spec.minval = self.minval
+    spec.maxval = self.maxval
+    spec.warp_name = self.warp_name
+    spec.step = self.step
+    spec.default = self.default
+    spec.units = self.units
+    spec.quantum = self.quantum
+    return spec
+  end
+
   function ControlSpec:unmap(value)
     local clamped = util.clamp(util.round(value, self.step), math.min(self.minval, self.maxval),
       math.max(self.minval, self.maxval))
