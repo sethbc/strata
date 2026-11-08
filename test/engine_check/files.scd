@@ -262,22 +262,31 @@ var checkShortWrite = { arg stereoPath;
     File.delete(savePath);
 };
 // An sclang error inside a write's routine (injected through
-// interleaveFaultHook, which interleaveFiles runs first) still ends the save:
-// one failed report, its writeGenerations entry gone, no temporary float or
-// .part file left. Slot 5 (index 4) holds the stereo file.
-var checkWriteFault = {
-    var dir = scratchRoot +/+ "fault", savePath = dir +/+ "broken.wav", count, temps = tempFloatFiles.value, left;
+// interleaveFaultHook, which interleaveFiles calls with the output path, a
+// stage and the sound files it has open: \start before it opens any, \open
+// once the temporary files and the output are open) still ends the save: one
+// failed report, its writeGenerations entry gone, no temporary float or .part
+// file left, and every sound file it had opened closed. Slot 5 (index 4)
+// holds the stereo file.
+var checkWriteFault = { arg stage;
+    var dir = scratchRoot +/+ "fault-" ++ stage, savePath = dir +/+ "broken.wav", count, temps = tempFloatFiles.value;
+    var left, seen;
     File.mkdir(dir);
     count = saveResults.value.size;
-    engine.tryPerform(\interleaveFaultHook_, { Error("injected write fault").throw });
+    engine.tryPerform(\interleaveFaultHook_, { arg path, at, openFiles;
+        if (at == stage) { seen = openFiles.copy; Error("injected write fault").throw };
+    });
     command.(\saveBuffer, 4, savePath);
     1.0.wait;
     engine.tryPerform(\interleaveFaultHook_, nil);
     left = (tempFloatFiles.value - temps).asArray ++ PathName(dir).files.collect(_.fileName);
     check.(saveReportsAfter.(count) == [[4, savesSent.(4), true]],
-        "files: a save whose routine throws is reported failed, once (got %)".format(saveReportsAfter.(count)));
+        "files: a save whose routine throws (%) is reported failed, once (got %)".format(stage, saveReportsAfter.(count)));
     check.(engine.writeGenerations[savePath.standardizePath].isNil and: { left.isEmpty },
-        "files: and leaves no writeGenerations entry, temporary or .part file (left: %)".format(left));
+        "files: and leaves no writeGenerations entry, temporary or .part file (%; left: %)".format(stage, left));
+    check.(seen.notNil and: { seen.size == (if (stage == \open) { 3 } { 0 }) } and: { seen.every({ arg file; file.isOpen.not }) },
+        "files: and closes every sound file it had opened (%: % opened, open now: %)".format(
+            stage, seen !? _.size, seen !? { seen.count(_.isOpen) }));
 };
 // A save onto a folder (mv -f would move the file into it) fails: one
 // failed report, the folder and its contents unchanged, no .part beside it
@@ -462,7 +471,8 @@ check.(saveReportsAfter.(reports).isEmpty and: { (0 .. engine.numBuffers - 1).co
     "a save of a slot out of range counts and reports nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
 checkShortWrite.(stereoPath);
-checkWriteFault.value;
+checkWriteFault.(\start);
+checkWriteFault.(\open);
 checkSaveOntoFolder.value;
 checkLongSave.value;
 }
