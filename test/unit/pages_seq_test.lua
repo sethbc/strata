@@ -164,6 +164,40 @@ test("while the patterns play SEQ redraws the screen every frame and never the a
   assert_equal(counter.screen, 0, "stopped: no redraw until something changes")
 end)
 
+test("while the norns menu is open the playing SEQ page never draws itself", function()
+  local context, S = started_on_seq()
+  local arc_hardware = context.arc.plug(1)
+  local record = S.registry.pages[S.constants.UI_PAGES.index.SEQ]
+  local page_draws, real_draw = 0, record.draw
+  record.draw = function(...) page_draws = page_draws + 1; return real_draw(...) end
+  tap(2)
+  h.next_frame(context)
+  assert_true(S.pattern_playing, "playing")
+  assert_equal(page_draws, 1, "the frame draws SEQ")
+  _menu.set_mode(true)
+  -- norns' set_mode(true) swaps the global redraw for norns.none (the stub
+  -- only tracks the mode): a stand-in that draws nothing counts the calls
+  local script_redraw = redraw
+  local swapped_calls = 0
+  redraw = function() swapped_calls = swapped_calls + 1 end
+  page_draws = 0
+  local arc_refreshes = arc_hardware.refresh_count
+  for _ = 1, 3 do h.next_frame(context) end
+  assert_equal(swapped_calls, 3, "each frame calls the global redraw, norns.none in the menu")
+  assert_equal(page_draws, 0, "the page never draws while the menu is open")
+  assert_equal(arc_hardware.refresh_count, arc_refreshes, "and the arc gets no extra frames")
+  assert_true(S.pattern_playing, "the patterns keep playing")
+  -- the menu closes: norns puts the script's redraw back and calls it
+  redraw = script_redraw
+  _menu.set_mode(false)
+  redraw()
+  page_draws = 0
+  for _ = 1, 2 do h.next_frame(context) end
+  assert_equal(page_draws, 2, "back from the menu SEQ draws every frame again")
+  record.draw = real_draw
+  tap(2)
+end)
+
 test("SEQ playing while another page shows adds no redraws", function()
   local context, S = started_on_seq()
   tap(2)
@@ -236,6 +270,32 @@ test("pattern edits on SEQ reach the grid", function()
   for step = 1, 16 do
     assert_equal(device:get_led(step, 2), S.patterns[2][step], "ALT+K3's step " .. step .. " on the grid")
   end
+end)
+
+test("a SEQ pattern edit requests one redraw, enc's or key's own", function()
+  local context, S = started_on_seq()
+  S.selected_voice = 2; S.cursors.seq_step = 6
+  local requests, real = 0, request_redraw
+  request_redraw = function() requests = requests + 1; real() end
+  local function count(action)
+    requests = 0
+    action()
+    return requests
+  end
+  local grids = 0
+  local real_grid = grid_redraw
+  grid_redraw = function() grids = grids + 1; real_grid() end
+  assert_equal(count(function() enc(3, 2) end), 1, "E3")
+  assert_equal(count(function() key(3, 1) end), 1, "K3")
+  key(3, 0)
+  key(1, 1)
+  assert_equal(count(function() key(2, 1) end), 1, "ALT+K2")
+  key(2, 0)
+  assert_equal(count(function() key(3, 1) end), 1, "ALT+K3")
+  key(3, 0); key(1, 0)
+  grid_redraw = real_grid
+  request_redraw = real
+  assert_true(grids >= 4, "each edit still redraws the grid")
 end)
 
 test("SEQ hints", function()

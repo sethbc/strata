@@ -29,7 +29,7 @@ return function()
     params = {},        -- param-adding functions, run by init in order
     start = {},         -- {order, fn} records, run by init() by order
     cleanup = {},       -- {order, fn} records, run by cleanup() by order
-    grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw}
+    grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw, fx_faders_page?}
     voice_params = {},  -- per-voice param records (register_voice_params), in registration order
     scene_fields = {},  -- global scene fields {id, default, discrete} (register_scene_field)
     source_change = {}, -- fn(voice_idx, source), run after a v<i>_source action

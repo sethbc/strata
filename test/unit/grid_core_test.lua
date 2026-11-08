@@ -241,18 +241,57 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
-test("a scene saved on a hold redraws the screen (SETUP no longer counts scenes)", function()
+test("an FX change redraws the grids only while one shows the FX faders", function()
   local context = load_strata(); finish_startup(context)
-  h.show_page("SETUP")
+  local core = grid_core()
+  local wide = context.grid.plug(1, 16, 8)
+  local tall = context.grid.plug(2, 8, 16)
+  core.set_page(1, 4); core.set_page(2, 4)  -- their page 4: sources, freeze, slots (no FX)
+  local function refreshes() return wide.refresh_count + tall.refresh_count end
+  local before = refreshes()
+  for _, id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix" }) do
+    params:delta(id, 1)
+  end
+  assert_equal(refreshes(), before, "a 16x8 and an 8x16 on page 4 show no FX: no redraw")
+  local full = context.grid.plug(3, 16, 16)
+  before = full.refresh_count
+  params:delta("delay_mix", 1)
+  assert_equal(full.refresh_count, before, "a 256 on page 1: no redraw")
+  core.set_page(3, 4)
+  params:delta("delay_mix", -1)
+  assert_equal(full.refresh_count, before + 1, "a 256 on page 4 shows the faders: one redraw")
+end)
+
+test("a scene saved on a hold shows on the SCENES page on the next frame", function()
+  local context = load_strata(); finish_startup(context)
+  -- slot 2's box on the SCENES page (5x5, right of its number): its rect
+  -- from the last draw
+  local function slot_box(slot)
+    local number
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == tostring(slot) and entry.y > 8 and entry.y < 46 then number = entry end
+    end
+    for _, rect in ipairs(context.screen.rects) do
+      if number and rect.w == 5 and rect.h == 5 and rect.x > number.x and rect.y == number.y - 5 then return rect end
+    end
+  end
+  h.show_page("SCENES")
   context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
   h.next_frame(context)
+  assert_true(not slot_box(2).filled, "slot 2 starts empty")
   context.grid.press(1, 2, 3, 1)
   h.next_frame(context)
   local counter = h.count_screen_draws()
-  context.clock.run_for(0.5)
-  h.next_frame(context)
+  context.clock.run_for(0.3)  -- under 0.5 s since the press, frames included
+  assert_true(not local_value("scenes")[2].populated, "still pending")
+  assert_equal(counter.screen, 0, "a pending hold draws nothing")
+  context.clock.run_for(0.25)  -- the hold fires, then a frame
   counter.restore()
-  assert_equal(counter.screen, 1, "the save shows on the next frame")
+  assert_true(local_value("scenes")[2].populated, "held 0.5 s: saved")
+  assert_equal(counter.screen, 1, "the save draws on a frame, once")
+  assert_true(slot_box(2).filled, "slot 2's box is filled")
+  assert_true(not slot_box(3).filled, "slot 3's is not")
+  context.grid.press(1, 2, 3, 0)
 end)
 
 test("a third key sets only its own voice's held step", function()

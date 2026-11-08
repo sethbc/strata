@@ -249,13 +249,24 @@ test("MIDI device param, hot-plug and the SETUP page", function()
     end
     return false
   end
+  -- the value drawn on the row labeled `label`: right-aligned at x 124, on
+  -- the label's baseline (nil if there is none)
+  local function row_value(label)
+    local label_entry
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == label and entry.align == "left" then label_entry = entry end
+    end
+    if not label_entry then return nil end
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.y == label_entry.y and entry.align == "right" and entry.x == 124 then return entry.text end
+    end
+  end
   assert_equal(params:get("midi_device"), 1); assert_equal(params:get("midi_channel_mode"), 1)
   assert_equal(params:get("midi_note_off"), 1)
   assert_equal(params:string("midi_channel_mode"), "per voice")
   show_page("SETUP")
   assert_true(screen_has("midi 1: none"), "no device on port 1")
-  enc(2, 1); redraw(); enc(2, -1); redraw()
-  assert_true(screen_has("per voice"), "channel mode shown")
+  assert_equal(row_value("channels"), "per voice", "the channels row shows the channel mode")
   context.midi.plug(1, "keys"); next_frame(context)
   assert_true(screen_has("midi 1: keys"), "plugging a device redraws SETUP")
   -- E3 on the first field selects the port; events on the old port no longer reach Strata
@@ -268,7 +279,7 @@ test("MIDI device param, hot-plug and the SETUP page", function()
   assert_true(#context.calls_named("retrigger") == 1, "port 2 is")
   -- E2 then E3 sets the channel mode
   enc(2, 1); enc(3, 1); next_frame(context); assert_equal(params:get("midi_channel_mode"), 2)
-  assert_true(screen_has("omni to selected"))
+  assert_equal(row_value("channels"), "omni to selected", "the channels row shows the new mode")
   assert_true(screen_has("midi 2: stub midi"), "the device that played is shown")
   -- unplugging the selected port's device shows none on the next frame
   context.midi.unplug(2); next_frame(context)
