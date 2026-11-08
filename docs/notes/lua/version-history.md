@@ -1,6 +1,6 @@
 ## Must not break
 
-- Each release gets a short entry here (highlights only). CHANGELOG.md holds the full list and `docs/status.md` the decisions.
+- Each release gets a short entry here (highlights only). CHANGELOG.md holds the full list and `docs/decisions.md` the decisions.
 - Entries describe a release as it shipped. Do not rewrite old entries to today's names or layout.
 - The docs check reads this file (it covers every file under docs/notes/): every repo path it names in backticks must still exist, and every `engine.<name>(` must name a command the engine has. Name commands without `engine.` and parentheses (`setFilter`), and name a file that has since moved by its plain name.
 - When an idea under Future extension points ships, strike it through and add the version.

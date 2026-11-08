@@ -78,7 +78,7 @@ Tests built on it:
 ### Docs checks
 
 - CLAUDE.md's command table under "Lua ↔ SuperCollider Communication" must have exactly one row per engine `addCommand`, with the same signature and argument count. Update the table in the same commit as the engine.
-- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are CLAUDE.md, README.md, `docs/status.md` and every `.md` under docs/notes/ (recursively), docs/user/ and docs/process/ (`maintained_docs` in `test/helpers.lua`).
+- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are CLAUDE.md, README.md, `docs/status.md`, `docs/decisions.md` and every `.md` under docs/notes/ (recursively), docs/user/ and docs/process/ (`maintained_docs` in `test/helpers.lua`).
 - Every repo path the maintained docs name in backticks (under docs/, test/, .github/ and lib/) must exist, from the repo root. A relative Markdown link target must exist relative to the doc's own folder (`doc_paths_missing(text, doc_name)`); `docs/notes/lua.md` alone may still link root files from the repo root, a fallback to delete with that file. A norns library is named by its path in the norns repo (`lua/lib/lfo.lua`), which is not checked.
 - Every file in docs/notes/lua/ must have `## Must not break` as its first heading (headings inside code fences do not count).
 - Every changelog fragment in changes/ (`changes/README.md` aside) must hold an `### Added`, `### Changed` or `### Fixed` heading with a bullet under it.

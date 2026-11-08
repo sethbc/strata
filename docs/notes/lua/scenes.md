@@ -109,7 +109,7 @@ Order of voice changes (#46):
 
 So a recall sends at most one full sync per voice, after its params. An instant recall and a smooth transition (which ends in `recall_scene_instant`) both leave the engine with the Lua state of every running voice.
 
-A failed instant recall keeps the previous scene current (`docs/status.md`, Decisions).
+A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2).
 
 ### Smooth transitions
 
