@@ -12,7 +12,7 @@
 
 ## Owns
 
-`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; CLAUDE.md's module table names each), `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`.
+`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; CLAUDE.md's module table names each), `test/norns_stubs.lua`, `test/stub_lfo.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/run_engine_check_313.sh` and its image (`test/docker/sc313/Dockerfile`, `test/docker/sc313/check.sh`), `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`.
 
 ## The Lua test run
 
@@ -228,6 +228,17 @@ Ports:
 Setup:
 - Needs SuperCollider: sclang is `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app path.
 - On Linux scsynth also needs a running JACK server. CI and local runs use a dummy driver: `jackd --no-realtime -d dummy -r 48000 -p 1024 &` (check with `jack_lsp`). `QT_QPA_PLATFORM=offscreen` keeps sclang headless.
+
+### The engine check on SuperCollider 3.13 (Docker)
+
+`test/run_engine_check_313.sh [-n runs] [-j parallel] [-o log_dir] [path/to/norns]` runs the engine check on SuperCollider 3.13, norns' version, whatever version the machine has:
+- The image (`strata-sc313`, from `test/docker/sc313/Dockerfile`) is CI's setup: Ubuntu 24.04, `supercollider-language` and `supercollider-server` at CI's `SC_APT_VERSION` (`1:3.13.0+repack-1ubuntu3`; a docs test checks the two pins match), `jackd2`, `procps` and `coreutils`. Its `check` command (`test/docker/sc313/check.sh`) starts a dummy JACK, waits for `jack_lsp`, then runs `test/run_engine_check.sh /norns` on the repo at `/src`.
+- The script builds the image when it is missing or the folder's files changed (the image's `strata.dockerfile-sha256` label holds their hash), so a fresh machine needs no manual step. The one-time build takes about a minute (55 s measured; longer on a slow connection: it downloads Ubuntu 24.04 and its SuperCollider and JACK packages, about 230 MB); later runs reuse the image.
+- Each run is `docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e XDG_RUNTIME_DIR=/tmp -v <repo>:/src:ro -v <norns>:/norns:ro strata-sc313 check`. It runs as a non-root user because QtWebEngine refuses root. The mounts are read-only: the check writes only to its container's `/tmp`.
+- Every container has its own network, so parallel runs never clash on a port. Local sclang runs exhaust sclang's language ports past a few at once, so use this script for more than three or four parallel runs.
+- `-n` is the number of runs (1), `-j` how many run at once (1), `-o` the log folder (created if missing; default a new `${TMPDIR:-/tmp}/strata-sc313-logs.XXXXXX`), with run `<i>`'s output in `run-<i>.log`. The script never deletes a log. `STRATA_ENGINE_CHECK_AREAS`, `ENGINE_CHECK_TIMEOUT`, `STRATA_SOAK_ROUNDS` and `STRATA_SOAK_SECONDS` pass through to every run.
+- The summary counts the runs that passed, failed, and crashed (sclang ended on a signal, #131's failure), and the script exits 0 only when every run passed. An interrupt stops only the containers this run started (named `strata-sc313-<pid>-<i>`).
+- Example, #131's rate on the files area: `STRATA_ENGINE_CHECK_AREAS=files test/run_engine_check_313.sh -n 16 -j 8 -o /tmp/files-313`.
 
 ## On hardware
 
