@@ -85,10 +85,7 @@
             this.stopRecordSlot(msg[1]);
         });
 
-        // msg: slot index, path of the stereo 16-bit WAV to write
-        this.addCommand(\saveBuffer, "is", { arg msg;
-            if (this.validBuffer(msg[1])) { this.writeSlot(msg[1], msg[2].asString) };
-        });
+        // saveBuffer and its bufferSaveResult poll are the files area's
 
         // Valid seconds per slot. matron only accepts single-float value
         // polls (/poll/value is typed "if"), so each message carries one

@@ -1,16 +1,66 @@
 // StrataFiles.sc
 // The files area: checking a file decodes before a load, writing a slot
-// to a WAV (saveBuffer and the scratch takes) and deleting what an
-// interrupted write left. See docs/notes/engine/files.md.
+// to a WAV (saveBuffer, its bufferSaveResult poll, and the scratch takes)
+// and deleting what an interrupted write left. See docs/notes/engine/files.md.
 
 + Engine_Strata {
     // The files area (order 50)
     strataAreaFiles {
         ^(
             order: 50,
+            // per slot, the saveBuffer commands received (bufferSaves); then
             // the files a write interrupted by a crash or power cut left
-            allocState: { this.deleteStaleParts }
+            allocState: {
+                areaState[\files][\saves] = Array.fill(numBuffers, 0);
+                this.deleteStaleParts
+            },
+            addCommands: { this.addFileCommands }
         )
+    }
+
+    addFileCommands {
+        // msg: slot index, path of the stereo 16-bit WAV to write
+        this.addCommand(\saveBuffer, "is", { arg msg;
+            this.saveSlot(msg[1], msg[2].asString);
+        });
+
+        // How a save ended: one message per saveBuffer whose write ends,
+        // written or failed (bufferSaveResultValue: the slot, that slot's save
+        // number and failed), so Lua confirms a save only once its file is in
+        // place and a late report never speaks for a newer save. A write
+        // abandoned for a newer write to the same path reports nothing (the
+        // newer one reports). Not periodic; a value request resends the last
+        // report (Lua ignores a repeat).
+        areaState[\files][\saveResultPoll] = this.addPoll(\bufferSaveResult, {
+            this.bufferSaveResultPoll.value ? 0.0
+        }, false);
+    }
+
+    bufferSaveResultPoll { ^areaState[\files][\saveResultPoll] }
+
+    // Per slot: the saveBuffer commands received, counted from 1 (Lua's
+    // save_buffer counts the same), named in bufferSaveResult
+    bufferSaves { ^areaState[\files][\saves] }
+
+    // One float, as bufferLoadFailed (matron's /poll/value is typed "if"):
+    // (save * 2 + failed) * numBuffers + slot index, where save is the slot's
+    // save number (counted from 1) and failed is 1 when the engine wrote
+    // nothing, 0 when the file is in place. Exact for the first 2^20 saves of
+    // a slot (a float32 holds integers exactly up to 2^24).
+    bufferSaveResultValue { arg index, save, failed;
+        ^((((save * 2) + failed.binaryValue) * numBuffers) + index).asFloat
+    }
+
+    // saveBuffer: count the save and write the slot, reporting how the write
+    // ended on bufferSaveResult (an abandoned write reports nothing)
+    saveSlot { arg index, path;
+        var save;
+        if (this.validBuffer(index).not) { ^this };
+        save = this.bufferSaves[index] + 1;
+        this.bufferSaves[index] = save;
+        this.writeSlot(index, path, { arg written;
+            this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
+        });
     }
 
     // true when libsndfile decodes the first `frames` frames of the open
@@ -142,13 +192,18 @@
     // and two writes never mix. instanceTag keeps another engine instance's
     // files apart. Samples beyond ±1 (a take recorded at a level above 1)
     // are clipped symmetrically to ±int16Peak, never wrapped. Temporary
-    // files are deleted in every case. Creates no synth nodes.
-    writeSlot { arg index, path;
+    // files are deleted in every case. Creates no synth nodes. done (nil, or
+    // a function of written, a Boolean) is called once when the write ends:
+    // true once the file is in place, false when nothing was written (an
+    // empty slot, at once; a folder that cannot be made, a short write or a
+    // failed rename); never for a write a newer one abandoned.
+    writeSlot { arg index, path, done;
         var frames = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
         var generation, tempPaths, partPath;
         if (frames < 1) {
             postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
+            done.value(false);
             ^this
         };
         path = path.standardizePath;
@@ -163,26 +218,62 @@
         buffersR[index].write(tempPaths[1], "wav", "float", frames);
         fork({
             var current = { writeGenerations[path] == generation };
-            var written;
-            context.server.sync;
-            written = current.value and: { this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames) };
-            tempPaths.do({ arg tempPath; File.delete(tempPath) });
-            // no yield between this check and the rename. The newest write
-            // forgets its generation whether it succeeded or failed; an
-            // abandoned one leaves the newer write's entry alone.
-            if (current.value) {
-                if (written) {
-                    if (("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0) {
+            // done runs at most once, whatever happens below
+            var reported = false, finish = { arg ok; if (reported.not) { reported = true; done.value(ok) } };
+            var deleteIfThere = { arg file; try { if (File.exists(file)) { File.delete(file) } } };
+            // every SoundFile the interleave opens, so an error can close them
+            var openFiles = List.new;
+            var written, moved, folder;
+            try {
+                context.server.sync;
+                written = current.value and: {
+                    this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames, openFiles)
+                };
+                tempPaths.do({ arg tempPath; File.delete(tempPath) });
+                // no yield between this check and the rename. The newest write
+                // forgets its generation whether it succeeded or failed, and
+                // reports how it ended (finish); an abandoned one leaves the
+                // newer write's entry alone and reports nothing. A folder at
+                // the path fails the write: mv -f would move the file into it.
+                if (current.value) {
+                    folder = written and: { PathName(path).isFolder };
+                    if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
+                    moved = written and: { folder.not }
+                        and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
+                    if (moved) {
                         postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
                     } {
-                        postln("strata: cannot move " ++ partPath ++ " to " ++ path);
+                        if (written and: { folder.not }) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
                     };
+                    writeGenerations.removeAt(path);
+                    finish.(moved);
                 };
-                writeGenerations.removeAt(path);
+                if (File.exists(partPath)) { File.delete(partPath) };
+            } { arg error;
+                // an sclang error inside the write (a read, a delete, the
+                // interleave) still ends it: its sound files closed, nothing
+                // left behind, and the newest write still reports, failed.
+                // Each close is its own try, so one that fails skips nothing.
+                // Never posted with the word the engine check fails on: the
+                // check injects this.
+                postln("strata: cannot write % (%)".format(path, error.class.name));
+                openFiles.do({ arg file; try { if (file.notNil and: { file.isOpen }) { file.close } } });
+                tempPaths.do(deleteIfThere);
+                deleteIfThere.(partPath);
+                if (current.value) {
+                    writeGenerations.removeAt(path);
+                    finish.(false);
+                };
             };
-            if (File.exists(partPath)) { File.delete(partPath) };
         }, SystemClock);
     }
+
+    // A test hook (nil on norns): a function interleaveFiles calls with the
+    // output path, a stage and its open sound files (openFiles): \start before
+    // it opens any, \open once the temporary files and the output are open,
+    // so the engine check can throw inside a write's routine at either point
+    interleaveFaultHook { ^areaState[\files][\interleaveFaultHook] }
+    interleaveFaultHook_ { arg hook; areaState[\files][\interleaveFaultHook] = hook }
 
     // Called inside a routine. Returns false (and writes nothing more) as
     // soon as keepGoing is false, i.e. a newer write to the same path began,
@@ -190,13 +281,18 @@
     // length: a temporary file holding fewer (the server's write ran out of
     // disk: a 300 s save needs about 115 MB of them) or an output that ends
     // short is a failed write, posted as one, so writeSlot never renames a
-    // truncated file over the old one.
-    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames;
-        var chunkFrames = 8192;
-        var sources = sourcePaths.collect({ arg sourcePath; SoundFile.openRead(sourcePath) });
+    // truncated file over the old one. openFiles (a List, from writeSlot)
+    // gets every SoundFile it opens, so the caller can close them if an error
+    // ends the routine; on any normal return they are closed here.
+    interleaveFiles { arg sourcePaths, path, sampleRate, keepGoing, frames, openFiles;
+        var chunkFrames = 8192, sources;
         var output, left, right, interleaved, finished = true, written;
         var peak = int16Peak, negativePeak = int16Peak.neg;
+        var opened = { arg file; if (file.notNil) { openFiles.add(file) }; file };
 
+        openFiles = openFiles ?? { List.new };
+        this.interleaveFaultHook.value(path, \start, openFiles);  // the engine check's fault, before any file opens
+        sources = sourcePaths.collect({ arg sourcePath; opened.(SoundFile.openRead(sourcePath)) });
         if (sources.includes(nil).not and: { sources.any({ arg source; source.numFrames < frames }) }) {
             postln("strata: cannot write " ++ path ++ " (a temporary file holds % of % frames: is the disk full?)".format(
                 sources.collect(_.numFrames).minItem, frames));
@@ -205,12 +301,13 @@
         };
         // File.mkdir throws when the directory cannot be made; openWrite then fails below
         try { File.mkdir(path.dirname) };
-        output = if (sources.includes(nil).not) { SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate) };
+        output = if (sources.includes(nil).not) { opened.(SoundFile.openWrite(path, "WAV", "int16", 2, sampleRate)) };
         if (output.isNil) {
             postln("strata: cannot write " ++ path);
             sources.do({ arg source; if (source.notNil) { source.close } });
             ^false
         };
+        this.interleaveFaultHook.value(path, \open, openFiles);  // the engine check's fault, with every file open
 
         while { finished and: { left = this.freshReadArray(chunkFrames); sources[0].readData(left); left.size > 0 } } {
             right = this.freshReadArray(chunkFrames);
@@ -232,7 +329,7 @@
         sources.do({ arg source; source.close });
         if (finished.not) { ^false };
         // the output read back: a write that ran out of disk ends short
-        written = SoundFile.openRead(path);
+        written = opened.(SoundFile.openRead(path));
         written = written !? { arg file; var count = file.numFrames; file.close; count };
         if (written != frames) {
             postln("strata: cannot write " ++ path ++ " (% of % frames written: is the disk full?)".format(written, frames));

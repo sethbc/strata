@@ -74,6 +74,7 @@ test("recording again stops early; clear and load cancel the timer", function()
   assert_equal(context.clock.pending_count(), 0, "no recording timer left")
   assert_true(not context.polls.polls.bufferState.running, "bufferState poll stopped")
   assert_true(not context.polls.polls.bufferLoadFailed.running, "bufferLoadFailed poll stopped")
+  assert_true(not context.polls.polls.bufferSaveResult.running, "bufferSaveResult poll stopped")
 end)
 
 test("a file the engine cannot read, loaded during a recording, leaves a canceled recording", function()
@@ -258,6 +259,9 @@ test("bufferState poll is found and started in init", function()
   entry = context.polls.polls.bufferLoadFailed
   assert_true(entry ~= nil, "the engine registers bufferLoadFailed")
   assert_true(entry.running, "bufferLoadFailed started"); assert_true(entry.callback ~= nil, "its callback set")
+  entry = context.polls.polls.bufferSaveResult
+  assert_true(entry ~= nil, "the engine registers bufferSaveResult")
+  assert_true(entry.running, "bufferSaveResult started"); assert_true(entry.callback ~= nil, "its callback set")
 end)
 
 -- bufferLoadFailed poll value for Lua slot `slot`'s load number `load_number`
@@ -461,6 +465,91 @@ test("save_buffer writes a timestamped wav under audio/strata", function()
   context.clear_engine_calls(); save_buffer(1)
   assert_equal(#context.calls_named("saveBuffer"), 0, "empty slot not saved")
   params:set("buf6_save", 1); assert_equal(#context.calls_named("saveBuffer"), 1, "save trigger")
+end)
+
+-- bufferSaveResult poll value for Lua slot `slot`'s save number
+-- `save_number` (the engine counts the saveBuffer commands of each slot from
+-- 1); failed: the engine could not write the file
+local function save_result_value(slot, save_number, failed)
+  return (save_number * 2 + (failed and 1 or 0)) * local_value("NUM_BUFFERS") + (slot - 1)
+end
+
+local function printed_since(context, count)
+  local lines = {}
+  for index = count + 1, #context.printed do lines[#lines + 1] = context.printed[index] end
+  return table.concat(lines, "\n")
+end
+
+test("a save says saved only once the engine reports the file written (#127)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.polls.fire("bufferState", 1004)   -- buffer 2 holds 4 s
+  local printed = #context.printed
+  assert_equal(save_buffer(2), true, "save_buffer says it sent the save")
+  local path = context.calls_named("saveBuffer")[1].args[2]
+  local text = printed_since(context, printed)
+  assert_true(text:find("buffer 2 saving to " .. path, 1, true), "the console says the save is under way: " .. text)
+  assert_true(not text:find("saved", 1, true), "and never that it is saved before the engine says so")
+  -- the engine wrote it
+  printed = #context.printed
+  context.polls.fire("bufferSaveResult", save_result_value(2, 1)); next_frame(context)
+  assert_true(printed_since(context, printed):find("buffer 2 saved to " .. path, 1, true), "then that it is saved")
+  assert_equal(buffer_hint(context), "saved buf 2", "and the BUFFER page confirms it")
+  assert_screen_layout(context, "BUFFER page saved flash")
+  -- the engine could not write the next one (a full disk, a folder it cannot make)
+  context.clock.run_for(2)
+  save_buffer(2)
+  local failed_path = context.calls_named("saveBuffer")[2].args[2]
+  printed = #context.printed
+  context.polls.fire("bufferSaveResult", save_result_value(2, 2, true)); next_frame(context)
+  text = printed_since(context, printed)
+  assert_true(text:find("buffer 2: cannot save " .. failed_path, 1, true), "the console says it failed: " .. text)
+  assert_true(not text:find("saved to", 1, true), "never that it saved")
+  assert_equal(buffer_hint(context), "buf 2 save failed", "the BUFFER page says the save failed")
+  assert_screen_layout(context, "BUFFER page save failed flash")
+  context.clock.run_for(2); next_frame(context)
+  assert_equal(buffer_hint(context), buffer_record_hints(), "briefly: then the page's own hints")
+  -- an empty slot sends nothing, so it takes no save number
+  assert_equal(save_buffer(3), false, "an empty slot is not saved")
+  context.polls.fire("bufferState", 2002); save_buffer(3)
+  context.polls.fire("bufferSaveResult", save_result_value(3, 1)); next_frame(context)
+  assert_equal(buffer_hint(context), "saved buf 3", "the slot's first save sent is its save 1")
+end)
+
+test("a late, duplicate or bad save report never corrects a newer save", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.polls.fire("bufferState", 4003)   -- buffer 5 holds 3 s
+  save_buffer(5); save_buffer(5)            -- save 2 sent before save 1's report
+  context.polls.fire("bufferSaveResult", save_result_value(5, 2)); next_frame(context)
+  assert_equal(buffer_hint(context), "saved buf 5", "the newest save is confirmed")
+  local printed = #context.printed
+  context.polls.fire("bufferSaveResult", save_result_value(5, 1, true)); next_frame(context)
+  assert_equal(buffer_hint(context), "saved buf 5", "an older save's late failure leaves the newer save's flash")
+  assert_true(printed_since(context, printed):find("buffer 5: cannot save", 1, true),
+    "the console still names the older file")
+  -- the other order: the older save's late success never confirms a newer save still writing
+  save_buffer(5); save_buffer(5)            -- saves 3 and 4
+  context.clock.run_for(2); next_frame(context)
+  context.polls.fire("bufferSaveResult", save_result_value(5, 3)); next_frame(context)
+  assert_equal(buffer_hint(context), buffer_record_hints(), "save 3's success says nothing of save 4")
+  context.polls.fire("bufferSaveResult", save_result_value(5, 4, true)); next_frame(context)
+  assert_equal(buffer_hint(context), "buf 5 save failed", "save 4's own report shows")
+  -- repeats, saves never sent, another slot's numbers and bad values do nothing
+  context.clock.run_for(2); next_frame(context)
+  printed = #context.printed
+  for _, value in ipairs({ save_result_value(5, 4, true), save_result_value(5, 4), save_result_value(5, 3),
+    save_result_value(5, 9), save_result_value(6, 1), 0, 0 / 0, math.huge, -math.huge, -1, 41.5 }) do
+    local ok, message = pcall(context.polls.fire, "bufferSaveResult", value)
+    assert_true(ok, "report " .. tostring(value) .. " raises no error: " .. tostring(message))
+    next_frame(context)
+    assert_equal(buffer_hint(context), buffer_record_hints(), "report " .. tostring(value) .. " flashes nothing")
+  end
+  assert_equal(printed_since(context, printed), "", "and prints nothing")
+  assert_equal(rawget(local_value("buffers"), 0), nil); assert_equal(rawget(local_value("buffers"), 9), nil)
+  -- a load, clear or recording in the slot leaves a save in flight alone:
+  -- its report is about the file it writes
+  save_buffer(5); clear_buffer(5)
+  context.polls.fire("bufferSaveResult", save_result_value(5, 5)); next_frame(context)
+  assert_equal(buffer_hint(context), "saved buf 5", "the save sent before the clear is still confirmed")
 end)
 
 test("explicit save writes a timestamped file; cleanup/init persist buffer paths", function()

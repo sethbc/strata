@@ -55,7 +55,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 30 | watch the norns menu opening (`watch_menu_opening`) | `lib/ui/menu_watch.lua` |
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
 | 50 | create the mutation metro (`S.mutation_metro`, `mutation_rate`, `gentle_mutate`); the `mutation_enabled` param starts it | `lib/mutation.lua` |
-| 60 | set and start the `bufferState` and `bufferLoadFailed` polls (`S.buffer_polls`) | `lib/buffers.lua` |
+| 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 90 | listen for MIDI (`midi_init`) | `lib/midi_in.lua` |
