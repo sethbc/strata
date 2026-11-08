@@ -527,12 +527,16 @@ return function(S)
 
   -- As on a high tier with 300 s slots: the page reads S.performance, and
   -- the duration's range ends at the slot length (the script's own start
-  -- read a standard tier)
+  -- read a standard tier). The param gets a copy of its spec with the wider
+  -- range, so the spec it was built with never changes
   local function as_300_s_tier()
     S.performance = {tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60, reason = "high: setting"}
     -- the param keeps its position in the range: put its value back
     local duration = params:get("record_duration")
-    params:lookup_param("record_duration").controlspec.maxval = 300
+    local param = params:lookup_param("record_duration")
+    local spec = param.controlspec:copy()
+    spec.maxval = 300
+    param.controlspec = spec
     params:set("record_duration", duration)
   end
 
