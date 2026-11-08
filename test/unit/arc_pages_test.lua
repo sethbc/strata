@@ -277,6 +277,12 @@ local function place_voice_cursor(index)
   local_value("S").lib.pages_voice.place_cursor(index)
 end
 
+test("VOICE's rings read the cursor from the cursor module, not the page", function()
+  local file = assert(io.open(h.repo_root .. "/lib/arc/voice.lua", "r")); local source = file:read("*a"); file:close()
+  assert_true(not source:find("pages_voice", 1, true), "lib/arc/voice.lua never calls into lib/pages/voice.lua")
+  assert_true(source:find('S.lib.ui_cursors.sync("voice")', 1, true), "it syncs through S.lib.ui_cursors")
+end)
+
 test("MAIN's ALT rings are pitch, spread, level and pan", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
