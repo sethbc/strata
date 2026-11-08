@@ -94,6 +94,53 @@ test("K3 on save and load runs them and does nothing elsewhere", function()
   assert_equal(loaded, 1, "K3 on load scenes reads it back, once")
 end)
 
+test("every SETUP field shows its own label on its row", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP")
+  enc(2, -20)
+  local seen = 0
+  while true do
+    redraw()
+    local field = S.lib.pages_setup.setup_rows()[S.setup_cursor]
+    local selected = {}
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.level == 15 and entry.y > 8 and entry.y < h.HINT_ROW_Y then table.insert(selected, entry) end
+    end
+    local label = selected[1]
+    for _, entry in ipairs(selected) do
+      if entry.x < label.x then label = entry end
+    end
+    assert_true(label.text:sub(1, #field.label) == field.label,
+      "row " .. S.setup_cursor .. " starts with its label '" .. field.label .. "', not '" .. label.text .. "'")
+    seen = seen + 1
+    local before = S.setup_cursor
+    enc(2, 1)
+    if S.setup_cursor == before then break end
+  end
+  assert_equal(seen, 9, "the nine fields (no buffer length on the standard setting)")
+end)
+
+test("SETUP's save and load fields run the function their record holds", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP")
+  local ran = {}
+  for _, field in ipairs(S.lib.pages_setup.SETUP_FIELDS) do
+    if field.kind == "action" then
+      assert_equal(type(field.run), "function", field.label .. " holds its function")
+      assert_equal(field.action, nil, field.label .. " names no global")
+      local real = field.run
+      field.run = function() ran[#ran + 1] = field.label end
+      enc(2, -20)
+      while S.lib.pages_setup.setup_rows()[S.setup_cursor] ~= field do enc(2, 1) end
+      tap(3)
+      field.run = real
+    end
+  end
+  assert_equal(table.concat(ran, ","), "save scenes,load scenes", "K3 runs each field's own function")
+end)
+
 test("SETUP scrolls with a marker and reaches both ends", function()
   local context = load_strata(); finish_startup(context)
   context.grid.plug(1, 16, 16)
@@ -103,7 +150,7 @@ test("SETUP scrolls with a marker and reaches both ends", function()
   assert_equal(local_value("S").setup_cursor, 9, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "load scenes"), "load scenes is drawn")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
-  assert_true(not text_entry(context, "midi port"), "the first fields scrolled out")
+  assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
   for _, line in ipairs(context.screen.lines) do
     if line.x1 == 127 and line.x2 == 127 then marker_bottom = math.max(line.y1, line.y2) end

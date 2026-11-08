@@ -218,6 +218,21 @@ return function(S)
     set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, order = press_count})
   end
 
+  -- End the step-level gesture on voice_idx's held step keys, on every port:
+  -- a change that replaces the whole pattern (a 256's paste) calls it, so a
+  -- step held from before never takes a level in the new pattern. The keys
+  -- stay held; their releases do nothing, as always, and the next step key
+  -- of the voice toggles its own step
+  function M.end_step_gestures(voice_idx)
+    for _, columns in pairs(step_keys) do
+      for _, rows in pairs(columns) do
+        for key_y, entry in pairs(rows) do
+          if entry.voice == voice_idx then rows[key_y] = nil end
+        end
+      end
+    end
+  end
+
   -- A scene save key: saves once held GRID_HOLD.scene_save_seconds (layouts
   -- light it at 15 while hold_pending)
   function M.scene_save_key(port, x, y, z, scene_num)
@@ -225,7 +240,7 @@ return function(S)
     M.on_hold(port, x, y, GRID_HOLD.scene_save_seconds, function()
       capture_scene(scene_num)
       grid_redraw()
-      request_redraw()  -- SETUP counts the saved scenes
+      request_redraw()  -- the SCENES page shows the saved slot
     end)
   end
 
@@ -284,6 +299,17 @@ return function(S)
       return "64"
     end
     return nil
+  end
+
+  -- Whether a connected grid shows the FX faders now: its layout record's
+  -- fx_faders_page (the 256's page 4; the other layouts have none) is the
+  -- port's page. The FX params' actions redraw the grids only then
+  function M.any_fx_faders()
+    for port, grid_port in pairs(S.grids) do
+      local layout = grid_port.device and S.registry.grid_layouts[grid_layout(grid_port)]
+      if layout and layout.fx_faders_page == M.page(port) then return true end
+    end
+    return false
   end
 
   -- Store a grid port's vport and route its key events to grid_key. Handlers

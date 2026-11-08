@@ -1,6 +1,6 @@
 ## Must not break
 
-- Each `lib/arc/<page>.lua` sets only the arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those, `arc_button` included; tests check both). Avoid page field names (`key`, `name`, `enter`, ...) as keys in a ring file's own tables: the ownership tests read every `<field> =` in the file.
+- Each `lib/arc/<page>.lua` sets only the arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those, `arc_button` included; tests check both). Avoid page field names (`key`, `name`, `enter`, ...) as keys in a ring file's own tables: the ownership tests read every `<field> =` in the file. A second test watches the includes as the script loads: each page file sets no arc field, and each arc file sets only arc fields, only on its own page's record (which exists before it loads), and removes none (`test/unit/ui_pages_test.lua`).
 - Every ring is drawn through `arc_ring_fill` or `arc_ring_fill_bipolar`. A ring showing a param draws from `param_fraction(id)` (`arc_ring_fill_param` picks the bipolar fill for a range through 0), so a changed param range moves the ring (a test swaps the controlspec to check). A ring showing a cursor or a step level draws exactly these fractions:
   - SEQ ring 1: `(S.cursors.seq_step - 1) / (PATTERN_LENGTH - 1)`;
   - SEQ ring 2: `S.patterns[S.selected_voice][step] / MAX_STEP_LEVEL`;
