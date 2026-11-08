@@ -593,6 +593,8 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
     setFilter = function(args) return enumerated("filterType", args[3]) end,
     setMasterDrift = none, setReverb = none, setDelay = none,
+    -- effect 0 delay, 1 reverb (the engine ignores others; Lua never sends them)
+    setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
     -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
     setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
   }

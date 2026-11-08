@@ -173,7 +173,8 @@ check.([\grainRate, \grainPan, \grainDur, \slotGrainPos, \scanRate, \ringScanOff
     .every({ arg method; engine.respondsTo(method) }), "grains: the hook methods exist");
 // Both: two stereo GrainBufs (one per channel buffer, panned -1 and +1, so
 // the pair stays sample-aligned), Balance2 for the pan wander, the trigger
-// selected by grainMode, and one stereo Out to mainBus and one to the mirror
+// selected by grainMode, and stereo Outs to mainBus (dry), the delay and
+// reverb sends (the mix area's voiceOutput) and the mirror
 grainDefs.do({ arg name;
     var ugens = SynthDescLib.global.at(name).def.children;
     var grainBufs = ugens.select({ arg ugen; ugen.isKindOf(GrainBuf) });
@@ -182,8 +183,8 @@ grainDefs.do({ arg name;
     check.(ugens.any({ arg ugen; ugen.isKindOf(Balance2) }), "% pans with Balance2".format(name));
     check.(ugens.any({ arg ugen; ugen.isKindOf(Select) }) and: { ugens.any({ arg ugen; ugen.isKindOf(T2A) }) },
         "% selects between Impulse and T2A(t_trig) grain triggers".format(name));
-    check.(ugens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2],
-        "% has one stereo Out to mainBus and one to the mirror (got %)".format(name,
+    check.(ugens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 }) == [2, 2, 2, 2],
+        "% has stereo Outs to mainBus, the two sends and the mirror (got %)".format(name,
             ugens.select({ arg ugen; ugen.isKindOf(Out) }).collect({ arg ugen; ugen.inputs.size - 1 })));
 });
 // "grains: sources 0 and 9 build strataGrainRing, 1-8 strataGrainBuf" (a stopped voice)

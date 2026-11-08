@@ -71,9 +71,9 @@ Each of the 7 voices follows this path (synth source; see Audio Sources in `docs
 2. The voice's ring writer (`strataRingWrite`) records `granBuses[i]` into the voice's ring, and the granular processor (`strataGrainRing`) reads that ring and outputs to shared `mainBus` (see `docs/notes/engine/rings.md`). A buffer-sourced voice has no voice synth: `strataGrainBuf` reads its buffer pair; an input-sourced voice's `strataGrainRing` reads the input ring (written from `inputBus`). Both also write their output to `granBuses[i]` (the mirror)
 3. Modulation synth (`strataMod`) analyzes voice bus output (the voice synth, or the mirror) and generates control signal to `modBuses[i]`
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
-5. Filter (`strataFilter`) processes mainBus, outputs to `filterBus`; delay (`strataDelay`) processes filterBus, outputs to `delayBus`
-6. Reverb (`strataReverb`) processes delayBus, outputs to `reverbBus`
-7. Master (`strataMaster`) applies drift, a `Limiter.ar(sig, 0.95)` safety stage that catches peaks before saturation, then saturation, and outputs to norns output
+5. Each grain synth writes its dry part to `mainBus` and its delay and reverb sends to the mix area's send buses (`voiceOutput`); three master filters (`strataFilter`) process `mainBus` (to `filterBus`) and the two sends; the delay (`strataDelay`) processes the filtered delay send and returns to `delayBus`
+6. Reverb (`strataReverb`, or `strataReverbFDN` on high) processes the filtered reverb send plus `delayBus` and returns to `reverbBus` (see `docs/notes/engine/effects.md`)
+7. Master (`strataMaster`) sums `filterBus` and the two returns (`masterSum`), applies drift, a `Limiter.ar(sig, 0.95)` safety stage that catches peaks before saturation, then saturation, and outputs to norns output
 
 ## Lua ↔ SuperCollider details
 
@@ -109,10 +109,11 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - `numVoices` stereo `granBuses` (one per voice, for audio)
 - `numVoices` mono `modBuses` (one per voice, for control signals)
 - 1 mono `silentBus` (always 0; "no modulation source")
-- 1 stereo `mainBus` (granular outputs mix here; filter input)
-- 1 stereo `filterBus` (filter output, delay input)
-- 1 stereo `delayBus` (delay output, reverb input)
-- 1 stereo `reverbBus` (reverb output, master input)
+- 1 stereo `mainBus` (the grain outputs' dry part mixes here; the first filter's input)
+- 1 stereo `filterBus` (that filter's output, the master's dry input)
+- 1 stereo `delayBus` (the delay's return, read by the reverb and the master)
+- 1 stereo `reverbBus` (the reverb's return, master input)
+- the mix area's (`areaState[\mix]`, `docs/notes/engine/effects.md`): stereo delay and reverb sends, their filtered copies, and the 2-channel control `fxMix`
 - 4 `envBuffers` (grain envelope shapes, 1024 frames each; see `envShape`)
 - 1 stereo `inputBus` (live input from `\strataInput`)
 - `numBuffers` mono control `recordFrameBuses` (frames recorded so far, for `stopRecord`)
@@ -124,6 +125,6 @@ Buses, buffers, the input synth and groups are freed in `free` to prevent resour
 
 Everything runs inside the engine group `context.xg`, so norns' output group (`og`) and its meters come after the engine:
 ```
-context.xg: voiceGroup (strataInput, voice synths, strataRecord, then the ring writers) -> processGroup (bus-reading grain synths, then mirroring grain synths each before its voice's mod synth) -> strataFilter -> strataDelay -> strataReverb -> strataMaster
+context.xg: voiceGroup (strataInput, voice synths, strataRecord, then the ring writers) -> processGroup (bus-reading grain synths, then mirroring grain synths each before its voice's mod synth) -> strataFilter x3 (dry, delay send, reverb send) -> strataDelay -> strataReverb -> strataMaster
 ```
-`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and filter, delay, reverb and master are added in that order with `\addToTail` on `context.xg`. `inputSynth` is added at the head of `voiceGroup` and record synths right after it; the ring writers go to the tail of `voiceGroup` when the engine starts (the rings area). Mod synths go to the tail of `processGroup`. Grain synths are placed by `startPlacedGrainSynth`, so the order holds after any history of source switches and voice restarts: one that reads the voice bus (synth source) at the **head** of `processGroup`, before every grain synth that mirrors into a voice bus (so it never re-grains a releasing mirror); one that mirrors (buffer and input sources) is created at the tail of `processGroup` and then moved before the voice's running `\strataMod` (`moveBefore`), or stays at the tail when the voice has none yet (`gateVoice` starts or re-gates the mod synth after the grain synth; a re-gated mod synth is moved after a mirroring grain synth with `moveAfter`). A move whose target has just freed on the server (its `/n_end` not yet in sclang) only fails, and the mod synth's `onFree` restart goes to the tail; an `/s_new` relative to such a node would create nothing and leave a phantom grain synth that never frees, so no grain synth is ever created relative to another synth. Every grain synth of a voice therefore runs before that voice's mod synth (not necessarily before other voices' mod synths, which do not read its bus); the engine check reads `/g_queryTree` with controls after 0 -> 3 -> 9 -> 0 switches within 1 s.
+`voiceGroup = Group.head(context.xg)`, `processGroup = Group.after(voiceGroup)`, and the three filters, delay, reverb and master are added in that order with `\addToTail` on `context.xg` (a bypass lifted re-creates the delay after the third filter and the reverb before the master). `inputSynth` is added at the head of `voiceGroup` and record synths right after it; the ring writers go to the tail of `voiceGroup` when the engine starts (the rings area). Mod synths go to the tail of `processGroup`. Grain synths are placed by `startPlacedGrainSynth`, so the order holds after any history of source switches and voice restarts: one that reads the voice bus (synth source) at the **head** of `processGroup`, before every grain synth that mirrors into a voice bus (so it never re-grains a releasing mirror); one that mirrors (buffer and input sources) is created at the tail of `processGroup` and then moved before the voice's running `\strataMod` (`moveBefore`), or stays at the tail when the voice has none yet (`gateVoice` starts or re-gates the mod synth after the grain synth; a re-gated mod synth is moved after a mirroring grain synth with `moveAfter`). A move whose target has just freed on the server (its `/n_end` not yet in sclang) only fails, and the mod synth's `onFree` restart goes to the tail; an `/s_new` relative to such a node would create nothing and leave a phantom grain synth that never frees, so no grain synth is ever created relative to another synth. Every grain synth of a voice therefore runs before that voice's mod synth (not necessarily before other voices' mod synths, which do not read its bus); the engine check reads `/g_queryTree` with controls after 0 -> 3 -> 9 -> 0 switches within 1 s.

@@ -9,7 +9,7 @@ The engine notes are one file per area of the engine check (`test/engine_check/<
 - [memory](engine/memory.md): Real-time memory (the grain UGens' sizes, the budget, the worst cases)
 - [buffers](engine/buffers.md): the `bufferState` and `bufferLoadFailed` polls, the buffer slots, Buffer commands (damaged files and failed reads, fade before zeroing, `slotChanges`, recording, `stopRecord`), Audio Sources: Lua side (the buffers table, buffer params, scenes)
 - [files](engine/files.md): `writeSlot` and `saveBuffer` (`.part` files, generations, clipping), `deleteStaleParts`, the scratch directory
-- [effects](engine/effects.md): `\strataFilter`, `\strataDelay`, `\strataReverb`, `\strataMaster`, the NaN guard before the effects
+- [effects](engine/effects.md): the mix (the voice filter, the sends, `fxMixBus`), `\strataFilter` x3, `\strataDelay`, `\strataReverb`, `\strataReverbFDN`, `\strataMaster`, the NaN guards before the effects, the bypass
 - [performance](engine/performance.md): the values a performance tier sets
 - [rings](engine/rings.md): the voice and input rings, their writers, where a ring grain starts (the lookback, history), `ringReaders`
 - [freeze](engine/freeze.md): freeze per source (hold, spectral), the input copy and its fade, the frozen read point, the spectral writer
