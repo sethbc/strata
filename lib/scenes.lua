@@ -201,7 +201,11 @@ return function(S)
   -- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
   -- Filling only adds what is missing, so it runs for every file version;
   -- from_version is there for changes that must convert a particular format.
-  -- Malformed scenes are left alone for validate_scene to reject.
+  -- Then each registered voice-param record's normalize_scene(extras), if it
+  -- has one, brings values a hand edit may have left inconsistent back to
+  -- what the params allow (a loop past the slot's end), so a recall ends
+  -- where the params would. Malformed scenes are left alone for
+  -- validate_scene to reject.
   function migrate_scene(scene, from_version)
     if type(scene) ~= "table" or scene.populated ~= true or type(scene.data) ~= "table" then return end
     local data = scene.data
@@ -226,6 +230,11 @@ return function(S)
         fill_scene_default(data.voices[i], {"extras"}, {})
         for key, entry in pairs(extras) do
           fill_scene_default(data.voices[i], {"extras", key}, entry.default)
+        end
+        if type(data.voices[i].extras) == "table" then
+          for _, record in ipairs(S.registry.voice_params) do
+            if record.normalize_scene then record.normalize_scene(data.voices[i].extras) end
+          end
         end
       end
     end

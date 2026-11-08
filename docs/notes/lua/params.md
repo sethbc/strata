@@ -53,6 +53,7 @@ Menu order:
   discrete = { freeze = {0, 1}, freeze_mode = {1, 2} }, -- whole range; the other scene keys crossfade
   voice_rows = { section = "mix", rows = {"freeze", "freeze_mode"}, when = nil, before = nil },
   layout_states = nil,         -- optional {{name, setup = fn(context)}}
+  normalize_scene = nil,       -- optional fn(extras): a loaded scene's values made consistent (migrate_scene)
   fader = false }
 ```
 

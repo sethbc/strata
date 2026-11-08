@@ -268,6 +268,47 @@ test("loops are continuous scene fields that crossfade", function()
   assert_near(start, 0, 1e-9, "migration gives a start of 0"); assert_near(length, 1, 1e-9, "and a length of 1")
 end)
 
+-- A hand-edited scene file with a loop past the slot's end loads as a
+-- valid pair, so a recall, crossfaded or instant, ends inside the slot (#167)
+test("a scene file's invalid loop pair is cut to fit when it loads", function()
+  local subdir = "loop-pair-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  params:set("v2_source", 4)
+  capture_scene(1)
+  -- edited by hand: start 0.6 with length 0.9, and a start past 0.999
+  S.scenes[1].data.voices[2].extras.loop_start = 0.6
+  S.scenes[1].data.voices[2].extras.loop_length = 0.9
+  S.scenes[1].data.voices[3].extras.loop_start = 1
+  S.scenes[1].data.voices[3].extras.loop_length = 0.5
+  save_scenes_to_disk()
+  cleanup()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  S = local_value("S")
+  local extras = S.scenes[1].data.voices[2].extras
+  assert_near(extras.loop_start, 0.6, 1e-9, "the start stays")
+  assert_near(extras.loop_length, 0.4, 1e-9, "the length is cut to 1 - start")
+  extras = S.scenes[1].data.voices[3].extras
+  assert_near(extras.loop_start, 0.999, 1e-9, "a start past 0.999 stops there")
+  assert_near(extras.loop_length, 0.001, 1e-9, "with the length that is left")
+  assert_true(validate_scene(S.scenes[1]), "the scene validates")
+  -- a crossfaded recall from the whole slot ends at the cut pair
+  recall_scene(1, 4); wake(context, "scene_transition_clock")
+  context.clock.run_for(5)
+  local start, length = loop_of(2)
+  assert_near(start, 0.6, 1e-9, "the crossfade ends at the scene's start")
+  assert_near(length, 0.4, 1e-9, "and a length that fits")
+  -- the normalize leaves a valid pair and non-numbers (validate_scene's) alone
+  local hook
+  for _, record in ipairs(S.registry.voice_params) do if record.name == "loops" then hook = record.normalize_scene end end
+  local valid = {loop_start = 0.25, loop_length = 0.5}
+  hook(valid)
+  assert_near(valid.loop_start, 0.25, 1e-12); assert_near(valid.loop_length, 0.5, 1e-12)
+  local broken = {loop_start = "x", loop_length = 2}
+  hook(broken)
+  assert_equal(broken.loop_start, "x"); assert_equal(broken.loop_length, 2, "left for validate_scene to reject")
+end)
+
 test("randomize, mutation and the fader pages leave loops alone", function()
   local context = load_strata()
   finish_startup(context)

@@ -5,7 +5,7 @@ Every parameter of the selected voice. Back to [Screen Controls](../controls.md)
 The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- karp [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/4`).
 
 Below it, five rows at a time, the voice's parameters in four sections, each under a dim section name:
-- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead; an input-sourced voice has no synth section (its sections are then counted out of three)
+- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead, then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)); an input-sourced voice has no synth section (its sections are then counted out of three)
 - **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
