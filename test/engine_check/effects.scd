@@ -120,13 +120,25 @@ SynthDef(\strataCheckCompare, { arg in, ref, out;
 SynthDef(\strataCheckVoiceFilter, { arg in, out, filterType = 0, freq = 1000, res = 0.5, mix = 1;
     Out.ar(out, engine.voiceFilter(In.ar(in, 2), filterType, freq, res, mix));
 }).add;
-// A 10 ms noise burst, once
-SynthDef(\strataCheckBurst, { arg out;
-    Out.ar(out, ({ WhiteNoise.ar(0.5) } ! 2) * EnvGen.ar(Env.perc(0.001, 0.01), doneAction: 2));
+// A unit impulse on both channels, once (Impulse at 0 Hz fires on its
+// first sample): the same every run, where a noise burst's spectrum, and so
+// the decay the reverbs measure, varies with the random generator's state
+SynthDef(\strataCheckImpulse, { arg out;
+    Out.ar(out, Impulse.ar(0) ! 2);
+    Line.kr(0, 0, 0.01, doneAction: 2);
 }).add;
-// The energy envelope of a stereo bus (20 ms lag), recorded at control rate
-SynthDef(\strataCheckEnvelopeRecord, { arg in, buffer;
-    RecordBuf.kr(A2K.kr(Lag.ar(In.ar(in, 2).squared.sum, 0.02)), buffer, loop: 0, doneAction: 2);
+// The decay of two stereo buses (inA, inB), measured on the server for a
+// fixed number of control blocks, after which it frees itself (its /n_end
+// ends the wait). For each bus, from its energy envelope (20 ms lag): the
+// blocks spent above -5 dB and above -35 dB of the running peak, 1 once it
+// fell below -35 dB, and the peak; out holds the eight values when it ends.
+SynthDef(\strataCheckDecayTimes, { arg inA, inB, out, blocks = 1;
+    Out.kr(out, [inA, inB].collect({ arg in;
+        var energy = A2K.kr(Lag.ar(In.ar(in, 2).squared.sum, 0.02)), peak = RunningMax.kr(energy);
+        [Integrator.kr(energy > (peak * 10.pow(-0.5)), 1), Integrator.kr(energy > (peak * 10.pow(-3.5)), 1),
+            RunningMax.kr((energy < (peak * 10.pow(-3.5))) * (peak > 0)), peak]
+    }).flat);
+    Line.kr(0, 0, blocks * ControlDur.ir, doneAction: 2);
 }).add;
 server.sync;
 
@@ -532,42 +544,46 @@ checkReverbBypass = {
 };
 
 // The FDN (the high tier's reverb) against FreeVerb2, both fully wet at
-// size 0.8 and damp 0.5: the RT60 of a noise burst's energy envelope (T30:
-// twice the time from -5 to -35 dB) within 30%. Also each one's pool size
+// size 0.8 and damp 0.5: the RT60 of the impulse response's energy envelope
+// (T30: twice the time from -5 to -35 dB, as the blocks the envelope spends
+// above each level) within 30%. Also each one's pool size
 // (the small probes that fit with and without one), and a high engine
 // runs the FDN, also after a bypass is lifted.
 checkFdn = {
-    // each def in its own group on its own buses, rendered at once; a 3 s
-    // window holds T30 (-35 dB about 1-1.4 s after -5 dB at RT60 2-2.7 s)
+    // Both defs (inA, inB) in one group, created in one bundle: one impulse
+    // on one bus that both read, each def writing its own bus, and one
+    // \strataCheckDecayTimes after them. Everything is counted in server
+    // blocks and the wait ends on the analysis synth's /n_end, so a busy
+    // machine (a late server, a late sclang) changes nothing. A 3 s window
+    // holds T30 (-35 dB about 1.1-1.3 s after -5 dB at RT60 1.9-2.2 s).
     var rt60s = { arg defNames;
-        var seconds = 3, frames = (seconds * server.sampleRate / server.options.blockSize).asInteger;
-        var runs = defNames.collect({ arg defName;
-            var run = (inBus: Bus.audio(server, 2), outBus: Bus.audio(server, 2), nothing: Bus.audio(server, 2),
-                buffer: Buffer.alloc(server, frames, 1), group: Group.after(context.xg), condition: Condition(false));
-            Synth(defName, [\in, run[\inBus], \delayIn, run[\nothing], \out, run[\outBus], \mix, 1, \size, 0.8, \damp, 0.5],
-                run[\group]);
-            run
-        });
-        server.sync; 0.1.wait;
+        var seconds = 3, blocks = (seconds * server.sampleRate / server.options.blockSize).asInteger;
+        var group = Group.after(context.xg), inBus = Bus.audio(server, 2), nothing = Bus.audio(server, 2);
+        var outBuses = defNames.collect({ Bus.audio(server, 2) }), resultBus = Bus.control(server, 4 * defNames.size);
+        var condition = Condition(false), values;
+        resultBus.setAll(0);
+        server.sync;
         server.makeBundle(nil, {
-            runs.do({ arg run;
-                Synth(\strataCheckBurst, [\out, run[\inBus]], run[\group], \addToHead);
-                Synth(\strataCheckEnvelopeRecord, [\in, run[\outBus], \buffer, run[\buffer]], run[\group], \addToTail);
-            })
+            var analysis;
+            Synth(\strataCheckImpulse, [\out, inBus], group, \addToTail);
+            defNames.do({ arg defName, index;
+                Synth(defName, [\in, inBus, \delayIn, nothing, \out, outBuses[index], \mix, 1, \size, 0.8, \damp, 0.5],
+                    group, \addToTail)
+            });
+            analysis = Synth(\strataCheckDecayTimes, [\inA, outBuses[0], \inB, outBuses[1], \out, resultBus,
+                \blocks, blocks], group, \addToTail);
+            OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID])
+                .oneShot;
         });
-        (seconds + 0.3).wait;
-        runs.collect({ arg run;
-            var values, dbs, peakIndex, peakDb, at5, at35;
-            run[\buffer].loadToFloatArray(action: { arg array; values = array; run[\condition].test = true; run[\condition].signal });
-            awaitReply.(run[\condition], 10);
-            run[\group].free; server.sync;
-            [\buffer, \inBus, \outBus, \nothing].do({ arg key; run[key].free });
-            dbs = values.collect({ arg value; 10 * log10(value.max(1e-20)) });
-            peakIndex = dbs.maxIndex; peakDb = dbs[peakIndex];
-            at5 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 5) });
-            at35 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 35) });
-            if (at5.notNil and: { at35.notNil }) {
-                2 * (at35 - at5) * server.options.blockSize / server.sampleRate
+        awaitReply.(condition, seconds * 10);
+        values = readBus.(resultBus);
+        group.free; server.sync;
+        ([inBus, nothing, resultBus] ++ outBuses).do(_.free);
+        defNames.collect({ arg defName, index;
+            var above5, above35, reached, peak;
+            #above5, above35, reached, peak = values.copyRange(index * 4, (index * 4) + 3);
+            if ((values.size == (4 * defNames.size)) and: { reached == 1 } and: { peak > 0 }) {
+                2 * (above35 - above5) * server.options.blockSize / server.sampleRate
             }
         })
     };
@@ -584,8 +600,9 @@ checkFdn = {
     var freeverbKB = poolKB.(\strataReverb), fdnKB = poolKB.(\strataReverbFDN);
     var root = h.tempDir +/+ "effects-high/", write, high, highReverb;
     check.(freeverb.notNil and: { fdn.notNil } and: { (fdn / freeverb).inclusivelyBetween(0.7, 1.3) },
-        "effects: the FDN's RT60 is within 30\\% of FreeVerb2's at size 0.8 (FDN % s, FreeVerb2 % s; pool: FDN about % KB, FreeVerb2 about % KB)".format(
-            fdn !? { arg value; value.round(0.01) }, freeverb !? { arg value; value.round(0.01) }, fdnKB.round(1), freeverbKB.round(1)));
+        "effects: the FDN's RT60 is within 30\\% of FreeVerb2's at size 0.8 (FDN % s, FreeVerb2 % s, ratio %; pool: FDN about % KB, FreeVerb2 about % KB)".format(
+            fdn !? { arg value; value.round(0.01) }, freeverb !? { arg value; value.round(0.01) },
+            (fdn.notNil and: { freeverb.notNil }).if({ (fdn / freeverb).round(0.001) }), fdnKB.round(1), freeverbKB.round(1)));
     check.(fdnKB < 512, "effects: the FDN takes under 512 KB of the pool (about % KB)".format(fdnKB.round(1)));
     // a high engine's reverb
     write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
