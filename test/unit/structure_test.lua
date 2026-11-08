@@ -1088,4 +1088,74 @@ test("recursive deletes happen only at the guarded sites", function()
   for path in pairs(GUARDED_RECURSIVE_DELETES) do assert_true(seen[path], "the guarded delete in " .. path .. " is still there") end
 end)
 
+-- The runner stops what sclang started without pgrep, timeout or stdbuf
+-- (#152). A fake sclang starts a fake scsynth (sleep, run under the name
+-- scsynth) and then either reports a compile error and waits, so the
+-- runner's own stop must reach its child, or exits at once like a crashed
+-- sclang, leaving the server orphaned with only the PID file the check
+-- writes (scsynth.pid in its work dir) to find it by. The runner runs on a
+-- PATH holding only the tools it needs.
+local RUNNER_TOOLS = { "dirname", "mktemp", "cp", "mkdir", "uname", "cat", "grep", "sleep", "rm", "ps", "awk" }
+
+local function run_runner_without_tools(case)
+  local shell_quote, root = h.shell_quote, data_root .. "runner-" .. case
+  os.execute("mkdir -p " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
+  local function tool_path(tool)
+    local pipe = io.popen("command -v " .. tool)
+    local found = pipe:read("*l")
+    pipe:close()
+    assert_true(found ~= nil and found ~= "", tool .. " is installed")
+    return found
+  end
+  for _, tool in ipairs(RUNNER_TOOLS) do
+    os.execute("ln -s " .. shell_quote(tool_path(tool)) .. " " .. shell_quote(root .. "/bin/" .. tool))
+  end
+  -- a script, not a link to sleep: a multi-call coreutils refuses to run
+  -- under another name. It sleeps in 1 s steps, so a stopped one leaves
+  -- no long sleep behind
+  local server = assert(io.open(root .. "/scsynth", "w"))
+  server:write("#!/bin/sh\ncount=0\nwhile [ $count -lt 60 ]; do sleep 1; count=$((count + 1)); done\n")
+  server:close()
+  os.execute("chmod +x " .. shell_quote(root .. "/scsynth"))
+  local lines = { "#!/bin/sh", shell_quote(root .. "/scsynth") .. " 60 &", "echo $! > " .. shell_quote(root .. "/fake.pid") }
+  if case == "compile-error" then
+    lines[#lines + 1] = 'echo "ERROR: syntax error, unexpected"'
+    lines[#lines + 1] = "sleep 60"
+  else
+    lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
+    lines[#lines + 1] = "exit 1"
+  end
+  local sclang = assert(io.open(root .. "/sclang", "w"))
+  sclang:write(table.concat(lines, "\n") .. "\n")
+  sclang:close()
+  os.execute("chmod +x " .. shell_quote(root .. "/sclang"))
+  local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(root .. "/bin")
+    .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=30 TMPDIR=" .. shell_quote(root)
+    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1")
+  local output = pipe:read("*a")
+  pipe:close()
+  local pid_file = io.open(root .. "/fake.pid", "r")
+  local pid = pid_file and pid_file:read("*l")
+  if pid_file then pid_file:close() end
+  local alive = pid ~= nil and pid:match("^%d+$") ~= nil and os.execute("kill -0 " .. pid .. " 2>/dev/null")
+  alive = alive == true or alive == 0
+  if alive then os.execute("kill " .. pid .. " 2>/dev/null") end
+  h.remove_tree(root)
+  return output, pid, alive
+end
+
+test("the engine check runner stops sclang's scsynth without pgrep or timeout (#152)", function()
+  local output, pid, alive = run_runner_without_tools("compile-error")
+  assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
+  assert_true(output:find("sclang reported a compile error", 1, true) ~= nil, "the runner stopped sclang: " .. output)
+  assert_true(not alive, "the server sclang started is stopped with it")
+end)
+
+test("the engine check runner stops the scsynth a crashed sclang left behind (#152)", function()
+  local output, pid, alive = run_runner_without_tools("crash")
+  assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
+  assert_true(output:find("ENGINE CHECK PASSED", 1, true) == nil, "the run failed")
+  assert_true(not alive, "the orphaned server is stopped through its PID file: " .. output)
+end)
+
 end

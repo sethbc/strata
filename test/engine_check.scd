@@ -362,7 +362,12 @@ SystemClock.sched(540, {
     nil
 });
 server.waitForBoot({
-    var exitCode, defaultScratchDir, running;
+    var exitCode, defaultScratchDir, running, workDir = "STRATA_CHECK_TMPDIR".getenv;
+    // the server's PID for run_engine_check.sh, which stops this scsynth if
+    // it outlives sclang (a crash, #152)
+    if (workDir.notNil and: { workDir.size > 0 } and: { server.pid.notNil }) {
+        try { File.use(workDir +/+ "scsynth.pid", "w", { arg file; file.write(server.pid.asString ++ "\n") }) };
+    };
     try {
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
