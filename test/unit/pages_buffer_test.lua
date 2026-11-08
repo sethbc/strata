@@ -217,7 +217,7 @@ test("ALT+K2 clear never opens the file browser", function()
   assert_equal(#context.calls_named("clearBuffer"), 2, "and clears nothing")
 end)
 
-test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", function()
+test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashes", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local buffers = local_value("buffers")
   enc(2, 2)   -- slot 3; no voice reads it
@@ -230,12 +230,17 @@ test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", func
   assert_equal(#saves, 1, "ALT+K3 saves")
   assert_equal(saves[1].args[1], 2, "the cursor slot (engine slot 2)")
   assert_equal(#context.calls_named("recordBuffer"), 0, "and does not record")
-  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save")
-  assert_screen_layout(context, "BUFFER with the saved flash")
+  assert_equal(hint_text(context), "saving buf 3", "the hint row says the save is under way")
+  assert_screen_layout(context, "BUFFER with the saving flash")
   assert_equal(#page_dots(context), 8, "the hint flash leaves the header alone")
-  context.set_time(101.4); redraw()
+  -- the engine reports the file written (bufferSaveResult: (save 1 * 2 + ok 0) * 8 + slot index 2)
+  context.set_time(100.2)
+  context.polls.fire("bufferSaveResult", (1 * 2 + 0) * 8 + 2); next_frame(context)
+  assert_equal(hint_text(context), "saved buf 3", "the hint row confirms the save once the engine reports it")
+  assert_screen_layout(context, "BUFFER with the saved flash")
+  context.set_time(101.6); redraw()
   assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
-  context.set_time(101.5); redraw()
+  context.set_time(101.7); redraw()
   assert_equal(hint_text(context), "K2:load K3:rec", "the normal hint after 1.5 s")
   -- an empty slot: nothing saved, the hint says so
   enc(2, 1)   -- slot 4, empty
@@ -263,7 +268,9 @@ test("ALT+K3 saves the cursor slot with the busy, saved and empty flashes", func
   assert_true(not buffers[4].finishing, "the take settled")
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
-  assert_equal(hint_text(context), "saved buf 4")
+  assert_equal(hint_text(context), "saving buf 4")
+  context.polls.fire("bufferSaveResult", (1 * 2 + 1) * 8 + 3); next_frame(context)
+  assert_equal(hint_text(context), "buf 4 save failed", "a save the engine could not write says so")
   -- K2 held, then K3: records, never saves (the old K2+K3 gesture is gone)
   context.clear_engine_calls()
   key(2, 1); tap(3)
@@ -807,7 +814,7 @@ test("BUFFER's layout states draw clear of each other", function()
   local names = {}
   for _, state in ipairs(record.layout_states) do names[state.name] = true end
   for _, name in ipairs({ "slot 1", "slot 8", "field dur", "field lvl", "long names", "every slot recording",
-    "saved flash", "busy flash", "empty flash", "load failed flash", "meter peak",
+    "saving flash", "saved flash", "save failed flash", "busy flash", "empty flash", "load failed flash", "meter peak",
     "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)" }) do
     assert_true(names[name], "a layout state " .. name)
   end
