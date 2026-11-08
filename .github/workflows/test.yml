@@ -34,10 +34,25 @@ jobs:
       - name: Lua / engine command sync check
         run: lua5.3 test/sync_check.lua
 
-  engine:
-    name: engine
+  # The engine check's areas run in parallel shards, each on its own runner
+  # with its own sclang and scsynth, so the job takes about as long as its
+  # slowest shard (buffers, alone) instead of the sum of every area. The
+  # groups are balanced from the per-area times the check prints ("area
+  # <name>: <seconds> s"); every area is in exactly one shard
+  # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
+  engine-shard:
+    name: engine (${{ matrix.areas }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        areas:
+          - buffers
+          - lifecycle,memory,structure,performance
+          - loops,freeze,grains
+          - rings,files,voices,effects
     env:
+      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes)
       NORNS_REF: 227aa044
       NORNS_DIR: ${{ github.workspace }}/norns
@@ -78,3 +93,17 @@ jobs:
 
       - name: Engine check
         run: SCLANG="$(command -v sclang)" timeout 600 test/run_engine_check.sh "$NORNS_DIR"
+
+  # The required status check: passes only when every shard passed (a
+  # failed, canceled or skipped shard fails it), so branch protection keeps
+  # requiring one job named engine
+  engine:
+    name: engine
+    needs: engine-shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every engine shard passed
+        run: |
+          echo "engine shards: ${{ needs.engine-shard.result }}"
+          test "${{ needs.engine-shard.result }}" = success
