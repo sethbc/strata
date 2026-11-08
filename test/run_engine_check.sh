@@ -78,9 +78,13 @@ YAML
 # 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
-# command) signals every descendant, so no scsynth is left holding its
-# port. stdbuf makes sclang's output line-buffered, so an error is in the
-# output file while sclang waits (block-buffered, it never would be).
+# command) signals every descendant, found with POSIX ps (pgrep is not on
+# every machine), so no scsynth is left holding its port. A sclang that
+# ends on its own (a crash) leaves its scsynth running: the check writes
+# the server's PID to scsynth.pid in the work dir, and the script stops it
+# after sclang ends (#152). stdbuf makes sclang's output line-buffered, so
+# an error is in the output file while sclang waits (block-buffered, it
+# never would be).
 sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
 compile_error='^ERROR: (syntax error|Command line parse failed|file .* parse failed)|Library has not been compiled successfully'
 timeout_cmd=$(command -v timeout || command -v gtimeout || true)
@@ -89,12 +93,36 @@ set --
 [ -n "$timeout_cmd" ] && set -- "$timeout_cmd" --kill-after=10 "$sclang_timeout"
 [ -n "$stdbuf_cmd" ] && set -- "$@" "$stdbuf_cmd" -oL -eL
 
+# The PIDs of a process's children: POSIX ps (Linux and macOS), or pgrep
+# where ps cannot list processes
+child_pids() {
+  if processes=$(ps -A -o pid= -o ppid= 2>/dev/null) && [ -n "$processes" ]; then
+    printf '%s\n' "$processes" | awk -v parent="$1" '$2 == parent { print $1 }'
+  else
+    pgrep -P "$1" 2>/dev/null
+  fi
+}
+
 # Signal a process and all its descendants, children first (once the
 # parent is gone they would be re-parented out of reach)
 kill_tree() (
-  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  for child in $(child_pids "$1"); do kill_tree "$child"; done
   kill "$1" 2>/dev/null
 )
+
+# Stop the scsynth the check booted if it outlived sclang: the PID in
+# scsynth.pid, signaled only while its command line still names scsynth
+# (never a process that took the PID over)
+stop_leftover_server() {
+  server_pid=$(cat "$work_dir/scsynth.pid" 2>/dev/null) || return 0
+  case $server_pid in ''|*[!0-9]*) return 0 ;; esac
+  case $(ps -p "$server_pid" -o args= 2>/dev/null) in
+    *scsynth*)
+      kill_tree "$server_pid"
+      echo "stopped the scsynth sclang left running (pid $server_pid)" >&2
+      ;;
+  esac
+}
 
 output="$work_dir/output.txt"
 set +e
@@ -102,6 +130,7 @@ set +e
 # directory is removed with it, never left in the caller's directory
 (cd "$work_dir" && STRATA_CHECK_TMPDIR="$work_dir" exec "$@" "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1 &
 sclang_pid=$!
+started_at=$(date +%s)
 # Without a timeout command this loop enforces the limit itself
 elapsed=0
 stopped=
@@ -120,10 +149,15 @@ while kill -0 "$sclang_pid" 2>/dev/null; do
 done
 wait "$sclang_pid"
 status=$?
+stop_leftover_server
 set -e
-# 124: timeout stopped it; 137: timeout's --kill-after SIGKILL
-if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; }; then
+# 124: timeout stopped it; 137: timeout's --kill-after SIGKILL, or a
+# sclang killed some other way (a crash), told apart by the time it ran
+ran_for=$(( $(date +%s) - started_at ))
+if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || { [ "$status" -eq 137 ] && [ "$ran_for" -ge "$sclang_timeout" ]; }; }; then
   stopped="no result within $sclang_timeout s"
+elif [ -z "$stopped" ] && [ "$status" -ge 128 ]; then
+  stopped="sclang ended on signal $((status - 128)) after $ran_for s"
 fi
 if [ -n "$stopped" ]; then
   echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2
