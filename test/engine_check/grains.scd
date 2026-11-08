@@ -47,7 +47,10 @@ var checkSourceGrains = { arg voice, slot;
     // a 1 s stereo 440 Hz sine at 0.5, at the server rate
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
     file.openWrite(path);
-    file.writeData(FloatArray.fill(frames * 2, { arg i; sin(2pi * 440 * (i div: 2) / server.sampleRate) * 0.5 }));
+    // one period: the frames holding a whole number of cycles
+    file.writeData({ var sine = h.periodic((0 .. (frames div: frames.gcd(440)) - 1).collect({ arg frame;
+        sin(2pi * 440 * frame / server.sampleRate) * 0.5 }), 0, frames);
+        h.stereoOf(sine, sine) }.value);
     file.close;
     command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
     tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);

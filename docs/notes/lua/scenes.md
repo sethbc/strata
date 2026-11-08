@@ -198,6 +198,7 @@ In the PARAMS menu (strata_scenes section):
   - Top-level blocks from `S.SCENE_BLOCK_DEFAULTS` (`{key, default}`).
   - Per-voice fields from `S.VOICE_SCENE_DEFAULTS` (`{path = keys inside data.voices[i], default}`), filled only when the parent table exists.
   - Each voice's `extras` table, then every registered voice param's default (`scene_defaults`) inside it.
+  - Then each registered record's optional `normalize_scene(extras)` on that table, in registration order: it puts back what the params would allow where a hand edit left values inconsistent (loops: a start past 0.999 or a length past `1 - start`), so a recall, which sets the extras without the params' cross-clamps, ends where the params would. It leaves anything but numbers to `validate_scene`.
   - The registered global fields from their `default`, as entries of `SCENE_GLOBAL_PARAMS`.
   - Malformed scenes are left for validation to reject.
   - A later scene field adds its default to one of these tables. `S.VOICE_SCENE_DEFAULTS` holds the grain envelope and mode, `source` and the three buffer params. `S.SCENE_BLOCK_DEFAULTS` is empty: the LFO settings are globals in `SCENE_GLOBAL_PARAMS`.

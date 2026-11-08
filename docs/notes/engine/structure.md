@@ -3,7 +3,8 @@
 - CLAUDE.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `standardBufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants (`bufferSeconds` is a tier value: [performance.md](performance.md)).
 - Everything runs inside `context.xg`, in this order: `voiceGroup` (the input synth, voice synths, record synths), `processGroup` (grain synths, then mod synths), then filter, delay, reverb and master. Master runs last in `xg`, never after `og`.
 - `free` frees every node, bus and buffer the engine made, and nothing that waits for a fade runs afterward.
-- Each engine check area (`test/engine_check/<area>.scd`) has a notes file of the same name here and a place in the runner's `areaOrder` (`test/engine_check.scd`), and each notes file here has an area of its name; the docs test checks all three.
+- Each engine check area (`test/engine_check/<area>.scd`) has a notes file of the same name here and a place in the runner's `areaOrder` (`test/engine_check.scd`), and each notes file here has an area of its name; the docs test checks all three. An on-demand area (`onDemandAreas`: the soak) has no notes file, is in no CI shard and is documented where it is run.
+- The engine check builds test sound and checks saved files with C primitives (`h.repeating`, `h.stereoOf`, `h.periodic`, `h.sameFrames`, ...), never a sclang function per sample, and never reads a long file into one array (sclang's garbage collector, `docs/notes/engine/files.md`).
 
 ## The engine check and the notes, per area
 
@@ -39,6 +40,11 @@ Each area stops the voices it started. After each area the runner checks `"<area
 | effects | `test/engine_check/effects.scd` | `docs/notes/engine/effects.md` | filter, delay, reverb, master |
 | performance | `test/engine_check/performance.scd` | `docs/notes/engine/performance.md` | the values a performance tier sets |
 | rings | `test/engine_check/rings.scd` | `docs/notes/engine/rings.md` | the ring writers, where ring grains read (pitch as rate, the lookback, history), the GrainBuf wrap |
+| soak (on demand) | `test/engine_check/soak.scd` | `docs/notes/engine/files.md` (sclang's garbage collector) | rounds of 60 s loads and saves on a high engine, each saved file checked in every frame |
+
+**On-demand areas** (`onDemandAreas` in the runner: the soak) run only when `$STRATA_ENGINE_CHECK_AREAS` names them (`STRATA_ENGINE_CHECK_AREAS=soak`), never in a full run or a CI shard. They come last in `areaOrder`, have no notes file of their own (the notes of the code they stress say how to run them) and are in no shard; the docs test checks all three. `test/run_engine_check.sh` passes the runner a deadline 30 s under its timeout (`STRATA_ENGINE_CHECK_DEADLINE`, from `$ENGINE_CHECK_TIMEOUT`; 540 s by default), so a long soak given a longer `ENGINE_CHECK_TIMEOUT` gets the time.
+
+**Test sound** is built from C primitives, never a sclang function per sample (sclang's garbage collector under heavy allocation, in `docs/notes/engine/files.md`): `h.repeating(size, values)` (a Signal repeating an Array of values: `putEach` wraps them), `h.stereoOf(left, right)` (two mono channels interleaved), `h.rampSignal(size)` (0, 1, 2, ...; scale it with Signal arithmetic), `h.periodic(period, startFrame, frames)` (a chunk of a signal repeating one period, an Array built once), `h.noise(size, level)` (4801 random values repeated), `h.writeConstantFrames(file, frames, values)` (65536 frames at a time) and `h.sameFrames(file, path)` (an open file compared in every sample with another, a chunk at a time into fresh Signals, never read as one big array).
 
 ## Dual-Language System
 

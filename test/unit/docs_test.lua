@@ -730,7 +730,18 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "performance", "rings", "freeze", "variation", "loops" }
+  "effects", "performance", "rings", "freeze", "variation", "loops", "soak" }
+
+-- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
+-- (its onDemandAreas: the soak, #131), as a set
+local function on_demand_areas()
+  local runner = stubs.strip_sc_comments(read_repo_file("test/engine_check.scd"))
+  local list = runner:match("var%s+onDemandAreas%s*=%s*(%b[])")
+  assert_true(list ~= nil, "test/engine_check.scd declares onDemandAreas")
+  local names = {}
+  for name in list:gmatch("\\(%w+)") do names[name] = true end
+  return names
+end
 
 test("every engine notes file opens with Must not break", function()
   local files = markdown_files("docs/notes/engine")
@@ -770,19 +781,45 @@ test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names th
 end)
 
 -- Both ways (#155): every area has its notes file, and every notes file
--- belongs to an area
+-- belongs to an area. An on-demand area (the soak) tests other areas'
+-- code: it has no notes file and is documented where it is run (next test)
 test("the engine check areas and the engine notes files match one to one", function()
-  local notes, areas = {}, {}
+  local notes, areas, on_demand = {}, {}, on_demand_areas()
   local note_names, area_names = names_in("docs/notes/engine", "md"), names_in("test/engine_check", "scd")
   for _, name in ipairs(note_names) do notes[name] = true end
   for _, name in ipairs(area_names) do areas[name] = true end
   assert_true(#area_names >= 9, "test/engine_check holds the area files (found " .. #area_names .. ")")
   for _, name in ipairs(area_names) do
-    assert_true(notes[name], "test/engine_check/" .. name .. ".scd has docs/notes/engine/" .. name .. ".md")
+    if not on_demand[name] then
+      assert_true(notes[name], "test/engine_check/" .. name .. ".scd has docs/notes/engine/" .. name .. ".md")
+    end
   end
   for _, name in ipairs(note_names) do
     assert_true(areas[name], "docs/notes/engine/" .. name .. ".md has test/engine_check/" .. name .. ".scd")
   end
+end)
+
+-- An on-demand area has a file, runs last in the fixed order, and the docs
+-- say how to run it (status.md's checks, and the engine notes)
+test("every on-demand engine check area is documented and has a file (#131)", function()
+  local on_demand, count = on_demand_areas(), 0
+  local status = read_repo_file("docs/status.md")
+  local files_notes = read_repo_file("docs/notes/engine/files.md")
+  local seen_on_demand = false
+  for _, name in ipairs(ENGINE_CHECK_AREA_ORDER) do
+    if on_demand[name] then seen_on_demand = true
+    else assert_true(not seen_on_demand, name .. " runs after an on-demand area") end
+  end
+  for name in pairs(on_demand) do
+    count = count + 1
+    local file = io.open(repo_root .. "/test/engine_check/" .. name .. ".scd", "r")
+    assert_true(file ~= nil, "on-demand area " .. name .. " has test/engine_check/" .. name .. ".scd")
+    if file then file:close() end
+    local run = "STRATA_ENGINE_CHECK_AREAS=" .. name
+    assert_true(status:find(run, 1, true) ~= nil, "docs/status.md says how to run " .. name .. " (" .. run .. ")")
+    assert_true(files_notes:find(run, 1, true) ~= nil, "docs/notes/engine/files.md says how to run " .. name)
+  end
+  assert_true(count >= 1, "the runner names its on-demand areas (the soak)")
 end)
 
 test("the runner's area order names every area file", function()
@@ -816,11 +853,16 @@ test("CI's engine shards run every engine check area exactly once", function()
   end
   assert_true(shards >= 2, "the check is sharded (" .. shards .. " shards)")
   -- the areas with a file (areaOrder may name one not written yet; the
-  -- runner refuses a name with no file, so a shard may not list it)
-  local files = {}
+  -- runner refuses a name with no file, so a shard may not list it). An
+  -- on-demand area (the soak) is never in a shard: CI never runs it.
+  local files, on_demand = {}, on_demand_areas()
   for _, name in ipairs(names_in("test/engine_check", "scd")) do
     files[name] = true
-    assert_true(seen[name], name .. " (test/engine_check/" .. name .. ".scd) is in a shard")
+    if on_demand[name] then
+      assert_true(not seen[name], name .. " runs on demand only, never in a CI shard")
+    else
+      assert_true(seen[name], name .. " (test/engine_check/" .. name .. ".scd) is in a shard")
+    end
   end
   for name in pairs(seen) do assert_true(files[name], "shard area " .. name .. " has an area file") end
   -- the required check is still one job named engine, which needs every shard

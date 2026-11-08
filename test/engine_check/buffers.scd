@@ -97,10 +97,11 @@ var checkBadLoadsDuringRecording = { arg textPath, stereoPath;
 // run_engine_check.sh's error patterns.
 var writeDamagedFlac = { arg path;
     var file = SoundFile.new.headerFormat_("FLAC").sampleFormat_("int16").numChannels_(1).sampleRate_(48000);
-    var bytes, header, headerReads;
-    file.openWrite(path); file.writeData(FloatArray.fill(48000, { 1.0.rand2 * 0.5 })); file.close;
+    var bytes, header, headerReads, start;
+    file.openWrite(path); file.writeData(h.noise(48000, 0.5)); file.close;
     file = File(path, "rb"); bytes = Int8Array.newClear(file.length); file.read(bytes); file.close;
-    ((bytes.size div: 3)..(bytes.size - 1)).do({ arg i; bytes[i] = 0x55 });
+    start = bytes.size div: 3;
+    bytes.overWrite(Int8Array.newClear(bytes.size - start).fill(0x55), start);
     file = File(path, "wb"); file.write(bytes); file.close;
     header = SoundFile.openRead(path);
     headerReads = header.notNil and: { header.numFrames == 48000 };
@@ -154,7 +155,9 @@ var checkFilePitch = {
     server.sync;
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(44100);
     file.openWrite(sinePath);
-    file.writeData(FloatArray.fill(44100 * 2 * 2, { arg i; sin(2pi * 1000 * (i div: 2) / 44100) * 0.5 }));
+    // 2 s on both sides: a period of 441 frames holds 10 cycles
+    file.writeData({ var sine = h.periodic((0 .. 440).collect({ arg frame; sin(2pi * 1000 * frame / 44100) * 0.5 }), 0, 44100 * 2);
+        h.stereoOf(sine, sine) }.value);
     file.close;
     command.(\loadBuffer, 3, sinePath); 0.5.wait; server.sync;
     [[\bufPos, 0.25], [\bufScan, 0], [\posSpread, 0], [\bufRate, 1], [\pitchShift, 1],
@@ -489,7 +492,7 @@ var writeLongFile = { arg path, seconds, levelFor;
     file.openWrite(path);
     seconds.do({ arg second;
         var level = levelFor.(second);
-        file.writeData(FloatArray.fill(rate * 2, { arg i; if (i.even) { level } { level.neg } }));
+        file.writeData(h.repeating(rate * 2, [level, level.neg]));
     });
     file.close;
 };
@@ -501,7 +504,7 @@ var writeDamagedLongFlac = { arg path;
     var rate = server.sampleRate.asInteger, bytes, start;
     var file = SoundFile.new.headerFormat_("FLAC").sampleFormat_("int16").numChannels_(1).sampleRate_(rate);
     file.openWrite(path);
-    20.do({ file.writeData(FloatArray.fill(rate, { 1.0.rand2 * 0.5 })) });
+    20.do({ file.writeData(h.noise(rate, 0.5)) });
     file.close;
     file = File(path, "rb"); bytes = Int8Array.newClear(file.length); file.read(bytes); file.close;
     start = bytes.size div: 3;
