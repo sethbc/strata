@@ -121,6 +121,60 @@ test("page files never set arc fields and arc files set nothing else", function(
   assert_equal(arc_files, 7, "seven page ring files (SETUP has none)")
 end)
 
+-- Each record field's value, per page index (a shallow copy)
+local function record_snapshot(pages)
+  local snapshot = {}
+  for index, record in pairs(pages) do
+    snapshot[index] = {}
+    for field, value in pairs(record) do snapshot[index][field] = value end
+  end
+  return snapshot
+end
+
+test("as they load, page files set no arc field and each arc file sets only its own page's arc fields", function()
+  local loaded = { pages = 0, arcs = 0 }
+  local problems = {}
+  local function problem(text) table.insert(problems, text) end
+  load_strata({ before_load = function()
+    local real_include = include
+    include = function(file)
+      local constructor = real_include(file)
+      local kind = file:match("^lib/pages/") and "page" or (file:match("^lib/arc/") and file ~= "lib/arc/core" and "arc")
+      if not kind or type(constructor) ~= "function" then return constructor end
+      return function(S, ...)
+        local before = record_snapshot(S.registry.pages)
+        local module = constructor(S, ...)
+        local own_name = file:match("([%w_]+)$"):upper()
+        for index, record in pairs(S.registry.pages) do
+          local was = before[index] or {}
+          for field, value in pairs(record) do
+            if was[field] ~= value then
+              if kind == "page" and ARC_FIELDS[field] then
+                problem(file .. " sets " .. tostring(record.name) .. "." .. field .. " (only lib/arc/<page>.lua does)")
+              elseif kind == "arc" and not ARC_FIELDS[field] then
+                problem(file .. " sets " .. tostring(record.name) .. "." .. field .. ", not an arc field")
+              elseif kind == "arc" and record.name ~= own_name then
+                problem(file .. " sets " .. tostring(record.name) .. "." .. field .. ", another page's record")
+              end
+            end
+          end
+          for field in pairs(was) do
+            if record[field] == nil then problem(file .. " removes " .. tostring(record.name) .. "." .. field) end
+          end
+        end
+        if kind == "arc" and before[S.constants.UI_PAGES.index[own_name]] == nil then
+          problem(file .. " loads before its page's record exists")
+        end
+        loaded[kind == "page" and "pages" or "arcs"] = loaded[kind == "page" and "pages" or "arcs"] + 1
+        return module
+      end
+    end
+  end })
+  assert_equal(table.concat(problems, "\n"), "", "record fields set by the wrong file")
+  assert_equal(loaded.pages, 8, "eight page files loaded")
+  assert_equal(loaded.arcs, 7, "seven page ring files loaded")
+end)
+
 test("strata.lua includes every page file, then every arc file", function()
   local text = read_lua_sources()[1].text
   local last_page, first_arc = 0, math.huge

@@ -1,6 +1,6 @@
 ## Must not break
 
-- Each `lib/arc/<page>.lua` sets only the arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those, `arc_button` included; tests check both). Avoid page field names (`key`, `name`, `enter`, ...) as keys in a ring file's own tables: the ownership tests read every `<field> =` in the file.
+- Each `lib/arc/<page>.lua` sets only the arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those, `arc_button` included; tests check both). Avoid page field names (`key`, `name`, `enter`, ...) as keys in a ring file's own tables: the ownership tests read every `<field> =` in the file. A second test watches the includes as the script loads: each page file sets no arc field, and each arc file sets only arc fields, only on its own page's record (which exists before it loads), and removes none (`test/unit/ui_pages_test.lua`).
 - Every ring is drawn through `arc_ring_fill` or `arc_ring_fill_bipolar`. A ring showing a param draws from `param_fraction(id)` (`arc_ring_fill_param` picks the bipolar fill for a range through 0), so a changed param range moves the ring (a test swaps the controlspec to check). A ring showing a cursor or a step level draws exactly these fractions:
   - SEQ ring 1: `(S.cursors.seq_step - 1) / (PATTERN_LENGTH - 1)`;
   - SEQ ring 2: `S.patterns[S.selected_voice][step] / MAX_STEP_LEVEL`;
@@ -12,7 +12,7 @@
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
 - Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
-- VOICE's rings read the cursor only from `S.lib.pages_voice.sync_cursor()` (the page's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw: after a source switch the raw cursor can sit past the last row or on a section label. Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`.
+- VOICE's rings read the cursor only from `S.lib.ui_cursors.sync("voice")` (the cursor module's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw (after a source switch the raw cursor can sit past the last row or on a section label) and never through the VOICE page module (a test checks). Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`, the page's name for `S.lib.ui_cursors.place("voice", index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
 - SCENES ring 1 moves the cursor only through `S.lib.pages_scenes.move_cursor(slot)`, the page's own move (E2 uses it too), which disarms a pending overwrite confirmation and clears its prompt. The ring never touches `S.scenes_page` itself.
 

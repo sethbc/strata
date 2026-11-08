@@ -7,9 +7,9 @@
 -- (add_lfo_params, which lib/params_setup.lua's lfos record calls).
 -- S.selected_lfo is the LFO the LFO page and arc ring 4 work on. The
 -- functions that were global stay global;
--- LFO_DEFAULT_PERIOD and BUILT_IN_DESTINATIONS (the LFO page's groups) are
--- fields of this module's table (S.lib.lfos); the period for the
--- scene defaults in lib/scenes.lua. Registers the LFOs' cleanup step.
+-- LFO_DEFAULT_PERIOD, LFO_OFFSET_RANGE and BUILT_IN_DESTINATIONS (the LFO
+-- page's groups) are fields of this module's table (S.lib.lfos); the period
+-- and the offset range for the scene defaults and validation in lib/scenes.lua. Registers the LFOs' cleanup step.
 
 return function(S)
   local M = {}
@@ -34,6 +34,9 @@ return function(S)
   -- (scenes keep the depth they store; lib/scenes.lua's migration default
   -- for a file without one stays 0)
   local LFO_DEFAULT_DEPTH = 0.25
+  -- The library's lfo_offset_<n> range in percent, for every baseline (from
+  -- center narrows it to -50..50): what a scene's offset may hold
+  local LFO_OFFSET_RANGE = {-100, 100}
   -- Library steps per beat (its default is 96): the action, and so an engine
   -- message, runs on every step, so this bounds the message rate (96/s per LFO
   -- at 120 BPM) while a 10 Hz LFO still gets several steps per cycle
@@ -263,6 +266,7 @@ return function(S)
   end)
 
   M.LFO_DEFAULT_PERIOD = LFO_DEFAULT_PERIOD
+  M.LFO_OFFSET_RANGE = LFO_OFFSET_RANGE
   M.BUILT_IN_DESTINATIONS = BUILT_IN_LFO_DESTINATIONS  -- the LFO page's last voice group ends here
   return M
 end

@@ -310,6 +310,105 @@ test("the step cursor stays on the pattern's steps", function()
   assert_true(not moved and tostring(problem):find("nowhere", 1, true), "an unknown cursor is an error")
 end)
 
+-- The param id under the voice cursor after S.lib.ui_cursors.sync("voice"),
+-- checking that sync returns the selected voice's current rows and the cursor
+local function synced_voice_param(S)
+  local rows, cursor = S.lib.ui_cursors.sync("voice")
+  assert_equal(row_ids(rows), row_ids(voice_page_rows(S.selected_voice)), "sync returns the selected voice's rows")
+  assert_equal(cursor, S.cursors.voice, "sync puts S.cursors.voice on the cursor it returns")
+  return rows[cursor].param_id
+end
+
+test("sync keeps the voice cursor on its anchored param when the rows change", function()
+  load_strata()
+  local S = local_value("S")
+  local rows, cursor = S.lib.ui_cursors.place("voice", row_of(voice_page_rows(1), "v1_grain_pitch"))
+  assert_equal(rows[cursor].param_id, "v1_grain_pitch", "place returns the rows and the placed cursor")
+  assert_equal(S.cursors.voice, cursor)
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  assert_equal(synced_voice_param(S), "v1_grain_pitch", "grain pitch when the synth section goes")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(synced_voice_param(S), "v1_grain_pitch", "and when it comes back")
+  S.selected_voice = 2
+  assert_equal(synced_voice_param(S), "v2_grain_pitch", "the same param of another voice")
+  -- a param the rows lack: clamped from the anchored index, then found again
+  S.selected_voice = 1
+  S.lib.ui_cursors.place("voice", row_of(voice_page_rows(1), "v1_rq"))
+  local anchored_index = S.cursors.voice
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  rows = voice_page_rows(1)
+  assert_equal(select(2, S.lib.ui_cursors.sync("voice")), S.lib.ui_field_list.clamp(rows, anchored_index),
+    "no rq on an input voice: clamped from rq's index")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(synced_voice_param(S), "v1_rq", "rq again after input and back")
+end)
+
+test("sync anchors where the cursor is before any deliberate move", function()
+  load_strata()
+  local S = local_value("S")
+  S.cursors.voice = row_of(voice_page_rows(1), "v1_grain_size")
+  assert_equal(synced_voice_param(S), "v1_grain_size", "the first sync anchors on the cursor's row")
+  S.cursors.voice = 2
+  assert_equal(synced_voice_param(S), "v1_grain_size", "later bare writes are taken back to it")
+end)
+
+test("move sets the voice anchor and starts from the anchored param", function()
+  load_strata()
+  local S = local_value("S")
+  S.lib.ui_cursors.move("voice", 1)
+  assert_equal(voice_page_rows(1)[S.cursors.voice].param_id, "v1_rq")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  S.lib.ui_cursors.sync("voice")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(synced_voice_param(S), "v1_rq", "the move anchored rq: found again after input and back")
+  -- a move right after a source change, before any sync, goes on from the param
+  S.lib.ui_cursors.place("voice", row_of(voice_page_rows(1), "v1_grain_pitch"))
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  S.lib.ui_cursors.move("voice", 1)
+  local rows = voice_page_rows(1)
+  assert_equal(rows[S.cursors.voice].param_id, rows[row_of(rows, "v1_grain_pitch") + 1].param_id,
+    "the row after grain pitch on the input voice's rows")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(synced_voice_param(S), rows[row_of(rows, "v1_grain_pitch") + 1].param_id, "and anchored there")
+end)
+
+test("a bare write and clamp_all never move the voice anchor", function()
+  load_strata()
+  local S = local_value("S")
+  S.lib.ui_cursors.place("voice", row_of(voice_page_rows(1), "v1_pan"))
+  S.cursors.voice = 2
+  S.lib.ui_cursors.clamp_all()
+  assert_equal(S.cursors.voice, 2, "clamp_all only clamps the index")
+  assert_equal(synced_voice_param(S), "v1_pan", "sync takes it back to the anchored param")
+  local cursor = S.cursors.voice
+  for _ = 1, 3 do
+    assert_equal(select(2, S.lib.ui_cursors.sync("voice")), cursor, "sync is idempotent")
+  end
+end)
+
+test("sync and place are only for cursors over rows", function()
+  load_strata()
+  local S = local_value("S")
+  for _, name in ipairs({ "seq_step", "scene", "nowhere" }) do
+    local synced, problem = pcall(S.lib.ui_cursors.sync, name)
+    assert_true(not synced and tostring(problem):find(name, 1, true), "sync(" .. name .. ") is an error")
+    local placed
+    placed, problem = pcall(S.lib.ui_cursors.place, name, 1)
+    assert_true(not placed and tostring(problem):find(name, 1, true), "place(" .. name .. ") is an error")
+  end
+end)
+
+test("the VOICE page's cursor functions are the cursor module's", function()
+  load_strata()
+  local S = local_value("S")
+  local voice_page = S.lib.pages_voice
+  voice_page.place_cursor(row_of(voice_page_rows(1), "v1_grain_spread"))
+  assert_equal(synced_voice_param(S), "v1_grain_spread", "place_cursor anchors in the cursor module")
+  S.lib.ui_cursors.place("voice", row_of(voice_page_rows(1), "v1_amp"))
+  local rows, cursor = voice_page.sync_cursor()
+  assert_equal(rows[cursor].param_id, "v1_amp", "sync_cursor reads the cursor module's anchor")
+end)
+
 test("the cursor and row functions live in their modules", function()
   load_strata()
   local S = local_value("S")

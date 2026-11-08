@@ -33,11 +33,12 @@ return function(S)
   -- default mix is 0; 1 would be fully wet).
   S.fx_last_mix = {filter = 1, delay = 0.3, reverb = 0.3}
 
-  -- The filter and delay params are faders on the 256 grid's FX page. A scene
+  -- The filter and delay params are faders on the 256 grid's FX page: redraw
+  -- only while a grid shows it (no other layout shows them). A scene
   -- transition sets them on every step and redraws the grid once per step
   -- itself.
   local function fx_fader_changed()
-    if S.lib.grid_core.any_page(4) and not S.scene_transition_active then grid_redraw() end
+    if S.lib.grid_core.any_fx_faders() and not S.scene_transition_active then grid_redraw() end
   end
 
   -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an
