@@ -55,7 +55,6 @@ CHANGELOG.md has every change. In short:
 ## Open items
 
 - **Next: 3.2**, the performance setting and one grain path (`docs/design/3.2-design.md`, approved; plan `docs/superpowers/plans/2026-11-08-3.2-plan.md`). It starts with the engine split, as 3.1 started with the module split.
-- [#103](https://github.com/sethbc/strata/issues/103) **LFO offset in scenes** (step 2): scenes should capture `lfo_offset_<n>`. That is a new scene field, so it waits for 3.2 (3.1 added none). Step 1, keeping the offset across on/off, shipped in 3.1.
 - [#113](https://github.com/sethbc/strata/issues/113) **Grid playhead one step ahead between steps:** a grid redraw between pattern steps lights the next step, while SEQ draws the sounding one. Not new in 3.1; a shared "sounding step" helper fixes both.
 - [#109](https://github.com/sethbc/strata/issues/109) **Move the VOICE cursor anchor into `lib/ui/cursors.lua`:** a refactor with no behavior change, for a release whose design owns the cursor module.
 - [#114](https://github.com/sethbc/strata/issues/114) **3.1 follow-ups:** the small cleanups the 3.1 reviews deferred (none a user would notice), as a checklist.
