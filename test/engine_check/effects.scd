@@ -16,7 +16,7 @@ var getControl = { arg synth, control; h.getControl(synth, control) };
 var readBus = { arg bus; h.readBus(bus) };
 var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
 var mixBus = { arg name; engine.mixBus(name) };
-var masterUGens, filterIn, filterOut, stepBus, readStep;
+var masterUGens, readStep;
 var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRouting, checkChain30, checkDrySends;
 var checkBypassFrees, checkBypassMemory, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
@@ -132,33 +132,43 @@ server.sync;
 
 // The largest sample step a filter of def (fully wet, a 1 kHz sine at its
 // cutoff, where lowpass and highpass are in antiphase) takes while its type
-// changes, against the largest in any type's steady state
-checkFilterCrossfade = { arg defName, message;
-    var group = Group.tail(server), filterSynth, stepProbe, steadySteps, switchStep;
-    filterIn = Bus.audio(server, 2); filterOut = Bus.audio(server, 2); stepBus = Bus.control(server, 1);
-    Synth(\strataCheckSine, [\out, filterIn, \freq, 1000], group, \addToTail);
-    filterSynth = Synth(defName, [\in, filterIn, \out, filterOut, \freq, 1000, \res, 0.5, \filterType, 0, \mix, 1],
-        group, \addToTail);
-    stepProbe = Synth(\strataCheckStep, [\in, filterOut, \out, stepBus], group, \addToTail);
-    steadySteps = [0, 1, 2].collect({ arg type;
-        filterSynth.set(\filterType, type); 0.4.wait;
-        stepProbe.set(\t_reset, 1); 0.3.wait;
-        readStep.value
+// changes, against the largest in any type's steady state. Each [defName,
+// message] pair runs in its own group on its own buses, all at once (the
+// same type changes at the same times), so the defs share one timeline.
+checkFilterCrossfade = { arg pairs;
+    var runs = pairs.collect({ arg pair;
+        var group = Group.tail(server), filterIn = Bus.audio(server, 2), filterOut = Bus.audio(server, 2);
+        var stepBus = Bus.control(server, 1), filterSynth, stepProbe;
+        Synth(\strataCheckSine, [\out, filterIn, \freq, 1000], group, \addToTail);
+        filterSynth = Synth(pair[0], [\in, filterIn, \out, filterOut, \freq, 1000, \res, 0.5, \filterType, 0, \mix, 1],
+            group, \addToTail);
+        stepProbe = Synth(\strataCheckStep, [\in, filterOut, \out, stepBus], group, \addToTail);
+        (message: pair[1], group: group, buses: [filterIn, filterOut, stepBus], stepBus: stepBus,
+            filter: filterSynth, probe: stepProbe, steady: List.new)
     });
-    filterSynth.set(\filterType, 0); 0.4.wait;
-    stepProbe.set(\t_reset, 1); 0.05.wait;
+    var setType = { arg type; server.makeBundle(nil, { runs.do({ arg run; run[\filter].set(\filterType, type) }) }) };
+    var resetProbes = { server.makeBundle(nil, { runs.do({ arg run; run[\probe].set(\t_reset, 1) }) }) };
+    [0, 1, 2].do({ arg type;
+        setType.(type); 0.4.wait;
+        resetProbes.value; 0.3.wait;
+        runs.do({ arg run; run[\steady].add(readStep.(run[\stepBus])) })
+    });
+    setType.(0); 0.4.wait;
+    resetProbes.value; 0.05.wait;
     // six changes, each at a different point in the sine's cycle
-    [1, 2, 0, 2, 1, 0].do({ arg type; filterSynth.set(\filterType, type); 0.13.wait });
-    switchStep = readStep.value;
-    check.(switchStep <= (steadySteps.maxItem * 1.1),
-        "% (largest step % while switching, % at most in steady state %)".format(
-            message, switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
-    group.free; filterIn.free; filterOut.free; stepBus.free;
+    [1, 2, 0, 2, 1, 0].do({ arg type; setType.(type); 0.13.wait });
+    runs.do({ arg run;
+        var switchStep = readStep.(run[\stepBus]), steadySteps = run[\steady].asArray;
+        check.(switchStep <= (steadySteps.maxItem * 1.1),
+            "% (largest step % while switching, % at most in steady state %)".format(
+                run[\message], switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
+    });
+    runs.do({ arg run; run[\group].free; run[\buses].do(_.free) });
 };
-// the largest step since the probe was last reset
-readStep = {
+// the largest step since the probe on bus was last reset
+readStep = { arg bus;
     var condition = Condition(false), value;
-    stepBus.get({ arg result; value = result; condition.test = true; condition.signal });
+    bus.get({ arg result; value = result; condition.test = true; condition.signal });
     awaitReply.(condition);
     value
 };
@@ -527,30 +537,39 @@ checkReverbBypass = {
 // (the small probes that fit with and without one), and a high engine
 // runs the FDN, also after a bypass is lifted.
 checkFdn = {
-    var rt60 = { arg defName;
-        var inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2), nothing = Bus.audio(server, 2);
-        var seconds = 5, frames = (seconds * server.sampleRate / server.options.blockSize).asInteger;
-        var buffer = Buffer.alloc(server, frames, 1), group = Group.after(context.xg), condition = Condition(false);
-        var values, dbs, peakIndex, peakDb, at5, at35, result;
-        Synth(defName, [\in, inBus, \delayIn, nothing, \out, outBus, \mix, 1, \size, 0.8, \damp, 0.5], group);
+    // each def in its own group on its own buses, rendered at once; a 3 s
+    // window holds T30 (-35 dB about 1-1.4 s after -5 dB at RT60 2-2.7 s)
+    var rt60s = { arg defNames;
+        var seconds = 3, frames = (seconds * server.sampleRate / server.options.blockSize).asInteger;
+        var runs = defNames.collect({ arg defName;
+            var run = (inBus: Bus.audio(server, 2), outBus: Bus.audio(server, 2), nothing: Bus.audio(server, 2),
+                buffer: Buffer.alloc(server, frames, 1), group: Group.after(context.xg), condition: Condition(false));
+            Synth(defName, [\in, run[\inBus], \delayIn, run[\nothing], \out, run[\outBus], \mix, 1, \size, 0.8, \damp, 0.5],
+                run[\group]);
+            run
+        });
         server.sync; 0.1.wait;
         server.makeBundle(nil, {
-            Synth(\strataCheckBurst, [\out, inBus], group, \addToHead);
-            Synth(\strataCheckEnvelopeRecord, [\in, outBus, \buffer, buffer], group, \addToTail);
+            runs.do({ arg run;
+                Synth(\strataCheckBurst, [\out, run[\inBus]], run[\group], \addToHead);
+                Synth(\strataCheckEnvelopeRecord, [\in, run[\outBus], \buffer, run[\buffer]], run[\group], \addToTail);
+            })
         });
         (seconds + 0.3).wait;
-        buffer.loadToFloatArray(action: { arg array; values = array; condition.test = true; condition.signal });
-        awaitReply.(condition, 10);
-        group.free; server.sync;
-        buffer.free; inBus.free; outBus.free; nothing.free;
-        dbs = values.collect({ arg value; 10 * log10(value.max(1e-20)) });
-        peakIndex = dbs.maxIndex; peakDb = dbs[peakIndex];
-        at5 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 5) });
-        at35 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 35) });
-        result = if (at5.notNil and: { at35.notNil }) {
-            2 * (at35 - at5) * server.options.blockSize / server.sampleRate
-        };
-        result
+        runs.collect({ arg run;
+            var values, dbs, peakIndex, peakDb, at5, at35;
+            run[\buffer].loadToFloatArray(action: { arg array; values = array; run[\condition].test = true; run[\condition].signal });
+            awaitReply.(run[\condition], 10);
+            run[\group].free; server.sync;
+            [\buffer, \inBus, \outBus, \nothing].do({ arg key; run[key].free });
+            dbs = values.collect({ arg value; 10 * log10(value.max(1e-20)) });
+            peakIndex = dbs.maxIndex; peakDb = dbs[peakIndex];
+            at5 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 5) });
+            at35 = (peakIndex..(dbs.size - 1)).detect({ arg index; dbs[index] <= (peakDb - 35) });
+            if (at5.notNil and: { at35.notNil }) {
+                2 * (at35 - at5) * server.options.blockSize / server.sampleRate
+            }
+        })
     };
     var poolKB = { arg defName;
         var inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2), without, with, synth;
@@ -561,7 +580,7 @@ checkFdn = {
         synth.free; server.sync; inBus.free; outBus.free;
         (without - with) * probeKB
     };
-    var freeverb = rt60.(\strataReverb), fdn = rt60.(\strataReverbFDN);
+    var rt60 = rt60s.([\strataReverb, \strataReverbFDN]), freeverb = rt60[0], fdn = rt60[1];
     var freeverbKB = poolKB.(\strataReverb), fdnKB = poolKB.(\strataReverbFDN);
     var root = h.tempDir +/+ "effects-high/", write, high, highReverb;
     check.(freeverb.notNil and: { fdn.notNil } and: { (fdn / freeverb).inclusivelyBetween(0.7, 1.3) },
@@ -644,8 +663,8 @@ check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feed
 check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
 check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
 
-checkFilterCrossfade.(\strataFilter, "filter type changes crossfade");
-checkFilterCrossfade.(\strataCheckVoiceFilter, "effects: the voice filter crossfades types in 20 ms");
+checkFilterCrossfade.([[\strataFilter, "filter type changes crossfade"],
+    [\strataCheckVoiceFilter, "effects: the voice filter crossfades types in 20 ms"]]);
 checkEffectsGuard.value;
 checkEffectSendsReported.value;
 h.stopAllVoices;

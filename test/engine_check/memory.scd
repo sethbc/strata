@@ -18,9 +18,10 @@
 //   (/c_getn, /n_info) and anything an engine synth allocates meanwhile find
 //   room (the high run's spectral writers take their last ~16 KB each
 //   lazily, about 21 ms in, after the flood: the freed reserve holds it).
-//   They count as free. (256 KB each until 2d: beside sixteen probes the
-//   high worst case left about 250 KB, too little for them and the
-//   spectral writers' lazy allocations; about 310 KB since #132.)
+//   They count as free. (256 KB each until 2d: with 2b and 2d the high
+//   worst case leaves about 145-165 KB beside the sixteen probes
+//   (4240-4260 - 4096 KB), and about 30-50 KB after the spectral writers'
+//   lazy allocations: too little for two 256 KB reserves.)
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
