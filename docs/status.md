@@ -63,7 +63,6 @@ CHANGELOG.md has every change. In short:
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
   - A buffer slot's internal `restoring` flag can stay set after a restore that never gets audio. Nothing reads it except when audio is confirmed.
-  - The arc keeps redrawing while the norns menu is open (the screen does not), so a param changed from PARAMS, a CC map or an LFO moves the rings at once.
   - The engine check's timeout kills sclang's child processes through `pgrep`. On a machine without `pgrep` and without `timeout`, a hung scsynth may outlive the check.
 - **Limits to keep in mind:**
   - Lua's 200-local limit applies to each function: the locals probe in `test/run.lua` measures the free locals at the end of each file's main chunk and of each module's constructor function, and requires 30 in each (`strata.lua`'s main chunk uses 5). Group new constants into tables, and split a module that runs short.
@@ -142,3 +141,6 @@ From the 3.1 design's "Cost if wrong" and the calls made while building it:
 - **Built as parallel pull requests:** Wave 1 ran as batches of separate pull requests instead of one serial package, and Wave 2 as twelve packages at once, each owning disjoint files (CLAUDE.md, "Working in parallel"). Parallel pull requests merged `main` and kept both sides of registration conflicts. If wrong: rebase conflicts within a batch, and `main` carried a partly built 3.1 between merges (never tagged).
 - **Merged names win:** later work follows the module names already merged (`S.lib.ui_text`, `S.lib.grid_core`, ...) and never renames merged code to match a plan. If wrong: none.
 - **The start registry** (#73) came into Wave 1, so each module registers its start step beside its cleanup step and `init` never changes. If wrong: a later package re-homes init pieces.
+
+**3.2**
+- **The arc stays live while the norns menu is open** (#169), like the grid: norns' menu takes only the screen, the keys and the encoders (`lua/core/menu.lua`), so arc turns still reach the script and the rings show their params (an arc turn, PARAMS, a CC map) at once; the screen stops because the menu owns it. If wrong: skip `arc_redraw` in `draw_frame` while `norns.menu.status()` and redraw the arc as the menu closes; an arc turned in the menu would then edit without feedback.

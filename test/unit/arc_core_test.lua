@@ -285,4 +285,35 @@ test("the arc keeps drawing while the norns menu is open (#49)", function()
   _menu.set_mode(false)
 end)
 
+-- norns' menu takes the screen, keys and encoders only (lua/core/menu.lua's
+-- set_mode swaps redraw, key and the encoder callback); arc and grid input
+-- stays with the script, so both keep showing what changes (#169)
+test("with the menu open the arc's own turns and the grid stay live, and the rings are right after", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  local grid_hardware = context.grid.plug(1, 16, 16)
+  show_page("MAIN"); next_frame(context)
+  _menu.set_mode(true)
+  local script_redraw = redraw
+  redraw = function() end   -- norns.none while the menu is open
+  local density = params:get("master_density")
+  local arc_refreshes = arc_hardware.refresh_count
+  context.arc.turn(1, 1, 64)
+  assert_true(params:get("master_density") > density, "an arc turn in the menu still edits its ring's param")
+  next_frame(context)
+  assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the ring redraws on the next frame")
+  local shown = {}
+  for led = 1, 64 do shown[led] = arc_hardware.rings[1][led] end
+  local grid_refreshes = grid_hardware.refresh_count
+  params:set("scene_sequence_length", 6)   -- PARAMS while the menu is open
+  assert_equal(grid_hardware.refresh_count, grid_refreshes + 1, "the grid repaints as it does outside the menu")
+  redraw = script_redraw
+  _menu.set_mode(false)
+  -- the menu closing changes nothing on the arc: the rings already show the value
+  request_redraw(); next_frame(context)
+  for led = 1, 64 do
+    assert_equal(arc_hardware.rings[1][led], shown[led], "ring 1 LED " .. led .. " after the menu closes")
+  end
+end)
+
 end
