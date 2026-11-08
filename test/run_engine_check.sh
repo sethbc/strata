@@ -130,6 +130,7 @@ set +e
 # directory is removed with it, never left in the caller's directory
 (cd "$work_dir" && STRATA_CHECK_TMPDIR="$work_dir" exec "$@" "$sclang" -l "$work_dir/sclang_conf.yaml" "$script_dir/engine_check.scd") > "$output" 2>&1 &
 sclang_pid=$!
+started_at=$(date +%s)
 # Without a timeout command this loop enforces the limit itself
 elapsed=0
 stopped=
@@ -150,9 +151,13 @@ wait "$sclang_pid"
 status=$?
 stop_leftover_server
 set -e
-# 124: timeout stopped it; 137: timeout's --kill-after SIGKILL
-if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; }; then
+# 124: timeout stopped it; 137: timeout's --kill-after SIGKILL, or a
+# sclang killed some other way (a crash), told apart by the time it ran
+ran_for=$(( $(date +%s) - started_at ))
+if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || { [ "$status" -eq 137 ] && [ "$ran_for" -ge "$sclang_timeout" ]; }; }; then
   stopped="no result within $sclang_timeout s"
+elif [ -z "$stopped" ] && [ "$status" -ge 128 ]; then
+  stopped="sclang ended on signal $((status - 128)) after $ran_for s"
 fi
 if [ -n "$stopped" ]; then
   echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2

@@ -1089,13 +1089,13 @@ test("recursive deletes happen only at the guarded sites", function()
 end)
 
 -- The runner stops what sclang started without pgrep, timeout or stdbuf
--- (#152). A fake sclang starts a fake scsynth (sleep, run under the name
--- scsynth) and then either reports a compile error and waits, so the
--- runner's own stop must reach its child, or exits at once like a crashed
--- sclang, leaving the server orphaned with only the PID file the check
--- writes (scsynth.pid in its work dir) to find it by. The runner runs on a
--- PATH holding only the tools it needs.
-local RUNNER_TOOLS = { "dirname", "mktemp", "cp", "mkdir", "uname", "cat", "grep", "sleep", "rm", "ps", "awk" }
+-- (#152). A fake sclang starts a fake scsynth (a script named scsynth)
+-- and then either reports a compile error and waits, so the runner's own
+-- stop must reach its child, or kills itself like a crashed sclang,
+-- leaving the server orphaned with only the PID file the check writes
+-- (scsynth.pid in its work dir) to find it by. The runner runs on a PATH
+-- holding only the tools it needs.
+local RUNNER_TOOLS = { "dirname", "mktemp", "cp", "mkdir", "uname", "cat", "grep", "sleep", "rm", "ps", "awk", "date" }
 
 local function run_runner_without_tools(case)
   local shell_quote, root = h.shell_quote, data_root .. "runner-" .. case
@@ -1123,7 +1123,7 @@ local function run_runner_without_tools(case)
     lines[#lines + 1] = "sleep 60"
   else
     lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
-    lines[#lines + 1] = "exit 1"
+    lines[#lines + 1] = "kill -KILL $$"
   end
   local sclang = assert(io.open(root .. "/sclang", "w"))
   sclang:write(table.concat(lines, "\n") .. "\n")
@@ -1154,7 +1154,8 @@ end)
 test("the engine check runner stops the scsynth a crashed sclang left behind (#152)", function()
   local output, pid, alive = run_runner_without_tools("crash")
   assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
-  assert_true(output:find("ENGINE CHECK PASSED", 1, true) == nil, "the run failed")
+  assert_true(output:find("ENGINE CHECK FAILED: sclang ended on signal 9", 1, true) ~= nil,
+    "the run fails, naming the crash, not a timeout: " .. output)
   assert_true(not alive, "the orphaned server is stopped through its PID file: " .. output)
 end)
 
