@@ -39,11 +39,15 @@ return function(S)
   -- too and names one in its bufferSaveResult report); pending_saves holds
   -- the newest of them, oldest first, each with its path, until the engine
   -- reports how it ended (buffer_save_result).
+  -- checking_from is the length shown before a load the engine checks in a
+  -- routine first (a long file on a high tier), while it checks (nil
+  -- otherwise): until a report differs from it, the poll leaves the load
+  -- unsettled and the BUFFER page shows "..." for the length.
   S.buffers = {}
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
-      loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}}
+      loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, checking_from = nil}
   end
   -- per slot: clock that ends the recording state, then the finishing fallback
   S.buffer_record_clocks = {}
@@ -62,7 +66,11 @@ return function(S)
   -- overlap; keeping only the newest 4 is still safe: the flash depends only
   -- on saves_sent, and dropping an older entry only loses that save's console
   -- line.
-  local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4}
+  -- server_rate: norns' audio server runs at 48 kHz; the engine checks a
+  -- file in a routine when it would read more than its standard slot length
+  -- at that rate (loadCheckAtOnceFrames, lib/engine/StrataBuffers.sc)
+  local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4,
+    server_rate = 48000}
   S.buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
   local buffer_audio_dir = _path.audio .. "strata/"
   local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
@@ -175,7 +183,7 @@ return function(S)
   -- completed (a later report of audio adopts it), else false.
   function empty_buffer_state(settled_empty)
     return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
-      confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio}
+      confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio, checking_from = nil}
   end
 
   -- What a load replaces in the slot, for buffer_load_failed to put back: the
@@ -188,7 +196,24 @@ return function(S)
     if buffer.recording or buffer.finishing then return empty_buffer_state("take") end
     return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
       settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
-      missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file")}
+      missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file"),
+      checking_from = buffer.checking_from}
+  end
+
+  -- Whether the engine checks the file in a routine before the load takes
+  -- effect (loadSlot): on a tier whose slots hold more than the standard
+  -- length, a file of more frames than that at the server rate, counting
+  -- only what the slot reads (at most buffer_seconds at the file's rate and
+  -- at the server's). norns' audio.file_info gives its frames and rate; a
+  -- file it cannot open (0 frames) is rejected at once, unchecked
+  local function checked_before_load(path)
+    local standard_seconds = S.constants.STANDARD_BUFFER_SECONDS
+    local seconds = S.performance.buffer_seconds
+    if seconds <= standard_seconds or not (audio and audio.file_info) then return false end
+    local inspected, _, frames, rate = pcall(audio.file_info, path)
+    if not inspected or type(frames) ~= "number" or type(rate) ~= "number" or rate <= 0 then return false end
+    local read = math.min(frames, rate * seconds, BUFFER_SETTLE.server_rate * seconds)
+    return read > BUFFER_SETTLE.server_rate * standard_seconds
   end
 
   function load_buffer(slot, path)
@@ -215,6 +240,7 @@ return function(S)
     buffer.confirm_since = util.time()
     buffer.path = path
     buffer.missing_path = nil
+    buffer.checking_from = checked_before_load(path) and buffer.seconds or nil
     buffer_display_changed()
   end
 
@@ -242,6 +268,7 @@ return function(S)
       buffer.settled_empty = false
       buffer.confirm_since = nil
       buffer.missing_path = nil
+      buffer.checking_from = nil
       S.buffer_record_clocks[slot] = clock.run(function()
         clock.sleep(duration)
         S.buffer_record_clocks[slot] = nil
@@ -268,6 +295,7 @@ return function(S)
     buffer.confirm_since = nil
     buffer.path = nil
     buffer.missing_path = nil
+    buffer.checking_from = nil
     buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
     buffer_display_changed()
   end
@@ -345,7 +373,11 @@ return function(S)
   -- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or
   -- load that settled empty (a periodic 0 before a slow take or file read
   -- completed) is adopted when audio is reported later, as long as nothing
-  -- else (load, clear, a new recording) happened in the slot since.
+  -- else (load, clear, a new recording) happened in the slot since. A load
+  -- the engine is still checking (checking_from) settles nothing until a
+  -- report differs from the length shown before it: the 0 s of the load
+  -- taking effect (its read then settles as any load's), or, over an empty
+  -- slot, its new length.
   local function buffer_state_changed(value)
     local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
     local slot = slot_index + 1
@@ -355,6 +387,15 @@ return function(S)
     local changed = buffer.seconds ~= seconds
     buffer.seconds = seconds
     local has_audio = seconds > 0
+    if buffer.checking_from ~= nil then
+      if seconds == buffer.checking_from then
+        if changed then request_redraw() end
+        return
+      end
+      buffer.checking_from = nil
+      buffer.confirm_since = util.time()
+      changed = true
+    end
     if buffer.confirm_since ~= nil
       and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
       settle_buffer_slot(slot)
@@ -417,6 +458,7 @@ return function(S)
       buffer.confirm_since = left.confirm_since
       buffer.path = left.path
       buffer.missing_path = left.missing_path
+      buffer.checking_from = left.checking_from
       set_buffer_file_param(slot, left.file_param)
     end
     print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
