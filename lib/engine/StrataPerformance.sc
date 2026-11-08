@@ -5,7 +5,8 @@
 // It reads the setting Lua saved (performance.data), the board model and
 // the free memory, and writes what it runs to performance_active.data,
 // which Lua reads at init. The engine runs high only if it could write that
-// file, so the two never disagree. See docs/notes/engine/performance.md.
+// file, or if an old one it cannot remove says high (Lua reads that one),
+// so the two never disagree on the tier. See docs/notes/engine/performance.md.
 
 + Engine_Strata {
     // The standard tier's buffer length (s): Lua's S.constants.STANDARD_BUFFER_SECONDS
@@ -59,16 +60,17 @@
     }
 
     allocPerformance {
-        var state = areaState[\performance], decision;
+        var state = areaState[\performance], decision, model, memKB, sampleRate;
         instanceTag = UniqueID.next;
         writeGenerations = Dictionary.new;
         // the folder deleteStaleParts cleans (stalePartDirs), as this start used it
         state[\settingsDir] = this.settingsDirectory;
-        decision = this.performanceDecision(this.readPerformanceSetting, this.readBoardModel,
-            this.readMemAvailableKB, context.server.sampleRate ? 48000);
+        model = this.readBoardModel;
+        memKB = this.readMemAvailableKB;
+        sampleRate = context.server.sampleRate ? 48000;
+        decision = this.performanceDecision(this.readPerformanceSetting, model, memKB, sampleRate);
         if (this.writeActivePerformance(decision).not) {
-            decision = this.standardPerformance("standard: performance_active.data could not be written");
-            postln("strata: cannot write " ++ this.activePerformancePath ++ "; running standard");
+            decision = this.unwrittenPerformance(model, memKB, sampleRate);
         };
         state[\decision] = decision;
         tier = decision[\tier];
@@ -76,6 +78,71 @@
         maxGrains = decision[\maxGrains];
         historySeconds = decision[\historySeconds];
         postln("strata: performance " ++ tier ++ ", " ++ bufferSeconds ++ " s buffers (" ++ decision[\reason] ++ ")");
+    }
+
+    // The decision when performance_active.data could not be written. With
+    // no file left, Lua runs standard, and so does the engine. An old file
+    // that could not be removed (#153) is what Lua reads at init, so the
+    // engine runs what it says, read by Lua's rules (parseActivePerformance):
+    // standard for an invalid or standard file; for high, N s the high tier
+    // at N s, stepped down as usual when memory is short (Lua then caps its
+    // slot length to the engine's, which bufferState reports:
+    // bufferLengthValue). Posts what it runs and how to clear it
+    unwrittenPerformance { arg model, memKB, sampleRate;
+        var path = this.activePerformancePath, text, old, decision;
+        if (File.exists(path).not) {
+            postln("strata: cannot write " ++ path ++ "; running standard");
+            ^this.standardPerformance("standard: performance_active.data could not be written")
+        };
+        text = try { File.readAllString(path) } { nil };
+        old = this.parseActivePerformance(text);
+        decision = if (old.notNil and: { old[\tier] == \high }) {
+            this.performanceDecision((performance: \high, bufferSeconds: old[\bufferSeconds]), model, memKB, sampleRate)
+        } {
+            this.standardPerformance("standard: setting")
+        };
+        // "high: setting" or "standard: setting", and any step-down after it
+        decision[\reason] = decision[\reason].replace(": setting", ": the old performance_active.data"
+            ++ (if (old.isNil) { ", unreadable" } { "" }) ++ " (it could not be replaced)");
+        postln("strata: cannot replace " ++ path ++ "; running what the script will read from it ("
+            ++ (if (old.isNil) { "unreadable, so standard" } { old[\tier] ++ ", " ++ old[\bufferSeconds] ++ " s" })
+            ++ "). Remove the file by hand to use the setting");
+        if (old.notNil and: { decision[\bufferSeconds] < old[\bufferSeconds] }) {
+            postln("strata: memory allows " ++ decision[\bufferSeconds] ++ " s slots, not the "
+                ++ old[\bufferSeconds] ++ " s the file names; the script takes the slots' length from bufferState");
+        };
+        ^decision
+    }
+
+    // performance_active.data's values from its text, read exactly as Lua's
+    // S.lib.performance.parse_active_text reads them: "key value" lines
+    // (the key a run of letters, digits and _, the value the rest of the
+    // line, both trimmed; blank lines skipped; the last line of a key wins),
+    // tier standard or high, buffer_seconds a whole number the tier allows,
+    // max_grains and history_seconds the tier's. An Event (tier,
+    // bufferSeconds, maxGrains, historySeconds, reason), or nil when any is
+    // missing or not allowed
+    parseActivePerformance { arg text;
+        var fields = Dictionary.new, tierName, allowed, history, number;
+        if (text.isString.not) { ^nil };
+        text.split($\n).do({ arg line;
+            var trimmed = this.trimmedText(line), end = 0;
+            while { (end < trimmed.size) and: { trimmed[end].isAlphaNum or: { trimmed[end] == $_ } } } { end = end + 1 };
+            if (end > 0) { fields[trimmed.copyRange(0, end - 1)] = this.trimmedText(trimmed.copyToEnd(end)) };
+        });
+        number = { arg value;
+            if (value.notNil and: { value.notEmpty } and: { value.every(_.isDecDigit) }) { value.asInteger } { nil }
+        };
+        tierName = fields["tier"];
+        case
+        { tierName == "standard" } { allowed = [this.standardBufferSeconds]; history = this.standardHistorySeconds }
+        { tierName == "high" } { allowed = this.highBufferChoices; history = this.highHistorySeconds }
+        { ^nil };
+        if (allowed.includes(number.(fields["buffer_seconds"])).not
+            or: { number.(fields["max_grains"]) != this.tierMaxGrains }
+            or: { number.(fields["history_seconds"]) != history }) { ^nil };
+        ^(tier: tierName.asSymbol, bufferSeconds: number.(fields["buffer_seconds"]), maxGrains: this.tierMaxGrains,
+            historySeconds: history, reason: fields["reason"] ? "")
     }
 
     standardPerformance { arg reason;
@@ -210,7 +277,8 @@
 
     // Write performance_active.data, synchronously, so it exists before
     // alloc returns. The old file is deleted first (a start that cannot
-    // write leaves none, and Lua then runs standard). The text goes to
+    // write leaves none, and Lua then runs standard; one that cannot delete
+    // it runs what the old file says, unwrittenPerformance). The text goes to
     // path.<instanceTag>-<generation>.part, renamed into place with mv -f;
     // the final path is never opened for writing. Returns false when the
     // file could not be written (no .part is left)
