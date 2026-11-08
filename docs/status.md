@@ -9,7 +9,7 @@ Last updated 2026-11-07, at the 3.1.0 release. This file is the hand-off between
   - 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
   - 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
   - 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes (#115) and the release.
-- **CI:** `.github/workflows/test.yml` runs two jobs, `lua` and `engine`. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
+- **CI:** `.github/workflows/test.yml` runs `lua` and the engine check in four parallel shards (`engine (<areas>)`, one runner each, about 2.5 minutes in all instead of 6), gathered by one `engine` job that passes only when every shard passed. The shards are balanced from the per-area times the check prints; `test/unit/docs_test.lua` checks that every area is in exactly one. A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass on a branch that is up to date with `main`;
   - the rules apply to admins too;
@@ -55,9 +55,7 @@ CHANGELOG.md has every change. In short:
 ## Open items
 
 - **Next: 3.2**, the performance setting and one grain path (`docs/design/3.2-design.md`, approved; plan `docs/superpowers/plans/2026-11-08-3.2-plan.md`). It starts with the engine split, as 3.1 started with the module split.
-- [#103](https://github.com/sethbc/strata/issues/103) **LFO offset in scenes** (step 2): scenes should capture `lfo_offset_<n>`. That is a new scene field, so it waits for 3.2 (3.1 added none). Step 1, keeping the offset across on/off, shipped in 3.1.
 - [#113](https://github.com/sethbc/strata/issues/113) **Grid playhead one step ahead between steps:** a grid redraw between pattern steps lights the next step, while SEQ draws the sounding one. Not new in 3.1; a shared "sounding step" helper fixes both.
-- [#109](https://github.com/sethbc/strata/issues/109) **Move the VOICE cursor anchor into `lib/ui/cursors.lua`:** a refactor with no behavior change, for a release whose design owns the cursor module.
 - [#114](https://github.com/sethbc/strata/issues/114) **3.1 follow-ups:** the small cleanups the 3.1 reviews deferred (none a user would notice), as a checklist.
 - **K1 as ALT on hardware:** the long-press fallback (`S.lib.ui_alt.long_press`, 0.6 s) is a hook only; no timer calls it yet. If K1 held feels wrong in play, wiring the timer is the fallback (checked on #6).
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on a norns.** 3.0.2 has run on a norns shield (Raspberry Pi 4, 8 GB): everything runs, with plenty of CPU headroom. The detailed measurements are still to do; the issue and its comments list every check. Pending, in short:

@@ -484,6 +484,36 @@ test("row 16 copies a pattern and pastes it onto another voice", function()
   assert_equal(S_table().lib.grid_core.port_state(1).clipboard.voice, 2, "column 10 copies voice 2")
 end)
 
+test("a paste ends the step-level gesture of the voice it lands on", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 16, 16)
+  local small = context.grid.plug(2, 16, 8)
+  local patterns = local_value("patterns")
+  patterns[1][5], patterns[1][6] = 3, 0
+  local copied = copy_of(patterns[1])
+  tap(context, 9, 16)  -- copy voice 1
+  context.grid.press(1, 5, 3, 1)  -- hold voice 3 step 5 (toggles it on)
+  context.grid.press(2, 6, 3, 1)  -- and step 6 on the 16x8
+  context.grid.press(1, 6, 2, 1)  -- hold voice 2 step 6: no paste lands there
+  tap(context, 11, 16)  -- paste onto voice 3
+  assert_equal(patterns[3][5], copied[5], "the paste set step 5")
+  -- a second key on voice 3's row toggles its own step, as with nothing held
+  context.grid.press(1, 12, 3, 1)
+  assert_equal(patterns[3][5], copied[5], "the held step keeps the pasted level")
+  assert_equal(patterns[3][12], 15, "the new key toggles step 12")
+  context.grid.press(1, 12, 3, 0); context.grid.press(1, 5, 3, 0)
+  context.grid.press(2, 14, 3, 1)
+  assert_equal(patterns[3][6], copied[6], "the 16x8's held step keeps the pasted level")
+  assert_equal(patterns[3][14], 15, "and its new key toggles step 14")
+  context.grid.press(2, 14, 3, 0); context.grid.press(2, 6, 3, 0)
+  -- the other voice's gesture still works
+  context.grid.press(1, 16, 2, 1)
+  assert_equal(patterns[2][6], 15, "voice 2's held step takes column 16's level")
+  assert_equal(patterns[2][16], 0, "and the level key does not toggle")
+  context.grid.press(1, 16, 2, 0); context.grid.press(1, 6, 2, 0)
+  assert_equal(small:get_led(6, 3), patterns[3][6], "the 16x8 shows the pasted step")
+end)
+
 test("pasting onto the copied voice changes nothing", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
@@ -675,6 +705,32 @@ test("256 page 1: holding row 16 column 8 turns row 16 columns 1-7 into freeze k
   for voice_idx = 1, S.constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice_idx .. "_freeze"), voice_idx == 3 and 1 or 0)
   end
+end)
+
+test("256 lights the sounding step between steps, as SEQ does (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local device = context.grid.plug(1, 16, 16)
+  local function led(voice_idx, step) return device:get_led(step, voice_idx) end
+  S.patterns[1][2] = 9
+  grid_redraw()
+  assert_equal(led(1, 2), 9, "stopped: the stored level")
+  assert_equal(led(2, 1), 0, "stopped: no playhead")
+  pattern_toggle()  -- step 1 plays at once
+  grid_redraw()
+  assert_equal(led(2, 1), 4, "just started: step 1 is the playhead")
+  assert_equal(led(2, PATTERN_LENGTH), 0, "never the last step")
+  h.wake(context, "pattern_clock")  -- step 2 plays; the position is now 3
+  grid_redraw()  -- a redraw between steps (a key press)
+  assert_equal(S.pattern_position, 3)
+  assert_equal(led(1, 2), 15, "the sounding active step at 15")
+  assert_equal(led(2, 2), 4, "the sounding empty step at 4")
+  assert_equal(led(2, 3), 0, "not the next step")
+  assert_equal(S.lib.sequencer.sounding_step(), 2, "the step SEQ draws")
+  pattern_toggle()
+  assert_equal(led(1, 2), 9, "stopped: the stored level again")
+  assert_equal(led(2, 2), 0)
 end)
 
 end

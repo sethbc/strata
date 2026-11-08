@@ -34,19 +34,12 @@ return function(S)
     return util.clamp(S.cursors.seq_step, 1, PATTERN_LENGTH)
   end
 
-  -- The step that sounded last while the patterns play (nil when stopped).
-  -- The pattern clock plays S.pattern_position and then advances it, so
-  -- between steps the one sounding is the position before it: the column
-  -- the grid lights on each step
-  local function playing_step()
-    if not S.pattern_playing then return nil end
-    return (S.pattern_position - 2) % PATTERN_LENGTH + 1
-  end
 
-  -- A pattern edit: the grid shows the patterns, so it follows at once
+  -- A pattern edit: the grid shows the patterns, so it follows at once. (The
+  -- screen needs nothing here: enc and key in strata.lua request its redraw
+  -- after every handler)
   local function pattern_changed()
     grid_redraw()
-    request_redraw()
   end
 
   local function draw_cell(x, y, level, playing)
@@ -62,7 +55,9 @@ return function(S)
   end
 
   local function redraw_seq()
-    local playing = playing_step()
+    -- the playing column: the step sounding now (nil when stopped), the
+    -- one every grid layout lights
+    local playing = S.lib.sequencer.sounding_step()
     for voice_idx = 1, NUM_VOICES do
       local y = SEQ_PAGE.rows_y + (voice_idx - 1) * SEQ_PAGE.row_spacing
       local selected = voice_idx == S.selected_voice

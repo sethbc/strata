@@ -43,8 +43,8 @@ test("include stub loads lib modules and honors overrides", function()
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
     .. " lfo_destinations = {}, fx_params = {} }, lib = {}, register_start = function() end,"
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
-    .. " register_lfo_destination = function() end, register_source_change = function() end,"
-    .. " register_param_filter = function() end } end" } }
+    .. " register_lfo_destination = function() end, register_param_filter = function() end,"
+    .. " register_source_change = function() end, register_scene_field = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
@@ -747,12 +747,41 @@ test("the runner finds unit files and filters them", function()
   assert_equal(tests, "beta one", "and only their tests")
   assert_equal(load_from("a."), "", "the filter is plain text, not a pattern")
   assert_equal(load_from("gamma"), "", "a filter matching no file loads none")
-  os.execute("rm -rf '" .. dir .. "'")
+  h.remove_tree(dir)
   -- the suite's own unit files
   local unit_dir = repo_root .. "/test/unit"
   assert_equal(table.concat(unit_files(unit_dir, "lfos"), " "), "lfos_test.lua", "the lfos filter")
   local all = table.concat(unit_files(unit_dir), " ")
   assert_true(all:find("stubs_test.lua", 1, true) and all:find("structure_test.lua", 1, true), "every unit file: " .. all)
+end)
+
+-- The suite deletes its temporary folders only through h.remove_tree (#134)
+test("remove_tree deletes only inside the suite's temporary folder", function()
+  local function exists(path)
+    local file = io.open(path, "r"); if file then file:close() end
+    return file ~= nil
+  end
+  local function refused(path)
+    local ok, err = pcall(h.remove_tree, path)
+    return not ok and tostring(err):find("remove_tree", 1, true) ~= nil
+  end
+  local root = data_root:gsub("/+$", "")
+  for _, path in ipairs({ "", "/", "//", "relative/dir", root:match("^(.*)/"), root .. "_sibling",
+      root .. "/../escape", root .. "/a/./b", root .. "/a/../../b", "/tmp", "/" .. "home" }) do
+    assert_true(refused(path), "refused: " .. path)
+  end
+  assert_true(refused(nil) and refused(42), "refused: not a string")
+  -- a folder inside it goes, files and all, also with a quote and spaces in its name
+  for _, name in ipairs({ "remove_me", "it's a dir", "-rf" }) do
+    local dir = data_root .. "remove_tree/" .. name
+    os.execute("mkdir -p " .. h.shell_quote(dir))
+    local file = assert(io.open(dir .. "/file.txt", "w")); file:write("x"); file:close()
+    h.remove_tree(dir .. "/")
+    assert_true(not exists(dir .. "/file.txt"), "removed: " .. name)
+  end
+  assert_true(exists(data_root .. "remove_tree"), "and nothing above it")
+  h.remove_tree(data_root .. "remove_tree")
+  assert_equal(h.shell_quote("it's"), "'it'\\''s'", "shell_quote escapes a single quote")
 end)
 
 test("engine_sources reads Engine_Strata.sc first, then lib/engine sorted", function()

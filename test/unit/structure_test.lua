@@ -933,6 +933,36 @@ test("no engine SynthDef uses LocalBuf (it crashes sclang 3.13)", function()
   end
 end)
 
+-- Reusing a FloatArray across SoundFile readData calls makes sclang 3.13
+-- (norns) abort in its garbage collector (#131): every readData in the
+-- engine reads into an array freshReadArray made for it, in the same
+-- statement or the line before
+local function stale_reads(text)
+  local stale, previous = {}, ""
+  for line in (stubs.strip_sc_comments(text) .. "\n"):gmatch("([^\n]*)\n") do
+    for target in line:gmatch("%.readData%(%s*([%w_]+)%s*%)") do
+      local fresh = target .. "%s*=%s*this%.freshReadArray%("
+      if not (line:match(fresh) or previous:match(fresh)) then table.insert(stale, target .. ": " .. line) end
+    end
+    previous = line
+  end
+  return stale
+end
+
+test("every engine readData reads into a fresh array (#131)", function()
+  assert_equal(#stale_reads("chunk = this.freshReadArray(8);\nfile.readData(chunk);"), 0, "allowed: fresh on the line before")
+  assert_equal(#stale_reads("while { a = this.freshReadArray(8); f.readData(a); a.size > 0 } { }"), 0, "allowed: the same statement")
+  assert_equal(#stale_reads("chunk = FloatArray.newClear(8);\nwhile { true } {\nfile.readData(chunk);\n}"), 1, "caught: reused")
+  assert_equal(#stale_reads("file.readData(data); // this.freshReadArray("), 1, "caught: a comment is not an allocation")
+  local total = 0
+  for _, file in ipairs(engine_files()) do
+    local stale = stale_reads(file.text)
+    assert_equal(#stale, 0, file.path .. ": " .. table.concat(stale, "; "))
+    for _ in stubs.strip_sc_comments(file.text):gmatch("%.readData%(") do total = total + 1 end
+  end
+  assert_true(total >= 3, "the engine's reads are found (" .. total .. ")")
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',
@@ -1007,6 +1037,55 @@ test("no Lua 5.2+ name that CI's LuaJIT lacks is used without a fallback (#119)"
   listing:close()
   problems = luajit_missing_name_problems(sources)
   assert_equal(#problems, 0, table.concat(problems, "; "))
+end)
+
+-- Recursive deletes (#134): code runs `rm -r` only at the three guarded
+-- sites, each of which checks its path first and passes it after "--":
+-- h.remove_tree, the engine check's scratch cleanup and the runner's trap
+local GUARDED_RECURSIVE_DELETES = {
+  ["test/helpers.lua"] = 'os.execute("rm -rf -- " .. shell_quote(target))',
+  ["test/engine_check.scd"] = '("rm -rf -- " ++ scratchRoot.shellQuote).systemCmd;',
+  ["test/run_engine_check.sh"] = '[ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;',
+}
+
+local function recursive_delete(line)
+  return line:match("%f[%w]rm%s+%-%-?[%a]*[rR]") ~= nil or line:match("%f[%w]rm%s+%-%-recursive") ~= nil
+    or line:match("rmtree") ~= nil or line:match("deleteAll") ~= nil
+end
+
+test("recursive deletes happen only at the guarded sites", function()
+  for _, line in ipairs({ "rm -rf /x", "rm -r dir", "rm -fr dir", 'os.execute("rm -Rf " .. d)', "rm --recursive d",
+      "shutil.rmtree(p)", "File.deleteAll(p)" }) do
+    assert_true(recursive_delete(line), "caught: " .. line)
+  end
+  for _, line in ipairs({ "rm file.txt", "os.remove(path)", "File.delete(path)", "-- a firm -r flag", "perform -r" }) do
+    assert_true(not recursive_delete(line), "allowed: " .. line)
+  end
+  local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
+  local seen = {}
+  for path in listing:gmatch("[^\n]+") do
+    -- this file is skipped: its samples above are what the scan looks for
+    if path ~= "test/unit/structure_test.lua" and (path:match("%.lua$") or path:match("%.sc$")
+        or path:match("%.scd$") or path:match("%.sh$") or path:match("%.py$") or path:match("%.yml$")
+        or path:match("%.in$")) then
+      local file = io.open(repo_root .. "/" .. path, "r")
+      if file then
+        local number = 0
+        for line in file:lines() do
+          number = number + 1
+          local stripped = line:gsub("^%s+", ""):gsub("%s+$", "")
+          if recursive_delete(line) and not stripped:match("^%-%-") and not stripped:match("^//") and not stripped:match("^#") then
+            local allowed = GUARDED_RECURSIVE_DELETES[path]
+            assert_true(allowed ~= nil and line:find(allowed, 1, true) ~= nil,
+              path .. ":" .. number .. " deletes recursively outside the guarded sites: " .. stripped)
+            seen[path] = true
+          end
+        end
+        file:close()
+      end
+    end
+  end
+  for path in pairs(GUARDED_RECURSIVE_DELETES) do assert_true(seen[path], "the guarded delete in " .. path .. " is still there") end
 end)
 
 end

@@ -49,6 +49,53 @@ test("field_list clamps a cursor past the end of shrunk rows", function()
   assert_equal(FL.clamp(rows, 3), 2); assert_equal(FL.clamp(rows, 4), 4)
 end)
 
+test("field_list starts a missing or invalid cursor on the first field", function()
+  local FL = field_list()
+  assert_equal(FL.clamp(rows, nil), 2, "nil: the first selectable row")
+  assert_equal(FL.clamp(rows, "x"), 2, "not a number: the first selectable row")
+  assert_equal(FL.clamp(rows, 0 / 0), 2, "NaN: the first selectable row")
+  assert_equal(FL.clamp(rows, -3), 2, "before the first row")
+  assert_equal(FL.move(rows, nil, 1), 4, "move starts from the first field")
+  assert_equal(select(1, FL.ordinal(rows, FL.clamp(rows, nil))), 1)
+end)
+
+-- The marker's one line for first..count rows, visible at a time, on top..bottom
+local function marker_line(screen, FL, first, visible, count, top, bottom)
+  screen.clear()
+  FL.draw_marker(first, visible, count, top, bottom)
+  assert_equal(#screen.lines, 1, "one marker line")
+  return screen.lines[1]
+end
+
+test("the scroll marker stays in its range and moves with a short list", function()
+  local FL = field_list()
+  local screen = load_strata().screen
+  -- one row more than fit: the first and last views put the marker at each
+  -- end, and the two positions differ
+  for _, case in ipairs({ { 5, 6, 14, 56 }, { 7, 8, 12, 55 }, { 5, 6, 18, 53 }, { 6, 8, 10, 52 } }) do
+    local visible, count, top, bottom = case[1], case[2], case[3], case[4]
+    local where = visible .. " of " .. count .. " on " .. top .. "-" .. bottom
+    local at_start = marker_line(screen, FL, 1, visible, count, top, bottom)
+    local at_end = marker_line(screen, FL, count - visible + 1, visible, count, top, bottom)
+    assert_equal(at_start.y1, top, where .. ": first view at the top")
+    assert_equal(at_end.y2, bottom, where .. ": last view at the bottom")
+    assert_true(at_end.y1 > at_start.y1, where .. ": the marker moves between the views")
+  end
+  -- a track shorter than the marker's minimum length never leaves it
+  for first = 1, 4 do
+    local line = marker_line(screen, FL, first, 5, 8, 20, 22)
+    assert_true(line.y1 >= 20 and line.y2 <= 22, "first " .. first .. ": inside a 2 px track")
+  end
+  -- every position of every list stays between top and bottom
+  for count = 6, 30 do
+    for first = 1, count - 4 do
+      local line = marker_line(screen, FL, first, 5, count, 14, 56)
+      assert_true(line.y1 >= 14 and line.y2 <= 56 and line.y1 < line.y2,
+        count .. " rows from " .. first .. ": inside 14-56")
+    end
+  end
+end)
+
 test("the scroll marker sits at x 127 and reaches each end", function()
   local FL = field_list()
   local context = load_strata()

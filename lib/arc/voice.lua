@@ -25,10 +25,10 @@ return function(S)
 
   -- The rows and the row indices rings 1-4 edit. The rows can change under
   -- the cursor (a source change, another selected voice) before the next
-  -- frame: the VOICE page's sync_cursor puts it back on its param (or
+  -- frame: the cursor module's sync puts it back on its anchored param (or
   -- clamps it), so a turn sees the cursor the screen will show
   local function voice_ring_rows()
-    local rows, cursor = S.lib.pages_voice.sync_cursor()
+    local rows, cursor = S.lib.ui_cursors.sync("voice")
     local _, row_indices = voice_page_group(rows, cursor)
     return rows, row_indices, cursor
   end

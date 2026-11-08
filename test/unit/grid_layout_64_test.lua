@@ -134,7 +134,7 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(1, 8), 4, "stopped: column 1 dim")
   toggle_pattern_step(2, 4)
   S.pattern_playing = true
-  S.pattern_position = 4
+  S.pattern_sounding_step = 4
   grid_redraw()
   assert_equal(device:get_led(1, 8), 15, "the shown half plays: column 1 at 15")
   assert_equal(device:get_led(4, 2), 15, "the playhead on an active step")
@@ -142,12 +142,12 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(5, 1), 0, "no playhead past it")
   -- the other half plays: column 1 blinks 12 / 3 with the beat (four steps)
   local levels = {}
-  for position = 9, 16 do
-    S.pattern_position = position
+  for sounding = 9, 16 do
+    S.pattern_sounding_step = sounding
     grid_redraw()
     levels[#levels + 1] = device:get_led(1, 8)
     for x = 1, 8 do
-      assert_true(device:get_led(x, 1) ~= 4, "no playhead in the shown half at step " .. position)
+      assert_true(device:get_led(x, 1) ~= 4, "no playhead in the shown half at step " .. sounding)
     end
   end
   assert_equal(table.concat(levels, " "), "12 12 12 12 3 3 3 3", "column 1 blinks with the beat")
@@ -155,24 +155,78 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   S.pattern_playing = false
   switch_half(context, 1)
   S.pattern_playing = true
-  S.pattern_position = 12
+  S.pattern_sounding_step = 12
   grid_redraw()
   assert_equal(device:get_led(4, 1), 4, "half 2: step 12's playhead in column 4")
   assert_equal(device:get_led(1, 8), 15)
-  S.pattern_position = 3
+  S.pattern_sounding_step = 3
   grid_redraw()
   assert_equal(device:get_led(1, 8), 12, "half 1 plays: column 1 blinks (beat 1 lit)")
-  S.pattern_position = 6
+  S.pattern_sounding_step = 6
   grid_redraw()
   assert_equal(device:get_led(1, 8), 3, "beat 2 dim")
   S.pattern_playing = false
   grid_redraw()
-  assert_equal(device:get_led(1, 8), 4)
+  assert_equal(device:get_led(1, 8), 8, "stopped on half 2: column 1 at 8")
   -- with the sequencer running for real
   pattern_toggle()
   context.clock.advance()
   assert_true(device:get_led(1, 8) == 15 or device:get_led(1, 8) == 12 or device:get_led(1, 8) == 3, "playing")
   pattern_toggle()
+end)
+
+test("64 column 1 shows which half is up while the patterns are stopped", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 8)
+  local other = context.grid.plug(2, 8, 8)
+  assert_true(not local_value("pattern_playing"), "stopped")
+  assert_equal(device:get_led(1, 8), 4, "steps 1-8: column 1 at 4")
+  switch_half(context, 1)
+  assert_equal(device:get_led(1, 8), 8, "steps 9-16: column 1 at 8")
+  assert_equal(other:get_led(1, 8), 4, "each grid shows its own half")
+  switch_half(context, 1)
+  assert_equal(device:get_led(1, 8), 4, "back on steps 1-8: 4 again")
+  -- playing, the playhead rules apply in either half; stopping shows the half again
+  switch_half(context, 1)
+  pattern_toggle()  -- step 1 sounds: the other half
+  assert_equal(device:get_led(1, 8), 12, "playing: half 1's beat blinks")
+  pattern_toggle()
+  assert_equal(device:get_led(1, 8), 8, "stopped on steps 9-16: 8")
+  local levels = local_value("S").lib.grid_layout_64.LAYOUT.stopped_levels
+  assert_equal(levels[1], 4); assert_equal(levels[2], 8)
+end)
+
+test("64 lights the sounding step between steps, in its own half (#113)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  local device = context.grid.plug(1, 8, 8)
+  S.patterns[1][8] = 9
+  pattern_toggle()  -- step 1 plays at once
+  grid_redraw()
+  assert_equal(device:get_led(1, 2), 4, "just started: step 1 is the playhead")
+  assert_equal(device:get_led(1, 8), 15, "and it is in the shown half")
+  for _ = 2, 8 do h.wake(context, "pattern_clock") end  -- steps 2-8 play; the position is now 9
+  grid_redraw()  -- a redraw between steps (a key press)
+  assert_equal(S.pattern_position, 9)
+  assert_equal(device:get_led(8, 1), 15, "step 8 sounds: column 8 lit")
+  assert_equal(device:get_led(1, 8), 15, "the playhead is still in the shown half, no blink")
+  -- half 2 shows steps 9-16: step 8 sounding is the other half
+  S.lib.grid_core.port_state(1).half = 2
+  grid_redraw()
+  for x = 1, 8 do
+    assert_true(device:get_led(x, 2) ~= 4, "half 2: no playhead while step 8 sounds (column " .. x .. ")")
+  end
+  assert_equal(device:get_led(1, 8), 3, "half 1 plays: column 1 blinks (step 8 is beat 2)")
+  h.wake(context, "pattern_clock")  -- step 9 plays
+  assert_equal(device:get_led(1, 2), 4, "half 2: step 9 in column 1")
+  assert_equal(device:get_led(1, 8), 15)
+  for _ = 10, PATTERN_LENGTH + 1 do h.wake(context, "pattern_clock") end  -- through 16, wrap to 1
+  grid_redraw()
+  assert_equal(S.lib.sequencer.sounding_step(), 1, "wrapped to step 1")
+  assert_equal(device:get_led(1, 8), 12, "half 1 plays again: column 1 blinks (beat 1)")
+  pattern_toggle()
+  assert_equal(device:get_led(1, 8), 8, "stopped on steps 9-16: column 1 at 8")
 end)
 
 end

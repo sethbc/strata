@@ -9,7 +9,7 @@
 - The tempo handler is installed once (never chaining to itself) and given back only while the script's is still installed.
 - The script never bangs its params, so Lua defaults are what the engine plays, and the filter and delay SynthDef defaults must equal the Lua param defaults (a test checks).
 - The registries (`S.registry.voice_params`, `fx_params`, `param_filters`, `source_change`) are read at init, inside a params record's `add`, never at include time, so a module that registers can be included before or after this one.
-- A registered record's `add` adds exactly `count` params (an error names the record otherwise), and every key its `grain_keys`, `scene_defaults` and `voice_rows.rows` name is one of the params it added with `add_voice_extra`.
+- A registered record's `add` (with its `add_first`, if any) adds exactly `count` params (an error names the record otherwise), and every key its `grain_keys`, `scene_defaults` and `voice_rows.rows` name is one of the params it added with `add_voice_extra`.
 - Registered voice params are never on the 256 fader pages (`fader` is never true) and never touched by randomize or mutations: they live in `S.voices[i].extras`, which neither reads.
 - The fx group's size is its 11 params plus every registered fx record's `count`, and the registered fx params follow tape drift.
 - `S.performance` is never the constant `S.constants.STANDARD_PERFORMANCE` itself (a copy, or the table `lib/performance.lua` reads at init). A tier-dependent spec reads it when its param is added (`record_duration`'s maximum is `S.performance.buffer_seconds`).
@@ -36,7 +36,7 @@ Every adjustable value is a norns param:
 Menu order:
 - `strata` (master density, tempo), `strata_mutations`, `strata_scenes`;
 - the fx, lfo destinations, LFO 1-3, buffers and midi groups;
-- then each voice's synthesis, granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
+- then each voice's synthesis (after any registered record's `add_first` params), granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
 
 ## Registries
 
@@ -46,6 +46,7 @@ Menu order:
 
 ```lua
 { name = "freeze", count = 2, add = function(voice_idx) ... end,
+  add_first = nil,             -- optional fn(voice_idx): params a PSET must read before the built-in ones
   grain_keys = { freeze = "freeze", freeze_mode = { name = "freezeMode", value = function(x) return x - 1 end } },
   sync = nil,                  -- optional fn(voice_idx): the voice sync's sends after grain_keys
   scene_defaults = { freeze = 0, freeze_mode = 1 },   -- each the param's default
@@ -55,7 +56,7 @@ Menu order:
   fader = false }
 ```
 
-- `add_voice_params(i)` adds, after the cross-modulation params, a separator `voice <i> extras` and then each record's params, in registration order, through its `add(i)`. `add_counted` checks that it added `count` params.
+- `add_voice_params(i)` adds, after the cross-modulation params, a separator `voice <i> extras` and then each record's params, in registration order, through its `add(i)`. A record may also have `add_first = fn(voice_idx)`: its params come right after the `voice <i>: <name>` separator, ahead of the synthesis params, because norns reads a PSET line by line in param order and a filter on a built-in param may read them (variation's `quantize`, read by the `freq` filter: #125). Both add with `add_voice_extra`, and together they add exactly `count` params.
 - `add` calls `S.lib.params_setup.add_voice_extra(voice_idx, record, key, param)` for each param: `param` is a `params:add` table without an `id` (its own `action`, if any, runs last). The param's id is `v<i>_<key>`. Its action:
   1. runs `S.registry.param_filters[key]` (a changed value is written back with `params:set(id, v, true)`);
   2. stores the value in `S.voices[i].extras[key]` (`add_voice_params` makes `extras` fresh at each init);

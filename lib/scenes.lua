@@ -77,15 +77,22 @@ return function(S)
     {id = "drift_amount", continuous = true, default = 0.01}
   }
 
-  -- Per LFO: the library's shape, mode, clocked rate, free period and depth
-  -- (percent), Strata's destination, then the state, so an LFO starts with its
-  -- settings in place. Depth and free period crossfade.
+  -- Per LFO: the library's shape, mode, clocked rate, free period, depth
+  -- (percent) and offset (percent), Strata's destination, then the state, so
+  -- an LFO starts with its settings in place. Depth, free period and offset
+  -- crossfade. The state switch re-bangs the library's baseline, which zeroes
+  -- the offset: lib/lfos.lua's lfo_<n> wrapper puts the recalled one back
+  -- (#103). range (optional) is the {min, max} validate_scene allows: the
+  -- offset's is the library's, -100..100 for every baseline (the param
+  -- clamps a recalled value to its current baseline's range)
   for n = 1, NUM_LFOS do
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, default = S.lib.lfos.LFO_DEFAULT_PERIOD})
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, default = 0})
+    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_offset_" .. n, continuous = true, default = 0,
+      range = S.lib.lfos.LFO_OFFSET_RANGE})
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
   end
@@ -743,6 +750,10 @@ return function(S)
       -- option params (filter type, LFO shape, destination, ...) hold an index
       local param = params:lookup_param(global.id)
       if param.options and not is_integer_between(data[global.id], 1, param.count) then return false end
+      -- a global with a range (the LFO offsets) stays inside it
+      if global.range and (data[global.id] < global.range[1] or data[global.id] > global.range[2]) then
+        return false
+      end
       -- a registered discrete field holds a whole value in its param's range
       if global.registered and not global.continuous then
         local minval, maxval = -math.huge, math.huge

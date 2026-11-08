@@ -18,7 +18,7 @@ return function(S)
     play_level = 15,          -- playing in the shown half
     blink_levels = {12, 3},   -- playing in the other half: odd / even beats
     steps_per_beat = 4,       -- a step is a sixteenth note: the blink follows quarter notes
-    stopped_level = 4,
+    stopped_levels = {4, 8},  -- stopped: steps 1-8 shown dim, steps 9-16 brighter
   }
   M.LAYOUT = LAYOUT_64
 
@@ -81,21 +81,25 @@ return function(S)
     end
   end
 
-  -- Column 1 of row 8: stopped dim; playing in the shown half bright; playing
-  -- in the other half, a blink that alternates with the beat (every four
-  -- steps)
+  -- Column 1 of row 8: stopped, the shown half's level (4 for steps 1-8, 8
+  -- for 9-16); the sounding step in the shown half bright; in the other
+  -- half, a blink that alternates with the beat (every four steps). Playing
+  -- with no step sounded yet counts as step 1
   local function play_level(port, cols)
-    if not S.pattern_playing then return LAYOUT_64.stopped_level end
-    local playing_half = math.ceil(S.pattern_position / visible_steps(cols))
+    if not S.pattern_playing then
+      return LAYOUT_64.stopped_levels[M.shown_half(port)] or LAYOUT_64.stopped_levels[1]
+    end
+    local sounding = S.lib.sequencer.sounding_step() or 1
+    local playing_half = math.ceil(sounding / visible_steps(cols))
     if playing_half == M.shown_half(port) then return LAYOUT_64.play_level end
-    local beat = math.ceil(S.pattern_position / LAYOUT_64.steps_per_beat)
+    local beat = math.ceil(sounding / LAYOUT_64.steps_per_beat)
     return LAYOUT_64.blink_levels[(beat + 1) % 2 + 1]
   end
 
   function grid_redraw_64(port, grid_device)
     -- Rows 1-7: the shown half of each 16-step pattern (step_brightness
-    -- lights the playhead when it is in this half); the sequencer still
-    -- plays all PATTERN_LENGTH steps
+    -- lights the sounding step when it is in this half); the sequencer
+    -- still plays all PATTERN_LENGTH steps
     local cols = grid_device.cols
     for voice_idx = 1, NUM_VOICES do
       for x = 1, visible_steps(cols) do
