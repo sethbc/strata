@@ -49,7 +49,7 @@ var models = (
     cm4s: "Raspberry Pi Compute Module 4S Rev 1.0", cm3: "Raspberry Pi Compute Module 3 Plus Rev 1.0",
     pi3: "Raspberry Pi 3 Model B Plus Rev 1.3", unknown: "Generic x86 desktop", empty: ""
 );
-var decision, other, dir, text, fields, parts, stale, fresh, result;
+var decision, other, dir, text, fields, parts, stale, fresh, result, readOnlyRun;
 
 File.mkdir(root);
 
@@ -178,6 +178,70 @@ check.(other.tier == \standard and: { parts.isEmpty },
     "performance: an active file that cannot be replaced runs standard and leaves no .part (left: %)".format(parts));
 h.freeEngine(other);
 
+// An old active file the engine cannot remove (#153): Lua will read it, so
+// the engine runs what it says, read by Lua's rules (parse_active_text;
+// test/unit/performance_test.lua checks Lua on the same texts)
+check.(engine.parseActivePerformance("tier high\r\nbuffer_seconds 120\r\nmax_grains 128\r\nhistory_seconds 60\r\nreason x y\r\n")
+    == (tier: \high, bufferSeconds: 120, maxGrains: 128, historySeconds: 60, reason: "x y"),
+    "performance: parseActivePerformance reads a valid file (CRLF too)");
+check.(engine.parseActivePerformance("  tier standard \nbuffer_seconds 16\nmax_grains 128\nhistory_seconds 16\n")
+    == (tier: \standard, bufferSeconds: 16, maxGrains: 128, historySeconds: 16, reason: ""),
+    "performance: and a valid standard file without a reason");
+check.(engine.parseActivePerformance("tier high\nbuffer_seconds 300\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n")
+    [\bufferSeconds] == 60, "performance: the last line of a key wins, as in Lua");
+result = [
+    nil, "", "tier high\n", "tier turbo\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 61\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60 s\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60.5\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 64\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
+    "tier standard\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
+    "tier high please\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n"
+].reject({ arg text; engine.parseActivePerformance(text).isNil });
+check.(result.isEmpty, "performance: parseActivePerformance refuses what Lua refuses (accepted %)".format(result));
+// An old file in a settings folder the engine cannot write to: [tier,
+// bufferSeconds, reason, the file's text after, .part files left], or nil
+// when the folder is writable anyway (as root)
+writeText.(root +/+ "meminfo-1350000", "MemAvailable:    1350000 kB\n");
+readOnlyRun = { arg name, stale, settingText, meminfo = "meminfo";
+    var folder = root +/+ "readonly-" ++ name ++ "/", engineThere, writable, outcome;
+    writeText.(folder +/+ "performance.data", settingText);
+    writeText.(folder +/+ "performance_active.data", stale);
+    ("chmod 555 " ++ folder.shellQuote).systemCmd;
+    writable = try { File.use(folder +/+ "probe", "w", { arg file; file.write("x") }); File.exists(folder +/+ "probe") } { false };
+    if (writable.not) {
+        engineThere = h.startEngine((settingsDir: folder, modelPath: root +/+ "model", meminfoPath: root +/+ meminfo));
+        outcome = [engineThere.tier, engineThere.bufferSeconds, engineThere.areaState[\performance][\decision][\reason],
+            readText.(folder +/+ "performance_active.data"), (folder +/+ "*.part").pathMatch,
+            engineThere.bufferLengthValue];
+        h.freeEngine(engineThere);
+    };
+    ("chmod 755 " ++ folder.shellQuote).systemCmd;
+    outcome
+};
+text = "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\nreason high: setting\n";
+fields = readOnlyRun.("high", text, "performance standard\n");
+if (fields.isNil) {
+    check.(true, "performance: (skipped: a read-only settings folder is still writable here, as root)");
+} {
+    check.(fields[0] == \high and: { fields[1] == 60 } and: { fields[3] == text } and: { fields[4].isEmpty },
+        "performance: an old high active file that cannot be removed runs high, 60 s, as Lua will read it (got %)".format(fields));
+    check.(fields[2].contains("could not be replaced"), "performance: and the reason says why (got %)".format(fields[2]));
+    fields = readOnlyRun.("high-memory", "tier high\nbuffer_seconds 300\nmax_grains 128\nhistory_seconds 60\nreason x\n",
+        "performance high\nbuffer_seconds 300\n", "meminfo-1350000");
+    check.(fields[0] == \high and: { fields[1] == 60 } and: { fields[2].contains("300 s -> 60 s (memory)") },
+        "performance: an old high 300 s file runs high with the memory step-down (got %)".format(fields));
+    check.(fields[5] == 8060, "performance: and reports its 60 s slots to Lua as bufferState 8 * 1000 + 60 (got %)".format(fields[5]));
+    fields = readOnlyRun.("standard", "tier standard\nbuffer_seconds 16\nmax_grains 128\nhistory_seconds 16\nreason x\n",
+        "performance high\nbuffer_seconds 60\n");
+    check.(fields[0] == \standard and: { fields[1] == 16 },
+        "performance: an old standard file that cannot be removed runs standard, whatever the setting (got %)".format(fields));
+    fields = readOnlyRun.("garbled", "tier high\nbuffer_seconds 61\n", "performance high\nbuffer_seconds 60\n");
+    check.(fields[0] == \standard and: { fields[1] == 16 },
+        "performance: an old file Lua cannot read runs standard, as Lua will (got %)".format(fields));
+};
+
 // A crash's .part in the settings folder: deleted at alloc once stale, a fresh one kept
 dir = root +/+ "stale/";
 stale = dir +/+ "performance_active.data.1234-5.part";
@@ -202,6 +266,10 @@ check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateVal
 check.((FloatArray[7300.0][0] == 7300) and: { (FloatArray[7299.99][0] - 7299.99).abs < 0.001 }
     and: { FloatArray[2016.5][0] == 2016.5 },
     "performance: the largest value, 7 * 1000 + 300 s, keeps 0.01 s in a 32-bit float");
+// ... and, after the slots, the slot length: numBuffers * 1000 + bufferSeconds
+check.(engine.bufferLengthValue == 8016 and: { engine.bufferLengthValue.isKindOf(Float) } and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 8016).abs < 0.001 }) }, 3) },
+    "performance: the periodic bufferState also sends the slot length, 8 * 1000 + 16 (got %)".format(
+        h.pollValues(\bufferState).select({ arg value; value >= 8000 }).asSet));
 h.command(\clearBuffer, 2);
 server.sync;
 }

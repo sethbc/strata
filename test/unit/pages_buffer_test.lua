@@ -992,4 +992,23 @@ test("BUFFER's 300 s layout states leave the duration's own spec alone", functio
   assert_true(params:get("record_duration") > 16, "the state's duration is past the standard range")
 end)
 
+-- While the engine checks a long file the row shows "..." for its length,
+-- never the old one beside the new name (#171)
+test("BUFFER shows a long file the engine is checking as loading", function()
+  write_high_tier(300)
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(1, "/tmp/old.wav"); context.polls.fire("bufferState", 8)
+  redraw()
+  local rows = slot_rows(context)
+  assert_equal(slot_row_text(context, rows[1]), "1 old 8.0s")
+  load_buffer(1, "/tmp/long.wav"); context.polls.fire("bufferState", 8)
+  redraw()
+  assert_equal(slot_row_text(context, rows[1]), "1 long ...", "the new name, loading")
+  assert_screen_layout(context, "BUFFER with a long file checking")
+  context.polls.fire("bufferState", 0); context.polls.fire("bufferState", 120)
+  redraw()
+  assert_equal(slot_row_text(context, rows[1]), "1 long 2:00", "then its own length")
+end)
+
 end

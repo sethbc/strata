@@ -105,6 +105,70 @@ test("an active file with an unknown tier or buffer length gives standard", func
   end
 end)
 
+-- The engine reads an old active file it cannot remove with the same rules
+-- (parseActivePerformance, #153), so it runs what Lua will read: the same
+-- texts as test/engine_check/performance.scd
+test("parse_active_text reads the texts the engine's parseActivePerformance is checked on alike", function()
+  load_strata()
+  local parse = local_value("S").lib.performance.parse_active_text
+  local valid = parse("tier high\r\nbuffer_seconds 120\r\nmax_grains 128\r\nhistory_seconds 60\r\nreason x y\r\n")
+  assert_equal(valid and valid.tier, "high", "CRLF")
+  assert_equal(valid.buffer_seconds, 120)
+  assert_equal(valid.reason, "x y")
+  valid = parse("  tier standard \nbuffer_seconds 16\nmax_grains 128\nhistory_seconds 16\n")
+  assert_equal(valid and valid.tier, "standard", "padded, no reason")
+  assert_equal(valid.reason, "")
+  valid = parse("tier high\nbuffer_seconds 300\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n")
+  assert_equal(valid and valid.buffer_seconds, 60, "the last line of a key wins")
+  for _, text in ipairs({
+    "", "tier high\n", "tier turbo\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 61\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60 s\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60.5\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 64\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
+    "tier standard\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
+    "tier high please\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
+  }) do
+    assert_equal(parse(text), nil, "refused: " .. text:gsub("\n", "|"))
+  end
+  assert_equal(parse(nil), nil, "no text")
+end)
+
+-- The engine reports its slot length as bufferState's slot index
+-- NUM_BUFFERS (8 * 1000 + seconds). An old active file the engine could not
+-- replace may name more than memory let it allocate (#153): Lua then caps
+-- its slot length to the engine's, so SETUP, BUFFER and the record duration
+-- agree with what the slots hold
+test("the engine's slot length caps a longer one from the active file", function()
+  h.write_performance_active({tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60})
+  local context = load_strata(); h.finish_startup(context)
+  local S = local_value("S")
+  params:set("record_duration", 200)
+  local CAPPED = "strata: the engine's slots hold 60 s, not the 300 s performance_active.data names; using 60 s"
+  context.polls.fire("bufferState", 8300)    -- the length the file names: nothing changes
+  assert_equal(S.performance.buffer_seconds, 300, "an equal length changes nothing")
+  context.polls.fire("bufferState", 8060)
+  assert_equal(S.performance.buffer_seconds, 60, "capped to the engine's length")
+  assert_equal(S.performance.tier, "high", "the tier stays")
+  assert_equal(params:lookup_param("record_duration").controlspec.maxval, 60, "the record duration's maximum")
+  assert_equal(params:get("record_duration"), 60, "and a longer duration comes down to it")
+  assert_equal(count_lines(context, CAPPED), 1, "one console line")
+  context.polls.fire("bufferState", 8060)    -- the periodic repeat
+  assert_equal(count_lines(context, CAPPED), 1, "said once")
+  for _, value in ipairs({ 8000, 8017, 8120, 8600 }) do
+    context.polls.fire("bufferState", value) -- no length, not a tier length, or longer: ignored
+  end
+  assert_equal(S.performance.buffer_seconds, 60, "only a shorter tier length caps it")
+  assert_equal(rawget(S.buffers, 9), nil, "no slot 9")
+  -- a duration inside the new range is kept as it was
+  h.write_performance_active({tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60})
+  context = load_strata(); h.finish_startup(context)
+  params:set("record_duration", 30)
+  context.polls.fire("bufferState", 8060)
+  assert_equal(params:get("record_duration"), 30, "a shorter duration is kept")
+end)
+
 test("bufferState decodes with stride 1000", function()
   h.write_performance_active({tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60})
   local context = load_strata(); h.finish_startup(context)

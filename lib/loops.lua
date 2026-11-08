@@ -95,6 +95,19 @@ return function(S)
     end
   end
 
+  -- A scene's loop pair as the params would leave it (a hand-edited file
+  -- may hold any pair): the start at most max_start, the length at most
+  -- 1 - start. migrate_scene runs it on every loaded scene, so a recall,
+  -- whose length is not clamped while it sets the fields, still ends inside
+  -- the slot. Anything but two numbers is left for validate_scene
+  local function normalize_scene(extras)
+    local start, length = extras[LOOP.start_key], extras[LOOP.length_key]
+    if type(start) ~= "number" or type(length) ~= "number" or start ~= start or length ~= length then return end
+    start = math.min(start, LOOP.max_start)
+    extras[LOOP.start_key] = start
+    if length > 1 - start + LOOP.tolerance then extras[LOOP.length_key] = 1 - start end
+  end
+
   local record
   record = {
     name = "loops",
@@ -117,6 +130,7 @@ return function(S)
     end,
     grain_keys = {[LOOP.start_key] = LOOP.start_engine, [LOOP.length_key] = LOOP.length_engine},
     scene_defaults = {[LOOP.start_key] = 0, [LOOP.length_key] = 1},
+    normalize_scene = normalize_scene,
     voice_rows = {
       section = LOOP.section,
       rows = {LOOP.start_key, LOOP.length_key},

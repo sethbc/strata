@@ -7,7 +7,7 @@
 // This file is the runner: it boots the server, builds the engine and runs
 // the area files test/engine_check/<area>.scd in areaOrder (the areas named
 // in $STRATA_ENGINE_CHECK_AREAS, comma- or space-separated, or every area
-// file present). Each area file returns a function of the helper Event h
+// file present but the onDemandAreas). Each area file returns a function of the helper Event h
 // (below), which holds the shared helpers and the engine. Call a helper as
 // a method: h.check(condition, "area: message"), h.command(\voiceOn, ...).
 // Each area stops the voices it started (h.stopAllVoices); after it the
@@ -18,7 +18,10 @@ var server = Server.local;
 var failures = 0;
 // The fixed order the areas run in; an absent 3.2 file is skipped
 var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \performance,
-    \rings, \freeze, \variation, \loops];
+    \rings, \freeze, \variation, \loops, \soak];
+// Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
+// a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)
+var onDemandAreas = [\soak];
 var testDir = thisProcess.nowExecutingPath.dirname;
 var areaPath = { arg name; testDir +/+ "engine_check" +/+ (name.asString ++ ".scd") };
 var areasText = "STRATA_ENGINE_CHECK_AREAS".getenv ? "";
@@ -29,8 +32,12 @@ var areas = if (missingAreas.notEmpty) {
     ("ENGINE CHECK FAILED: no area " ++ missingAreas[0]).postln;
     1.exit;
 } {
-    areaOrder.select({ arg name; File.exists(areaPath.(name)) and: { requested.isEmpty or: { requested.includes(name) } } })
+    areaOrder.select({ arg name; File.exists(areaPath.(name))
+        and: { if (requested.isEmpty) { onDemandAreas.includes(name).not } { requested.includes(name) } } })
 };
+// The run's own deadline (s): run_engine_check.sh passes 30 s less than its
+// timeout ($ENGINE_CHECK_TIMEOUT, 570 by default), so a long soak can be given more
+var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 540 } }.value;
 var context, engine, h;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
@@ -175,12 +182,75 @@ var voiceTrio = { arg voice;
     [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)].collect({ arg key; engine.synths[key] })
 };
 
+// Test sound built from C primitives, never a sclang function per sample:
+// on sclang 3.13 (norns' version, CI's) millions of small calls pile up
+// garbage-collector work until it fails (#131; docs/notes/engine/files.md).
+// A Signal of `size` samples repeating `values`, an Array (putEach wraps
+// its values; it reads keys and values as Arrays, so never pass it a
+// FloatArray or Signal)
+var repeating = { arg size, values;
+    if (size < 1) { Signal.new } { Signal.newClear(size).putEach((0 .. size - 1), values) }
+};
+// A stereo FloatArray of two mono channels of one size (Signals or Arrays):
+// at with an index Array returns an Array, which putEach takes
+var stereoOf = { arg left, right;
+    var size = left.size, frames = (0 .. size - 1), stereo = FloatArray.newClear(size * 2);
+    if (size > 0) {
+        stereo.putEach((0, 2 .. (size * 2) - 2), left.at(frames));
+        stereo.putEach((1, 3 .. (size * 2) - 1), right.at(frames));
+    };
+    stereo
+};
+// A Signal of `size` samples counting 0, 1, 2, ... (Signal arithmetic
+// scales it: rampSignal.(n) / n rises from 0 toward 1)
+var rampSignal = { arg size;
+    var steps = (0 .. size - 1);
+    Signal.newClear(size).putEach(steps, steps)
+};
+// `frames` frames from startFrame of a mono signal that repeats `period`
+// (an Array of one period's samples, built once with a function per sample)
+var periodic = { arg period, startFrame, frames;
+    repeating.(frames, period.rotate((startFrame % period.size).neg))
+};
+// A Signal of `size` samples of noise up to ±level: 4801 random values
+// (a period longer than a FLAC block) repeated
+var noise = { arg size, level; repeating.(size, Array.fill(4801, { level.rand2 })) };
+// Write `frames` frames of `values` (an Array: one constant per channel)
+// to an open SoundFile, at most 65536 frames at a time
+var writeConstantFrames = { arg file, frames, values;
+    var left = frames;
+    while { left > 0 } {
+        file.writeData(repeating.(left.min(65536) * values.size, values));
+        left = left - 65536;
+    };
+};
+
+// An open sound file compared in every sample with the file at `path`
+// (a saved int16 file against the int16 source it was loaded from: the
+// samples come back exactly). Both are read 65536 frames at a time, each
+// chunk into a fresh Signal, and compared with Signal arithmetic (-, peak:
+// C primitives, no Array of slots for the collector to scan). Returns [the
+// largest difference (1 where the chunks differ in size), the frames compared].
+var sameFrames = { arg file, path;
+    var other = SoundFile.openRead(path), deviation = 0, frames = 0, ours, theirs;
+    if (other.isNil) { [1, 0] } {
+        while { ours = Signal.newClear(65536 * file.numChannels); file.readData(ours); ours.size > 0 } {
+            theirs = Signal.newClear(65536 * other.numChannels);
+            other.readData(theirs);
+            deviation = deviation.max(if (theirs.size == ours.size) { (ours - theirs).peak } { 1 });
+            frames = frames + (ours.size div: file.numChannels);
+        };
+        other.close;
+        [deviation, frames]
+    }
+};
+
 // Write a test sound file of constant per-channel values
 var writeTestFile = { arg path, sampleRate, frames, values;
     var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16")
         .numChannels_(values.size).sampleRate_(sampleRate);
     file.openWrite(path);
-    file.writeData(FloatArray.fill(frames * values.size, { arg i; values[i % values.size] }));
+    writeConstantFrames.(file, frames, values);
     file.close;
 };
 
@@ -353,16 +423,21 @@ server.options.numInputBusChannels = 2;
 // explicitly so the worst-case memory check measures norns' budget.
 server.options.memSize = 8192;
 // Whatever hangs (a server.sync to a server that went away), the check ends:
-// a failed run after 540 s, inside CI's 600 s timeout
-SystemClock.sched(540, {
-    "FAIL engine check did not finish within 540 s".postln;
+// a failed run after `deadline` s (540 by default, inside CI's 600 s timeout)
+SystemClock.sched(deadline, {
+    ("FAIL engine check did not finish within % s".format(deadline)).postln;
     ("ENGINE CHECK FAILED: timed out after % failures".format(failures)).postln;
     server.quit;
     SystemClock.sched(1, { 1.exit });
     nil
 });
 server.waitForBoot({
-    var exitCode, defaultScratchDir, running;
+    var exitCode, defaultScratchDir, running, workDir = "STRATA_CHECK_TMPDIR".getenv;
+    // the server's PID for run_engine_check.sh, which stops this scsynth if
+    // it outlives sclang (a crash, #152)
+    if (workDir.notNil and: { workDir.size > 0 } and: { server.pid.notNil }) {
+        try { File.use(workDir +/+ "scsynth.pid", "w", { arg file; file.write(server.pid.asString ++ "\n") }) };
+    };
     try {
         CroneDefs.sendDefs(server);
         // Check-only helpers: a test tone (written into the input bus) and a
@@ -451,6 +526,14 @@ server.waitForBoot({
                 pollMessages.select({ arg msg; poll.notNil and: { msg[1] == poll.index } }).collect({ arg msg; msg[2] })
             },
             writeTestFile: { arg self, path, sampleRate, frames, values; writeTestFile.(path, sampleRate, frames, values) },
+            // test sound from C primitives (#131): see repeating and the helpers after it
+            repeating: { arg self, size, values; repeating.(size, values) },
+            stereoOf: { arg self, left, right; stereoOf.(left, right) },
+            rampSignal: { arg self, size; rampSignal.(size) },
+            periodic: { arg self, period, startFrame, frames; periodic.(period, startFrame, frames) },
+            noise: { arg self, size, level; noise.(size, level) },
+            sameFrames: { arg self, file, path; sameFrames.(file, path) },
+            writeConstantFrames: { arg self, file, frames, values; writeConstantFrames.(file, frames, values) },
             bufferSample: { arg self, buffer, frame; bufferSample.(buffer, frame) },
             getControl: { arg self, synth, control; getControl.(synth, control) },
             readBusValue: { arg self, bus; readBusValue.(bus) },
