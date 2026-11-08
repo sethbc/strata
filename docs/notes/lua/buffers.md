@@ -40,7 +40,7 @@ Saving (`save_buffers_to_disk()`):
 
 Loading (`load_buffers_from_disk()`, from its start step `START_ORDER.buffers_load`, after the scenes load):
 - resets `S.buffers_restored` and `S.buffer_autosave_blocked` first;
-- `load_buffer`s each non-empty path that `util.file_exists`, and marks the slot `restoring`;
+- `load_buffer`s each non-empty path that `util.file_exists`, and marks the slot `restoring` until it settles (with audio, or empty as `settled_empty = "restore"`, which a late report of audio still adopts and counts);
 - `S.buffers_restored` counts only the slots the poll then confirms holding audio.
 - A path that exists but that the engine cannot load (unreadable, unsupported, empty or damaged) is reported by `bufferLoadFailed`. The slot goes back to empty and the path is not saved again.
 - A path that does not exist (deleted, or on an unmounted drive) is not loaded. The slot stays empty, the console names it, and it is kept in `missing_path`.
