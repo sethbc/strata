@@ -243,6 +243,42 @@ test("the engine's standard buffer length equals STANDARD_BUFFER_SECONDS", funct
   assert_equal(local_value("S").constants.BUFFER_SECONDS, nil, "BUFFER_SECONDS is no longer a constant")
 end)
 
+-- A "Must match <NAME> in <file>" comment in the engine names a constant
+-- that file still declares, so a moved or removed constant (BUFFER_SECONDS,
+-- now a tier value) never leaves a stale pointer behind
+test("every engine \"must match <NAME> in <file>\" comment names a constant that file declares", function()
+  local files = {"lib/Engine_Strata.sc"}
+  local listing = io.popen('ls "' .. repo_root .. '/lib/engine"')
+  for name in listing:lines() do
+    if name:match("%.sc$") then table.insert(files, "lib/engine/" .. name) end
+  end
+  listing:close()
+  local function read(path)
+    local file = io.open(repo_root .. "/" .. path, "r")
+    if not file then return nil end
+    local text = file:read("*a")
+    file:close()
+    return text
+  end
+  local stale, seen = {}, 0
+  for _, path in ipairs(files) do
+    for line in read(path):gmatch("[^\n]+") do
+      local comment = line:match("//(.*)$")
+      if comment then
+        for name, target in comment:gmatch("[Mm]ust match ([%u_][%u%d_]*) in ([%w_/%.%-]+%.lua)") do
+          seen = seen + 1
+          local text = read(target)
+          if not (text and text:match("\nlocal " .. name .. "%s*=")) then
+            table.insert(stale, path .. ": " .. name .. " in " .. target)
+          end
+        end
+      end
+    end
+  end
+  assert_true(seen >= 3, "the engine's constant comments are found (" .. seen .. ")")
+  assert_true(#stale == 0, "comments naming a constant the file does not declare:\n" .. table.concat(stale, "\n"))
+end)
+
 test("the engine stub's voice and slot limits follow numVoices and numBuffers in the engine source (#51)", function()
   local source = engine_sources()
   local patched, count = source:gsub("var <numVoices = %d+;", "var <numVoices = 6;")
