@@ -5,7 +5,7 @@
 -- field_list rows, and the group of four rows the arc's rings edit. voice_page_rows and
 -- voice_page_group are global; the rows are built from the voice's source
 -- each call, so they follow a source change at once. Not cached on purpose:
--- a call costs about 12 us (measured, docs/notes/lua/ui-core.md), and the
+-- a call costs about 12 us (measured, docs/notes/lua/ui/field-list-and-cursors.md), and the
 -- registered rows' when functions read more than the voice and its source.
 
 return function(S)

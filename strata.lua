@@ -70,7 +70,7 @@ S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 
 -- The screen pages, in UI_PAGES order: each creates its record at
 -- S.registry.pages[UI_PAGES.index.<PAGE>] (every field but the four arc
--- fields; docs/notes/lua/ui-core.md lists them), which enc, key and
+-- fields; docs/notes/lua/ui/pages-and-dispatch.md lists them), which enc, key and
 -- redraw dispatch through
 S.lib.pages_main = include("lib/pages/main")(S)
 S.lib.pages_voice = include("lib/pages/voice")(S)

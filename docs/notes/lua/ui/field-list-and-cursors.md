@@ -1,0 +1,37 @@
+## Must not break
+
+- `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `S.lib.ui_cursors.sync("voice")` (or the VOICE page's `sync_cursor()`, the same function) first, never `clamp_all()` alone: `clamp_all` only clamps the index and would lose the anchored param (a source change A → B → A must come back to the same param). Code that sets the cursor calls `S.lib.ui_cursors.place("voice", index)` or `move("voice", d)` (or the page's `place_cursor(index)`), never a bare assignment, which the next sync takes back. Only `move` and `place` set an anchor; `sync` and `clamp_all` never do.
+
+## Cursors and VOICE rows
+
+`S.cursors` (`lib/ui/cursors.lua`) holds the cursors more than one page or ring set uses:
+- `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row (row 2: row 1 is the first section's label).
+- `seq_step`: 1..`PATTERN_LENGTH`.
+- `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (12): the eight scene slots, then the four `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`).
+
+`S.lib.ui_cursors.move(name, d)` moves one by `d` stops, clamped at its ends (no wrap): `voice` through `S.lib.ui_field_list.move` on the selected voice's rows (section labels take no stop), the others with `util.clamp`. An unknown name is an error. `S.lib.ui_cursors.clamp_all()` puts each cursor back on a real stop: `voice` through `field_list.clamp` (the nearest selectable row at or before it, else the first), the others within their range. `redraw()` and `arc_redraw()` run it first, so a source switched by the grid, MIDI or a scene recall, or another selected voice, never leaves the cursor past the end or on a label row. None of these functions requests a redraw: their callers (`enc`, `key`, `arc_delta`) do.
+
+Anchors (ruling W7, #109). A cursor over rows that change, listed in the module's `ROW_CURSORS` (today only `voice`: its rows are `voice_page_rows(S.selected_voice)` and a row's key is its param id without `v<i>_`), keeps an anchor: the key and index of the row it was last deliberately put on. `S.lib.ui_cursors.sync(name)` returns `rows, cursor` and sets `S.cursors[name]` to the row with the anchored key when the current rows have one, else to `field_list.clamp(rows, anchor.index)`; before the first deliberate move it anchors where the cursor is. It never moves the anchor, so it is idempotent. `place(name, index)` anchors on row `index` (clamped) and returns what `sync` returns. `move(name, d)` on a row cursor moves from the synced cursor and places it where it lands, so a move right after a source change goes on from the anchored param. `sync` and `place` on any other name are errors. A new cursor over rows that change gets a `ROW_CURSORS` entry and the same calls; nothing else changes.
+
+`voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists every param of a voice in four sections, each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"`, `"option"` or `"binary"` from the param's type (binary: only registered rows).
+- `synth`: `param_order` without `amp` and `pan`; for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
+- `grain`: `grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env`, `grain_mode`.
+- `crossmod`: `mod_speed`, then per slot `mod_source_<s>`, `mod_amp_amt_<s>`, `mod_freq_amt_<s>`.
+- `mix`: `source`, `amp`, and `pan` when the voice has one (Sub has none).
+
+Registered rows (3.2's freeze, variation, loop, history, filter and send params) come from `S.registry.voice_params` (`docs/notes/lua/params.md`), read on each call, so a record registered by a module included after this one counts. For each record with `voice_rows = {section, rows, when, before}`, in registration order:
+- its rows for which `when(voice_idx, key)` holds (all of them without `when`) go at the end of the section named `section`;
+- a section that is not there yet is added before the section named `before` (when there is one) or else at the end, after `mix` and any earlier registered section;
+- a section with no rows for the voice is left out, as the input voice's synth section is.
+
+A registered row keeps 3.1's row shape, so the cursor's anchor (`S.lib.ui_cursors.sync("voice")`, the param id without its `v<i>_` prefix) and the ring groups work on it unchanged. VOICE shows a binary row's value as `on` or `off`, and E3 sets it: on for a turn up, off for a turn down (a toggle's `params:delta` would flip it either way). `first_field_row` reads only the built-in sections: it runs before init, and the first section's first field is row 2 either way.
+
+A record's `layout_states` join VOICE's own at init (start step 15, `voice_layout_states`), so the layout tests and the page renders draw its rows without editing `lib/pages/voice.lua`. `test/unit/pages_voice_test.lua` computes every section count and last field from `voice_page_rows`, so a registered row changes no assertion there.
+
+The rows are built on each call from the voice's current source, so they follow a source change at once. They are not cached: a cache keyed by (voice, source) would miss the `when` functions' other inputs (freeze's spectral mode follows the running tier) and registrations, and the cost is negligible. Measured off the device (Lua 5.3, x86-64, the stubs): about 12 us per call for 25-29 rows; a VOICE frame (screen and arc) makes 4 calls, E3 and an arc turn 1 each, E2 4. That is about 50 us of a frame every 67 ms (15 fps), under 0.1% of a core here and, at roughly 10 times slower on a CM3, under 1% there. Voice 1 has 28 rows (24 fields) when nothing is registered; a voice index outside 1..`NUM_VOICES` is an error. The 256's fader pages keep their own list (`fader_param_ids`).
+
+`voice_page_group(rows, cursor) -> group, row_indices` (global) gives the arc's ring group: with `k` the cursor's position among the selectable rows (`field_list.ordinal`), `group = ceil(k / 4)` and `row_indices` the row indices of selectable rows `4 * group - 3 .. 4 * group`, fewer in a last group that is not full (voice 2 has 23 fields: its sixth group is source, amp, pan). VOICE's screen marks these rows and the rings 1-4 edit them in order.
+
+## Field lists
+
+`lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor. Rows are `{label, param_id?, selectable, section?}`; a cursor is a row index at a selectable row. `move` (skips label rows, no wrap), `clamp` (a cursor that is nil, not a number or NaN goes to the first selectable row), `ordinal`, `first_visible` (one row above the cursor in view), `draw(rows, cursor, spec, draw_row)` (`draw_row(row, y, selected, value_right)`) and `draw_marker` (1 px line at x 127, none when every row fits; it never leaves its top..bottom range and is at least 1 px shorter than it, so a list one row longer than the view still moves it). FX, VOICE, BUFFER and SETUP use it.
