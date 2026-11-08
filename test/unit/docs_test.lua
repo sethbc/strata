@@ -870,6 +870,21 @@ test("CI's engine shards run every engine check area exactly once", function()
     "an engine job gathers the shards")
 end)
 
+-- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
+-- runs: the same Ubuntu release and SuperCollider package
+test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local dockerfile = read_repo_file("test/docker/sc313/Dockerfile")
+  local ci_version = workflow:match("\n%s*SC_APT_VERSION:%s*(%S+)")
+  local image_version = dockerfile:match("\nARG SC_APT_VERSION=(%S+)")
+  assert_true(ci_version ~= nil, "the workflow pins SC_APT_VERSION")
+  assert_equal(image_version, ci_version, "test/docker/sc313/Dockerfile's SC_APT_VERSION")
+  local ci_ubuntu = workflow:match("engine%-shard:.-runs%-on:%s*ubuntu%-(%S+)")
+  assert_equal(dockerfile:match("\nFROM ubuntu:(%S+)"), ci_ubuntu, "the image's Ubuntu release")
+  local runner = read_repo_file("test/run_engine_check_313.sh")
+  assert_true(runner:find("docker/sc313", 1, true) ~= nil, "the runner builds test/docker/sc313")
+end)
+
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
   local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
   local setting = workflow:match("\n%s*cancel%-in%-progress:%s*([^\n]-)%s*\n")
