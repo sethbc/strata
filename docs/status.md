@@ -62,7 +62,6 @@ CHANGELOG.md has every change. In short:
   - from 3.1: the page dots, `[L]`/`[T]`, the SEQ step rows and the BUFFER input meter on the real screen and font, the input meter against a recorded take, the arc's whole-step rings (20 ticks per value) and the 24-tick center detent, the grid's half-second holds and step levels, and the screen against the PNG renders.
   - The `●`/`○` glyph check listed on #6 no longer applies: the voice list uses ASCII marks since 3.0.2 (see Decisions).
 - **Known and accepted, no action:**
-  - A buffer slot's internal `restoring` flag can stay set after a restore that never gets audio. Nothing reads it except when audio is confirmed.
   - The engine check's timeout kills sclang's child processes through `pgrep`. On a machine without `pgrep` and without `timeout`, a hung scsynth may outlive the check.
 - **Limits to keep in mind:**
   - Lua's 200-local limit applies to each function: the locals probe in `test/run.lua` measures the free locals at the end of each file's main chunk and of each module's constructor function, and requires 30 in each (`strata.lua`'s main chunk uses 5). Group new constants into tables, and split a module that runs short.

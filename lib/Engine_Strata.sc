@@ -15,7 +15,7 @@ Engine_Strata : CroneEngine {
     // check sets them before it builds an engine
     classvar <>settingsDir, <>modelPath, <>meminfoPath;
 
-    var <numVoices = 7;  // Must match NUM_VOICES in strata.lua
+    var <numVoices = 7;  // Must match NUM_VOICES in lib/constants.lua
     var <voiceSynthDefs;
     var <synths;
     var <granBuses;
@@ -31,9 +31,9 @@ Engine_Strata : CroneEngine {
 
     // Audio sources: grainSource[voice] is 0 = the voice's synth,
     // 1..numBuffers = buffer slot, numBuffers + 1 = live input
-    var <numBuffers = 8;      // Must match NUM_BUFFERS in strata.lua
-    var <>bufferSeconds = 16;  // Must match BUFFER_SECONDS in strata.lua (set by the performance area)
-    var <numModSlots = 3;     // Crossmod slots per voice (modBus1..3): must match NUM_MOD_SLOTS in strata.lua
+    var <numBuffers = 8;      // Must match NUM_BUFFERS in lib/constants.lua
+    var <>bufferSeconds = 16;  // A tier value: allocPerformance sets it (standard 16 s, high up to 300 s); Lua reads it from performance_active.data
+    var <numModSlots = 3;     // Crossmod slots per voice (modBus1..3): must match NUM_MOD_SLOTS in lib/constants.lua
     var <buffersL, <buffersR; // One mono buffer per channel per slot (GrainBuf reads mono only)
     var <bufferFrames;        // Valid (loaded or recorded) frames per slot; 0 = empty
     var <bufferSampleRates;   // Sample rate of each slot's content (valid seconds = frames / rate)
