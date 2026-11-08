@@ -191,10 +191,7 @@ var checkLongSave = {
     // left the ramp, right its negative, a second at a time
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
     file.openWrite(sourcePath);
-    60.do({ arg second;
-        var left = h.periodic(period, second * rate, rate);
-        file.writeData(h.stereoOf(left, left.neg));
-    });
+    h.writePeriodicSeconds(file, period, 60, rate);
     file.close;
     other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
     h.commandTo(other, \loadBuffer, 0, sourcePath);
@@ -387,10 +384,7 @@ longWritePath = scratchRoot +/+ "long-server-rate.wav";
 frames = (server.sampleRate * 16).asInteger;
 file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
 file.openWrite(longWritePath);
-16.do({ arg second;
-    var rate = server.sampleRate.asInteger, left = h.periodic(rampPeriod, second * rate, rate);
-    file.writeData(h.stereoOf(left, left.neg));
-});
+h.writePeriodicSeconds(file, rampPeriod, 16, server.sampleRate.asInteger);
 file.close;
 info = pollMessages.size;   // slot 8 reported 7016 before (16 s at 22.05 kHz): only later reports count
 command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
