@@ -16,7 +16,8 @@ var getControl = { arg synth, control; h.getControl(synth, control) };
 var bufferSample = { arg buffer, frame; h.bufferSample(buffer, frame) };
 var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, longPath = h.longPath, textPath = h.textPath;
-var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, reports;
+var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, rampPeriod, reports;
+var rampDeviation = { arg file, period; h.rampDeviation(file, period) };
 
 // bufferSaveResult reports received so far, each decoded as [slot index,
 // the slot's save number, failed]: value = (save * 2 + failed) * numBuffers + slot index
@@ -46,7 +47,7 @@ var checkLoudSave = {
     var loudPath = scratchRoot +/+ "loud.wav", savePath, file, data;
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(server.sampleRate);
     file.openWrite(loudPath);
-    file.writeData(FloatArray.fill(2 * 1000, { arg i; [1.5, -1.7][i % 2] }));
+    file.writeData(h.repeating(2 * 1000, [1.5, -1.7]));
     file.close;
     command.(\loadBuffer, 6, loudPath); 0.5.wait; server.sync;
     check.(((bufferSample.(engine.buffersL[6], 10) - 1.5).abs < 0.001)
@@ -183,16 +184,17 @@ var checkLongSave = {
     var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     var ramp = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 };
     var other, sourcePath = root +/+ "ramp.wav", savePath = root +/+ "saved/ramp.wav", file, data, start, seconds;
-    var heard, ping, spots, parts, partSeen;
+    var heard, ping, parts, partSeen, period = (0 .. 999).collect(ramp);
     File.mkdir(root);
     write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
     write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
     write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+    // left the ramp, right its negative, a second at a time
     file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
     file.openWrite(sourcePath);
     60.do({ arg second;
-        file.writeData(FloatArray.fill(rate * 2, { arg i;
-            var value = ramp.((second * rate) + (i div: 2)); if (i.odd) { value.neg } { value } }));
+        var left = h.periodic(period, second * rate, rate);
+        file.writeData(h.stereoOf(left, left.neg));
     });
     file.close;
     other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
@@ -221,17 +223,13 @@ var checkLongSave = {
         "files: a message sent while a long save interleaves is handled before it ends (.part seen %, heard during it %)".format(
             partSeen, heard));
     file = SoundFile.openRead(savePath);
-    spots = (0, 9973 .. frames - 1) ++ [8191, 8192, 8193, frames div: 2, frames - 8193, frames - 1];
-    if (file.notNil) {
-        data = FloatArray.newClear(frames * 2);
-        file.readData(data);
-        file.close;
-    };
+    // every frame, read in chunks (never one 23 MB array)
+    data = if (file.notNil) { rampDeviation.(file, period) } { [1, 0] };
+    file !? { file.close };
     check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames } and: { file.sampleFormat == "int16" }
-        and: { file.sampleRate == rate } and: { data.size == (frames * 2) }
-        and: { spots.every({ arg frame;
-            ((data[frame * 2] - ramp.(frame)).abs < 0.001) and: { (data[(frame * 2) + 1] + ramp.(frame)).abs < 0.001 } }) },
-        "files: a 60 s save writes 60 s of stereo 16-bit (% frames in % s)".format(file !? _.numFrames, seconds.round(0.01)));
+        and: { file.sampleRate == rate } and: { data[0] < 0.001 } and: { data[1] == frames },
+        "files: a 60 s save writes 60 s of stereo 16-bit, every frame in place (% frames in % s; largest error %)".format(
+            file !? _.numFrames, seconds.round(0.01), data[0]));
     h.freeEngine(other);
     File.delete(sourcePath); File.delete(savePath);
 };
@@ -385,11 +383,15 @@ check.(info.isEmpty, "no temporary float files are left behind (new: %)".format(
 // A 16 s take at the server rate: the interleave finishes, every
 // sample is in place (left ramp, right its negative) and the time is reported
 rampValue = { arg frame; ((frame % 1000) / 1000 - 0.5) * 0.8 };
+rampPeriod = (0 .. 999).collect(rampValue);
 longWritePath = scratchRoot +/+ "long-server-rate.wav";
 frames = (server.sampleRate * 16).asInteger;
 file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(server.sampleRate);
 file.openWrite(longWritePath);
-file.writeData(FloatArray.fill(frames * 2, { arg i; var value = rampValue.(i div: 2); if (i.odd) { value.neg } { value } }));
+16.do({ arg second;
+    var rate = server.sampleRate.asInteger, left = h.periodic(rampPeriod, second * rate, rate);
+    file.writeData(h.stereoOf(left, left.neg));
+});
 file.close;
 info = pollMessages.size;   // slot 8 reported 7016 before (16 s at 22.05 kHz): only later reports count
 command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
@@ -410,12 +412,11 @@ check.(waitFor.({ saveReportsAfter.(reports).notEmpty }) and: { saveReportsAfter
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames }, "the 16 s file holds every frame");
 if (file.notNil) {
-    data = FloatArray.newClear(frames * 2);
-    file.readData(data);
+    data = rampDeviation.(file, rampPeriod);
     file.close;
-    check.(((0, 997 .. frames - 1) ++ [8191, 8192, 8193, 16383, 16384, frames - 1]).every({ arg frame;
-            ((data[frame * 2] - rampValue.(frame)).abs < 0.001) and: { (data[(frame * 2) + 1] + rampValue.(frame)).abs < 0.001 } }),
-        "the 16 s file interleaves every frame in place (chunk boundaries included)");
+    check.((data[0] < 0.001) and: { data[1] == frames },
+        "the 16 s file interleaves every frame in place (chunk boundaries included; largest error %, % frames)".format(
+            data[0], data[1]));
 };
 File.delete(longWritePath);
 

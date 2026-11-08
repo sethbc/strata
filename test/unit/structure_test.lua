@@ -963,6 +963,56 @@ test("every engine readData reads into a fresh array (#131)", function()
   assert_true(total >= 3, "the engine's reads are found (" .. total .. ")")
 end)
 
+-- A per-sample sclang loop (a function called per sample or frame) piles
+-- up work for sclang 3.13's garbage collector until it fails (#131): the
+-- engine's sample paths use C primitives only. The body of method `name`
+-- in SC source (comments stripped), without its braces and its own
+-- argument list, or nil
+local function sc_method_body(text, name)
+  local stripped = stubs.strip_sc_comments(text)
+  local start = stripped:find("\n%s*" .. name .. "%s*{")
+  if not start then return nil end
+  local body = stripped:match("%b{}", start)
+  body = body:sub(2, -2)
+  return (body:gsub("^%s*arg%s[^;]*;", "", 1))
+end
+
+-- The per-sample iteration a piece of SC code holds: a function literal with
+-- arguments or an iterating call
+local function per_sample_loops(code)
+  local found = {}
+  for _, pattern in ipairs({ "{%s*arg%s", "{%s*|", "%.do%s*%(", "%.collect%s*%(", "%.fill%s*%(", "%.select%s*%(",
+    "%.reject%s*%(", "%.every%s*%(", "%.any%s*%(", "%.inject%s*%(", "%.sum%s*%(", "%.do%s*{", "%.collect%s*{" }) do
+    if code:find(pattern) then table.insert(found, pattern) end
+  end
+  return found
+end
+
+test("the engine's sample paths run no sclang function per sample (#131)", function()
+  local old_loop = "while { true } { interleaved = FloatArray.newClear(n); left.size.do({ arg frame; "
+    .. "interleaved[frame * 2] = left[frame].clip(-1, 1) }) }"
+  assert_true(#per_sample_loops(old_loop) > 0, "caught: the old per-frame interleave")
+  assert_true(#per_sample_loops("FloatArray.fill(n, { |i| i })") > 0, "caught: a fill")
+  assert_equal(#per_sample_loops("out.putEach(keys[0], left.clip(peak.neg, peak).at(keys[2]))"), 0, "allowed: primitives")
+  local text
+  for _, file in ipairs(engine_files()) do
+    if file.path:match("StrataFiles%.sc$") then text = file.text end
+  end
+  assert_true(text ~= nil, "the engine sources hold StrataFiles.sc")
+  for _, name in ipairs({ "interleaveChunk", "interleaveKeys", "fileDecodes", "freshReadArray" }) do
+    local body = sc_method_body(text, name)
+    assert_true(body ~= nil, "StrataFiles.sc defines " .. name)
+    local loops = per_sample_loops(body or "")
+    assert_equal(#loops, 0, name .. " runs no function per sample (found " .. table.concat(loops, ", ") .. ")")
+  end
+  local interleave = sc_method_body(text, "interleaveFiles") or ""
+  local condition, loop = interleave:match("while%s*(%b{})%s*(%b{})")
+  assert_true(loop ~= nil, "interleaveFiles reads its chunks in a while loop")
+  local loops = per_sample_loops((condition or "") .. (loop or ""))
+  assert_equal(#loops, 0, "interleaveFiles' chunk loop runs no function per sample (found " .. table.concat(loops, ", ") .. ")")
+  assert_true((loop or ""):find("this%.interleaveChunk%(") ~= nil, "each chunk goes through interleaveChunk")
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',

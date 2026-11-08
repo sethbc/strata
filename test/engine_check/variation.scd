@@ -242,7 +242,7 @@ rampPath = h.tempDir +/+ "variation-ramp.wav";
 rampFrames = server.sampleRate.asInteger;
 rampFile = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(server.sampleRate);
 rampFile.openWrite(rampPath);
-rampFile.writeData(FloatArray.fill(rampFrames * 2, { arg index; if (index.odd) { 1.0 } { (index div: 2) / rampFrames } }));
+rampFile.writeData(h.stereoOf(h.rampSignal(rampFrames) / rampFrames, h.repeating(rampFrames, [1.0])));
 rampFile.close;
 command.(\loadBuffer, 0, rampPath); 0.3.wait; server.sync;
 startTimecodeVoice.(1, 1, 0.1, 5.0, 1.0);

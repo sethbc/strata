@@ -7,7 +7,9 @@
 # usage: [STRATA_SC_PORT=57141] [STRATA_ENGINE_CHECK_AREAS=memory,buffers] test/run_engine_check.sh [path/to/norns]
 #   STRATA_ENGINE_CHECK_AREAS names the areas to run, comma- or
 #   space-separated (structure, voices, grains, lifecycle, memory, buffers,
-#   files, effects, performance); unset or empty runs every area. They run in
+#   files, effects, performance, ...); unset or empty runs every area but
+#   the on-demand ones (soak, the long-session soak: docs/notes/engine/files.md),
+#   which run only when named. They run in
 #   the check's fixed order whatever order they are named in, and a name with
 #   no area file fails the run ("ENGINE CHECK FAILED: no area <name>"). Each
 #   area's time is printed as "area <name>: <seconds> s".
@@ -75,13 +77,22 @@ YAML
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
 # seconds: a normal run takes about 3.5 minutes, the check's own deadline is
-# 540 s, CI's is 600 s) and killed as soon as sclang reports a compile error.
+# 30 s less (540 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
+# long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too),
+# CI's is 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
 # command) signals every descendant, so no scsynth is left holding its
 # port. stdbuf makes sclang's output line-buffered, so an error is in the
 # output file while sclang waits (block-buffered, it never would be).
 sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
+case $sclang_timeout in
+  ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
+esac
+if [ "$sclang_timeout" -gt 60 ]; then
+  STRATA_ENGINE_CHECK_DEADLINE=$((sclang_timeout - 30))
+  export STRATA_ENGINE_CHECK_DEADLINE
+fi
 compile_error='^ERROR: (syntax error|Command line parse failed|file .* parse failed)|Library has not been compiled successfully'
 timeout_cmd=$(command -v timeout || command -v gtimeout || true)
 stdbuf_cmd=$(command -v stdbuf || command -v gstdbuf || true)
