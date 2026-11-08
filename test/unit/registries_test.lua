@@ -347,10 +347,15 @@ test("registered fx params grow the fx group and follow its 11 params", function
       params:add_binary("probe_other", "probe other", "toggle", 0)
     end })
   end)
-  assert_equal(params:lookup_param("strata_fx").n, 13, "11 plus the registered count")
+  -- the script's own registered fx params (lib/voice_mix.lua's bypass) come first
+  local own = 0
+  for _, record in ipairs(local_value("S").registry.fx_params) do
+    if record.name ~= "probe fx" then own = own + record.count end
+  end
+  assert_equal(params:lookup_param("strata_fx").n, 13 + own, "11 plus the registered count")
   local position = {}
   for index, param in ipairs(params.params) do position[param.id] = index end
-  assert_equal(position["probe_bypass"], position["drift_amount"] + 1, "after the 11, tape drift last of them")
+  assert_equal(position["probe_bypass"], position["drift_amount"] + own + 1, "after the 11, tape drift last of them")
   assert_equal(position["probe_other"], position["probe_bypass"] + 1)
 end)
 

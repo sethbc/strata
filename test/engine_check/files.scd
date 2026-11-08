@@ -4,6 +4,7 @@
 // writes to one path, a full 16 s take, a write that fails), stale .part
 // and temporary float files, which directories deleteStaleParts cleans, and
 // a 60 s save on a high engine of its own (commands still get in meanwhile).
+// Every save that ends is reported once on the bufferSaveResult poll (#127).
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -15,7 +16,20 @@ var getControl = { arg synth, control; h.getControl(synth, control) };
 var bufferSample = { arg buffer, frame; h.bufferSample(buffer, frame) };
 var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, longPath = h.longPath, textPath = h.textPath;
-var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue;
+var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, reports;
+
+// bufferSaveResult reports received so far, each decoded as [slot index,
+// the slot's save number, failed]: value = (save * 2 + failed) * numBuffers + slot index
+var saveResults = {
+    h.pollValues(\bufferSaveResult).collect({ arg value;
+        var slots = engine.numBuffers, rest = value.asInteger div: slots;
+        [value.asInteger % slots, rest div: 2, (rest % 2) == 1]
+    })
+};
+// the reports after the first `count`
+var saveReportsAfter = { arg count; saveResults.value.copyToEnd(count) };
+// the saveBuffer commands slot `index` has received (nil before #127)
+var savesSent = { arg index; engine.tryPerform(\bufferSaves) !? { arg saves; saves[index] } };
 
 // The engine's temporary float files (strata-buf*) in the shared system
 // temp dir. Checks compare sets taken before and after their own writes, so
@@ -103,7 +117,7 @@ var checkStaleTempFiles = {
 // running in another engine instance (a script reload in the same sclang
 // session runs alloc while the old engine writes).
 var checkStaleParts = {
-    var info, data, savePath, file;
+    var info, data, savePath, file, count;
     info = [engine.scratchDir, engine.scratchDir.withoutTrailingSlash.dirname];
     info.do({ arg dir;
         File.mkdir(dir);
@@ -126,6 +140,7 @@ var checkStaleParts = {
     // to one path never share a .part file
     engine.writeChunkWait = 0.02;          // the 16 s interleave now takes about 2 s
     savePath = engine.scratchDir +/+ "running.wav";
+    count = saveResults.value.size;
     command.(\saveBuffer, 7, savePath);
     0.5.wait;
     data = PathName(engine.scratchDir).files.collect(_.fileName).select({ arg name; name.endsWith(".part") });
@@ -134,6 +149,8 @@ var checkStaleParts = {
         "a .part name carries the engine instance's tag (got %)".format(data));
     engine.tryPerform(\deleteStaleParts);
     check.(waitFor.({ File.exists(savePath) }, 10), "a write in progress survives deleteStaleParts");
+    // its report arrives a moment after the rename: wait, so no later window counts it
+    waitFor.({ saveReportsAfter.(count).notEmpty });
     engine.writeChunkWait = 0.001;
     file = SoundFile.openRead(savePath);
     check.(file.notNil and: { file.numFrames == engine.bufferFrames[7] }, "and holds every frame");
@@ -188,6 +205,7 @@ var checkLongSave = {
     parts = { (savePath ++ ".*.part").pathMatch };
     ping = OSCFunc({ heard = parts.value.notEmpty and: { File.exists(savePath).not } }, '/strataCheckSavePing');
     other.writeChunkWait = 0.0001;
+    reports = saveResults.value.size;
     start = Main.elapsedTime;
     h.commandTo(other, \saveBuffer, 0, savePath);
     while { parts.value.isEmpty and: { File.exists(savePath).not } and: { (Main.elapsedTime - start) < 30 } } { 0.001.wait };
@@ -197,6 +215,8 @@ var checkLongSave = {
     seconds = Main.elapsedTime - start;
     0.2.wait;
     ping.free;
+    check.(saveReportsAfter.(reports) == [[0, 1, false]],
+        "files: a 60 s save is reported written once it is in place (got %)".format(saveReportsAfter.(reports)));
     check.(partSeen and: { heard == true },
         "files: a message sent while a long save interleaves is handled before it ends (.part seen %, heard during it %)".format(
             partSeen, heard));
@@ -220,13 +240,16 @@ var checkLongSave = {
 // which the server's /b_write clips to the buffer's end. The file already
 // at the path is kept, no .part is left, and the newest write's entry goes.
 var checkShortWrite = { arg stereoPath;
-    var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept;
+    var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept, count;
     File.mkdir(dir);
     File.copy(stereoPath, savePath);
     command.(\loadBuffer, 6, stereoPath); 0.5.wait; server.sync;
     engine.bufferFrames[6] = engine.buffersL[6].numFrames + 100;
+    count = saveResults.value.size;
     command.(\saveBuffer, 6, savePath);
     3.0.wait;
+    check.(saveReportsAfter.(count) == [[6, savesSent.(6), true]],
+        "files: a save whose temporary file is short is reported failed (got %)".format(saveReportsAfter.(count)));
     engine.bufferFrames[6] = 11025;
     file = SoundFile.openRead(savePath);
     kept = file.notNil and: { file.numFrames == 11025 } and: { file.sampleRate == 22050 };
@@ -238,7 +261,56 @@ var checkShortWrite = { arg stereoPath;
     command.(\clearBuffer, 6); server.sync;
     File.delete(savePath);
 };
+// An sclang error inside a write's routine (injected through
+// interleaveFaultHook, which interleaveFiles calls with the output path, a
+// stage and the sound files it has open: \start before it opens any, \open
+// once the temporary files and the output are open) still ends the save: one
+// failed report, its writeGenerations entry gone, no temporary float or .part
+// file left, and every sound file it had opened closed. Slot 5 (index 4)
+// holds the stereo file.
+var checkWriteFault = { arg stage;
+    var dir = scratchRoot +/+ "fault-" ++ stage, savePath = dir +/+ "broken.wav", count, temps = tempFloatFiles.value;
+    var left, seen;
+    File.mkdir(dir);
+    count = saveResults.value.size;
+    engine.tryPerform(\interleaveFaultHook_, { arg path, at, openFiles;
+        if (at == stage) { seen = openFiles.copy; Error("injected write fault").throw };
+    });
+    command.(\saveBuffer, 4, savePath);
+    1.0.wait;
+    engine.tryPerform(\interleaveFaultHook_, nil);
+    left = (tempFloatFiles.value - temps).asArray ++ PathName(dir).files.collect(_.fileName);
+    check.(saveReportsAfter.(count) == [[4, savesSent.(4), true]],
+        "files: a save whose routine throws (%) is reported failed, once (got %)".format(stage, saveReportsAfter.(count)));
+    check.(engine.writeGenerations[savePath.standardizePath].isNil and: { left.isEmpty },
+        "files: and leaves no writeGenerations entry, temporary or .part file (%; left: %)".format(stage, left));
+    check.(seen.notNil and: { seen.size == (if (stage == \open) { 3 } { 0 }) } and: { seen.every({ arg file; file.isOpen.not }) },
+        "files: and closes every sound file it had opened (%: % opened, open now: %)".format(
+            stage, seen !? _.size, seen !? { seen.count(_.isOpen) }));
+};
+// A save onto a folder (mv -f would move the file into it) fails: one
+// failed report, the folder and its contents unchanged, no .part beside it
+var checkSaveOntoFolder = {
+    var dir = scratchRoot +/+ "onto-folder", savePath = dir +/+ "taken.wav", count, inside, beside;
+    File.mkdir(savePath);
+    File.use(savePath +/+ "inside.txt", "w", { arg text; text.write("keep") });
+    count = saveResults.value.size;
+    command.(\saveBuffer, 4, savePath);
+    1.0.wait;
+    inside = PathName(savePath).files.collect(_.fileName);
+    beside = PathName(dir).files.collect(_.fileName);
+    check.(saveReportsAfter.(count) == [[4, savesSent.(4), true]],
+        "files: a save onto a folder is reported failed (got %)".format(saveReportsAfter.(count)));
+    check.(PathName(savePath).isFolder and: { inside == ["inside.txt"] } and: { beside.isEmpty }
+        and: { engine.writeGenerations[savePath.standardizePath].isNil },
+        "files: and leaves the folder as it was, with no .part beside it (inside %, beside %)".format(inside, beside));
+    File.delete(savePath +/+ "inside.txt"); File.delete(savePath);
+};
 var tempFilesBefore = tempFloatFiles.value;
+
+check.(engine.tryPerform(\bufferSaveResultValue, 3, 2, true) == (((2 * 2) + 1) * engine.numBuffers + 3).asFloat
+    and: { engine.tryPerform(\bufferSaveResultValue, 0, 1, false) == (2 * engine.numBuffers).asFloat },
+    "bufferSaveResultValue is (save * 2 + failed) * numBuffers + slot index, a float");
 
 check.(h.defaultScratchDir == (Platform.userHomeDir +/+ "dust/audio/strata/scratch/"),
     "scratch takes default to ~/dust/audio/strata/scratch/");
@@ -250,9 +322,14 @@ command.(\loadBuffer, 4, stereoPath); 0.5.wait; server.sync;
 
 // saveBuffer writes the valid region as a stereo 16-bit WAV
 savePath = scratchRoot +/+ "saved/take-buf5.wav";
+info = savesSent.(4); reports = saveResults.value.size;
 command.(\saveBuffer, 4, savePath);
 check.(waitFor.({ File.exists(savePath) }), "saveBuffer writes the file (creating its directory)");
 1.0.wait;
+check.(info.notNil and: { savesSent.(4) == (info + 1) }, "saveBuffer counts the slot's saves (% then %)".format(info, savesSent.(4)));
+check.(saveReportsAfter.(reports) == [[4, savesSent.(4), false]],
+    "a save that writes its file is reported once, written, with its slot and save number (got %)".format(
+        saveReportsAfter.(reports)));
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == 11025 }
     and: { file.sampleRate == 22050 } and: { file.sampleFormat == "int16" },
@@ -269,11 +346,15 @@ checkLoudSave.value;
 command.(\loadBuffer, 7, longPath); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
 savePath = scratchRoot +/+ "race/same.wav";
 engine.writeChunkWait = 0.02;          // the long interleave now takes about 0.9 s
+reports = saveResults.value.size;
 command.(\saveBuffer, 7, savePath);
 0.3.wait;                              // the first interleave is under way
 command.(\saveBuffer, 4, savePath);                              // 11025 frames, 0.5 / -0.25
 check.(waitFor.({ File.exists(savePath) }, 5), "back-to-back writes to one path produce the file");
 2.0.wait;
+check.(saveReportsAfter.(reports) == [[4, savesSent.(4), false]],
+    "of two writes to one path only the newer is reported, written; the abandoned one reports nothing (got %)".format(
+        saveReportsAfter.(reports)));
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == 11025 } and: { file.sampleRate == 22050 },
     "an older write to the same path abandons: the file is the second write (got % frames)".format(file !? _.numFrames));
@@ -286,9 +367,12 @@ if (file.notNil) {
         "the surviving file holds exactly the second write's samples");
 };
 // the other order: a short write then a long one; the long (newer) one wins
+reports = saveResults.value.size;
 command.(\saveBuffer, 4, savePath);
 command.(\saveBuffer, 7, savePath);
 3.0.wait;
+check.(saveReportsAfter.(reports) == [[7, savesSent.(7), false]],
+    "the newer long write is the one reported (got %)".format(saveReportsAfter.(reports)));
 engine.writeChunkWait = 0.001;
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numFrames == (22050 * 16) }, "a newer long write replaces an older short one");
@@ -313,11 +397,16 @@ check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills s
 check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 7016 }) }),
     "slot 8 holding 16 s reports 7016 through bufferState");
 savePath = scratchRoot +/+ "long/saved.wav";
+reports = saveResults.value.size;
 writeStart = Main.elapsedTime;
 command.(\saveBuffer, 7, savePath);
 info = waitFor.({ File.exists(savePath) }, 30);
 writeSeconds = Main.elapsedTime - writeStart;
 check.(info, "a 16 s write completes (% frames at % Hz in % s)".format(frames, server.sampleRate, writeSeconds.round(0.01)));
+// its report is sent just after the rename and arrives as an OSC message a
+// moment later: wait for it, so it never lands in a later check's window
+check.(waitFor.({ saveReportsAfter.(reports).notEmpty }) and: { saveReportsAfter.(reports) == [[7, savesSent.(7), false]] },
+    "the 16 s write is reported written (got %)".format(saveReportsAfter.(reports)));
 file = SoundFile.openRead(savePath);
 check.(file.notNil and: { file.numChannels == 2 } and: { file.numFrames == frames }, "the 16 s file holds every frame");
 if (file.notNil) {
@@ -334,7 +423,10 @@ File.delete(longWritePath);
 // file) forgets its generation and leaves no temporary files
 savePath = textPath +/+ "sub/cannot.wav";
 tempFilesBefore = tempFloatFiles.value;
+reports = saveResults.value.size;
 command.(\saveBuffer, 4, savePath); 1.0.wait;
+check.(saveReportsAfter.(reports) == [[4, savesSent.(4), true]],
+    "a save whose folder cannot be made is reported failed (got %)".format(saveReportsAfter.(reports)));
 check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[savePath.standardizePath].isNil },
     "a failed newest write removes its writeGenerations entry");
 info = tempFloatFiles.value - tempFilesBefore;
@@ -366,9 +458,21 @@ info = [["", []], ["/", []], [".", []], ["./", []], ["x/", []], ["//", []],
 check.(info.isEmpty, "deleteStaleParts cleans only absolute directories below / (wrong for %)".format(info));
 engine.scratchDir = savePath;
 
+reports = saveResults.value.size;
 command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
 check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
+check.(saveReportsAfter.(reports) == [[6, savesSent.(6), true]],
+    "and is reported failed (got %)".format(saveReportsAfter.(reports)));
+// a slot out of range is ignored: nothing counted, nothing reported
+info = (0 .. engine.numBuffers - 1).collect({ arg index; savesSent.(index) });
+reports = saveResults.value.size;
+command.(\saveBuffer, engine.numBuffers, scratchRoot +/+ "out-of-range.wav"); 0.3.wait;
+check.(saveReportsAfter.(reports).isEmpty and: { (0 .. engine.numBuffers - 1).collect({ arg index; savesSent.(index) }) == info },
+    "a save of a slot out of range counts and reports nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
 checkShortWrite.(stereoPath);
+checkWriteFault.(\start);
+checkWriteFault.(\open);
+checkSaveOntoFolder.value;
 checkLongSave.value;
 }

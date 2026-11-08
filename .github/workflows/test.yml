@@ -36,10 +36,13 @@ jobs:
 
   # The engine check's areas run in parallel shards, each on its own runner
   # with its own sclang and scsynth, so the job takes about as long as its
-  # slowest shard (buffers, alone) instead of the sum of every area. The
+  # slowest shard instead of the sum of every area. The
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
+  # Area times on 3.14.1 (s): buffers 95, lifecycle 61, variation 46, loops 45,
+  # freeze 31, effects 30, rings 30, memory 21, grains 20, files 20, voices 15,
+  # structure 2, performance 1: buffers alone, then about 106-108 s a shard.
   engine-shard:
     name: engine (${{ matrix.areas }})
     runs-on: ubuntu-24.04
@@ -48,9 +51,9 @@ jobs:
       matrix:
         areas:
           - buffers
-          - lifecycle,memory,structure,performance
-          - loops,freeze,grains
-          - rings,files,voices,effects,variation
+          - lifecycle,loops,structure
+          - variation,effects,rings,performance
+          - freeze,memory,grains,files,voices
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes)

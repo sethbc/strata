@@ -419,6 +419,7 @@ server.waitForBoot({
         engine.scratchDir = scratchRoot +/+ "nested/scratch/";
         engine.bufferStatePoll.start;
         engine.bufferLoadFailedPoll.start;
+        engine.bufferSaveResultPoll.start;
 
         // Test files every area may load: stereo, mono, too long, not audio
         File.mkdir(scratchRoot);
@@ -470,6 +471,7 @@ server.waitForBoot({
                 engine.scratchDir = scratchRoot +/+ "nested/scratch/";
                 engine.bufferStatePoll.start;
                 engine.bufferLoadFailedPoll.start;
+                engine.bufferSaveResultPoll.start;
                 self[\engine] = engine;
                 engine
             },

@@ -414,9 +414,11 @@ return function(S)
     if n == 3 then record_cursor_slot() end
   end
 
-  -- Save the cursor slot, confirmed in the hint row: a slot recording or
+  -- Save the cursor slot, shown in the hint row: a slot recording or
   -- awaiting its take is busy (nothing to save yet); otherwise save_buffer
-  -- saves only a slot the engine reports holding audio
+  -- saves only a slot the engine reports holding audio. A save sent shows
+  -- saving until the engine reports how it ended: buffer_save_result then
+  -- flashes saved or save failed.
   local function save_cursor_slot()
     local slot = cursor_slot()
     local buffer = S.buffers[slot]
@@ -424,9 +426,7 @@ return function(S)
       buffer_page_flash("buf " .. slot .. " busy")
       return
     end
-    local has_audio = buffer.seconds > 0
-    save_buffer(slot)
-    buffer_page_flash(has_audio and ("saved buf " .. slot) or ("buf " .. slot .. " empty"))
+    buffer_page_flash(save_buffer(slot) and ("saving buf " .. slot) or ("buf " .. slot .. " empty"))
   end
 
   -- ALT+K2 clears the cursor slot, ALT+K3 saves it. An ALT press releases
@@ -542,6 +542,12 @@ return function(S)
     for slot = 1, NUM_BUFFERS do context.polls.fire("bufferState", (slot - 1) * 1000 + seconds) end
   end
 
+  -- The engine's bufferSaveResult report of the slot's newest save
+  -- ((save number * 2 + failed) * NUM_BUFFERS + slot index)
+  local function save_result_value(slot, failed)
+    return (S.buffers[slot].saves_sent * 2 + (failed and 1 or 0)) * NUM_BUFFERS + slot - 1
+  end
+
   local BUFFER_INDEX = UI_PAGES.index.BUFFER
   local layout_states = {
     {name = "slot 1", setup = function(context) load_long_names(context); voices_on_slot(1, 2) end},
@@ -555,8 +561,16 @@ return function(S)
       for slot = 1, NUM_BUFFERS do record_buffer(slot) end
       voices_on_slot(1, 1)
     end},
-    {name = "saved flash", setup = function(context)
+    {name = "saving flash", setup = function(context)
       load_long_names(context); alt_action(BUFFER_INDEX, 3) end},
+    {name = "saved flash", setup = function(context)
+      load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; alt_action(BUFFER_INDEX, 3)
+      context.polls.fire("bufferSaveResult", save_result_value(NUM_BUFFERS, false))
+    end},
+    {name = "save failed flash", setup = function(context)
+      load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; alt_action(BUFFER_INDEX, 3)
+      context.polls.fire("bufferSaveResult", save_result_value(NUM_BUFFERS, true))
+    end},
     {name = "busy flash", setup = function() record_buffer(1); alt_action(BUFFER_INDEX, 3) end},
     {name = "empty flash", setup = function() alt_action(BUFFER_INDEX, 3) end},
     {name = "load failed flash", setup = function() buffer_page_flash("buf 8 load failed") end},
