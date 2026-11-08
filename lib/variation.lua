@@ -300,7 +300,12 @@ return function(S)
             if S.voices[voice_idx].extras.intervals == V.set_index.custom then M.send_intervals(voice_idx) end
           end})
       end
-      add(voice_idx, record, "quantize", {type = "binary", name = "quantize", behavior = "toggle", default = 0,
+    end,
+    -- quantize ahead of the voice's freq, so a PSET (read in param order)
+    -- sets it before the freq the filter snaps by it (#125)
+    add_first = function(voice_idx)
+      S.lib.params_setup.add_voice_extra(voice_idx, record, "quantize", {type = "binary", name = "quantize",
+        behavior = "toggle", default = 0,
         action = function(x)
           if x == 1 and not S.scene_recall_in_progress then snap_freq(voice_idx) end
           M.send_scale_note(voice_idx)

@@ -483,4 +483,56 @@ test("randomize, mutation and the faders leave variation alone", function()
   assert_equal(params:get("scale"), 1); assert_equal(params:get("root"), 1)
 end)
 
+
+-- norns reads a PSET in file order, which is the params' order: a voice's
+-- quantize must come before its freq, or the filter of the quantize still
+-- in force would snap (or leave) the PSET's pitch (#125)
+test("a PSET whose quantize differs from the current value loads the voice's exact stored pitch", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local pset_path = context.data_dir .. "strata-02.pset"
+  if not S.voices[1].active then toggle_voice(1) end
+  assert_true(S.voices[1].active, "voice 1 runs")
+  -- saved: quantize off and a pitch between tones on every voice
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_freq", 450) end
+  params:write(pset_path)
+  -- now: C major, quantize on (every freq snapped to A4)
+  params:set("scale", option_index("scale", "Major"))
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_quantize", 1) end
+  params:set("scale", 1)
+  context.clear_engine_calls()
+  params:read(pset_path)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local prefix = "v" .. voice_idx .. "_"
+    assert_equal(params:get(prefix .. "quantize"), 0, prefix .. "quantize off, as saved")
+    assert_near(params:get(prefix .. "freq"), 450, 1e-9, prefix .. "freq 450 Hz, as saved (quantize on before)")
+    assert_near(S.voices[voice_idx].params.freq, 450, 1e-9, prefix .. "freq stored as saved")
+  end
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "freq" then table.insert(sent, call.args[3]) end
+  end
+  assert_near(sent[#sent], 450, 1e-9, "the running voice plays the saved pitch")
+
+  -- saved: D major, quantize on, freq on a D major tone (C#5, not in C major)
+  params:set("scale", option_index("scale", "Major")); params:set("root", 3)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    params:set("v" .. voice_idx .. "_quantize", 1); params:set("v" .. voice_idx .. "_freq", freq_of(73))
+  end
+  params:write(pset_path)
+  -- now: C major, quantize off, a pitch between tones
+  params:set("root", 1)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    params:set("v" .. voice_idx .. "_quantize", 0); params:set("v" .. voice_idx .. "_freq", 450)
+  end
+  params:read(pset_path)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local prefix = "v" .. voice_idx .. "_"
+    assert_equal(params:get(prefix .. "quantize"), 1, prefix .. "quantize on, as saved")
+    assert_near(params:get(prefix .. "freq"), freq_of(73), 1e-9, prefix .. "freq C#5, as saved (quantize off before)")
+  end
+  assert_near(last_grain(context, 0, "scaleNote"), 73, 1e-9, "scaleNote follows the saved pitch")
+end)
+
 end

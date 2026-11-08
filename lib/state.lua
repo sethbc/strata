@@ -121,6 +121,7 @@ return function()
     local where = kind .. " " .. record.name
     require_arg(is_whole(record.count, 1), where, "count is a whole number of params, at least 1")
     require_arg(type(record.add) == "function", where, "add is a function")
+    require_arg(record.add_first == nil or type(record.add_first) == "function", where, "add_first is a function")
     require_arg(all_entries(record.grain_keys, is_grain_key), where,
       "grain_keys maps a key to an engine name or {name, value = fn}")
     require_arg(record.sync == nil or type(record.sync) == "function", where, "sync is a function")

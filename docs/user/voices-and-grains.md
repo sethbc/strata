@@ -29,7 +29,7 @@ Every voice's grains read audio that is already there: a synth voice writes its 
 
 ### Grain variation
 
-Each grain can differ from the one before it. These are the rows of the VOICE page's **variation** section (and PARAMETERS > voice n extras); at their defaults every grain plays as in 3.1:
+Each grain can differ from the one before it. These are the rows of the VOICE page's **variation** section (and PARAMETERS > voice n extras, except quantize, which is listed above the voice's freq); at their defaults every grain plays as in 3.1:
 - **reverse** (0-100%, 0): the chance that a grain plays backward
 - **pitch jitter** (0-12 st, 0): each grain's pitch moves at random up to that many semitones either way
 - **pan jitter** (0-1, 0): each grain moves at random across the stereo field, up to fully across at 1, on top of the slow pan wander
@@ -42,7 +42,7 @@ Scenes capture all of them; intervals, quantize and the custom intervals switch 
 
 ### Scales
 
-PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Natural Minor, Dorian, the pentatonics, ...) and its **root** (C-B), which every quantizing voice shares. With the scale off, quantize rounds to semitones. A synth voice quantizes around its own pitch; a buffer or input voice, whose key Strata cannot know, takes its audio to be in the root (C4 for root C). A buffer voice played at another rate (a MIDI note, its buffer rate) is transposed by it and its grains still land on the scale. Scenes capture the scale and root and switch them at the end of a fade. One known limit: loading a PSET whose voice has quantize off, while that voice quantizes, snaps the PSET's freq to the current scale; turn quantize off before loading such a PSET.
+PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Natural Minor, Dorian, the pentatonics, ...) and its **root** (C-B), which every quantizing voice shares. With the scale off, quantize rounds to semitones. A synth voice quantizes around its own pitch; a buffer or input voice, whose key Strata cannot know, takes its audio to be in the root (C4 for root C). A buffer voice played at another rate (a MIDI note, its buffer rate) is transposed by it and its grains still land on the scale. Scenes capture the scale and root and switch them at the end of a fade. A PSET loads every voice's saved pitch exactly, whatever its quantize was set to before.
 
 ## Performance Features
 

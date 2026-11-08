@@ -91,12 +91,14 @@ test("a registered voice param is added, stored, sent and synced", function()
   for index, param in ipairs(params.params) do position[param.id] = index end
   assert_true(position["voice 1 extras"], "a separator voice 1 extras")
   assert_true(position["v1_mod_speed"] < position["voice 1 extras"], "after the cross-modulation params")
-  -- after the script's own records' params (lib/history.lua's), registered at include
+  -- after the script's own records' params (lib/history.lua's), registered
+  -- at include, less those their add_first put ahead of the synthesis params
   local before = 0
   for _, record in ipairs(S.registry.voice_params) do
     if record.name == "probe" then break end
     before = before + record.count
   end
+  before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 1)
   assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
   assert_equal(position["v1_probe_switch"], position["v1_probe"] + 1)
 end)
@@ -134,6 +136,32 @@ test("a record's add must add exactly count params", function()
     end })
   end)
   assert_true(not ok and tostring(problem):find("probe fx", 1, true), "an fx record too: " .. tostring(problem))
+end)
+
+-- norns reads a PSET in param order (#125)
+test("a record's add_first params come before the voice's synthesis params, counted with its add's", function()
+  local record = probe_record({ count = 3 })
+  function record.add_first(voice_idx)
+    local_value("S").lib.params_setup.add_voice_extra(voice_idx, record, "probe_first",
+      { type = "control", name = "probe first", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+  end
+  load_with(function(S) S.register_voice_params(record) end)
+  local S = local_value("S")
+  local position = {}
+  for index, param in ipairs(params.params) do position[param.id] = index end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local prefix = "v" .. voice_idx .. "_"
+    assert_true(position[prefix .. "probe_first"] < position[prefix .. S.voices[voice_idx].param_order[1]],
+      prefix .. "probe_first before the synthesis params")
+    assert_true(position["voice " .. voice_idx .. ": " .. S.voices[voice_idx].name] < position[prefix .. "probe_first"],
+      "inside voice " .. voice_idx .. "'s block")
+    assert_true(position[prefix .. "probe"] > position["voice " .. voice_idx .. " extras"], "add's params in extras")
+  end
+  params:set("v2_probe_first", 0.3)
+  assert_near(S.voices[2].extras.probe_first, 0.3, 1e-9, "stored like any registered param")
+  local ok, problem = pcall(load_with, function(S2) S2.register_voice_params(probe_record({ add_first = record.add_first })) end)
+  assert_true(not ok and tostring(problem):find("add_first", 1, true), "its params count: " .. tostring(problem))
+  assert_true(not pcall(S.register_voice_params, probe_record({ name = "p3", add_first = 1 })), "add_first is a function")
 end)
 
 test("the register functions check their argument and refuse duplicates", function()
