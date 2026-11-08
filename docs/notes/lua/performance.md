@@ -9,7 +9,7 @@
 
 ## Owns
 
-- `lib/performance.lua` (`S.lib.performance`): `read_active`, `parse_active_text` (also the engine stub's validator), `setting`, `set_setting`, `PERFORMANCE` (the files, choices, defaults and each tier's allowed values), and `S.performance_setting` (the setting as SETUP shows it) and `S.performance_start_setting` (the setting this start used).
+- `lib/performance.lua` (`S.lib.performance`): `read_active`, `parse_active_text` (also the engine stub's validator; the engine's `parseActivePerformance` must read every text the same way, #153), `setting`, `set_setting`, `PERFORMANCE` (the files, choices, defaults and each tier's allowed values), and `S.performance_setting` (the setting as SETUP shows it) and `S.performance_start_setting` (the setting this start used).
 - Its unit tests: `test/unit/performance_test.lua`. The SETUP fields are in [pages/setup.md](pages/setup.md).
 
 ## How it works
