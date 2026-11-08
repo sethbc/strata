@@ -733,13 +733,19 @@ test("docs/notes/engine.md only indexes docs/notes/engine and CLAUDE.md names th
   assert_true(claude:find("STRATA_ENGINE_CHECK_AREAS", 1, true) ~= nil, "CLAUDE.md names STRATA_ENGINE_CHECK_AREAS")
 end)
 
-test("every engine check area has a notes file of the same name", function()
-  local notes = {}
-  for _, name in ipairs(names_in("docs/notes/engine", "md")) do notes[name] = true end
-  local areas = names_in("test/engine_check", "scd")
-  assert_true(#areas >= 9, "test/engine_check holds the area files (found " .. #areas .. ")")
-  for _, name in ipairs(areas) do
+-- Both ways (#155): every area has its notes file, and every notes file
+-- belongs to an area
+test("the engine check areas and the engine notes files match one to one", function()
+  local notes, areas = {}, {}
+  local note_names, area_names = names_in("docs/notes/engine", "md"), names_in("test/engine_check", "scd")
+  for _, name in ipairs(note_names) do notes[name] = true end
+  for _, name in ipairs(area_names) do areas[name] = true end
+  assert_true(#area_names >= 9, "test/engine_check holds the area files (found " .. #area_names .. ")")
+  for _, name in ipairs(area_names) do
     assert_true(notes[name], "test/engine_check/" .. name .. ".scd has docs/notes/engine/" .. name .. ".md")
+  end
+  for _, name in ipairs(note_names) do
+    assert_true(areas[name], "docs/notes/engine/" .. name .. ".md has test/engine_check/" .. name .. ".scd")
   end
 end)
 
