@@ -21,7 +21,7 @@ return function(S)
   S.alt_held = false
 
   -- Per key: true while it is held as an ALT press (it went down with ALT
-  -- held, or the long-press fallback took it), nil otherwise. key() sends
+  -- held), nil otherwise. key() sends
   -- its release to alt_key_release, never key_release, even if K1 came up
   -- first
   S.key_press_alt = {}
