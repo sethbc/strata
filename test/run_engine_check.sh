@@ -170,6 +170,13 @@ if [ -z "$stopped" ] && { [ "$status" -eq 124 ] || { [ "$status" -eq 137 ] && [ 
 elif [ -z "$stopped" ] && [ "$status" -ge 128 ]; then
   stopped="sclang ended on signal $((status - 128)) after $ran_for s"
 fi
+# A check that runs late still posts its own deadline's FAIL line (its
+# SystemClock fires 30 s before the timeout); without that line sclang
+# itself stopped running: a hang in the language (on 3.13, the collector:
+# #131), not a slow check or a reply that never came
+if [ "$stopped" = "no result within $sclang_timeout s" ] && ! grep -q "did not finish within" "$output"; then
+  stopped="$stopped, and its own deadline never fired: sclang hung"
+fi
 if [ -n "$stopped" ]; then
   echo "ENGINE CHECK FAILED: $stopped; sclang stopped" >&2
 fi
