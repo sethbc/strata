@@ -362,8 +362,12 @@ high = other.tier == \high;
 // the spectral writer's def is added by a high engine only (so not in the
 // runner's allDefs, which the structure area checks on the standard engine)
 check.(high and: { SynthDescLib.global.at(\strataRingWriteSpectral).notNil }
-    and: { SynthDescLib.global.at(\strataRingWriteSpectral).controlNames.collect(_.asSymbol) == [\in, \bufL, \bufR, \phaseOut] },
-    "freeze: a high engine adds strataRingWriteSpectral, with strataRingWrite's controls");
+    and: { SynthDescLib.global.at(\strataRingWriteSpectral).controlNames.collect(_.asSymbol) == [\in, \bufL, \bufR, \phaseOut, \fftL, \fftR] }
+    and: { other.areaState[\freeze][\spectralBuffers].size == other.numVoices }
+    and: { other.areaState[\freeze][\spectralBuffers].flat.every({ arg buffer; buffer.numFrames == other.spectralFrames }) },
+    "freeze: a high engine adds strataRingWriteSpectral, with strataRingWrite's controls and a voice's FFT pair (fftL, fftR)");
+check.(engine.areaState[\freeze][\spectralBuffers] == [],
+    "freeze: a standard engine allocates no spectral FFT buffers");
 writerNodes = {
     h.synthTree(other.voiceGroup).select({ arg node; [\strataRingWrite, \strataRingWriteSpectral].includes(node.def) })
 };
