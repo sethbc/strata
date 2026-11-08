@@ -12,7 +12,7 @@
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
 - Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
-- VOICE's rings read the cursor only from `S.lib.pages_voice.sync_cursor()` (the page's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw: after a source switch the raw cursor can sit past the last row or on a section label. Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`.
+- VOICE's rings read the cursor only from `S.lib.ui_cursors.sync("voice")` (the cursor module's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw (after a source switch the raw cursor can sit past the last row or on a section label) and never through the VOICE page module (a test checks). Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`, the page's name for `S.lib.ui_cursors.place("voice", index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
 - SCENES ring 1 moves the cursor only through `S.lib.pages_scenes.move_cursor(slot)`, the page's own move (E2 uses it too), which disarms a pending overwrite confirmation and clears its prompt. The ring never touches `S.scenes_page` itself.
 
