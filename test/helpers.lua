@@ -251,7 +251,7 @@ local function maintained_docs()
   local docs = { "CLAUDE.md", "README.md", "docs/status.md" }
   local prefix = repo_root .. "/"
   local found = {}
-  for _, dir in ipairs({ "docs/notes", "docs/user" }) do
+  for _, dir in ipairs({ "docs/notes", "docs/user", "docs/process" }) do
     local listing = io.popen('find "' .. prefix .. dir .. '" -name "*.md" 2>/dev/null')
     for path in listing:read("*a"):gmatch("[^\n]+") do
       if path:sub(1, #prefix) == prefix then table.insert(found, path:sub(#prefix + 1)) end
