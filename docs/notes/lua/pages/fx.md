@@ -10,7 +10,7 @@
 ## Owns
 
 - `lib/pages/fx.lua` (`S.lib.pages_fx`): the FX record, `redraw_fx`, `fx_enc`, `fx_key`, `fx_hints`; `S.FX_PAGE` (rows and layout), `S.fx_row` (the selected row, an index into `S.FX_PAGE.rows`).
-- `S.fx_last_mix` (per effect: filter, delay, reverb) is set up in `lib/params_setup.lua` (`docs/notes/lua/params.md`); the page reads only the filter's.
+- `S.fx_last_mix` (only `.filter`) is set up in `lib/params_setup.lua` (`docs/notes/lua/params.md`).
 - The bypass params are `lib/voice_mix.lua`'s (`docs/notes/lua/voice-mix.md`).
 - Its unit tests: `test/unit/pages_fx_test.lua`. Its rings: `lib/arc/fx.lua` (`docs/notes/lua/arc-pages.md`).
 

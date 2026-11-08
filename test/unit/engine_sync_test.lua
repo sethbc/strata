@@ -195,19 +195,20 @@ test("the lock keeps its lock names and the freeze module never touches S.frozen
   assert_true(found.freeze_module, "lib/freeze.lua was scanned")
 end)
 
-test("each effect remembers its last non-zero mix", function()
+-- The delay and reverb are bypassed through their bypass params (FX K3),
+-- so only the filter keeps a mix to restore (#150)
+test("only the filter remembers its last non-zero mix", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
-  assert_equal(S.fx_last_mix.filter, 1); assert_equal(S.fx_last_mix.delay, 0.3)
-  assert_equal(S.fx_last_mix.reverb, 0.3)
-  params:set("delay_mix", 0.6); params:set("delay_mix", 0)
-  assert_equal(S.fx_last_mix.delay, 0.6); assert_equal(S.fx_last_mix.reverb, 0.3)
-  params:set("reverb_mix", 0.8); params:set("reverb_mix", 0)
-  assert_equal(S.fx_last_mix.reverb, 0.8)
+  assert_equal(S.fx_last_mix.filter, 1)
   params:set("filter_mix", 0.4); params:set("filter_mix", 0)
   assert_equal(S.fx_last_mix.filter, 0.4)
-  assert_equal(S.fx_last_mix.delay, 0.6, "other effects keep theirs")
+  params:set("delay_mix", 0.6); params:set("reverb_mix", 0.8)
+  assert_equal(S.fx_last_mix.filter, 0.4, "the delay and reverb mixes leave it alone")
+  local keys = {}
+  for key in pairs(S.fx_last_mix) do table.insert(keys, key) end
+  assert_equal(table.concat(keys, " "), "filter", "nothing kept for the delay or the reverb")
 end)
 
 end

@@ -971,4 +971,25 @@ test("BUFFER shows 65 s as 1:05 and 16.5 s as today", function()
   end
 end)
 
+
+-- The 300 s layout states widen the duration's range on a copy of its
+-- spec, never on the spec the param was built with (#157)
+test("BUFFER's 300 s layout states leave the duration's own spec alone", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local param = params:lookup_param("record_duration")
+  local original = param.controlspec
+  for _, state in ipairs(S.registry.pages[local_value("UI_PAGES").index.BUFFER].layout_states) do
+    if state.name:find("300 s", 1, true) then
+      param.controlspec = original
+      state.setup(context)
+      assert_equal(original.maxval, 16, state.name .. ": the spec the param was built with still ends at 16 s")
+      assert_true(param.controlspec ~= original, state.name .. ": the param reads a copy")
+      assert_equal(param.controlspec.maxval, 300, state.name .. ": the copy ends at 300 s")
+      assert_equal(param.controlspec.step, original.step, state.name .. ": the copy keeps the step")
+    end
+  end
+  assert_true(params:get("record_duration") > 16, "the state's duration is past the standard range")
+end)
+
 end
