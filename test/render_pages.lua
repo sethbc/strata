@@ -177,7 +177,7 @@ if arg and arg[0] and arg[0]:match("render_pages%.lua$") then
   end
   local ok, written = xpcall(M.render_page_states, debug.traceback, out_dir)
   print = h.real_print
-  os.execute("rm -rf '" .. h.data_root .. "'")
+  h.remove_tree(h.data_root)
   if not ok then
     h.real_print(written)
     os.exit(1)

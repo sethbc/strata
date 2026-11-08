@@ -1,9 +1,10 @@
 -- lib/sequencer.lua
 -- The pattern sequencer: S.patterns (built fresh by the constructor), the
--- pattern clock and its state (S.pattern_position, S.pattern_playing,
--- S.pattern_clock), pattern edits and the step LED levels. Steps accent
--- running voices with engine.retrigger and never create nodes. The
--- functions stay global.
+-- pattern clock and its state (S.pattern_position, S.pattern_sounding_step,
+-- S.pattern_playing, S.pattern_clock), pattern edits, the sounding step
+-- (M.sounding_step, the playhead every grid layout and SEQ draw) and the
+-- step LED levels. Steps accent running voices with engine.retrigger and
+-- never create nodes. The functions stay global.
 
 return function(S)
   local M = {}
@@ -13,7 +14,8 @@ return function(S)
 
   -- Pattern sequencer
   S.patterns = {}
-  S.pattern_position = 1
+  S.pattern_position = 1         -- the next step the clock plays
+  S.pattern_sounding_step = nil  -- the step it played last (nil before the first)
   S.pattern_playing = false
   S.pattern_clock = nil
 
@@ -70,9 +72,14 @@ return function(S)
 
     S.pattern_playing = true
     S.pattern_position = 1
+    S.pattern_sounding_step = nil
 
     S.pattern_clock = clock.run(function()
       while S.pattern_playing do
+        -- This step sounds from now on: every grid redraw until the next
+        -- step (the one below, a voice it starts, a key press) shows it
+        S.pattern_sounding_step = S.pattern_position
+
         -- Trigger voices that have active steps
         for voice_idx = 1, NUM_VOICES do
           if S.patterns[voice_idx][S.pattern_position] > 0 then
@@ -89,7 +96,7 @@ return function(S)
           end
         end
 
-        -- Show the step that just played, then advance
+        -- Show the step that just played, then advance to the next one
         grid_redraw()
         S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
 
@@ -101,6 +108,7 @@ return function(S)
 
   function pattern_clock_stop()
     S.pattern_playing = false
+    S.pattern_sounding_step = nil
     if S.pattern_clock then
       clock.cancel(S.pattern_clock)
       S.pattern_clock = nil
@@ -108,11 +116,22 @@ return function(S)
     grid_redraw()
   end
 
-  -- LED level for a pattern step: its stored level, or at the playhead 15 for
-  -- an active step and 4 for an empty one
+  -- The step sounding now: the one the pattern clock played last, so
+  -- between steps it is the position before S.pattern_position (which the
+  -- clock has already advanced). nil while stopped and before the first
+  -- step plays. Every playhead (each grid layout, the SEQ page) is this step
+  function M.sounding_step()
+    if not S.pattern_playing then return nil end
+    local step = S.pattern_sounding_step
+    if type(step) ~= "number" or step < 1 or step > PATTERN_LENGTH then return nil end
+    return step
+  end
+
+  -- LED level for a pattern step: its stored level, or at the playhead (the
+  -- sounding step) 15 for an active step and 4 for an empty one
   function step_brightness(voice_idx, step)
     local level = S.patterns[voice_idx][step]
-    if S.pattern_playing and step == S.pattern_position then
+    if step == M.sounding_step() then
       return level > 0 and 15 or 4
     end
     return level
