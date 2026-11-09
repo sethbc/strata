@@ -67,7 +67,9 @@ grainLog = { arg seconds, voice = 0;
     log = Synth(\strataCheckGrainLog, [\in, readOut, \rates, logRates, \durs, logDurs], probeGroup);
     seconds.wait;
     log.free;
-    engine.synths[engine.grainKey(voice)].set(\out, engine.mainBus.index);
+    engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+    h.check(h.getControl(engine.synths[engine.grainKey(voice)], \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
+        "variation: a grain synth's out is restored to its own path (voice %)".format(voice));
     server.sync;
     [logRates, logDurs].do({ arg buffer, index;
         var condition = Condition(false);
