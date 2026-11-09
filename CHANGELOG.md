@@ -1,5 +1,100 @@
 # Strata Changelog
 
+## Version 3.2.0 - 2026-11-09
+
+A performance setting for the Pi 4 norns and one grain path for every source, with the features that path makes possible: freeze per voice, grain variation and scale quantize, loop regions, input history, a filter and sends per voice, effect bypass and buffers up to 300 s. Underneath, the engine is split into files by area. Scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.1 load, and every new per-voice setting starts where it sounds as 3.1 did. The voices themselves do sound different, and a Pi 4 or CM4 norns gets a different reverb by default (see Sound Changes). norns needs one restart after updating (see Upgrade Notes).
+
+### Upgrade Notes
+
+- **Restart norns after updating** (SYSTEM > RESTART): the engine has new files under `lib/engine/`, which SuperCollider compiles only at a restart. No engine file was renamed or deleted since 3.1.
+- **Scenes are saved as version 3,** ready for the new per-voice settings. Older scene files load and are rewritten as version 3 on exit; they recall every new setting at its default and an LFO offset of 0.
+
+### Sound Changes
+
+All four come from the new grain path, and there is no switch back:
+- **Pitch is the grains' playback rate.** Every voice transposes exactly, with no smearing, where a pitch shifter used to follow the grains. A buffer voice's pitch also sets how fast its grains read the sample.
+- **Pitch steps grain by grain.** A pitch change (the drift, an LFO, a scene fade) reaches the next grains instead of gliding.
+- **Grains start milliseconds in the past.** A synth or input voice's grains start a few milliseconds back in what it played, further back at high pitch. In triggered mode, grains above pitch 2 are shortened instead.
+- **Position spread is a backward offset.** On synth and input voices' continuous grains it moves each grain's start a random distance back, up to half a second, instead of adding a smeared copy.
+
+Two more, apart from the grain path:
+- **A different reverb on a Pi 4 or CM4 norns.** The performance setting defaults to `auto`, which picks high there, and high runs a feedback delay network in place of the standard reverb, without you touching anything. Set SETUP's performance to `standard` (it applies at the next start) to keep the old reverb.
+- A moving reverb mix glides over 50 ms instead of stepping.
+
+### Performance Setting
+
+- **Auto, standard or high,** on the SETUP page, and on high a buffer length of 16, 60, 120 or 300 s. Auto picks high on a Pi 4 or Compute Module 4 norns, so longer buffers (60 s by default) arrive there with no setup; the engine steps the length down when memory is short and SETUP shows it. The setting is saved at once, applies at the next start, and is never part of a PSET or scene (`docs/user/technical.md`, Performance tiers).
+- **The high setting also brings** 60 s of input history, spectral freeze and a richer reverb.
+
+### Freeze
+
+- **Freeze per voice.** A voice's grains keep playing what they were playing (a synth voice its last 4 s, an input voice the 4 s up to its history, a buffer voice its position: the scan stops), while pitch, spread and the grain settings still move. It is the freeze row in VOICE's mix section, a key on the 256 (page 4 column 12, or row 16 columns 1-7 while column 8 is held), 128h (page 4 column 12) and 128v (sources page row 14), and can be mapped to a MIDI CC. MAIN shows `[F]` after `[L]` and `[T]`, which move a few pixels left to make room. A source change unfreezes; scenes save freeze and its mode; randomize and mutations never change them.
+- **Spectral freeze** on the high setting: the freeze mode row offers `spectral`, which holds one sound spectrum and keeps granulating it. On standard, freeze always holds.
+
+### Grain Variation and Scale Quantize
+
+All of it is in the VOICE page's new variation section and in scenes; randomize and mutations leave it alone.
+- **Reverse grains:** each voice's reverse param is the chance that a grain plays backward.
+- **Pitch, pan and size jitter:** each grain's pitch (up to 12 semitones either way), stereo place and length (up to half or double, never past 0.5 s) vary at random.
+- **Interval sets** (octaves, fifths, the scale's chord, or five custom intervals of -24 to +24 semitones): each grain adds one at random, with a probability that a grain takes one at all.
+- **Scale quantize:** a global scale (off or any norns scale) and root, and per voice quantize, which lands every grain's pitch on the scale, steps a synth voice's freq through it on E3 and the arc, and snaps the voice's MIDI notes. Changing the scale or root moves each quantizing voice's freq to the new scale, and a PSET loads every voice's saved pitch exactly (#125). A buffer voice quantizes around the rate it plays, so a MIDI note transposes it without leaving the scale.
+
+### Buffers and Input
+
+- **Loop regions** for buffer voices: loop start and loop length (on VOICE, in a buffer voice's first section) set the part of the buffer its grains start in. Position, scan and spread move through the loop and wrap inside it; grains play full length and never past the end of the recording. Scenes store and fade them; the default is the whole buffer.
+- **Input history:** an input-sourced voice can play from up to 16 s back in the live input (60 s on the high setting) while the input keeps recording. It is the history row in the voice's input section on VOICE, a scene field that fades, and an LFO destination (`v<i> hist`).
+- **Buffers up to 300 s** on the high setting: recording, loading, clearing and saving work at the setting's buffer length, the record duration goes up to it, and the BUFFER page shows lengths of a minute and more as minutes and seconds (`1:05`).
+- **Long files no longer stall the engine.** A file longer than 16 s is checked in the background before it loads (load, record or clear the buffer meanwhile and the later action wins; the row shows `...` for its length until the file is in), and saving a long buffer no longer holds up other commands while it writes.
+- **Input-sourced voices follow pitchbend and frequency cross-modulation,** as buffer voices do.
+
+### Filter, Sends and Effects
+
+- **A filter and sends per voice:** lowpass, highpass or bandpass with cutoff, resonance and mix after the grains, and delay and reverb sends, in a new "filter & sends" section on VOICE. With both sends at 100% (the default) the effects sound as before on standard; a voice with its sends at 0 plays dry at full level, whatever the global delay and reverb mixes. The filter cutoff and both sends are LFO destinations (`v<i> vfilt`, `v<i> dsend`, `v<i> rsend`) and scene fields.
+- **Delay and reverb bypass** (`delay bypass`, `reverb bypass` in PARAMS > fx, stored in PSETs, not in scenes): a bypassed effect stops running, which gives back its CPU and memory, and comes back empty when the bypass is lifted. A mix of 0 still only silences the effect. On the FX page, K3 on a delay or reverb row toggles that effect's bypass (its section row shows `byp`) and keeps its mix; on the filter rows K3 still turns the filter's mix off and back on.
+- **A richer reverb on the high setting:** a feedback delay network with a decay close to the standard reverb's.
+
+### Scenes, Grid and Arc
+
+- **Scenes store each LFO's offset** and crossfade it in a smooth transition; an LFO the scene turns on or off keeps the recalled offset (#103).
+- **8×8 grid:** while the patterns are stopped, row 8 column 1 shows which half is up: dim for steps 1-8, brighter for steps 9-16.
+- **16×16 grid:** pasting a pattern onto a voice ends a level setting on it: if you were holding one of its steps, the next key on that voice turns its own step on or off instead of setting the held step's level.
+- **The arc keeps working while the norns menu is open,** as the grid does: a ring turned there still changes its parameter, and the rings follow changes made in PARAMETERS. No change in behavior; the arc page now says so (#169).
+- K1 held stays the only way into ALT: it works on hardware, so the planned long-press fallback for K2/K3 is dropped (#159). No key changes.
+
+### Fixes
+
+- **A buffer save that cannot be written** (a full card, a folder that cannot be made) no longer says it saved: the BUFFER page shows `saving buf <n>`, then `saved buf <n>` only once the file is written, or `buf <n> save failed`, and the console says the same (#127).
+- **Saving and loading long buffers is much lighter on SuperCollider's memory manager,** which can crash under heavy load, most of all on norns' SuperCollider 3.13. Saving is several times faster and saved files are unchanged; each chunk of a file is read into a new array; and spectral freeze's FFT buffers are allocated once per voice instead of inside the synth (#130, PR #132). See #131.
+- **The grid's playhead** no longer jumps one step ahead when the grid redraws between steps: every layout lights the step that is sounding, the same one the SEQ page shows (#113).
+- **A grid key whose action also redraws the grid** (a sequence-length key, starting a voice, a scene recall) sends one LED refresh per press instead of two. On the 16×8 and 8×16, filter and delay changes no longer redraw the grid on page 4, which shows no effects.
+- **A buffer restored at start** that the engine first reports as empty no longer stays marked as restoring for the rest of the session; if its audio arrives later it is still counted once in SETUP's restored buffers.
+- **A buffer loading a long file** that the engine never reports back goes back to what it held after 30 s.
+- **When the engine cannot replace an old `performance_active.data`** (a read-only data folder), it runs the tier that file names, the one the script reads at start, and says the file must be removed by hand. If memory allows only shorter slots than the file names, the script learns the engine's slot length within a few seconds (#153).
+- **A hand-edited scene with a loop past the end of the buffer** is shortened to fit when the scenes load, so recalling it ends on a loop the VOICE page can show (#167).
+- A list page's scroll marker always stays inside its track.
+
+### Internals and Development
+
+- **The engine is split** into `lib/engine/Strata*.sc` files, one area each, with no change to how it behaves; `lib/Engine_Strata.sc` holds only the class, its variables and a generic `alloc` and `free`. The `bufferState` poll now sends `slot * 1000 + seconds` so a slot can report up to 300 s, and the engine writes `performance_active.data` beside the scenes file at every start. The unused pitch-shifter window setting is gone (#151).
+- **The engine check runs per area:** `test/engine_check.scd` is a runner for the area files `test/engine_check/<area>.scd`, `$STRATA_ENGINE_CHECK_AREAS` runs only the areas it names, and each area must leave no voice synth running and prints its time. An area and its notes file stay one to one (#155). The check's reverb decay comparison no longer fails on a busy machine (#176), and its runner stops the server it started without `pgrep` or `timeout` and after a crashed `sclang` (#152).
+- **SuperCollider 3.13 at scale:** `test/run_engine_check_313.sh` runs the check in Docker on norns' version, as many times and as many at once as asked. The long-session soak no longer overflows its poll lists, and a check whose SuperCollider stopped is reported as a hang (#131).
+- **Registries for the shared Lua spots** (per-voice params, scene fields, source changes, param filters, LFO destinations, fx params), so 3.2's features own disjoint files.
+- **Docs.** `CLAUDE.md` became `AGENTS.md`, slimmed to the rules, each naming the notes file with its detail; the engine notes are one file per check area under `docs/notes/engine/`, the UI core and test harness notes are split by part, and the old `docs/notes/engine.md` and `docs/notes/lua.md` indexes are gone. `docs/process/agents.md` says how agents run the work. The finished 3.1 and 3.2 plans are removed; git history keeps them.
+- **Tests.** A test fails on Lua 5.2+ names that CI's LuaJIT lacks unless they have a fallback (#119). The FX page's layout checks select rows by param id (#114). Small cleanups with nothing to see in use: the VOICE cursor's anchor (#109), the delay's and reverb's unused restore mix, the BUFFER page's 300 s render states and the engine's comments on its shared constants (#149).
+- `lua test/run.lua` / `luajit test/run.lua` grew from 462 to 622 tests.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/decisions.md`.
+
+## Version 3.1.1 - 2026-11-07
+
+A fix release, shipped on `release/3.1.x`; #126 carried the same fix to main for 3.2, so it is one fix, not two. No command, param or file format changes.
+
+### Fixed
+
+- Saving a buffer, and the scratch take written after every recording, no longer holds up the script's commands while the file is written: notes, param changes and LFO sends arrive on time instead of in a late burst when the write ends (#124).
+
 ## Version 3.1.0 - 2026-11-07
 
 Makes Strata playable from the norns alone, with the grid and arc as accelerators: three new screen pages (VOICE, SEQ and SCENES), K1 held as ALT on every page, lock in place of freeze, one level of randomize undo, fine adjustment and center detents, arc rings on every page but SETUP, and small grids that catch up with the 256. Underneath, `strata.lua` is split into modules built for parallel work. No engine command, param or file format changes, and no sound changes: scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.0.2 load unchanged. One default changes, the LFO depth (see Changed Defaults). Many keys moved (see Upgrade Notes).

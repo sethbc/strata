@@ -31,6 +31,28 @@
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
 
+## Version 3.2.0 (2026-11-09)
+
+The performance setting and one grain path (design: `docs/design/3.2-design.md`). The sound changes (every voice: pitch by rate, stepped per grain; synth and input voices: milliseconds of lookback, position spread as a backward offset); every new per-voice setting defaults to 3.1's sound, and a Pi 4 or CM4 on `auto` runs high and its FDN reverb (SETUP `standard` keeps the old one). Highlights:
+- Engine split: `lib/Engine_Strata.sc` holds the class, its variables and a generic `alloc` and `free`; everything else is an area in `lib/engine/` (`strataArea<Name>`). The engine check runs per area (`test/engine_check/<area>.scd`).
+- Performance: `lib/performance.lua` and `lib/engine/StrataPerformance.sc`; SETUP's setting, the engine's active file and `S.performance`. The high tier has buffers up to 300 s, 60 s of history, spectral freeze and an FDN reverb.
+- One grain path: `\strataGrainRing` and `\strataGrainBuf`, built by `grainBody`, reading rings (`lib/engine/StrataRings.sc`) or slots; no `PitchShift` or spread delay, so the worst case falls from 6.9 MB to about 3.3 MB of the pool.
+- Features, one module and engine area each: freeze (`lib/freeze.lua`), variation and scale quantize (`lib/variation.lua`, `setScale`), loop regions (`lib/loops.lua`), input history (`lib/history.lua`), the voice filter and sends (`lib/voice_mix.lua`), effect bypass (`setBypass`).
+- Registries: `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`. Scenes are version 3.
+- Buffers: the `bufferSaveResult` poll; long files checked and saved through `yieldToCommands`.
+- Docs: AGENTS.md slimmed to the rules; engine notes per check area, the old index files removed.
+- Tests: 622 Lua tests.
+
+See CHANGELOG.md and `docs/status.md`.
+
+## Version 3.1.1 (2026-11-07)
+
+A fix release on 3.1 (`release/3.1.x`), with no command, param or file format change:
+- Engine: buffer writes (saves and scratch takes) yield to commands between chunks (`yieldToCommands`, `commandGap`), so a save no longer holds up the script's commands until it ends (#124; fixed on main for 3.2 by #126, the same fix).
+- Tests: 462 Lua tests; the engine check sends a message during a save and requires it handled before the save ends.
+
+See CHANGELOG.md.
+
 ## Version 3.1.0 (2026-11-07)
 
 Playable from the norns alone (design: `docs/design/3.1-design.md`). No engine, command, param or scene format change; the one default change is LFO depth 25%. Highlights:

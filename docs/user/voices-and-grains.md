@@ -48,4 +48,5 @@ PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Nat
 
 - **Randomization** - Generate new parameter sets for each voice
 - **Lock** - Protect a voice's parameters while others continue to evolve
+- **Freeze** - Hold what a voice's grains are playing while pitch, spread and grain size keep moving; see [Freeze on the VOICE page](pages/voice.md#freeze)
 - **Drift** - A slow random walk adds subtle grain pitch movement to active voices that are not locked; it always drifts back toward the pitch you set

@@ -306,9 +306,6 @@ local function doc_paths_missing(text, doc_name)
   for _, path in ipairs(paths) do
     local base = (links[path] and doc_dir and doc_dir ~= "") and (doc_dir .. "/") or ""
     local handle = io.open(repo_root .. "/" .. base .. path, "r")
-    -- Temporary: docs/notes/lua.md links root files from the repo root.
-    -- Delete this fallback once the notes split removes lua.md
-    if not handle and doc_name == "docs/notes/lua.md" then handle = io.open(repo_root .. "/" .. path, "r") end
     if handle then handle:close() else table.insert(missing, path) end
   end
   return missing, #paths
