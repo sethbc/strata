@@ -8,7 +8,7 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 3  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 4  -- Scene file format version (written into scenes.data)
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
@@ -16,6 +16,20 @@ local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standard tier (engine standardBufferSeconds)
 local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
 local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
+local NUM_BOOKMARKS = 4       -- Bookmarks per voice (3.3)
+local NORNS_SAMPLE_RATE = 48000  -- norns' server rate, for lengths read from a file's header
+
+-- Record sources (3.3's record_source option order): the live input, the
+-- master before and after its effects, then each voice
+local RECORD_SOURCES = {"input", "pre-master", "post-master"}
+for voice = 1, NUM_VOICES do
+  RECORD_SOURCES[#RECORD_SOURCES + 1] = "voice " .. voice
+end
+-- Synced recording: bars of beats_per_bar beats, started lead_seconds early
+local RECORD_SYNC = {beats_per_bar = 4, lead_seconds = 0.25}
+local FILES = {restart_seconds = 0.3}       -- lib/files.lua
+local WAVEFORMS = {refresh_seconds = 0.5}   -- lib/waveforms.lua
+local PLAYHEADS = {update_hz = 15}          -- lib/playheads.lua
 
 -- The standard performance tier's values. S.performance starts as a copy
 -- (lib/params_setup.lua); lib/performance.lua fills it at init, before
@@ -209,6 +223,13 @@ return {
   STANDARD_PERFORMANCE = STANDARD_PERFORMANCE,
   BUFFER_DATA_VERSION = BUFFER_DATA_VERSION,
   NUM_LFOS = NUM_LFOS,
+  NUM_BOOKMARKS = NUM_BOOKMARKS,
+  NORNS_SAMPLE_RATE = NORNS_SAMPLE_RATE,
+  RECORD_SOURCES = RECORD_SOURCES,
+  RECORD_SYNC = RECORD_SYNC,
+  FILES = FILES,
+  WAVEFORMS = WAVEFORMS,
+  PLAYHEADS = PLAYHEADS,
   GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,
   SOURCE_SYNTH = SOURCE_SYNTH,

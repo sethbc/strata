@@ -118,7 +118,8 @@ return function(S)
     local keys = {}
     for _, record in ipairs(S.registry.voice_params) do
       for key, default in pairs(record.scene_defaults or {}) do
-        keys[key] = {default = default, range = record.discrete and record.discrete[key]}
+        keys[key] = {default = default, range = record.discrete and record.discrete[key],
+          limits = record.scene_ranges and record.scene_ranges[key]}
       end
     end
     return keys
@@ -808,6 +809,7 @@ return function(S)
         local entry = extra_keys[key]
         if entry == nil or not is_number(value) then return false end
         if entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
+        if entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
       end
 
       if type(data.frozen[i]) ~= "boolean" then return false end

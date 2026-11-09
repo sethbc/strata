@@ -124,6 +124,27 @@ return function(S)
   S.engine_senders.reverb_damp = send_reverb_to_engine
   S.engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 
+  -- The source each voice's engine has (what engine.setGrainSource last
+  -- sent), per voice. A running voice whose source changes gets a new
+  -- grain synth, so the grain-restart hooks run (S.registry.grain_restart)
+  -- (lives in this load's constructor, on the fresh S: a script reload resets it)
+  local sent_sources = {}
+
+  local function run_grain_restart_hooks(voice_idx)
+    for _, hook in ipairs(S.registry.grain_restart) do hook(voice_idx) end
+  end
+
+  -- Every engine.setGrainSource goes through here, so the remembered source
+  -- stays true. The same source again, or a stopped voice's change, runs no
+  -- hook (a stopped voice has no grain synth; voiceOn builds the right one)
+  function M.send_grain_source(voice_idx)
+    local source = S.voices[voice_idx].source
+    engine.setGrainSource(voice_idx - 1, source - 1)
+    local changed = sent_sources[voice_idx] ~= source
+    sent_sources[voice_idx] = source
+    if changed and S.voices[voice_idx].active then run_grain_restart_hooks(voice_idx) end
+  end
+
   function toggle_voice(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     local voice = S.voices[voice_idx]
@@ -142,6 +163,8 @@ return function(S)
         engine_param_value("v" .. voice_idx .. "_grain_density") * engine_param_value("master_density"),
         voice.grain.pitch
       )
+      -- voiceOn builds the synths for the source the engine has recorded
+      run_grain_restart_hooks(voice_idx)
       sync_voice_to_engine(voice_idx)
       voice.active = true
     end
@@ -192,7 +215,7 @@ return function(S)
   -- edits made while a voice was off (and scene recalls) would be lost. The
   -- source goes first (the engine ignores it when unchanged).
   function sync_voice_to_engine(voice_idx)
-    engine.setGrainSource(voice_idx - 1, S.voices[voice_idx].source - 1)
+    M.send_grain_source(voice_idx)
     sync_voice_values_to_engine(voice_idx)
   end
 

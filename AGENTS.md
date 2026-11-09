@@ -54,6 +54,11 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/variation.lua` | `variation` | `docs/notes/lua/variation.md` | variation_test.lua |
 | `lib/voice_mix.lua` | `voice_mix` | `docs/notes/lua/voice-mix.md` | voice_mix_test.lua |
 | `lib/performance.lua` | `performance` | `docs/notes/lua/performance.md` | performance_test.lua |
+| `lib/files.lua` | `files` | `docs/notes/lua/files.md` | files_test.lua |
+| `lib/waveforms.lua` | `waveforms` | `docs/notes/lua/waveforms.md` | waveforms_test.lua |
+| `lib/playheads.lua` | `playheads` | `docs/notes/lua/playheads.md` | playheads_test.lua |
+| `lib/positions.lua` | `positions` | `docs/notes/lua/positions.md` | positions_test.lua |
+| `lib/bookmarks.lua` | `bookmarks` | `docs/notes/lua/bookmarks.md` | bookmarks_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -79,7 +84,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 - **`S`** (`lib/state.lua`) is built fresh on every load. State more than one module uses is a field of `S` under its plain name; state one module uses stays local to it. `S.constants` is `lib/constants.lua`.
 - **Includes**: only `strata.lua` calls `include`, once per module, always as `include("lib/<path>")`, never `"strata/lib/..."` (a test checks).
 - **A module** is a constructor, `return function(S) local M = {} ... return M end`, ending with exactly `  return M` and `end`; its table is `S.lib.<name>`, or `S.lib.<dir>_<basename>` in a subfolder. Functions that were global stay global, in their module (`MODULE_HOMES`).
-- **Registries** (`S.registry`: `pages`, `params`, `grid_layouts`, `start`, `cleanup`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`) are read at init, never at include time. Each register function checks its argument and refuses a duplicate name.
+- **Registries** (`S.registry`: `pages`, `params`, `grid_layouts`, `start`, `cleanup`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`, and 3.3's `grain_restart` (`S.register_grain_restart(fn(voice_idx))`, run by `lib/engine_sync.lua` after every `engine.voiceOn` and every `engine.setGrainSource` that changes a running voice's source, all sent through `S.lib.engine_sync.send_grain_source`) and `alt_release` (`S.register_alt_release(fn())`, run when ALT goes from held to not held)) are read at init, never at include time. Each register function checks its argument and refuses a duplicate name.
 - **`S.performance`** is the tier the engine runs (`lib/performance.lua` reads the engine's `performance_active.data`). Every tier-dependent spec reads it; the setting itself (`performance.data`) is SETUP's, never a param.
 - Tests reach script state with `local_value(name)` and `find_upvalue(name)`: a field of `S`, then of `S.constants`, then an upvalue of a global function.
 
@@ -208,7 +213,7 @@ Several pull requests are built at once, often by agents: a feature lives in fil
 
 ## Code Style Guidelines
 
-**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of each module that uses them): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (3), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (8, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `STANDARD_BUFFER_SECONDS` (16), `STANDARD_PERFORMANCE`, `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3). The engine mirrors them as `numVoices`, `numBuffers`, `standardBufferSeconds` and `numModSlots`. The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
+**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of each module that uses them): `NUM_VOICES` (7), `NUM_SCENES` (8), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (4), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (8, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `STANDARD_BUFFER_SECONDS` (16), `STANDARD_PERFORMANCE`, `BUFFER_DATA_VERSION` (1), `NUM_LFOS` (3), and 3.3's `NUM_BOOKMARKS` (4), `RECORD_SOURCES`, `RECORD_SYNC`, `FILES`, `WAVEFORMS`, `PLAYHEADS` and `NORNS_SAMPLE_RATE` (48000). The engine mirrors them as `numVoices`, `numBuffers`, `standardBufferSeconds` and `numModSlots`. The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
 **Lua's 200-local limit applies to each function, checked by a test**: the locals probe measures the free locals at the end of each file's main chunk and of each module's constructor function, and fails when any has fewer than 30 (`strata.lua`'s main chunk uses 5). Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE`, `BUFFER_SETTLE` do) rather than adding many `local`s, and split a module that runs short.
 

@@ -2386,10 +2386,46 @@ function stubs.install(options)
   -- A test lists the files it knows: context.audio.files[path] = {channels,
   -- frames, rate}; any other path reads as unopenable
   context.audio = { files = {} }
+  -- context.audio.register(path, {channels, frames, rate}) lists a file the
+  -- test has no bytes for
+  function context.audio.register(path, info)
+    context.audio.files[path] = { info.channels, info.frames, info.rate }
+  end
+  -- A WAV file's header (PCM: 'fmt ' and 'data' chunks), as libsndfile reads
+  -- it: channels, frames, rate; nil for anything else
+  local function wav_header_info(path)
+    local file = io.open(path, "rb")
+    if not file then return nil end
+    local bytes = file:read(4096) or ""
+    file:close()
+    if bytes:sub(1, 4) ~= "RIFF" or bytes:sub(9, 12) ~= "WAVE" then return nil end
+    -- little-endian unsigned integer of `width` bytes at 1-based `at` (LuaJIT has no string.unpack)
+    local function le(at, width)
+      local value = 0
+      for offset = width - 1, 0, -1 do value = value * 256 + (bytes:byte(at + offset) or 0) end
+      return value
+    end
+    local channels, rate, bits, data_bytes
+    local position = 13
+    while position + 8 <= #bytes + 1 do
+      local id, size = bytes:sub(position, position + 3), le(position + 4, 4)
+      if id == "fmt " then
+        channels, rate, bits = le(position + 10, 2), le(position + 12, 4), le(position + 22, 2)
+      elseif id == "data" then
+        data_bytes = size
+        break
+      end
+      position = position + 8 + size + (size % 2)
+    end
+    if not (channels and rate and bits and data_bytes and channels > 0 and bits >= 8) then return nil end
+    return channels, math.floor(data_bytes / (channels * math.floor(bits / 8))), rate
+  end
   context.audio.api = {
     file_info = function(path)
       local info = context.audio.files[path]
       if info then return info[1], info[2], info[3] end
+      local channels, frames, rate = wav_header_info(path)
+      if channels then return channels, frames, rate end
       return 0, 0, 0
     end,
   }

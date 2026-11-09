@@ -25,7 +25,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
   - The library's `lfo_*` params and actions; `reset_phase` and `set("period")` reset and rescale `phase_counter` as the library does.
   - Nothing runs on its own: `context.lfo.tick(instance, raw)` performs one library step, with `raw` 0..1 as the shape output.
 - `midi`: `test/stub_midi.lua`. 16 vports, `to_msg`/`to_data`. Helpers `context.midi.plug(port, name)`, `unplug(port)`, `send(port, msg)`.
-- `audio.file_info(path)`: `lua/core/audio.lua`'s (matron's `sound_file_inspect`): channels, frames and sample rate of a file a test lists in `context.audio.files[path] = {channels, frames, rate}`; any other path returns 0, 0, 0, as for a file libsndfile cannot open.
+- `audio.file_info(path)`: `lua/core/audio.lua`'s (matron's `sound_file_inspect`): channels, frames and sample rate of a file a test lists in `context.audio.files[path] = {channels, frames, rate}`; `context.audio.register(path, {channels, frames, rate})` lists one too, and a path under a test's data folder is read from its WAV header (`fmt ` and `data` chunks); any other path returns 0, 0, 0, as for a file libsndfile cannot open.
 - `poll.set`: the system polls plus the engine's `addPoll` names; unknown names return nil. `context.polls.fire(name, value)` reaches started polls.
 - `require("fileselect")`: a module through `package.preload`, never a global, so a script that relies on a `fileselect` global fails.
   - `enter` records `context.fileselect.last`, and its callback in `fileselect.callback` (as `fs.enter` keeps it in `fs.callback`, so a second `enter` replaces the first's).

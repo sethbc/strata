@@ -954,7 +954,7 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 3, "scenes are saved as version 3")
+  assert_equal(saved.version, 4, "scenes are saved as version 4")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
 
@@ -1173,6 +1173,37 @@ test("LFO offsets in scenes: save and load, migration of older scenes, validatio
   assert_equal(local_value("scenes")[1].data.lfo_offset_2, captured_offset, "the bad file is not loaded")
   assert_true(local_value("scenes")[2].populated, "the current scenes stay")
   assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
+end)
+
+test("scenes save as version 4 and a version 3 file loads unchanged", function()
+  local context = load_strata(); finish_startup(context)
+  scramble_state(5)
+  capture_scene(2)
+  local original = deep_copy(local_value("scenes")[2].data)
+  save_scenes_to_disk()
+  local path = context.data_dir .. "strata/scenes.data"
+  local saved = context.tab.load(path)
+  assert_equal(saved.version, 4, "scenes are saved as version 4")
+  saved.version = 3
+  context = load_strata({ data_subdir = "v3" })
+  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+  context.tab.save(saved, context.data_dir .. "strata/scenes.data")
+  load_scenes_from_disk()
+  local loaded = local_value("scenes")[2]
+  assert_true(loaded.populated, "the version 3 scene loads")
+  -- the whole scene is unchanged (numbers to the file's precision)
+  local function assert_same(expected, actual, where)
+    if type(expected) == "number" then
+      assert_near(actual, expected, 1e-6, where)
+    elseif type(expected) == "table" then
+      assert_equal(type(actual), "table", where)
+      for key, value in pairs(expected) do assert_same(value, actual[key], where .. "." .. tostring(key)) end
+      for key in pairs(actual) do assert_true(expected[key] ~= nil, where .. "." .. tostring(key) .. " is new") end
+    else
+      assert_equal(actual, expected, where)
+    end
+  end
+  assert_same(original, loaded.data, "scene")
 end)
 
 end

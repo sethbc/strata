@@ -187,10 +187,11 @@ In the PARAMS menu (strata_scenes section):
 ## Disk persistence
 
 - **Location**: `~/dust/data/strata/scenes.data`.
-- **Format**: a Lua table serialized with norns' `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 3, since 3.2).
-  - Version 1 and 2 files (`{version = 1, ...}` or `{version = 2, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version <n>`. The next save writes version 3.
+- **Format**: a Lua table serialized with norns' `tab` library: `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 4, since 3.3).
+  - Version 1 and 2 files (`{version = 1, ...}` or `{version = 2, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version <n>`. The next save writes the current version.
   - Version 3 adds each voice's `extras` (the registered voice params), the registered global fields and the LFO offsets. With nothing registered, a migrated voice gets an empty `extras`.
   - When to bump `SCENE_DATA_VERSION`: once per release that adds scene fields, never per field. Migration fills whatever is missing whatever the file's version, so a field added within an unreleased format (the LFO offsets joined format 3 before 3.2 shipped) needs only its default; a version 3 file written without them migrates like an older one.
+  - Version 4 (3.3) changes no field: a version 3 file migrates with only its version changed (registered defaults fill as before), and the next save writes 4. A voice-param record's `scene_ranges` limits a continuous extra in `validate_scene`.
   - Any other version is rejected.
 - **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`.
   - It fills only what is missing, so it runs for every version.

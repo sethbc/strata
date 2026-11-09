@@ -211,4 +211,33 @@ test("only the filter remembers its last non-zero mix", function()
   assert_equal(table.concat(keys, " "), "filter", "nothing kept for the delay or the reverb")
 end)
 
+test("a grain restart runs the hooks after voiceOn and after a running voice's source switch", function()
+  local log, at = {}, {}
+  local context = load_strata({ before_init = function(context)
+    local_value("S").register_grain_restart(function(voice_idx)
+      table.insert(log, voice_idx)
+      table.insert(at, #context.engine_calls)
+    end)
+  end })
+  finish_startup(context)
+  for voice_idx = 1, 2 do
+    if local_value("S").voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  for index in pairs(log) do log[index] = nil; at[index] = nil end
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(table.concat(log, ","), "1", "voiceOn runs the hooks once")
+  local voice_on_index
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "voiceOn" then voice_on_index = index end
+  end
+  assert_true(at[1] >= voice_on_index, "the hook runs after the engine.voiceOn call")
+  params:set("v1_source", 2)
+  assert_equal(table.concat(log, ","), "1,1", "a running voice's source switch runs them")
+  params:set("v1_source", 2)
+  assert_equal(table.concat(log, ","), "1,1", "the same source again runs none")
+  params:set("v2_source", 3)
+  assert_equal(table.concat(log, ","), "1,1", "a stopped voice's change runs none")
+end)
+
 end

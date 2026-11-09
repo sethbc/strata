@@ -36,7 +36,9 @@ return function(S)
     for n in pairs(S.key_press_alt) do
       S.key_press_alt[n] = nil
     end
+    local was_held = S.alt_held
     S.alt_held = false
+    if was_held then S.lib.ui_alt.run_release_hooks() end
   end
 
   local function ignore_page_input() end

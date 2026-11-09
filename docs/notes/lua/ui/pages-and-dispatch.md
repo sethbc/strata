@@ -7,6 +7,8 @@
 
 ## Pages and dispatch
 
+A page record may also have `animates()`: while it returns true for the shown page, `draw_frame` redraws the screen every frame (`docs/notes/lua/ui/redraws.md`).
+
 The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}`. `UI_PAGES.index[name]` is a page's index (`UI_PAGES.index.FX == 4`); `UI_PAGES.MAIN_PAGE` stays 1. `S.ui_page` is the index of the shown page.
 
 Encoders and keys (`strata.lua`):
