@@ -1,6 +1,6 @@
 -- strata.lua
 -- ambient granular layers
--- v3.1.0
+-- v3.2.0
 --
 -- E1: page   K1 held: ALT
 -- MAIN: E2 voice, E3 field,
@@ -37,8 +37,8 @@ local NUM_UI_PAGES = S.constants.NUM_UI_PAGES
 local UI_PAGES = S.constants.UI_PAGES
 local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 
--- The modules, in dependency order (docs/notes/lua.md, Modules, lists what
--- each owns). Each constructor's table is S.lib.<name> (lib/<dir>/<file>.lua:
+-- The modules, in dependency order (AGENTS.md's module table lists each
+-- one's notes file). Each constructor's table is S.lib.<name> (lib/<dir>/<file>.lua:
 -- S.lib.<dir>_<file>); a module adds its records to S.registry (pages,
 -- params, grid layouts, cleanup steps) as it loads.
 S.lib.voices = include("lib/voices")(S)

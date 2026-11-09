@@ -2,14 +2,15 @@
 
 Every parameter of the selected voice. Back to [Screen Controls](../controls.md).
 
-The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- karp [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/4`).
+The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- karp [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/6`).
 
-Below it, five rows at a time, the voice's parameters in four sections, each under a dim section name:
-- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead, then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)); an input-sourced voice has no synth section (its sections are then counted out of three)
+Below it, five rows at a time, the voice's parameters in six sections, each under a dim section name:
+- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead, then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)); an input-sourced voice has no synth section and shows its input section instead
 - **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
 - **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp), pan (the Sub has no pan) and freeze. With the high performance setting a freeze mode row follows: `hold` or `spectral`
+- **variation** - reverse, pitch, pan and size jitter, intervals, interval probability and quantize (see [Voices and Granular Processing](../voices-and-grains.md))
 - **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out) and its delay and reverb sends (see [Global Controls and Effects](../effects.md))
 
 ### Freeze

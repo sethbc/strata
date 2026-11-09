@@ -48,7 +48,7 @@
   - else `saving buf <n>` when `save_buffer` sent the save (it returns true when the slot reports audio, `seconds > 0`);
   - else `buf <n> empty`.
 - `buffer_save_result` (`lib/buffers.lua`) flashes `saved buf <n>` or `buf <n> save failed` when the engine reports how the slot's newest save ended (`bufferSaveResult`); a report of an older save flashes nothing.
-- `buffer_load_failed` flashes `buf <n> load failed` when the engine reports a failed load (see the buffers table in `docs/notes/engine.md`).
+- `buffer_load_failed` flashes `buf <n> load failed` when the engine reports a failed load (see the buffers table in `docs/notes/engine/buffers.md`).
 - Hints: `K2:load K3:rec` (`K3:stop` while the cursor slot records, `K3:...` while it is `finishing`); with ALT `K2:clear K3:save`.
 
 The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5, UI_PAGES.index.BUFFER)`. `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s); its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it (`docs/notes/lua/ui/header-and-flashes.md`).

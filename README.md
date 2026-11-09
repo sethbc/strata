@@ -6,14 +6,15 @@ An ambient granular soundscape generator for monome norns.
 
 Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
-This is version 3.1.0. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. Version 3.1 makes everything playable from the norns alone: new VOICE, SEQ and SCENES pages, K1 held as ALT, lock and randomize undo, fine adjustment, arc rings on every page but SETUP and fuller layouts for the smaller grids. See [CHANGELOG.md](CHANGELOG.md).
+This is version 3.2.0. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. Version 3.1 makes everything playable from the norns alone: new VOICE, SEQ and SCENES pages, K1 held as ALT, lock and randomize undo, fine adjustment, arc rings on every page but SETUP and fuller layouts for the smaller grids. Version 3.2 adds a performance setting (a high tier on the Pi 4, with buffers up to 300 s), per-voice freeze, grain variation and scale quantize, loop regions for buffers, input history and a filter and effect sends per voice; every voice now transposes by grain rate. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
 - Seven synthesis voices (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring), each with its own granular processor
-- Eight sample buffers and a live stereo input as alternative grain sources
+- Eight sample buffers (up to 300 s each on a Pi 4 norns) and a live stereo input with up to 60 s of history as alternative grain sources
+- Per-voice freeze, grain variation (reverse, jitter, intervals), scale quantize and loop regions
 - Cross-modulation between voices, three global LFOs and probability-based mutations
-- Filter, delay, reverb and a limiter on the master output
+- A filter and delay and reverb sends per voice; filter, delay, reverb and a limiter on the master output
 - Eight scenes with smooth recall and a scene sequencer
 - An eight-page screen UI that reaches every parameter, the patterns and the scenes without a grid or arc
 - A pattern sequencer (on the SEQ page and the grid), MIDI input and monome arc support
@@ -73,6 +74,8 @@ After installation with either method, restart norns or run `;restart` in maiden
 - [Parameters Reference](docs/user/params.md) - everything in the PARAMETERS menu
 - [Usage Tips](docs/user/tips.md) - workflows and starting points
 - [Technical Details](docs/user/technical.md) - architecture, signal flow and the development checks
+
+Page renders: `lua test/render_pages.lua <dir>` then `python3 test/render_pages.py <dir>` draw every screen page state as a PNG (`docs/status.md`, Running the checks).
 
 ## License
 

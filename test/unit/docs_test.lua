@@ -568,7 +568,7 @@ test("AGENTS.md command table lists exactly the engine's commands", function()
   -- no engine command mentioned anywhere in AGENTS.md, README.md,
   -- docs/status.md or docs/notes is gone
   local doc_names = maintained_docs()
-  for _, note in ipairs({"docs/status.md", "docs/notes/engine.md", "docs/notes/lua.md"}) do
+  for _, note in ipairs({"docs/status.md", "docs/notes/engine/structure.md", "docs/notes/lua/state-and-voices.md"}) do
     local listed = false
     for _, doc_name in ipairs(doc_names) do listed = listed or doc_name == note end
     assert_true(listed, "the check reads " .. note)
@@ -595,8 +595,8 @@ end)
 test("the docs path check resolves links from the doc's folder", function()
   local missing = doc_paths_missing("[top](README.md) and [ok](../../README.md)", "docs/user/arc.md")
   assert_equal(table.concat(missing, " "), "README.md", "a root-relative link in docs/user is reported")
-  missing = doc_paths_missing("[top](README.md)", "docs/notes/engine.md")
-  assert_equal(#missing, 1, "only docs/notes/lua.md may link the root that way")
+  missing = doc_paths_missing("[top](README.md)", "docs/notes/engine/structure.md")
+  assert_equal(#missing, 1, "a notes file may not link the root that way")
 end)
 
 test("the docs path check covers lib/ paths", function()
@@ -765,24 +765,9 @@ test("every engine notes file opens with Must not break", function()
   assert_true(#files >= 9, "docs/notes/engine holds the area notes (found " .. #files .. ")")
 end)
 
-test("docs/notes/engine.md only indexes docs/notes/engine and AGENTS.md names the area files", function()
-  local index = read_repo_file("docs/notes/engine.md")
-  local linked = {}
-  for line in (index .. "\n"):gmatch("([^\n]*)\n") do
-    assert_true(not line:match("^##"), "docs/notes/engine.md holds no sections, only the index: " .. line)
-    if line:match("^%s*[-*] ") then
-      local name, target = line:match("^%- %[([%w%-]+)%]%(engine/([%w%-]+)%.md%):? ")
-      assert_true(name ~= nil and name == target, "each index line links one area file: " .. line)
-      assert_true(linked[name] == nil, "docs/notes/engine.md links " .. tostring(name) .. " once")
-      linked[name] = true
-    end
-  end
-  for target in index:gmatch("%]%(([^)]+)%)") do
-    assert_true(target:match("^engine/[%w%-]+%.md$") ~= nil, "docs/notes/engine.md links only area files, not " .. target)
-  end
+test("AGENTS.md names the engine notes files", function()
   local instructions = read_repo_file("AGENTS.md")
   for _, name in ipairs(names_in("docs/notes/engine", "md")) do
-    assert_true(linked[name], "docs/notes/engine.md links docs/notes/engine/" .. name .. ".md")
     assert_true(instructions:find("`docs/notes/engine/" .. name .. ".md`", 1, true) ~= nil,
       "AGENTS.md names docs/notes/engine/" .. name .. ".md")
   end

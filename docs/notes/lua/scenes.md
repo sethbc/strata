@@ -105,7 +105,7 @@ Patterns:
 Order of voice changes (#46):
 - A voice the recall stops is stopped (`toggle_voice`) before its source and params are set, so its release tail keeps the outgoing scene's values (param actions reach the engine only while a voice is active).
 - A voice the recall starts is started after its params.
-- The engine only records a stopped voice's source, so a recall never builds a grain synth for the new source only to release it at once. Scenes on/synth, off/input, on/buffer recalled in quick succession used to leave the engine more synths than its real-time memory bound (see Real-time memory in `docs/notes/engine.md`).
+- The engine only records a stopped voice's source, so a recall never builds a grain synth for the new source only to release it at once. Scenes on/synth, off/input, on/buffer recalled in quick succession used to leave the engine more synths than its real-time memory bound (see Real-time memory in `docs/notes/engine/memory.md`).
 
 So a recall sends at most one full sync per voice, after its params. An instant recall and a smooth transition (which ends in `recall_scene_instant`) both leave the engine with the Lua state of every running voice.
 
