@@ -123,7 +123,7 @@ if (engine.respondsTo(\voiceMixKey).not) {
     check.((positionOf.(\strataInput) < firstStage) and: { nodes.detectIndex({ arg node; node.def == voiceDefs[0] }) < firstStage }
         and: { lastSynthGrain.notNil } and: { lastSynthGrain < firstStage }
         and: { (0..engine.numVoices - 1).every({ arg voice;
-            var pair = stageAndMod.(voice); pair[0].notNil and: { (pair[1].isNil) or: { pair[1] == (pair[0] + 1) } } }) }
+            var pair = stageAndMod.(voice); pair[0].notNil and: { pair[1].notNil } and: { pair[1] == (pair[0] + 1) } }) }
         and: { firstStage < positionOf.(\strataFilter) },
         "structure: the node order is voiceGroup, processGroup (synth-source grain synths, then each voice's mix group before its mod synth), then the effects chain");
 };

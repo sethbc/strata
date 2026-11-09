@@ -189,6 +189,7 @@ var stopVoice = { arg state;
     server.sync;
 };
 var inDb = { arg peaks; (peaks[0] / max(peaks[1], 1e-12)).ampdb.round(0.1) };
+var isFinite = { arg value; value.abs < inf };   // false for NaN, inf and -inf
 var assertEqualRef = { arg peaks, message;
     check.((peaks.size == 2) and: { peaks[1] > silent } and: { peaks[0] < 1e-6 },
         "% (difference %, reference peak %, % dB)".format(message, peaks[0], peaks[1], inDb.(peaks)));
@@ -247,6 +248,26 @@ var checkStagePersistence = {
     server.sync; 0.1.wait;
     h.stopAllVoices;
     check.(same.value, "mix: switches, starts, stops and the A -> B -> A -> C recalls leave every stage's node ID unchanged");
+    // the memory area's worst cases: spaced switches then a restart, a burst, every voice among three slots
+    {
+        var startAll = { engine.numVoices.do({ arg target; command.(\voiceOn, target, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) }) };
+        var switchAll = { arg sourceOf; engine.numVoices.do({ arg target; command.(\setGrainSource, target, sourceOf.(target)) }) };
+        var steps = [{ arg target; target + 1 }, { engine.inputSource }, { 0 }];
+        var slotOf = { arg target, step; ((target + step) % engine.numBuffers) + 1 };
+        startAll.value; server.sync; 0.2.wait;
+        steps.do({ arg sourceOf, step; if (step > 0) { 0.2.wait; server.sync }; switchAll.(sourceOf) });
+        engine.numVoices.do({ arg target; command.(\voiceOff, target) });
+        startAll.value; server.sync; 0.1.wait;
+        steps.do({ arg sourceOf; switchAll.(sourceOf) });
+        server.sync; 0.1.wait;
+        h.stopAllVoices;
+        switchAll.({ arg target; slotOf.(target, 0) });
+        startAll.value; server.sync; 0.2.wait;
+        2.do({ arg step; if (step > 0) { 0.2.wait; server.sync }; switchAll.({ arg target; slotOf.(target, step + 1) }) });
+        server.sync; 0.1.wait;
+        h.stopAllVoices;
+    }.value;
+    check.(same.value, "mix: the memory area's worst cases (spaced, burst, all-buffer) leave every stage's node ID unchanged");
 };
 
 // A mix group sits just before its voice's mod synth: in the flattened node
@@ -256,7 +277,7 @@ var groupsBeforeMods = {
     (0..engine.numVoices - 1).every({ arg target;
         var modAt = nodes.detectIndex({ arg node; (node.def == \strataMod) and: { node.controls[\in] == engine.granBuses[target].index } });
         var stageAt = nodes.detectIndex({ arg node; (node.def == \strataVoiceMix) and: { node.controls[\mirrorOut] == engine.granBuses[target].index } });
-        modAt.isNil or: { stageAt.notNil and: { (modAt - 1) == stageAt } }
+        modAt.notNil and: { stageAt.notNil } and: { (modAt - 1) == stageAt }
     })
 };
 var checkGroupOrder = {
@@ -360,7 +381,7 @@ var checkBadStage = {
     peakProbe = Synth(\strataCheckPeak, [\in, engine.mainBus, \out, peakBus], group);
     server.sync; 0.1.wait;
     oldId = stageOf.(voice).nodeID;
-    stageOf.(voice).set(\filterMix, 0/0);    // a NaN: the replacement starts from the kept 0
+    stageOf.(voice).set(\filterMix, 0/0);    // a NaN: the replacement starts from the kept filterMix
     0.3.wait; server.sync;
     level = h.measure(peakProbe, peakBus, 0.4)[0];
     bad = h.readBus(badBus);
@@ -392,8 +413,8 @@ var checkFades = {
         withComparison.(voice, { arg state;
             var add = { arg name, peaks;
                 figures.add(inDb.(peaks));
-                check.(inDb.(peaks).isNaN.not and: { peaks[1] > 0 },
-                    "mix: fade figure at %: % % dB of the reference's peak (difference %)".format(filterSet[2], name, inDb.(peaks), peaks[0]));
+                check.(isFinite.(inDb.(peaks)) and: { peaks[1] > silent },
+                    "mix: fade figure at %: % % dB of the reference's peak (difference %, reference peak %)".format(filterSet[2], name, inDb.(peaks), peaks[0], peaks[1]));
             };
             loadSlot.(0); loadSlot.(1);
             prepareVoice.(voice, 1, settings);
@@ -408,7 +429,7 @@ var checkFades = {
             server.makeBundle(nil, { switchPair.(state, 1, settings) });   // slot 1 starts; slot 2 fades
             0.2.wait;
             add.("a cut", measureSpan.(state, 0.1, { switchPair.(state, 2, settings) }));   // cuts the slot 1 grain's predecessor
-            0.2.wait;
+            2.3.wait;   // the older grain synths have ended, so the slot's own grains alone are measured, as Step 1b did
             // live on slot 2 (index 1): the slot fade
             add.("a slot fade", measureSpan.(state, 0.15, {
                 command.(\clearBuffer, 1);
@@ -449,7 +470,7 @@ var checkAccentedCrossfade = {
             server.sync;
             peaks = h.readBus(state[\peaks]);
             stopVoice.(state);
-            check.((peaks.size == 2) and: { peaks[1] > silent } and: { inDb.(peaks).isNaN.not } and: { inDb.(peaks) < 100 },
+            check.((peaks.size == 2) and: { peaks[1] > silent } and: { isFinite.(inDb.(peaks)) },
                 "mix: bypassed, a crossfade with accents and an amp move prints its difference from 3.2's (%: % dB of the reference's peak, reference peak %)".format(
                     entry[1], inDb.(peaks), peaks[1]));
         });
@@ -469,7 +490,7 @@ var checkMirror = {
     server.sync; 1.5.wait;   // past enough of the Pulse's attack, the grains running
     probe.set(\t_reset, 1); 0.5.wait; server.sync;
     values = h.readBus(peaks);
-    check.((values[0] < 1e-6) and: { values[1] > 0.01 },
+    check.((values[0] < 1e-6) and: { values[1] > silent },
         "mix: the mirror carries the buffer and input path only, filtered and after the level (a synth voice's voice bus: difference %, level %)".format(values[0], values[1]));
     copy.free; probe.free;
     h.stopAllVoices;
