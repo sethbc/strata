@@ -1,7 +1,9 @@
 // test/engine_check/memory.scd
 // Real-time memory: the grain UGens' fixed sizes, what each grain synth
 // takes of the pool, and the worst cases (spaced switches, a burst, fast
-// recalls) on norns' 8192 KB pool: 3 MB left on standard, 4 MB on high.
+// recalls, every voice on three buffer slots, eight recordings) on norns'
+// 8192 KB pool: 3 MB left on standard, 3.5 MB on high (3 MB on both tiers
+// with eight recordings running).
 //
 // Everything is measured with allocation probes, as on SuperCollider 3.13
 // (norns' and CI's version, which has no /rtMemoryStatus):
@@ -19,9 +21,10 @@
 //   room (the high run's spectral writers take their last ~16 KB each
 //   lazily, about 21 ms in, after the flood: the freed reserve holds it).
 //   They count as free. (256 KB each until 2d: with 2b and 2d the high
-//   worst case leaves about 145-165 KB beside the sixteen probes
-//   (4240-4260 - 4096 KB), and about 30-50 KB after the spectral writers'
-//   lazy allocations: too little for two 256 KB reserves.)
+//   worst case left about 145-165 KB beside sixteen probes (4240-4260 -
+//   4096 KB), and about 30-50 KB after the spectral writers' lazy
+//   allocations: too little for two 256 KB reserves. 3.3's floor of
+//   fourteen probes leaves 512 KB more.)
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
@@ -113,9 +116,9 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (about 69 and 75 KB with 2b's draws and 3.2's voice filter and sends)
-    check.(sizes.every({ arg size; (size > 0) and: { size < 80 } }),
-        "memory: each grain synth takes under 80 KB of the pool (% KB, by allocation probes)".format(
+    // (3.2's 69 and 75 KB; 88 KB is 3.3's and 3.4's limit: design Question 1)
+    check.(sizes.every({ arg size; (size > 0) and: { size < 88 } }),
+        "memory: each grain synth takes under 88 KB of the pool (% KB, by allocation probes)".format(
             [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", ")));
     group.free; privateBus.free;
 };
@@ -136,26 +139,38 @@ var checkGrainSynthSizes = {
 // voiceOn hands it to fadingSynths, and the voice still holds no more than
 // its live synths, one fading and one cutting set. Each time, on norns'
 // 8192 KB pool (memSize, set before boot), probeCount 256 KB probes (twelve
-// on standard: 3 MB, 3.5's second note per voice plus 1 MB; sixteen on
-// high: 4 MB; see docs/notes/engine/memory.md) are sent right after the
+// on standard: 3 MB, 3.5's second note per voice plus 1 MB; fourteen on
+// high: 3.5 MB; see docs/notes/engine/memory.md) are sent right after the
 // last command, with no sync between, inside the 50 ms kill fade, then the
 // flood of small probes (what is left beyond them) and the node tree, in
 // that order: the cutting synths must still be there (so the probes meet
 // the real peak) and every 256 KB probe must allocate. run_engine_check.sh
 // also fails on any "alloc failed". engage (optional) runs right after each
 // scenario's last command, before the probes (the high run's spectral
-// freeze). Returns the free KB at each peak.
+// freeze). The all-buffer worst case: every voice switched between three
+// slots 0.2 s apart, so it holds a live, a fading and a cutting
+// \strataGrainBuf (21 in all, the largest grain def). Eight recordings: the
+// spaced mixed case with every slot recording an input take, twelve probes
+// on both tiers (recordingFits gathers each tier's answer for one check).
+// Returns the free KB at each peak.
+var recordingFits = List.new;
 var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var command = { arg name ... args; h.commandTo(target, name, *args) };
     var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
     var startAll = { target.numVoices.do(startVoice) };
     var switchAll = { arg sourceOf; target.numVoices.do({ arg voice; command.(\setGrainSource, voice, sourceOf.(voice)) }) };
     var sourceSteps = [{ arg voice; voice + 1 }, { target.numBuffers + 1 }, { 0 }];
+    var slotOf = { arg voice, step; ((voice + step) % target.numBuffers) + 1 };
     var probeBus = Bus.control(server, probeCount), figures = List.new;
-    var probeHeadroom = { arg label;
+    var recordingProbes = 12;
+    // scenario: names the case in the check line ("worst case", "all-buffer
+    // worst case"); count: the probes (probeCount unless given); report: a
+    // function of (all allocated, free KB) instead of the floor's own check
+    var probeHeadroom = { arg label, scenario = "worst case", count, report;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
-        var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB;
-        probes = probeCount.collect({ arg index;
+        var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
+        count = count ? probeCount;
+        probes = count.collect({ arg index;
             Synth(\strataCheckMemProbe, [\out, probeBus.index + index], target.processGroup, \addToTail)
         });
         flood = floodStart.value;
@@ -163,16 +178,24 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         // answers /n_info for each one there and (errors off) nothing for one gone
         watcher = OSCFunc({ arg msg; infos.add(msg[1]) }, '/n_info', server.addr);
         server.sendBundle(nil, ['/error', -1], *cutting.collect({ arg id; ['/n_query', id] }));
-        freeKB = (probeCount * 256) + (floodResult.(flood) * probeKB) + reserveKB;
+        freeKB = (count * 256) + (floodResult.(flood) * probeKB) + reserveKB;
         watcher.free;
         present = cutting.count({ arg id; infos.includes(id) });
-        values = h.readBus(probeBus);
+        if (scenario == "all-buffer worst case") {
+            // by now the 50 ms cuts have ended: 14 left, plus the 7 that were cutting
+            var running = h.synthNames(target.processGroup).count({ arg name; name == \strataGrainBuf });
+            check.((present == target.numVoices) and: { running >= (target.numVoices * 2) },
+                "memory: the all-buffer case holds 21 strataGrainBuf (% cutting, % still running after the cuts)".format(present, running));
+        };
+        values = h.readBus(probeBus).keep(count);
+        fits = (values.size == count) and: { values.every({ arg value; value > 0.5 }) };
         figures.add(freeKB.round(1));
         check.((cutting.size > 0) and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start (%: % of %)".format(label, present, cutting.size));
-        check.((values.size == probeCount) and: { values.every({ arg value; value > 0.5 }) },
-            "memory: % free at the % worst case: % (about % KB free, the engine using about % KB more than idle)".format(
-                floorLabel, target.tier, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
+        if (report.notNil) { report.value(fits, freeKB) } {
+            check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
+                floorLabel, target.tier, scenario, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
+        };
         probes.do(_.free);
         probeBus.setAll(0);
         2.5.wait; server.sync;
@@ -197,15 +220,47 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer)");
     h.stopAllVoices(target);
+    // all-buffer: 21 \strataGrainBuf, reading slots that hold audio
+    target.numBuffers.do({ arg slot; command.(\loadBuffer, slot, h.stereoPath, 0) });
+    h.waitFor({ target.bufferFrames.every({ arg frames; frames > 0 }) }, 3);
+    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
+    startAll.value;
+    server.sync; 0.2.wait;
+    2.do({ arg step;
+        if (step > 0) { 0.2.wait; server.sync };
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
+    });
+    engage.value(command);
+    probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart", "all-buffer worst case");
+    h.stopAllVoices(target);
+    // eight recordings at the mixed worst case (spaced, as the first scenario)
+    target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, 0, 0, 0, 0) });
+    h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
+    startAll.value;
+    server.sync; 0.2.wait;
+    sourceSteps.do({ arg sourceOf, step;
+        if (step > 0) { 0.2.wait; server.sync };
+        switchAll.(sourceOf);
+    });
+    target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
+    startAll.value;
+    engage.value(command);
+    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, eight slots recording", nil, recordingProbes,
+        { arg fits, freeKB;
+            recordingFits.add([target.tier, fits and: { target.recordSynths.every({ arg synth; synth.notNil }) }, freeKB.round(10)]);
+        });
+    target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
+    h.stopAllVoices(target);
     probeBus.free;
     figures
 };
 
 // The high run (needs the performance setting): the default engine is
-// replaced by a high one (one engine alone in the pool), the three worst
-// cases run with sixteen probes and spectral freeze engaged on every voice
+// replaced by a high one (one engine alone in the pool), the worst cases
+// run with fourteen probes (3.5 MB) and spectral freeze engaged on every voice
 // (a spectral writer per voice reading a ring: the first two scenarios end
-// on the synth source; the third ends on the slots, where spectral holds),
+// on the synth source; the recalls and the all-buffer case end on the
+// slots, where spectral holds),
 // and the default engine comes back for the areas that follow.
 // PV_MagFreeze takes its few KB once its first frame is analyzed (about
 // 21 ms in): after the probes have allocated, while they are still held,
@@ -228,7 +283,7 @@ var checkHighWorstCase = {
     check.(high.tier == \high, "memory: the high engine runs tier high (got %, % s slots, % s history)".format(
         high.tier, high.bufferSeconds, high.historySeconds));
     spectral = List.new;
-    checkMemoryWorstCase.(high, 16, "4 MB", { arg command;
+    checkMemoryWorstCase.(high, 14, "3.5 MB", { arg command;
         spectralFreezeAll.(command);
         spectral.add(high.numVoices.collect({ arg voice; high.ringWriterFor(voice) })
             .count({ arg writer; writer.defName.asSymbol == \strataRingWriteSpectral }));
@@ -258,6 +313,9 @@ check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
         idleFreeKB.round(10), probeKB.round(0.1)));
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
+check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
+    "memory: 3 MB free on both tiers with eight recordings running (%)".format(
+        recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));
 h.stopAllVoices;
 reserveBus.free;
 }
