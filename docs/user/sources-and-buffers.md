@@ -12,6 +12,10 @@ Every voice can grain something other than its own synth. Its **source** (the BU
 - The source itself is never randomized or mutated, and lock keeps the buffer parameters still
 - Several voices can read the same buffer, and any voice can be switched back to its synth at any time
 
+## Recording
+
+Record the live input, the master or a single voice into a buffer ([Record group](params.md#record-group)). With feedback 0 and loop off, a recording is a **take**: it replaces the buffer, which is silent until the take ends. With feedback above 0 or loop on it is a **playable recording**: the buffer keeps playing while it records, its length becomes the longer of its own and the recording's, and each frame keeps the old audio times the feedback; when it ends, the buffer is `take <n>`. A recording into a buffer loaded from a file at another sample rate is a take (the buffer page says `replaced (rate)`). A recording that waits for a beat, a bar or a level shows `ARM` until it starts. Post-master is Strata's own output after its effects; norns' monitor, softcut and TAPE are mixed outside SuperCollider and are not recorded.
+
 ## Saving and restoring buffers
 
 Strata writes audio to disk only when a recording finishes and when you save a buffer:
