@@ -533,7 +533,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "playheads clock", "scan holds", "waveform loop", "buffer start reload", "buffer polls and timers",
+  "lfos", "playheads clock", "scan holds", "waveform loop", "buffer start reload", "buffer polls and timers", "record poll",
   "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -615,6 +615,7 @@ test("cleanup runs every registered step in today's order", function()
   for n = 1, local_value("NUM_LFOS") do watch_method(S.lfos[n], "stop", "lfos") end
   watch_method(S.buffer_polls.state, "stop", "buffer polls and timers")
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
+  watch_method(context.polls.polls.recordState, "stop", "record poll")
   for _, input_poll in pairs(S.lib.pages_buffer.meter.polls) do watch_method(input_poll, "stop", "input meter") end
   watch_field(S.midi_device, "event", "midi handler")
   local real_voice_off = engine.voiceOff
@@ -683,6 +684,7 @@ local function start_steps()
     { "mutation metro", { "metro created" } },
     { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
       "poll started bufferLoadFailed", "poll set bufferSaveResult", "poll started bufferSaveResult" } },
+    { "record poll", { "poll set recordState", "poll started recordState" } },
     { "arc", { "arc connected" } },
     { "grids", { "grid connected", "print grid 1 connected: 16x16", "grid connected", "grid redrawn" } },
     { "midi", { "midi connected" } },

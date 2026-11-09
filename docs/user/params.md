@@ -35,6 +35,15 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 How buffers are saved, written to disk and restored at startup is described in [Saving and restoring buffers](sources-and-buffers.md#saving-and-restoring-buffers).
 
+## Record (group)
+Settings for the BUFFER page's record key and each buffer's Record trigger. They are saved in PSETs, not in scenes. Record duration and level are in the buffers group.
+- Record source: input (default), pre-master (the master before its effects), post-master (after them, Strata's own output only: norns' monitor, softcut and TAPE are mixed outside SuperCollider and not heard) or voice 1-7
+- Record feedback (0-100%, default 0): how much of the old audio a recording keeps. At 0 with loop off, a recording replaces the buffer (a take); otherwise it plays on while it records
+- Record loop (off/on): wrap over the first record-duration seconds until stopped
+- Record threshold (off, -48 to -6 dB in 6 dB steps): wait for the source to pass this level before recording
+- Record sync (off, beat, bar): start on the next beat or bar of the norns clock, at least 0.25 s ahead. With sync on, the length is record beats (1-64, default 16) at the tempo when it starts, at most the buffer length
+- Trigger Record while a recording waits or records to stop it
+
 ## Positions (group)
 - Scrub friction (0-100%, default 100%): how far the arc's scrub ring keeps going when you let go of it. At 100% the ring moves the buffer position directly and stops with your finger; below it, a flick keeps the position moving in the same direction and slows down, for longer the lower the friction (about 4 s at 0%). Saved in PSETs, not in scenes
 

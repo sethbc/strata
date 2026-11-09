@@ -419,6 +419,7 @@ return function(S)
     end
   end)
 
+  register_params("record", S.lib.record.add_params)
   register_params("positions", function() S.lib.positions.add_params() end)
 
   register_params("midi", function()

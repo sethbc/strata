@@ -199,4 +199,196 @@ test("record_buffer calls S.lib.buffers.recording_started for the slot", functio
   S.lib.buffers.recording_started = original
 end)
 
+
+-- 3.3 record settings, synced takes and playable recordings
+
+local function record_state_value(number, state, slot) return ((number * 4) + state) * 8 + (slot - 1) end
+local function S_record_state(slot) return local_value("S").lib.record.state(slot) end
+local function recording_calls(context) return context.calls_named("recordBuffer") end
+
+test("record params default to 3.2's take and are not scene fields", function()
+  local context = load_strata(); finish_startup(context)
+  local ids = {"record_source", "record_feedback", "record_loop", "record_threshold", "record_sync", "record_beats"}
+  assert_equal(params:get("record_source"), 1); assert_equal(params:string("record_source"), "input")
+  assert_equal(params:get("record_feedback"), 0); assert_equal(params:get("record_loop"), 1)
+  assert_equal(params:get("record_threshold"), 1); assert_equal(params:get("record_sync"), 1)
+  assert_equal(params:get("record_beats"), 16)
+  assert_equal(params:lookup_param("strata_record").n, 6, "the strata_record group holds exactly 6 params")
+  capture_scene(1)
+  local scene = local_value("scenes")[1]
+  local function holds(table_value, id, seen)
+    seen = seen or {}
+    if type(table_value) ~= "table" or seen[table_value] then return false end
+    seen[table_value] = true
+    for key, value in pairs(table_value) do
+      if key == id or holds(value, id, seen) then return true end
+    end
+    return false
+  end
+  for _, id in ipairs(ids) do assert_true(not holds(scene, id), id .. " is not in a scene") end
+end)
+
+test("the record settings reach recordBuffer", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_source", 6); params:set("record_feedback", 50); params:set("record_loop", 2)
+  params:set("record_threshold", 6); params:set("record_duration", 4)
+  context.clear_engine_calls()
+  record_buffer(1)
+  local args = recording_calls(context)[1].args
+  assert_equal(args[1], 0); assert_equal(args[2], 4.0); assert_equal(args[3], 1.0)
+  assert_near(args[4], 0.5, 1e-9); assert_equal(args[5], 5)
+  assert_near(args[6], 0.0631, 1e-4); assert_equal(args[7], 1); assert_equal(args[8], 0.0)
+end)
+
+test("a synced take waits for the next beat or bar with a 0.25 s lead", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("clock_tempo", 120); context.set_time(1.8)
+  params:set("record_sync", 2)
+  context.clear_engine_calls(); record_buffer(1)
+  local args = recording_calls(context)[1].args
+  assert_near(args[8], 0.7, 1e-6, "next beat"); assert_near(args[2], 8.0, 1e-6, "16 beats at 120 BPM")
+  params:set("record_sync", 3)
+  clear_buffer(2); context.clear_engine_calls(); record_buffer(2)
+  assert_near(recording_calls(context)[1].args[8], 2.2, 1e-6, "next bar")
+end)
+
+test("a length in beats is capped at the slot length", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("clock_tempo", 60); params:set("record_sync", 2); params:set("record_beats", 64)
+  context.clear_engine_calls(); record_buffer(1)
+  assert_equal(recording_calls(context)[1].args[2], 16.0)
+end)
+
+test("K3 while armed or recording sends stopRecord", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 3)
+  context.clear_engine_calls(); record_buffer(1)
+  assert_equal(#recording_calls(context), 1)
+  context.polls.fire("recordState", 32)
+  assert_equal(S_record_state(1).phase, "armed")
+  record_buffer(1)
+  assert_equal(#context.calls_named("stopRecord"), 1); assert_equal(context.calls_named("stopRecord")[1].args[1], 0)
+  assert_equal(#recording_calls(context), 1, "no second recordBuffer")
+end)
+
+test("a replace take's timer starts at its recording report", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 3); params:set("record_duration", 4)
+  local pending = context.clock.pending_count()
+  record_buffer(1)
+  assert_equal(context.clock.pending_count(), pending, "no take timer while armed")
+  assert_equal(S_record_state(1).started_at, nil)
+  context.set_time(3)
+  context.polls.fire("recordState", record_state_value(1, 1, 1))
+  assert_equal(context.clock.pending_count(), pending + 1, "the report starts it")
+  assert_equal(S_record_state(1).phase, "recording"); assert_equal(S_record_state(1).started_at, 3)
+  local buffers = local_value("buffers")
+  wake_buffer_clock(context, 1)
+  assert_true(buffers[1].finishing, "record_duration later it finishes")
+end)
+
+test("a playable recording stays loaded, shows its length and becomes take n when it ends", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2008)
+  assert_true(buffers[3].loaded)
+  buffers[3].records_sent = 1
+  params:set("record_feedback", 50); params:set("record_duration", 12)
+  record_buffer(3)
+  assert_equal(S_record_state(3).kind, "playable"); assert_equal(S_record_state(3).number, 2)
+  assert_equal(buffers[3].name, "drone.wav"); assert_true(buffers[3].loaded); assert_equal(buffers[3].seconds, 8)
+  context.polls.fire("recordState", record_state_value(2, 1, 3))
+  context.polls.fire("bufferState", 2012)
+  assert_equal(buffers[3].seconds, 12); assert_true(buffers[3].loaded)
+  assert_true(not buffers[3].finishing, "never settles")
+  context.polls.fire("recordState", record_state_value(2, 2, 3))
+  assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
+  assert_true(buffers[3].loaded); assert_equal(S_record_state(3), nil); assert_true(not buffers[3].recording)
+end)
+
+test("a canceled armed replace take leaves its slot empty; a canceled playable one keeps it", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", 1006)
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", 32); context.polls.fire("recordState", 56)
+  assert_equal(buffers[1].name, "empty"); assert_true(not buffers[1].loaded); assert_true(not buffers[1].recording)
+  params:set("record_sync", 1); params:set("record_feedback", 50)
+  record_buffer(2); context.polls.fire("recordState", 33); context.polls.fire("recordState", 57)
+  assert_equal(buffers[2].name, "b.wav"); assert_true(buffers[2].loaded); assert_equal(buffers[2].seconds, 6)
+  assert_true(not buffers[2].recording)
+end)
+
+test("a stale recordState report never acts on a newer recording", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  buffers[3].records_sent = 1
+  params:set("record_sync", 3)
+  record_buffer(3)
+  assert_equal(buffers[3].records_sent, 2)
+  context.polls.fire("recordState", record_state_value(1, 1, 3))
+  assert_equal(S_record_state(3).phase, "armed", "record 1's report changes nothing")
+  context.polls.fire("recordState", record_state_value(2, 1, 3))
+  context.polls.fire("recordState", record_state_value(1, 1, 3))
+  assert_equal(S_record_state(3).number, 2); assert_equal(S_record_state(3).phase, "recording")
+  context.polls.fire("recordState", record_state_value(1, 3, 3))
+  assert_true(buffers[3].recording, "a stale cancel changes nothing")
+end)
+
+test("a playable recording into a 44.1 kHz slot flashes replaced (rate)", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", 8)
+  buffers[1].sample_rate = 44100
+  params:set("record_feedback", 50)
+  local_value("S").lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
+  record_buffer(1)
+  assert_equal(S_record_state(1).kind, "take")
+  assert_equal(local_value("S").lib.ui_flash.text("hints"), "buf 1: replaced (rate)")
+end)
+
+test("any_recording and any_armed follow every slot", function()
+  local context = load_strata(); finish_startup(context)
+  local record = local_value("S").lib.record
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", 32)
+  assert_true(record.any_armed()); assert_true(not record.any_recording())
+  params:set("record_sync", 1)
+  record_buffer(2); context.polls.fire("recordState", 41)
+  assert_true(record.any_armed()); assert_true(record.any_recording())
+  context.polls.fire("recordState", record_state_value(1, 3, 1))
+  assert_true(not record.any_armed(), "slot 1's cancel ends its arming")
+  context.polls.fire("recordState", 57)
+  assert_true(not record.any_recording(), "slot 2's cancel ends its recording")
+end)
+
+test("the record poll starts at init and stops at cleanup", function()
+  local context = load_strata(); finish_startup(context)
+  assert_true(context.polls.polls.recordState.running)
+  cleanup()
+  assert_true(not context.polls.polls.recordState.running)
+end)
+
+
+test("a late armed report never regresses a recording", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 3)
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(1, 1, 1))
+  context.polls.fire("recordState", record_state_value(1, 0, 1))
+  assert_equal(S_record_state(1).phase, "recording")
+end)
+
+test("a loop recording downgraded by the sample rate is sent with loop 0", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", 8)
+  buffers[1].sample_rate = 44100
+  params:set("record_loop", 2)
+  context.clear_engine_calls(); record_buffer(1)
+  assert_equal(recording_calls(context)[1].args[7], 0, "a replace take never loops")
+  assert_equal(S_record_state(1).kind, "take"); assert_equal(S_record_state(1).loop, false)
+end)
+
 end
