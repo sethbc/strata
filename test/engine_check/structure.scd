@@ -98,12 +98,35 @@ names = synthNames.(context.xg);
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;
-check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + 6),
-    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, filter x3, delay, reverb and master (got %)".format(
+check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + engine.numVoices + 6),
+    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, the stages, filter x3, delay, reverb and master (got %)".format(
         engine.numVoices - 1, names.size));
 check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
 check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");
 check.(grainIndices.maxItem < names.indexOf(\strataFilter), "grain/mod synths run before the effects chain");
+if (engine.respondsTo(\voiceMixKey).not) {
+    check.(false, "structure: the node order is voiceGroup, processGroup (synth-source grain synths, then each voice's mix group before its mod synth), then the effects chain");
+} {
+    // the groups' order in the engine group's tree: voiceGroup, processGroup,
+    // then the effects chain; inside processGroup the synth-source grain
+    // synths (head), then each voice's mix group, its mod synth just after it
+    var nodes = h.synthTree(context.xg), synthPaths, firstStage, lastSynthGrain;
+    var positionOf = { arg def; nodes.detectIndex({ arg node; node.def == def }) };
+    var stageAndMod = { arg voice;
+        var stageAt = nodes.detectIndex({ arg node; (node.def == \strataVoiceMix) and: { node.controls[\mirrorOut] == engine.granBuses[voice].index } });
+        var modAt = nodes.detectIndex({ arg node; (node.def == \strataMod) and: { node.controls[\in] == engine.granBuses[voice].index } });
+        [stageAt, modAt]
+    };
+    synthPaths = engine.areaState[\mix][\synthPaths].collect(_.index);
+    firstStage = nodes.detectIndex({ arg node; node.def == \strataVoiceMix });
+    lastSynthGrain = nodes.selectIndices({ arg node; (node.def == \strataGrainRing) and: { synthPaths.includes(node.controls[\out].asInteger) } }).maxItem;
+    check.((positionOf.(\strataInput) < firstStage) and: { nodes.detectIndex({ arg node; node.def == voiceDefs[0] }) < firstStage }
+        and: { lastSynthGrain.notNil } and: { lastSynthGrain < firstStage }
+        and: { (0..engine.numVoices - 1).every({ arg voice;
+            var pair = stageAndMod.(voice); pair[0].notNil and: { (pair[1].isNil) or: { pair[1] == (pair[0] + 1) } } }) }
+        and: { firstStage < positionOf.(\strataFilter) },
+        "structure: the node order is voiceGroup, processGroup (synth-source grain synths, then each voice's mix group before its mod synth), then the effects chain");
+};
 check.(names.copyRange(names.size - 4, names.size - 1).asArray == chainDefs,
     "xg ends filter -> delay -> reverb -> master (got %)".format(names.copyRange(names.size - 4, names.size - 1)));
 check.(names.last == \strataMaster, "master runs last inside xg (M5)");
@@ -150,9 +173,10 @@ h.stopAllVoices;
     h.waitFor({ engine.bufferFrames[0] > 0 });
     ids = 2.collect({ server.nextNodeID });
     // both grain synths in one bundle, so both start in one block
+    // (3.2's def has the sends: at 0 its dry output is the signal itself)
     server.sendBundle(nil,
         (['/s_new', \strataGrainBuf, ids[0], 1, group.nodeID] ++ args.(buses[0])).asOSCArgArray,
-        (['/s_new', h.def32[\grainBuf], ids[1], 1, group.nodeID] ++ args.(buses[1])).asOSCArgArray);
+        (['/s_new', h.def32[\grainBuf], ids[1], 1, group.nodeID] ++ args.(buses[1]) ++ [\delaySend, 0, \reverbSend, 0]).asOSCArgArray);
     server.sync;
     Synth(\strataCheckBusDiff, [\a, buses[0], \b, buses[1], \out, peaks], group, \addToTail);
     0.3.wait;                  // past the grain synths' attack

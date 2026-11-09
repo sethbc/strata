@@ -66,9 +66,10 @@
     // The two grain SynthDefs. Both declare the same grain controls (their
     // arg lists are literal, so the Lua stub reads them) and share
     // grainBody; they differ only in what they read and where a grain
-    // starts. The 3.2 controls past today's (history ... reverbSend) have
-    // neutral defaults: no variation, the whole slot as the loop, no
-    // freeze, no voice filter, sends at 1. 3.3's: scrubRate, scanHold and
+    // starts. The 3.2 controls past today's (history ...) have neutral
+    // defaults: no variation, the whole slot as the loop, no freeze. The
+    // voice filter, level, sends, mirror and tap are the voice's stage
+    // (StrataMix.sc). 3.3's: scrubRate, scanHold and
     // t_scanReset default to no scrub, and recHeadBus (a named control, as
     // its default is this engine's idle head bus: the record area's) to the
     // idle head; the engine sends a buffer synth its slot's (slotLengthPairs).
@@ -80,33 +81,25 @@
         SynthDef(\strataGrainRing, {
             arg out, gate=1, bufL=0, bufR=0, phaseBus=0, bufScan=0,
             grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
-            envBuf = -1, grainMode=0, t_trig=0, velocity=1, amp=1, bend=1, kill=0, pan=0,
-            accentAmt=0, mirrorOut=0, mirrorLevel=0, modLevel=0, rateLevel=1,
+            envBuf = -1, grainMode=0, t_trig=0, bend=1, kill=0, pan=0, rateLevel=1,
             modBus1=0, modBus2=0, modBus3=0,
-            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             history=0, ringLevel=1, freeze=0, freezeMode=0,
             reverseProb=0, pitchJitter=0, panJitter=0, sizeJitter=0,
             interval1=0, interval2=0, interval3=0, interval4=0,
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
-            loopStart=0, loopLength=1,
-            filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
-            delaySend=1, reverbSend=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
-                t_trig: t_trig, velocity: velocity, amp: amp, bend: bend, kill: kill, pan: pan,
-                accentAmt: accentAmt, mirrorOut: mirrorOut, mirrorLevel: mirrorLevel, modLevel: modLevel,
-                rateLevel: rateLevel, modBuses: [modBus1, modBus2, modBus3],
-                modAmpAmts: [modAmpAmt1, modAmpAmt2, modAmpAmt3], modFreqAmts: [modFreqAmt1, modFreqAmt2, modFreqAmt3],
+                t_trig: t_trig, bend: bend, kill: kill, pan: pan, rateLevel: rateLevel,
+                modBuses: [modBus1, modBus2, modBus3], modFreqAmts: [modFreqAmt1, modFreqAmt2, modFreqAmt3],
                 ringLevel: ringLevel, reverseProb: reverseProb, pitchJitter: pitchJitter, panJitter: panJitter,
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
-                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
-                filterType: filterType, filterFreq: filterFreq, filterRes: filterRes, filterMix: filterMix,
-                delaySend: delaySend, reverbSend: reverbSend
+                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote
             );
             this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
@@ -124,45 +117,38 @@
         SynthDef(\strataGrainBuf, {
             arg out, gate=1, bufnumL=0, bufnumR=0, bufFrames=1, bufRateScale=1, bufPos=0, bufRate=1, bufScan=0,
             grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
-            envBuf = -1, grainMode=0, t_trig=0, velocity=1, amp=1, bend=1, kill=0, pan=0,
-            accentAmt=0, mirrorOut=0, mirrorLevel=0, modLevel=0, rateLevel=1,
+            envBuf = -1, grainMode=0, t_trig=0, bend=1, kill=0, pan=0, rateLevel=1,
             modBus1=0, modBus2=0, modBus3=0,
-            modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             history=0, ringLevel=1, freeze=0, freezeMode=0,
             reverseProb=0, pitchJitter=0, panJitter=0, sizeJitter=0,
             interval1=0, interval2=0, interval3=0, interval4=0,
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
-            loopStart=0, loopLength=1,
-            filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
-            delaySend=1, reverbSend=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
-                t_trig: t_trig, velocity: velocity, amp: amp, bend: bend, kill: kill, pan: pan,
-                accentAmt: accentAmt, mirrorOut: mirrorOut, mirrorLevel: mirrorLevel, modLevel: modLevel,
-                rateLevel: rateLevel, modBuses: [modBus1, modBus2, modBus3],
-                modAmpAmts: [modAmpAmt1, modAmpAmt2, modAmpAmt3], modFreqAmts: [modFreqAmt1, modFreqAmt2, modFreqAmt3],
+                t_trig: t_trig, bend: bend, kill: kill, pan: pan, rateLevel: rateLevel,
+                modBuses: [modBus1, modBus2, modBus3], modFreqAmts: [modFreqAmt1, modFreqAmt2, modFreqAmt3],
                 ringLevel: ringLevel, reverseProb: reverseProb, pitchJitter: pitchJitter, panJitter: panJitter,
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
-                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
-                filterType: filterType, filterFreq: filterFreq, filterRes: filterRes, filterMix: filterMix,
-                delaySend: delaySend, reverbSend: reverbSend
+                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote
             );
             this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate,
                 bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
         }).add;
     }
 
-    // The chain both grain SynthDefs share. controls: an Event of the def's
-    // controls (the three crossmod slots as Arrays, the intervals as one).
-    // reader: a function of (trigger, rate, duration, mode) returning an
-    // Event of what the grains read: the left and right buffers (bufL,
-    // bufR), the rate, duration and start (pos, 0-1 of the buffer) each
-    // GrainBuf latches per grain, and an output level (level).
+    // The grain signal both grain SynthDefs share (grainSignal) and its one
+    // Out (grainBody). controls: an Event of the def's controls (the three
+    // crossmod slots as Arrays, the intervals as one). reader: a function of
+    // (trigger, rate, duration, mode) returning an Event of what the grains
+    // read: the left and right buffers (bufL, bufR), the rate, duration and
+    // start (pos, 0-1 of the buffer) each GrainBuf latches per grain, and an
+    // output level (level).
     //   1. The trigger: grainDensity grains per second (grainMode 0) or one
     //      per t_trig (1: retrigger, pattern steps, MIDI notes).
     //   2. Rate and duration: grainRate and grainDur (StrataVariation.sc);
@@ -172,25 +158,23 @@
     //   3. Two stereo GrainBufs, the left buffer's grains panned to -1 and
     //      the right's to +1 (plus grainPan's offset), so the pair stays
     //      sample-aligned and keeps its image; then the slow pan wander
-    //      (Balance2 by panSpread), the voice's pan (panBalance; 0 for the
-    //      synth source) and the voice filter (StrataMix.sc).
-    //   4. The level: the ASR (openedGate, released by gate), the kill fade,
-    //      ringLevel (a 50 ms fade the rings area uses before overwriting a
-    //      ring), the amplitude crossmod (by modLevel) and the accent (by
-    //      accentAmt; velocity is only the accent's levelScale, sampled per
-    //      trigger, so it never rescales a running tail); then voiceOutput
-    //      (StrataMix.sc) writes it and the mirror.
-    grainBody { arg controls, reader;
-        var c = controls, env, accent, modSigs, modSig, rateMod, bendRate, grainMode, mode, trig;
+    //      (Balance2 by panSpread) and the voice's pan (panBalance; 0 for
+    //      the synth source).
+    //   4. The grain synth's own fade (fade): the ASR (openedGate, released
+    //      by gate), the kill fade and ringLevel (a 50 ms fade the rings
+    //      area uses before overwriting a ring). The filter, the voice-level
+    //      gain, the sends, the mirror and the tap are the voice's mix stage
+    //      (StrataMix.sc): one Out writes this synth's path.
+    // Returns (sig: the stereo signal, fade: its fade).
+    grainSignal { arg controls, reader;
+        var c = controls, env, modSigs, rateMod, bendRate, grainMode, mode, trig;
         var vary, rate, dur, read, panOffset, left, right, sig;
 
         env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(c[\gate]), doneAction: 2) * this.killFade(c[\kill]);
-        accent = EnvGen.kr(Env.perc(0.005, 0.4), c[\t_trig], levelScale: c[\velocity]);
 
-        // Crossmod, clamped like the voices': amplitude by modLevel, rate
-        // (kept positive) by rateLevel
+        // Crossmod (rate only; the amplitude crossmod is the stage's):
+        // clamped like the voices', kept positive, by rateLevel
         modSigs = c[\modBuses].collect({ arg bus; In.kr(bus, 1) });
-        modSig = (modSigs * c[\modAmpAmts]).sum.clip(-2, 2) * c[\modLevel];
         rateMod = (modSigs * c[\modFreqAmts]).sum.clip(-0.9, 2);
         bendRate = 1 + (c[\rateLevel] * ((c[\bend] * (1 + rateMod)) - 1));
 
@@ -216,11 +200,15 @@
         sig = left + right;
         sig = Balance2.ar(sig[0], sig[1], LFNoise1.kr(2).range(c[\panSpread].neg, c[\panSpread]));
         sig = this.panBalance(sig, c[\pan]);
-        sig = this.voiceFilter(sig, c[\filterType], c[\filterFreq], c[\filterRes], c[\filterMix]);
 
-        sig = sig * env * read[\level] * c[\ringLevel].lag(0.05)
-            * (c[\amp] * (1 + modSig) * (1 + (accent * c[\accentAmt]))).clip(0, 2);
-        this.voiceOutput(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend]);
+        ^(sig: sig, fade: env * read[\level] * c[\ringLevel].lag(0.05))
+    }
+
+    // One grain synth's output: its signal times its own fade, on the path
+    // of its source (StrataMix.sc)
+    grainBody { arg controls, reader;
+        var result = this.grainSignal(controls, reader);
+        Out.ar(controls[\out], result[\sig] * result[\fade]);
     }
 
     // What a ring grain reads (strataGrainRing): the ring pair, at the rate

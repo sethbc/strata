@@ -19,15 +19,17 @@ var grainCount, voiceCount, grainBefore, voiceBefore, countVoiceAndGrain, maxGra
 var orderNodes, orderGrains, busReadingAt, mirroringAt;
 
 // A voice's grain synths (live or releasing) in node order: [position in
-// nodes, reads the voice bus?] for each synth whose mirrorOut is the voice bus
+// nodes, reads the voice's own ring?] for each grain synth on one of its two
+// paths (engine.voicePathBus)
 var voiceGrainNodes = { arg nodes, voice;
-    var voiceBus = engine.granBuses[voice].index;
+    var paths = [engine.voicePathBus(voice, 0).index, engine.voicePathBus(voice, 1).index];
     nodes.collect({ arg node, position;
-        if (grainDefs.includes(node.def) and: { node.controls[\mirrorOut] == voiceBus }) {
+        if (grainDefs.includes(node.def) and: { paths.includes(node.controls[\out].asInteger) }) {
             [position, (node.def == \strataGrainRing) and: { node.controls[\bufL] == engine.ringBuffersFor(voice, 0)[0].bufnum }]
         }
     }).reject(_.isNil)
 };
+var stageOf = { arg voice; engine.synths[engine.voiceMixKey(voice)] };
 var voiceModPosition = { arg nodes, voice;
     nodes.detectIndex({ arg node; (node.def == \strataMod) and: { node.controls[\in] == engine.granBuses[voice].index } })
 };
@@ -278,17 +280,16 @@ check.(getControl.(grainBuf, \bufnumL) == engine.buffersL[2].bufnum, "source 3 r
 check.(getControl.(grainBuf, \bufPos) == 0.25, "grain controls set before the switch carry over (bufPos)");
 check.(getControl.(grainBuf, \pitchShift) == 2.0, "grain controls carry over (pitchShift)");
 check.(getControl.(grainBuf, \envBuf) == engine.envBuffers[0].bufnum, "grain controls carry over (envBuf)");
-check.(getControl.(grainBuf, \out) == engine.mainBus.index, "strataGrainBuf writes mainBus");
-check.(getControl.(grainBuf, \mirrorOut) == engine.granBuses[0].index, "strataGrainBuf mirrors into the voice bus");
+check.(getControl.(grainBuf, \out) == engine.voicePathBus(0, 3).index, "strataGrainBuf writes the voice's other path");
+check.(getControl.(stageOf.(0), \mirrorOut) == engine.granBuses[0].index, "the stage mirrors the other path into the voice bus");
 check.(getControl.(grainBuf, \bufFrames) == 0, "an empty slot plays with bufFrames 0");
-check.(getControl.(grainBuf, \mirrorLevel) == 1, "the engine turns strataGrainBuf's mirror on (mirrorLevel 1)");
 check.(grainsBeforeOwnMods.value, "a replacement grain synth still runs before its voice's mod synth");
 after = synthNames.(context.xg).size;
 command.(\setGrainSource, 0, 3); server.sync;
 check.(engine.synths[\grain0] === grainBuf and: { synthNames.(context.xg).size == after },
     "setGrainSource with the current source changes nothing");
 command.(\retrigger, 0, 0.5); server.sync;
-check.(getControl.(grainBuf, \velocity) == 0.5, "retrigger carries velocity to strataGrainBuf (for its accent)");
+check.(getControl.(stageOf.(0), \velocity) == 0.5, "retrigger carries velocity to the voice's stage (for its accent)");
 command.(\setModSource, 0, 1, 2);
 command.(\setModAmpAmt, 0, 1, 0.5);
 command.(\setModFreqAmt, 0, 2, 0.25);
@@ -297,9 +298,9 @@ command.(\setVoiceParam, 0, \rq, 0.2);
 command.(\setGrainParam, 0, \bufRate, 0.5);
 server.sync;
 check.(getControl.(grainBuf, \modBus1) == engine.modBuses[2].index, "setModSource reaches strataGrainBuf");
-check.(getControl.(grainBuf, \modAmpAmt1) == 0.5 and: { getControl.(grainBuf, \modFreqAmt2) == 0.25 },
-    "mod amounts reach strataGrainBuf");
-check.(getControl.(grainBuf, \amp).equalWithPrecision(0.3), "the voice's amp sets strataGrainBuf's level");
+check.(getControl.(stageOf.(0), \modAmpAmt1) == 0.5 and: { getControl.(grainBuf, \modFreqAmt2) == 0.25 },
+    "the amp amount reaches the stage and the freq amount strataGrainBuf");
+check.(getControl.(stageOf.(0), \amp).equalWithPrecision(0.3), "the voice's amp sets its stage's level");
 check.(getControl.(grainBuf, \bufRate) == 0.5, "setGrainParam bufRate reaches strataGrainBuf");
 command.(\setGrainSource, 0, 9); server.sync;
 check.(synthNames.(context.xg).count({ arg n; n == \strataGrainBuf }) == 2, "input source uses strataGrainRing (old GrainBuf only releasing)");
@@ -308,21 +309,21 @@ check.(engine.synths[\grain0].defName == \strataGrainRing
     and: { getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, engine.inputSource)[0].bufnum }
     and: { getControl.(engine.synths[\grain0], \phaseBus) == engine.ringBuffersFor(0, engine.inputSource)[2].index },
     "input source: strataGrainRing reads the input ring");
-check.(getControl.(engine.synths[\grain0], \mirrorLevel) == 1
-    and: { getControl.(engine.synths[\grain0], \mirrorOut) == engine.granBuses[0].index },
-    "input source mirrors into the voice bus (so its mod synth keeps feeding crossmod)");
-check.(getControl.(engine.synths[\grain0], \accentAmt) == 1, "input source carries the accent (accentAmt 1: no voice synth accents it)");
-check.(getControl.(engine.synths[\grain0], \amp).equalWithPrecision(0.3), "the voice's amp sets the input grain level");
+check.(getControl.(stageOf.(0), \mirrorOut) == engine.granBuses[0].index,
+    "input source: the stage mirrors into the voice bus (so its mod synth keeps feeding crossmod)");
+check.(getControl.(engine.synths[\grain0], \out) == engine.voicePathBus(0, 9).index,
+    "input source: the grain synth writes the voice's other path (its stage applies the level and accent)");
+check.(getControl.(stageOf.(0), \amp).equalWithPrecision(0.3), "the voice's amp sets its stage's level");
 check.(getControl.(engine.synths[\grain0], \pitchShift) == 2.0, "grain controls carry over to the input source");
 command.(\retrigger, 0, 0.75); server.sync;
-check.(getControl.(engine.synths[\grain0], \velocity) == 0.75, "retrigger carries velocity to the input grain synth");
+check.(getControl.(stageOf.(0), \velocity) == 0.75, "retrigger carries velocity to the stage of an input voice");
 // amplitude crossmod reaches an input-sourced voice through its grain synth
-check.(getControl.(engine.synths[\grain0], \modLevel) == 1, "input source: crossmod on (modLevel 1)");
 check.(getControl.(engine.synths[\grain0], \modBus1) == engine.modBuses[2].index
-    and: { getControl.(engine.synths[\grain0], \modAmpAmt1) == 0.5 },
-    "input source: the grain synth reads its routed mod bus with the slot's amp amount");
+    and: { getControl.(stageOf.(0), \modBus1) == engine.modBuses[2].index }
+    and: { getControl.(stageOf.(0), \modAmpAmt1) == 0.5 },
+    "input source: the grain synth reads its routed mod bus (rate); the stage reads it for the level, with the slot's amp amount");
 command.(\setModAmpAmt, 0, 2, 0.75); server.sync;
-check.(getControl.(engine.synths[\grain0], \modAmpAmt2) == 0.75, "setModAmpAmt reaches an input-sourced voice's grain synth");
+check.(getControl.(stageOf.(0), \modAmpAmt2) == 0.75, "setModAmpAmt reaches an input-sourced voice's stage");
 command.(\setModAmpAmt, 0, 2, 0.0);
 command.(\setGrainSource, 0, 0); server.sync;
 check.(engine.synths[\voice0].notNil, "returning to synth restarts the voice synth");
@@ -335,12 +336,8 @@ check.(getControl.(engine.synths[\voice0], \modBus1) == engine.modBuses[2].index
     and: { getControl.(engine.synths[\voice0], \modAmpAmt1) == 0.5 },
     "the restarted voice synth keeps its crossmod routing");
 check.(getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, 0)[0].bufnum
-    and: { getControl.(engine.synths[\grain0], \mirrorLevel) == 0 }
-    and: { getControl.(engine.synths[\grain0], \accentAmt) == 0 }
-    and: { getControl.(engine.synths[\grain0], \amp) == 1 },
-    "synth source: grain reads the voice ring, no mirror, no grain accent, unity level");
-check.(getControl.(engine.synths[\grain0], \modLevel) == 0,
-    "synth source: the grain synth's crossmod is off (the voice synth applies it)");
+    and: { getControl.(engine.synths[\grain0], \out) == engine.voicePathBus(0, 0).index },
+    "synth source: grain reads the voice ring and writes the voice's synth path (no mirror, no level)");
 check.([\modBus1, \modBus2, \modBus3].every({ arg control; getControl.(engine.synths[\grain0], control) == silentIndex }),
     "synth source: the grain synth's mod buses are the silent bus, never control bus 0");
 command.(\setGrainSource, 0, 10);

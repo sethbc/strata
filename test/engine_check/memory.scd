@@ -102,7 +102,7 @@ var checkGrainMemorySizes = {
 // bus), so the figure is within a probe / 20 (under 1 KB)
 var checkGrainSynthSizes = {
     var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), count = 20;
-    var ring = engine.ringBuffersFor(0, 0), sizes;
+    var ring = engine.ringBuffersFor(0, 0), sizes, sizes32, stageKB;
     var argsFor = (
         strataGrainRing: [\bufL, ring[0], \bufR, ring[1], \phaseBus, ring[2]],
         strataGrainBuf: [\bufnumL, engine.buffersL[0], \bufnumR, engine.buffersR[0]]
@@ -120,6 +120,31 @@ var checkGrainSynthSizes = {
     check.(sizes.every({ arg size; (size > 0) and: { size < 88 } }),
         "memory: each grain synth takes under 88 KB of the pool (% KB, by allocation probes)".format(
             [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", ")));
+    // ... against check-only copies of 3.2's defs, measured the same way
+    sizes32 = [h.def32[\grainRing], h.def32[\grainBuf]].collect({ arg name, index;
+        var before = floodFit.value, synths, after;
+        var defName = grainDefs[index];
+        synths = count.collect({ Synth(name, [\out, privateBus, \mirrorOut, privateBus, \grainSize, 0.5, \grainDensity, 200]
+            ++ argsFor[defName] ++ engine.mixBusControls.asKeyValuePairs, group) });
+        server.sync; 0.1.wait;
+        after = floodFit.value;
+        synths.do(_.free); server.sync;
+        (before - after) * probeKB / count
+    });
+    check.((sizes.size == 2) and: { (sizes - sizes32).every({ arg saving; saving <= -12 }) },
+        "memory: each grain synth is at least 12 KB under 3.2's (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
+    // the stage's size (design 3.3 §0c.6; it fails above 40 KB, the budget 3.4 keeps)
+    stageKB = if (SynthDescLib.global.at(\strataVoiceMix).isNil) { 0 } {
+        var before = floodFit.value, synths, after;
+        synths = count.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
+            \mirrorOut, privateBus, \tapOut, privateBus, \delaySendOut, privateBus.index, \reverbSendOut, privateBus.index,
+            \fxMixIn, engine.mixBus(\fxMix).index, \modBus1, engine.silentBus, \modBus2, engine.silentBus, \modBus3, engine.silentBus], group) });
+        server.sync; 0.1.wait;
+        after = floodFit.value;
+        synths.do(_.free); server.sync;
+        (before - after) * probeKB / count
+    };
+    check.((stageKB > 0) and: { stageKB < 40 }, "memory: a voice's mix stage takes under 40 KB of the pool (% KB; estimate 35-37)".format(stageKB.round(0.1)));
     group.free; privateBus.free;
 };
 

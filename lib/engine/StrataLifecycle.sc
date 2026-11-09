@@ -11,12 +11,17 @@
                 target: voiceGroup))
     }
 
-    // Modulation output synth, after every grain synth, at the voice's mod speed
+    // Modulation output synth, at the tail of processGroup at the voice's
+    // mod speed, with the voice's mix group moved just before it in the same
+    // bundle: the mirror the stage writes reaches strataMod in the same
+    // block (a re-gated mod synth is already after its group). A group
+    // never ends, so these are plain messages.
     startModSynth { arg voice;
-        ^this.watchVoiceSynth(voice, this.modKey(voice), Synth(\strataMod, [
-            \in, granBuses[voice],
-            \out, modBuses[voice]
-        ] ++ this.modSpeedPairs(voice), target: processGroup, addAction: \addToTail))
+        var mod = Synth.basicNew(\strataMod, context.server);
+        context.server.sendBundle(nil,
+            mod.newMsg(processGroup, [\in, granBuses[voice], \out, modBuses[voice]] ++ this.modSpeedPairs(voice), \addToTail),
+            ['/n_before', this.voiceMixGroup(voice).nodeID, mod.nodeID]);
+        ^this.watchVoiceSynth(voice, this.modKey(voice), mod)
     }
 
     // The voice's mod speed as strataMod controls; empty until Lua has sent one
@@ -38,33 +43,30 @@
     }
 
     // The grain synth for the voice's current source, with its current
-    // grain controls. Buffer and input sources also take the voice-level
-    // controls the grain SynthDef has (level, pan, crossmod, bend). The ring,
-    // mirror, accent, crossmod and rate switches are always set explicitly:
-    // the synth source's strataGrainRing reads the voice's ring with mirror,
-    // accent, amplitude crossmod, pan and rateLevel 0 (its voice synth
-    // already applies them; rateLevel 0 makes the bend and frequency
-    // crossmod term 1) and its mod buses on the silent bus; the input
-    // source's reads the input ring with all of them on, as a buffer
-    // source's strataGrainBuf does. A strataGrainRing is kept in ringReaders
-    // and a strataGrainBuf in grainSlots (with its slot, so a slot change
-    // reaches it in its release too: bufferChanged) until it frees.
+    // grain controls and its source kind's path (out: voicePathBus). Buffer
+    // and input sources also take the voice-level controls the grain SynthDef
+    // has (pan, bend, the frequency crossmod). The rate switch is always set
+    // explicitly: the synth source's strataGrainRing reads the voice's ring
+    // with pan and rateLevel 0 (its voice synth already applies them;
+    // rateLevel 0 makes the bend and frequency crossmod term 1) and its mod
+    // buses on the silent bus, never control bus 0 (the input amplitude
+    // follower on norns); the input source's reads the input ring with
+    // them on, as a buffer source's strataGrainBuf does. A strataGrainRing
+    // is kept in ringReaders and a strataGrainBuf in grainSlots (with its
+    // slot, so a slot change reaches it in its release too: bufferChanged)
+    // until it frees.
     startGrainSynth { arg voice, target, addAction;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
-        var args = [\out, mainBus, \mirrorOut, granBuses[voice]], synth;
+        var args = [\out, this.voicePathBus(voice, source)], synth;
 
         case
         { source == 0 } {
-            // crossmod off, and read from the silent bus, never control bus 0 (the
-            // input amplitude follower on norns)
-            args = args ++ this.ringPairs(voice) ++ [\mirrorLevel, 0, \accentAmt, 0, \modLevel, 0, \rateLevel, 0,
-                \pan, 0, \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
+            args = args ++ this.ringPairs(voice) ++ [\rateLevel, 0, \pan, 0,
+                \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
         }
-        { source == this.inputSource } {
-            args = args ++ this.ringPairs(voice) ++ [\mirrorLevel, 1, \accentAmt, 1, \modLevel, 1, \rateLevel, 1];
-        }
-        { args = args ++ [\mirrorLevel, 1, \accentAmt, 1, \modLevel, 1, \rateLevel, 1] ++ this.bufferSlotPairs(voice) };
+        { source == this.inputSource } { args = args ++ this.ringPairs(voice) ++ [\rateLevel, 1] }
+        { args = args ++ [\rateLevel, 1] ++ this.bufferSlotPairs(voice) };
         synth = this.watchVoiceSynth(voice, this.grainKey(voice),
             Synth(defName, args ++ this.grainControlPairs(voice), target, addAction));
         case
@@ -99,23 +101,17 @@
     }
 
     // A new grain synth for the voice's source, placed so the node order
-    // holds after any history of switches: one that reads the voice bus
-    // (synth source) at the head of processGroup, so it runs before every
-    // grain synth that mirrors into a voice bus and never re-grains a
-    // mirror; one that mirrors (buffer and input sources) at the tail of
-    // processGroup, then moved before the voice's running strataMod (the
-    // mod synth started or re-gated next is put after it when there is
-    // none). Never created next to another synth: that one may already
-    // have freed on the server without sclang knowing yet (an /s_new to a
-    // missing target creates nothing, leaving a grain synth that never
-    // frees). A move to a freed mod synth just fails (quietly: sendToSynth);
-    // its onFree restart goes to the tail, after the grain synth.
+    // holds after any history of switches: the synth source's at the head
+    // of processGroup (it writes the voice's synth path; the stage reads it
+    // later in processGroup), any other at the head of the voice's mix
+    // group, so its stage, at the group's tail, reads it in the same block.
+    // Never created next to another synth: that one may already have freed
+    // on the server without sclang knowing yet (an /s_new to a missing
+    // target creates nothing, leaving a grain synth that never frees); a
+    // group never ends.
     startPlacedGrainSynth { arg voice;
-        var modSynth = synths[this.modKey(voice)], grainSynth;
         if (grainSource[voice] == 0) { ^this.startGrainSynth(voice, processGroup, \addToHead) };
-        grainSynth = this.startGrainSynth(voice, processGroup, \addToTail);
-        if (modSynth.notNil) { this.sendToSynth(grainSynth.moveBeforeMsg(modSynth)) };
-        ^grainSynth
+        ^this.startGrainSynth(voice, this.voiceMixGroup(voice), \addToHead)
     }
 
     // Start a voice: every synth it still has is re-gated instead of
@@ -131,9 +127,8 @@
     // both as the voice's fadingSynths (fadeSupersededSynths), so the next
     // switch or mismatched start can cut them and the voice holds at most
     // its live synths, one fading and one cutting set (#46). New grain
-    // synths are placed by startPlacedGrainSynth; a mod synth re-gated
-    // after a new mirroring grain synth went to the tail of processGroup is
-    // moved after it.
+    // synths are placed by startPlacedGrainSynth; the mix group is already
+    // before a re-gated mod synth.
     gateVoice { arg voice;
         var releasing = releasingSynths[voice];
         var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
@@ -173,10 +168,6 @@
 
         if (synths[modKey].isNil and: { stillReleasing.(modKey) }) {
             synths[modKey] = releasing.removeAt(modKey);
-            // after the voice's grain synth when that mirrors into the voice
-            // bus (a move: if this mod synth has just freed, nothing happens
-            // and its replacement starts at the tail)
-            if (grainSource[voice] != 0) { this.sendToSynth(synths[modKey].moveAfterMsg(synths[grainKey])) };
         };
         if (synths[modKey].isNil) { synths[modKey] = this.startModSynth(voice) } {
             this.sendToSynth(synths[modKey].setMsg(\gate, 1, *this.modSpeedPairs(voice)));
@@ -213,8 +204,8 @@
     // Swap a running voice's grain synth for one matching its source: the
     // old one is released (grainRelease) as the new one starts, so one
     // voice never runs two grain paths beyond that release. The new one is
-    // placed by startPlacedGrainSynth (bus-reading at the head, mirroring
-    // before the voice's mod synth), so no grain synth re-grains a mirror.
+    // placed by startPlacedGrainSynth (the synth source's at the head of
+    // processGroup, any other in the voice's mix group).
     // Whatever is fading (what an earlier switch replaced, or what voiceOn
     // handed over when it restarted the voice for another source) is cut
     // first (cutSynth: gone within switchCutTime), so once a switch has been
