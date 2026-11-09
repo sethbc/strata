@@ -162,7 +162,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var sourceSteps = [{ arg voice; voice + 1 }, { target.numBuffers + 1 }, { 0 }];
     var slotOf = { arg voice, step; ((voice + step) % target.numBuffers) + 1 };
     var probeBus = Bus.control(server, probeCount), figures = List.new;
-    var recordingProbes = 12;
+    var recordingProbes = 12, recordingsStarted;
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
     // function of (all allocated, free KB) instead of the floor's own check
@@ -235,7 +235,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     h.stopAllVoices(target);
     // eight recordings at the mixed worst case (spaced, as the first scenario)
     target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, 0, 0, 0, 0) });
-    h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
+    recordingsStarted = h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
     startAll.value;
     server.sync; 0.2.wait;
     sourceSteps.do({ arg sourceOf, step;
@@ -247,7 +247,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, eight slots recording", nil, recordingProbes,
         { arg fits, freeKB;
-            recordingFits.add([target.tier, fits and: { target.recordSynths.every({ arg synth; synth.notNil }) }, freeKB.round(10)]);
+            recordingFits.add([target.tier, fits and: { recordingsStarted }
+                and: { target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, freeKB.round(10)]);
         });
     target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
     h.stopAllVoices(target);

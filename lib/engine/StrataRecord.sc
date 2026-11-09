@@ -25,8 +25,8 @@
         recordFrameBuses = Array.fill(numBuffers, { Bus.control(server, 1) });
         stopReplies = Array.newClear(numBuffers);
         state[\recordCounts] = Array.fill(numBuffers, 0);
-        // Per slot: the head frame and the record length D (StrataLoop.sc's
-        // guard reads them through recHeadBus), -1 and 0 while idle; and one
+        // Per slot: the head frame and the record length D (slotHeadGuard
+        // reads them through recHeadBus), -1 and 0 while idle; and one
         // head that always reads -1 and 0, the grain defs' default
         state[\headBuses] = Array.fill(numBuffers, headBus);
         state[\idleHead] = headBus.value;
