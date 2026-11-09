@@ -800,10 +800,10 @@ test("a command defined in lib/engine is found with its file", function()
   assert_equal(stubs.parse_engine_signatures(text).voiceOn, "iffffff")
   -- the harness, sync_check and the AGENTS.md table check read the same text
   assert_equal(signatures.voiceOn, "iffffff", "the stub's signatures")
-  assert_equal(h.sync_check.sc_commands(text).loadBuffer, "is", "sync_check's commands")
+  assert_equal(h.sync_check.sc_commands(text).loadBuffer, "isf", "sync_check's commands")
   -- a parse error names the file it is in
   local ok, message = pcall(stubs.parse_engine_spec, text .. "\nSynthDef(\\open, { arg x;\n")
-  assert_true(not ok and tostring(message):find("lib/engine/StrataVoices.sc", 1, true), "error names the file: " .. tostring(message))
+  assert_true(not ok and tostring(message):find(text:match(".*// file: (%S+)"), 1, true), "error names the file: " .. tostring(message))
 end)
 
 test("the stub reads a constant given as a method", function()

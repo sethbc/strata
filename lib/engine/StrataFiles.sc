@@ -19,9 +19,11 @@
     }
 
     addFileCommands {
-        // msg: slot index, path of the stereo 16-bit WAV to write
-        this.addCommand(\saveBuffer, "is", { arg msg;
-            this.saveSlot(msg[1], msg[2].asString);
+        // msg: slot index, path of the stereo 16-bit WAV to write, start and
+        // length (3.3's region, fractions of the valid region: the whole
+        // slot until the files package)
+        this.addCommand(\saveBuffer, "isff", { arg msg;
+            this.saveSlot(msg[1], msg[2].asString, msg[3], msg[4]);
         });
 
         // How a save ended: one message per saveBuffer whose write ends,
@@ -53,14 +55,14 @@
 
     // saveBuffer: count the save and write the slot, reporting how the write
     // ended on bufferSaveResult (an abandoned write reports nothing)
-    saveSlot { arg index, path;
+    saveSlot { arg index, path, start = 0, length = 1;
         var save;
         if (this.validBuffer(index).not) { ^this };
         save = this.bufferSaves[index] + 1;
         this.bufferSaves[index] = save;
         this.writeSlot(index, path, { arg written;
             this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
-        });
+        }, start, length);
     }
 
     // true when libsndfile decodes the first `frames` frames of the open
@@ -223,7 +225,7 @@
     // true once the file is in place, false when nothing was written (an
     // empty slot, at once; a folder that cannot be made, a short write or a
     // failed rename); never for a write a newer one abandoned.
-    writeSlot { arg index, path, done;
+    writeSlot { arg index, path, done, start = 0, length = 1;
         var frames = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
         var generation, tempPaths, partPath;

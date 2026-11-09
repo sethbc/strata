@@ -173,7 +173,7 @@ peakProbe = Synth(\strataCheckPeak, [\in, privateBus, \out, peakBus], probeGroup
 loadSlot = { arg seconds, low = 0, high = 1;
     var validFrames;
     writeTestFile.(path, sampleRate, (seconds * sampleRate).round.asInteger, [0, 0]);
-    command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
     validFrames = engine.bufferFrames[slot];
     [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer;
         var first = (low * validFrames).round.asInteger, last = (high * validFrames).round.asInteger;

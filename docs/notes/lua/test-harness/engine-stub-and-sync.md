@@ -16,6 +16,7 @@ It range-checks the values, with limits parsed from the engine source by `stubs.
 Continuous arguments are checked where the engine enforces a limit (`argument_limits`):
 - an FX control its SynthDef clips as it is (`feedback.clip(0, 0.95)`, `freq.lag(0.05).clip(20, 20000)`: the filter's freq, res and mix, the delay's time, feedback and mix);
 - or an argument the command clips itself (`msg[2].clip(0, 1)`: `retrigger`'s velocity);
+- or 3.3's arguments of the three buffer commands, checked by hand in the stub's `checks` table: `loadBuffer`'s `start` at least 0, `saveBuffer`'s `start` and `length` 0-1, `recordBuffer`'s `feedback` and `threshold` 0-1, `source` 0-9 (2 + `numVoices`), `loop` 0-1 and `delay` at least 0;
 - a rounding error of 1e-12 of the limit passes (a 0.01 step makes 0.95 into 0.9500000000000001).
 - The engine clips no crossmod depth or mod speed, but AGENTS.md's table documents their ranges. So `setModAmpAmt`, `setModFreqAmt` and `setModSpeed` are checked against the controlspec of the Lua param that sends them (`DOCUMENTED_LIMITS`, read at call time). A test checks that AGENTS.md's row states that range.
 

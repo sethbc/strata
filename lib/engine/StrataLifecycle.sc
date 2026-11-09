@@ -81,8 +81,8 @@
     }
 
     // A buffer-sourced voice's slot as strataGrainBuf controls (bufnums,
-    // valid length and, for a slot holding audio, rate scale: see
-    // bufferChanged); empty for the synth and input sources
+    // valid length, record head bus and, for a slot holding audio, rate
+    // scale: see bufferChanged); empty for the synth and input sources
     bufferSlotPairs { arg voice;
         var slot = grainSource[voice] - 1;
         if (grainSource[voice].inclusivelyBetween(1, numBuffers).not) { ^[] };
@@ -94,7 +94,8 @@
     // retune the grains still fading out (hasAudio's lag)
     slotLengthPairs { arg index;
         var frames = bufferFrames[index];
-        ^if (frames > 0) { [\bufFrames, frames, \bufRateScale, this.bufferRateScale(index)] } { [\bufFrames, 0] }
+        var head = [\recHeadBus, this.slotHeadBus(index).index];
+        ^(if (frames > 0) { [\bufFrames, frames, \bufRateScale, this.bufferRateScale(index)] } { [\bufFrames, 0] }) ++ head
     }
 
     // A new grain synth for the voice's source, placed so the node order

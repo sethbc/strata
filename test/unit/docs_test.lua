@@ -232,6 +232,37 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
 end)
 
+test("the engine's waveformPoints equals WAVEFORM_POINTS", function()
+  load_strata()
+  local points = tonumber(engine_sources():match("waveformPoints%s*{%s*%^(%d+)%s*}"))
+  assert_equal(points, 64, "the engine's waveformPoints")
+  assert_equal(local_value("WAVEFORM_POINTS"), 64, "lib/constants.lua's WAVEFORM_POINTS")
+  assert_equal(points, local_value("WAVEFORM_POINTS"), "waveformPoints = WAVEFORM_POINTS")
+end)
+
+test("the engine stub checks the 3.3 arguments", function()
+  load_strata()
+  local rejected = {
+    {"recordBuffer", {0, 4, 1, 1.5, 0, 0, 0, 0}, "feedback past 1"},
+    {"recordBuffer", {0, 4, 1, 0, 10, 0, 0, 0}, "source past 9"},
+    {"recordBuffer", {0, 4, 1, 0, 0, -0.1, 0, 0}, "threshold below 0"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 2, 0}, "loop past 1"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, -1}, "delay below 0"},
+    {"loadBuffer", {0, "/x.wav", -1}, "a start below 0"},
+    {"saveBuffer", {0, "/x.wav", 0, 1.5}, "a length past 1"},
+    {"saveBuffer", {0, "/x.wav", -0.1, 1}, "a start below 0"},
+    {"recordBuffer", {0, 4, 1}, "3.2's three arguments"},
+    {"loadBuffer", {0, "/x.wav"}, "3.2's two arguments"},
+    {"saveBuffer", {0, "/x.wav"}, "3.2's two arguments"},
+  }
+  for _, case in ipairs(rejected) do
+    assert_true(not pcall(engine[case[1]], (table.unpack or unpack)(case[2])), "engine." .. case[1] .. " rejects " .. case[3])
+  end
+  assert_true(pcall(engine.recordBuffer, 7, 16, 1, 1, 9, 0.5, 1, 2), "every recordBuffer argument at its limit")
+  assert_true(pcall(engine.loadBuffer, 7, "/x.wav", 12.5), "a start inside the file")
+  assert_true(pcall(engine.saveBuffer, 7, "/x.wav", 0.25, 0.5), "a region of the slot")
+end)
+
 -- The slot length is a tier value (lib/performance.lua): only the standard
 -- tier's is a constant on both sides
 test("the engine's standard buffer length equals STANDARD_BUFFER_SECONDS", function()
@@ -430,9 +461,9 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
     assert_engine_rejects("slot", command, 8)
     assert_engine_rejects("slot", command, -1)
   end
-  assert_engine_rejects("slot", "loadBuffer", 8, "/tmp/x.wav")
-  assert_engine_rejects("slot", "saveBuffer", 8, "/tmp/x.wav")
-  assert_engine_rejects("slot", "recordBuffer", 8, 4, 1)
+  assert_engine_rejects("slot", "loadBuffer", 8, "/tmp/x.wav", 0)
+  assert_engine_rejects("slot", "saveBuffer", 8, "/tmp/x.wav", 0, 1)
+  assert_engine_rejects("slot", "recordBuffer", 8, 4, 1, 0, 0, 0, 0, 0)
   engine.clearBuffer(0); engine.clearBuffer(7)
   -- sources are 0 (synth), 1..numBuffers, numBuffers + 1 (input)
   assert_engine_rejects("source", "setGrainSource", 0, 10)
@@ -739,7 +770,7 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "performance", "rings", "freeze", "variation", "loops", "soak" }
+  "effects", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set

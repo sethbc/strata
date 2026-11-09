@@ -26,8 +26,8 @@ var freeDuringPendingFades = { arg engine, stereoPath;
     var sent, realAddr, nodeFrees, bufferFrees;
     engine.bufferFadeWait = 0.5;
     command.(\clearBuffer, 0);
-    command.(\loadBuffer, 1, stereoPath);
-    command.(\recordBuffer, 2, 0.2, 1.0);
+    command.(\loadBuffer, 1, stereoPath, 0);
+    command.(\recordBuffer, 2, 0.2, 1.0, 0, 0, 0, 0, 0);
     waiting = (0..2).every({ arg slot; engine.slotPlaying(slot) }) and: { engine.recordSynths[2].notNil };
     // every message free sends, in order (free never yields, so only the
     // engine's messages pass through the recording address meanwhile)
@@ -65,8 +65,8 @@ check.(formatOf.(\retrigger) == "if", "retrigger signature is if (voice, velocit
 check.(formatOf.(\setFilter) == "ffif", "setFilter signature is ffif");
 check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
 check.(formatOf.(\setGrainSource) == "ii", "setGrainSource ii");
-check.(formatOf.(\loadBuffer) == "is" and: { formatOf.(\recordBuffer) == "iff" }
-    and: { formatOf.(\clearBuffer) == "i" } and: { formatOf.(\saveBuffer) == "is" }
+check.(formatOf.(\loadBuffer) == "isf" and: { formatOf.(\recordBuffer) == "ifffifif" }
+    and: { formatOf.(\clearBuffer) == "i" } and: { formatOf.(\saveBuffer) == "isff" }
     and: { formatOf.(\stopRecord) == "i" }, "buffer command signatures");
 
 // A fresh engine: empty slots, every voice on its synth, the live input
@@ -110,6 +110,62 @@ check.(names.last == \strataMaster, "master runs last inside xg (M5)");
 check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 h.stopAllVoices;
 
+// The 3.3 surface
+check.(engine.strataAreas.select({ arg area; [\record, \waveform, \positions].includes(area[\name]) })
+    .collect({ arg area; [area[\name], area[\order]] }) == [[\record, 130], [\waveform, 140], [\positions, 150]],
+    "structure: the record, waveform and positions areas run at orders 130, 140 and 150");
+check.(grainDefs.every({ arg name;
+        var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
+        [\recHeadBus, \scrubRate, \scanHold, \t_scanReset].every({ arg control; controls.includes(control) })
+    }), "structure: both grain defs declare recHeadBus, scrubRate, scanHold and t_scanReset");
+check.((engine.waveformPoints == 64) and: { engine.areaState[\waveform][\peakBuffers].size == 8 }
+    and: { engine.areaState[\waveform][\peakBuffers].every({ arg buffer; (buffer.numFrames == 64) and: { buffer.numChannels == 1 } }) },
+    "structure: waveformPoints is 64 and the waveform area holds eight 64-frame peak buffers");
+engine.numVoices.do({ arg voice;
+    command.(\setGrainSource, voice, voice + 1);
+    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+});
+server.sync;
+check.(engine.numVoices.collect({ arg voice;
+        var control = getControl.(engine.synths[engine.grainKey(voice)], \recHeadBus);
+        (control == engine.slotHeadBus(voice).index) and: { control != engine.areaState[\record][\idleHead].index }
+    }).every(_ == true), "structure: every buffer grain synth gets its slot's recHeadBus");
+h.stopAllVoices;
+
+// A triggered buffer grain, from the engine's def and from the copy of 3.2's
+// in the check (h.def32), both with no spreads: identical on the server
+{
+    var rate = server.sampleRate.asInteger, path = h.tempDir +/+ "structure-grain.wav";
+    var period = Array.fill(1000, { arg i; sin(2pi * 7 * i / 1000) * 0.5 });
+    var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    var buses = 2.collect({ Bus.audio(server, 2) }), sink = Bus.audio(server, 2), peaks = Bus.control(server, 2);
+    var group = Group.after(engine.processGroup), ids, values;
+    var args = { arg out; [\out, out, \mirrorOut, sink, \bufnumL, engine.buffersL[0].bufnum, \bufnumR, engine.buffersR[0].bufnum,
+        \bufRateScale, 1, \bufFrames, rate * 2, \bufPos, 0.25, \grainSize, 0.1, \grainMode, 1, \posSpread, 0, \panSpread, 0,
+        \delaySendOut, sink.index, \reverbSendOut, sink.index, \fxMixIn, engine.mixBus(\fxMix).index] };
+    file.openWrite(path);
+    h.writePeriodicSeconds(file, period, 2, rate);
+    file.close;
+    command.(\loadBuffer, 0, path, 0);
+    h.waitFor({ engine.bufferFrames[0] > 0 });
+    ids = 2.collect({ server.nextNodeID });
+    // both grain synths in one bundle, so both start in one block
+    server.sendBundle(nil,
+        (['/s_new', \strataGrainBuf, ids[0], 1, group.nodeID] ++ args.(buses[0])).asOSCArgArray,
+        (['/s_new', h.def32[\grainBuf], ids[1], 1, group.nodeID] ++ args.(buses[1])).asOSCArgArray);
+    server.sync;
+    Synth(\strataCheckBusDiff, [\a, buses[0], \b, buses[1], \out, peaks], group, \addToTail);
+    0.3.wait;                  // past the grain synths' attack
+    server.sendBundle(nil, ['/n_set', ids[0], \t_trig, 1], ['/n_set', ids[1], \t_trig, 1]);
+    0.3.wait; server.sync;
+    values = h.readBus(peaks);
+    group.free; server.sync;
+    command.(\clearBuffer, 0);
+    buses.do(_.free); sink.free; peaks.free;
+    check.((values[1] > 0.001) and: { values[0] < 1e-6 },
+        "structure: a triggered buffer grain with spreads 0 matches 3.2's within 1e-6 (difference %, level %)".format(values[0], values[1]));
+}.value;
+
 // free, on a second engine whose voices 1-3 read slots 1-3
 other = h.startEngine;
 3.do({ arg voice;
@@ -125,4 +181,8 @@ check.((other.buffersL ++ other.buffersR).every({ arg buffer; buffer.bufnum.isNi
 check.(([other.inputBus, other.silentBus, other.mainBus, other.filterBus, other.delayBus, other.reverbBus]
     ++ other.granBuses ++ other.modBuses ++ other.recordFrameBuses).every({ arg bus; bus.index.isNil }),
     "free frees every engine bus");
+check.((other.areaState[\record][\headBuses] ++ other.areaState[\record][\voiceTaps]
+        ++ [other.areaState[\record][\tapSink], other.areaState[\record][\idleHead]]).every({ arg bus; bus.index.isNil })
+    and: { other.areaState[\waveform][\peakBuffers].every({ arg buffer; buffer.bufnum.isNil }) },
+    "structure: free frees the head buses, the voice taps and the peak buffers");
 }

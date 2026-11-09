@@ -562,6 +562,9 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
       if problem then return problem .. " (" .. param_id .. "'s range, which AGENTS.md documents)" end
     end
   end
+  local function at_least(what, value, low)
+    if value < low then return string.format("%s %s is below %g", what, tostring(value), low) end
+  end
   local function enumerated(name, value)
     local limits = spec.enumerations[name]
     if not limits then return nil end
@@ -586,9 +589,22 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
       return voice(args) or named_param(args, spec.grain_params, "the grain SynthDefs")
     end,
     setGrainSource = function(args) return voice(args) or range("source", args[2], 0, spec.input_source) end,
-    loadBuffer = slot, clearBuffer = slot, stopRecord = slot, saveBuffer = slot,
-    -- a take never asks for more than a slot holds on the running tier
-    recordBuffer = function(args) return slot(args) or float_range("seconds", args[2], 0, buffer_seconds()) end,
+    clearBuffer = slot, stopRecord = slot,
+    -- start: seconds into the file (the engine clips it to the file)
+    loadBuffer = function(args) return slot(args) or at_least("start", args[3], 0) end,
+    -- start and length: fractions of the slot's valid region
+    saveBuffer = function(args)
+      return slot(args) or float_range("start", args[3], 0, 1) or float_range("length", args[4], 0, 1)
+    end,
+    -- a take never asks for more than a slot holds on the running tier;
+    -- feedback and threshold 0-1, source 0 (input), 1 pre-, 2 post-master, 3..N voice 1..N,
+    -- loop 0 or 1, delay at least 0 (seconds before the take starts)
+    recordBuffer = function(args)
+      return slot(args) or float_range("seconds", args[2], 0, buffer_seconds())
+        or float_range("feedback", args[4], 0, 1) or range("source", args[5], 0, spec.num_voices + 2)
+        or float_range("threshold", args[6], 0, 1) or range("loop", args[7], 0, 1)
+        or at_least("delay", args[8], 0)
+    end,
     setModSource = function(args) return voice_and_mod_slot(args) or range("mod source", args[3], -1, last_voice) end,
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
     setFilter = function(args) return enumerated("filterType", args[3]) end,

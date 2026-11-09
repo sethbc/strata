@@ -1,13 +1,14 @@
 -- lib/buffers.lua
--- The sample buffers: what each slot holds (S.buffers), recording, loading,
--- clearing and saving them, the engine's bufferState, bufferLoadFailed and
+-- The sample buffers: what each slot holds (S.buffers), loading, clearing
+-- and saving them (recording is lib/record.lua's), the engine's bufferState, bufferLoadFailed and
 -- bufferSaveResult polls (S.buffer_polls; init starts them), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
--- valid_buffer_slot (for lib/grid/layout_256.lua) and buffer_state_changed
--- (the bufferState poll's handler, which init sets) are fields of this
--- module's table (S.lib.buffers). finish_buffer_take is also
--- S.finish_buffer_take, where the tests reach it. Registers two cleanup
--- steps (saving the buffer paths; the polls and recording timers).
+-- valid_buffer_slot (for lib/grid/layout_256.lua), buffer_state_changed
+-- (the bufferState poll's handler, which init sets), BUFFER_SETTLE (shared
+-- with lib/record.lua), display_changed and recording_started (a hook
+-- lib/record.lua calls) are fields of this module's table (S.lib.buffers).
+-- Registers two cleanup steps (saving the buffer paths; the polls and
+-- recording timers).
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride by matching this line in the script's sources
@@ -31,7 +32,8 @@ return function(S)
   -- audio (a later report of audio adopts it: a slow take or file read, and a
   -- restore then counts in buffers_restored), else false;
   -- missing_path is a remembered file that was not found on start (kept in
-  -- buffers.data). loads_sent counts the slot's loadBuffer commands (the
+  -- buffers.data). records_sent counts the slot's recordBuffer commands
+  -- (lib/record.lua). loads_sent counts the slot's loadBuffer commands (the
   -- engine counts them too and names one in its bufferLoadFailed report);
   -- pending_loads holds the newest of them, oldest first, each with the state
   -- it replaced, so a failed load can be undone (buffer_load_failed).
@@ -50,11 +52,9 @@ return function(S)
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
-      loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, checking_from = nil,
-      checking_load = nil}
+      loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, records_sent = 0,
+      checking_from = nil, checking_load = nil}
   end
-  -- per slot: clock that ends the recording state, then the finishing fallback
-  S.buffer_record_clocks = {}
   -- the engine's bufferState, bufferLoadFailed and bufferSaveResult polls (nil if missing)
   S.buffer_polls = {state = nil, load_failed = nil, save_result = nil}
   -- confirm_seconds: a report of 0 s settles a take or load only this long
@@ -99,11 +99,9 @@ return function(S)
     grid_redraw()
   end
 
+  -- lib/record.lua owns the take timers (S.buffer_record_clocks)
   local function cancel_buffer_recording_timer(slot)
-    if S.buffer_record_clocks[slot] then
-      clock.cancel(S.buffer_record_clocks[slot])
-      S.buffer_record_clocks[slot] = nil
-    end
+    S.lib.record.cancel_timer(slot)
   end
 
   -- The engine writes each completed (or early-stopped) take here,
@@ -155,27 +153,6 @@ return function(S)
         buffer.path = nil
       end
     end
-  end
-
-  -- The recording ended (its timer ran out or it was stopped early): the slot
-  -- stays recording, finishing, until the engine reports what it captured, or
-  -- BUFFER_SETTLE.fallback_seconds pass without a report. The fallback only
-  -- matters when the bufferState poll is missing: with the poll, its periodic
-  -- report settles a take within about 2 s. Without it the last known seconds
-  -- is 0, so the take settles empty: the fallback exists so K3 is never
-  -- ignored forever, not to recover audio.
-  local function finish_buffer_take(slot)
-    local buffer = S.buffers[slot]
-    buffer.finishing = true
-    buffer.confirm_since = util.time()
-    S.buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(BUFFER_SETTLE.fallback_seconds)
-      S.buffer_record_clocks[slot] = nil
-      if buffer.finishing then
-        settle_buffer_slot(slot)
-        buffer_display_changed()
-      end
-    end)
   end
 
   -- A usable sound file path: not empty, not norns' "-" (no file chosen) and
@@ -288,7 +265,7 @@ return function(S)
     table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
     -- loading cancels a recording in progress in the engine
     cancel_buffer_recording_timer(slot)
-    engine.loadBuffer(slot - 1, path)
+    engine.loadBuffer(slot - 1, path, 0)
     -- the BUFFER page's file selector and a restore on start load directly
     set_buffer_file_param(slot, path)
     -- a scratch take restored on start keeps its take name
@@ -305,41 +282,6 @@ return function(S)
     buffer.checking_from = checked_before_load(path) and buffer.seconds or nil
     buffer.checking_load = buffer.checking_from ~= nil and buffer.loads_sent or nil
     if buffer.checking_load then start_check_fallback(slot, buffer.checking_load) end
-    buffer_display_changed()
-  end
-
-  -- Record the live input into a slot for record_duration seconds, or, if the
-  -- slot is already recording, stop early and keep what was captured. A take
-  -- that has ended and waits for the engine (finishing) ignores the press.
-  function record_buffer(slot)
-    if not valid_buffer_slot(slot) then return end
-    local buffer = S.buffers[slot]
-    if buffer.finishing then return end
-    cancel_buffer_recording_timer(slot)
-    if buffer.recording then
-      engine.stopRecord(slot - 1)
-      finish_buffer_take(slot)
-    else
-      -- at most what a slot holds on this tier (the param's range already
-      -- ends there; a value set before the range was known never passes it)
-      local duration = math.min(params:get("record_duration"), S.performance.buffer_seconds)
-      engine.recordBuffer(slot - 1, duration, params:get("record_level"))
-      set_buffer_file_param(slot, _path.audio)
-      buffer.recording = true
-      buffer.seconds = 0  -- the engine reports 0 s until the take completes
-      buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
-      buffer.restoring = false
-      buffer.settled_empty = false
-      buffer.confirm_since = nil
-      buffer.missing_path = nil
-      buffer.checking_from, buffer.checking_load = nil, nil
-      S.buffer_record_clocks[slot] = clock.run(function()
-        clock.sleep(duration)
-        S.buffer_record_clocks[slot] = nil
-        finish_buffer_take(slot)
-        buffer_display_changed()
-      end)
-    end
     buffer_display_changed()
   end
 
@@ -386,7 +328,7 @@ return function(S)
     buffer.saves_sent = buffer.saves_sent + 1
     if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
     table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path})
-    engine.saveBuffer(slot - 1, path)
+    engine.saveBuffer(slot - 1, path, 0, 1)
     print("buffer " .. slot .. " saving to " .. path)
     return true
   end
@@ -456,6 +398,7 @@ return function(S)
     local changed = buffer.seconds ~= seconds
     buffer.seconds = seconds
     local has_audio = seconds > 0
+    if buffer.recording then S.lib.record.slot_reported(slot, seconds) end
     if buffer.checking_from ~= nil then
       if seconds == buffer.checking_from then
         if changed then request_redraw() end
@@ -623,9 +566,6 @@ return function(S)
     S.buffers_loaded = true
   end
 
-  -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here
-  S.finish_buffer_take = finish_buffer_take
-
   -- init's start steps: the polls (valid seconds per buffer slot, failed
   -- loads and save results, from the engine), and later, after the scenes, which may
   -- use them, the restore. A start that fails before the restore leaves
@@ -673,12 +613,16 @@ return function(S)
     if S.buffer_polls.state then S.buffer_polls.state:stop() end
     if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
     if S.buffer_polls.save_result then S.buffer_polls.save_result:stop() end
-    for slot = 1, NUM_BUFFERS do
-      cancel_buffer_recording_timer(slot)
-    end
+    S.lib.record.stop_all()
   end)
 
   M.valid_buffer_slot = valid_buffer_slot
   M.buffer_state_changed = buffer_state_changed
+  M.BUFFER_SETTLE = BUFFER_SETTLE
+  M.display_changed = buffer_display_changed
+  -- A recordBuffer was just sent for the slot (lib/record.lua calls it).
+  -- Neutral: 3.3's waveform package (1e) fills it
+  function M.recording_started(_)
+  end
   return M
 end

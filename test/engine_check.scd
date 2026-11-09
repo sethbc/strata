@@ -18,7 +18,7 @@ var server = Server.local;
 var failures = 0;
 // The fixed order the areas run in; an absent 3.2 file is skipped
 var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \performance,
-    \rings, \freeze, \variation, \loops, \soak];
+    \rings, \freeze, \variation, \loops, \record, \waveform, \positions, \soak];
 // Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
 // a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)
 var onDemandAreas = [\soak];
@@ -70,6 +70,184 @@ var scPort = if(scPortText.isNil or: { scPortText.size == 0 }, 57110, {
 });
 var scratchRoot = Platform.defaultTempDir +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ "-" ++ scPort);
 var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
+
+// Check-only copies of 3.2's \strataRecord and grain SynthDefs, built once
+// under their own names and exposed on h (h.def32). They are the text of
+// 3.2's defs and of the grainBody, readers, slotGrainPos, voiceFilter and
+// voiceOutput the defs call (with this. written e.), so the 3.3 packages'
+// changes to those methods never reach them and a later comparison against
+// 3.2's sound stays one. The stable helpers they call (openedGate, killFade,
+// panBalance, grainRate, grainDur, grainPan, multimodeFilter, scanRate,
+// ringScanOffset and the ring constants) are still the engine's own. The
+// voiceOutput copy reads this engine's fx mix bus and sends by its default
+// control values; every comparison sets them through the control names
+// (delaySendOut, reverbSendOut, fxMixIn) on both synths.
+var addDefs32 = { arg e;
+    var voiceFilter32 = { arg sig, filterType, filterFreq, filterRes, filterMix;
+        e.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
+            filterMix.lag(0.05).clip(0, 1))
+    };
+    var voiceOutput32 = { arg sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
+        var mixes = In.kr(\fxMixIn.kr(e.mixBus(\fxMix).index), 2).lag(e.fxMixLag);
+        var toDelay = delaySend.clip(0, 1).lag(e.fxMixLag), toReverb = reverbSend.clip(0, 1).lag(e.fxMixLag);
+        var pastDelay = 1 - (toDelay * mixes[0]);
+        Out.ar(out, sig * (pastDelay * (1 - (toReverb * mixes[1]))));
+        Out.ar(\delaySendOut.kr(e.mixBus(\delaySend).index), sig * toDelay);
+        Out.ar(\reverbSendOut.kr(e.mixBus(\reverbSend).index), sig * (toReverb * pastDelay));
+        Out.ar(mirrorOut, sig * mirrorLevel);
+    };
+    var slotGrainPos32 = { arg trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength;
+        var reverse = rate < 0;
+        var lowest = durFrames * reverse;
+        var highest = (validFrames - e.grainEndMargin - (durFrames * (1 - reverse))).max(lowest);
+        var first = loopStart.clip(0, 1);
+        var loopFirst = (first * validFrames).clip(lowest, highest);
+        var loopLast = ((first + loopLength.clip(0, 1)).min(1) * validFrames).clip(loopFirst, highest);
+        var frame = loopFirst + ((bufPos + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
+        frame / validFrames.max(1)
+    };
+    var ringGrainReader32 = { arg bufL, bufR, phaseBus, posSpread, history, bufScan, freeze;
+        { arg trig, rate, dur, mode;
+            var ringRate = rate.clip2(e.ringMaxRate);
+            var ahead = (ringRate - 1).max(0);
+            var length = dur + (mode * ((dur / ahead.max(1)) - dur));
+            var spread = TRand.ar(0, posSpread * e.ringSpreadSeconds, trig) * (1 - mode);
+            var lookback = e.ringReadMargin + history.clip(0, e.historySeconds) + spread + (ahead * length)
+                + e.ringScanOffset(bufScan, freeze);
+            var frames = BufFrames.kr(bufL);
+            var start = (In.kr(phaseBus, 1) - (lookback * SampleRate.ir)).wrap(0, frames);
+            (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: start / frames, level: 1)
+        }
+    };
+    var slotGrainReader32 = { arg bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate, bufScan, posSpread,
+        freeze, loopStart, loopLength;
+        { arg trig, rate, dur, mode;
+            var serverScale = BufRateScale.kr(bufnumL);
+            var slotRate = rate * bufRate * (bufRateScale / serverScale);
+            var validFrames = Gate.kr(bufFrames, bufFrames > 0);
+            var readRate = (slotRate * serverScale).abs.max(0.001);
+            var grainDur = dur.min((validFrames - e.grainEndMargin).max(0) / (readRate * SampleRate.ir));
+            var grainFrames = grainDur * SampleRate.ir * readRate;
+            var scanPhase = Phasor.ar(0, e.scanRate(bufScan, freeze) * SampleDur.ir, 0, 1);
+            var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
+            var start = slotGrainPos32.(trig, bufPos, scanPhase, spreadDraw, slotRate, grainFrames, validFrames,
+                loopStart, loopLength);
+            (bufL: bufnumL, bufR: bufnumR, rate: slotRate, dur: grainDur,
+                pos: start * (validFrames / BufFrames.kr(bufnumL)),
+                level: (bufFrames > 0).lag(0.05))
+        }
+    };
+    var grainBody32 = { arg controls, reader;
+        var c = controls, env, accent, modSigs, modSig, rateMod, bendRate, grainMode, mode, trig;
+        var vary, rate, dur, read, panOffset, left, right, sig;
+        env = EnvGen.kr(Env.asr(0.1, 1, e.grainRelease), e.openedGate(c[\gate]), doneAction: 2) * e.killFade(c[\kill]);
+        accent = EnvGen.kr(Env.perc(0.005, 0.4), c[\t_trig], levelScale: c[\velocity]);
+        modSigs = c[\modBuses].collect({ arg bus; In.kr(bus, 1) });
+        modSig = (modSigs * c[\modAmpAmts]).sum.clip(-2, 2) * c[\modLevel];
+        rateMod = (modSigs * c[\modFreqAmts]).sum.clip(-0.9, 2);
+        bendRate = 1 + (c[\rateLevel] * ((c[\bend] * (1 + rateMod)) - 1));
+        grainMode = c[\grainMode];
+        mode = grainMode.round.clip(0, 1);
+        trig = Select.ar(mode, [Impulse.ar(c[\grainDensity]), T2A.ar(c[\t_trig])]);
+        vary = (
+            reverseProb: c[\reverseProb], pitchJitter: c[\pitchJitter], intervals: c[\intervals],
+            intervalCount: c[\intervalCount], intervalProb: c[\intervalProb], quantize: c[\quantize], scaleNote: c[\scaleNote]
+        );
+        rate = e.grainRate(trig, c[\pitchShift], bendRate, vary);
+        dur = e.grainDur(trig, c[\grainSize], c[\sizeJitter]).min(e.grainMaxSeconds);
+        read = reader.value(trig, rate, dur, mode);
+        panOffset = e.grainPan(trig, c[\panJitter]);
+        left = GrainBuf.ar(2, trig, read[\dur], read[\bufL], read[\rate], read[\pos], 2,
+            (panOffset - 1).clip(-1, 1), c[\envBuf], e.maxGrains);
+        right = GrainBuf.ar(2, trig, read[\dur], read[\bufR], read[\rate], read[\pos], 2,
+            (panOffset + 1).clip(-1, 1), c[\envBuf], e.maxGrains);
+        sig = left + right;
+        sig = Balance2.ar(sig[0], sig[1], LFNoise1.kr(2).range(c[\panSpread].neg, c[\panSpread]));
+        sig = e.panBalance(sig, c[\pan]);
+        sig = voiceFilter32.(sig, c[\filterType], c[\filterFreq], c[\filterRes], c[\filterMix]);
+        sig = sig * env * read[\level] * c[\ringLevel].lag(0.05)
+            * (c[\amp] * (1 + modSig) * (1 + (accent * c[\accentAmt]))).clip(0, 2);
+        voiceOutput32.(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend]);
+    };
+    var grainControls32 = { arg out, gate, grainSize, grainDensity, pitchShift, posSpread, panSpread, envBuf, grainMode,
+        t_trig, velocity, amp, bend, kill, pan, accentAmt, mirrorOut, mirrorLevel, modLevel, rateLevel,
+        modBus1, modBus2, modBus3, modAmpAmt1, modAmpAmt2, modAmpAmt3, modFreqAmt1, modFreqAmt2, modFreqAmt3,
+        ringLevel, reverseProb, pitchJitter, panJitter, sizeJitter,
+        interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8,
+        intervalCount, intervalProb, quantize, scaleNote, filterType, filterFreq, filterRes, filterMix, delaySend, reverbSend;
+        (
+            out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
+            posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
+            t_trig: t_trig, velocity: velocity, amp: amp, bend: bend, kill: kill, pan: pan,
+            accentAmt: accentAmt, mirrorOut: mirrorOut, mirrorLevel: mirrorLevel, modLevel: modLevel,
+            rateLevel: rateLevel, modBuses: [modBus1, modBus2, modBus3],
+            modAmpAmts: [modAmpAmt1, modAmpAmt2, modAmpAmt3], modFreqAmts: [modFreqAmt1, modFreqAmt2, modFreqAmt3],
+            ringLevel: ringLevel, reverseProb: reverseProb, pitchJitter: pitchJitter, panJitter: panJitter,
+            sizeJitter: sizeJitter,
+            intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
+            intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
+            filterType: filterType, filterFreq: filterFreq, filterRes: filterRes, filterMix: filterMix,
+            delaySend: delaySend, reverbSend: reverbSend
+        )
+    };
+    SynthDef(\strataCheckRecord32, {
+        arg in, bufnumL, bufnumR, level=1, duration=1, framesOut;
+        var sig = In.ar(in, 2) * level;
+        RecordBuf.ar(sig[0], bufnumL, loop: 0, doneAction: 2);
+        RecordBuf.ar(sig[1], bufnumR, loop: 0);
+        Out.kr(framesOut, Sweep.kr(0, SampleRate.ir));
+        Line.kr(0, 0, duration, doneAction: 2);
+    }).add;
+    SynthDef(\strataCheckGrainRing32, {
+        arg out, gate=1, bufL=0, bufR=0, phaseBus=0, bufScan=0,
+        grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
+        envBuf = -1, grainMode=0, t_trig=0, velocity=1, amp=1, bend=1, kill=0, pan=0,
+        accentAmt=0, mirrorOut=0, mirrorLevel=0, modLevel=0, rateLevel=1,
+        modBus1=0, modBus2=0, modBus3=0,
+        modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+        modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+        history=0, ringLevel=1, freeze=0, freezeMode=0,
+        reverseProb=0, pitchJitter=0, panJitter=0, sizeJitter=0,
+        interval1=0, interval2=0, interval3=0, interval4=0,
+        interval5=0, interval6=0, interval7=0, interval8=0,
+        intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
+        loopStart=0, loopLength=1,
+        filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
+        delaySend=1, reverbSend=1;
+        var controls = grainControls32.(out, gate, grainSize, grainDensity, pitchShift, posSpread, panSpread, envBuf, grainMode,
+            t_trig, velocity, amp, bend, kill, pan, accentAmt, mirrorOut, mirrorLevel, modLevel, rateLevel,
+            modBus1, modBus2, modBus3, modAmpAmt1, modAmpAmt2, modAmpAmt3, modFreqAmt1, modFreqAmt2, modFreqAmt3,
+            ringLevel, reverseProb, pitchJitter, panJitter, sizeJitter,
+            interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8,
+            intervalCount, intervalProb, quantize, scaleNote, filterType, filterFreq, filterRes, filterMix, delaySend, reverbSend);
+        grainBody32.(controls, ringGrainReader32.(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
+    }).add;
+    SynthDef(\strataCheckGrainBuf32, {
+        arg out, gate=1, bufnumL=0, bufnumR=0, bufFrames=1, bufRateScale=1, bufPos=0, bufRate=1, bufScan=0,
+        grainSize=0.1, grainDensity=20, pitchShift=1, posSpread=0.5, panSpread=0.5,
+        envBuf = -1, grainMode=0, t_trig=0, velocity=1, amp=1, bend=1, kill=0, pan=0,
+        accentAmt=0, mirrorOut=0, mirrorLevel=0, modLevel=0, rateLevel=1,
+        modBus1=0, modBus2=0, modBus3=0,
+        modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
+        modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
+        history=0, ringLevel=1, freeze=0, freezeMode=0,
+        reverseProb=0, pitchJitter=0, panJitter=0, sizeJitter=0,
+        interval1=0, interval2=0, interval3=0, interval4=0,
+        interval5=0, interval6=0, interval7=0, interval8=0,
+        intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
+        loopStart=0, loopLength=1,
+        filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
+        delaySend=1, reverbSend=1;
+        var controls = grainControls32.(out, gate, grainSize, grainDensity, pitchShift, posSpread, panSpread, envBuf, grainMode,
+            t_trig, velocity, amp, bend, kill, pan, accentAmt, mirrorOut, mirrorLevel, modLevel, rateLevel,
+            modBus1, modBus2, modBus3, modAmpAmt1, modAmpAmt2, modAmpAmt3, modFreqAmt1, modFreqAmt2, modFreqAmt3,
+            ringLevel, reverseProb, pitchJitter, panJitter, sizeJitter,
+            interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8,
+            intervalCount, intervalProb, quantize, scaleNote, filterType, filterFreq, filterRes, filterMix, delaySend, reverbSend);
+        grainBody32.(controls, slotGrainReader32.(bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate,
+            bufScan, posSpread, freeze, loopStart, loopLength));
+    }).add;
+};
 
 var check = { arg condition, message;
     if (condition == true) {
@@ -500,6 +678,18 @@ server.waitForBoot({
             Line.kr(0, 0, 0.05, doneAction: 2);
             Out.ar(out, [infinite, infinite - infinite]);
         }).add;
+        // ... the largest difference and level of two stereo buses since the
+        // last t_reset, and of two mono buffers read sample for sample: audio
+        // comparisons run on the server, one number back to sclang (#131)
+        SynthDef(\strataCheckBusDiff, { arg a, b, out, t_reset = 0;
+            var x = In.ar(a, 2), y = In.ar(b, 2);
+            Out.kr(out, [A2K.kr(Peak.ar((x - y).abs.sum, t_reset)), A2K.kr(Peak.ar(x.abs.sum, t_reset))]);
+        }).add;
+        SynthDef(\strataCheckBufDiff, { arg bufA, bufB, frames, out, t_reset = 0;
+            var phase = Phasor.ar(0, 1, 0, frames.max(1));
+            var x = BufRd.ar(1, bufA, phase, 0, 1), y = BufRd.ar(1, bufB, phase, 0, 1);
+            Out.kr(out, [A2K.kr(Peak.ar((x - y).abs, t_reset)), A2K.kr(Peak.ar(x.abs, t_reset))]);
+        }).add;
         server.sync;
         context = CroneAudioContext.new(server);
         context.out_b = Bus.audio(server, 2);  // keep the check silent
@@ -516,6 +706,8 @@ server.waitForBoot({
 
         engine = buildEngine.(context);
         "compiled and allocated Engine_Strata".postln;
+        addDefs32.(engine);
+        server.sync;
         defaultScratchDir = engine.scratchDir;
         // never write into ~/dust from the check; a nested dir also tests mkdir on demand
         engine.scratchDir = scratchRoot +/+ "nested/scratch/";
@@ -535,6 +727,9 @@ server.waitForBoot({
             engine: engine, server: server, context: context, tempDir: scratchRoot, testDir: testDir,
             pollMessages: pollMessages, voiceDefs: voiceDefs, allDefs: allDefs, grainDefs: grainDefs,
             chainDefs: chainDefs, defaultScratchDir: defaultScratchDir,
+            // Check-only copies of 3.2's SynthDefs (addDefs32), for
+            // comparisons against 3.2's sound: control names as 3.2's
+            def32: (record: \strataCheckRecord32, grainRing: \strataCheckGrainRing32, grainBuf: \strataCheckGrainBuf32),
             stereoPath: scratchRoot +/+ "stereo.wav", monoPath: scratchRoot +/+ "mono.wav",
             longPath: scratchRoot +/+ "long.wav", textPath: scratchRoot +/+ "not-audio.wav",
             // helpers: each takes the Event first (h.check(condition, message))

@@ -48,11 +48,11 @@ var checkLoudSave = {
     file.openWrite(loudPath);
     file.writeData(h.repeating(2 * 1000, [1.5, -1.7]));
     file.close;
-    command.(\loadBuffer, 6, loudPath); 0.5.wait; server.sync;
+    command.(\loadBuffer, 6, loudPath, 0); 0.5.wait; server.sync;
     check.(((bufferSample.(engine.buffersL[6], 10) - 1.5).abs < 0.001)
         and: { (bufferSample.(engine.buffersR[6], 10) + 1.7).abs < 0.001 }, "a slot holds samples beyond ±1 unclipped");
     savePath = scratchRoot +/+ "saved/loud.wav";
-    command.(\saveBuffer, 6, savePath);
+    command.(\saveBuffer, 6, savePath, 0, 1);
     check.(waitFor.({ File.exists(savePath) }), "a slot beyond ±1 is saved");
     0.5.wait;
     file = SoundFile.openRead(savePath);
@@ -141,7 +141,7 @@ var checkStaleParts = {
     engine.writeChunkWait = 0.02;          // the 16 s interleave now takes about 2 s
     savePath = engine.scratchDir +/+ "running.wav";
     count = saveResults.value.size;
-    command.(\saveBuffer, 7, savePath);
+    command.(\saveBuffer, 7, savePath, 0, 1);
     0.5.wait;
     data = PathName(engine.scratchDir).files.collect(_.fileName).select({ arg name; name.endsWith(".part") });
     check.(engine.respondsTo(\instanceTag) and: { data.size == 1 }
@@ -194,7 +194,7 @@ var checkLongSave = {
     h.writePeriodicSeconds(file, period, 60, rate);
     file.close;
     other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
-    h.commandTo(other, \loadBuffer, 0, sourcePath);
+    h.commandTo(other, \loadBuffer, 0, sourcePath, 0);
     check.(other.bufferSeconds == 60 and: { waitFor.({ other.bufferFrames[0] == frames }, 10) },
         "files: a 60 s file fills a high engine's 60 s slot (% frames)".format(other.bufferFrames[0]));
     // the ping goes out once the interleave has opened its .part file, and
@@ -205,7 +205,7 @@ var checkLongSave = {
     other.writeChunkWait = 0.0001;
     reports = saveResults.value.size;
     start = Main.elapsedTime;
-    h.commandTo(other, \saveBuffer, 0, savePath);
+    h.commandTo(other, \saveBuffer, 0, savePath, 0, 1);
     while { parts.value.isEmpty and: { File.exists(savePath).not } and: { (Main.elapsedTime - start) < 30 } } { 0.001.wait };
     partSeen = parts.value.notEmpty;
     NetAddr.localAddr.sendMsg('/strataCheckSavePing');
@@ -237,10 +237,10 @@ var checkShortWrite = { arg stereoPath;
     var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept, count;
     File.mkdir(dir);
     File.copy(stereoPath, savePath);
-    command.(\loadBuffer, 6, stereoPath); 0.5.wait; server.sync;
+    command.(\loadBuffer, 6, stereoPath, 0); 0.5.wait; server.sync;
     engine.bufferFrames[6] = engine.buffersL[6].numFrames + 100;
     count = saveResults.value.size;
-    command.(\saveBuffer, 6, savePath);
+    command.(\saveBuffer, 6, savePath, 0, 1);
     3.0.wait;
     check.(saveReportsAfter.(count) == [[6, savesSent.(6), true]],
         "files: a save whose temporary file is short is reported failed (got %)".format(saveReportsAfter.(count)));
@@ -270,7 +270,7 @@ var checkWriteFault = { arg stage;
     engine.tryPerform(\interleaveFaultHook_, { arg path, at, openFiles;
         if (at == stage) { seen = openFiles.copy; Error("injected write fault").throw };
     });
-    command.(\saveBuffer, 4, savePath);
+    command.(\saveBuffer, 4, savePath, 0, 1);
     1.0.wait;
     engine.tryPerform(\interleaveFaultHook_, nil);
     left = (tempFloatFiles.value - temps).asArray ++ PathName(dir).files.collect(_.fileName);
@@ -289,7 +289,7 @@ var checkSaveOntoFolder = {
     File.mkdir(savePath);
     File.use(savePath +/+ "inside.txt", "w", { arg text; text.write("keep") });
     count = saveResults.value.size;
-    command.(\saveBuffer, 4, savePath);
+    command.(\saveBuffer, 4, savePath, 0, 1);
     1.0.wait;
     inside = PathName(savePath).files.collect(_.fileName);
     beside = PathName(dir).files.collect(_.fileName);
@@ -312,12 +312,12 @@ checkDecodeShortfall.(stereoPath, longPath);
 
 // Slot 5 (index 4) holds the stereo file the saves below write
 before = synthNames.(context.xg).size;
-command.(\loadBuffer, 4, stereoPath); 0.5.wait; server.sync;
+command.(\loadBuffer, 4, stereoPath, 0); 0.5.wait; server.sync;
 
 // saveBuffer writes the valid region as a stereo 16-bit WAV
 savePath = scratchRoot +/+ "saved/take-buf5.wav";
 info = savesSent.(4); reports = saveResults.value.size;
-command.(\saveBuffer, 4, savePath);
+command.(\saveBuffer, 4, savePath, 0, 1);
 check.(waitFor.({ File.exists(savePath) }), "saveBuffer writes the file (creating its directory)");
 1.0.wait;
 check.(info.notNil and: { savesSent.(4) == (info + 1) }, "saveBuffer counts the slot's saves (% then %)".format(info, savesSent.(4)));
@@ -337,13 +337,13 @@ if (file.notNil) {
 };
 checkLoudSave.value;
 // Two writes to one path back to back: the newer one wins, the file is never mixed
-command.(\loadBuffer, 7, longPath); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
+command.(\loadBuffer, 7, longPath, 0); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
 savePath = scratchRoot +/+ "race/same.wav";
 engine.writeChunkWait = 0.02;          // the long interleave now takes about 0.9 s
 reports = saveResults.value.size;
-command.(\saveBuffer, 7, savePath);
+command.(\saveBuffer, 7, savePath, 0, 1);
 0.3.wait;                              // the first interleave is under way
-command.(\saveBuffer, 4, savePath);                              // 11025 frames, 0.5 / -0.25
+command.(\saveBuffer, 4, savePath, 0, 1);                              // 11025 frames, 0.5 / -0.25
 check.(waitFor.({ File.exists(savePath) }, 5), "back-to-back writes to one path produce the file");
 2.0.wait;
 check.(saveReportsAfter.(reports) == [[4, savesSent.(4), false]],
@@ -362,8 +362,8 @@ if (file.notNil) {
 };
 // the other order: a short write then a long one; the long (newer) one wins
 reports = saveResults.value.size;
-command.(\saveBuffer, 4, savePath);
-command.(\saveBuffer, 7, savePath);
+command.(\saveBuffer, 4, savePath, 0, 1);
+command.(\saveBuffer, 7, savePath, 0, 1);
 3.0.wait;
 check.(saveReportsAfter.(reports) == [[7, savesSent.(7), false]],
     "the newer long write is the one reported (got %)".format(saveReportsAfter.(reports)));
@@ -387,14 +387,14 @@ file.openWrite(longWritePath);
 h.writePeriodicSeconds(file, rampPeriod, 16, server.sampleRate.asInteger);
 file.close;
 info = pollMessages.size;   // slot 8 reported 7016 before (16 s at 22.05 kHz): only later reports count
-command.(\loadBuffer, 7, longWritePath); 1.0.wait; server.sync;
+command.(\loadBuffer, 7, longWritePath, 0); 1.0.wait; server.sync;
 check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
 check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 7016 }) }),
     "slot 8 holding 16 s reports 7016 through bufferState");
 savePath = scratchRoot +/+ "long/saved.wav";
 reports = saveResults.value.size;
 writeStart = Main.elapsedTime;
-command.(\saveBuffer, 7, savePath);
+command.(\saveBuffer, 7, savePath, 0, 1);
 info = waitFor.({ File.exists(savePath) }, 30);
 writeSeconds = Main.elapsedTime - writeStart;
 check.(info, "a 16 s write completes (% frames at % Hz in % s)".format(frames, server.sampleRate, writeSeconds.round(0.01)));
@@ -418,7 +418,7 @@ File.delete(longWritePath);
 savePath = textPath +/+ "sub/cannot.wav";
 tempFilesBefore = tempFloatFiles.value;
 reports = saveResults.value.size;
-command.(\saveBuffer, 4, savePath); 1.0.wait;
+command.(\saveBuffer, 4, savePath, 0, 1); 1.0.wait;
 check.(saveReportsAfter.(reports) == [[4, savesSent.(4), true]],
     "a save whose folder cannot be made is reported failed (got %)".format(saveReportsAfter.(reports)));
 check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[savePath.standardizePath].isNil },
@@ -453,14 +453,14 @@ check.(info.isEmpty, "deleteStaleParts cleans only absolute directories below / 
 engine.scratchDir = savePath;
 
 reports = saveResults.value.size;
-command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav"); 0.5.wait;
+command.(\saveBuffer, 6, scratchRoot +/+ "empty.wav", 0, 1); 0.5.wait;
 check.(File.exists(scratchRoot +/+ "empty.wav").not, "saving an empty slot writes nothing");
 check.(saveReportsAfter.(reports) == [[6, savesSent.(6), true]],
     "and is reported failed (got %)".format(saveReportsAfter.(reports)));
 // a slot out of range is ignored: nothing counted, nothing reported
 info = (0 .. engine.numBuffers - 1).collect({ arg index; savesSent.(index) });
 reports = saveResults.value.size;
-command.(\saveBuffer, engine.numBuffers, scratchRoot +/+ "out-of-range.wav"); 0.3.wait;
+command.(\saveBuffer, engine.numBuffers, scratchRoot +/+ "out-of-range.wav", 0, 1); 0.3.wait;
 check.(saveReportsAfter.(reports).isEmpty and: { (0 .. engine.numBuffers - 1).collect({ arg index; savesSent.(index) }) == info },
     "a save of a slot out of range counts and reports nothing");
 check.(synthNames.(context.xg).size == before, "saving adds no nodes");
@@ -469,4 +469,26 @@ checkWriteFault.(\start);
 checkWriteFault.(\open);
 checkSaveOntoFolder.value;
 checkLongSave.value;
+
+// saveBuffer with 0 and 1 writes what 3.2's saveBuffer wrote: the whole valid
+// region, as a 16-bit stereo WAV equal to the int16 file it was loaded from
+{
+    var rate = server.sampleRate.asInteger, sourcePath = scratchRoot +/+ "files-region-source.wav";
+    var path = scratchRoot +/+ "files-region-saved.wav", file, written, data;
+    var period = Array.fill(1000, { arg i; sin(2pi * 3 * i / 1000) * 0.5 });
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    file.openWrite(sourcePath);
+    h.writePeriodicSeconds(file, period, 2, rate);
+    file.close;
+    command.(\loadBuffer, 5, sourcePath, 0);
+    h.waitFor({ engine.bufferFrames[5] == (rate * 2) });
+    command.(\saveBuffer, 5, path, 0, 1);
+    h.waitFor({ File.exists(path) }, 4);
+    0.2.wait; server.sync;
+    written = SoundFile.openRead(path);
+    data = if (written.notNil) { var result = h.sameFrames(written, sourcePath); written.close; result } { [1, 0] };
+    command.(\clearBuffer, 5); server.sync;
+    check.((data[0] == 0) and: { data[1] == (rate * 2) },
+        "files: saveBuffer with 0 and 1 writes what 3.2's saveBuffer wrote (difference %, % frames)".format(data[0], data[1]));
+}.value;
 }
