@@ -44,4 +44,16 @@ The `mix` check area compares every voice against references that keep 3.2's tai
 1. A per-synth fade while the voice filter is on (Question A3 of the design): the fade now acts before the filter. The bound in `mix.scd` is the worst figure Step 1b measured at 5 kHz, res 0.5, on 3.13 (`\strataCheckTone` and a loaded noise slot; three runs): -36.6 dB of the reference's peak (a slot fade on noise; -39.4, -36.6 and -38.6 dB in the three runs, -36.2 dB on 3.14.1), plus 6 dB: **-30.6 dB**. It is the slot fade, a 50 ms `Lag` (`hasAudio`) with an instantaneous first slope, that sets it; the design's -50 dB estimate took the linear 50 ms fades. The other 5 kHz figures in that measurement: attack -60 to -63 dB, release about -74 dB, a switch's crossfade about -75 dB, a cut about -53 dB, the input's ring fade about -52 dB; at 200 Hz, res 0.9: attack -29 dB, release -38 dB, crossfade -38 dB, a cut about -16 dB, a slot fade about -6 dB, a ring fade about -12 dB (printed, not bounded, as the check prints them). Exact when the filter is bypassed and once a fade ends.
 2. A value change or an accent during a switch's crossfade or cut: the fading buffer or input tail now follows the voice's current filter, sends and level (`mix` prints the difference and asserts it is finite and the reference above -30 dBFS).
 
-The check's figures in a run are in `docs/notes/engine/memory.md`.
+### What the check prints (SuperCollider 3.13.0, one run of `mix`, seeded noise slots)
+
+dB of the reference's peak over each span, the voice on a noise-loaded slot with its filter on (the slot fade measured with the slot's own grains alone, as Step 1b did):
+
+| Fade | filter at 5 kHz, res 0.5 | at 200 Hz, res 0.9 (no bound) |
+|---|---|---|
+| attack (0.1 s) | -60.6 | -28.9 |
+| release (2 s) | -73.4 | -38.1 |
+| a switch's crossfade (2 s) | -66.5 | -30.9 |
+| a cut (50 ms) | -57.8 | -21.2 |
+| a slot fade (50 ms) | -38.4 | -1.8 |
+
+The bound is -30.6 dB (the 5 kHz column's worst here -38.4 dB). A crossfade with accents every 100 ms and an amp move, filter bypassed (exception 2, printed): buffer -> buffer -9.2 dB, buffer -> input -11.2 dB, buffer -> synth -8.9 dB. The check asserts that every printed figure is finite and every reference above -30 dBFS.
