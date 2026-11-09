@@ -814,4 +814,28 @@ test("the stub reads a constant given as a method", function()
   assert_true(engine_spec.grain_params.bufPos and engine_spec.grain_params.posSpread, "both grainDefs' controls are grain params")
 end)
 
+test("audio.file_info reads a test sound file and a registered table", function()
+  local context = load_strata()
+  local path = context.audio_dir .. "probe.wav"
+  local function le(value, bytes)
+    local out = {}
+    for index = 1, bytes do out[index] = string.char(value % 256); value = math.floor(value / 256) end
+    return table.concat(out)
+  end
+  local frames, channels, rate = 11025, 2, 22050
+  local data = string.rep("\0", frames * channels * 2)
+  os.execute("mkdir -p '" .. context.audio_dir .. "'")
+  local file = assert(io.open(path, "wb"))
+  file:write("RIFF", le(36 + #data, 4), "WAVEfmt ", le(16, 4), le(1, 2), le(channels, 2), le(rate, 4),
+    le(rate * channels * 2, 4), le(channels * 2, 2), le(16, 2), "data", le(#data, 4), data)
+  file:close()
+  local got_channels, got_frames, got_rate = audio.file_info(path)
+  assert_equal(got_channels, 2); assert_equal(got_frames, 11025); assert_equal(got_rate, 22050)
+  context.audio.register("/tmp/registered.wav", { channels = 2, frames = 480000, rate = 48000 })
+  got_channels, got_frames, got_rate = audio.file_info("/tmp/registered.wav")
+  assert_equal(got_channels, 2); assert_equal(got_frames, 480000); assert_equal(got_rate, 48000)
+  got_channels, got_frames, got_rate = audio.file_info("/tmp/missing-file.wav")
+  assert_equal(got_channels, 0); assert_equal(got_frames, 0); assert_equal(got_rate, 0)
+end)
+
 end

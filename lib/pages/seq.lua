@@ -174,7 +174,8 @@ return function(S)
   -- are lib/arc/seq.lua's
   S.registry.pages[UI_PAGES.index.SEQ] = {name = "SEQ", draw = redraw_seq, hints = seq_hints,
     enc = seq_enc, key = seq_key, alt_enc = seq_alt_enc, alt_key = seq_alt_key,
-    header_status = seq_header_status, arc_button = seq_arc_button, layout_states = layout_states}
+    header_status = seq_header_status,
+    animates = function() return S.pattern_playing end, arc_button = seq_arc_button, layout_states = layout_states}
 
   return M
 end

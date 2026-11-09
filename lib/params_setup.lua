@@ -656,7 +656,7 @@ return function(S)
       default = v.source,
       action = function(x)
         S.voices[voice_idx].source = x
-        engine.setGrainSource(voice_idx - 1, x - 1)
+        S.lib.engine_sync.send_grain_source(voice_idx)
         -- the registered hooks (S.registry.source_change), before the sync,
         -- so it sends what they set (freeze cleared, never the old freeze
         -- first); a scene recall sets every value itself, so they never run

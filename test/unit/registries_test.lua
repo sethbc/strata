@@ -494,7 +494,7 @@ end
   assert_equal(S.scenes[1].data.voices[1].extras.late, 0, "and the voice param")
 end)
 
-test("a version 2 scene migrates to 3 with every registered default", function()
+test("a version 2 scene migrates to 4 with every registered default", function()
   local function register(S)
     S.register_voice_params(probe_record())
     S.register_fx_params({ name = "probe fx", count = 1, add = function()
@@ -506,7 +506,7 @@ test("a version 2 scene migrates to 3 with every registered default", function()
   local context = load_with(register, { data_subdir = "v2_to_v3" })
   finish_startup(context)
   local S = local_value("S")
-  assert_equal(S.constants.SCENE_DATA_VERSION, 3)
+  assert_equal(S.constants.SCENE_DATA_VERSION, 4)
   params:set("v2_probe", 0.6); params:set("probe_level", 0.9)
   capture_scene(2)
   local scene = deep_copy(S.scenes[2])
@@ -532,7 +532,7 @@ test("a version 2 scene migrates to 3 with every registered default", function()
   assert_equal(params:get("v2_probe"), 0, "the recall applies the default")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 3, "saved as version 3")
+  assert_equal(saved.version, 4, "saved as version 4")
   -- with nothing registered, a v2 scene still gains an empty extras table
   tab.save({ version = 2, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v2_to_v3" })
@@ -662,6 +662,58 @@ test("S.performance starts standard and sets the record duration range", functio
   load_strata()
   assert_equal(params:lookup_param("record_duration").controlspec.maxval, 60)
   assert_equal(local_value("S").constants.STANDARD_PERFORMANCE.buffer_seconds, 16, "the constant is unchanged")
+end)
+
+test("register_grain_restart and register_alt_release refuse a non-function", function()
+  local context = load_strata()
+  local S = local_value("S")
+  local grain_restart, alt_release = #S.registry.grain_restart, #S.registry.alt_release
+  assert_true(not pcall(S.register_grain_restart, 1), "a number is refused")
+  assert_true(not pcall(S.register_alt_release, nil), "nil is refused")
+  assert_equal(#S.registry.grain_restart, grain_restart, "no grain restart hook added")
+  assert_equal(#S.registry.alt_release, alt_release, "no ALT release hook added")
+end)
+
+test("a record's scene_ranges reject an extra outside its range", function()
+  local context = load_with(function(S)
+    S.register_voice_params(probe_record({
+      scene_defaults = { probe = 0.5, probe_switch = 0 },
+      scene_ranges = { probe = { 0, 1 } },
+    }))
+  end)
+  finish_startup(context)
+  capture_scene(2)
+  local scene = deep_copy(local_value("scenes")[2])
+  assert_true(validate_scene(scene), "a captured scene validates")
+  scene.data.voices[1].extras.probe = 1.5
+  assert_true(not validate_scene(scene), "1.5 lies outside 0-1")
+  scene.data.voices[1].extras.probe = 0.75
+  assert_true(validate_scene(scene), "0.75 lies inside it")
+
+  local function refused(overrides)
+    local S = local_value("S")
+    overrides.name = "probe_range"
+    return not pcall(S.register_voice_params, probe_record(overrides))
+  end
+  assert_true(refused({ scene_ranges = { probe_switch = { 0, 1 } } }), "a range on a discrete key is refused")
+  assert_true(refused({ scene_ranges = { probe = { 0.6, 1 } }, scene_defaults = { probe = 0.5, probe_switch = 0 } }),
+    "a range that excludes the default is refused")
+end)
+
+test("the 3.3 constants", function()
+  local constants = local_value("S").constants
+  assert_equal(constants.NUM_BOOKMARKS, 4)
+  local sources = constants.RECORD_SOURCES
+  assert_equal(#sources, 10)
+  assert_equal(sources[1], "input"); assert_equal(sources[2], "pre-master"); assert_equal(sources[3], "post-master")
+  assert_equal(sources[4], "voice 1"); assert_equal(sources[10], "voice 7")
+  assert_equal(constants.RECORD_SYNC.beats_per_bar, 4)
+  assert_equal(constants.RECORD_SYNC.lead_seconds, 0.25)
+  assert_equal(constants.FILES.restart_seconds, 0.3)
+  assert_equal(constants.WAVEFORMS.refresh_seconds, 0.5)
+  assert_equal(constants.PLAYHEADS.update_hz, 15)
+  assert_equal(constants.NORNS_SAMPLE_RATE, 48000)
+  assert_equal(constants.SCENE_DATA_VERSION, 4)
 end)
 
 end

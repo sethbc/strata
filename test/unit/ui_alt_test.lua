@@ -154,4 +154,19 @@ test("ALT has no long-press fallback: K1 held is the only way in", function()
   key(2, 1); key(2, 0)
   assert_equal(table.concat(log, ","), "key 2,key_release 2", "a K2 press and release without ALT stay plain")
 end)
+
+test("an ALT release runs the hooks, from K1 up and from forget_held_keys", function()
+  local context = load_strata(); finish_startup(context)
+  local calls = 0
+  local_value("S").register_alt_release(function() calls = calls + 1 end)
+  key(1, 1); key(1, 0)
+  assert_equal(calls, 1, "K1 up runs the hook")
+  key(1, 1); forget_held_keys()
+  assert_equal(calls, 2, "forget_held_keys runs it")
+  key(1, 0)
+  assert_equal(calls, 2, "a K1 release with ALT not held runs none")
+  forget_held_keys()
+  assert_equal(calls, 2, "forgetting with ALT not held runs none")
+end)
+
 end

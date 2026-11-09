@@ -7,6 +7,7 @@
 - `toggle_voice` calls `engine.voiceOn` and then `sync_voice_to_engine`, which sends `setGrainSource` first, then every synth, grain and crossmod value.
 - Voices are 0-indexed in the engine: always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 - Action sends always go out (no dedupe). Only `apply_lfo` skips sends (`docs/notes/lua/lfos.md`).
+- Every `engine.setGrainSource` goes through `S.lib.engine_sync.send_grain_source(voice_idx)` (the sync's first send and the `v<i>_source` action), which remembers the source the engine has per voice. A running voice whose source changed runs the `S.registry.grain_restart` hooks; the same source again, or a stopped voice's change, runs none. `toggle_voice` runs them after `engine.voiceOn`, before the sync.
 
 ## Owns
 

@@ -26,7 +26,7 @@ return function(S)
 
   -- Grid UI state. Each port shows its own page (M.page): 1 patterns,
   -- 2 parameters, 3 scenes, 4 buffers / FX (256 only)
-  local MAX_GRID_PAGES = 4
+  local MAX_GRID_PAGES = 5
   S.grid_pages = {}
   S.param_page = 1
   S.grid_voice_select = 1

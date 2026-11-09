@@ -1,7 +1,7 @@
 ## Must not break
 
 - Never call `redraw()` or `arc_redraw()` from script code. Call `request_redraw()`, and the frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15). Grid redraws stay direct (`grid_redraw()`).
-- SEQ animates through the frame clock: `draw_frame` marks the screen dirty each frame while SEQ shows and `S.pattern_playing`, like the LFO page, and never the arc. A page's `draw()` never calls `request_redraw()` to animate itself (that would redraw a connected arc at 15 fps).
+- A page animates through the frame clock by giving its record `animates()`: `draw_frame` marks the screen dirty each frame while the shown page's `animates()` is true, and never the arc. LFO's is always true, SEQ's is `S.pattern_playing`. A page's `draw()` never calls `request_redraw()` to animate itself (that would redraw a connected arc at 15 fps).
 - A failing draw prints its error once per distinct error and the frame clock keeps running.
 
 ## Redraws
@@ -11,7 +11,7 @@ Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in init's last start step, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
 - `draw_frame()` clears each dirty flag and calls the global `redraw()` and/or `arc_redraw()`. A burst of arc turns, encoder steps, MIDI or param changes costs one screen draw and one arc redraw per frame, and an idle frame draws nothing.
 - Both flags start set, so the first frame draws the screen and any arc connected at start.
-- On the LFO page, and on SEQ while `S.pattern_playing`, `draw_frame` marks the screen dirty every frame (screen only, never the arc), so the dots and the playing column move. Neither page has a clock of its own.
+- On the LFO page, and on SEQ while `S.pattern_playing`, `draw_frame` marks the screen dirty every frame (screen only, never the arc), through their records' `animates()`, so the dots and the playing column move. Neither page has a clock of its own.
 
 Draw errors:
 - Each draw runs through `draw_frame_part(part, draw)` (`part` is `"screen"` or `"arc"`): an `xpcall` with `draw_error_report`, which returns a key and the error with its traceback.

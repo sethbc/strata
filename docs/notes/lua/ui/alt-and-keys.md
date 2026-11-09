@@ -1,7 +1,7 @@
 ## Must not break
 
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
-- Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call. A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`.
+- Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call. A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`. When ALT goes from held to not held (`S.lib.ui_alt.set(false)`, `forget_held_keys`), the `S.registry.alt_release` hooks run (`S.register_alt_release`).
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 
 ## ALT

@@ -360,7 +360,7 @@ return function(S)
   -- are lib/arc/lfo.lua's
   S.registry.pages[UI_PAGES.index.LFO] = {name = "LFO", draw = redraw_lfo, hints = lfo_hints,
     enc = lfo_enc, alt_enc = lfo_alt_enc, key = lfo_key, alt_key = lfo_alt_key,
-    arc_button = toggle_selected_lfo, layout_states = layout_states}
+    animates = function() return true end, arc_button = toggle_selected_lfo, layout_states = layout_states}
 
   return M
 end

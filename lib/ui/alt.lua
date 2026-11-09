@@ -13,8 +13,16 @@ return function(S)
 
   -- Hold or clear ALT. The hint row shows the ALT layer while it is held
   function M.set(held)
+    local was_held = S.alt_held
     S.alt_held = held == true
+    if was_held and not S.alt_held then M.run_release_hooks() end
     request_redraw()
+  end
+
+  -- The registered ALT-release hooks (S.registry.alt_release), run when ALT
+  -- goes from held to not held: from set(false) and forget_held_keys
+  function M.run_release_hooks()
+    for _, hook in ipairs(S.registry.alt_release) do hook() end
   end
 
   -- The ALT action of key n (K2 or K3) on page `page` (an index into

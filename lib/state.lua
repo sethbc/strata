@@ -36,6 +36,8 @@ return function()
     param_filters = {}, -- per voice param key: fn(voice_idx, value, previous) -> value
     lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, after the built-in ones
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
+    grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
+    alt_release = {},   -- fn(), run when ALT goes from held to not held
   }
 
   -- Add an {order, fn} record to one of the ordered registries (start or
@@ -108,6 +110,8 @@ return function()
   --     scenes capture into voices[i].extras and migration fills;
   --   discrete: {key = {min, max}} (whole values): set at a transition's
   --     end, after the source; every other scene key crossfades;
+  --   scene_ranges: {key = {min, max}} for a continuous scene key:
+  --     validate_scene rejects a scene whose value lies outside it;
   --   voice_rows: {section, rows = {key, ...}, when = fn(voice_idx, key),
   --     before = <section>}: VOICE's rows (lib/ui/voice_rows.lua);
   --   layout_states: {{name, setup = fn(context)}}: VOICE's layout tests draw them;
@@ -133,6 +137,12 @@ return function()
       return type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
         and is_whole(default, range[1]) and default <= range[2]
     end), where, "discrete maps a scene key to a whole {min, max} that holds its default")
+    require_arg(all_entries(record.scene_ranges, function(key, range)
+      local default = record.scene_defaults and record.scene_defaults[key]
+      return type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
+        and range[1] <= range[2] and not (record.discrete and record.discrete[key])
+        and type(default) == "number" and default >= range[1] and default <= range[2]
+    end), where, "scene_ranges maps a continuous scene key to a {min, max} that holds its default")
     local rows = record.voice_rows
     require_arg(rows == nil or (type(rows) == "table" and type(rows.section) == "string"
       and type(rows.rows) == "table" and (rows.when == nil or type(rows.when) == "function")
@@ -168,6 +178,21 @@ return function()
   function M.register_source_change(fn)
     require_arg(type(fn) == "function", "register_source_change", "a hook is a function")
     table.insert(M.registry.source_change, fn)
+  end
+
+  -- fn(voice_idx) runs after every engine.voiceOn and after every
+  -- engine.setGrainSource that changes a running voice's source
+  -- (lib/engine_sync.lua), when the voice's grain synth is new
+  function M.register_grain_restart(fn)
+    require_arg(type(fn) == "function", "register_grain_restart", "a hook is a function")
+    table.insert(M.registry.grain_restart, fn)
+  end
+
+  -- fn() runs when ALT goes from held to not held (S.lib.ui_alt.set(false),
+  -- forget_held_keys)
+  function M.register_alt_release(fn)
+    require_arg(type(fn) == "function", "register_alt_release", "a hook is a function")
+    table.insert(M.registry.alt_release, fn)
   end
 
   -- fn(voice_idx, value, previous) -> value, applied by the action of every

@@ -295,4 +295,41 @@ test("many arc turns and encoder steps within one frame draw the screen and the 
   assert_equal(arc_hardware.refresh_count, arc_refreshes + 1)
 end)
 
+test("the frame clock redraws a page while its animates() is true", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local record = S.registry.pages[S.ui_page]
+  local animating = true
+  record.animates = function() return animating end
+  context.clock.run_for(0.2)
+  local counter = count_screen_draws()
+  context.clock.run_for(1)
+  assert_equal(counter.screen, 15, "15 frames in 1 s draw it 15 times")
+  animating = false
+  counter.screen = 0
+  context.clock.run_for(1)
+  assert_equal(counter.screen, 0, "false draws nothing")
+  counter.restore()
+end)
+
+test("LFO always animates and SEQ only while the patterns play", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages = S.constants.UI_PAGES.index
+  local function draws_in_a_second(page)
+    S.lib.ui_keys.set_ui_page(page)
+    context.clock.run_for(0.2)
+    local counter = count_screen_draws()
+    context.clock.run_for(1)
+    counter.restore()
+    return counter.screen
+  end
+  assert_equal(draws_in_a_second(pages.LFO), 15, "LFO draws every frame")
+  S.pattern_playing = false
+  assert_equal(draws_in_a_second(pages.SEQ), 0, "SEQ stopped draws nothing")
+  S.pattern_playing = true
+  assert_equal(draws_in_a_second(pages.SEQ), 15, "SEQ playing draws every frame")
+  S.pattern_playing = false
+end)
+
 end
