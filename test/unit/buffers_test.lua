@@ -1,5 +1,5 @@
 -- test/unit/buffers_test.lua
--- Buffers: recording, loading, clearing, saving, load failures, the
+-- Buffers: loading, clearing, saving, load failures, the
 -- bufferState poll and buffers.data (lib/buffers.lua)
 -- Run alone: lua test/run.lua buffers
 
@@ -42,39 +42,6 @@ test("buffer triggers call the engine and track recording state", function()
   context.clear_engine_calls()
   params:set("buf4_file", ""); params:set("buf4_file", "-"); params:set("buf4_file", _path.audio)
   assert_equal(#context.calls_named("loadBuffer"), 0, "no load without a file")
-end)
-
-test("recording again stops early; clear and load cancel the timer", function()
-  local context = load_strata(); finish_startup(context)   -- finish init's start-up coroutine
-  local buffers = local_value("buffers")
-  params:set("record_duration", 4)
-  record_buffer(2); assert_true(buffers[2].recording)
-  context.clear_engine_calls()
-  record_buffer(2)
-  assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
-  assert_equal(context.calls_named("stopRecord")[1].args[1], 1)
-  assert_equal(#context.calls_named("recordBuffer"), 0, "and does not start a new one")
-  context.polls.fire("bufferState", 1001)  -- the engine reports what was captured
-  assert_true(not buffers[2].recording); assert_true(buffers[2].loaded); assert_equal(buffers[2].name, "take 2")
-  local pending = context.clock.pending_count()
-  record_buffer(2); assert_equal(context.clock.pending_count(), pending + 1, "new recording timer")
-  clear_buffer(2)
-  assert_true(not buffers[2].recording, "clear ends the recording state")
-  assert_equal(context.clock.pending_count(), pending, "clear cancels the timer")
-  record_buffer(2); load_buffer(2, "/tmp/b.wav")
-  assert_true(not buffers[2].recording, "load ends the recording state")
-  assert_equal(context.clock.pending_count(), pending, "load cancels the timer")
-  -- out-of-range slots are ignored
-  context.clear_engine_calls()
-  record_buffer(0); record_buffer(9); clear_buffer(9); load_buffer(0, "/tmp/c.wav"); save_buffer(9)
-  assert_equal(#context.engine_calls, 0, "invalid slots send nothing")
-  -- cleanup stops the poll and any recording timer
-  record_buffer(5)
-  cleanup()
-  assert_equal(context.clock.pending_count(), 0, "no recording timer left")
-  assert_true(not context.polls.polls.bufferState.running, "bufferState poll stopped")
-  assert_true(not context.polls.polls.bufferLoadFailed.running, "bufferLoadFailed poll stopped")
-  assert_true(not context.polls.polls.bufferSaveResult.running, "bufferSaveResult poll stopped")
 end)
 
 test("a file the engine cannot read, loaded during a recording, leaves a canceled recording", function()
@@ -150,32 +117,6 @@ test("a take or a load is confirmed by the engine's bufferState report", functio
   assert_true(buffers[6].loaded, "audio reported: loaded"); assert_near(buffers[6].seconds, 3.5, 1e-9)
 end)
 
-test("a take settled empty adopts audio the engine reports later; a clear wins", function()
-  local context = load_strata(); finish_startup(context)
-  local buffers = local_value("buffers")
-  params:set("record_duration", 2)
-  record_buffer(3); wake_buffer_clock(context, 3)     -- the timer ends; the engine is slow
-  context.set_time(5); context.polls.fire("bufferState", 2000)
-  assert_equal(buffers[3].name, "empty", "a periodic 0 after the settle time empties the slot")
-  context.polls.fire("bufferState", 2002)        -- the take completes late
-  assert_true(buffers[3].loaded, "the late take is adopted"); assert_equal(buffers[3].name, "take 3")
-  assert_equal(buffers[3].path, scratch_take_path(3), "with the scratch take path")
-  context.polls.fire("bufferState", 2002); context.polls.fire("bufferState", 2003)
-  assert_equal(buffers[3].name, "take 3", "later reports leave it a take")
-  -- a slot cleared after an empty take is not brought back by a report
-  record_buffer(4); record_buffer(4)
-  context.set_time(10); context.polls.fire("bufferState", 3000)
-  assert_equal(buffers[4].name, "empty")
-  clear_buffer(4); context.polls.fire("bufferState", 3002)
-  assert_true(not buffers[4].loaded, "clear wins"); assert_equal(buffers[4].path, nil)
-  -- nor is a slot whose last event was a load or a new recording
-  record_buffer(5); record_buffer(5)
-  context.set_time(15); context.polls.fire("bufferState", 4000)
-  record_buffer(5); context.polls.fire("bufferState", 4001)
-  assert_true(buffers[5].recording, "a new recording is not adopted as the old take")
-  assert_true(not buffers[5].finishing)
-end)
-
 test("a load settled empty adopts audio the engine reports later; restores count; a clear wins", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
@@ -203,6 +144,19 @@ test("a load settled empty adopts audio the engine reports later; restores count
   load_buffer(5, "/tmp/second.wav"); context.set_time(10); context.polls.fire("bufferState", 4000)
   assert_true(not buffers[5].loaded, "the second load settled empty too")
   assert_equal(buffers[5].name, "second.wav", "a new load replaces the old one")
+end)
+
+test("load_buffer sends start 0 and save_buffer the whole region", function()
+  local context = load_strata(); finish_startup(context)
+  load_buffer(3, "/x/a.wav")
+  local load = context.calls_named("loadBuffer")[1]
+  assert_equal(#load.args, 3, "slot, path, start")
+  assert_equal(load.args[1], 2); assert_equal(load.args[2], "/x/a.wav"); assert_equal(load.args[3], 0)
+  context.polls.fire("bufferState", 2004)  -- the engine reports the file's length
+  assert_true(save_buffer(3), "a loaded slot saves")
+  local save = context.calls_named("saveBuffer")[1]
+  assert_equal(#save.args, 4, "slot, path, start, length")
+  assert_equal(save.args[1], 2); assert_equal(save.args[3], 0); assert_equal(save.args[4], 1)
 end)
 
 -- A restore that settles empty is no longer restoring; a late report of
@@ -238,52 +192,6 @@ test("a restore that settles empty clears restoring, and late audio still counts
   assert_equal(buffers[4].settled_empty, "load")
   context.polls.fire("bufferState", 3004)
   assert_equal(local_value("buffers_restored"), 2, "a plain load never counts as restored")
-end)
-
-test("a finishing take settles from the last known seconds when no report comes", function()
-  local context = load_strata(); finish_startup(context)
-  local buffers = local_value("buffers")
-  -- BUFFER_SETTLE is an upvalue of the local finish_buffer_take, which the
-  -- global record_buffer holds
-  local finish_buffer_take = local_value("finish_buffer_take")
-  local buffer_settle
-  for index = 1, math.huge do
-    local name, value = debug.getupvalue(finish_buffer_take, index)
-    if not name then break end
-    if name == "BUFFER_SETTLE" then buffer_settle = value end
-  end
-  assert_true(buffer_settle ~= nil, "BUFFER_SETTLE reached through finish_buffer_take")
-  local fallback_seconds = buffer_settle.fallback_seconds
-  params:set("record_duration", 2)
-  record_buffer(3); wake_buffer_clock(context, 3)     -- the timer ends: finishing, no report ever
-  assert_true(buffers[3].finishing, "finishing")
-  local log = context.clock.sleep_log
-  assert_equal(log[#log].amount, fallback_seconds, "the fallback waits fallback_seconds after the take ends")
-  wake_buffer_clock(context, 3)                       -- the fallback runs
-  assert_true(not buffers[3].finishing and not buffers[3].recording, "settled")
-  assert_equal(buffers[3].name, "empty", "no seconds known: empty")
-  context.clear_engine_calls(); record_buffer(3)
-  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
-  -- a stopped take gets the fallback too, and settles as a take when the
-  -- slot's seconds are known
-  record_buffer(3)
-  assert_true(buffers[3].finishing)
-  buffers[3].seconds = 1.5                      -- as an earlier report left it
-  wake_buffer_clock(context, 3)
-  assert_true(buffers[3].loaded, "known seconds: loaded"); assert_equal(buffers[3].name, "take 3")
-  -- a report, a load, a clear or cleanup cancels the fallback
-  local pending = context.clock.pending_count()
-  record_buffer(4); record_buffer(4)
-  assert_equal(context.clock.pending_count(), pending + 1, "fallback pending")
-  context.polls.fire("bufferState", 3001)
-  assert_equal(context.clock.pending_count(), pending, "a report settles it and cancels the fallback")
-  record_buffer(5); record_buffer(5); load_buffer(5, "/tmp/x.wav")
-  assert_equal(context.clock.pending_count(), pending, "load cancels the fallback")
-  record_buffer(6); record_buffer(6); clear_buffer(6)
-  assert_equal(context.clock.pending_count(), pending, "clear cancels the fallback")
-  record_buffer(7); record_buffer(7)
-  cleanup()
-  assert_equal(context.clock.pending_count(), 0, "cleanup cancels the fallback")
 end)
 
 test("bufferState poll is found and started in init", function()

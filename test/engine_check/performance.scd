@@ -258,7 +258,7 @@ h.freeEngine(other);
 
 // The bufferState poll carries slot * 1000 + seconds
 check.(engine.bufferStateStride == 1000, "performance: bufferStateStride is 1000");
-h.command(\loadBuffer, 2, h.stereoPath);
+h.command(\loadBuffer, 2, h.stereoPath, 0);
 check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateValue(2) == 2000.5 }
     and: { h.waitFor({ h.pollValueNear(\bufferState, 2000.5, 0.001) }, 3) },
     "performance: bufferState carries slot * 1000 + seconds (got %)".format(engine.bufferStateValue(2)));

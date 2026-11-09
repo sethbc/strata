@@ -52,7 +52,7 @@ var checkSourceGrains = { arg voice, slot;
         sin(2pi * 440 * frame / server.sampleRate) * 0.5 }), 0, frames);
         h.stereoOf(sine, sine) }.value);
     file.close;
-    command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
     tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
     probe = Synth(\strataCheckChannelPeaks, [\in, privateBus, \out, peakBus], group);
 
@@ -96,7 +96,7 @@ var checkSourceGrains = { arg voice, slot;
     [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [96000, 0.25, 0.2, 1], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
         var validFrames;
         writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
-        command.(\loadBuffer, slot, path); 0.3.wait; server.sync;
+        command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
         validFrames = engine.bufferFrames[slot];
         [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(validFrames, buffer.numFrames - validFrames, 1) });
         command.(\setGrainParam, voice, \grainSize, grainCase[2]);

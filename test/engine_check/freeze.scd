@@ -323,7 +323,7 @@ rampFile = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels
 rampFile.openWrite(rampPath);
 rampFile.writeData(h.stereoOf(h.rampSignal(sampleRate.asInteger) / sampleRate, h.repeating(sampleRate.asInteger, [1.0])));
 rampFile.close;
-command.(\loadBuffer, 5, rampPath);
+command.(\loadBuffer, 5, rampPath, 0);
 h.waitFor({ engine.bufferFrames[5] > 0 }, 3);
 startTimecodeVoice.(1, 6, 0.05, 20.0, 1.0);
 command.(\setGrainParam, 1, \bufScan, 0.5);

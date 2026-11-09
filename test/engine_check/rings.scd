@@ -144,7 +144,7 @@ check.([engine.ringReadMargin, engine.ringSpreadSeconds, engine.ringMaxRate] == 
 
 // with a voice and a recording started, the writers still run last in voiceGroup
 command.(\voiceOn, 2, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
-command.(\recordBuffer, 7, 0.5, 1.0);
+command.(\recordBuffer, 7, 0.5, 1.0, 0, 0, 0, 0, 0);
 0.1.wait; server.sync;
 nodes = h.synthTree(engine.voiceGroup);
 writers = nodes.copyRange(nodes.size - (engine.numVoices + 1), nodes.size - 1);

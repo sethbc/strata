@@ -68,7 +68,10 @@
     // grainBody; they differ only in what they read and where a grain
     // starts. The 3.2 controls past today's (history ... reverbSend) have
     // neutral defaults: no variation, the whole slot as the loop, no
-    // freeze, no voice filter, sends at 1.
+    // freeze, no voice filter, sends at 1. 3.3's: scrubRate, scanHold and
+    // t_scanReset default to no scrub, and recHeadBus (a named control, as
+    // its default is this engine's idle head bus: the record area's) to the
+    // idle head; the engine sends a buffer synth its slot's (slotLengthPairs).
     addGrainDefs {
         // Granular processor for a ring: the voice's own (synth source) or
         // the input's (input source), each written by a strataRingWrite
@@ -89,7 +92,8 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1,
             filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
-            delaySend=1, reverbSend=1;
+            delaySend=1, reverbSend=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
@@ -132,7 +136,8 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1,
             filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0,
-            delaySend=1, reverbSend=1;
+            delaySend=1, reverbSend=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
@@ -148,7 +153,7 @@
                 delaySend: delaySend, reverbSend: reverbSend
             );
             this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate,
-                bufScan, posSpread, freeze, loopStart, loopLength));
+                bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
         }).add;
     }
 
@@ -256,7 +261,7 @@
     // out by the level) the last valid length is held, so the grains fading
     // out keep their size and place.
     slotGrainReader { arg bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate, bufScan, posSpread,
-        freeze, loopStart, loopLength;
+        freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus;
         ^{ arg trig, rate, dur, mode;
             var serverScale = BufRateScale.kr(bufnumL);
             var slotRate = rate * bufRate * (bufRateScale / serverScale);
@@ -264,10 +269,10 @@
             var readRate = (slotRate * serverScale).abs.max(0.001);  // never 0: the duration divides by it
             var grainDur = dur.min((validFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
             var grainFrames = grainDur * SampleRate.ir * readRate;
-            var scanPhase = Phasor.ar(0, this.scanRate(bufScan, freeze) * SampleDur.ir, 0, 1);
+            var scanPhase = this.slotScanPhase(bufScan, freeze, scrubRate, scanHold, t_scanReset);
             var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
             var start = this.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, slotRate, grainFrames, validFrames,
-                loopStart, loopLength);
+                loopStart, loopLength, recHeadBus);
             (bufL: bufnumL, bufR: bufnumR, rate: slotRate, dur: grainDur,
                 pos: start * (validFrames / BufFrames.kr(bufnumL)),
                 // silent while the slot is empty or being recorded: every

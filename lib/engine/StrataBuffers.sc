@@ -1,7 +1,7 @@
 // StrataBuffers.sc
-// The buffers area: the eight slots, the live input, recording, the slot
-// commands and the bufferState and bufferLoadFailed polls. See
-// docs/notes/engine/buffers.md.
+// The buffers area: the eight slots, the live input, the slot commands and
+// the bufferState and bufferLoadFailed polls (recording is the record area's:
+// StrataRecord.sc). See docs/notes/engine/buffers.md.
 
 + Engine_Strata {
     // The buffers area (order 40)
@@ -29,10 +29,7 @@
         buffersR = Array.fill(numBuffers, { Buffer.alloc(context.server, context.server.sampleRate * bufferSeconds, 1) });
         bufferFrames = Array.fill(numBuffers, 0);
         bufferSampleRates = Array.fill(numBuffers, { context.server.sampleRate });
-        recordSynths = Array.newClear(numBuffers);
-        recordFrameBuses = Array.fill(numBuffers, { Bus.control(context.server, 1) });
         slotChanges = Array.fill(numBuffers, 0);
-        stopReplies = Array.newClear(numBuffers);
         bufferLoads = Array.fill(numBuffers, 0);
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
@@ -47,18 +44,6 @@
             arg out;
             Out.ar(out, SoundIn.ar([0, 1]));
         }).add;
-
-        // Records the stereo input into a slot's buffer pair from frame 0
-        // (replacing, never overdubbing) and frees itself after duration.
-        // framesOut holds the frames recorded so far, read by stopRecord.
-        SynthDef(\strataRecord, {
-            arg in, bufnumL, bufnumR, level=1, duration=1, framesOut;
-            var sig = In.ar(in, 2) * level;
-            RecordBuf.ar(sig[0], bufnumL, loop: 0, doneAction: 2);
-            RecordBuf.ar(sig[1], bufnumR, loop: 0);
-            Out.kr(framesOut, Sweep.kr(0, SampleRate.ir));
-            Line.kr(0, 0, duration, doneAction: 2);
-        }).add;
     }
 
     startInputSynth {
@@ -66,25 +51,17 @@
     }
 
     addBufferCommands {
-        // msg: slot index (0-7), sound file path
-        this.addCommand(\loadBuffer, "is", { arg msg;
-            this.loadSlot(msg[1], msg[2].asString);
-        });
-
-        // msg: slot index, seconds, input level
-        this.addCommand(\recordBuffer, "iff", { arg msg;
-            this.recordSlot(msg[1], msg[2], msg[3]);
+        // msg: slot index (0-7), sound file path, start seconds (3.3's
+        // argument: read from the beginning until the files package)
+        this.addCommand(\loadBuffer, "isf", { arg msg;
+            this.loadSlot(msg[1], msg[2].asString, msg[3]);
         });
 
         this.addCommand(\clearBuffer, "i", { arg msg;
             this.clearSlot(msg[1]);
         });
 
-        // End a recording early, keeping what was captured
-        this.addCommand(\stopRecord, "i", { arg msg;
-            this.stopRecordSlot(msg[1]);
-        });
-
+        // recordBuffer and stopRecord are the record area's;
         // saveBuffer and its bufferSaveResult poll are the files area's
 
         // Valid seconds per slot. matron only accepts single-float value
@@ -112,11 +89,11 @@
         bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
     }
 
-    // Recordings and waiting slot changes, then the input synth
+    // Waiting slot changes, then the input synth (the record area's stop
+    // has canceled the recordings first, so none completes and writes on
+    // free): a slot change drops a load or zeroing still waiting for its fade
     stopBuffers {
-        // canceled first, so no recording completes (and writes) on free;
-        // a slot change also drops a load or zeroing still waiting for its fade
-        numBuffers.do({ arg index; this.stopRecording(index); this.slotChanged(index) });
+        numBuffers.do({ arg index; this.slotChanged(index) });
         inputSynth.free;
     }
 
@@ -125,7 +102,6 @@
         buffersL.do({ arg buffer; buffer.free });
         buffersR.do({ arg buffer; buffer.free });
         inputBus.free;
-        recordFrameBuses.do({ arg bus; bus.free });
     }
 
     bufferStateValue { arg index;
@@ -181,15 +157,6 @@
         ^readers
     }
 
-    // Cancel a recording in progress, or one still waiting for its zeroed
-    // buffers (it then never starts); its onFree sees it was canceled
-    stopRecording { arg index;
-        var synth = recordSynths[index];
-        recordSynths[index] = nil;
-        // its take may have just completed (sendToSynth); free(false) marks it freed
-        if (synth.notNil and: { synth.isPlaying }) { this.sendToSynth(synth.freeMsg); synth.free(false) };
-    }
-
     // Read up to bufferSeconds of a sound file into a slot (channel 0 to the
     // left buffer, channel 1, or 0 again for a mono file, to the right).
     // At most bufferSeconds at the server rate fit (the buffers' size), so a
@@ -204,7 +171,7 @@
     // or stop, or a later load that took effect, arrived meanwhile
     // (loadsSuperseded). bufferLoads counts at the command either way, so
     // bufferLoadFailed's numbering is the same.
-    loadSlot { arg index, path;
+    loadSlot { arg index, path, start = 0;
         var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled;
         if (this.validBuffer(index).not) { ^this };
         bufferLoads[index] = bufferLoads[index] + 1;
@@ -317,23 +284,6 @@
         bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
     }
 
-    // true while a recording runs or waits to start in the slot, or one
-    // stopRecord ended still awaits its frame count (stopReplies)
-    slotRecording { arg index;
-        ^recordSynths[index].notNil or: { stopReplies[index].notNil }
-    }
-
-    // A load cancels the slot's recording: it never completes, and the slot
-    // reads empty (0 frames). The change also drops the awaited frame count
-    // (stopReplies) and supersedes the loads up to throughLoad (every load
-    // sent so far unless given: a long file's load passes the load before
-    // its own, so it can still take effect after its check)
-    cancelSlotRecording { arg index, throughLoad;
-        this.stopRecording(index);
-        this.slotChanged(index, throughLoad);
-        this.bufferChanged(index);
-    }
-
     // true when a grain synth reads the slot: a running voice's, or one
     // still releasing, fading or cutting (slotGrainSynths)
     slotPlaying { arg index;
@@ -368,85 +318,6 @@
         stopReplies[index] = nil;
         superseded[index] = superseded[index].max(throughLoad ? bufferLoads[index]);
         ^slotChanges[index]
-    }
-
-    // Record the stereo input into a slot, replacing it: the slot reads as
-    // empty at once (the voices reading it fade out, afterSlotFade), then
-    // the pair is zeroed and the record synth starts after a sync, so
-    // zeroing never lands on the new take, and only if nothing canceled it
-    // meanwhile (a completion message could not be canceled before the
-    // node exists). The slot reads as empty until the recording completes,
-    // then the take is written to scratchDir so it survives a restart.
-    recordSlot { arg index, seconds, level;
-        var frames, synth, change;
-        if (this.validBuffer(index).not) { ^this };
-        frames = (seconds * context.server.sampleRate).round.asInteger.clip(0, buffersL[index].numFrames);
-        if (frames < 1) { ^this };
-
-        this.stopRecording(index);
-        change = this.slotChanged(index);
-        bufferFrames[index] = 0;
-        bufferSampleRates[index] = context.server.sampleRate;
-        this.bufferChanged(index);
-
-        synth = Synth.basicNew(\strataRecord, context.server);
-        recordSynths[index] = synth;
-        this.afterSlotFade(index, change, {
-            buffersL[index].zero;
-            buffersR[index].zero;
-            fork({
-                context.server.sync;
-                if (recordSynths[index] === synth) {
-                    // Marked playing from the moment it is sent (not when /n_go
-                    // arrives), so stopRecording frees it from here on
-                    synth.register(true);
-                    synth.onFree({
-                        if (recordSynths[index] === synth) {
-                            recordSynths[index] = nil;
-                            bufferFrames[index] = frames;
-                            this.bufferChanged(index);
-                            this.writeSlot(index, this.scratchPath(index));
-                        };
-                    });
-                    recordFrameBuses[index].set(0);
-                    context.server.listSendMsg(synth.newMsg(inputSynth, [
-                        \in, inputBus,
-                        \bufnumL, buffersL[index].bufnum,
-                        \bufnumR, buffersR[index].bufnum,
-                        \level, level,
-                        \duration, frames / context.server.sampleRate,
-                        \framesOut, recordFrameBuses[index].index
-                    ], \addAfter));
-                };
-            }, SystemClock);
-        });
-    }
-
-    // Stop a recording now and keep it: the slot's valid length becomes the
-    // frames the record synth reported (its frames bus keeps the last value
-    // after the free, and /c_get is answered after the /n_free), then the
-    // scratch take is written as for a completed recording. A recording
-    // still waiting for its zeroed buffers captured nothing and is simply
-    // canceled; an idle slot is left alone. The reply applies only if no
-    // load, record or clear changed the slot before it arrived (slotChanges).
-    stopRecordSlot { arg index;
-        var synth, started, change;
-        if (this.validBuffer(index).not) { ^this };
-        synth = recordSynths[index];
-        if (synth.isNil) { ^this };
-        started = synth.isPlaying;  // read first: Node.free clears it
-        this.stopRecording(index);
-        change = this.slotChanged(index);
-        if (started.not) { ^this };
-        stopReplies[index] = change;
-        recordFrameBuses[index].get({ arg recorded;
-            if (stopReplies[index] == change) { stopReplies[index] = nil };
-            if (slotChanges[index] == change) {
-                bufferFrames[index] = recorded.round.asInteger.clip(0, buffersL[index].numFrames);
-                this.bufferChanged(index);
-                this.writeSlot(index, this.scratchPath(index));
-            };
-        });
     }
 
     // Empty a slot: it reads 0 frames at once (the voices reading it fade

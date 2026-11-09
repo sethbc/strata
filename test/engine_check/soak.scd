@@ -65,10 +65,10 @@ rounds.do({ arg round;
     var slot = round % other.numBuffers, savePath = root +/+ "saved/round%.wav".format(round % 2);
     var roundStart = Main.elapsedTime, loaded, reports, saved, deviation, savedFile;
     if (File.exists(savePath)) { File.delete(savePath) };
-    h.commandTo(other, \loadBuffer, slot, sourcePath);
+    h.commandTo(other, \loadBuffer, slot, sourcePath, 0);
     loaded = waitFor.({ other.bufferFrames[slot] == frames }, 30);
     reports = saveReports.value.size;
-    h.commandTo(other, \saveBuffer, slot, savePath);
+    h.commandTo(other, \saveBuffer, slot, savePath, 0, 1);
     saved = waitFor.({ saveReports.value.size > reports }, 120)
         and: { saveReports.value.copyToEnd(reports) == [[slot, false]] };
     savedFile = if (saved) { SoundFile.openRead(savePath) };

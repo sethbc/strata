@@ -12,8 +12,8 @@
 ## Owns
 
 `lib/buffers.lua` (`S.lib.buffers`):
-- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine/buffers.md`, Audio Sources: Lua side), `S.buffer_polls`, `S.buffer_record_clocks`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
-- recording, loading, clearing and saving (`record_buffer`, `load_buffer`, `clear_buffer`, `save_buffer`, ...);
+- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine/buffers.md`, Audio Sources: Lua side, with `records_sent` that `lib/record.lua` counts), `S.buffer_polls`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
+- loading, clearing and saving (`load_buffer`, `clear_buffer`, `save_buffer`, ...); recording is `lib/record.lua`'s (`docs/notes/lua/record.md`), and these send `loadBuffer` and `saveBuffer` with 3.3's neutral arguments (start 0, region 0, 1);
 - the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`, `buffer_save_result`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
 - two cleanup steps: 40 (save the buffer paths) and 130 (the polls and recording timers).
