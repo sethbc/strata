@@ -1,7 +1,7 @@
 ## Must not break
 
 - **Ring writers** (`\strataRingWrite`) are one per voice, reading `granBuses[i]`, and one reading `inputBus`.
-- **Writers run last in `voiceGroup`** (after the voice, input and record synths), so a voice writer records only its voice synth: mirroring grain synths write the voice bus later, in `processGroup`. They are persistent (started in the rings area's `start`, never released) and their keys (`ringWrite0`..`ringWrite6`, `ringWriteInput`) are `effectKeys`, so they get plain messages.
+- **Writers run last in `voiceGroup`** (after the voice, input and record synths), so a voice writer records only its voice synth: the stage writes the voice bus later, in `processGroup`. They are persistent (started in the rings area's `start`, never released) and their keys (`ringWrite0`..`ringWrite6`, `ringWriteInput`) are `effectKeys`, so they get plain messages.
 - **A writer's input goes through `zeroBadValues`** before its `BufWr`s: a voice that blows up never writes NaN into a ring that frozen or later grains replay.
 - **Rings only ever append.** Any other write into a voice ring (3.2's freeze copy) fades the voice's ring readers first (`ringLevel 0`, waiting `bufferFadeWait` when one plays) and runs only if `ringChanges[voice]` is unchanged, as `slotChanges` guards the slots.
 - **`ringReaders`** holds every `\strataGrainRing` with its voice until it frees (set in `startGrainSynth`, cleared in `watchVoiceSynth`'s `onFree`).
@@ -31,7 +31,7 @@ Methods: `ringSeconds` (4), `ringGuardSeconds` (4), `ringReadMargin` (0.005 s), 
 
 `\strataRingWrite` (`in`, `bufL`, `bufR`, `phaseOut`): a `Phasor.ar` over the ring's frames drives two `BufWr`s and reports its position with `Out.kr(phaseOut, A2K.kr(phase))`. The `Phasor` starts from the frame on `phaseOut` (an `Impulse.ar(0)` reset to `In.kr(phaseOut)`), so a writer that replaces another (3.2's spectral freeze, `Synth.replace`) carries on where it was; the phase buses start at 0. One writer per voice reads `granBuses[i]`, and the input writer reads `inputBus`. They start at the tail of `voiceGroup` in the rings area's `start` (after the voices area's groups and the buffers area's input synth), stop in its `stop` (before the voices area frees the groups) and the rings and phase buses are freed in its `free`.
 
-`In.ar` reads a bus not yet written in this cycle as silence, so a voice writer, running before `processGroup`, never records a mirroring grain synth's output: returning to the synth source never re-grains a fading buffer voice's mirror, with no gating.
+`In.ar` reads a bus not yet written in this cycle as silence, so a voice writer, running before `processGroup`, never records the mirror its stage writes: returning to the synth source never re-grains a fading buffer voice's mirror, with no gating.
 
 ### Where a ring grain starts
 

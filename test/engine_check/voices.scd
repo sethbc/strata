@@ -299,10 +299,19 @@ voiceDefs.do({ arg name;
         ugen.isKindOf(EnvGen) and: { ugen.inputs[1].isKindOf(OutputProxy) }
     }), "% scales its accent envelope by velocity through levelScale".format(name));
 });
-(voiceDefs ++ grainDefs).do({ arg name;
+voiceDefs.do({ arg name;
     check.(velocityOnlyScalesAccents.(name),
         "% uses velocity only as its accent's levelScale (no bare velocity multiplier)".format(name));
 });
+check.(SynthDescLib.global.at(\strataVoiceMix).notNil and: { velocityOnlyScalesAccents.(\strataVoiceMix) },
+    "voices: velocity in strataVoiceMix feeds only EnvGen levelScale");
+// A copy of the stage bent so velocity also scales the level directly: the check must fail it
+SynthDef(\strataCheckBentVoiceMix, { arg out, t_trig = 0, velocity = 1;
+    var accent = EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity);
+    Out.ar(out, In.ar(0, 2) * (1 + accent) * velocity);
+}).add;
+server.sync;
+check.(velocityOnlyScalesAccents.(\strataCheckBentVoiceMix, false).not, "voices: a bent copy of strataVoiceMix fails the velocity check");
 checkKarplusMutants.value;
 
 // Silent bus (I4)

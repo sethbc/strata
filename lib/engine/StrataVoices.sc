@@ -52,12 +52,13 @@
 
     startVoiceGroups {
         // Node order inside the engine group (context.xg):
-        // voiceGroup (input, voices, recorders) -> processGroup (grain
-        // synths that read a voice bus at the head; grain synths that mirror
-        // into a voice bus just before that voice's live mod synth, so the
-        // mirror reaches strataMod in the same block; mod synths added at
-        // the tail; see startPlacedGrainSynth) -> filter -> delay -> reverb
-        // -> master.
+        // voiceGroup (input, voices, recorders) -> processGroup (the synth
+        // source's grain synths at the head; each voice's mix group, the
+        // voice's buffer and input grain synths at its head and its
+        // strataVoiceMix at its tail, just before that voice's mod synth,
+        // so the mirror reaches strataMod in the same block; mod synths
+        // added at the tail: see startPlacedGrainSynth and startModSynth)
+        // -> filter -> delay -> reverb -> master.
         // Keeping everything inside xg leaves norns' output group (og) and
         // its output metering after the engine.
         voiceGroup = Group.head(context.xg);
@@ -89,21 +90,28 @@
                 ]);
 
                 // Re-gates the synths the voice still has (running or
-                // releasing) and starts the missing ones; never stacks
-                this.gateVoice(voice);
+                // releasing) and starts the missing ones; never stacks. The
+                // stage takes the reset values in the same bundle, so the
+                // level and the first grain land in one block.
+                context.server.makeBundle(nil, {
+                    this.setSynth(this.voiceMixKey(voice), *this.controlPairs(\strataVoiceMix, voiceControls[voice]));
+                    this.gateVoice(voice);
+                });
             };
         });
 
         // Re-articulate a running voice without creating new nodes: fires
-        // the accent envelope at the given velocity (0-1) on whichever synth
-        // carries it (the voice synth for the synth source, re-plucking
-        // Karplus; the grain synth for buffer and input sources), and one
-        // grain when the grain synth is in triggered mode. velocity is set
-        // in the same message as t_trig.
+        // the accent envelope at the given velocity (0-1) on the voice synth
+        // (the synth source, re-plucking Karplus) and, while the voice runs,
+        // on the stage (its voice-level gain on the buffer or input path),
+        // and one grain when the grain synth is in triggered mode (the grain
+        // synth takes t_trig alone: it has no accent). velocity is set in the
+        // same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
-            var velocity = msg[2].clip(0, 1);
-            this.setSynth(this.voiceKey(msg[1]), \velocity, velocity, \t_trig, 1);
-            this.setSynth(this.grainKey(msg[1]), \velocity, velocity, \t_trig, 1);
+            var voice = msg[1], velocity = msg[2].clip(0, 1);
+            this.setSynth(this.voiceKey(voice), \velocity, velocity, \t_trig, 1);
+            this.setSynth(this.grainKey(voice), \t_trig, 1);
+            if (this.voiceRunning(voice)) { this.setSynth(this.voiceMixKey(voice), \velocity, velocity, \t_trig, 1) };
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;
@@ -208,17 +216,21 @@
     }
 
     // A voice-level control (synthesis param, crossmod routing or amount):
-    // kept for restarts, sent to the voice synth, and to the grain synth
-    // when that has the control (strataGrainBuf takes crossmod, amp, pan and
-    // bend; the input strataGrain takes amp, pan and the amplitude crossmod)
-    // while the voice is not on its synth source
+    // kept for restarts, sent to the voice synth, to the grain synth when
+    // that has the control (pan, bend and the frequency crossmod) while the
+    // voice is not on its synth source, and, whatever the source, to the
+    // stage when that has the control (amp and the amplitude crossmod) while
+    // the voice runs (a stopped voice's reach the stage at its next voiceOn)
     setVoiceControl { arg voice, control, value;
+        var pairs;
         if (this.validVoice(voice)) {
             voiceControls[voice][control] = value;
             this.setSynth(this.voiceKey(voice), control, value);
             if (grainSource[voice] != 0) {
                 this.setSynth(this.grainKey(voice), *this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]));
             };
+            pairs = this.controlPairs(\strataVoiceMix, Dictionary[control -> value]);
+            if (pairs.notEmpty and: { this.voiceRunning(voice) }) { this.setSynth(this.voiceMixKey(voice), *pairs) };
         };
     }
 }

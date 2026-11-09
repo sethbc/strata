@@ -17,7 +17,7 @@
 var server = Server.local;
 var failures = 0;
 // The fixed order the areas run in; an absent 3.2 file is skipped
-var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \performance,
+var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \mix, \performance,
     \rings, \freeze, \variation, \loops, \record, \waveform, \positions, \soak];
 // Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
 // a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)
@@ -41,7 +41,7 @@ var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInte
 var context, engine, h;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
-var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataInput, \strataRecord, \strataRingWrite,
+var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataVoiceMix, \strataInput, \strataRecord, \strataRingWrite,
     \strataFilter, \strataDelay, \strataReverb, \strataMaster];
 var grainDefs = [\strataGrainRing, \strataGrainBuf];
 var engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
@@ -84,6 +84,7 @@ var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 // (delaySendOut, reverbSendOut, fxMixIn) on both synths. Each def also bakes
 // in this engine's scaleBuffer bufnum at def time (grainRate's quantize), so
 // replaceEngine builds them again with the new engine.
+var tail32;
 var addDefs32 = { arg e;
     var voiceFilter32 = { arg sig, filterType, filterFreq, filterRes, filterMix;
         e.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
@@ -192,6 +193,7 @@ var addDefs32 = { arg e;
             delaySend: delaySend, reverbSend: reverbSend
         )
     };
+    tail32 = (voiceFilter: voiceFilter32, voiceOutput: voiceOutput32);
     SynthDef(\strataCheckRecord32, {
         arg in, bufnumL, bufnumR, level=1, duration=1, framesOut;
         var sig = In.ar(in, 2) * level;
@@ -733,6 +735,12 @@ server.waitForBoot({
             // Check-only copies of 3.2's SynthDefs (addDefs32), for
             // comparisons against 3.2's sound: control names as 3.2's
             def32: (record: \strataCheckRecord32, grainRing: \strataCheckGrainRing32, grainBuf: \strataCheckGrainBuf32),
+            // ... and 3.2's voiceFilter and voiceOutput (the tail of 3.2's
+            // grain synth), for a reference built around the engine's reader
+            voiceFilter32: { arg self, sig, filterType, filterFreq, filterRes, filterMix;
+                tail32[\voiceFilter].(sig, filterType, filterFreq, filterRes, filterMix) },
+            voiceOutput32: { arg self, sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
+                tail32[\voiceOutput].(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend) },
             stereoPath: scratchRoot +/+ "stereo.wav", monoPath: scratchRoot +/+ "mono.wav",
             longPath: scratchRoot +/+ "long.wav", textPath: scratchRoot +/+ "not-audio.wav",
             // helpers: each takes the Event first (h.check(condition, message))

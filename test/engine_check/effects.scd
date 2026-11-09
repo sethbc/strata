@@ -101,10 +101,10 @@ SynthDef(\strataCheck30Reverb, { arg in, out, mix=0.3, size=0.8, damp=0.5;
 // the raw bus) through the engine's voiceOutput with the given sends; its
 // buses are controls (voiceOutput's named controls, set from
 // mixBusControls), so a check can move them to private buses
-SynthDef(\strataCheckChainSource, { arg out, raw, junk, delaySend = 1, reverbSend = 1;
+SynthDef(\strataCheckChainSource, { arg out, raw, delaySend = 1, reverbSend = 1;
     var sig = ({ WhiteNoise.ar(0.15) } ! 2) * LFPulse.kr(3, 0, 0.3).lag(0.005) + SinOsc.ar([330, 331], 0, 0.08);
     Out.ar(raw, sig);
-    engine.voiceOutput(sig, out, junk, 0, delaySend, reverbSend);
+    engine.voiceOutput(sig, out, delaySend, reverbSend);
 }).add;
 // The master's input (masterSum, as \strataMaster sums it) on the given buses
 SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, fxMix, out;
@@ -210,13 +210,13 @@ checkRouting = {
         and: { [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].every({ arg name;
             (mixBus.(name).numChannels == 2) and: { mixBus.(name).rate == \audio } }) },
         "effects: areaState[\\mix] holds the stereo send buses, their ...Post copies, the returns and fxMix (2 channels)");
-    // every grain synth the engine starts takes this engine's buses
+    // every stage takes this engine's buses
     check.((0..(engine.numVoices - 1)).every({ arg voice;
-        var synth = engine.synths[engine.grainKey(voice)];
+        var synth = engine.synths[engine.voiceMixKey(voice)];
         synth.notNil and: { getControl.(synth, \delaySendOut) == mixBus.(\delaySend).index }
             and: { getControl.(synth, \reverbSendOut) == mixBus.(\reverbSend).index }
             and: { getControl.(synth, \fxMixIn) == mixBus.(\fxMix).index }
-    }), "effects: every running grain synth writes this engine's send buses and reads its fxMix");
+    }), "effects: every voice's mix stage writes this engine's send buses and reads its fxMix");
 };
 
 // A NaN or inf on any of the three mix buses (a voice blowing up) becomes
@@ -284,7 +284,7 @@ checkEffectSendsReported = {
 checkChain30 = { arg label, fx, sweep;
     var rawBus = Bus.audio(server, 2), filtered30 = Bus.audio(server, 2), delayed30 = Bus.audio(server, 2);
     var reverbed30 = Bus.audio(server, 2), out32 = Bus.audio(server, 2), sum32;
-    var junk = Bus.audio(server, 2), energyBus = Bus.control(server, 2);
+    var energyBus = Bus.control(server, 2);
     var group30 = Group.after(context.xg), compareGroup, copies, source, comparator, energies, ratio, elapsed = 0;
     command.(\setFilter, *fx.copyRange(0, 3));
     command.(\setDelay, *fx.copyRange(4, 6));
@@ -306,7 +306,7 @@ checkChain30 = { arg label, fx, sweep;
         \fxMix, mixBus.(\fxMix), \out, out32], engine.synths[\master], \addBefore);
     0.6.wait; server.sync;   // the lifted mixes settle
     server.makeBundle(nil, {
-        source = Synth(\strataCheckChainSource, [\out, engine.mainBus, \raw, rawBus, \junk, junk]
+        source = Synth(\strataCheckChainSource, [\out, engine.mainBus, \raw, rawBus]
             ++ engine.mixBusControls.asKeyValuePairs, engine.processGroup, \addToTail);
         comparator = Synth(\strataCheckCompare, [\in, out32, \ref, reverbed30, \out, energyBus], compareGroup);
     });
@@ -325,7 +325,7 @@ checkChain30 = { arg label, fx, sweep;
         "effects: with every send at 1 the output matches 3.0's chain within -60 dB (%: % dB, reference energy %)".format(
             label, (ratio.max(1e-12).ampdb).round(0.1), energies[1] ? 0));
     source.free; comparator.free; sum32.free; group30.free; compareGroup.free; server.sync;
-    [rawBus, filtered30, delayed30, reverbed30, out32, junk, energyBus].do(_.free);
+    [rawBus, filtered30, delayed30, reverbed30, out32, energyBus].do(_.free);
 };
 
 // A voice whose sends are 0 plays dry at full level at any global mix: the
@@ -335,7 +335,7 @@ checkChain30 = { arg label, fx, sweep;
 // (1 - m_d)
 checkDrySends = {
     var rawBus = Bus.audio(server, 2), dryBus = Bus.audio(server, 2), delayBus = Bus.audio(server, 2);
-    var reverbBus = Bus.audio(server, 2), junk = Bus.audio(server, 2), peakBus = Bus.control(server, 4);
+    var reverbBus = Bus.audio(server, 2), peakBus = Bus.control(server, 4);
     var group = Group.after(engine.processGroup), source, probe, peaks, results;
     // the largest error of each bus against the raw signal times its gain
     SynthDef(\strataCheckSendPeaks, { arg raw, dry, delay, reverb, out, dryGain = 1, delayGain = 0, reverbGain = 0, t_reset = 0;
@@ -352,7 +352,7 @@ checkDrySends = {
     server.sync; 0.2.wait;
     // [delay send, reverb send, dry gain, delay send gain, reverb send gain]
     results = [[0, 0, 1, 0, 0], [1, 1, 0.2 * 0.1, 1, 0.2]].collect({ arg each;
-        source = Synth(\strataCheckChainSource, [\out, dryBus, \raw, rawBus, \junk, junk, \delaySend, each[0], \reverbSend, each[1],
+        source = Synth(\strataCheckChainSource, [\out, dryBus, \raw, rawBus, \delaySend, each[0], \reverbSend, each[1],
             \delaySendOut, delayBus.index, \reverbSendOut, reverbBus.index, \fxMixIn, mixBus.(\fxMix).index], group);
         probe = Synth(\strataCheckSendPeaks, [\raw, rawBus, \dry, dryBus, \delay, delayBus, \reverb, reverbBus, \out, peakBus,
             \dryGain, each[2], \delayGain, each[3], \reverbGain, each[4]], group, \addToTail);
@@ -364,7 +364,7 @@ checkDrySends = {
     check.(results.every({ arg each; (each.size == 4) and: { each[3] > 0.1 } and: { each.keep(3).every({ arg peak; peak < 1e-5 }) } }),
         "effects: a voice with sends 0 plays dry at full level at any global mix (delay 0.8, reverb 0.9; errors against dry x1 and empty sends, and at sends 1 dry x0.02, delay send x1, reverb send x0.2: %)".format(
             results.collect({ arg each; each.round(0.000001) })));
-    group.free; [rawBus, dryBus, delayBus, reverbBus, junk, peakBus].do(_.free);
+    group.free; [rawBus, dryBus, delayBus, reverbBus, peakBus].do(_.free);
 };
 
 // A command's messages, captured (makeBundle(false) sends nothing) and
@@ -635,14 +635,15 @@ masterUGens = SynthDescLib.global.at(\strataMaster).def.children;
 check.(masterUGens.detectIndex({ arg ugen; ugen.isKindOf(Limiter) })
     < masterUGens.detectIndex({ arg ugen; ugen.isKindOf(UnaryOpUGen) and: { ugen.operator == \tanh } }),
     "master limits before the tanh saturation");
-// "effects: the filter and send controls feed a UGen", in both grain defs
+// "effects: the filter and send controls feed a UGen", in the stage; each
+// grain def has one stereo Out (its path), the stage five (dry, the two
+// sends, the mirror and the tap)
+check.([\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].every({ arg control;
+    h.controlFeedsAUGen(\strataVoiceMix, control) }), "effects: the filter and send controls feed a UGen");
 check.(h.grainDefs.every({ arg name;
-    [\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].every({ arg control;
-        h.controlFeedsAUGen(name, control) })
-}), "effects: the filter and send controls feed a UGen");
-check.(h.grainDefs.every({ arg name;
-    SynthDescLib.global.at(name).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 4
-}), "effects: each grain def writes the dry bus, the two sends and the mirror");
+    SynthDescLib.global.at(name).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 1 })
+    and: { SynthDescLib.global.at(\strataVoiceMix).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 5 },
+    "effects: each grain def writes one path; the stage writes the dry bus, the two sends, the mirror and the tap");
 
 // The 3.0 comparison and the dry voice first, with no voice running
 probeKB = smallProbeKB.value;
