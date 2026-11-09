@@ -826,19 +826,27 @@ checkLongSlots.value;
 
 // A take through the record area equals 3.2's sample for sample: slot 1
 // by the engine, slot 2 by the check's copy of 3.2's \strataRecord (h.def32),
-// the same input (a 64-sample ramp: every block starts on the same value, so
-// the two takes need not start in the same block). Compared on the server.
+// the same input. The input is aperiodic, so a slipped or shifted frame
+// shows: left, a sample counter (a ramp that never repeats in the check's
+// span, 2^24 samples; its first value says at which sample a take started);
+// right, noise from h.noise (a 4801-sample period, no multiple of a block,
+// #131's primitive builder). The takes cannot start in one block (the engine
+// sends its own /s_new), so they are compared aligned by those first values:
+// the start difference must be whole blocks, and every frame after it equal.
+// Compared on the server.
 {
     var engine = h.engine, server = h.server, seconds = 0.5, frames = (seconds * server.sampleRate).round.asInteger;
     var framesBus = Bus.control(server, 1), diff = Bus.control(server, 2), diffR = Bus.control(server, 2);
-    var def = SynthDef(\strataCheckBlockRamp, { arg out;
-        var ramp = Phasor.ar(0, 1, 0, 64) / 64;
-        Out.ar(out, [ramp, ramp * -0.5]);
+    var counterSpan = 2 ** 24, noiseFrames = 65536;
+    var noise = Buffer.loadCollection(server, h.noise(noiseFrames, 0.5));
+    var input, group, starts, offset, first, second, compared, valuesL, valuesR;
+    SynthDef(\strataCheckAperiodicInput, { arg out, noiseBuf;
+        Out.ar(out, [Phasor.ar(0, 1, 0, counterSpan) / counterSpan,
+            BufRd.ar(1, noiseBuf, Phasor.ar(0, 1, 0, noiseFrames), 1, 1)]);
     }).add;
-    var input, group, valuesL, valuesR;
     server.sync;
     h.command(\clearBuffer, 0); h.command(\clearBuffer, 1); server.sync;
-    input = Synth(\strataCheckBlockRamp, [\out, engine.inputBus], engine.inputSynth, \addBefore);
+    input = Synth(\strataCheckAperiodicInput, [\out, engine.inputBus, \noiseBuf, noise.bufnum], engine.inputSynth, \addBefore);
     server.sync;
     Synth(h.def32[\record], [\in, engine.inputBus, \bufnumL, engine.buffersL[1].bufnum, \bufnumR, engine.buffersR[1].bufnum,
         \level, 1.0, \duration, seconds, \framesOut, framesBus.index], engine.inputSynth, \addAfter);
@@ -846,17 +854,27 @@ checkLongSlots.value;
     (seconds + 0.3).wait;
     h.waitFor({ engine.bufferFrames[0] == frames }, 2);
     input.free; server.sync;
+    // the sample each take's first frame recorded
+    starts = [0, 1].collect({ arg slot; (h.bufferSample(engine.buffersL[slot], 0) * counterSpan).round.asInteger });
+    offset = (starts[0] - starts[1]).abs;
+    // the take that started later is read from its first frame, the earlier one ahead by the difference
+    first = if (starts[0] >= starts[1]) { 0 } { 1 };
+    second = 1 - first;
+    compared = frames - offset;
     group = Group.after(engine.processGroup);
-    Synth(\strataCheckBufDiff, [\bufA, engine.buffersL[0].bufnum, \bufB, engine.buffersL[1].bufnum, \frames, frames, \out, diff], group);
-    Synth(\strataCheckBufDiff, [\bufA, engine.buffersR[0].bufnum, \bufB, engine.buffersR[1].bufnum, \frames, frames, \out, diffR], group);
+    Synth(\strataCheckBufDiff, [\bufA, engine.buffersL[first].bufnum, \bufB, engine.buffersL[second].bufnum,
+        \frames, compared, \offsetB, offset, \out, diff], group);
+    Synth(\strataCheckBufDiff, [\bufA, engine.buffersR[first].bufnum, \bufB, engine.buffersR[second].bufnum,
+        \frames, compared, \offsetB, offset, \out, diffR], group);
     (seconds + 0.1).wait; server.sync;
     valuesL = h.readBus(diff); valuesR = h.readBus(diffR);
-    group.free; server.sync;
+    group.free; noise.free; server.sync;
     h.command(\clearBuffer, 0); h.command(\clearBuffer, 1); server.sync;
     [framesBus, diff, diffR].do(_.free);
-    h.check((valuesL[1] > 0.5) and: { valuesR[1] > 0.1 } and: { valuesL[0] == 0 } and: { valuesR[0] == 0 },
-        "buffers: a take through the record area equals 3.2's sample for sample (difference %, %; level %, %)".format(
-            valuesL[0], valuesR[0], valuesL[1], valuesR[1]));
+    h.check(((offset % 64) == 0) and: { offset < (64 * 256) } and: { starts.every(_ > 0) }
+        and: { valuesL[1] > 0.0005 } and: { valuesR[1] > 0.1 } and: { valuesL[0] == 0 } and: { valuesR[0] == 0 },
+        "buffers: a take through the record area equals 3.2's sample for sample (start difference % frames; difference %, %; level %, %)".format(
+            offset, valuesL[0], valuesR[0], valuesL[1], valuesR[1]));
 }.value;
 
 // loadBuffer with start 0 reads the whole file, as 3.2's: the slot equals a

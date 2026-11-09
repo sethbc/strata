@@ -81,7 +81,9 @@ var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 // ringScanOffset and the ring constants) are still the engine's own. The
 // voiceOutput copy reads this engine's fx mix bus and sends by its default
 // control values; every comparison sets them through the control names
-// (delaySendOut, reverbSendOut, fxMixIn) on both synths.
+// (delaySendOut, reverbSendOut, fxMixIn) on both synths. Each def also bakes
+// in this engine's scaleBuffer bufnum at def time (grainRate's quantize), so
+// replaceEngine builds them again with the new engine.
 var addDefs32 = { arg e;
     var voiceFilter32 = { arg sig, filterType, filterFreq, filterRes, filterMix;
         e.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
@@ -685,9 +687,10 @@ server.waitForBoot({
             var x = In.ar(a, 2), y = In.ar(b, 2);
             Out.kr(out, [A2K.kr(Peak.ar((x - y).abs.sum, t_reset)), A2K.kr(Peak.ar(x.abs.sum, t_reset))]);
         }).add;
-        SynthDef(\strataCheckBufDiff, { arg bufA, bufB, frames, out, t_reset = 0;
+        // (offsetB: frames bufB is read ahead of bufA)
+        SynthDef(\strataCheckBufDiff, { arg bufA, bufB, frames, out, t_reset = 0, offsetB = 0;
             var phase = Phasor.ar(0, 1, 0, frames.max(1));
-            var x = BufRd.ar(1, bufA, phase, 0, 1), y = BufRd.ar(1, bufB, phase, 0, 1);
+            var x = BufRd.ar(1, bufA, phase, 0, 1), y = BufRd.ar(1, bufB, phase + offsetB, 0, 1);
             Out.kr(out, [A2K.kr(Peak.ar((x - y).abs, t_reset)), A2K.kr(Peak.ar(x.abs, t_reset))]);
         }).add;
         server.sync;
@@ -788,6 +791,8 @@ server.waitForBoot({
                 freeEngine.(engine);
                 server.sync;
                 engine = buildEngine.(context, settings);
+                addDefs32.(engine);
+                server.sync;
                 engine.scratchDir = scratchRoot +/+ "nested/scratch/";
                 engine.bufferStatePoll.start;
                 engine.bufferLoadFailedPoll.start;
