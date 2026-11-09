@@ -85,7 +85,9 @@ timeReads = { arg voice, seconds, action;
     seconds.wait;
     values = readBus.(bus);
     probe.free; bus.free;
-    engine.synths[engine.grainKey(voice)].set(\out, engine.mainBus.index);
+    engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+    check.(getControl.(engine.synths[engine.grainKey(voice)], \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
+        "rings: a grain synth's out is restored to its own path (voice %)".format(voice));
     values
 };
 // The median of a voice's grain pitch over 0.6 s (Hz)
@@ -96,7 +98,9 @@ pitchOf = { arg voice;
     server.sync; 0.3.wait;
     7.do({ 0.1.wait; readBus.(bus) !? { arg pair; if (pair[1] > 0.5) { freqs.add(pair[0]) } } });
     probe.free; bus.free;
-    engine.synths[engine.grainKey(voice)].set(\out, engine.mainBus.index);
+    engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+    check.(getControl.(engine.synths[engine.grainKey(voice)], \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
+        "rings: a grain synth's out is restored to its own path (voice %)".format(voice));
     if (freqs.isEmpty) { 0 } { freqs.sort[freqs.size div: 2] }
 };
 // Start a voice for the timecode reads: its voice synth (if any) played

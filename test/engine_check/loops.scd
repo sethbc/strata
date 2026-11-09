@@ -244,7 +244,9 @@ check.(peak > 0.05, "loops: the reverseProb 1 grains play (peak %)".format(peak)
 [[\reverseProb, 0], [\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
     command.(\setGrainParam, voice, *pair)
 });
-engine.synths[grainKey].set(\out, engine.mainBus.index);
+engine.synths[grainKey].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+check.(getControl.(engine.synths[grainKey], \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
+    "loops: the grain synth's out is restored to its own path");
 command.(\voiceOff, voice);
 command.(\setGrainSource, voice, 0);
 server.sync;

@@ -89,7 +89,9 @@ timeReads = { arg voice, seconds, action;
     seconds.wait;
     values = h.readBus(bus);
     probe.free; bus.free;
-    synth.set(\out, engine.mainBus.index);
+    synth.set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+    check.(getControl.(synth, \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
+        "freeze: a grain synth's out is restored to its own path (voice %)".format(voice));
     values
 };
 // Start a voice for the timecode reads: its voice synth (if any) played
@@ -157,7 +159,9 @@ readings = { arg seconds;
     command.(\setGrainParam, 0, \bufScan, 0.0);
     command.(\setGrainParam, 0, \grainSize, 0.1);
     probe.free; bus.free;
-    synth.set(\out, engine.mainBus.index);
+    synth.set(\out, engine.voicePathBus(0, engine.grainSource[0]).index);
+    check.(getControl.(synth, \out) == engine.voicePathBus(0, engine.grainSource[0]).index,
+        "freeze: the grain synth's out is restored to its own path (voice 0)");
     [starts.asArray.differentiate.drop(1), travel]
 }.value(3.0);
 ok = readings[0].select({ arg step; step.abs > 0.01 });
