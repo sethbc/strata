@@ -4,7 +4,7 @@
 -- Run alone: lua test/run.lua grid_layout_64
 
 return function(h)
-local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
 local function grid_core() return local_value("S").lib.grid_core end
@@ -98,7 +98,8 @@ test("64 column 1: a tap plays or stops on release, a 0.5 s hold switches the ha
   context.grid.press(1, 5, 3, 1); context.grid.press(1, 8, 3, 1)
   assert_equal(patterns[3][13], 15, "column 8 is the top level")
   context.grid.press(1, 8, 3, 0); context.grid.press(1, 5, 3, 0)
-  -- a hold switches back
+  -- a hold shows positions, the next switches back
+  switch_half(context, 1)
   switch_half(context, 1)
   assert_equal(grid_core().port_state(1).half, 1, "a second hold shows steps 1-8")
   tap(context, 1, 3, 1)
@@ -184,6 +185,7 @@ test("64 column 1 shows which half is up while the patterns are stopped", functi
   switch_half(context, 1)
   assert_equal(device:get_led(1, 8), 8, "steps 9-16: column 1 at 8")
   assert_equal(other:get_led(1, 8), 4, "each grid shows its own half")
+  switch_half(context, 1)  -- positions (3.3's third view)
   switch_half(context, 1)
   assert_equal(device:get_led(1, 8), 4, "back on steps 1-8: 4 again")
   -- playing, the playhead rules apply in either half; stopping shows the half again
@@ -227,6 +229,105 @@ test("64 lights the sounding step between steps, in its own half (#113)", functi
   assert_equal(device:get_led(1, 8), 12, "half 1 plays again: column 1 blinks (beat 1)")
   pattern_toggle()
   assert_equal(device:get_led(1, 8), 8, "stopped on steps 9-16: column 1 at 8")
+end)
+
+
+-- Voice 1 and 3 on slot 1 (16 s); the 64 grid on port 1
+local function positions_grid()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  for voice_idx = 1, 3 do params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1) end
+  local device = context.grid.plug(1, 8, 8)
+  return context, S, device
+end
+
+test("64: row 8 column 1's hold cycles steps 1-8, steps 9-16 and positions", function()
+  local context, S, device = positions_grid()
+  local core = grid_core()
+  assert_equal(core.page(1), 1, "starts on the steps")
+  switch_half(context, 1)
+  assert_equal(shown_half(1), 2, "steps 9-16"); assert_equal(core.page(1), 1)
+  switch_half(context, 1)
+  assert_equal(core.page(1), 5, "positions is page 5")
+  switch_half(context, 1)
+  assert_equal(core.page(1), 1, "back to the steps"); assert_equal(shown_half(1), 1, "steps 1-8")
+  switch_half(context, 1); switch_half(context, 1)
+  assert_equal(core.page(1), 5, "positions again")
+  S.pattern_playing = false
+  tap(context, 1, 1, 8)
+  assert_true(S.pattern_playing, "a tap still plays in the positions view")
+  grid_redraw()
+  assert_equal(device:get_led(1, 8), 15, "positions view: playing is 15")
+  tap(context, 1, 1, 8)
+  assert_true(not S.pattern_playing, "and stops")
+  grid_redraw()
+  assert_equal(device:get_led(1, 8), 6, "positions view: stopped is 6")
+end)
+
+test("64: rows 1-2 are the grid voice's 16 positions and a pair may span both", function()
+  local context, S = positions_grid()
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+  tap(context, 1, 5, 1)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "cell 5 of 16")
+  tap(context, 1, 1, 2)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "row 2 column 1 is cell 9")
+  context.grid.press(1, 8, 1, 1)
+  context.grid.press(1, 1, 2, 1)
+  context.grid.press(1, 1, 2, 0); context.grid.press(1, 8, 1, 0)
+  assert_near(params:get("v1_loop_start"), 0.4375, 1e-9, "cells 8-9")
+  assert_near(params:get("v1_loop_length"), 0.125, 1e-6, "two cells")
+end)
+
+test("64: row 3 is the strip and row 7 picks the grid voice", function()
+  local context, S, device = positions_grid()
+  local positions = S.lib.positions
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_bookmark_2", 0.6)
+  tap(context, 1, 2, 3)
+  assert_equal(positions.last_recalled(1), 2, "bookmark 2 recalled")
+  params:set("v1_buf_pos", 0.3)
+  context.grid.press(1, 6, 3, 1); tap(context, 1, 3, 3); context.grid.press(1, 6, 3, 0)
+  assert_near(positions.bookmark(1, 3), 0.3, 1e-6, "bookmark 3 stored")
+  context.grid.press(1, 7, 3, 1)
+  assert_true(positions.scan_held(1), "hold on")
+  context.grid.press(1, 7, 3, 0)
+  assert_true(not positions.scan_held(1), "hold off")
+  params:set("v1_loop_length", 0.5)
+  tap(context, 1, 8, 3)
+  assert_near(params:get("v1_loop_start"), 0, 1e-9, "whole loop start")
+  assert_near(params:get("v1_loop_length"), 1, 1e-6, "whole loop length")
+  tap(context, 1, 3, 7)
+  assert_equal(S.grid_voice_select, 3, "row 7 column 3 picks voice 3")
+  grid_redraw()
+  assert_equal(device:get_led(3, 7), 15, "selected")
+  assert_equal(device:get_led(1, 7), 6, "a buffer voice")
+  params:set("v2_source", S.constants.SOURCE_SYNTH)
+  grid_redraw()
+  assert_equal(device:get_led(2, 7), 2, "another voice")
+  for y = 4, 6 do for x = 1, 8 do assert_equal(device:get_led(x, y), 0, "rows 4-6 dark") end end
+end)
+
+test("64: the step views keep every key", function()
+  local context, S = positions_grid()
+  local calls = 0
+  local positions = S.lib.positions
+  local originals = {grid_key = positions.grid_key, strip_key = positions.strip_key}
+  positions.grid_key = function(...) calls = calls + 1 end
+  positions.strip_key = function(...) calls = calls + 1 end
+  for half = 1, 2 do
+    if shown_half(1) ~= half then switch_half(context, 1) end
+    for y = 1, 8 do
+      for x = 1, 8 do
+        if not (x == 1 and y == 8) then tap(context, 1, x, y) end
+      end
+    end
+  end
+  positions.grid_key, positions.strip_key = originals.grid_key, originals.strip_key
+  assert_equal(calls, 0, "the step views never reach positions")
 end)
 
 end

@@ -1,5 +1,6 @@
 ## Must not break
 
+- The 64 has three views, cycled by row 8 column 1's hold: steps 1-8, steps 9-16, positions, steps 1-8. The positions view is grid page 5 (`S.lib.grid_core.set_page(port, 5)`; the steps views are page 1 with `port_state(port).half`), so it is per port; leaving it resets the half to 1. In it rows 1-2 are the grid voice's 16 positions (`S.lib.positions.grid_key(port, S.grid_voice_select, cell, 16, z)`, row 1 cells 1-8, row 2 cells 9-16, releases passed on), row 3 the strip (`strip_key`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole; column 5 nothing), rows 4-6 dark, row 7 columns 1-7 `select_grid_voice` (LED 15 selected, 6 a buffer voice, 2 other), row 8 as on the steps views except column 1's LED (15 playing, 6 stopped). The step views never call `S.lib.positions`.
 - The 64 shows and edits one half of the patterns at a time: steps 1-8 or 9-16 (`visible_steps = math.min(PATTERN_LENGTH, cols)`), chosen per port by `S.lib.grid_core.port_state(port).half` (1 or 2; nil reads as 1). Patterns still play all 16 steps; a key in column x edits step `(half - 1) * 8 + x` and never any other.
 - The half lives in `port_state`, so it is per grid and is forgotten when the grid is removed (a grid plugged back shows steps 1-8). Never keep it in a layout local or on `S`.
 - Pattern keys go through `step_key` with 8 positions (the column within the shown half), so column 8 sets level 15 and column 4 level 8 in either half.
@@ -16,4 +17,5 @@
 ## Keys
 
 - Rows 1-7: `step_key(port, x, y, z, y, (half - 1) * 8 + x, x, 8)`.
-- Row 8: column 1 play / stop on a tap's release, switch the half on a 0.5 s hold; columns 2-8 `toggle_voice(x - 1)` (LED 12 running, 4 stopped).
+- Positions view (page 5): see the first item of Must not break.
+- Row 8: column 1 play / stop on a tap's release, a 0.5 s hold cycles steps 1-8, steps 9-16 and positions; columns 2-8 `toggle_voice(x - 1)` (LED 12 running, 4 stopped).
