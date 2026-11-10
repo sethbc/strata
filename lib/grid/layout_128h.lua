@@ -255,15 +255,15 @@ return function(S)
   end
 
   -- Page 4's strip, the grid voice's, at S.lib.positions' levels
-  local function redraw_strip(grid_device)
+  local function redraw_strip(port, grid_device)
     local voice_idx = S.grid_voice_select
     for n = 1, S.constants.NUM_BOOKMARKS do
       grid_device:led(LAYOUT_128H.strip_first_column + n - 1, LAYOUT_128H.strip_bookmark_row,
-        S.lib.positions.strip_level(voice_idx, n))
+        S.lib.positions.strip_level(voice_idx, n, port))
     end
     for i, key in ipairs(STRIP_KEYS) do
       grid_device:led(LAYOUT_128H.strip_first_column + i - 1, LAYOUT_128H.strip_key_row,
-        S.lib.positions.strip_level(voice_idx, key))
+        S.lib.positions.strip_level(voice_idx, key, port))
     end
   end
 
@@ -304,7 +304,7 @@ return function(S)
       redraw_scene_page(port, grid_device)
     elseif page == 4 then
       redraw_source_page(grid_device)
-      redraw_strip(grid_device)
+      redraw_strip(port, grid_device)
     elseif page == LAYOUT_128H.position_page then
       redraw_position_page(grid_device)
     else
@@ -318,7 +318,8 @@ return function(S)
     redraw_control_row(page, grid_device)
   end
 
-  S.registry.grid_layouts["128h"] = {key = grid_key_128h, redraw = grid_redraw_128h}
+  -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
+  S.registry.grid_layouts["128h"] = {key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true}
 
   return M
 end

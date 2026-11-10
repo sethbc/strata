@@ -641,6 +641,40 @@ test("on a 256 a strip store's release ends only its own voice: voice 2's next b
   S.grids[1] = nil
 end)
 
+-- #239: on the grids with one strip, store belongs to the port; each
+-- grid's store LED shows only its own key
+test("the store LED is the port's own", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  context.grid.plug(1, 16, 16)
+  context.grid.plug(2, 16, 8)
+  S.lib.grid_core.set_page(2, 4)
+  positions.strip_key(2, 1, "store", 1)
+  assert_equal(positions.strip_level(1, "store", 2), 15, "the 128h's store key is down")
+  assert_equal(positions.strip_level(1, "store", 1), 4, "the 256's is not")
+  assert_equal(positions.strip_level(1, "store"), 15, "with no port: any port's")
+  positions.strip_key(2, 1, 3, 1)
+  assert_equal(positions.strip_level(1, 3, 2), 15, "the bookmark stored on the 128h")
+  assert_equal(positions.strip_level(1, 3, 1), 6, "the 256 shows it unpressed")
+  positions.strip_key(2, 1, 3, 0); positions.strip_key(2, 1, "store", 0)
+  assert_equal(positions.strip_level(1, "store", 2), 4)
+end)
+
+test("a one-strip grid's store ends when the grid shows another page", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  context.grid.plug(1, 16, 8)
+  S.lib.grid_core.set_page(1, 4)
+  positions.strip_key(1, 1, "store", 1)
+  S.lib.grid_core.set_page(1, 1)
+  context.clock.run_for(0.1)
+  assert_equal(positions.strip_level(1, "store", 1), 4, "store ended with the page")
+  S.lib.grid_core.set_page(1, 4)
+  params:set("v1_bookmark_3", 0.9)
+  positions.strip_key(1, 1, 3, 1)
+  assert_near(params:get("v1_buf_pos"), 0.9, 1e-9, "the next press recalls")
+end)
+
 -- #238: the scan hold has a set of holders per voice (each grid port, the
 -- arc), and the hold LED shows the hold itself
 test("the hold LED follows the scan hold, not the key", function()

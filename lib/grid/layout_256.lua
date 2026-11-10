@@ -216,7 +216,7 @@ return function(S)
         end
         local y = LAYOUT_256.strip_first_row + voice_idx - 1
         for x, key in pairs(LAYOUT_256.strip_key_columns) do
-          grid_device:led(x, y, S.lib.positions.strip_level(voice_idx, key))
+          grid_device:led(x, y, S.lib.positions.strip_level(voice_idx, key, port))
         end
       end
       grid_redraw_256_transport(port, grid_device)
