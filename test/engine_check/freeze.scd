@@ -436,6 +436,47 @@ check.(ok and: { live.defName.asSymbol == \strataGrainBuf } and: { state[\inputR
 command.(\setGrainParam, 3, \freeze, 0.0);
 command.(\voiceOff, 3);
 command.(\setGrainSource, 3, 0);
+// the source changed to the synth while a frozen input voice was stopped: the
+// new synth-source grain synth is never counted a reader of the input copy
+// (it would read the live input after the unfreeze), once the old grain synth
+// has freed and once inside its release
+command.(\setGrainSource, 3, engine.inputSource);
+startInput.(3);
+command.(\setGrainParam, 3, \freeze, 1.0);
+ok = h.waitFor({ state[\copied][3] }, 2);
+old = grainOf.(3);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
+ok = ok and: { h.waitFor({ old.isPlaying.not }, engine.grainRelease + 1) };
+startInput.(3); server.sync;
+live = grainOf.(3);
+readings = [ok, live.defName.asSymbol == \strataGrainRing, state[\inputReaders][live].isNil,
+    getControl.(live, \bufL) == voiceRing.(3)[0].bufnum, getControl.(live, \history) == 0,
+    state[\frozen][3], phaseMoves.(rings[\phaseBuses][3]).not];
+command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
+readings = readings ++ [getControl.(live, \bufL) == voiceRing.(3)[0].bufnum, state[\frozen][3].not,
+    phaseMoves.(rings[\phaseBuses][3])];
+check.(readings.every({ arg value; value == true }),
+    "freeze: a synth source started after the old grain synth freed is no reader of the input copy (freed, ring def, no reader, own ring, history 0, still frozen, writer paused; after freeze 0: own ring, unfrozen, writer runs: %)".format(readings));
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, engine.inputSource);
+startInput.(3);
+command.(\setGrainParam, 3, \freeze, 1.0);
+ok = h.waitFor({ state[\copied][3] }, 2);
+old = grainOf.(3);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
+startInput.(3); server.sync;
+live = grainOf.(3);
+readings = [ok, live !== old, live.defName.asSymbol == \strataGrainRing, state[\inputReaders][live].isNil,
+    getControl.(live, \bufL) == voiceRing.(3)[0].bufnum];
+command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
+readings = readings ++ [getControl.(live, \bufL) == voiceRing.(3)[0].bufnum,
+    old.isPlaying.not or: { getControl.(old, \bufL) == inputRing[0].bufnum }];
+check.(readings.every({ arg value; value == true }),
+    "freeze: a synth source started inside the old grain synth's release is no reader of the input copy (copied, new node, ring def, no reader, own ring; after freeze 0: own ring, the old one set back: %)".format(readings));
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
 // inputReaders forgets a reader that frees: a frozen input voice stopped
 // and started three times (Lua resending freeze after each voiceOn) counts
 // only its live grain synth

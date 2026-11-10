@@ -42,9 +42,9 @@ jobs:
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
-  # Area times on 3.14.1 (s): buffers 95, lifecycle 61, mix 62, variation 46, loops 45,
-  # freeze 31, effects 30, rings 30, memory 37, grains 20, files 20, voices 15,
-  # structure 3, performance 1, positions 1, record 1, waveform 0: buffers alone, then at most about 165 s a shard (rebalanced at the release).
+  # Area times on 3.14.1 (s): buffers 98, record 71, mix 68, lifecycle 65, memory 57,
+  # freeze 49, variation 47, loops 45, effects 30, rings 30, files 29, waveform 22,
+  # grains 20, voices 16, positions 8, structure 3, performance 2: buffers alone, then at most about 177 s a shard (rebalanced at the release).
   engine-shard:
     name: engine (${{ matrix.areas }})
     # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
