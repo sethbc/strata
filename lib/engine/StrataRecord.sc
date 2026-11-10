@@ -63,7 +63,7 @@
     addRecordDefs {
         var fade = this.recordFadeSeconds, preroll = this.recordPrerollSeconds;
         var points = this.waveformPoints;
-        var fadeFrames = fade * context.server.sampleRate;
+        var sampleRate = context.server.sampleRate, fadeFrames = fade * sampleRate;
         // The master's own sum, for the pre-master record source: the filter,
         // delay and reverb returns, before drift, the limiter and the
         // saturator. A bypassed delay or reverb leaves its bus unwritten,
@@ -106,21 +106,23 @@
             // One bin per waveformPoints of peakFrames; while the head is in
             // a bin, its peak is the old peak (latched as the head enters it,
             // in the first block for bin 0) x feedback, plus the largest
-            // sample of the source since (both channels). Nothing is written
-            // before arming
+            // sample written since (both channels: the signal after the
+            // pre-roll, times the record level). Nothing is written before
+            // arming
             var bin = (head * points / peakFrames).floor;
             var entering = BinaryOpUGen('!=', bin, Delay1.kr(bin)) + Impulse.kr(0);
             var stored = BufRd.kr(1, peakBuf, bin, 1, 1);
             var oldPeak = Latch.kr(stored, entering);
-            var peak = Peak.kr(loudest, entering);
+            var peak = Peak.kr(fresh[0], entering).max(Peak.kr(fresh[1], entering));
             BufWr.kr(Select.kr(armed, [stored, ((oldPeak * feedback) + peak).min(1)]), peakBuf, bin, 1);
             [bufnumL, bufnumR].do({ arg bufnum, channel;
                 var old = BufRd.ar(1, bufnum, phase, 1, 1);
                 BufWr.ar((old * keep) + fresh[channel], bufnum, phase, 1);
             });
-            // the head at the start of this block (one block short of what
-            // the block writes: sclang adds it)
-            Out.kr(framesOut, head);
+            // the frames written before this block, counted from arming
+            // (sclang adds the block), which a one-shot's head, wrapping
+            // under a stop's release, would not give
+            Out.kr(framesOut, Sweep.kr(armed, sampleRate));
             Out.kr(headOut, Select.kr(armed, [[-1, 0], [head, frames]]));
             SendReply.kr(armed, '/strataRecord', 0, replyID);
         }).add;
@@ -257,8 +259,15 @@
             state[\takes][index] = nil;
             this.reportRecordState(index, take[\number], 3);
         };
-        // its take may have just completed (sendToSynth); free(false) marks it freed
-        if (synth.notNil and: { synth.isPlaying }) { this.sendToSynth(synth.freeMsg); synth.free(false) };
+        // its take may have just completed (sendToSynth); free(false) marks
+        // it freed. The head goes back to idle after the free (in order on
+        // the server), so a retake waiting for its delay or its level never
+        // leaves the grains steering around this one's head
+        if (synth.notNil and: { synth.isPlaying }) {
+            this.sendToSynth(synth.freeMsg);
+            synth.free(false);
+            this.slotHeadBus(index).setn([-1, 0]);
+        };
     }
 
     // true while a recording runs or waits to start in the slot, or one
@@ -376,6 +385,9 @@
             \frames, take[\frames], \peakFrames, length, \peakBuf, this.slotPeakBuffer(index).bufnum,
             \framesOut, recordFrameBuses[index].index, \headOut, this.slotHeadBus(index).index, \replyID, index
         ], \addToTail);
+        // from then on the server may arm it before sclang hears so (it
+        // computes ahead of the clock by its latency: stopRecordSlot)
+        take[\sent] = true;
         if (wait > 0) {
             server.sendBundle(nil, message, synth.runMsg(false));
             server.sendBundle(wait, ['/error', -1], synth.runMsg(true));
@@ -448,6 +460,16 @@
         };
         recordSynths[index] = nil;
         this.slotHeadBus(index).setn([-1, 0]);
+        // (never armed: canceled, nothing kept; stopRecordSlot frees such
+        // a synth, so this is only a safety net)
+        if (take[\started].not) {
+            if (stopReplies[index] == change) { stopReplies[index] = nil };
+            if (areaState[\record][\takes][index] === take) {
+                areaState[\record][\takes][index] = nil;
+                this.reportRecordState(index, take[\number], 3);
+            };
+            ^this
+        };
         if (take[\stopping] and: { take[\kind] == \replace }) {
             recordFrameBuses[index].get({ arg recorded;
                 if (stopReplies[index] == change) { stopReplies[index] = nil };
@@ -509,7 +531,14 @@
         take = state[\takes][index];
         if (take.isNil or: { recordSynths[index].isNil }) { ^this };
         if (take[\stopping]) { ^this };
-        if (take[\started].not) {
+        // not started as far as sclang knows and not sent yet (still
+        // preparing): canceled here. One sent (running, or paused until its
+        // timestamp: the server computes ahead of the clock, so it may have
+        // armed already, its reply still on its way) is gated off like a
+        // started one, and after a sync (the server sends an arming reply
+        // before it answers a /sync that follows the gate) one that has
+        // still not armed is canceled: gated off unarmed it writes nothing
+        if (take[\started].not and: { take[\sent] != true }) {
             unprepared = (take[\kind] == \replace) and: { take[\prepared].not };
             this.stopRecording(index);
             change = this.slotChanged(index);
@@ -530,5 +559,11 @@
         take[\change] = change;
         if (take[\kind] == \replace) { stopReplies[index] = change };
         this.sendToSynth(take[\synth].setMsg(\gate, 0));
+        if (take[\started].not) {
+            fork({
+                context.server.sync;
+                if (take[\started].not and: { state[\takes][index] === take }) { this.stopRecording(index) };
+            }, SystemClock);
+        };
     }
 }
