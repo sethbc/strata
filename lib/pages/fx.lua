@@ -122,8 +122,8 @@ return function(S)
 
   -- K3 on FX: toggle the delay's or reverb's bypass param (the engine
   -- frees the effect and its mix is kept), or set the filter's mix to 0 and
-  -- back to its last non-zero mix (the filter is never freed); master rows
-  -- do nothing
+  -- back to its restore mix (params_setup's toggle_filter_mix; the filter is
+  -- never freed); master rows do nothing
   local function fx_key(n)
     local effect = cursor_row().effect
     if n ~= 3 or not effect then return end
@@ -131,8 +131,7 @@ return function(S)
     if bypass then
       params:set(bypass.param_id, 1 - params:get(bypass.param_id))
     else
-      local mix_id = effect .. "_mix"
-      params:set(mix_id, params:get(mix_id) > 0 and 0 or S.fx_last_mix[effect])
+      S.lib.params_setup.toggle_filter_mix()
     end
   end
 

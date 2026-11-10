@@ -28,10 +28,26 @@ return function(S)
   S.performance = {}
   for key, value in pairs(S.constants.STANDARD_PERFORMANCE) do S.performance[key] = value end
 
-  -- The filter's last non-zero mix (set by filter_mix's action): the FX
-  -- page's K3 sets the mix to 0 and back to it. The delay and reverb need
-  -- none: K3 toggles their bypass params, which keep the mix
+  -- The filter's restore mix: the mix K3 brings back from 0. filter_mix's
+  -- action sets it when the mix rises, and toggle_filter_mix sets it to the
+  -- mix at the press before turning the filter off: nothing else writes it
+  -- (#235). The delay and reverb need none: K3 toggles their bypass params,
+  -- which keep the mix
   S.fx_last_mix = {filter = 1}
+  local filter_mix_before = 0  -- the filter mix before its last change (the param's default)
+
+  -- FX's K3 on a filter row: a mix above 0 becomes 0 (remembering it), a mix
+  -- of 0 becomes the restore mix and counts as a rise from 0
+  function M.toggle_filter_mix()
+    local mix = params:get("filter_mix")
+    if mix > 0 then
+      S.fx_last_mix.filter = mix
+      params:set("filter_mix", 0)
+    else
+      params:set("filter_mix", S.fx_last_mix.filter)
+      filter_mix_before = 0  -- the restore starts a new run: a later turn down below it is the new level
+    end
+  end
 
   -- The filter and delay params are faders on the 256 grid's FX page: redraw
   -- only while a grid shows it (no other layout shows them). A scene
@@ -299,8 +315,9 @@ return function(S)
       name = "filter mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
       action = function(x)
-        -- FX page K3 brings back the last non-zero mix, however it was set
-        if x > 0 then S.fx_last_mix.filter = x end
+        -- a rise (E3, PARAMS, a scene, a PSET) is the mix K3 brings back
+        if x > filter_mix_before then S.fx_last_mix.filter = x end
+        filter_mix_before = x
         send_param_to_engine("filter_mix", x)
       end
     }
