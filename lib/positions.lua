@@ -324,16 +324,24 @@ return function(S)
       if z == 1 then
         record_of(port).store[voice_idx] = page
       elseif records[port] then
-        records[port].store[voice_idx] = nil
-        records[port].pressed[voice_idx] = nil
+        -- one store key per port: its release ends it for every voice it
+        -- was pressed for, whatever voice the release names
+        records[port].store = {}
+        records[port].pressed = {}
       end
     elseif key == "hold" then
       if z == 1 then
         record_of(port).hold[voice_idx] = page
         M.hold_scan(voice_idx, true)
       else
-        if records[port] then records[port].hold[voice_idx] = nil end
-        M.hold_scan(voice_idx, false)
+        -- one hold key per port: its release ends the hold for every voice
+        -- it was pressed for, whatever voice the release names
+        local held_voices = {voice_idx}
+        if records[port] then
+          for held_voice in pairs(records[port].hold) do held_voices[#held_voices + 1] = held_voice end
+          records[port].hold = {}
+        end
+        for _, held_voice in ipairs(held_voices) do M.hold_scan(held_voice, false) end
       end
     elseif key == "whole" and z == 1 then
       whole_loop(voice_idx)
