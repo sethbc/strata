@@ -130,6 +130,31 @@ test("every grid redraw while a step plays shows that step, a started voice's to
   end
 end)
 
+test("an error in a step stops the pattern clock and shows it stopped (#243)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.patterns[1][2] = 15  -- step 2 fails, on the clock's first wake-up
+  if S.voices[1].active then toggle_voice(1) end
+  local real_toggle_voice, raised = toggle_voice, false
+  toggle_voice = function(voice_idx)
+    if not raised then raised = true; error("step failed") end
+    return real_toggle_voice(voice_idx)
+  end
+  pattern_clock_start()
+  wake(context, "pattern_clock")
+  local errors = context.clock.take_errors()
+  toggle_voice = real_toggle_voice
+  assert_equal(#errors, 1, "one clock error")
+  assert_true(errors[1]:find("step failed", 1, true), "the step's error")
+  assert_true(errors[1]:find("stack traceback:", 1, true), "with its traceback")
+  assert_equal(S.pattern_playing, false, "shown stopped")
+  assert_equal(S.pattern_clock, nil, "the clock id is forgotten")
+  assert_equal(S.lib.sequencer.sounding_step(), nil, "no step sounds")
+  pattern_toggle()
+  assert_equal(S.pattern_playing, true, "one press plays again")
+  pattern_toggle()
+end)
+
 test("replace_pattern copies sixteen whole levels in range and ignores a bad voice", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
