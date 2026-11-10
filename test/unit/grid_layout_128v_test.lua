@@ -397,7 +397,7 @@ test("128v: column 8 rows 10-16 are the grid voice's strip", function()
   tap(context, 1, 8, 16)
   assert_equal(params:get("v1_loop_start"), 0, "(8,16) loop back to whole")
   for row = 10, 16 do
-    local key = ({1, 2, 3, 4, "store", "hold", "whole"})[row - 9]
+    local key = S.lib.grid_layout_128v.LAYOUT.strip_keys[row - 9]
     assert_equal(device:get_led(8, row), positions.strip_level(1, key), "strip LED row " .. row)
   end
 end)
@@ -431,6 +431,30 @@ test("128v: an armed slot's record key lights 11", function()
   context.polls.fire("recordState", 32)
   grid_redraw()
   assert_equal(device:get_led(1, 12), 11, "an armed slot's record key")
+end)
+
+test("128v positions page: releases on column 8 rows 1-9 do nothing, synth voices are ignored", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  show_grid_page(context, 1, 5)
+  local was_active = S.voices[3].active
+  tap(context, 1, 8, 3)
+  assert_true(S.voices[3].active ~= was_active, "a press and release toggles voice 3 once")
+  local playing = local_value("pattern_playing")
+  tap(context, 1, 8, 9)
+  assert_true(local_value("pattern_playing") ~= playing, "(8,9) toggles play once")
+  local page = grid_core().page(1)
+  context.grid.press(1, 8, 8, 0)
+  assert_equal(grid_core().page(1), page, "a page key release does nothing")
+  context.clear_engine_calls()
+  tap(context, 1, 5, 5)
+  assert_equal(#context.calls_named("setGrainParam"), 0, "a synth voice's cell sends no grain param")
+  assert_equal(S.grid_voice_select, 1, "and does not select it")
+  show_grid_page(context, 1, 2)
+  was_active = S.voices[3].active
+  context.grid.press(1, 8, 3, 0)
+  assert_equal(S.voices[3].active, was_active, "a release on pages 1-4 is ignored")
 end)
 
 end
