@@ -541,6 +541,73 @@ test("128h: a bookmark released after a grid voice change goes dark for the voic
   context.grid.press(1, 13, 6, 0)
 end)
 
+-- The final review's item 1: the hold key shows the hold whoever changes it,
+-- also when no key of this grid changes it
+test("128h: the hold key lights for a 256's hold and goes dark when the 256 leaves", function()
+  local context, S, device = position_setup()
+  local LEVELS = S.lib.positions.LEVELS
+  tap(context, 1, 8, 8)  -- page 4
+  select_grid_voice(1)
+  grid_redraw()
+  assert_equal(device:get_led(14, 6), LEVELS.key_up, "not held")
+  context.grid.plug(2, 16, 16)
+  tap(context, 2, 12, 8)  -- the 256's page 5
+  context.grid.press(2, 7, 9, 1)  -- voice 1's hold key, held
+  assert_equal(S.lib.positions.scan_held(1), true, "the 256 holds voice 1")
+  assert_equal(device:get_led(14, 6), LEVELS.key_down, "the 256's hold lights the 128h's hold key")
+  context.grid.unplug(2)
+  context.clock.run_for(0.2)
+  assert_equal(S.lib.positions.scan_held(1), false, "the tick released the gone grid's hold")
+  assert_equal(device:get_led(14, 6), LEVELS.key_up, "and the 128h's hold key goes dark")
+end)
+
+test("128h: the hold key lights while BUFFER's ALT ring 1 holds and goes dark when ALT comes up", function()
+  local context, S, device = position_setup()
+  local LEVELS = S.lib.positions.LEVELS
+  tap(context, 1, 8, 8)  -- page 4
+  select_grid_voice(1)
+  context.arc.plug(1)
+  h.show_page("BUFFER")
+  assert_equal(S.selected_voice, 1)
+  grid_redraw()
+  assert_equal(device:get_led(14, 6), LEVELS.key_up, "not held")
+  key(1, 1)
+  context.arc.turn(1, 1, 1)
+  assert_equal(S.lib.positions.scan_held(1), true, "the arc holds voice 1")
+  assert_equal(device:get_led(14, 6), LEVELS.key_down, "the arc's hold lights the hold key")
+  key(1, 0)
+  assert_equal(S.lib.positions.scan_held(1), false, "ALT up releases it")
+  assert_equal(device:get_led(14, 6), LEVELS.key_up, "and the hold key goes dark")
+end)
+
+-- The final review's item 6 (#256 with #238 and #239): a grid moved in
+-- SYSTEM > DEVICES lets go of what its keys held
+test("128h: a grid moved to another port releases its store at once and its scan hold at the next tick", function()
+  local context, S = position_setup()
+  local positions = S.lib.positions
+  tap(context, 1, 8, 8)  -- page 4
+  select_grid_voice(1)
+  context.grid.press(1, 14, 6, 1)  -- hold, held
+  context.grid.press(1, 13, 6, 1)  -- store, held
+  assert_equal(positions.scan_held(1), true, "the grid holds voice 1's scan")
+  assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_down, "store is down")
+  _menu.set_mode(true)  -- SYSTEM > DEVICES
+  context.grid.reassign(1, 2)
+  _menu.set_mode(false)
+  assert_equal(positions.strip_level(1, "store", 2), positions.LEVELS.key_up, "on its new port the store is up at once")
+  tap(context, 2, 8, 8)  -- the moved grid starts on page 1: back to page 4
+  local bookmark = params:get("v1_bookmark_1")
+  params:set("v1_buf_pos", 0.6)
+  context.grid.press(2, 13, 5, 1)
+  assert_near(params:get("v1_bookmark_1"), bookmark, 1e-9, "a bookmark press there recalls: nothing stored")
+  context.grid.press(2, 13, 5, 0)
+  context.clock.run_for(0.2)
+  assert_equal(positions.scan_held(1), false, "the next playhead tick released the scan hold")
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "the old port holds nothing")
+  assert_equal(positions.holds_scan(1, "grid:2"), false, "nor the new one")
+  assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_up, "no port holds store")
+end)
+
 test("128h: the page 4 cells next to the strip still act", function()
   local context, S = position_setup()
   tap(context, 1, 8, 8)

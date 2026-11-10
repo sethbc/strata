@@ -257,6 +257,37 @@ test("a tick that keeps failing prints its error once, and again after a good ti
   if not ok then error(err, 0) end
 end)
 
+-- The final review's item 7: each part of the tick contains its own error
+test("a tick whose estimate fails every time still releases a gone grid's hold", function()
+  local context, S = buffer_voice()
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
+  assert_true(S.voices[2].active, "voice 2 runs on slot 1 too")
+  local positions = S.lib.positions
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(positions.scan_held(1), true, "the grid holds voice 1")
+  -- the estimate fails on every tick, at voice 2 (voice 1's own advance,
+  -- which the release runs, still works)
+  local real_advance, failures = S.lib.playheads.advance, 0
+  S.lib.playheads.advance = function(voice_idx)
+    if voice_idx == 2 then failures = failures + 1; error("estimate boom") end
+    return real_advance(voice_idx)
+  end
+  local real_print = print
+  print = function() end
+  local ok, err = pcall(function()
+    context.grid.unplug(1)
+    context.clock.run_for(0.3)
+  end)
+  print = real_print
+  S.lib.playheads.advance = real_advance
+  if not ok then error(err, 0) end
+  assert_true(failures >= 2, "the estimate failed on every tick, " .. failures .. " times")
+  assert_equal(positions.scan_held(1), false, "the gone grid's hold is released all the same")
+  assert_true(S.lib.playheads.clock_id() ~= nil, "the clock is still running")
+end)
+
 test("the clock ends with cleanup", function()
   local context = buffer_voice()
   local device = page_five_grid(context)

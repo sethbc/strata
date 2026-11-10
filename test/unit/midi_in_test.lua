@@ -144,6 +144,12 @@ test("omni: the same note on two channels holds the voice until both are off", f
   assert_equal(next(midi_state.held[1]), nil)
 end)
 
+-- The final review's item 4: the hold release is the module's own
+test("releasing a note's hold adds no script global", function()
+  load_strata()
+  assert_equal(rawget(_G, "release_note_hold"), nil, "release_note_hold is local to lib/midi_in.lua")
+end)
+
 test("omni, voice off: the previous voice keeps running while it holds another note or another channel maps the note", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")

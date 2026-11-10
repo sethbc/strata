@@ -20,8 +20,9 @@ return function(S)
   local clock_id
   -- the page-5 grids' LED levels as of their last redraw (nil: none shown)
   local shown_signature
-  -- the key (`message`) of the tick error last printed (nil after a good tick)
-  local last_error
+  -- per tick part (TICK_PARTS' keys): the key (`message`) of its error
+  -- last printed (nil after the part ran well)
+  local last_errors = {}
 
   local function valid_voice(voice_idx)
     return type(voice_idx) == "number" and voice_idx >= 1 and voice_idx <= NUM_VOICES and voice_idx % 1 == 0
@@ -120,15 +121,22 @@ return function(S)
     return false
   end
 
-  -- The clock's work: follow the scan (an LFO moves it), end the grid holds
-  -- whose grid left, and redraw the grids that show the position page when
+  -- The clock's work, in three parts that each contain their own error
+  -- (guarded_tick): follow the scan (an LFO moves it); end the grid holds
+  -- whose grid left; and redraw the grids that show the position page when
   -- an LED they show changed (a head changing column, and also buf_pos, a
-  -- loop or a bookmark changed by a param, a scene fade or an LFO)
-  local function tick()
+  -- loop or a bookmark changed by a param, a scene fade or an LFO). A fault
+  -- that persists in one part never skips the others: a gone grid's hold is
+  -- always released
+  local function follow_scans()
     for voice_idx = 1, NUM_VOICES do
       if running_buffer_voice(voice_idx) then M.advance(voice_idx) end
     end
-    S.lib.positions.end_stale_holds()
+  end
+
+  local function end_stale_holds() S.lib.positions.end_stale_holds() end
+
+  local function redraw_position_grids()
     if S.lib.grid_core.any_page(POSITION_PAGE) then
       local signature = S.lib.positions.display_signature()
       -- the first look only records: whatever put the grid on this page redrew it
@@ -138,6 +146,12 @@ return function(S)
       shown_signature = nil
     end
   end
+
+  local TICK_PARTS = {
+    {key = "scan", run = follow_scans},
+    {key = "holds", run = end_stale_holds},
+    {key = "redraw", run = redraw_position_grids},
+  }
 
   -- The playhead clock's id, nil when it is not running (the cleanup test)
   function M.clock_id() return clock_id end
@@ -149,17 +163,18 @@ return function(S)
     end
   end
 
-  -- Run one tick; an error is printed once per distinct message (a good
-  -- tick forgets it) and never ends the clock
+  -- Run one tick: each part under its own xpcall. A part's error is printed
+  -- once per distinct message (that part's good run forgets it) and never
+  -- ends the clock or skips another part
   local function guarded_tick()
-    local ticked, report = xpcall(tick, draw_error_report)
-    if ticked then
-      last_error = nil
-      return
-    end
-    if report.message ~= last_error then
-      last_error = report.message
-      print("strata: playhead tick failed: " .. report.traceback)
+    for _, part in ipairs(TICK_PARTS) do
+      local ran, report = xpcall(part.run, draw_error_report)
+      if ran then
+        last_errors[part.key] = nil
+      elseif report.message ~= last_errors[part.key] then
+        last_errors[part.key] = report.message
+        print("strata: playhead tick failed: " .. report.traceback)
+      end
     end
   end
 

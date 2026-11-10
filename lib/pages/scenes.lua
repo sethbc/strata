@@ -70,9 +70,11 @@ return function(S)
     S.scenes_page.armed_until = 0
   end
 
-  -- The overwrite prompt for a slot, as the hint row shows it
-  local function overwrite_prompt(slot)
-    return "K3 again: overwrite S" .. slot
+  -- The overwrite prompt for a slot, as the hint row shows it: it names the
+  -- keys that answer it (with ALT up a plain K3 recalls instead)
+  local function overwrite_prompt(slot, alt_held)
+    if alt_held then return "K3 again: overwrite S" .. slot end
+    return "ALT+K3: overwrite S" .. slot
   end
 
   local function redraw_scenes()
@@ -113,7 +115,7 @@ return function(S)
   end
 
   local function scenes_hints(alt_held)
-    if armed() then return overwrite_prompt(S.scenes_page.armed_slot) end
+    if armed() then return overwrite_prompt(S.scenes_page.armed_slot, alt_held) end
     if alt_held then return "K3:save" end
     if S.cursors.scene > NUM_SCENES then return "E2:move E3:edit" end
     return "K2:fade K3:recall"
@@ -203,11 +205,17 @@ return function(S)
         S.cursors.scene = cursor
       end))
     end
-    table.insert(states, state("armed", function()
+    local function arm_slot_8()
       populate_all()
       S.cursors.scene = 8
       S.scenes_page.armed_slot = 8
       S.scenes_page.armed_until = util.time() + SCENES_PAGE.arm_seconds
+    end
+    table.insert(states, state("armed", arm_slot_8))
+    -- the renders draw each state with ALT up: this one holds it
+    table.insert(states, state("armed with ALT", function()
+      arm_slot_8()
+      key(1, 1)
     end))
     return states
   end
