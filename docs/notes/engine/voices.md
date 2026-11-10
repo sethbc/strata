@@ -4,6 +4,7 @@
 - **Silent bus**: an unrouted mod slot reads `silentBus`, never control bus 0 (norns allocates the input follower there).
 - The Lua `voices` table is the only source of values: the engine holds no per-voice defaults.
 - The crossmod commands ignore a slot outside 1..`numModSlots`.
+- Every voice command checks its index with `validVoice` (an integer in 0..`numVoices` - 1) and ignores any other, including `voiceOff` and `retrigger` (#262); the check sends both a bad index and 1.5 and asserts nothing raises and no node changes.
 - The Resonator's `RLPF` cutoff stays below `filterCeiling` × the sample rate, and its level goes through `resonatorGain` and its voice limiter.
 - `\strataMod` replaces bad values on its input and output (`zeroBadValues`), so a voice that blows up never spreads through crossmod.
 

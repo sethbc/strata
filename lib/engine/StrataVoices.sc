@@ -109,13 +109,16 @@
         // same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
             var voice = msg[1], velocity = msg[2].clip(0, 1);
-            this.setSynth(this.voiceKey(voice), \velocity, velocity, \t_trig, 1);
-            this.setSynth(this.grainKey(voice), \t_trig, 1);
-            if (this.voiceRunning(voice)) { this.setSynth(this.voiceMixKey(voice), \velocity, velocity, \t_trig, 1) };
+            if (this.validVoice(voice)) {
+                this.setSynth(this.voiceKey(voice), \velocity, velocity, \t_trig, 1);
+                this.setSynth(this.grainKey(voice), \t_trig, 1);
+                if (this.voiceRunning(voice)) { this.setSynth(this.voiceMixKey(voice), \velocity, velocity, \t_trig, 1) };
+            };
         });
 
         this.addCommand(\voiceOff, "i", { arg msg;
-            this.releaseVoice(msg[1]);
+            var voice = msg[1];
+            if (this.validVoice(voice)) { this.releaseVoice(voice) };
         });
 
         this.addCommand(\setVoiceParam, "isf", { arg msg;
