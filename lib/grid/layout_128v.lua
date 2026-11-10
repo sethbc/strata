@@ -1,5 +1,6 @@
 -- lib/grid/layout_128v.lua
--- The 8x16 grid: four pages (1 patterns, 2 faders, 3 scenes, 4 sources and freeze),
+-- The 8x16 grid: five pages (1 patterns, 2 faders, 3 scenes, 4 sources and freeze,
+-- 5 positions),
 -- cycled by (8,8), keys and LEDs. Column 8 rows 1-7 and 9 work on every
 -- page. Registers S.registry.grid_layouts["128v"]. The functions stay
 -- global.
@@ -16,9 +17,9 @@ return function(S)
 
   -- The 128v's geometry and LED levels
   local LAYOUT_128V = {
-    pages = {PATTERNS = 1, FADERS = 2, SCENES = 3, SOURCES = 4},
-    page_count = 4,
-    page_levels = {4, 8, 12, 15},  -- (8,8) shows the page
+    pages = {PATTERNS = 1, FADERS = 2, SCENES = 3, SOURCES = 4, POSITIONS = 5},
+    page_count = 5,
+    page_levels = {3, 6, 9, 12, 15},  -- (8,8) shows the page
     control_column = 8,
     page_key_row = 8,
     play_row = 9,
@@ -42,6 +43,11 @@ return function(S)
     freeze_row = 14,
     frozen_level = 15,
     unfrozen_level = 3,
+    -- positions page: columns 1-7 the voices' 16 position cells down; column 8
+    -- rows 10-16 the grid voice's strip: bookmarks 1-4, store, hold, whole
+    position_cells = 16,
+    strip_first_row = 10,
+    strip_keys = {1, 2, 3, 4, "store", "hold", "whole"},
   }
   M.LAYOUT = LAYOUT_128V
   local PAGES = LAYOUT_128V.pages
@@ -97,13 +103,16 @@ return function(S)
 
   -- Column 8: voices 1-7, the page key, play / stop, and voice select on
   -- pages 1-3 (the sources page uses rows 12-13 for slot 8)
-  local function grid_key_128v_controls(port, y, page)
+  local function grid_key_128v_controls(port, y, page, z)
     if y <= NUM_VOICES then
       toggle_voice(y)
     elseif y == LAYOUT_128V.page_key_row then
       grid_core.set_page(port, page % LAYOUT_128V.page_count + 1)
     elseif y == LAYOUT_128V.play_row then
       pattern_toggle()
+    elseif page == PAGES.POSITIONS then
+      local key = LAYOUT_128V.strip_keys[y - LAYOUT_128V.strip_first_row + 1]
+      if key then S.lib.positions.strip_key(port, S.grid_voice_select, key, z) end
     elseif page ~= PAGES.SOURCES then
       select_grid_voice(y - LAYOUT_128V.voice_select_first_row + 1)
     else
@@ -113,10 +122,19 @@ return function(S)
 
   -- 8x16 grid layout (128 buttons vertical)
   function grid_key_128v(port, x, y, z)
-    if z == 0 then return end  -- presses only
     local page = grid_core.page(port)
+    if page == PAGES.POSITIONS then
+      -- the positions page needs releases (held loop and strip keys)
+      if x == LAYOUT_128V.control_column then
+        if z == 1 or y >= LAYOUT_128V.strip_first_row then grid_key_128v_controls(port, y, page, z) end
+      elseif x <= NUM_VOICES and y <= LAYOUT_128V.position_cells then
+        S.lib.positions.grid_key(port, x, y, LAYOUT_128V.position_cells, z)
+      end
+      return
+    end
+    if z == 0 then return end  -- presses only
     if x == LAYOUT_128V.control_column then
-      grid_key_128v_controls(port, y, page)
+      grid_key_128v_controls(port, y, page, z)
     elseif page == PAGES.FADERS then
       grid_key_128v_faders(x, y)
     elseif page == PAGES.SCENES then
@@ -193,6 +211,18 @@ return function(S)
     end
   end
 
+  local function grid_redraw_128v_positions(grid_device)
+    for voice_idx = 1, NUM_VOICES do
+      for cell = 1, LAYOUT_128V.position_cells do
+        grid_device:led(voice_idx, cell, S.lib.positions.grid_level(voice_idx, cell, LAYOUT_128V.position_cells))
+      end
+    end
+    for i, key in ipairs(LAYOUT_128V.strip_keys) do
+      grid_device:led(LAYOUT_128V.control_column, LAYOUT_128V.strip_first_row + i - 1,
+        S.lib.positions.strip_level(S.grid_voice_select, key))
+    end
+  end
+
   local function grid_redraw_128v_controls(grid_device, page)
     local column = LAYOUT_128V.control_column
     for i = 1, NUM_VOICES do
@@ -200,7 +230,7 @@ return function(S)
     end
     grid_device:led(column, LAYOUT_128V.page_key_row, LAYOUT_128V.page_levels[page])
     grid_device:led(column, LAYOUT_128V.play_row, S.pattern_playing and 15 or 4)
-    if page == PAGES.SOURCES then return end  -- rows 12-13 are slot 8 there
+    if page == PAGES.SOURCES or page == PAGES.POSITIONS then return end  -- slot 8's keys, the strip
     for i = 1, NUM_VOICES do
       grid_device:led(column, LAYOUT_128V.voice_select_first_row + i - 1, i == S.grid_voice_select and 15 or 2)
     end
@@ -214,6 +244,8 @@ return function(S)
       grid_redraw_128v_scenes(port, grid_device)
     elseif page == PAGES.SOURCES then
       grid_redraw_128v_sources(grid_device)
+    elseif page == PAGES.POSITIONS then
+      grid_redraw_128v_positions(grid_device)
     else
       grid_redraw_128v_patterns(grid_device)
     end
