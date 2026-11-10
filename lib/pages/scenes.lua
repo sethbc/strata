@@ -173,9 +173,7 @@ return function(S)
     end
     disarm()
     S.lib.ui_flash.start("hints", nil)
-    capture_scene(slot)
-    grid_redraw()
-    request_redraw()
+    S.lib.scenes.save(slot)
   end
 
   -- The arc button: recall the cursor slot at once

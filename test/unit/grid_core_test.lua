@@ -447,4 +447,17 @@ test("clear, randomize and a scene recall end a held step gesture, as a paste do
   assert_equal(patterns[1][9], 15, "recall: the next step key toggles its own step")
 end)
 
+test("a scene saved on a grid hold flashes saved in the header", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
+  context.grid.press(1, 4, 3, 1)
+  context.clock.run_for(0.3)
+  context.grid.press(1, 4, 3, 0)
+  assert_equal(S.lib.ui_flash.text("header"), nil, "a release at 0.3 s saves nothing")
+  context.grid.press(1, 4, 3, 1)
+  context.clock.run_for(0.6)
+  assert_equal(S.lib.ui_flash.text("header"), "saved S4")
+end)
+
 end

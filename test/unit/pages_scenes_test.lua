@@ -210,4 +210,12 @@ test("the arc button recalls the cursor slot instantly", function()
   assert_equal(table.concat(calls, ","), "5:0", "instant recall of slot 5")
 end)
 
+test("ALT+K3 on SCENES flashes saved", function()
+  local _, S = started_on_scenes()
+  enc(2, 1)
+  assert_equal(S.cursors.scene, 2, "the cursor is on empty slot 2")
+  alt_tap(3)
+  assert_equal(S.lib.ui_flash.text("header"), "saved S2")
+end)
+
 end

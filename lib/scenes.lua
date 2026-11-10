@@ -884,6 +884,20 @@ return function(S)
     end
   end)
 
+  -- A user's save: capture, say so in the header, redraw. capture_scene
+  -- stays silent for the callers that are not a save.
+  function M.save(scene_num)
+    if type(scene_num) ~= "number" or scene_num % 1 ~= 0
+      or scene_num < 1 or scene_num > NUM_SCENES then
+      return false
+    end
+    capture_scene(scene_num)
+    header_flash("saved S" .. scene_num)
+    grid_redraw()
+    request_redraw()
+    return true
+  end
+
   M.scene_data_dir = scene_data_dir
   M.move_aside_unloadable_file = move_aside_unloadable_file
   return M
