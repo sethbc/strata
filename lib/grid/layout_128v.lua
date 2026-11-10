@@ -211,7 +211,7 @@ return function(S)
     end
   end
 
-  local function grid_redraw_128v_positions(grid_device)
+  local function grid_redraw_128v_positions(port, grid_device)
     for voice_idx = 1, NUM_VOICES do
       for cell = 1, LAYOUT_128V.position_cells do
         grid_device:led(voice_idx, cell, S.lib.positions.grid_level(voice_idx, cell, LAYOUT_128V.position_cells))
@@ -219,7 +219,7 @@ return function(S)
     end
     for i, key in ipairs(LAYOUT_128V.strip_keys) do
       grid_device:led(LAYOUT_128V.control_column, LAYOUT_128V.strip_first_row + i - 1,
-        S.lib.positions.strip_level(S.grid_voice_select, key))
+        S.lib.positions.strip_level(S.grid_voice_select, key, port))
     end
   end
 
@@ -245,14 +245,15 @@ return function(S)
     elseif page == PAGES.SOURCES then
       grid_redraw_128v_sources(grid_device)
     elseif page == PAGES.POSITIONS then
-      grid_redraw_128v_positions(grid_device)
+      grid_redraw_128v_positions(port, grid_device)
     else
       grid_redraw_128v_patterns(grid_device)
     end
     grid_redraw_128v_controls(grid_device, page)
   end
 
-  S.registry.grid_layouts["128v"] = {key = grid_key_128v, redraw = grid_redraw_128v}
+  -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
+  S.registry.grid_layouts["128v"] = {key = grid_key_128v, redraw = grid_redraw_128v, selects_grid_voice = true}
 
   return M
 end

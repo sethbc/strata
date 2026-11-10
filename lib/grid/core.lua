@@ -312,6 +312,14 @@ return function(S)
     return nil
   end
 
+  -- The layout record of the grid connected to a port ({key, redraw,
+  -- fx_faders_page?, selects_grid_voice?}), or nil (no grid, or a size with
+  -- no layout)
+  function M.layout_of(port)
+    local grid_port = S.grids[port]
+    return grid_port and S.registry.grid_layouts[grid_layout(grid_port)] or nil
+  end
+
   -- Whether a connected grid shows the FX faders now: its layout record's
   -- fx_faders_page (the 256's page 4; the other layouts have none) is the
   -- port's page. The FX params' actions redraw the grids only then

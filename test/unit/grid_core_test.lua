@@ -308,6 +308,18 @@ test("an FX change redraws the grids only while one shows the FX faders", functi
   assert_equal(full.refresh_count, before + 1, "a 256 on page 4 shows the faders: one redraw")
 end)
 
+test("a layout record says whether a position press selects the grid voice", function()
+  local context = load_strata(); finish_startup(context)
+  local layouts = local_value("S").registry.grid_layouts
+  assert_equal(layouts["256"].selects_grid_voice, nil, "the 256's rows are one voice each")
+  for _, name in ipairs({"128h", "128v", "64"}) do
+    assert_equal(layouts[name].selects_grid_voice, true, name .. " selects the grid voice")
+  end
+  context.grid.plug(1, 16, 8)
+  assert_equal(grid_core().layout_of(1), layouts["128h"], "a connected 128h's record")
+  assert_equal(grid_core().layout_of(2), nil, "a port with no grid")
+end)
+
 test("a scene saved on a hold shows on the SCENES page on the next frame", function()
   local context = load_strata(); finish_startup(context)
   -- slot 2's box on the SCENES page (5x5, right of its number): its rect

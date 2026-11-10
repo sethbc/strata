@@ -157,7 +157,7 @@ return function(S)
     end
     for x = 1, width do
       local key = LAYOUT_64.strip_keys[x]
-      grid_device:led(x, LAYOUT_64.strip_row, key and S.lib.positions.strip_level(voice_idx, key) or LAYOUT_64.dark)
+      grid_device:led(x, LAYOUT_64.strip_row, key and S.lib.positions.strip_level(voice_idx, key, port) or LAYOUT_64.dark)
     end
     for y = LAYOUT_64.strip_row + 1, LAYOUT_64.voice_row - 1 do
       for x = 1, width do grid_device:led(x, y, LAYOUT_64.dark) end
@@ -194,7 +194,8 @@ return function(S)
     end
   end
 
-  S.registry.grid_layouts["64"] = {key = grid_key_64, redraw = grid_redraw_64}
+  -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
+  S.registry.grid_layouts["64"] = {key = grid_key_64, redraw = grid_redraw_64, selects_grid_voice = true}
 
   return M
 end

@@ -311,6 +311,35 @@ test("64: row 3 is the strip and row 7 picks the grid voice", function()
   for y = 4, 6 do for x = 1, 8 do assert_equal(device:get_led(x, y), 0, "rows 4-6 dark") end end
 end)
 
+-- #239: store belongs to the port while its key is down
+test("64: store held, the grid voice changed: a bookmark press stores for the voice shown", function()
+  local context, S, device = positions_grid()
+  local positions = S.lib.positions
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  if S.voices[2].active then toggle_voice(2) end
+  assert_true(not S.voices[2].active, "voice 2 stopped")
+  params:set("v2_buf_pos", 0.4)
+  local v1_bookmark = params:get("v1_bookmark_1")
+  context.grid.press(1, 6, 3, 1)
+  tap(context, 1, 2, 7)
+  assert_equal(S.grid_voice_select, 2, "row 7 column 2 picks voice 2")
+  context.grid.press(1, 1, 3, 1)
+  assert_near(params:get("v2_bookmark_1"), 0.4, 1e-6, "voice 2's buf_pos is stored")
+  assert_near(params:get("v2_buf_pos"), 0.4, 1e-9, "no recall: buf_pos unchanged")
+  assert_equal(positions.last_recalled(2), nil, "nothing recalled")
+  assert_near(params:get("v1_bookmark_1"), v1_bookmark, 1e-9, "voice 1's bookmark unchanged")
+  grid_redraw()
+  assert_equal(device:get_led(6, 3), 15, "store lit while held")
+  assert_equal(device:get_led(1, 3), 15, "the stored bookmark lit while held")
+  context.grid.press(1, 1, 3, 0)
+  context.grid.press(1, 6, 3, 0)
+  params:set("v2_buf_pos", 0.7)
+  tap(context, 1, 1, 3)
+  assert_near(params:get("v2_buf_pos"), 0.4, 1e-6, "store up: a press recalls the bookmark")
+  assert_equal(positions.last_recalled(2), 1)
+end)
+
 test("64: the step views keep every key", function()
   local context, S = positions_grid()
   local calls = 0
