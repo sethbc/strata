@@ -191,11 +191,15 @@ test("record_buffer calls S.lib.buffers.recording_started for the slot", functio
   local S = local_value("S")
   local calls = {}
   local original = S.lib.buffers.recording_started
-  S.lib.buffers.recording_started = function(slot) table.insert(calls, slot) end
+  S.lib.buffers.recording_started = function(slot, playable) table.insert(calls, {slot, playable}) end
   record_buffer(5)
-  assert_equal(#calls, 1, "one call when it sends recordBuffer"); assert_equal(calls[1], 5)
+  assert_equal(#calls, 1, "one call when it sends recordBuffer")
+  assert_equal(calls[1][1], 5); assert_equal(calls[1][2], false, "feedback 0: a replace take")
   record_buffer(5)                                -- a stop sends no recordBuffer
   assert_equal(#calls, 1, "no second call for the stop")
+  params:set("record_feedback", 50)
+  record_buffer(6)
+  assert_equal(calls[2][1], 6); assert_equal(calls[2][2], true, "feedback above 0: playable")
   S.lib.buffers.recording_started = original
 end)
 
@@ -378,6 +382,38 @@ test("a late armed report never regresses a recording", function()
   context.polls.fire("recordState", record_state_value(1, 1, 1))
   context.polls.fire("recordState", record_state_value(1, 0, 1))
   assert_equal(S_record_state(1).phase, "recording")
+end)
+
+-- A 60 s file in slot 1 (standard tier: the slot holds 16 s), started at 12 s
+-- and reloaded there, then an armed dub (feedback 50%, a threshold) into it
+local DUB_FILE = "/tmp/dub60.wav"
+local function arm_dub_over_long_file(context)
+  context.audio.register(DUB_FILE, {channels = 2, frames = 2880000, rate = 48000})
+  load_buffer(1, DUB_FILE); context.polls.fire("bufferState", 16)
+  local_value("S").lib.buffers.set_start(1, 12)
+  context.clock.run_for(0.4); context.polls.fire("bufferState", 16)
+  params:set("record_feedback", 50); params:set("record_threshold", 2)
+  record_buffer(1)
+end
+
+test("a canceled dub keeps the file's start, rate and length", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  arm_dub_over_long_file(context)
+  record_buffer(1)                                -- K3 again: the armed dub is canceled
+  context.polls.fire("recordState", 56)
+  assert_equal(buffers[1].start, 12); assert_equal(buffers[1].file_seconds, 60)
+  assert_equal(buffers[1].sample_rate, 48000); assert_equal(buffers[1].path, DUB_FILE)
+  assert_equal(buffers[1].recording, false)
+end)
+
+test("a dub that ends becomes take n with start 0 and no file length", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  arm_dub_over_long_file(context)
+  context.polls.fire("recordState", 40); context.polls.fire("recordState", 48)
+  assert_equal(buffers[1].name, "take 1"); assert_equal(buffers[1].start, 0)
+  assert_equal(buffers[1].file_seconds, nil); assert_equal(buffers[1].sample_rate, nil)
 end)
 
 test("a loop recording downgraded by the sample rate is sent with loop 0", function()
