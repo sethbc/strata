@@ -653,6 +653,7 @@ return function(S)
         else
           S.buffers[slot].missing_path = path
           S.buffers[slot].start = (start and start > 0 and start < math.huge) and start or 0  -- kept with the path
+          S.buffers[slot].sent_start = S.buffers[slot].start  -- what a failed load puts back
           print("buffer " .. slot .. ": " .. path .. " not found, not restored (kept for the next start)")
         end
       end
@@ -710,7 +711,11 @@ return function(S)
     end
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_start_reload, function()
-    for slot = 1, NUM_BUFFERS do cancel_start_reload(slot) end
+    -- a canceled reload's untried start goes back to what plays (after the save above)
+    for slot = 1, NUM_BUFFERS do
+      cancel_start_reload(slot)
+      S.buffers[slot].start = S.buffers[slot].sent_start
+    end
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_polls, function()
     if S.buffer_polls.state then S.buffer_polls.state:stop() end
@@ -720,7 +725,8 @@ return function(S)
   end)
 
   -- A slot finishes only a recording, checks a load only while it awaits
-  -- the engine's report, and never settles empty while loaded
+  -- the engine's report, never settles empty while loaded, and shows a start
+  -- other than the last sent one only while a start reload is pending
   S.register_invariant("buffer slots", function()
     for slot = 1, NUM_BUFFERS do
       local buffer = S.buffers[slot]
@@ -732,6 +738,10 @@ return function(S)
       end
       if buffer.settled_empty and buffer.loaded then
         return "slot " .. slot .. " is loaded but settled empty (" .. tostring(buffer.settled_empty) .. ")"
+      end
+      if not start_reload_clocks[slot] and buffer.start ~= buffer.sent_start then
+        return "slot " .. slot .. " shows start " .. tostring(buffer.start) .. " but the load last sent was at "
+          .. tostring(buffer.sent_start) .. " with no start reload pending"
       end
     end
   end)
@@ -750,9 +760,11 @@ return function(S)
   function M.recording_started(slot, playable)
     if not valid_buffer_slot(slot) then return end
     cancel_start_reload(slot)
+    local buffer = S.buffers[slot]
     if not playable then
-      local buffer = S.buffers[slot]
       buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
+    else
+      buffer.start = buffer.sent_start  -- the reload that would have made a new start true is canceled
     end
   end
 

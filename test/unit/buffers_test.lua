@@ -1037,6 +1037,7 @@ test("a replace take, a clear or another file sets the start back to 0", functio
   -- a playable recording leaves the file's start, rate and length alone
   load_long_file(context, 2); buffers_lib.set_start(2, 12.0)
   params:set("record_feedback", 50)
+  context.clock.run_for(0.4)                     -- the reload settles: 12 is what plays
   record_buffer(2)
   assert_near(buffers[2].start, 12.0, 1e-9); assert_equal(buffers[2].sample_rate, 48000)
   assert_near(buffers[2].file_seconds, 60, 1e-9)
@@ -1173,6 +1174,60 @@ test("a start reload that fails puts the start back", function()
   context.clock.run_for(0.4)
   context.polls.fire("bufferLoadFailed", load_failed_value(1, 4))
   assert_near(buffers[1].start, 12.0, 1e-9)
+end)
+
+test("a failed load over a remembered missing file puts its start back", function()
+  local subdir = "missing-start-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local gone = context.audio_dir .. "gone.wav"
+  cleanup()   -- makes the data folder
+  local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+  file:write(tabutil_text({ version = 2, paths = { gone }, starts = { 12 } })); file:close()
+  context = load_strata({ data_subdir = subdir })
+  local buffers = local_value("buffers")
+  assert_equal(buffers[1].missing_path, gone); assert_near(buffers[1].start, 12.0, 1e-9)
+  load_buffer(1, "/tmp/bad.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 1))
+  assert_equal(buffers[1].missing_path, gone, "the missing file is shown again")
+  assert_near(buffers[1].start, 12.0, 1e-9)
+  cleanup()
+  assert_near(context.tab.load(context.data_dir .. "strata/buffers.data").starts[1], 12.0, 1e-9)
+end)
+
+test("a dub that starts inside the start reload's wait leaves the start at what plays", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers, buffers_lib = local_value("buffers"), local_value("S").lib.buffers
+  load_long_file(context, 1)
+  context.polls.fire("bufferState", 16)
+  buffers_lib.set_start(1, 12.0)
+  context.clock.run_for(0.1)
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  assert_equal(buffers[1].start, 0, "the file still plays from 0")
+  context.clock.run_for(1)
+  assert_equal(#context.calls_named("loadBuffer"), 0, "no reload")
+  context.polls.fire("recordState", 56)   -- the dub is canceled
+  assert_equal(buffers[1].start, 0)
+end)
+
+test("start reloads that fail out of order end at the start before them", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers, buffers_lib = local_value("buffers"), local_value("S").lib.buffers
+  local function two_pending()
+    load_long_file(context, 1)
+    context.polls.fire("bufferState", 16)
+    buffers_lib.set_start(1, 12.0); context.clock.run_for(0.4)   -- load n
+    buffers_lib.set_start(1, 20.0); context.clock.run_for(0.4)   -- load n + 1
+  end
+  two_pending()   -- loads 2 and 3 over load 1
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))
+  assert_near(buffers[1].start, 12.0, 1e-9)
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  assert_equal(buffers[1].start, 0)
+  two_pending()   -- loads 5 and 6 over load 4
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 5))
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 6))
+  assert_equal(buffers[1].start, 0)
 end)
 
 -- Put voice voice_idx on buffer slot with a loop
