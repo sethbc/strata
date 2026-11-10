@@ -176,7 +176,8 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   |------|--------|-------|
   | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, and `S.scene_transition_clock` is nil whenever the flag is false |
   | `pattern clock` | `lib/sequencer.lua` | `S.pattern_playing == (S.pattern_clock ~= nil)` |
-  | `grid keys` | `lib/grid/core.lua` | every consumed key and every key with a pending hold (`on_hold`) is a held key (`S.grid_held`) |
+  | `grid keys` | `lib/grid/core.lua` | every consumed key and every key with a pending hold (`on_hold`) is a held key (`S.grid_held`), and a port has an attached device recorded (`attached_devices[port]`) exactly while it is attached (`S.grids[port]`) |
+  | `arc connection` | `lib/arc/core.lua` | `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)` |
   | `key presses` | `lib/ui/keys.lua` | every `S.key_press_alt[n]` has an `S.key_press_page[n]` |
   | `buffer slots` | `lib/buffers.lua` | for every slot of `S.buffers`: `finishing` implies `recording`, `checking_from ~= nil` implies `confirm_since ~= nil`, and `settled_empty` and `loaded` are never both set |
   | `flash slots` | `lib/ui/flash.lua` | a flash slot with a text has a clock |

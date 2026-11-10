@@ -488,4 +488,18 @@ test("a grid moved to another port in SYSTEM > DEVICES works once the menu close
   assert_equal(grid_core().page(2), 1, "port 2 starts on page 1 with the other grid")
 end)
 
+test("a grid moved in SYSTEM > DEVICES cancels the old port's pending holds", function()
+  local context = load_strata(); finish_startup(context)
+  local scenes = local_value("scenes")
+  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
+  context.grid.press(1, 2, 3, 1)
+  assert_true(grid_core().hold_pending(1, 2, 3), "a scene save is pending on port 1")
+  _menu.set_mode(true)
+  context.grid.reassign(1, 2)
+  _menu.set_mode(false)
+  assert_true(not grid_core().hold_pending(1, 2, 3), "port 1's hold is canceled")
+  context.clock.run_for(1)
+  assert_true(not scenes[2].populated, "no scene saved")
+end)
+
 end

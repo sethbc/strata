@@ -42,3 +42,4 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - Connect up to 4 grids simultaneously
 - Each grid has its own page: one grid can show the patterns while another shows the scenes. Patterns, voices and everything else are shared
 - Hot-plug support - connect/disconnect grids while running. A grid plugged in starts on page 1; unplugging a grid while a scene save key is held saves nothing
+- A grid moved to another port in SYSTEM > DEVICES works once the norns menu closes, and starts on page 1 with no held keys, as a plugged-in grid does
