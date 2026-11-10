@@ -58,6 +58,10 @@ return function(S)
 
   -- The transient state, for the playhead estimate and the tests
   function M.scan_held(voice_idx) return valid_voice(voice_idx) and scan_hold[voice_idx] or false end
+  -- Whether one holder is in a voice's set of scan holders
+  function M.holds_scan(voice_idx, holder)
+    return valid_voice(voice_idx) and holder ~= nil and holders[voice_idx][holder] == true
+  end
   function M.scrub_rate(voice_idx) return valid_voice(voice_idx) and glide_rate[voice_idx] or 0 end
 
   -- A voice's bookmark n (0-1), or nil
