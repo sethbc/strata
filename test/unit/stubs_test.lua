@@ -11,6 +11,20 @@ local assert_near, load_strata, local_value = h.assert_near, h.load_strata, h.lo
 local finish_startup, patched_script, text_width = h.finish_startup, h.patched_script, h.text_width
 local unit_files, load_unit_files = h.unit_files, h.load_unit_files
 
+-- A lib/state replacement whose S has marker 2, empty registries (plus
+-- `extra_registry`, a Lua table field list such as "invariants = {}") and
+-- register functions that do nothing
+local function stub_state_source(extra_registry)
+  return "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
+    .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
+    .. " lfo_destinations = {}, fx_params = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
+    .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
+    .. " register_lfo_destination = function() end, register_param_filter = function() end,"
+    .. " register_source_change = function() end, register_scene_field = function() end,"
+    .. " register_grain_restart = function() end, register_alt_release = function() end,"
+    .. " register_invariant = function() end } end"
+end
+
 test("each load gets its own data directory, even after the same random seed (#50)", function()
   math.randomseed(1); local first = load_strata()
   math.randomseed(1); local second = load_strata()
@@ -38,15 +52,7 @@ test("include stub loads lib modules and honors overrides", function()
   install()
   assert_equal(include("lib/state")().marker, nil, "overrides last one install")
   -- load_strata passes them through
-  load_strata { module_sources = { ["lib/state"] =
-    "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
-    .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
-    .. " lfo_destinations = {}, fx_params = {}, invariants = {} }, lib = {}, register_start = function() end,"
-    .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
-    .. " register_lfo_destination = function() end, register_param_filter = function() end,"
-    .. " register_source_change = function() end, register_scene_field = function() end,"
-    .. " register_grain_restart = function() end, register_alt_release = function() end,"
-    .. " register_invariant = function() end } end" } }
+  load_strata { module_sources = { ["lib/state"] = stub_state_source("invariants = {}") } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
@@ -365,6 +371,22 @@ test("run_test fails a passing test that leaves an invariant broken, unless it a
   assert_true(ok, "an allowed break passes: " .. tostring(message))
   assert_true(run_test(function() end), "a test that loaded nothing is not checked")
   assert_true(not pcall(h.allow_broken_invariants, ""), "a reason is a non-empty string")
+  load_strata()  -- this test leaves nothing broken
+end)
+
+test("a script with no invariants registry fails only the test that loaded it, and the flags come back", function()
+  local inner_ok, inner_message
+  -- the middle test loads nothing: once the inner one returns, its own flags
+  -- are back, so it is not checked against the script the inner one left
+  local middle_ok, middle_message = run_test(function()
+    inner_ok, inner_message = run_test(function()
+      load_strata { module_sources = { ["lib/state"] = stub_state_source("") } }
+    end)
+  end)
+  assert_true(middle_ok, "the middle test passes: " .. tostring(middle_message))
+  assert_true(not inner_ok, "the inner test fails")
+  assert_true(tostring(inner_message):find("invariant check failed:", 1, true), "says so: " .. tostring(inner_message))
+  assert_true(tostring(inner_message):find("S.registry.invariants", 1, true), "names the field: " .. tostring(inner_message))
   load_strata()  -- this test leaves nothing broken
 end)
 

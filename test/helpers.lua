@@ -156,15 +156,22 @@ local function shared_state()
   end
 end
 
--- The invariants the loaded script registered (S.registry.invariants) that
--- are broken now, as "<name>: <message>" in registration order; an
--- invariant that raises is listed with its error. Empty when every one
--- holds or nothing is loaded
+-- The invariants of the script loaded last (shared_state(): the one this
+-- test loaded, or, in a test that loaded nothing, whatever script an earlier
+-- test left; run_test checks only a test that loaded) that are broken now,
+-- as "<name>: <message>" in registration order; an invariant that raises
+-- is listed with its error. Empty when every one holds or nothing was ever
+-- loaded. Raises when the loaded S has no S.registry.invariants (a patched
+-- lib/state that left it out): run_test fails that test with the error
 local function check_invariants()
   local S = shared_state()
   local broken = {}
   if type(S) ~= "table" then return broken end
-  for _, record in ipairs(S.registry.invariants) do
+  local invariants = type(S.registry) == "table" and S.registry.invariants
+  if type(invariants) ~= "table" then
+    error("the loaded script has no S.registry.invariants table", 2)
+  end
+  for _, record in ipairs(invariants) do
     local ok, message = pcall(record.fn)
     if not ok then
       table.insert(broken, record.name .. ": raised " .. tostring(message))
@@ -190,8 +197,9 @@ end
 -- failed anyway, they are added to its error. A test that passed, reported
 -- no clock error and called load_strata itself then has the script's
 -- invariants checked (check_invariants), unless it allowed broken ones
--- (allow_broken_invariants). A run_test inside a test keeps the outer
--- test's flags
+-- (allow_broken_invariants); a check that raises fails the test with
+-- "invariant check failed:" and its error. A run_test inside a test keeps
+-- the outer test's flags: they are restored on every return
 local function run_test(func)
   local outer_loaded, outer_allowed = invariant_check.loaded, invariant_check.allowed
   invariant_check.loaded, invariant_check.allowed = false, nil
@@ -203,8 +211,10 @@ local function run_test(func)
     ok = false
   end
   if ok and invariant_check.loaded and not invariant_check.allowed then
-    local broken = check_invariants()
-    if #broken > 0 then
+    local checked, broken = pcall(check_invariants)
+    if not checked then
+      ok, err = false, "invariant check failed: " .. tostring(broken)
+    elseif #broken > 0 then
       ok, err = false, "invariants broken after the test:\n" .. table.concat(broken, "\n")
     end
   end
