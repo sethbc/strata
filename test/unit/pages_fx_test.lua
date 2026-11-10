@@ -296,4 +296,51 @@ test("FX acts once per K3 press; the release does nothing", function()
   assert_true(params:get("filter_mix") ~= mix, "FX K3 press bypasses once, the release does not undo it")
 end)
 
+-- FX's K3 on the filter mix row restores the mix the player had (#235)
+local function filter_mix_row()
+  local context = load_strata(); show_page("FX")
+  enc(2, 5)  -- row 6: filter mix
+  return context
+end
+
+test("K3 restores the filter mix it had before it was turned down a step at a time", function()
+  filter_mix_row()
+  params:set("filter_mix", 0.8)
+  local turns = 0
+  while params:get("filter_mix") > 0 and turns < 200 do enc(3, -1); turns = turns + 1 end
+  assert_equal(params:get("filter_mix"), 0, "E3 brought the mix to 0")
+  key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6, "K3 restores 0.8, not the last step before 0")
+end)
+
+test("K3 restores the mix a scene fade took to 0", function()
+  local context = filter_mix_row()
+  params:set("filter_mix", 0.6); capture_scene(1)
+  params:set("filter_mix", 0); capture_scene(2)
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(3)
+  assert_equal(params:get("filter_mix"), 0, "the fade ended at 0")
+  key(3, 1); assert_near(params:get("filter_mix"), 0.6, 1e-6, "K3 restores the mix the fade started from")
+end)
+
+test("K3 off keeps the mix as it was at the press", function()
+  filter_mix_row()
+  params:set("filter_mix", 0.8); params:set("filter_mix", 0.3)
+  key(3, 1); assert_equal(params:get("filter_mix"), 0)
+  key(3, 1); assert_near(params:get("filter_mix"), 0.3, 1e-6, "K3 off recorded 0.3")
+end)
+
+test("turned down to 0.3 and later to 0, K3 restores the last mix it rose to", function()
+  filter_mix_row()
+  params:set("filter_mix", 0.8); params:set("filter_mix", 0.3); params:set("filter_mix", 0)
+  key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6, "decision 1's known cost")
+end)
+
+test("a PSET load leaves the restore value at the loaded mix", function()
+  filter_mix_row()
+  local filter_mix = params:lookup_param("filter_mix")
+  params:set("filter_mix", 0.6); filter_mix:bang()
+  params:set("filter_mix", 0); filter_mix:bang()
+  key(3, 1); assert_near(params:get("filter_mix"), 0.6, 1e-6, "the bang of 0 leaves 0.6")
+end)
+
 end
