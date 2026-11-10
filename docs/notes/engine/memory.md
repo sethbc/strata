@@ -40,6 +40,15 @@ After 0c's mix stage, SuperCollider 3.13.0, three runs of the memory area (53.1 
 | standard (floor 3072) | 5020 (+100) | 5040 | 5010 | 5140 (+120 over Step 1's 5020) | 5010 |
 | high, spectral freeze on every voice (floor 3584; recordings 3072) | 4370 (+100; 786 above) | 4350 | 4880 | 5010 (+100 over Step 1's 4910; 1426 above) | 4350 |
 
+After 1c's scan hook (`scrubRate`, `scanHold` and the reset on the `Phasor`; no 3.3 head guard or recording yet, so the second of 1a and 1c to merge records the combined figures here), SuperCollider 3.13.0, four full runs (53.1 KB `\strataGrainRing`, 59.0 KB `\strataGrainBuf`, 29 KB under 88, 33.7 KB per stage; 3.14.1 measured the same per-def figures, the probes resolving about 1 KB):
+
+| KB free | spaced | burst | recalls A -> B -> A -> C | all-buffer (21 `\strataGrainBuf`) | eight recordings (mixed) |
+|---|---|---|---|---|---|
+| standard (floor 3072) | 4990 | 5010 | 4990 | 5090 | 4970 |
+| high, spectral freeze on every voice (floor 3584; recordings 3072) | 4340 (756 above) | 4340 | 4840 | 4990 (1406 above) | 4300 |
+
+That is 20-50 KB below 0c's table, whose figures came from memory-only runs (these from full runs, identical in all four). The gap comes mainly from full against memory-only runs: the memory area alone on 3.14.1, before and after the hook, costs it 0-20 KB at the probes' 10 KB resolution (standard 5020 both; all-buffer 5140 to 5120; high all-buffer 5030 to 5010), against the design's about 3.5 KB at the mixed case and about 10.5 KB at the all-buffer one.
+
 The stage adds 7 × 34.5 = about 240 KB where every grain synth saves 16 KB, and the mixed worst cases have 21 grain synths: 21 × 16 − 240 = about 96 KB saved, 100-120 KB measured against Step 1's base on main, three memory-only runs on 3.13 (standard 4920, 4940, 4890, 5020, 4890; high 4270, 4250, 4780, 4910, 4230; the design estimated 80-90 KB). The all-buffer case leaves more than the mixed one: it has no voice synths (the mixed case's seven take their own graphs), and its 21 grain synths are only about 6 KB each larger than the rings'. The high figures do not count the spectral writers' late allocations (up to 112 KB).
 
 CI runs the same check on SuperCollider 3.13.0 (norns' version); its lines carry its own figures.

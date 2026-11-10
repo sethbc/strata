@@ -59,7 +59,7 @@ SynthDef(\strataCheckLoopReverse, { arg out, bufnumL, bufnumR, bufFrames = 1, bu
     posSpread = 0, loopStart = 0, loopLength = 1, grainSize = 0.2, density = 40;
     var trig = Impulse.ar(density);
     var read = engine.slotGrainReader(bufnumL, bufnumR, bufFrames, 1, bufPos, 1, bufScan, posSpread, 0,
-        loopStart, loopLength).value(trig, DC.ar(-1), grainSize, 0);
+        loopStart, loopLength, 0, 0, 0).value(trig, DC.ar(-1), grainSize, 0);
     Out.ar(out, GrainBuf.ar(2, trig, read[\dur], read[\bufL], read[\rate], read[\pos], 2, 0, -1, engine.maxGrains)
         * read[\level]);
 }).add;
