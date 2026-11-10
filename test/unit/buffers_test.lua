@@ -1425,6 +1425,14 @@ test("status names what a slot holds, one answer for every reader", function()
   assert_equal(status(4), "armed")
   context.polls.fire("recordState", 43)   -- slot 4's first recording starts
   assert_equal(status(4), "loop")
+  -- an armed replace take stopped with K3 finishes, whatever its phase
+  params:set("record_feedback", 0); params:set("record_loop", 1)
+  record_buffer(5)
+  assert_equal(status(5), "armed")
+  record_buffer(5)
+  assert_equal(status(5), "finishing", "K3 on an armed take: finishing before its canceled report")
+  context.polls.fire("recordState", 60)   -- slot 5's first recording is canceled
+  assert_equal(status(5), "empty"); assert_true(is_free(5))
   every_slot_has_a_status()
   -- a remembered file missing at start
   local subdir = "status-missing-" .. math.random(1, 1e9)

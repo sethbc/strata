@@ -280,14 +280,16 @@ return function(S)
     if whole_number_in(slot, 1, NUM_BUFFERS) then clear_buffer(slot) end
   end
 
-  -- 15 recording, 11 armed (waiting to start), 8 holding audio, 2 empty
+  -- From the slot's status (S.lib.buffers.status), the answer source_level
+  -- shares: 11 armed (waiting to start), 15 recording or finishing, 2 free
+  -- (S.lib.buffers.is_free), 8 anything else (loading, loaded, a named load
+  -- the engine has not reported yet)
+  local RECORD_LEVELS = {armed = 11, recording = 15, dub = 15, loop = 15, finishing = 15}
   function M.record_level(slot)
     if not whole_number_in(slot, 1, NUM_BUFFERS) then return 0 end
-    local buffer = S.buffers[slot]
-    local take = S.lib.record.state(slot)
-    if take and take.phase == "armed" then return 11 end
-    if buffer.recording then return 15 end
-    return buffer.loaded and 8 or 2
+    local level = RECORD_LEVELS[S.lib.buffers.status(slot)]
+    if level then return level end
+    return S.lib.buffers.is_free(slot) and 2 or 8
   end
 
   M.CLEAR_LEVEL = 4

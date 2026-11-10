@@ -230,6 +230,8 @@ test("a named, unsettled slot's source key is not shown as empty", function()
   assert_equal(local_value("S").lib.buffers.status(2), "unsettled")
   assert_equal(core.source_level(1, 3), 4, "slot 2 (option 3) is named: not dimmed")
   assert_equal(core.source_level(1, 4), 2, "an empty slot (slot 3, option 4) is")
+  assert_equal(core.record_level(2), 8, "its record key agrees: not empty")
+  assert_equal(core.record_level(3), 2, "an empty slot's record key")
 end)
 
 test("source and slot helpers check bounds and give the 256's levels", function()

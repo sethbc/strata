@@ -12,7 +12,7 @@
 - A playable recording (a dub) keeps the file's `start`, `sample_rate` and `file_seconds` until its "ended" report makes the slot `take <n>` (start 0, neither field); a canceled one keeps all three (#244). `recording_started` is told the take's kind (`record_buffer` calls it before it sets `recording`, so `S.lib.record.state` cannot say).
 - `buffer_state_changed` marks the slot's peaks stale (`S.lib.waveforms.stale`) when its seconds change to a non-zero value, and reads nothing itself.
 - Lengths come from `S.performance.buffer_seconds` (16 s standard, up to 300 s high), never a constant: `record_buffer` caps a take at it and the BUFFER page sizes its seconds column from it.
-- What a slot holds has one answer, `S.lib.buffers.status(slot)` (States, below), derived only: it stores nothing and no field changes for it. Whether a slot is free is `S.lib.buffers.is_free(slot)` (status `"empty"` or `"missing"`), and the fill (`S.lib.files.fill_empty`), BUFFER's seconds column (`slot_is_empty`) and the grid's source keys (`source_level`, level 2) read only it, never a test of their own (#247).
+- What a slot holds has one answer, `S.lib.buffers.status(slot)` (States, below), derived only: it stores nothing and no field changes for it. Whether a slot is free is `S.lib.buffers.is_free(slot)` (status `"empty"` or `"missing"`), and the fill (`S.lib.files.fill_empty`), BUFFER's seconds column (`slot_is_empty`) and the grid's source and record keys (`source_level`, level 2; `record_level`, from the status) read only it, never a test of their own (#247).
 
 ## Owns
 
@@ -31,16 +31,16 @@
 
 | # | Status | Fields that encode it | Entered by | Free |
 |---|--------|------------------------|------------|------|
-| 1 | `"armed"` | `recording`, the take's `phase == "armed"` (a delay or a threshold) | `record_buffer` | no |
-| 2 | `"finishing"` | `finishing` (with `recording`, `confirm_since`): a replace take that ended and waits for the engine's length | `finish_buffer_take` (`lib/record.lua`: the take's timer, a stop, an "ended" report) | no |
+| 1 | `"finishing"` | `finishing` (with `recording`, `confirm_since`): a replace take that ended and waits for the engine's length, whatever the take's phase (an armed replace take stopped with K3 finishes until its "canceled" report) | `finish_buffer_take` (`lib/record.lua`: the take's timer, a stop, an "ended" report) | no |
+| 2 | `"armed"` | `recording`, the take's `phase == "armed"` (a delay or a threshold) | `record_buffer` | no |
 | 3 | `"loop"`, `"dub"`, `"recording"` | `recording`, with a playable take (`kind == "playable"`) that loops, one that does not, or a replace take (also a recording with no take) | `record_buffer`, the "recording" report (`record_state_changed`) | no |
 | 4 | `"loading"` | `confirm_since` set: a load the engine has not confirmed, checking (`checking_from`) or not | `load_buffer` | no |
 | 5 | `"loaded"` | `loaded` | `settle_buffer_slot` or `confirm_buffer_audio` from a report of audio, a dub's "ended" report with a length, `buffer_load_failed` putting a loaded state back | no |
 | 6 | `"unsettled"` | `settled_empty == "load"` or `"restore"`: a named load (`name` kept) that reported no length yet; a later report of audio adopts it (`"loaded"`) | `settle_buffer_slot` (a 0 s report `BUFFER_SETTLE.confirm_seconds` after the load) | no |
 | 7 | `"missing"` | `missing_path` set: a remembered file not found at start, kept for buffers.data | `restore_buffers_from_file` | yes |
-| 8 | `"empty"` | none of the above (a canceled take may keep `settled_empty == "take"`, which a later report of audio still adopts) | init, `clear_buffer`, a replace take that settled without audio, a replace take's "canceled" report, `buffer_load_failed` with an empty state | yes |
+| 8 | `"empty"` | none of the above (a canceled take may keep `settled_empty == "take"`, which a later report of audio still adopts) | init, `clear_buffer`, a replace take that settled without audio, a replace take's "canceled" report, a dub's "ended" report that arrives with 0 s (`take <n>`, not loaded), a dub canceled while armed over an unsettled slot (`record_buffer` cleared its `settled_empty`), `buffer_load_failed` with an empty state | yes |
 
-The fields stay what other code and the tests read (`loaded`, `recording`, `finishing`, `seconds`, `name`, ...); `status` adds no field. `buffer_load_failed` and a check's fallback (`start_check_fallback`) can put back any of cases 4-8 from the state a load replaced (`apply_buffer_state`). A load, a clear and a recording leave a state by setting its fields (`load_buffer`, `clear_buffer`, `record_buffer`); the `"buffer slots"` invariant (`finishing` only with `recording`, `checking_from` only with `confirm_since`, never `settled_empty` with `loaded`) keeps the cases apart.
+The fields stay what other code and the tests read (`loaded`, `recording`, `finishing`, `seconds`, `name`, ...); `status` adds no field. A dub canceled while armed over an unsettled slot leaves a named, free slot: BUFFER shows its name without a length, and the fill may load over it. `buffer_load_failed` and a check's fallback (`start_check_fallback`) can put back any of cases 4-8 from the state a load replaced (`apply_buffer_state`). A load, a clear and a recording leave a state by setting its fields (`load_buffer`, `clear_buffer`, `record_buffer`); the `"buffer slots"` invariant (`finishing` only with `recording`, `checking_from` only with `confirm_since`, never `settled_empty` with `loaded`) keeps the cases apart.
 
 ### The file fields
 
