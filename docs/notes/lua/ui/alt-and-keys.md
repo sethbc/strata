@@ -1,9 +1,26 @@
 ## Must not break
 
-- A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
+- A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten, and so are keys held across a page change: `set_ui_page` clears `S.key_press_page` and `S.key_press_alt` (not `S.alt_held`, K1 is still down) and runs no ALT-release hook, so a K2 or K3 held out of a page and back does nothing when it comes up (#234).
 - Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call; the one exception is BUFFER's ALT+K2 and ALT+K3, which act on release in `alt_key_release`, by how long they were held, while their `alt_key` only notes the press (`docs/notes/lua/pages/buffer.md`). A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`. When ALT goes from held to not held (`S.lib.ui_alt.set(false)`, `forget_held_keys`), the `S.registry.alt_release` hooks run (`S.register_alt_release`).
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
 - The menu watch's wrapper never lets a failure stop the menu closing: the file selector release and each `S.registry.menu_close` hook run in their own `pcall`, and it calls only upvalues (no script-global lookup).
+
+## States
+
+The fields: `S.key_press_page[n]` (the page key `n` went down on, nil when up), `S.key_press_alt[n]` (true for an ALT press) and `S.alt_held` (K1 held). The "key presses" invariant checks that an ALT press has a press page.
+
+| Per key (2, 3) | `key_press_page[n]` | `key_press_alt[n]` |
+|----------------|---------------------|--------------------|
+| up | nil | nil |
+| down, plain | the page | nil |
+| down, ALT | the page | true |
+
+Legal: any of the three per key, with `S.alt_held` either way (K1 may come up before the key). Never an ALT press without a press page.
+
+Transitions, one function each:
+- `key(n, 1)` and `key(n, 0)` in `strata.lua`: up to down (plain or ALT by `S.alt_held`) and back to up.
+- `S.lib.ui_keys.set_ui_page`: every key to up, `S.alt_held` untouched.
+- `forget_held_keys`: every key to up and `S.alt_held` false, running the ALT-release hooks if ALT was held.
 
 ## ALT
 

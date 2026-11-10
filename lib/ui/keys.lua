@@ -62,6 +62,10 @@ return function(S)
     local old_record = S.registry.pages[S.ui_page]
     if old_record and old_record.leave then old_record.leave() end
     forget_arc_ticks()
+    -- A key held across the change must not release on the page it comes
+    -- back to; ALT itself stays (K1 is still down)
+    for n in pairs(S.key_press_page) do S.key_press_page[n] = nil end
+    for n in pairs(S.key_press_alt) do S.key_press_alt[n] = nil end
     S.ui_page = page
     local new_record = S.registry.pages[page]
     if new_record and new_record.enter then new_record.enter() end

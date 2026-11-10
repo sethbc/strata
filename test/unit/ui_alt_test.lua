@@ -90,6 +90,22 @@ test("a key pressed with ALT releases through the ALT path", function()
   assert_equal(table.concat(log, ","), "alt_key 2", "an ALT press released on another page runs no release")
 end)
 
+test("a key held across a page change and back runs no release", function()
+  load_strata()
+  local log = logging_fx_record()
+  local S = local_value("S")
+  key(2, 1); show_page("MAIN")
+  assert_true(S.key_press_page[2] == nil and S.key_press_alt[2] == nil, "a page change forgets the press")
+  show_page("FX"); key(2, 0)
+  assert_equal(table.concat(log, ","), "key 2", "a plain press released after the round trip runs no release")
+  for index in pairs(log) do log[index] = nil end
+  key(1, 1); key(2, 1); show_page("MAIN")
+  assert_true(S.alt_held, "ALT held across E1 stays ALT")
+  assert_true(S.key_press_page[2] == nil and S.key_press_alt[2] == nil, "the ALT press is forgotten too")
+  show_page("FX"); key(2, 0); key(1, 0)
+  assert_equal(table.concat(log, ","), "alt_key 2", "an ALT press released after the round trip runs no release")
+end)
+
 test("ALT+K2 on BUFFER, K1 released first, never opens the file browser", function()
   local context = load_strata(); finish_startup(context)
   params:set("v1_source", 2)  -- voice 1 reads buffer 1, so K2's release would load
