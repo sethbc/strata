@@ -176,6 +176,111 @@ end
 
 local function raw_fraction(id) return params:get_raw(id) end
 
+-- BUFFER's rings, plain and with ALT: [ring] = param id for voice 1
+local BUFFER_RING_PARAMS = {
+  plain = { "v1_buf_pos", "v1_loop_start", "v1_loop_length", "v1_buf_scan" },
+  alt = { "v1_buf_pos", "v1_buf_rate", "scrub_friction", "record_feedback" },
+}
+
+test("every BUFFER ring sweeps its param's range in 512 ticks, plain and with ALT", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1); show_page("BUFFER")
+  params:set("v1_source", 2)
+  -- raw fractions follow the warp (loop_length and buf_rate are exp specs);
+  -- loop_start's top stops short of 1, so its end is the value's own maximum
+  local function sweep(ring, param_id, where)
+    local function raw() return params:get_raw(param_id) end
+    params:set_raw(param_id, 0)
+    -- loop_start sits at 0 with a whole-slot loop; loop_length starts from its minimum
+    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
+    assert_near(raw(), 0.5, 2e-3, where .. ": 256 ticks reach the middle")
+    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
+    local reached = raw()
+    if param_id == "v1_loop_start" then
+      assert_true(reached > 0.99, where .. ": 512 ticks reach loop_start's top, got " .. reached)
+    elseif param_id == "v1_buf_scan" then
+      -- the range runs through 0, which holds for 24 ticks (docs/notes/lua/ui/detents-and-fine.md)
+      assert_near(reached, 1 - 24 / 512, 4e-3, where .. ": 512 ticks reach the maximum less the 0 detent's hold")
+    else
+      assert_near(reached, 1, 2e-3, where .. ": 512 ticks reach the maximum")
+    end
+    for _ = 1, 512 do context.arc.turn(1, ring, -1) end
+    assert_near(raw(), 0, 2e-3, where .. ": 512 back reach the minimum")
+  end
+  for ring, param_id in ipairs(BUFFER_RING_PARAMS.plain) do
+    params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+    sweep(ring, param_id, "BUFFER ring " .. ring)
+  end
+  key(1, 1)
+  for ring = 2, 4 do sweep(ring, BUFFER_RING_PARAMS.alt[ring], "BUFFER ALT ring " .. ring) end
+  key(1, 0)
+end)
+
+test("BUFFER's rings light 64 LEDs at the maximum, none at the minimum; scan is bipolar; plain and ALT", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local device = context.arc.plug(1)
+  params:set("v1_source", 2)
+  local function lit(ring)
+    local count = 0
+    for x = 1, 64 do if device:get_led(ring, x) > 0 then count = count + 1 end end
+    return count
+  end
+  local function check(ring, param_id, where)
+    params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+    params:set_raw(param_id, 1); arc_redraw()
+    local label = where .. " ring " .. ring .. " (" .. param_id .. ")"
+    if param_id == "v1_loop_start" then
+      assert_true(lit(ring) >= 63, label .. " at maximum, got " .. lit(ring))
+    elseif param_id == "v1_buf_scan" then
+      assert_equal(lit(ring), 32, label .. " at maximum fills a half turn clockwise")
+    else
+      assert_equal(lit(ring), 64, label .. " at maximum")
+    end
+    params:set_raw(param_id, 0.5); arc_redraw()
+    if param_id == "v1_buf_scan" then
+      assert_equal(lit(ring), 1, label .. " at 0 lights only the zero LED")
+    else
+      assert_true(math.abs(lit(ring) - 32) <= 1, label .. " at half lights about 32, got " .. lit(ring))
+    end
+    params:set_raw(param_id, 0); arc_redraw()
+    if param_id == "v1_buf_scan" then
+      assert_equal(lit(ring), 32, label .. " at minimum fills a half turn counter-clockwise")
+    else
+      assert_equal(lit(ring), 0, label .. " at minimum")
+    end
+  end
+  for ring, param_id in ipairs(BUFFER_RING_PARAMS.plain) do check(ring, param_id, "BUFFER") end
+  key(1, 1)
+  for ring = 1, 3 do check(ring, BUFFER_RING_PARAMS.alt[ring], "BUFFER ALT") end
+  -- ALT ring 4 is record_feedback at its fixed level 12
+  params:set("record_feedback", 100); arc_redraw()
+  assert_equal(lit(4), 64, "BUFFER ALT ring 4 at maximum")
+  assert_equal(device.segments[4].level, 12)
+  key(1, 0)
+end)
+
+test("ALT ring 1 holds the scan of the voice selected at each tick, once per voice", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.arc.plug(1)
+  local S = local_value("S")
+  params:set("v1_source", 2); params:set("v2_source", 2)
+  context.clear_engine_calls()
+  key(1, 1)
+  context.arc.turn(1, 1, 1)
+  S.selected_voice = 2
+  context.arc.turn(1, 1, 1)
+  context.arc.turn(1, 1, 1)
+  local sent = grain_sends(context, "scanHold")
+  assert_equal(#sent, 3, "voice 1 held, voice 1 released, voice 2 held")
+  assert_equal(sent[2].voice, 0); assert_equal(sent[2].value, 0)
+  assert_equal(sent[3].voice, 1); assert_equal(sent[3].value, 1)
+  key(1, 0)
+  sent = grain_sends(context, "scanHold")
+  assert_equal(#sent, 4); assert_equal(sent[4].voice, 1, "K1 up releases the voice held now")
+  assert_equal(sent[4].value, 0)
+  S.selected_voice = 1
+end)
+
 test("BUFFER's rings are position, loop start, loop length and scan", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   context.arc.plug(1)
