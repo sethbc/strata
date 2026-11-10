@@ -1648,11 +1648,13 @@ local function update_devices(kind)
   for port, vport in ipairs(kind.vports) do
     vport.device = nil
     if vport.cols then vport.cols, vport.rows = 0, 0 end
+    if vport.connected ~= nil then vport.connected = false end
     for _, device in pairs(kind.devices) do
       if device.name == vport.name then
         vport.device = device
         if vport.cols then vport.cols, vport.rows = device.cols, device.rows end
         device.port = port
+        if vport.connected ~= nil then vport.connected = true end
       end
     end
   end
@@ -2433,6 +2435,9 @@ function stubs.install(options)
   context.tab = make_tab()
   context.engine = engine
   context.midi = require("stub_midi")()
+  -- lua/core/midi.lua's update_devices() and SYSTEM > DEVICES' reassign
+  function context.midi.update_devices() update_devices(context.midi) end
+  function context.midi.reassign(from_port, to_port) reassign(context.midi, from_port, to_port) end
   context.lfo = {}
   context.lfo.library = require("stub_lfo")(context.lfo)
   context.fileselect = make_fileselect()

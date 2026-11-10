@@ -7,6 +7,7 @@
 - After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly).
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
+- The selected vport's device is reconciled when the norns menu closes (`M.reconcile`, a `register_menu_close` hook). Only a change of device resets the held notes, never an ordinary menu visit: SYSTEM > DEVICES moves a device with `update_devices()` and calls neither `midi.add` nor `midi.remove`.
 - Strata's code handles no CC: norns' PARAMS > MAP maps any CC to any param.
 
 ## Owns
@@ -46,6 +47,8 @@ Group `strata_midi`, 3 params:
 - `midi.remove(device)` resets the input if the device was on the selected port, requests a redraw and prints.
   - norns clears the vport as `midi.remove` returns (`Midi.update_devices`), before the next frame draws.
   - So `midi_device_name()` (the selected vport's name, or `none` without a device) then shows the port as empty.
+- The module keeps `attached_device`, the device last seen on the selected vport (set in `attach_midi`, nil after `midi.remove` took the selected port's device).
+- SYSTEM > DEVICES moves a device between ports through `update_devices()` only (no `midi.add`, no `midi.remove`). `M.reconcile()` runs as the menu closes: when `S.midi_device.device` is not `attached_device`, it calls `reset_midi_input()` if a device had been attached (its note offs and bend returns will not arrive), remembers the new device and requests a redraw. A menu visit that moves nothing does nothing.
 - `cleanup` clears `S.midi_device.event`.
 
 ## Routing
@@ -91,4 +94,4 @@ A note's owner is the voice in `note_voice[channel][note]`; `held[voice][note]` 
 
 | Fields | Legal combinations | Transition |
 |--------|--------------------|------------|
-| `note_voice[ch][note]`, `held[voice][note]` | held on a voice exactly while some channel maps the note to it | `midi_event` (note on and note off, through `release_note_hold`); `reset_midi_input` clears both |
+| `note_voice[ch][note]`, `held[voice][note]` | held on a voice exactly while some channel maps the note to it | `midi_event` (note on and note off, through `release_note_hold`); `reset_midi_input` clears both (also from `M.reconcile` when the selected vport's device changed) |

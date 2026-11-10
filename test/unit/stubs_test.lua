@@ -756,6 +756,27 @@ test("reassign moves a device between vports and calls no add or remove", functi
   _menu.set_mode(false)  -- the script catches up as the menu closes
 end)
 
+-- SYSTEM > DEVICES moves a MIDI device as it does a grid: lua/core/midi.lua's
+-- update_devices() re-links devices to vports, and neither add nor remove runs
+test("the stub's midi.reassign moves a device between vports as update_devices does", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.midi.plug(1, "keys")
+  local calls = {}
+  for _, name in ipairs({ "add", "remove" }) do
+    local real = midi[name]
+    midi[name] = function(...) calls[#calls + 1] = "midi." .. name; return real(...) end
+  end
+  _menu.set_mode(true)
+  context.midi.reassign(1, 2)
+  assert_equal(midi.connect(1).device, nil, "port 1 holds no device")
+  assert_equal(midi.connect(1).connected, false, "and is not connected")
+  assert_equal(midi.connect(2).device, device, "port 2 holds the device")
+  assert_equal(midi.connect(2).connected, true)
+  assert_equal(device.port, 2, "the device's port is 2")
+  assert_equal(#calls, 0, "no add or remove: " .. table.concat(calls, ", "))
+  _menu.set_mode(false)
+end)
+
 test("stub tab.save and tab.load are lib/tabutil.lua's (#27)", function()
   local context = load_strata()
   local shared = { 1, 2 }
