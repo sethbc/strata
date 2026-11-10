@@ -1238,6 +1238,43 @@ local function loop_voice(voice_idx, slot, start, length)
   S.voices[voice_idx].extras.loop_length = length
 end
 
+test("the save param sends nothing while the slot records", function()
+  local context = load_strata(); finish_startup(context)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  context.clock.run_for(2)
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  assert_true(local_value("buffers")[1].recording, "slot 1 records")
+  context.clear_engine_calls()
+  params:set("buf1_save", 1)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing is sent while the slot records")
+  assert_equal(local_value("buffers")[1].saves_sent, 0, "and no save is counted")
+end)
+
+test("save_buffer and save_buffer_loop say why they sent nothing", function()
+  local context = load_strata(); finish_startup(context)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  context.clock.run_for(2)
+  for _, save in ipairs({save_buffer, save_buffer_loop}) do
+    context.clear_engine_calls()
+    local sent, reason = save(0)
+    assert_equal(sent, false); assert_equal(reason, "invalid", "not a slot")
+    sent, reason = save(2)
+    assert_equal(sent, false); assert_equal(reason, "empty", "an empty slot")
+    sent, reason = save(1)
+    assert_equal(sent, true); assert_equal(reason, nil, "a loaded slot is sent")
+    assert_equal(#context.calls_named("saveBuffer"), 1)
+  end
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  for _, save in ipairs({save_buffer, save_buffer_loop}) do
+    context.clear_engine_calls()
+    local sent, reason = save(1)
+    assert_equal(sent, false); assert_equal(reason, "busy", "a recording slot")
+    assert_equal(#context.calls_named("saveBuffer"), 0)
+  end
+end)
+
 test("save_buffer_loop saves the selected voice's loop region", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

@@ -356,24 +356,46 @@ return function(S)
     return buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. ".wav"
   end
 
-  -- Send a save of the slot; true when it was sent. The engine reports how
-  -- it ended (bufferSaveResult, buffer_save_result), so nothing here says it
-  -- saved: the file is written a moment later, or not at all (a full disk).
-  function save_buffer(slot)
-    if not valid_buffer_slot(slot) then return false end
+  -- Count a save of the slot, track it for its bufferSaveResult report and
+  -- send it: the one place a saveBuffer leaves, so the two entry points
+  -- number their saves alike
+  local function send_save(slot, path, start, length, loop)
     local buffer = S.buffers[slot]
-    -- seconds comes from the engine's poll: a load is loaded optimistically
-    -- until the poll settles it, and a recording reads 0 s until it completes
-    if buffer.seconds <= 0 then
-      print("buffer " .. slot .. " is empty, nothing to save")
-      return false
-    end
-    util.make_dir(buffer_audio_dir)
-    local path = buffer_save_path(slot)
     buffer.saves_sent = buffer.saves_sent + 1
     if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
-    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path})
-    engine.saveBuffer(slot - 1, path, 0, 1)
+    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop or nil})
+    engine.saveBuffer(slot - 1, path, start, length)
+  end
+
+  -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
+  -- records or awaits its take: an armed recording has `recording` set) or
+  -- "empty" (the engine reports no length: a load is loaded optimistically
+  -- until the poll settles it, and a replace take reads 0 s). nil when it can.
+  local function save_refusal(slot)
+    if not valid_buffer_slot(slot) then return "invalid" end
+    local buffer = S.buffers[slot]
+    if buffer.recording or buffer.finishing then
+      print("buffer " .. slot .. " is recording, nothing to save yet")
+      return "busy"
+    end
+    if buffer.seconds <= 0 then
+      print("buffer " .. slot .. " is empty, nothing to save")
+      return "empty"
+    end
+    return nil
+  end
+
+  -- Send a save of the slot: true when it was sent, else false and why (see
+  -- save_refusal). The engine reports how it ended (bufferSaveResult,
+  -- buffer_save_result), so nothing here says it saved: the file is written a
+  -- moment later, or not at all (a full disk). Whoever asks (the save param,
+  -- the page), no save goes while the slot records.
+  function save_buffer(slot)
+    local refusal = save_refusal(slot)
+    if refusal then return false, refusal end
+    util.make_dir(buffer_audio_dir)
+    local path = buffer_save_path(slot)
+    send_save(slot, path, 0, 1, false)
     print("buffer " .. slot .. " saving to " .. path)
     return true
   end
@@ -399,24 +421,18 @@ return function(S)
     return extras[LOOP.start_key] or 0, extras[LOOP.length_key] or 1
   end
 
-  -- Timestamped stereo WAV of the slot's loop region in audio/strata/;
-  -- true when the save was sent (its result flashes "saved buf <n> loop")
+  -- Timestamped stereo WAV of the slot's loop region in audio/strata/: true
+  -- when the save was sent (its result flashes "saved buf <n> loop"), else
+  -- false and why, as save_buffer says
   function save_buffer_loop(slot)
-    if not valid_buffer_slot(slot) then return false end
-    local buffer = S.buffers[slot]
-    if buffer.seconds <= 0 then
-      print("buffer " .. slot .. " is empty, nothing to save")
-      return false
-    end
+    local refusal = save_refusal(slot)
+    if refusal then return false, refusal end
     local start, length = loop_region(slot)
     start = util.clamp(start, 0, 1)
     length = util.clamp(length, 0, 1 - start)
     util.make_dir(buffer_audio_dir)
     local path = buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. "-loop.wav"
-    buffer.saves_sent = buffer.saves_sent + 1
-    if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
-    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = true})
-    engine.saveBuffer(slot - 1, path, start, length)
+    send_save(slot, path, start, length, true)
     print("buffer " .. slot .. " saving its loop to " .. path)
     return true
   end

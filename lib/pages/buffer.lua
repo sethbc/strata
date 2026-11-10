@@ -724,20 +724,19 @@ return function(S)
   end
 
   -- Save the cursor slot (or, `loop`, its loop region: save_buffer_loop),
-  -- shown in the hint row: a slot recording or awaiting its take is busy
-  -- (nothing to save yet); otherwise a save goes only to a slot the engine
-  -- reports holding audio. A save sent shows saving until the engine
-  -- reports how it ended: buffer_save_result then flashes saved or failed.
+  -- shown in the hint row. The save functions decide: a slot recording or
+  -- awaiting its take is busy, one the engine reports empty has nothing to
+  -- save. A save sent shows saving until the engine reports how it ended:
+  -- buffer_save_result then flashes saved or failed.
   local function save_cursor_slot(loop)
     local slot = cursor_slot()
-    local buffer = S.buffers[slot]
-    if buffer.recording or buffer.finishing then
-      buffer_page_flash("buf " .. slot .. " busy")
-      return
+    local sent, reason
+    if loop then sent, reason = save_buffer_loop(slot) else sent, reason = save_buffer(slot) end
+    if sent then
+      buffer_page_flash("saving buf " .. slot .. (loop and " loop" or ""))
+    else
+      buffer_page_flash("buf " .. slot .. " " .. (reason == "busy" and "busy" or "empty"))
     end
-    local sent
-    if loop then sent = save_buffer_loop(slot) else sent = save_buffer(slot) end
-    buffer_page_flash(sent and ("saving buf " .. slot .. (loop and " loop" or "")) or ("buf " .. slot .. " empty"))
   end
 
   -- ALT+K2 and ALT+K3 act on release (design 3.3 section 8.1, the one
