@@ -1,5 +1,6 @@
 -- lib/ui/menu_watch.lua
--- Forgetting held keys when the norns menu opens: the wrapper around
+-- Forgetting held keys when the norns menu opens, and running the
+-- S.registry.menu_close hooks as it closes: the wrapper around
 -- _menu.set_mode (watch_menu_opening, unwatch_menu_opening) and
 -- forget_keys_held_through_menu. The functions stay global.
 
@@ -26,11 +27,13 @@ return function(S)
 
   function watch_menu_opening()
     if menu_watch.wrapper or not (_menu and _menu.set_mode) then return end
-    -- both held as upvalues: the wrapper never looks up a script global, so
-    -- it cannot break the system menu even if one is gone
+    -- all held as upvalues: the wrapper never looks up a script global, so
+    -- it cannot break the system menu even if one is gone. The menu-close
+    -- hooks are read now (hooks register at include time)
     local original_set_mode = _menu.set_mode
     local forget_keys = forget_keys_held_through_menu
     local release_selector = release_superseded_file_selector
+    local menu_close_hooks = S.registry.menu_close
     menu_watch.original_set_mode = original_set_mode
     menu_watch.wrapper = function(mode)
       if mode == false and menu_watch.active then
@@ -40,6 +43,14 @@ return function(S)
       end
       original_set_mode(mode)
       if mode == true and menu_watch.active then forget_keys() end
+      if mode == false and menu_watch.active then
+        -- each hook on its own: one that fails prints a line, and the others
+        -- still run
+        for _, hook in ipairs(menu_close_hooks) do
+          local ran, hook_error = pcall(hook)
+          if not ran then print("strata: menu close hook failed: " .. tostring(hook_error)) end
+        end
+      end
     end
     menu_watch.active = true
     _menu.set_mode = menu_watch.wrapper

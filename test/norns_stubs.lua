@@ -1640,8 +1640,41 @@ local function wrap_method(method)
   end
 end
 
+-- lua/core/grid.lua and arc.lua's update_devices(): every device leaves its
+-- port, then each vport takes the device whose name it holds (a grid vport
+-- also its cols and rows)
+local function update_devices(kind)
+  for _, device in pairs(kind.devices) do device.port = nil end
+  for port, vport in ipairs(kind.vports) do
+    vport.device = nil
+    if vport.cols then vport.cols, vport.rows = 0, 0 end
+    for _, device in pairs(kind.devices) do
+      if device.name == vport.name then
+        vport.device = device
+        if vport.cols then vport.cols, vport.rows = device.cols, device.rows end
+        device.port = port
+      end
+    end
+  end
+end
+
+-- lua/core/menu/devices.lua's K3 in SYSTEM > DEVICES: port to_port takes the
+-- name of the device on from_port, every other vport of that name (from_port)
+-- becomes "none", then update_devices(); no add or remove is called. A device
+-- that was on to_port is left on no port
+local function reassign(kind, from_port, to_port)
+  local name = kind.vports[from_port].name
+  kind.vports[to_port].name = name
+  for port, vport in ipairs(kind.vports) do
+    if port ~= to_port and vport.name == name then vport.name = "none" end
+  end
+  update_devices(kind)
+end
+
 local function make_grid()
-  local grid = { vports = {}, devices = {} }
+  -- devices[id], as norns keys them; plug, unplug and press name a port and
+  -- act on the device its vport holds now
+  local grid = { vports = {}, devices = {}, next_id = 1 }
   for port = 1, 4 do
     grid.vports[port] = {
       name = "none", device = nil, key = nil, cols = 0, rows = 0,
@@ -1651,35 +1684,41 @@ local function make_grid()
   function grid.connect(port) return grid.vports[port or 1] end
   function grid.add(device) end
   function grid.remove(device) end
+  function grid.update_devices() update_devices(grid) end
+  function grid.reassign(from_port, to_port) reassign(grid, from_port, to_port) end
 
   -- test helper: plug a device of the given size into a port
   function grid.plug(port, cols, rows)
     local device = make_led_device(cols, rows)
+    device.id = grid.next_id
+    grid.next_id = grid.next_id + 1
+    device.name = "grid " .. device.id
     device.port = port
-    grid.devices[port] = device
+    grid.devices[device.id] = device
     local vport = grid.vports[port]
     vport.device = device
     vport.cols = cols
     vport.rows = rows
-    vport.name = "grid " .. port
+    vport.name = device.name
     if grid.add then grid.add(device) end
     return device
   end
 
   function grid.unplug(port)
-    local device = grid.devices[port]
+    local vport = grid.vports[port]
+    local device = vport.device
     if not device then return end
     if grid.remove then grid.remove(device) end
-    grid.devices[port] = nil
-    local vport = grid.vports[port]
+    grid.devices[device.id] = nil
     vport.device = nil
     vport.cols = 0
     vport.rows = 0
   end
 
-  -- test helper: deliver a key event the way _norns.grid.key does
+  -- test helper: deliver a key event the way _norns.grid.key does, from the
+  -- device on the port
   function grid.press(port, x, y, z)
-    local device = grid.devices[port]
+    local device = grid.vports[port].device
     assert(device, "no grid on port " .. port)
     if device.key then device.key(x, y, z) end
     if device.port and grid.vports[device.port].key then
@@ -1692,7 +1731,9 @@ end
 
 local function make_arc()
   local util = make_util()
-  local arc = { vports = {}, devices = {} }
+  -- devices[id], as for grids: plug, unplug, turn and push name a port and
+  -- act on the device its vport holds now
+  local arc = { vports = {}, devices = {}, next_id = 1 }
   for port = 1, 4 do
     arc.vports[port] = {
       name = "none", device = nil, delta = nil, key = nil,
@@ -1703,12 +1744,16 @@ local function make_arc()
   function arc.connect(port) return arc.vports[port or 1] end
   function arc.add(device) end
   function arc.remove(device) end
+  function arc.update_devices() update_devices(arc) end
+  function arc.reassign(from_port, to_port) reassign(arc, from_port, to_port) end
 
   function arc.plug(port)
     -- rings[ring][x] is matron's LED buffer (md->data), 4 rings of 64 LEDs;
     -- segments[ring] records the ring's last segment() call (from, to,
     -- level, rel and the 64 levels it computed) for the ring tests
-    local device = { port = port, rings = {}, segments = {}, refresh_count = 0, cleared = 0 }
+    local device = { id = arc.next_id, name = "arc " .. arc.next_id, port = port, rings = {}, segments = {},
+      refresh_count = 0, cleared = 0 }
+    arc.next_id = arc.next_id + 1
     for ring = 1, 4 do
       device.rings[ring] = {}
       for x = 1, 64 do device.rings[ring][x] = 0 end
@@ -1787,28 +1832,29 @@ local function make_arc()
       self.segments[ring] = { from = from, to = to, level = level, rel = rel, leds = m }
     end
     function device:refresh() self.refresh_count = self.refresh_count + 1 end
-    arc.devices[port] = device
+    arc.devices[device.id] = device
     arc.vports[port].device = device
+    arc.vports[port].name = device.name
     if arc.add then arc.add(device) end
     return device
   end
 
   function arc.unplug(port)
-    local device = arc.devices[port]
+    local device = arc.vports[port].device
     if not device then return end
     if arc.remove then arc.remove(device) end
-    arc.devices[port] = nil
+    arc.devices[device.id] = nil
     arc.vports[port].device = nil
   end
 
   function arc.turn(port, ring, delta)
-    local device = arc.devices[port]
+    local device = arc.vports[port].device
     if device.delta then device.delta(ring, delta) end
     if device.port and arc.vports[device.port].delta then arc.vports[device.port].delta(ring, delta) end
   end
 
   function arc.push(port, button, state)
-    local device = arc.devices[port]
+    local device = arc.vports[port].device
     if device.key then device.key(button, state) end
     if device.port and arc.vports[device.port].key then arc.vports[device.port].key(button, state) end
   end

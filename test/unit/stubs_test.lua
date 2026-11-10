@@ -17,11 +17,12 @@ local unit_files, load_unit_files = h.unit_files, h.load_unit_files
 local function stub_state_source(extra_registry)
   return "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
-    .. " lfo_destinations = {}, fx_params = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
+    .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
     .. " register_grain_restart = function() end, register_alt_release = function() end,"
+    .. " register_menu_close = function() end,"
     .. " register_invariant = function() end } end"
 end
 
@@ -725,6 +726,34 @@ test("stub arc segment, led and all follow lua/core/arc.lua and matron's LED buf
   assert_true(not pcall(vport.led, vport, 1, 65, 1), "LED 65 does not exist")
   assert_true(not pcall(vport.led, vport, 1, 1, 16), "level 16 is out of range")
   assert_true(not pcall(vport.led, vport, 1, 1, 1.5), "levels are integers (luaL_checkinteger)")
+end)
+
+-- SYSTEM > DEVICES (lua/core/menu/devices.lua) renames the vports and calls
+-- update_devices() only (lua/core/grid.lua, arc.lua): no add, no remove
+test("reassign moves a device between vports and calls no add or remove", function()
+  local context = load_strata(); finish_startup(context)
+  local grid_device = context.grid.plug(1, 16, 8)
+  local arc_device = context.arc.plug(1)
+  local calls = {}
+  for _, name in ipairs({ "add", "remove" }) do
+    local real_grid, real_arc = grid[name], arc[name]
+    grid[name] = function(...) calls[#calls + 1] = "grid." .. name; return real_grid(...) end
+    arc[name] = function(...) calls[#calls + 1] = "arc." .. name; return real_arc(...) end
+  end
+  _menu.set_mode(true)  -- as in SYSTEM > DEVICES
+  context.grid.reassign(1, 2)
+  context.arc.reassign(1, 3)
+  local old_grid, new_grid = grid.connect(1), grid.connect(2)
+  assert_equal(old_grid.device, nil, "port 1's grid vport holds no device")
+  assert_equal(old_grid.cols, 0); assert_equal(old_grid.rows, 0)
+  assert_equal(new_grid.device, grid_device, "port 2's holds the grid")
+  assert_equal(new_grid.cols, 16); assert_equal(new_grid.rows, 8)
+  assert_equal(grid_device.port, 2, "the grid's port is 2")
+  assert_equal(arc.connect(1).device, nil, "port 1's arc vport holds no device")
+  assert_equal(arc.connect(3).device, arc_device, "port 3's holds the arc")
+  assert_equal(arc_device.port, 3, "the arc's port is 3")
+  assert_equal(#calls, 0, "no add or remove: " .. table.concat(calls, ", "))
+  _menu.set_mode(false)  -- the script catches up as the menu closes
 end)
 
 test("stub tab.save and tab.load are lib/tabutil.lua's (#27)", function()

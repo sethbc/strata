@@ -323,12 +323,16 @@ return function(S)
     return false
   end
 
+  -- Per attached port, the device its vport held when attached (reconcile_ports)
+  local attached_devices = {}
+
   -- Store a grid port's vport and route its key events to grid_key. Handlers
   -- live on the vport only: norns fires both device.key and vports[port].key,
   -- so also setting them on the device would run grid_key twice per press.
   local function attach_grid(port)
     local grid_port = grid.connect(port)
     S.grids[port] = grid_port
+    attached_devices[port] = grid_port.device
     grid_port.key = function(x, y, z)
       grid_key(port, x, y, z)
     end
@@ -371,6 +375,34 @@ return function(S)
     request_redraw()
     print("grid " .. port .. " disconnected")
   end
+
+  -- SYSTEM > DEVICES moves a grid to another port through norns'
+  -- update_devices() alone (lua/core/menu/devices.lua): no grid.add, no
+  -- grid.remove. Run as the norns menu closes: a vport holding a device that
+  -- is not attached, or another device than the one attached, is forgotten
+  -- and attached, as grid.add does; an attached port whose vport is empty is
+  -- detached and forgotten, as grid.remove does
+  function M.reconcile_ports()
+    for port = 1, S.MAX_GRID_PORTS do
+      local grid_port = grid.connect(port)
+      local attached = S.grids[port]
+      if grid_port.device and (attached == nil or attached_devices[port] ~= grid_port.device) then
+        forget_port(port)
+        attach_grid(port)
+        print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
+      elseif attached and grid_port.device == nil then
+        attached.key = nil
+        S.grids[port] = nil
+        attached_devices[port] = nil
+        forget_port(port)
+        print("grid " .. port .. " disconnected")
+      end
+    end
+    grid_redraw()
+    request_redraw()  -- SETUP lists the connected grids
+  end
+
+  S.register_menu_close(function() M.reconcile_ports() end)
 
   -- While grid_key handles a key, grid_redraw() calls from its actions (a
   -- param action that redraws, toggle_voice, ...) only wait: grid_key

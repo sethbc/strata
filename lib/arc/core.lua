@@ -165,6 +165,29 @@ return function(S)
     request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
   end
 
+  -- SYSTEM > DEVICES moves an arc to another port through norns'
+  -- update_devices() alone (lua/core/menu/devices.lua): no arc.add, no
+  -- arc.remove. Run as the norns menu closes: when the followed vport holds
+  -- no device, follow the first vport holding one, or disconnect; when it
+  -- holds one, it is connected
+  function M.reconcile()
+    if S.arc_device == nil or S.arc_device.device == nil then
+      local port = first_arc_port()
+      if port then
+        attach_arc(port)
+        print("arc connected on port " .. port)
+      elseif S.arc_connected then
+        S.arc_connected = false
+        print("arc disconnected")
+      end
+    else
+      S.arc_connected = true
+    end
+    request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
+  end
+
+  S.register_menu_close(function() M.reconcile() end)
+
   -- The current page's ring handler: alt_field (arc_alt_delta,
   -- arc_alt_redraw) while ALT is held and the page has it, else plain_field;
   -- nil when the page has neither
@@ -204,6 +227,15 @@ return function(S)
   -- Connect the arc at init
   S.register_start(S.constants.START_ORDER.arc, function()
     arc_init()
+  end)
+
+  -- SETUP's "arc: connected" is exactly the followed vport holding a device
+  S.register_invariant("arc connection", function()
+    local holds_device = S.arc_device ~= nil and S.arc_device.device ~= nil
+    if S.arc_connected ~= holds_device then
+      return "S.arc_connected is " .. tostring(S.arc_connected) .. " but the followed vport "
+        .. (holds_device and "holds" or "holds no") .. " device"
+    end
   end)
 
   -- Leave the arc dark on exit, the last cleanup step

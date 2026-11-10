@@ -674,6 +674,37 @@ test("register_grain_restart and register_alt_release refuse a non-function", fu
   assert_equal(#S.registry.alt_release, alt_release, "no ALT release hook added")
 end)
 
+test("register_menu_close checks its argument, and the hooks run as the menu closes", function()
+  local runs, order = 0, {}
+  local context = load_with(function(S)
+    assert_true(not pcall(S.register_menu_close, "x"), "a string is refused")
+    assert_true(not pcall(S.register_menu_close, nil), "nil is refused")
+    S.register_menu_close(function() order[#order + 1] = "raises"; error("boom") end)
+    S.register_menu_close(function() runs = runs + 1; order[#order + 1] = "counts" end)
+  end)
+  finish_startup(context)
+  local S = local_value("S")
+  assert_equal(runs, 0, "nothing runs before the menu closes")
+  local printed = {}
+  local real_print = print
+  print = function(...) printed[#printed + 1] = table.concat({ ... }, " ") end
+  local ok, err = pcall(function()
+    _menu.set_mode(true)
+    assert_equal(runs, 0, "nothing runs as the menu opens")
+    _menu.set_mode(false)
+  end)
+  print = real_print
+  assert_true(ok, "the menu closes: " .. tostring(err))
+  assert_equal(_menu.mode, false, "the menu is closed")
+  assert_equal(runs, 1, "the hook registered before init ran once")
+  assert_equal(table.concat(order, " "), "raises counts", "a hook that raises does not stop the next one")
+  assert_equal(#printed, 1, "the failure prints one line")
+  assert_true(printed[1]:find("boom", 1, true) ~= nil, "naming the error: " .. tostring(printed[1]))
+  local count = #S.registry.menu_close
+  assert_true(not pcall(S.register_menu_close, 1), "a number is refused after init too")
+  assert_equal(#S.registry.menu_close, count, "nothing refused was added")
+end)
+
 test("register_invariant checks its arguments and refuses a duplicate name", function()
   load_strata()
   local S = local_value("S")
