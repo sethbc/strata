@@ -214,6 +214,19 @@ test("a running playhead changing column redraws a page-5 grid once per column",
   assert_true(redraws >= 3 and redraws <= 5, "about one redraw a column, got " .. redraws)
 end)
 
+test("a failing tick is reported and the clock keeps ticking", function()
+  local context, S = buffer_voice()
+  local calls = 0
+  S.lib.positions.end_stale_holds = function()
+    calls = calls + 1
+    if calls == 1 then error("tick boom") end
+  end
+  context.clock.run_for(0.3)
+  assert_true(calls >= 3, "the first call raised and later ones came, got " .. calls)
+  assert_true(S.lib.playheads.clock_id() ~= nil, "the clock is still running")
+  assert_equal(#context.clock.take_errors(), 0, "the scheduler reported no clock error")
+end)
+
 test("the clock ends with cleanup", function()
   local context = buffer_voice()
   local device = page_five_grid(context)
