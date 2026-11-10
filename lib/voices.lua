@@ -1,6 +1,6 @@
 -- lib/voices.lua
 -- The voices: their definitions (S.voices, built fresh by each script load),
--- which voices are frozen (S.frozen), the master density, the selected voice,
+-- which voices are locked (S.frozen), the master density, the selected voice,
 -- and the global helpers that test a voice's grain source. strata.lua runs
 -- `S.lib.voices = include("lib/voices")(S)`; the constructor sets its S
 -- fields itself, and its table (S.lib.voices) has no fields.

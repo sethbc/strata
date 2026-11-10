@@ -73,7 +73,7 @@ Several grids:
 
 ## Keys
 
-- Every layout acts on presses only today (`z == 0` returns at once); `grid_key` passes releases on so a layout can handle them, and it tracks held keys for holds and two-key gestures (above).
+- Every layout handles releases on its position page (the hold, store and bookmark keys); elsewhere `z == 0` returns at once. `grid_key` passes releases on so a layout can handle them, and it tracks held keys for holds and two-key gestures (above).
 - Grid pages switch between pattern sequencing and parameter control.
 
 ## Faders (`lib/grid/faders.lua`)

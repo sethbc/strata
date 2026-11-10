@@ -1,6 +1,7 @@
 -- lib/grid/layout_256.lua
--- The 16x16 grid: its four pages (1 patterns, 2 parameters, 3 scenes,
--- 4 buffers / FX), keys and LEDs. Registers S.registry.grid_layouts["256"].
+-- The 16x16 grid: its five pages (1 patterns, 2 parameters, 3 scenes,
+-- 4 buffers / FX, 5 positions), keys and LEDs. Registers
+-- S.registry.grid_layouts["256"].
 -- Row 16 columns 9-15 copy and paste patterns through a clipboard kept per
 -- port (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze): page
 -- 4's column 12 on each voice's source row, and row 16 columns 1-7 while

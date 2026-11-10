@@ -17,7 +17,7 @@
   - init's start-up clock (`STARTUP`, `cancel_startup_clock`) and its start step, and E1's start step (`enc` lives here too).
   - The module rules (constructor shape, `S`, `S.lib` names, includes, registries) are under "Modules and `S`" below. AGENTS.md's module table lists the files in include order.
 - `lib/state.lua`: `S` itself.
-  - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`, `invariants`, ...), `S.register_start`, `S.register_cleanup`, `S.register_invariant`, `S.lib`.
+  - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`, `grain_restart`, `alt_release`, `invariants`), `S.register_start`, `S.register_cleanup`, `S.register_invariant`, `S.lib`.
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
 - `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_PARAM_IDS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
 - `lib/voices.lua`: `S.lib.voices`, which has no fields.
@@ -57,6 +57,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
 | 50 | create the mutation metro (`S.mutation_metro`, `mutation_rate`, `gentle_mutate`); the `mutation_enabled` param starts it | `lib/mutation.lua` |
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
+| 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 90 | listen for MIDI (`midi_init`) | `lib/midi_in.lua` |
@@ -64,6 +65,8 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
+| 140 | start the peaks read loop (`S.lib.waveforms.read_clock`, one tick per frame) | `lib/waveforms.lua` |
+| 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
 
 Adding a step:
 - A new resource gets its start in the module that owns it, at a free order at its place in this sequence (the orders are spaced by 10), next to its cleanup step.
@@ -106,7 +109,13 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
+| 122 | stop the playhead clock (`stop_clock`) | `lib/playheads.lua` |
+| 124 | cancel every voice's scrub glide and scan hold (`scrubRate` and `scanHold` back to 0) | `lib/positions.lua` |
+| 126 | stop the peaks read loop (`S.lib.waveforms.stop`) | `lib/waveforms.lua` |
+| 128 | cancel each slot's pending start reload of a long file | `lib/buffers.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
+| 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
+| 135 | stop the BUFFER page's `amp_in_l` and `amp_in_r` input meter polls (`stop_input_meter`) | `lib/pages/buffer.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
 | 160 | `engine.voiceOff` for every running voice | `lib/engine_sync.lua` |
