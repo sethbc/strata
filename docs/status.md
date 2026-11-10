@@ -60,6 +60,7 @@ CHANGELOG.md has every change. In short:
 ## Open items
 
 - **Next: 3.3**, recording, files, waveforms and positions (`docs/design/3.3-design.md`, approved; plan `docs/superpowers/plans/2026-11-08-3.3-plan.md`). 3.3 code follows this release.
+- **State machine fixes** (plan `docs/superpowers/plans/2026-11-10-state-machine-fixes-plan.md`): 27 fixes from an audit of the script's implicit state machines, one issue and pull request each ([#232](https://github.com/sethbc/strata/issues/232) to [#258](https://github.com/sethbc/strata/issues/258)), merged before 3.3's final review. The audit's engine findings ([#259](https://github.com/sethbc/strata/issues/259) to [#262](https://github.com/sethbc/strata/issues/262)) wait for the pre-4.0 review.
 - **3.3 candidate:** a seconds-based scan mode. `bufScan` moves in valid-region lengths per second, so a 300 s slot scans 300 s per second at scan 1; loop regions are the answer until then.
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on norns:** the essential checks for 3.2 (about 40 minutes) are in the issue. The maintainer tags 3.2.0 after it.
 - **Limits to keep in mind:**
