@@ -52,7 +52,7 @@ The last recalled bookmark, per voice (`recalled[v]`, a local of `lib/positions.
 | nil | no mark |
 | `{bookmark, source}` | `recall_bookmark` ran with the voice on `source`; `last_recalled(v)` returns the bookmark only while `S.voices[v].source` is still `source` |
 
-Transitions: `recall_bookmark(v, n)` sets it; the grain-restart and source-change hooks clear it; a source changed any other way (a scene recall of a stopped voice) hides it through `last_recalled`.
+Transitions: `recall_bookmark(v, n)` sets it; the grain-restart and source-change hooks clear it; a source changed any other way (a scene recall of a stopped voice) hides it through `last_recalled` (and shows it again if a later recall brings the source back: the mark shows only while the voice has the source it was recalled on).
 
 A strip's store, per port (the port's record in `S.lib.grid_core.port_state(port).positions`):
 

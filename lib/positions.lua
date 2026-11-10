@@ -592,10 +592,12 @@ return function(S)
   S.register_voice_params(record)
 
   -- A grain restart (a running voice's source switch; a voiceOn) ends the
-  -- glide; a source switch forgets the last recalled bookmark
+  -- glide; a source switch forgets the last recalled bookmark. A stopped
+  -- voice's scene recall runs neither hook: last_recalled's source check
+  -- covers it
   S.register_grain_restart(function(voice_idx)
     end_glide(voice_idx)
-    recalled[voice_idx] = nil  -- source-change hooks never run during a scene recall; this does
+    recalled[voice_idx] = nil  -- a running voice's source switch, in a scene recall too (the source-change hook below never runs in one)
   end)
   S.register_source_change(function(voice_idx) recalled[voice_idx] = nil end)
 
