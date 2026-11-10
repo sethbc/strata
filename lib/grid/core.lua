@@ -439,5 +439,20 @@ return function(S)
     end
   end)
 
+  -- Only a held key is consumed or waits for a hold
+  S.register_invariant("grid keys", function()
+    for kind, tables in pairs({consumed = consumed_keys, ["hold pending"] = hold_clocks}) do
+      for port, columns in pairs(tables) do
+        for x, rows in pairs(columns) do
+          for y in pairs(rows) do
+            if M.held(port, x, y) == nil then
+              return "grid " .. port .. " key " .. x .. "," .. y .. " is " .. kind .. " but not held"
+            end
+          end
+        end
+      end
+    end
+  end)
+
   return M
 end

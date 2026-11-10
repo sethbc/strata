@@ -64,20 +64,9 @@ local function test(name, func) table.insert(tests, { name = name, func = func }
 
 local function fail(message, level) error(message, (level or 1) + 1) end
 
--- Run one test function: ok, or false and the error. Errors the scheduler
--- reported while resuming a clock (norns prints them and keeps running)
--- fail the test unless it claimed them (clock.take_errors); when the test
--- failed anyway, they are added to its error
-local function run_test(func)
-  local ok, err = xpcall(func, debug.traceback)
-  local clock_errors = stubs.take_clock_errors()
-  if #clock_errors > 0 then
-    local report = "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
-    err = ok and report or (tostring(err) .. "\n" .. report)
-    ok = false
-  end
-  return ok, err
-end
+-- The current test's invariant check (run_test): loaded is set by
+-- load_strata, allowed (the reason) by allow_broken_invariants
+local invariant_check = { loaded = false, allowed = nil }
 
 local function assert_true(value, message)
   if not value then fail(message or "expected true", 2) end
@@ -138,6 +127,7 @@ local function load_strata(options)
   options = options or {}
   loads = loads + 1
   local data_dir = data_root .. (options.data_subdir or ("load" .. loads)) .. "/"
+  invariant_check.loaded = true
   local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
     data_dir = data_dir, quiet = true, module_sources = options.module_sources }
   context.data_dir = data_dir
@@ -164,6 +154,62 @@ local function shared_state()
     if upvalue_name == "S" then return upvalue_value end
     index = index + 1
   end
+end
+
+-- The invariants the loaded script registered (S.registry.invariants) that
+-- are broken now, as "<name>: <message>" in registration order; an
+-- invariant that raises is listed with its error. Empty when every one
+-- holds or nothing is loaded
+local function check_invariants()
+  local S = shared_state()
+  local broken = {}
+  if type(S) ~= "table" then return broken end
+  for _, record in ipairs(S.registry.invariants) do
+    local ok, message = pcall(record.fn)
+    if not ok then
+      table.insert(broken, record.name .. ": raised " .. tostring(message))
+    elseif message ~= nil then
+      table.insert(broken, record.name .. ": " .. tostring(message))
+    end
+  end
+  return broken
+end
+
+-- Turn the invariant check off for the current test, which breaks one on
+-- purpose (the reason says why)
+local function allow_broken_invariants(reason)
+  if type(reason) ~= "string" or reason == "" then
+    error("allow_broken_invariants: a reason is a non-empty string", 2)
+  end
+  invariant_check.allowed = reason
+end
+
+-- Run one test function: ok, or false and the error. Errors the scheduler
+-- reported while resuming a clock (norns prints them and keeps running)
+-- fail the test unless it claimed them (clock.take_errors); when the test
+-- failed anyway, they are added to its error. A test that passed, reported
+-- no clock error and called load_strata itself then has the script's
+-- invariants checked (check_invariants), unless it allowed broken ones
+-- (allow_broken_invariants). A run_test inside a test keeps the outer
+-- test's flags
+local function run_test(func)
+  local outer_loaded, outer_allowed = invariant_check.loaded, invariant_check.allowed
+  invariant_check.loaded, invariant_check.allowed = false, nil
+  local ok, err = xpcall(func, debug.traceback)
+  local clock_errors = stubs.take_clock_errors()
+  if #clock_errors > 0 then
+    local report = "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
+    err = ok and report or (tostring(err) .. "\n" .. report)
+    ok = false
+  end
+  if ok and invariant_check.loaded and not invariant_check.allowed then
+    local broken = check_invariants()
+    if #broken > 0 then
+      ok, err = false, "invariants broken after the test:\n" .. table.concat(broken, "\n")
+    end
+  end
+  invariant_check.loaded, invariant_check.allowed = outer_loaded, outer_allowed
+  return ok, err
 end
 
 -- Find a script value by name: a field of S (one it holds, or one ever
@@ -588,6 +634,8 @@ return {
   test = test,
   fail = fail,
   run_test = run_test,
+  check_invariants = check_invariants,
+  allow_broken_invariants = allow_broken_invariants,
   assert_true = assert_true,
   assert_equal = assert_equal,
   assert_near = assert_near,

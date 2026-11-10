@@ -9,7 +9,8 @@
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir and move_aside_unloadable_file are fields of this
 -- module's table (S.lib.scenes) for lib/buffers.lua. Registers its three
--- cleanup steps (saving the scenes, the sequencer, the transition).
+-- cleanup steps (saving the scenes, the sequencer, the transition) and the
+-- transition's invariant.
 
 return function(S)
   local M = {}
@@ -870,6 +871,19 @@ return function(S)
   -- Cancel any active transition clock
   S.register_cleanup(S.constants.CLEANUP_ORDER.scene_transition, function()
     cancel_scene_transition()
+  end)
+
+  -- A fade runs exactly while its next step is due, and no transition clock
+  -- outlives the fade
+  S.register_invariant("scene transition", function()
+    local due = S.SCENE_TRANSITION.next_step_due
+    if S.scene_transition_active ~= (due ~= nil) then
+      return "scene_transition_active is " .. tostring(S.scene_transition_active)
+        .. " but next_step_due is " .. tostring(due)
+    end
+    if not S.scene_transition_active and S.scene_transition_clock ~= nil then
+      return "no transition is active but scene_transition_clock is " .. tostring(S.scene_transition_clock)
+    end
   end)
 
   M.scene_data_dir = scene_data_dir

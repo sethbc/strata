@@ -141,5 +141,12 @@ return function(S)
     pattern_clock_stop()
   end)
 
+  -- The patterns play exactly while their clock runs
+  S.register_invariant("pattern clock", function()
+    if S.pattern_playing ~= (S.pattern_clock ~= nil) then
+      return "pattern_playing is " .. tostring(S.pattern_playing) .. " but pattern_clock is " .. tostring(S.pattern_clock)
+    end
+  end)
+
   return M
 end

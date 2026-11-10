@@ -716,6 +716,23 @@ return function(S)
     S.lib.record.stop_all()
   end)
 
+  -- A slot finishes only a recording, checks a load only while it awaits
+  -- the engine's report, and never settles empty while loaded
+  S.register_invariant("buffer slots", function()
+    for slot = 1, NUM_BUFFERS do
+      local buffer = S.buffers[slot]
+      if buffer.finishing and not buffer.recording then
+        return "slot " .. slot .. " is finishing but not recording"
+      end
+      if buffer.checking_from ~= nil and buffer.confirm_since == nil then
+        return "slot " .. slot .. " is checking a load but awaits no report (confirm_since nil)"
+      end
+      if buffer.settled_empty and buffer.loaded then
+        return "slot " .. slot .. " is loaded but settled empty (" .. tostring(buffer.settled_empty) .. ")"
+      end
+    end
+  end)
+
   M.valid_buffer_slot = valid_buffer_slot
   M.buffer_state_changed = buffer_state_changed
   M.BUFFER_SETTLE = BUFFER_SETTLE

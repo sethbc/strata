@@ -41,11 +41,12 @@ test("include stub loads lib modules and honors overrides", function()
   load_strata { module_sources = { ["lib/state"] =
     "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
-    .. " lfo_destinations = {}, fx_params = {} }, lib = {}, register_start = function() end,"
+    .. " lfo_destinations = {}, fx_params = {}, invariants = {} }, lib = {}, register_start = function() end,"
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
-    .. " register_grain_restart = function() end, register_alt_release = function() end } end" } }
+    .. " register_grain_restart = function() end, register_alt_release = function() end,"
+    .. " register_invariant = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
@@ -334,6 +335,37 @@ test("the runner adds the clock errors to a failing test's own error (#51)", fun
   assert_true(not ok and tostring(message):find("the clock failed", 1, true), "a passing test with a clock error fails")
   assert_true(run_test(function() end), "a passing test passes")
   assert_equal(#context.clock.take_errors(), 0, "the runner claimed them")
+end)
+
+test("a broken invariant is reported by name, a held one is not", function()
+  load_strata()
+  assert_equal(#h.check_invariants(), 0, "every invariant holds after a load")
+  local S = local_value("S")
+  S.pattern_playing = true  -- with no pattern clock
+  local broken = h.check_invariants()
+  assert_equal(#broken, 1, "one invariant broken")
+  assert_equal(broken[1]:sub(1, #"pattern clock:"), "pattern clock:", "named first: " .. broken[1])
+  S.register_invariant("raises", function() error("boom") end)
+  broken = h.check_invariants()
+  assert_equal(#broken, 2, "the raising one is listed too")
+  assert_equal(broken[2]:sub(1, #"raises:"), "raises:", "named first: " .. broken[2])
+  assert_true(broken[2]:find("boom", 1, true), "with its error: " .. broken[2])
+  h.allow_broken_invariants("this test breaks them on purpose")
+end)
+
+test("run_test fails a passing test that leaves an invariant broken, unless it allowed it", function()
+  local ok, message = run_test(function() load_strata(); local_value("S").pattern_playing = true end)
+  assert_true(not ok, "the test fails")
+  assert_true(tostring(message):find("invariants broken after the test:", 1, true), "says so: " .. tostring(message))
+  assert_true(tostring(message):find("pattern clock", 1, true), "names the invariant: " .. tostring(message))
+  ok, message = run_test(function()
+    h.allow_broken_invariants("on purpose")
+    load_strata(); local_value("S").pattern_playing = true
+  end)
+  assert_true(ok, "an allowed break passes: " .. tostring(message))
+  assert_true(run_test(function() end), "a test that loaded nothing is not checked")
+  assert_true(not pcall(h.allow_broken_invariants, ""), "a reason is a non-empty string")
+  load_strata()  -- this test leaves nothing broken
 end)
 
 test("stub clock.advance_until fails at once when its coroutine is canceled or nothing is pending (#51)", function()

@@ -38,6 +38,7 @@ return function()
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
     grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
     alt_release = {},   -- fn(), run when ALT goes from held to not held
+    invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
   }
 
   -- Add an {order, fn} record to one of the ordered registries (start or
@@ -193,6 +194,18 @@ return function()
   function M.register_alt_release(fn)
     require_arg(type(fn) == "function", "register_alt_release", "a hook is a function")
     table.insert(M.registry.alt_release, fn)
+  end
+
+  -- A state invariant of the registering module: fn() returns nil while it
+  -- holds, else a string saying what is broken. The test harness runs every
+  -- one after each unit test (test/helpers.lua); nothing runs them on the
+  -- device
+  function M.register_invariant(name, fn)
+    local kind = "register_invariant"
+    require_arg(type(name) == "string" and name ~= "", kind, "a name is a non-empty string")
+    require_arg(type(fn) == "function", kind .. " " .. name, "a check is a function")
+    require_arg(not name_taken(M.registry.invariants, "name", name), kind, "a second invariant " .. name)
+    table.insert(M.registry.invariants, {name = name, fn = fn})
   end
 
   -- fn(voice_idx, value, previous) -> value, applied by the action of every
