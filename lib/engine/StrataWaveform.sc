@@ -55,7 +55,7 @@
 
     // Write a slot's peaks file, then run action. The file goes to
     // <path>.<instanceTag>-<generation>.part and is renamed into place with
-    // mv -f by the peaks mover (renamePeaksFile: no fork of sclang, #210);
+    // mv -f by the mover (renameIntoPlace: no fork of sclang, #210);
     // action runs once the rename has ended, only if nothing
     // changed the slot meanwhile (slotChanges). A failed write posts why and
     // still runs action: a waveform is a view, never a reason to hold up
@@ -74,15 +74,21 @@
         if (this.writePeaksFile(index, frames, generation, partPath).not) { ^finish.(false) };
         // mv -f would move the file into a folder at the path, and succeed
         if (PathName(path).isFolder) { File.delete(partPath); ^finish.(false) };
-        this.renamePeaksFile(partPath, path, finish);
+        this.renameIntoPlace(partPath, path, finish);
     }
 
-    // The peaks mover (#210): one shell for the engine's life that renames
-    // the peaks files sclang writes, so a refresh never forks sclang (a fork
-    // costs about 2.5 ms per 130 MB of sclang, every peakRefreshSeconds
-    // while a slot records). sclang writes each rename to a FIFO as three
-    // lines, the .part, the path and an acknowledgment file; the shell runs
-    // mv -f for each, in order, then creates the acknowledgment. sclang
+    // The mover (#210, #217): one shell for the engine's life that renames
+    // the .part files sclang writes into place, so a write never forks
+    // sclang (a fork costs about 2.5 ms per 130 MB of sclang): every peaks
+    // file (every peakRefreshSeconds while a slot records), and the files
+    // area's saves and scratch takes (writeSlot). It starts with this
+    // area's allocState (order 140, after the files area's): every write
+    // that renames comes after alloc, and renameIntoPlace renames by
+    // subprocess while there is none. sclang writes each rename to a FIFO
+    // as three lines, the .part, the path and an acknowledgment file; the
+    // shell runs mv -f for each, in order, then creates the acknowledgment,
+    // or, for a failed mv whose .part is still there, deletes the .part
+    // and creates the failure file (moverFailPath) instead. sclang
     // opens its end read-write ("r+": it holds a reader too, so a mover
     // that died never SIGPIPEs sclang) and close-on-exec ("e": no
     // later child holds it open, so the mover ends on EOF when free closes
@@ -102,9 +108,12 @@
     // even with a mover that is stuck
     peaksMoverBacklog { ^4 }
 
-    // A rename's acknowledgment file: named like a .part, so one a crash
-    // left goes with deleteStaleParts
+    // A rename's acknowledgment file, and the file the mover creates
+    // instead when its mv failed (the shell derives it from the
+    // acknowledgment's name): named like a .part, so one a crash left goes
+    // with deleteStaleParts
     peaksAckPath { arg partPath; ^partPath.drop(-5) ++ ".ack.part" }
+    moverFailPath { arg partPath; ^partPath.drop(-5) ++ ".fail.part" }
 
     // The mover's process has ended (its exit action, or no /proc entry
     // for its pid where there is a /proc); a stopped or slow one has not
@@ -115,18 +124,19 @@
     startPeaksMover {
         var fifo = this.peaksMoverPath, file;
         var mover = (alive: false, exited: false, freed: false, pending: 0, pid: nil, file: nil);
-        // a failed mv posts only if the .part is still there: one a timed-out
-        // write renamed by subprocess is gone, and that write was not lost
+        // a failed mv fails the write only if the .part is still there: one
+        // a timed-out write renamed by subprocess is gone, and that write
+        // was not lost. The caller's finish posts a failure.
         var script = "rm -f -- \"$0\"; while IFS= read -r part && IFS= read -r path && IFS= read -r ack; do "
-            ++ "mv -f -- \"$part\" \"$path\" 2>/dev/null || if [ -e \"$part\" ]; then rm -f -- \"$part\"; "
-            ++ "printf '%s\\n' \"strata: cannot write $path\"; fi; : > \"$ack\"; done";
+            ++ "if mv -f -- \"$part\" \"$path\" 2>/dev/null || [ ! -e \"$part\" ]; then : > \"$ack\"; "
+            ++ "else rm -f -- \"$part\"; : > \"${ack%.ack.part}.fail.part\"; fi; done";
         areaState[\waveform][\mover] = mover;
         try { File.mkdir(fifo.dirname) };
         // a name left by an engine of an earlier sclang session (instanceTag
         // restarts with sclang)
         try { if (File.exists(fifo)) { File.delete(fifo) } };
         if (("mkfifo -m 600 " ++ fifo.shellQuote).systemCmd != 0) {
-            postln("strata: no peaks mover (cannot make " ++ fifo ++ "); peaks files rename by subprocess");
+            postln("strata: no mover (cannot make " ++ fifo ++ "); peaks files, saves and scratch takes rename by subprocess");
             ^this
         };
         // the shell's open blocks until sclang's end is open, then it removes the name
@@ -157,9 +167,9 @@
     }
 
     // No mover for this engine: post why, remove the FIFO, end the shell;
-    // every peaks write renames by subprocess
+    // every rename goes by subprocess
     abandonPeaksMover { arg mover, fifo, reason;
-        postln("strata: no peaks mover (" ++ reason ++ "); peaks files rename by subprocess");
+        postln("strata: no mover (" ++ reason ++ "); peaks files, saves and scratch takes rename by subprocess");
         mover[\alive] = false;
         mover[\file] !? { arg file; try { file.close } };
         mover[\file] = nil;
@@ -181,14 +191,15 @@
     // mover when it is alive, holds fewer than peaksMoverBacklog renames
     // and no path holds a newline (the lines would split), else by a
     // subprocess. Through the mover, written is true once its
-    // acknowledgment is there (it posts a failed mv itself). A write the
+    // acknowledgment is there, false once its failure file is. A write the
     // mover has not done within peaksMoverTimeout renames by subprocess
     // instead (finish runs then, never again); the rename stays counted
     // until the mover acknowledges it (its late mv finds no .part and says
     // nothing), so a stuck mover fills the backlog and is skipped, and one
     // that catches up is used again. Only a mover that is gone stops its use.
-    renamePeaksFile { arg partPath, path, finish;
+    renameIntoPlace { arg partPath, path, finish;
         var mover = areaState[\waveform][\mover], ackPath = this.peaksAckPath(partPath), started, finished = false;
+        var failPath = this.moverFailPath(partPath);
         var usable = mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
             and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) };
         var bySubprocess = { if (finished.not) { finished = true; this.renameBySubprocess(partPath, path, finish) } };
@@ -200,10 +211,11 @@
             SystemClock.sched(0.002, {
                 case
                 { mover[\freed] } { nil }  // the engine was freed: its actions are dropped
-                { File.exists(ackPath) } {
-                    try { File.delete(ackPath) };
+                { File.exists(ackPath) or: { File.exists(failPath) } } {
+                    var written = File.exists(failPath).not;
+                    try { File.delete(if (written) { ackPath } { failPath }) };
                     mover[\pending] = mover[\pending] - 1;
-                    if (finished.not) { finished = true; finish.(true) };
+                    if (finished.not) { finished = true; finish.(written) };
                     nil
                 }
                 { mover[\exited] } { mover[\pending] = mover[\pending] - 1; bySubprocess.value; nil }
