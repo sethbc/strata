@@ -38,6 +38,8 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `
 
 ## Capture
 
+`S.lib.scenes.save(scene_num)` is the user's save (the grid's hold and SCENES' ALT+K3): for a slot in 1..`NUM_SCENES` it calls `capture_scene`, flashes `saved S<n>` in the header, redraws grid and screen and returns true; any other slot does nothing and returns false. `capture_scene` itself stays silent (tests and layout states call it).
+
 `capture_scene(scene_num)`:
 
 ```lua

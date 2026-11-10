@@ -249,9 +249,7 @@ return function(S)
   function M.scene_save_key(port, x, y, z, scene_num)
     if z ~= 1 then return end
     M.on_hold(port, x, y, GRID_HOLD.scene_save_seconds, function()
-      capture_scene(scene_num)
-      grid_redraw()
-      request_redraw()  -- the SCENES page shows the saved slot
+      S.lib.scenes.save(scene_num)
     end)
   end
 

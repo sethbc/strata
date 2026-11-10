@@ -1208,4 +1208,18 @@ test("scenes save as version 4 and a version 3 file loads unchanged", function()
   assert_same(original, loaded.data, "scene")
 end)
 
+test("S.lib.scenes.save captures and flashes; capture_scene stays silent", function()
+  load_strata()
+  local S = local_value("S")
+  assert_true(S.lib.scenes.save(3), "slot 3 saves")
+  assert_true(S.scenes[3].populated, "captured")
+  assert_equal(S.lib.ui_flash.text("header"), "saved S3")
+  assert_true(not S.lib.scenes.save(0), "slot 0 is refused")
+  assert_true(not S.lib.scenes.save(9), "slot 9 is refused")
+  load_strata()
+  S = local_value("S")
+  capture_scene(3)
+  assert_equal(S.lib.ui_flash.text("header"), nil, "capture_scene says nothing")
+end)
+
 end
