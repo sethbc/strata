@@ -87,9 +87,9 @@ A key counts as down for the hint (`held_hint()`) while `S.key_press_page[n]` is
 | up | nil | nil | nil | the page's own hints |
 | down short (under 0.5 s) | time | BUFFER | nil (K2) or true (ALT+K2, ALT+K3) | `K2 up: load`, `K2 up: clear` or `K3 up: save` |
 | down long (0.5 s or more) | time | BUFFER | as above | `K2 up: random`, `K2 up: fill` or `K3 up: save loop` |
-| taken (menu, selector or page change) | stale or nil | nil | nil | the page's own hints |
+| taken (menu, selector or page change) | may stay set, harmless | nil | nil | the page's own hints |
 
-Transitions: the press (`buffer_key`, `buffer_alt_key`) notes `pressed_at`, the release (`held_long`) clears it, and `forget_held_keys` or a page change clears `S.key_press_page`, which ends the hint even if `pressed_at` is stale.
+Transitions: the press (`buffer_key`, `buffer_alt_key`) notes `pressed_at`, the release (`held_long`) clears it, and `forget_held_keys` or a page change clears `S.key_press_page`, which ends the hint even if `pressed_at` is stale (`forget_held_keys` clears `S.key_press_page` and `S.key_press_alt` both; a page change clears both too, by #234). The hint is gated on `S.key_press_page[n]`, so a stale `pressed_at[n]` is harmless.
 
 ## Input meter
 
