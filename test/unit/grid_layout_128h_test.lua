@@ -435,4 +435,42 @@ test("128h: the strip's dark cells light and an armed slot's record key lights 1
   assert_equal(device:get_led(13, 1), 11, "armed")
 end)
 
+local function scan_holds(context)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then table.insert(sent, {voice = call.args[1], value = call.args[3]}) end
+  end
+  return sent
+end
+
+test("128h: a strip key's release goes to the voice it was pressed for", function()
+  local context, S = position_setup()
+  tap(context, 1, 8, 8)
+  select_grid_voice(1)
+  context.clear_engine_calls()
+  context.grid.press(1, 14, 6, 1)
+  tap(context, 1, 16, 8)  -- the next grid voice
+  assert_equal(S.grid_voice_select, 2)
+  context.grid.press(1, 14, 6, 0)
+  local last = {}
+  for _, each in ipairs(scan_holds(context)) do last[each.voice] = each.value end
+  assert_equal(last[0], 0, "voice 1's hold ended")
+  assert_equal(last[1], nil, "voice 2 was never held")
+  assert_equal(S.lib.positions.scan_held(1), false)
+end)
+
+test("128h: the page 4 cells next to the strip still act", function()
+  local context, S = position_setup()
+  tap(context, 1, 8, 8)
+  tap(context, 1, 3, 4)
+  assert_equal(params:get("v4_source"), 3, "a source key")
+  context.clear_engine_calls()
+  tap(context, 1, 12, 3)
+  assert_true(S.lib.freeze.is_frozen(3), "the freeze key")
+  tap(context, 1, 13, 3)
+  assert_equal(#context.calls_named("clearBuffer"), 1, "a clear key")
+  tap(context, 1, 14, 1)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "a record key")
+end)
+
 end

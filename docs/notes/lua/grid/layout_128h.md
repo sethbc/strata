@@ -5,6 +5,7 @@
 - The faders on page 2 use the 256's fader list and mapping (`fader_param_ids`, `fader_page_count`, `set_fader_param`, `grid_redraw_fader_row` from `lib/grid/faders.lua`), four per fader page (`GRID_LAYOUT.fader_rows`), so `S.param_page` means the same page on both layouts. Row 5 accepts only columns up to `fader_page_count(S.grid_voice_select)`.
 - Page 4 goes through the core's helpers only (`source_key`/`source_level`, `record_key`/`record_level`, `clear_key`/`CLEAR_LEVEL`) and `S.lib.freeze`, so its keys and LEDs match the 256's page 4. The layout adds no clock, hold or per-port state of its own.
 - Page 5 (positions) and page 4's strip go through `S.lib.positions` only (`grid_key`, `strip_key`, `grid_level`, `strip_level`), never `jump`/`set_loop` directly. The layout's `z == 0` early return does not exist: a release reaches `positions.grid_key` (page 5) and `strip_key` (page 4's strip) so held pairs and the store and hold keys end.
+- A strip key's release goes to the voice it was pressed for (`port_state(port).strip_voice[key]`), so changing the grid voice while a key is held cannot leave a hold on.
 - Pages are per port (`S.lib.grid_core.page(port)` / `set_page`): two 128h grids show and change their own pages.
 
 ## Owns
