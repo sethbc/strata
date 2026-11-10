@@ -156,9 +156,11 @@ return function(S)
     {name = "cursor-v7-s16", setup = show_cursor(NUM_VOICES, PATTERN_LENGTH)},
     {name = "levels-playing", setup = function(context)
       for voice_idx = 1, NUM_VOICES do
+        local steps = {}
         for step = 1, PATTERN_LENGTH do
-          S.patterns[voice_idx][step] = (voice_idx + step) % 3 == 0 and (voice_idx * step) % (MAX_STEP_LEVEL + 1) or 0
+          steps[step] = (voice_idx + step) % 3 == 0 and (voice_idx * step) % (MAX_STEP_LEVEL + 1) or 0
         end
+        S.lib.sequencer.replace_pattern(voice_idx, steps)
       end
       pattern_toggle()
       context.clock.run_for(0.5)
