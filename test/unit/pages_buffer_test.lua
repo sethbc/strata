@@ -806,6 +806,7 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
   local arc_hardware = context.arc.plug(1)
   local grid_device = context.grid.plug(1, 16, 16)
   show_page("BUFFER")
+  load_buffer(2, "/tmp/a.wav")  -- a free slot shows no seconds (#247): the report confirms a load
   h.assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
     context.polls.fire("bufferState", 1005)
   end)

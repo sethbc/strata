@@ -12,16 +12,47 @@
 - A playable recording (a dub) keeps the file's `start`, `sample_rate` and `file_seconds` until its "ended" report makes the slot `take <n>` (start 0, neither field); a canceled one keeps all three (#244). `recording_started` is told the take's kind (`record_buffer` calls it before it sets `recording`, so `S.lib.record.state` cannot say).
 - `buffer_state_changed` marks the slot's peaks stale (`S.lib.waveforms.stale`) when its seconds change to a non-zero value, and reads nothing itself.
 - Lengths come from `S.performance.buffer_seconds` (16 s standard, up to 300 s high), never a constant: `record_buffer` caps a take at it and the BUFFER page sizes its seconds column from it.
+- What a slot holds has one answer, `S.lib.buffers.status(slot)` (States, below), derived only: it stores nothing and no field changes for it. Whether a slot is free is `S.lib.buffers.is_free(slot)` (status `"empty"` or `"missing"`), and the fill (`S.lib.files.fill_empty`), BUFFER's seconds column (`slot_is_empty`) and the grid's source keys (`source_level`, level 2) read only it, never a test of their own (#247).
 
 ## Owns
 
 `lib/buffers.lua` (`S.lib.buffers`):
 - the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine/buffers.md`, Audio Sources: Lua side, with `records_sent` that `lib/record.lua` counts), `S.buffer_polls`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
+- what a slot holds, `S.lib.buffers.status(slot)` and `is_free(slot)` (States, below);
 - loading, clearing and saving (`load_buffer(slot, path, start)`, `clear_buffer`, `save_buffer` (the whole slot: region 0, 1), `save_buffer_loop`, ...); recording is `lib/record.lua`'s (`docs/notes/lua/record.md`);
 - the files' start point (`S.lib.buffers.set_start`, `recording_started`, below);
 - the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`, `buffer_save_result`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
 - three cleanup steps: 40 (save the buffer paths), 128 (`buffer_start_reload`: the pending start reloads) and 130 (the polls and recording timers).
+
+## States
+
+`S.lib.buffers.status(slot)` is what the slot holds: the first of these cases that applies, read from `S.buffers[slot]` and the take `S.lib.record.state(slot)` (nil unless `recording`). It is nil only for a slot out of range (`status(0)`, `status(9)`, a non-number); every valid slot has one. `is_free(slot)` is true for `"empty"` and `"missing"` only (false out of range).
+
+| # | Status | Fields that encode it | Entered by | Free |
+|---|--------|------------------------|------------|------|
+| 1 | `"armed"` | `recording`, the take's `phase == "armed"` (a delay or a threshold) | `record_buffer` | no |
+| 2 | `"finishing"` | `finishing` (with `recording`, `confirm_since`): a replace take that ended and waits for the engine's length | `finish_buffer_take` (`lib/record.lua`: the take's timer, a stop, an "ended" report) | no |
+| 3 | `"loop"`, `"dub"`, `"recording"` | `recording`, with a playable take (`kind == "playable"`) that loops, one that does not, or a replace take (also a recording with no take) | `record_buffer`, the "recording" report (`record_state_changed`) | no |
+| 4 | `"loading"` | `confirm_since` set: a load the engine has not confirmed, checking (`checking_from`) or not | `load_buffer` | no |
+| 5 | `"loaded"` | `loaded` | `settle_buffer_slot` or `confirm_buffer_audio` from a report of audio, a dub's "ended" report with a length, `buffer_load_failed` putting a loaded state back | no |
+| 6 | `"unsettled"` | `settled_empty == "load"` or `"restore"`: a named load (`name` kept) that reported no length yet; a later report of audio adopts it (`"loaded"`) | `settle_buffer_slot` (a 0 s report `BUFFER_SETTLE.confirm_seconds` after the load) | no |
+| 7 | `"missing"` | `missing_path` set: a remembered file not found at start, kept for buffers.data | `restore_buffers_from_file` | yes |
+| 8 | `"empty"` | none of the above (a canceled take may keep `settled_empty == "take"`, which a later report of audio still adopts) | init, `clear_buffer`, a replace take that settled without audio, a replace take's "canceled" report, `buffer_load_failed` with an empty state | yes |
+
+The fields stay what other code and the tests read (`loaded`, `recording`, `finishing`, `seconds`, `name`, ...); `status` adds no field. `buffer_load_failed` and a check's fallback (`start_check_fallback`) can put back any of cases 4-8 from the state a load replaced (`apply_buffer_state`). A load, a clear and a recording leave a state by setting its fields (`load_buffer`, `clear_buffer`, `record_buffer`); the `"buffer slots"` invariant (`finishing` only with `recording`, `checking_from` only with `confirm_since`, never `settled_empty` with `loaded`) keeps the cases apart.
+
+### The file fields
+
+The file fields across a recording (`S.buffers[slot]`; `recording` and the take's kind are `lib/record.lua`'s):
+
+| State | `start` | `sample_rate`, `file_seconds` | Entered by |
+|-------|---------|-------------------------------|------------|
+| a file | where the file is read from (0 for a new file) | the file's, from `audio.file_info` (nil if it cannot open) | `load_buffer` |
+| a replace take recording | 0 | nil | `recording_started(slot, false)` |
+| a playable recording (dub) | the file's, unchanged | the file's, unchanged | `recording_started(slot, true)` |
+| a file again, after a canceled dub | the file's, unchanged | the file's, unchanged | a dub's "canceled" report (`record_state_changed` in `lib/record.lua`) |
+| a take (`take <n>`) or empty | 0 | nil | a replace take settling (`settle_buffer_slot`; `recording_started` already set the fields), a dub's "ended" report (`record_state_changed`), a replace take's "canceled" report (`record_state_changed`: empty), `clear_buffer` |
 
 ## Long buffers
 
@@ -36,19 +67,7 @@ On the high tier a slot holds up to `S.performance.buffer_seconds` (60, 120 or 3
 - `S.lib.buffers.recording_started(slot, playable)` (lib/record.lua's `record_buffer` calls it after it sends `recordBuffer`, with the `playable` it computed) cancels the pending reload either way. A replace take (`playable` false or nil) sets the start to 0 and forgets `sample_rate` and `file_seconds`, since a take is at the server rate and has no file; a playable recording leaves all three, since the slot keeps the file's audio. Its "ended" report (`record_state_changed`, `docs/notes/lua/record.md`) sets them as a replace take does; its "canceled" report changes none of them.
 - `buffer_state_before_load(slot)` keeps the slot's state during a playable recording, so a failed load restores the slot as it was; during a replace take the slot still comes back empty.
 
-### States
-
-The file fields across a recording (`S.buffers[slot]`; `recording` and the take's kind are `lib/record.lua`'s):
-
-| State | `start` | `sample_rate`, `file_seconds` | Entered by |
-|-------|---------|-------------------------------|------------|
-| a file | where the file is read from (0 for a new file) | the file's, from `audio.file_info` (nil if it cannot open) | `load_buffer` |
-| a replace take recording | 0 | nil | `recording_started(slot, false)` |
-| a playable recording (dub) | the file's, unchanged | the file's, unchanged | `recording_started(slot, true)` |
-| a file again, after a canceled dub | the file's, unchanged | the file's, unchanged | a dub's "canceled" report (`record_state_changed` in `lib/record.lua`) |
-| a take (`take <n>`) or empty | 0 | nil | a replace take settling (`settle_buffer_slot`; `recording_started` already set the fields), a dub's "ended" report (`record_state_changed`), a replace take's "canceled" report (`record_state_changed`: empty), `clear_buffer` |
-
-`set_start` acts only in the file state.
+`set_start` acts only in the file state (States, The file fields).
 
 `sent_start` is the start of the load last sent for the slot. `set_start` writes `start` at once and reloads 0.3 s later, so during that wait `start` is ahead of the file the engine holds; a load's snapshot (`buffer_state_before_load`) records `sent_start`, so a failed start reload puts the previous start back (#245). It is 0 at init, after `clear_buffer`, a replace take (`recording_started(slot, false)`), a dub's "ended" report and `empty_buffer_state`; `load_buffer` sets it to the start it sends and `apply_buffer_state` to the state's start. `buffers.data` saves `start`. The `"buffer slots"` invariant states that `start == sent_start` unless a start reload is pending (`start_reload_clocks[slot]`). Everything that cancels a reload without sending it keeps that true: a playable recording starting inside the wait sets `start` back to `sent_start` (the new start was never loaded), and the cleanup step that cancels reloads does the same after `buffers.data` is saved, so a script exit inside the 0.3 s saves the new, untried start (the player's last choice), which the next launch then tries. A remembered file missing at startup sets both fields. Loads that fail out of order each put back the start recorded in their own snapshot, so the slot ends at the start of the oldest failed load's predecessor.
 
