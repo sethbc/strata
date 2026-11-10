@@ -219,10 +219,11 @@ return function(S)
   end
 
   -- End the step-level gesture on voice_idx's held step keys, on every port:
-  -- a change that replaces the whole pattern (a 256's paste) calls it, so a
-  -- step held from before never takes a level in the new pattern. The keys
-  -- stay held; their releases do nothing, as always, and the next step key
-  -- of the voice toggles its own step
+  -- S.lib.sequencer.replace_pattern (every whole-pattern change: clear,
+  -- randomize, a 256's paste, a scene recall) calls it, so a step held from
+  -- before never takes a level in the new pattern. The keys stay held; their
+  -- releases do nothing, as always, and the next step key of the voice
+  -- toggles its own step
   function M.end_step_gestures(voice_idx)
     for _, columns in pairs(step_keys) do
       for _, rows in pairs(columns) do
@@ -231,6 +232,14 @@ return function(S)
         end
       end
     end
+  end
+
+  -- End the step-level gesture on every step key held on one port, whatever
+  -- the voice: a 64's half switch calls it, so a step held in the half no
+  -- longer shown never takes a level. The keys stay held; their releases do
+  -- nothing
+  function M.end_port_step_gestures(port)
+    step_keys[port] = nil
   end
 
   -- A scene save key: saves once held GRID_HOLD.scene_save_seconds (layouts

@@ -4,13 +4,14 @@
 - Bounds-check every voice and step before indexing `S.patterns`.
 - The pattern clock only syncs (`clock.sync`), so external clock sources keep working. `pattern_clock_start` cancels a running clock before starting a new one.
 - Anything that changes a pattern or the playhead calls `grid_redraw()`.
+- A whole-pattern change (clear, randomize, the 256's paste, a scene recall's restore) goes through `S.lib.sequencer.replace_pattern(voice, steps)`, never a loop over `S.patterns[voice]` of its own: it ends the voice's held step gestures (`S.lib.grid_core.end_step_gestures`, #242), so a step held from before never takes a level in the new pattern.
 - Every playhead (each grid layout through `step_brightness`, the 64's column 1, SEQ's playing column) is `S.lib.sequencer.sounding_step()`, never `S.pattern_position`, which is already the next step between steps (#113). It is nil while stopped and before the first step plays, never `PATTERN_LENGTH` on a fresh start.
 
 ## Owns
 
 - `lib/sequencer.lua` (`S.lib.sequencer`):
   - `S.patterns` (built fresh by its constructor), the pattern clock state (`S.pattern_position`, `S.pattern_sounding_step`, `S.pattern_playing`, `S.pattern_clock`);
-  - `toggle_pattern_step`, `clear_pattern`, `randomize_pattern`, `pattern_toggle`, `pattern_clock_start`, `pattern_clock_stop`, `step_brightness` (global) and `S.lib.sequencer.sounding_step()`;
+  - `toggle_pattern_step`, `clear_pattern`, `randomize_pattern`, `pattern_toggle`, `pattern_clock_start`, `pattern_clock_stop`, `step_brightness` (global) and `S.lib.sequencer.sounding_step()` and `S.lib.sequencer.replace_pattern(voice, steps)`;
   - cleanup step 90: the pattern clock stopped.
 - Its unit tests: `test/unit/sequencer_test.lua`. The grid keys that edit patterns are in `docs/notes/lua/grid-core.md` (`step_key`) and each layout's notes.
 
@@ -24,7 +25,8 @@
 - **Operations**:
   - `toggle_pattern_step(voice, step)`: toggle a step on or off;
   - `clear_pattern(voice)`: reset all steps to 0;
-  - `randomize_pattern(voice)`: a random pattern at 50% density.
+  - `randomize_pattern(voice)`: a random pattern at 50% density (per step `math.random() > 0.5`, then `math.random(8, 15)`, in that order, so seeded tests keep their values);
+  - `S.lib.sequencer.replace_pattern(voice, steps)`: steps 1..`PATTERN_LENGTH` take `steps[step]` floored to a whole number and clamped to 0..`MAX_STEP_LEVEL` (a missing or non-number entry is 0), then `end_step_gestures(voice)` runs. A voice outside 1..`NUM_VOICES` or a `steps` that is not a table does nothing. It redraws nothing: callers do. `clear_pattern` and `randomize_pattern` build their steps and write through it, as do the 256's paste (`docs/notes/lua/grid/layout_256.md`) and `recall_scene_instant`'s pattern restore (`docs/notes/lua/scenes.md`).
 - Cleanup stops the pattern clock, so no clock coroutine is left behind.
 
 Bounds check before indexing:

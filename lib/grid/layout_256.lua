@@ -178,8 +178,7 @@ return function(S)
       for step = 1, PATTERN_LENGTH do steps[step] = S.patterns[voice_idx][step] end
       state.clipboard = {voice = voice_idx, steps = steps}
     elseif clipboard.voice ~= voice_idx then
-      for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = clipboard.steps[step] end
-      grid_core.end_step_gestures(voice_idx)
+      S.lib.sequencer.replace_pattern(voice_idx, clipboard.steps)
     end
   end
 

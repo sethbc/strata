@@ -524,9 +524,7 @@ return function(S)
 
     -- Restore patterns
     for i = 1, NUM_VOICES do
-      for step = 1, PATTERN_LENGTH do
-        S.patterns[i][step] = scene_data.patterns[i][step]
-      end
+      S.lib.sequencer.replace_pattern(i, scene_data.patterns[i])
     end
 
     -- the scene is applied: the grid's scene page lights it in this redraw

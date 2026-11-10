@@ -130,4 +130,34 @@ test("every grid redraw while a step plays shows that step, a started voice's to
   end
 end)
 
+test("replace_pattern copies sixteen whole levels in range and ignores a bad voice", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
+  for step = 1, PATTERN_LENGTH do S.patterns[1][step] = 9 end
+  S.lib.sequencer.replace_pattern(1, {15, 3.7, -2, 99, "x"})
+  local expected = {15, 3, 0, 15, 0}
+  for step = 1, PATTERN_LENGTH do
+    assert_equal(S.patterns[1][step], expected[step] or 0, "step " .. step)
+  end
+  assert_equal(S.patterns[1][PATTERN_LENGTH + 1], nil, "the pattern never grows")
+  local before = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    before[voice_idx] = {}
+    for step = 1, PATTERN_LENGTH do before[voice_idx][step] = S.patterns[voice_idx][step] end
+  end
+  S.lib.sequencer.replace_pattern(0, {15, 15})
+  S.lib.sequencer.replace_pattern(8, {15, 15})
+  S.lib.sequencer.replace_pattern(1.5, {15, 15})
+  S.lib.sequencer.replace_pattern(2, nil)
+  S.lib.sequencer.replace_pattern(2, 15)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
+      assert_equal(S.patterns[voice_idx][step], before[voice_idx][step], "voice " .. voice_idx .. " step " .. step .. " unchanged")
+    end
+  end
+  assert_equal(S.patterns[0], nil, "voice 0 never created")
+  assert_equal(S.patterns[8], nil, "voice 8 never created")
+end)
+
 end
