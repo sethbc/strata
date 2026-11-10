@@ -22,6 +22,7 @@ return function(S)
     note_indent = 8,      -- a field's dim note row ("(next start)", ...) starts here
     xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
   }
+  M.SETUP_PAGE = SETUP_PAGE
 
   -- The fields, in cursor order. Each row starts with its label. kind
   -- "param": E3 edits param_id, shown with format (a string.format pattern,
@@ -69,7 +70,7 @@ return function(S)
   -- performance field above the buffer length): "(next start)" when a
   -- shown field differs from the setting this start used (the engine read
   -- the same file at alloc), "may xrun" for high on a CM3 or Pi 3, and the
-  -- step-down ("300 s -> 120 s (memory)", or "(no meminfo)") when the high tier runs
+  -- step-down ("300 s -> 120 s (memory)", or "(meminfo)") when the high tier runs
   -- shorter buffers than the unchanged setting asks for. The buffer length
   -- is offered when the setting or the running tier is high
   local function add_performance_rows(rows)
@@ -250,6 +251,13 @@ return function(S)
       {name = "performance: memory step-down", setup = function()
         S.performance = {tier = "high", buffer_seconds = 120, max_grains = 128, history_seconds = 60,
           reason = "high: setting"}
+        S.performance_setting = {performance = "high", buffer_seconds = 300}
+        S.performance_start_setting = {performance = "high", buffer_seconds = 300}
+        enc(2, 20)
+      end},
+      {name = "performance: memory step-down, no meminfo", setup = function()
+        S.performance = {tier = "high", buffer_seconds = 16, max_grains = 128, history_seconds = 60,
+          reason = "high: setting; buffer 300 s -> 16 s (meminfo unreadable)"}
         S.performance_setting = {performance = "high", buffer_seconds = 300}
         S.performance_start_setting = {performance = "high", buffer_seconds = 300}
         enc(2, 20)

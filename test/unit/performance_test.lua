@@ -243,7 +243,7 @@ test("running_note and step_down_cause read the engine's reason", function()
   assert_equal(performance.running_note(), nil, "a plain reason has no note")
   assert_equal(performance.step_down_cause(), "memory")
   performance = reason_of("high", 16, 60, "high: setting; buffer 300 s -> 16 s (meminfo unreadable)")
-  assert_equal(performance.step_down_cause(), "no meminfo")
+  assert_equal(performance.step_down_cause(), "meminfo")
 end)
 
 test("a failed write keeps the old setting and returns false", function()
