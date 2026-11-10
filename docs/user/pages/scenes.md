@@ -12,6 +12,6 @@ The page shows the eight slots in two columns (1-4 on the left, 5-8 on the right
 | K3 | Recall the slot at once |
 | ALT+K3 | Save the current sound into the slot |
 
-Saving into an empty slot happens at once. Saving into a slot that already holds a scene asks first: the hint row shows `K3 again: overwrite S<n>`, and a second ALT+K3 within 2 seconds saves. Moving the cursor cancels the question, so it never applies to another slot. If another message replaces the question on the hint row, the next ALT+K3 asks again instead of saving. The question shows on this page only.
+Saving into an empty slot happens at once. Saving into a slot that already holds a scene asks first: the hint row shows `K3 again: overwrite S<n>` (with ALT held or not), and a second ALT+K3 within 2 seconds saves; after 2 seconds the question goes from the hint row by itself. Moving the cursor cancels the question, so it never applies to another slot. A message from another page (a failed buffer load, say) never hides the question; while a message meant for every page covers the hint row, the next ALT+K3 asks again instead of saving. The question shows on this page only.
 
 Recalling an empty slot does nothing. With an arc, pressing the ring button recalls the slot at once. See [Scenes and Automation](../scenes.md) for the scene system and saving and loading scenes on disk.

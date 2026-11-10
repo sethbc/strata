@@ -5,7 +5,7 @@
 return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
-local show_page, hint_text, tap = h.show_page, h.hint_text, h.tap
+local show_page, hint_text, tap, next_frame = h.show_page, h.hint_text, h.tap, h.next_frame
 local assert_screen_layout = h.assert_screen_layout
 
 local function started_on_scenes()
@@ -169,7 +169,7 @@ test("the overwrite flash goes when the cursor leaves the slot by another route"
   enc(2, 2); alt_tap(3)
   redraw(); assert_equal(hint_text(context), "K3 again: overwrite S3", "armed")
   S.cursors.scene = 6   -- as the arc moves it
-  redraw()
+  next_frame(context)
   assert_true(hint_text(context) ~= "K3 again: overwrite S3", "no prompt over another slot")
   assert_equal(S.scenes_page.armed_slot, nil, "disarmed")
 end)
@@ -180,12 +180,12 @@ test("a replaced overwrite prompt never confirms: ALT+K3 asks again", function()
   local first = scene_data(S, 1)
   alt_tap(3)
   redraw(); assert_equal(hint_text(context), "K3 again: overwrite S1", "armed on S1")
-  -- another hint flash (a failed buffer load) replaces the prompt
-  buffer_page_flash("buf 2 load failed")
+  -- a hints flash with no page covers the prompt
+  S.lib.ui_flash.start("hints", "tempo 120")
   context.clock.run_for(0.5)
   alt_tap(3)
   assert_equal(scene_data(S, 1), first, "S1 is not overwritten without its prompt showing")
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S1", "the prompt shows again")
+  context.clock.run_for(1); redraw(); assert_equal(hint_text(context), "K3 again: overwrite S1", "the prompt shows again")
   alt_tap(3)
   assert_true(scene_data(S, 1) ~= first, "a second ALT+K3 under the prompt saves")
 end)
@@ -203,12 +203,72 @@ test("S.lib.pages_scenes.move_cursor moves, disarms and clears the prompt", func
   scenes_page.move_cursor(5)
   assert_equal(S.cursors.scene, 5, "moved to slot 5")
   assert_equal(S.scenes_page.armed_slot, nil, "disarmed")
-  assert_true(S.lib.ui_flash.text("hints") == nil, "the prompt is cleared")
+  redraw(); assert_equal(hint_text(context), "K2:fade K3:recall", "the prompt is cleared")
   scenes_page.move_cursor(100)
   assert_equal(S.cursors.scene, S.constants.NUM_SCENES + #S.constants.SCENES_FIELDS, "clamped to the last stop")
   scenes_page.move_cursor(-3)
   assert_equal(S.cursors.scene, 1, "clamped to slot 1")
   redraw(); assert_true(context ~= nil, "loaded")
+end)
+
+-- #255: the prompt is the page's own hint, not a "hints" flash
+local PROMPT_S1 = "K3 again: overwrite S1"
+
+test("the overwrite prompt is the page's hint while armed and lapses after 2 s", function()
+  local context, S = started_on_scenes()
+  capture_scene(1)
+  local first = scene_data(S, 1)
+  context.set_time(100); alt_tap(3)
+  redraw(); assert_equal(hint_text(context), PROMPT_S1, "the hint row asks")
+  key(1, 1); redraw(); assert_equal(hint_text(context), PROMPT_S1, "with ALT held too"); key(1, 0)
+  assert_equal(scene_data(S, 1), first, "nothing saved")
+  assert_true(S.lib.ui_flash.text("hints") == nil, "no hints flash carries it")
+  context.set_time(102.1)
+  key(1, 1); next_frame(context)
+  assert_equal(hint_text(context), "K3:save", "the frame after 2 s drops the prompt")
+  key(1, 0)
+  assert_true(S.scenes_page.armed_slot == nil, "and disarms")
+  alt_tap(3); alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "two presses within 2 s save")
+  assert_equal(S.lib.ui_flash.text("header"), "saved S1", "the header flashes saved")
+end)
+
+test("a flash from another page neither erases the prompt nor confirms through it", function()
+  local context, S = started_on_scenes()
+  capture_scene(1)
+  local first = scene_data(S, 1)
+  context.set_time(100); alt_tap(3)
+  buffer_page_flash("buf 1 load failed")
+  redraw(); assert_equal(hint_text(context), PROMPT_S1, "BUFFER's flash leaves the prompt showing")
+  -- a "hints" flash with no page covers the row on SCENES
+  S.lib.ui_flash.start("hints", "tempo 120")
+  alt_tap(3)
+  assert_equal(scene_data(S, 1), first, "no save while the prompt is covered")
+  assert_equal(S.scenes_page.armed_slot, 1, "armed again")
+  assert_equal(S.scenes_page.armed_until, util.time() + 2, "for another 2 s")
+  context.clock.run_for(2.1)
+  assert_true(S.lib.ui_flash.text("hints") == nil, "the flash has ended")
+  alt_tap(3)
+  assert_equal(scene_data(S, 1), first, "the first press after it only arms")
+  alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "the second saves")
+end)
+
+test("drawing SCENES asks for no redraw and ends no flash", function()
+  local context, S = started_on_scenes()
+  local UI_PAGES = local_value("UI_PAGES")
+  capture_scene(3)
+  enc(2, 2); alt_tap(3)
+  S.cursors.scene = 6   -- off the armed slot, as no move_cursor did
+  S.lib.ui_flash.start("hints", "tempo 120")
+  UI_PAGES.screen_dirty = false
+  redraw()
+  assert_equal(S.lib.ui_flash.text("hints"), "tempo 120", "the flash still shows")
+  assert_equal(hint_text(context), "tempo 120", "on the hint row")
+  assert_true(not UI_PAGES.screen_dirty, "the draw asks for no redraw")
+  S.registry.pages[S.constants.UI_PAGES.index.SCENES].hints(false)
+  assert_equal(S.lib.ui_flash.text("hints"), "tempo 120", "nor do the hints end it")
+  assert_true(not UI_PAGES.screen_dirty, "or ask for a redraw")
 end)
 
 test("SCENES hints", function()
