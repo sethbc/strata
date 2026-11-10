@@ -187,8 +187,11 @@
         if (file.isNil) { ^this.rejectLoad(index, load, "cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
         slotFrames = [(sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
-        startFrame = (start.max(0) * sampleRate).floor.asInteger;
-        if (startFrame >= file.numFrames) { startFrame = (file.numFrames - slotFrames).max(0) };
+        // compared as a Float, before converting: an int32 overflows about
+        // 12.4 h into a 48 kHz file (asFloat: an Integer start, as a client
+        // may send, would overflow in the multiplication itself)
+        startFrame = start.asFloat.max(0) * sampleRate;
+        startFrame = if (startFrame >= file.numFrames) { (file.numFrames - slotFrames).max(0) } { startFrame.floor.asInteger };
         frames = (file.numFrames - startFrame).min(slotFrames);
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
         damaged = "sound file " ++ path ++ " is damaged (it stops decoding early)";
