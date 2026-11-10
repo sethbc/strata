@@ -734,8 +734,10 @@ return function(S)
     if loop then sent, reason = save_buffer_loop(slot) else sent, reason = save_buffer(slot) end
     if sent then
       buffer_page_flash("saving buf " .. slot .. (loop and " loop" or ""))
-    else
-      buffer_page_flash("buf " .. slot .. " " .. (reason == "busy" and "busy" or "empty"))
+    elseif reason == "busy" then
+      buffer_page_flash("buf " .. slot .. " busy")
+    elseif reason == "empty" then
+      buffer_page_flash("buf " .. slot .. " empty")
     end
   end
 

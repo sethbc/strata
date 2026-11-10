@@ -369,8 +369,9 @@ return function(S)
 
   -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
   -- records or awaits its take: an armed recording has `recording` set) or
-  -- "empty" (the engine reports no length: a load is loaded optimistically
-  -- until the poll settles it, and a replace take reads 0 s). nil when it can.
+  -- "empty" (the engine reports no length: a load shows at once, and the
+  -- engine's report settles whether it holds audio; a replace take reads 0 s).
+  -- nil when it can.
   local function save_refusal(slot)
     if not valid_buffer_slot(slot) then return "invalid" end
     local buffer = S.buffers[slot]
