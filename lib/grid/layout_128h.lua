@@ -35,6 +35,16 @@ return function(S)
     slot_columns = 4,
     record_first_row = 1,
     clear_first_row = 3,
+    -- page 4's strip (the grid voice's): bookmarks on row 5, then store, hold
+    -- and whole on row 6, from column 13
+    strip_bookmark_row = 5,
+    strip_key_row = 6,
+    strip_first_column = 13,
+    -- page 5: the positions, voice v's row v (16 cells); the sources key
+    -- (page 4's own, column 8 of row 8) pressed on page 4 goes here and back
+    position_page = 5,
+    sources_page = 4,
+    position_page_level = 10,
   }
   M.LAYOUT = LAYOUT_128H
   local SLOT_ROWS = math.ceil(NUM_BUFFERS / LAYOUT_128H.slot_columns)
@@ -73,6 +83,19 @@ return function(S)
     elseif y == LAYOUT_128H.lock_row then
       if x <= NUM_VOICES then toggle_lock(x) end
     end
+  end
+
+  -- Page 4's strip: the grid voice's bookmarks and its store, hold and whole
+  -- keys (nil for any other cell)
+  local STRIP_KEYS = {"store", "hold", "whole"}
+  local function strip_key_of(x, y)
+    local offset = x - LAYOUT_128H.strip_first_column + 1
+    if y == LAYOUT_128H.strip_bookmark_row and offset >= 1 and offset <= S.constants.NUM_BOOKMARKS then
+      return offset
+    elseif y == LAYOUT_128H.strip_key_row and offset >= 1 and offset <= #STRIP_KEYS then
+      return STRIP_KEYS[offset]
+    end
+    return nil
   end
 
   -- Page 4, rows 1-7
@@ -114,6 +137,8 @@ return function(S)
     local voice_offset = x - LAYOUT_128H.voice_first_column + 1
     if x <= LAYOUT_128H.play_last_column then
       pattern_toggle()
+    elseif page_offset == LAYOUT_128H.sources_page and grid_core.page(port) == LAYOUT_128H.sources_page then
+      grid_core.set_page(port, LAYOUT_128H.position_page)
     elseif page_offset >= 1 and page_offset <= LAYOUT_128H.num_pages then
       grid_core.set_page(port, page_offset)
     elseif voice_offset >= 1 and voice_offset <= NUM_VOICES then
@@ -125,18 +150,37 @@ return function(S)
 
   -- 16x8 grid layout (128 buttons horizontal)
   function grid_key_128h(port, x, y, z)
-    if z == 0 then return end  -- presses only
+    local page = grid_core.page(port)
+    -- A release reaches only the positions: the position keys and the strip's
+    -- hold and store keys end on it
+    if z == 0 then
+      if y ~= LAYOUT_128H.control_row and x >= 1 and x <= PATTERN_LENGTH then
+        if page == LAYOUT_128H.position_page and y <= NUM_VOICES then
+          S.lib.positions.grid_key(port, y, x, PATTERN_LENGTH, 0)
+        elseif page == LAYOUT_128H.sources_page then
+          local key = strip_key_of(x, y)
+          if key then S.lib.positions.strip_key(port, S.grid_voice_select, key, 0) end
+        end
+      end
+      return
+    end
     if y == LAYOUT_128H.control_row then
       control_row_key(port, x)
       return
     end
-    local page = grid_core.page(port)
-    if page == 2 then
+    if page == LAYOUT_128H.position_page then
+      if y <= NUM_VOICES then S.lib.positions.grid_key(port, y, x, PATTERN_LENGTH, z) end
+    elseif page == 2 then
       fader_page_key(x, y)
     elseif page == 3 then
       scene_page_key(port, x, y, z)
     elseif page == 4 then
-      source_page_key(x, y)
+      local key = strip_key_of(x, y)
+      if key then
+        S.lib.positions.strip_key(port, S.grid_voice_select, key, z)
+      else
+        source_page_key(x, y)
+      end
     elseif y >= 1 and y <= NUM_VOICES then
       -- Rows 1-7: Pattern triggers
       grid_core.step_key(port, x, y, z, y, x, x, PATTERN_LENGTH)
@@ -202,6 +246,28 @@ return function(S)
     end
   end
 
+  -- Page 4's strip, the grid voice's, at S.lib.positions' levels
+  local function redraw_strip(grid_device)
+    local voice_idx = S.grid_voice_select
+    for n = 1, S.constants.NUM_BOOKMARKS do
+      grid_device:led(LAYOUT_128H.strip_first_column + n - 1, LAYOUT_128H.strip_bookmark_row,
+        S.lib.positions.strip_level(voice_idx, n))
+    end
+    for i, key in ipairs(STRIP_KEYS) do
+      grid_device:led(LAYOUT_128H.strip_first_column + i - 1, LAYOUT_128H.strip_key_row,
+        S.lib.positions.strip_level(voice_idx, key))
+    end
+  end
+
+  -- Page 5: voice v's positions on row v
+  local function redraw_position_page(grid_device)
+    for voice_idx = 1, NUM_VOICES do
+      for cell = 1, PATTERN_LENGTH do
+        grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PATTERN_LENGTH))
+      end
+    end
+  end
+
   -- Row 8: play/stop, the pages (shown 15), the voices (running 12) and the
   -- voice cycle key
   local function redraw_control_row(page, grid_device)
@@ -210,7 +276,11 @@ return function(S)
       grid_device:led(x, y, S.pattern_playing and 15 or 4)
     end
     for i = 1, LAYOUT_128H.num_pages do
-      grid_device:led(LAYOUT_128H.page_first_column + i - 1, y, i == page and 15 or 4)
+      local level = i == page and 15 or 4
+      if i == LAYOUT_128H.sources_page and page == LAYOUT_128H.position_page then
+        level = LAYOUT_128H.position_page_level
+      end
+      grid_device:led(LAYOUT_128H.page_first_column + i - 1, y, level)
     end
     for i = 1, NUM_VOICES do
       grid_device:led(LAYOUT_128H.voice_first_column + i - 1, y, S.voices[i].active and 12 or 2)
@@ -226,6 +296,9 @@ return function(S)
       redraw_scene_page(port, grid_device)
     elseif page == 4 then
       redraw_source_page(grid_device)
+      redraw_strip(grid_device)
+    elseif page == LAYOUT_128H.position_page then
+      redraw_position_page(grid_device)
     else
       -- Patterns (rows 1-NUM_VOICES)
       for voice_idx = 1, NUM_VOICES do
