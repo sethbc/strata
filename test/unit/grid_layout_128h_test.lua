@@ -512,6 +512,22 @@ test("128h: store held, the grid voice changed: a bookmark press stores for the 
   assert_equal(positions.last_recalled(2), 1)
 end)
 
+test("128h: a bookmark released after a grid voice change goes dark for the voice it stored", function()
+  local context, S = position_setup()
+  local positions = S.lib.positions
+  tap(context, 1, 8, 8)
+  select_grid_voice(1)
+  context.grid.press(1, 13, 6, 1)
+  context.grid.press(1, 13, 5, 1)
+  assert_equal(positions.strip_level(1, 1, 1), 15, "bookmark 1 stored for voice 1, its key down")
+  tap(context, 1, 16, 8)
+  assert_equal(S.grid_voice_select, 2)
+  context.grid.press(1, 13, 5, 0)
+  assert_true(positions.strip_level(1, 1, 1) ~= 15, "the release ends voice 1's pressed bookmark")
+  assert_equal(positions.strip_level(2, "store", 1), 15, "store still down")
+  context.grid.press(1, 13, 6, 0)
+end)
+
 test("128h: the page 4 cells next to the strip still act", function()
   local context, S = position_setup()
   tap(context, 1, 8, 8)

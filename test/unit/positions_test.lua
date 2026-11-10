@@ -660,6 +660,25 @@ test("the store LED is the port's own", function()
   assert_equal(positions.strip_level(1, "store", 2), 4)
 end)
 
+test("each grid's redraw lights only its own store key", function()
+  local context, S = buffer_voices()
+  local full = context.grid.plug(1, 16, 16)
+  local wide = context.grid.plug(2, 16, 8)
+  S.lib.grid_core.set_page(1, 5)  -- the 256's strips: voice v's on row 8 + v
+  S.lib.grid_core.set_page(2, 4)  -- the 128h's strip: store at (13, 6)
+  S.grid_voice_select = 1
+  S.lib.positions.strip_key(2, 1, "store", 1)
+  grid_redraw()
+  assert_equal(wide:get_led(13, 6), 15, "the 128h's store key is down")
+  assert_equal(full:get_led(6, 9), 4, "the 256's store key for voice 1 is not")
+  S.lib.positions.strip_key(2, 1, "store", 0)
+  S.lib.positions.strip_key(1, 1, "store", 1)
+  grid_redraw()
+  assert_equal(full:get_led(6, 9), 15, "the 256's store key for voice 1 is down")
+  assert_equal(wide:get_led(13, 6), 4, "the 128h's is not")
+  S.lib.positions.strip_key(1, 1, "store", 0)
+end)
+
 test("a one-strip grid's store ends when the grid shows another page", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
