@@ -11,7 +11,7 @@ The grid has no LFO controls (no layout has room for them); the LFOs live on the
 Each size has its own layout:
 
 - [16×16 (256)](grid/256.md) - Full featured layout with patterns, parameters, scenes, buffers and FX
-- [16×8 (128 horizontal)](grid/128h.md) - Four pages: patterns, faders, scenes and sources (record and clear buffers)
+- [16×8 (128 horizontal)](grid/128h.md) - Four pages: patterns, faders, scenes and sources (record and clear buffers), and a fifth for buffer positions
 - [8×16 (128 vertical)](grid/128v.md) - Five pages: patterns, faders, scenes, sources and positions, laid out vertically; the key at (8,8) steps to the next page
 - [8×8 (64)](grid/64.md) - Pattern sequencing, 8 steps per voice, one half of the 16 at a time: tap row 8 column 1 for play/stop, hold it to switch halves; columns 2-8 toggle voices 1-7; a third view shows the selected voice's positions
 

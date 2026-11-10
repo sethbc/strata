@@ -1005,7 +1005,8 @@ local function read_repo_file(path)
 end
 
 -- The orders in the first cell of a notes table: the rows under the line that
--- starts with `heading`, up to the first line that is not a table row
+-- starts with `heading`, up to the next heading or "The sequence (" line, so
+-- prose between rows does not hide the rows below it
 local function table_orders(text, heading)
   local orders, inside = {}, false
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -1014,7 +1015,7 @@ local function table_orders(text, heading)
     elseif line:sub(1, 1) == "|" then
       local order = line:match("^|%s*(%d+)%s*|")
       if order then orders[tonumber(order)] = true end
-    elseif next(orders) then
+    elseif line:sub(1, 1) == "#" or line:sub(1, 14) == "The sequence (" then
       break
     end
   end
@@ -1028,6 +1029,7 @@ test("the notes' start and cleanup tables list every step of START_ORDER and CLE
   local problems = {}
   for _, kind in ipairs({{"START_ORDER", "start"}, {"CLEANUP_ORDER", "cleanup"}}) do
     local rows = table_orders(notes, "The sequence (`" .. kind[1] .. "`")
+    assert_true(next(rows) ~= nil, "found the " .. kind[2] .. " table")
     local expected = {}
     for name, order in pairs(constants[kind[1]]) do
       expected[order] = true
@@ -1036,7 +1038,6 @@ test("the notes' start and cleanup tables list every step of START_ORDER and CLE
     for order in pairs(rows) do
       if not expected[order] then table.insert(problems, kind[2] .. " row " .. order .. " is in no " .. kind[1]) end
     end
-    assert_true(next(rows) ~= nil, "found the " .. kind[2] .. " table")
   end
   table.sort(problems)
   assert_true(#problems == 0, table.concat(problems, "\n"))
