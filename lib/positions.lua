@@ -29,11 +29,13 @@ return function(S)
   -- the position row's cells on the page-5 grids (the change signature)
   local DISPLAY_CELLS = 16
 
-  -- per voice: the scan hold, the glide's rate (as sent), the last recalled
-  -- bookmark, the glide clock and the ring's recent turns
-  local scan_hold, glide_rate, recalled, glide_clock, turns = {}, {}, {}, {}, {}
+  -- per voice: the scan hold, its holders (a set: "grid:<port>", "arc",
+  -- "caller"; held exactly while it is not empty), the glide's rate (as
+  -- sent), the last recalled bookmark, the glide clock and the ring's
+  -- recent turns
+  local scan_hold, holders, glide_rate, recalled, glide_clock, turns = {}, {}, {}, {}, {}, {}
   for voice_idx = 1, NUM_VOICES do
-    scan_hold[voice_idx], glide_rate[voice_idx] = false, 0
+    scan_hold[voice_idx], holders[voice_idx], glide_rate[voice_idx] = false, {}, 0
   end
 
   local function valid_voice(voice_idx)
@@ -97,13 +99,32 @@ return function(S)
     if glide_rate[voice_idx] ~= 0 then set_scrub_rate(voice_idx, 0) end
   end
 
-  -- Hold (or release) a buffer voice's own scan: scanHold 1 stops it, not
-  -- the glide
-  function M.hold_scan(voice_idx, on)
-    if not buffer_voice(voice_idx) then return end
+  -- The hold changes (the holders were just changed to match): bring the
+  -- playhead estimate up to now first
+  local function set_scan_hold(voice_idx, on)
     S.lib.playheads.advance(voice_idx)
-    scan_hold[voice_idx] = on and true or false
+    scan_hold[voice_idx] = on
     send_grain(voice_idx, "scanHold", on and 1 or 0)
+  end
+
+  -- A holder (any non-nil key, "caller" by default; the grid passes
+  -- "grid:<port>", the arc "arc") holds or lets go of a voice's own scan:
+  -- scanHold 1 stops it, not the glide. Only a buffer voice can be held;
+  -- a release counts whatever the voice's source is now. The scan stays
+  -- held while any holder remains
+  function M.hold_scan(voice_idx, on, holder)
+    if not valid_voice(voice_idx) then return end
+    if holder == nil then holder = "caller" end
+    local voice_holders = holders[voice_idx]
+    if on then
+      if not buffer_voice(voice_idx) then return end
+      local was_empty = next(voice_holders) == nil
+      voice_holders[holder] = true
+      if was_empty then set_scan_hold(voice_idx, true) end
+    elseif voice_holders[holder] then
+      voice_holders[holder] = nil
+      if next(voice_holders) == nil and scan_hold[voice_idx] then set_scan_hold(voice_idx, false) end
+    end
   end
 
   -- Jump a buffer voice to p (0-1 of the slot). Inside its loop buf_pos
@@ -241,7 +262,7 @@ return function(S)
     for voice_idx, pressed_page in pairs(record.hold) do
       if gone or pressed_page ~= page then
         record.hold[voice_idx] = nil
-        M.hold_scan(voice_idx, false)
+        M.hold_scan(voice_idx, false, "grid:" .. port)
       end
     end
     for voice_idx, pressed_page in pairs(record.store) do
@@ -338,7 +359,7 @@ return function(S)
     elseif key == "hold" then
       if z == 1 then
         record_of(port).hold[voice_idx] = page
-        M.hold_scan(voice_idx, true)
+        M.hold_scan(voice_idx, true, "grid:" .. port)
       else
         -- likewise one hold key per port where a grid voice is selected:
         -- the release ends the hold for every held voice (each once)
@@ -351,7 +372,7 @@ return function(S)
             records[port].hold[voice_idx] = nil
           end
         end
-        for held_voice in pairs(ended) do M.hold_scan(held_voice, false) end
+        for held_voice in pairs(ended) do M.hold_scan(held_voice, false, "grid:" .. port) end
       end
     elseif key == "whole" and z == 1 then
       whole_loop(voice_idx)
@@ -429,7 +450,10 @@ return function(S)
       end
       if recalled[voice_idx] == key then return LEVELS.recalled end
       return LEVELS.bookmark
-    elseif key == "store" or key == "hold" then
+    elseif key == "hold" then
+      -- the hold itself, whoever holds it
+      return scan_hold[voice_idx] and LEVELS.key_down or LEVELS.key_up
+    elseif key == "store" then
       return any_record(function(record) return record[key][voice_idx] end) and LEVELS.key_down or LEVELS.key_up
     elseif key == "whole" then
       local start, length = loop_of(voice_idx)
@@ -514,7 +538,7 @@ return function(S)
     sync = function(voice_idx)
       cancel_glide_clock(voice_idx)
       turns[voice_idx] = nil
-      glide_rate[voice_idx], scan_hold[voice_idx] = 0, false
+      glide_rate[voice_idx], scan_hold[voice_idx], holders[voice_idx] = 0, false, {}
       engine.setGrainParam(voice_idx - 1, "scrubRate", 0)
       engine.setGrainParam(voice_idx - 1, "scanHold", 0)
     end,
@@ -536,13 +560,24 @@ return function(S)
   end)
   S.register_source_change(function(voice_idx) recalled[voice_idx] = nil end)
 
-  -- cleanup: no glide runs on, no scan stays held
+  -- cleanup: no glide runs on, no scan stays held (every holder lets go)
   S.register_cleanup(S.constants.CLEANUP_ORDER.scrub_glide, function()
     for voice_idx = 1, NUM_VOICES do
       cancel_glide_clock(voice_idx)
       turns[voice_idx] = nil
       if glide_rate[voice_idx] ~= 0 then set_scrub_rate(voice_idx, 0) end
-      if scan_hold[voice_idx] then M.hold_scan(voice_idx, false) end
+      for holder in pairs(holders[voice_idx]) do M.hold_scan(voice_idx, false, holder) end
+    end
+  end)
+
+  -- A voice's scan is held exactly while it has a holder
+  S.register_invariant("scan holds", function()
+    for voice_idx = 1, NUM_VOICES do
+      local has_holder = next(holders[voice_idx]) ~= nil
+      if scan_hold[voice_idx] ~= has_holder then
+        return "voice " .. voice_idx .. ": scan held " .. tostring(scan_hold[voice_idx])
+          .. " with " .. (has_holder and "holders" or "no holder")
+      end
     end
   end)
 
