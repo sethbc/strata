@@ -46,11 +46,12 @@ return function(S)
 
   -- ALT ring 1 also holds the selected voice's own scan (as the holder
   -- "arc"), once, until ALT comes up (the release hook below); a voice sync
-  -- (the voice restarted) drops the hold, so the next turn holds again
+  -- (the voice restarted) drops the arc from the holders, so the next turn
+  -- joins again, even while a grid holds the voice
   local function arc_buffer_alt_delta(n, delta)
     local ring = ARC_BUFFER_ALT_RINGS[n]
     if not ring then return end
-    if n == 1 and (held_voice ~= S.selected_voice or not S.lib.positions.scan_held(held_voice)) then
+    if n == 1 and (held_voice ~= S.selected_voice or not S.lib.positions.holds_scan(held_voice, "arc")) then
       if held_voice then S.lib.positions.hold_scan(held_voice, false, "arc") end
       held_voice = S.selected_voice
       S.lib.positions.hold_scan(held_voice, true, "arc")
