@@ -641,4 +641,97 @@ test("on a 256 a strip store's release ends only its own voice: voice 2's next b
   S.grids[1] = nil
 end)
 
+-- #238: the scan hold has a set of holders per voice (each grid port, the
+-- arc), and the hold LED shows the hold itself
+test("the hold LED follows the scan hold, not the key", function()
+  local context, S = buffer_voices()
+  with_grid(S, 16, 8)
+  local positions = S.lib.positions
+  assert_true(S.voices[1].active, "voice 1 runs")
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(positions.strip_level(1, "hold"), 15, "held")
+  assert_equal(last_grain(context, "scanHold", 0), 1, "scanHold 1 sent")
+  toggle_voice(1); toggle_voice(1)
+  assert_true(S.voices[1].active, "voice 1 runs again")
+  assert_equal(positions.strip_level(1, "hold"), 4, "the restart dropped the hold: the key goes dim")
+  assert_equal(last_grain(context, "scanHold", 0), 0, "the voice sync sent scanHold 0")
+  assert_equal(positions.scan_held(1), false)
+  local count = #grain_calls(context, "scanHold")
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(#grain_calls(context, "scanHold"), count, "the release sends nothing more")
+  S.grids[1] = nil
+end)
+
+test("a synth voice's hold key stays dim and holds nothing", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  params:set("v3_source", 1)
+  context.clear_engine_calls()
+  positions.strip_key(1, 3, "hold", 1)
+  assert_equal(positions.strip_level(3, "hold"), 4, "dim")
+  assert_equal(#grain_calls(context, "scanHold"), 0, "no scanHold")
+  assert_equal(positions.scan_held(3), false)
+  positions.strip_key(1, 3, "hold", 0)
+end)
+
+test("two holders: the scan stays held until the last lets go", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  positions.hold_scan(1, true, "grid:1")
+  positions.hold_scan(1, true, "arc")
+  assert_equal(#grain_calls(context, "scanHold"), 1, "one scanHold in all")
+  assert_equal(last_grain(context, "scanHold", 0), 1, "scanHold 1")
+  positions.hold_scan(1, false, "arc")
+  assert_equal(#grain_calls(context, "scanHold"), 1, "the first release sends no scanHold 0")
+  assert_equal(positions.scan_held(1), true, "still held by the grid")
+  positions.hold_scan(1, false, "grid:1")
+  assert_equal(#grain_calls(context, "scanHold"), 2, "the last release sends one")
+  assert_equal(last_grain(context, "scanHold", 0), 0, "scanHold 0")
+  assert_equal(positions.scan_held(1), false)
+end)
+
+test("a release by a port that holds nothing changes nothing", function()
+  local context, S = buffer_voices()
+  with_grid(S, 16, 16)
+  local positions = S.lib.positions
+  positions.hold_scan(1, true, "arc")
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(positions.scan_held(1), true, "the arc still holds")
+  assert_equal(last_grain(context, "scanHold", 0), 1, "no scanHold 0")
+  S.grids[1] = nil
+end)
+
+test("a hold let go after the voice left its buffer is forgotten", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "voice 1 stopped")
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(positions.scan_held(1), true, "a stopped buffer voice is held")
+  params:set("v1_source", 1)
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(positions.scan_held(1), false, "the release forgets it")
+end)
+
+test("cleanup and an unplugged grid release their holds", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "hold", 1)
+  positions.hold_scan(1, true, "arc")
+  context.grid.unplug(1)
+  context.clock.run_for(0.1)
+  assert_equal(positions.scan_held(1), true, "the arc still holds")
+  assert_equal(positions.strip_level(1, "hold"), 15, "and the LED shows it")
+  cleanup()
+  assert_equal(positions.scan_held(1), false, "cleanup releases every holder")
+  local releases = 0
+  for _, each in ipairs(grain_calls(context, "scanHold")) do
+    if each.voice == 0 and each.value == 0 then releases = releases + 1 end
+  end
+  assert_equal(releases, 1, "exactly one scanHold 0 for voice 0")
+end)
+
 end

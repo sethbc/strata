@@ -44,15 +44,16 @@ return function(S)
     if ring then turn_ring(ring, delta) end
   end
 
-  -- ALT ring 1 also holds the selected voice's own scan, once, until ALT
-  -- comes up (the release hook below)
+  -- ALT ring 1 also holds the selected voice's own scan (as the holder
+  -- "arc"), once, until ALT comes up (the release hook below); a voice sync
+  -- (the voice restarted) drops the hold, so the next turn holds again
   local function arc_buffer_alt_delta(n, delta)
     local ring = ARC_BUFFER_ALT_RINGS[n]
     if not ring then return end
-    if n == 1 and held_voice ~= S.selected_voice then
-      if held_voice then S.lib.positions.hold_scan(held_voice, false) end
+    if n == 1 and (held_voice ~= S.selected_voice or not S.lib.positions.scan_held(held_voice)) then
+      if held_voice then S.lib.positions.hold_scan(held_voice, false, "arc") end
       held_voice = S.selected_voice
-      S.lib.positions.hold_scan(held_voice, true)
+      S.lib.positions.hold_scan(held_voice, true, "arc")
     end
     turn_ring(ring, delta)
   end
@@ -71,7 +72,7 @@ return function(S)
   S.register_alt_release(function()
     local voice = held_voice
     held_voice = nil
-    if voice then S.lib.positions.hold_scan(voice, false) end
+    if voice then S.lib.positions.hold_scan(voice, false, "arc") end
   end)
 
   -- BUFFER's record (lib/pages/buffer.lua) gains its rings: arc_delta and
