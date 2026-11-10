@@ -4,7 +4,7 @@
 - The MIDI device name is cut with `fit_text` to end by x 124 (the scroll marker owns x 127), so a long norns device name never leaves the screen.
 - E3 edits a control or option field through `enc_param_delta` (ALT+E3 fine steps apply). `mutation_enabled` is a binary param with no range, so E3 sets it directly (right = on, left = off); never send it through `enc_param_delta`.
 - K3 runs only a save/load field, by calling its record's `run` (a function that calls `save_scenes_to_disk`/`load_scenes_from_disk` as it runs), never a global looked up by name; on every other field it does nothing. The cursor (`S.setup_cursor`) only ever rests on the fields; the status and note rows are `selectable = false`. The fields are looked up through the rows (`setup_rows()[S.setup_cursor]`), since the buffer length field comes and goes.
-- The performance fields edit the setting through `S.lib.performance.set_setting` (saved at once to `performance.data`), never a param: no PSET or scene holds them. A change applies at the next start.
+- The performance fields edit the setting through `S.lib.performance.set_setting` (saved at once to `performance.data`), never a param: no PSET or scene holds them. A change applies at the next start. When `set_setting` returns false (the write failed) the field keeps its old value and SETUP's hint row flashes `setting not saved` (`S.lib.ui_flash`, #236).
 - The performance fields' notes go on dim rows below them, indented 8 px: the layout test's width estimate cannot fit `performance` with `high (next start)` on one 124 px row.
 - The grid-size line exists only while a grid is connected.
 - SETUP has no arc fields: its rings stay dark and ignore turns.

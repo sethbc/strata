@@ -18,6 +18,16 @@
 The engine decides the tier at `alloc` and writes `performance_active.data` before the script starts (`docs/notes/engine/performance.md`). Lua never decides: it reads what the engine wrote.
 - **`read_active()`** reads `_path.data .. "strata/performance_active.data"` (`key value` lines; the value is the rest of the line, so a reason keeps its spaces; CRLF line ends are fine) into `S.performance = {tier, buffer_seconds, max_grains, history_seconds, reason}`. `reason` is optional (`""`). It then reads the setting as this start used it (`S.performance_start_setting`): the engine read the same file at alloc just before.
 - **`setting()`** returns a copy of `{performance, buffer_seconds}`, read from `performance.data` the first time and cached in `S.performance_setting`.
-- **`set_setting(key, value)`** (`"performance"`: auto, standard or high; `"buffer_seconds"`: 16, 60, 120 or 300) updates the cache, writes the file and requests a redraw; anything else returns false and changes nothing. It applies at the next start.
+- **`set_setting(key, value)`** (`"performance"`: auto, standard or high; `"buffer_seconds"`: 16, 60, 120 or 300) writes the file and, only when the write worked, updates the cache and requests a redraw, and returns true. An unknown key or value, or a failed write (one console line `strata: cannot write <path>`), returns false and leaves the cache and so `setting()` as it was (#236). It applies at the next start.
 - `record_buffer` also caps a take at `S.performance.buffer_seconds` (the param's range already ends there).
 - The test harness writes the active file with `h.write_performance_active(fields)` before a `load_strata` (fields in the engine's order, or a string written as it is), and the engine stub's `recordBuffer` limit follows that file (`stubs.active_buffer_seconds`). See [test-harness.md](test-harness.md).
+
+## States
+
+| Field | Holds | Legal values |
+|-------|-------|--------------|
+| `S.performance_setting` | the setting as `performance.data` holds it (read from the file on first use) | `{performance, buffer_seconds}` from the choices, or nil until read |
+| `S.performance_start_setting` | the setting this start used, copied by `read_active` | the same shape, never changed after the start |
+| `S.performance` | the tier the engine runs (`performance_active.data`) | a tier record, never written by `set_setting` |
+
+The setting differs from the start setting only after a successful `set_setting` (SETUP then shows `(next start)`). The one transition is `set_setting`: it changes `S.performance_setting` only after `performance.data` is in place, so the cache never names a value the file lacks.
