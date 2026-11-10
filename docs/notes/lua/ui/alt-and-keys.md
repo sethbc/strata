@@ -15,7 +15,7 @@ The fields: `S.key_press_page[n]` (the page key `n` went down on, nil when up), 
 | down, plain | the page | nil |
 | down, ALT | the page | true |
 
-Legal: any of the three per key, with `S.alt_held` either way (K1 may come up before the key). Never an ALT press without a press page.
+Legal: any of the three per key, with `S.alt_held` either way (K1 may come up before the key). A page change takes a key to up (its marks forgotten) while the physical key is still down, so its release then does nothing. Never an ALT press without a press page.
 
 Transitions, one function each:
 - `key(n, 1)` and `key(n, 0)` in `strata.lua`: up to down (plain or ALT by `S.alt_held`) and back to up.
