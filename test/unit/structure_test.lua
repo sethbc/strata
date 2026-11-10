@@ -1077,26 +1077,54 @@ local function sc_function_body(text, name)
   return stripped:match("%b{}", start)
 end
 
+-- What every while loop in the function body breaks of the rule: its
+-- condition compares names and numbers only, and its body holds only
+-- `<file>.writeData(<name>)` (a chunk built before the loop) and the `left`
+-- decrement, so no call of any kind can build a chunk inside it
 local function constant_chunk_loop_findings(body)
-  local found = {}
-  local condition, loop = (body or ""):match("while%s*(%b{})%s*(%b{})")
-  if not loop then return { "no while loop" } end
-  for _, pattern in ipairs({ "repeating%.%(", "Signal%.newClear", "FloatArray%.newClear", "%(0%s*%.%." }) do
-    if (condition .. loop):find(pattern) then table.insert(found, pattern) end
+  local found, loops, writes = {}, 0, 0
+  for condition, loop in (body or ""):gmatch("while%s*(%b{})%s*(%b{})") do
+    loops = loops + 1
+    if not condition:sub(2, -2):match("^[%s%w_<>=]*$") then
+      table.insert(found, "condition " .. condition)
+    end
+    for statement in loop:sub(2, -2):gmatch("[^;]+") do
+      statement = statement:match("^%s*(.-)%s*$")
+      if statement:match("^[%a_][%w_]*%.writeData%(%s*[%a_][%w_]*%s*%)$") then
+        writes = writes + 1
+      elseif statement ~= "" and not statement:match("^left%s*=%s*left%s*%-%s*[%w_]+$") then
+        table.insert(found, statement)
+      end
+    end
   end
-  if not loop:find("writeData%(") then table.insert(found, "the loop writes nothing") end
+  if loops == 0 then table.insert(found, "no while loop") end
+  if writes == 0 then table.insert(found, "no loop writes a chunk built before it") end
   return found
 end
 
 test("the engine check builds a constant file's chunk once, not per chunk (#207)", function()
   local old = "{ arg file, frames, values;\n    var left = frames;\n    while { left > 0 } {\n"
     .. "        file.writeData(repeating.(left.min(65536) * values.size, values));\n        left = left - 65536;\n    };\n}"
+  local fixed = "{ var full = repeating.(n, values), left = frames;\n"
+    .. "    while { left >= chunkFrames } { file.writeData(full); left = left - chunkFrames };\n"
+    .. "    if (left > 0) { file.writeData(repeating.(left * values.size, values)) };\n}"
   assert_true(#constant_chunk_loop_findings(old) > 0, "caught: a chunk built in the loop")
+  for _, built in ipairs({ "Signal.fill(n, { 0 })", "Array.fill(n, 0)", "stereoOf.(a, b)", "periodic.(p, 0, n)",
+    "noise.(n, 1)", "values.dup(n)", "values.collect(_.neg)" }) do
+    local loop = "{ while { left > 0 } { file.writeData(" .. built .. "); left = left - 65536 } }"
+    assert_true(#constant_chunk_loop_findings(loop) > 0, "caught: " .. built .. " in the loop")
+  end
+  assert_true(#constant_chunk_loop_findings(fixed .. "\nwhile { left > 0 } { file.writeData(noise.(n, 1)) }") > 0,
+    "caught: a chunk built in a second while loop")
+  assert_true(#constant_chunk_loop_findings("{ while { left > 0 } { file.writeData(full); full = noise.(n, 1) } }") > 0,
+    "caught: a chunk built beside the write")
+  assert_equal(table.concat(constant_chunk_loop_findings(fixed), ", "), "", "allowed: one chunk built before the loop")
   local file = assert(io.open(repo_root .. "/test/engine_check.scd", "r"))
   local text = file:read("*a")
   file:close()
   local body = sc_function_body(text, "writeConstantFrames")
-  assert_true(body ~= nil, "test/engine_check.scd defines writeConstantFrames")
+  assert_true(body ~= nil, "test/engine_check.scd: writeConstantFrames could not be found or parsed "
+    .. "(expected `var writeConstantFrames = { ... };` at the start of a line)")
   local findings = constant_chunk_loop_findings(body)
   assert_equal(#findings, 0, "writeConstantFrames' loop builds no chunk (found " .. table.concat(findings, ", ") .. ")")
 end)
