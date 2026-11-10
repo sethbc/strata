@@ -257,6 +257,8 @@
         recordSynths[index] = nil;
         if (take.notNil) {
             state[\takes][index] = nil;
+            // a stop that was sent but never armed leaves no frame count to await
+            if (stopReplies[index] == take[\change]) { stopReplies[index] = nil };
             this.reportRecordState(index, take[\number], 3);
         };
         // its take may have just completed (sendToSynth); free(false) marks

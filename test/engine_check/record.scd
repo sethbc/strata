@@ -867,8 +867,36 @@ test.("record: an armed recording stopped before it starts keeps nothing", {
     before = engine.bufferFrames[1];
     h.command(\stopRecord, 1);
     settle.(0.1);
-    check.((before == 0) and: { engine.bufferFrames[1] == 0 } and: { engine.recordSynths[1].isNil },
-        "record: an armed recording stopped before it starts keeps nothing (before %, after %)".format(before, engine.bufferFrames[1]));
+    check.((before == 0) and: { engine.bufferFrames[1] == 0 } and: { engine.recordSynths[1].isNil }
+        and: { engine.stopReplies[1].isNil and: { engine.slotRecording(1).not } },
+        "record: an armed recording stopped before it starts keeps nothing (before %, after %, stopReplies %)".format(before, engine.bufferFrames[1], engine.stopReplies[1]));
+});
+test.("record: a bad load after an armed take was stopped cancels nothing", {
+    var changes, start;
+    reset.(1);
+    record.(1, 0.3, 1.0, 0, 0, 0.9);
+    settle.(0.1);
+    h.command(\stopRecord, 1);
+    settle.(0.1);
+    changes = engine.slotChanges[1];
+    start = nowReports.value;
+    h.command(\loadBuffer, 1, h.tempDir +/+ "no-such-file-261.wav", 0);
+    settle.(0.1);
+    check.((engine.slotChanges[1] == changes) and: { reportsFor.(1, start).isEmpty },
+        "record: a bad load after an armed take was stopped cancels nothing (changes % -> %, reports %)".format(changes, engine.slotChanges[1], reportsFor.(1, start)));
+});
+test.("record: a second stopRecord on an armed take changes nothing", {
+    var changes;
+    reset.(1);
+    record.(1, 0.3, 1.0, 0, 0, 0.9);
+    settle.(0.1);
+    changes = engine.slotChanges[1];
+    h.command(\stopRecord, 1);
+    h.command(\stopRecord, 1);
+    settle.(0.1);
+    check.((engine.slotChanges[1] == (changes + 1)) and: { engine.stopReplies[1].isNil }
+        and: { engine.recordSynths[1].isNil } and: { engine.bufferFrames[1] == 0 },
+        "record: a second stopRecord on an armed take changes nothing (changes % -> %, stopReplies %)".format(changes, engine.slotChanges[1], engine.stopReplies[1]));
 });
 test.("record: a take with no delay or threshold reports recording and ended, never armed", {
     var start = nowReports.value, states;
