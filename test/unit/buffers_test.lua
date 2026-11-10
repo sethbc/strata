@@ -533,7 +533,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   io.open(scratch_take_path(5), "w"):close()
   cleanup()
   local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
-  assert_equal(saved.version, 1, "format version")
+  assert_equal(saved.version, 2, "format version")
   for slot = 1, 8 do
     local expected = ({ [3] = loaded_file, [5] = scratch_take_path(5) })[slot] or ""
     assert_equal(saved.paths[slot], expected, "slot " .. slot .. " path")
@@ -951,6 +951,273 @@ test("a standard tier never checks a load, whatever the file", function()
   context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
   load_buffer(1, "/tmp/long.wav")
   assert_equal(buffers[1].checking_from, nil, "standard slots end at 16 s: the engine checks at once")
+end)
+
+-- 3.3's files: the start point of a long file, trim and buffers.data v2
+
+-- Register a 60 s stereo file at 48 kHz and load it into slot 1 (or slot)
+local function load_long_file(context, slot, path)
+  path = path or "/tmp/long60.wav"
+  context.audio.register(path, { channels = 2, frames = 48000 * 60, rate = 48000 })
+  load_buffer(slot or 1, path)
+  context.clear_engine_calls()
+  return path
+end
+
+-- Make lib/record.lua report a recording of this kind in slot, until restore()
+local function fake_record_state(slot, kind)
+  local records = local_value("S").lib.record
+  local original = records.state
+  records.state = function(asked)
+    if asked == slot then return { kind = kind, phase = "recording" } end
+    return original(asked)
+  end
+  return function() records.state = original end
+end
+
+test("loading a file keeps its sample rate and length, a start point of 0", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_long_file(context, 1)
+  assert_equal(buffers[1].start, 0); assert_equal(buffers[1].sample_rate, 48000)
+  assert_near(buffers[1].file_seconds, 60, 1e-9)
+  load_buffer(2, "/tmp/unreadable.wav")
+  assert_equal(buffers[2].file_seconds, nil, "a file audio.file_info cannot open has no length")
+  assert_equal(buffers[2].sample_rate, nil)
+end)
+
+test("a long file's start reloads 0.3 s after the last set_start", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib = local_value("S").lib.buffers
+  local path = load_long_file(context, 1)
+  buffers_lib.set_start(1, 12.0)
+  context.clock.run_for(0.1); buffers_lib.set_start(1, 12.0)
+  context.clock.run_for(0.1); buffers_lib.set_start(1, 12.0)
+  context.clock.run_for(0.25)
+  assert_equal(#context.calls_named("loadBuffer"), 0, "not yet: 0.25 s after the last call")
+  context.clock.run_for(0.1)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "one reload for the three calls")
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], path); assert_near(loads[1].args[3], 12.0, 1e-9)
+  assert_near(local_value("buffers")[1].start, 12.0, 1e-9)
+  context.clock.run_for(2)
+  assert_equal(#context.calls_named("loadBuffer"), 1, "and no more")
+end)
+
+test("the start clamps to the file's length less the slot's", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib, buffers = local_value("S").lib.buffers, local_value("buffers")
+  load_long_file(context, 1)
+  buffers_lib.set_start(1, 50); assert_near(buffers[1].start, 44.0, 1e-9)
+  buffers_lib.set_start(1, -3); assert_equal(buffers[1].start, 0)
+  -- a file that fits the slot has no start to move
+  context.audio.register("/tmp/short.wav", { channels = 2, frames = 48000 * 5, rate = 48000 })
+  load_buffer(2, "/tmp/short.wav"); buffers_lib.set_start(2, 3); assert_equal(buffers[2].start, 0)
+  buffers_lib.set_start(0, 3); buffers_lib.set_start(9, 3)   -- invalid slots do nothing
+  -- a slot without a file
+  buffers_lib.set_start(3, 3); assert_equal(buffers[3].start, 0)
+end)
+
+test("a recording, a clear or another file sets the start back to 0", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib, buffers = local_value("S").lib.buffers, local_value("buffers")
+  load_long_file(context, 1)
+  buffers_lib.set_start(1, 12.0)
+  local restore = fake_record_state(1, "take")
+  buffers_lib.recording_started(1)
+  restore()
+  assert_equal(buffers[1].start, 0); assert_equal(buffers[1].sample_rate, nil); assert_equal(buffers[1].file_seconds, nil)
+  load_long_file(context, 1); buffers_lib.set_start(1, 12.0)
+  clear_buffer(1); assert_equal(buffers[1].start, 0); assert_equal(buffers[1].file_seconds, nil)
+  load_long_file(context, 1); buffers_lib.set_start(1, 12.0)
+  context.audio.register("/other.wav", { channels = 2, frames = 48000 * 20, rate = 48000 })
+  context.clear_engine_calls()
+  load_buffer(1, "/other.wav")
+  local load = context.calls_named("loadBuffer")[1]
+  assert_equal(load.args[2], "/other.wav"); assert_equal(load.args[3], 0, "another file starts at 0")
+  assert_equal(buffers[1].start, 0)
+  -- a playable recording leaves the file's rate and length alone
+  load_long_file(context, 2); buffers_lib.set_start(2, 12.0)
+  restore = fake_record_state(2, "playable")
+  buffers_lib.recording_started(2)
+  restore()
+  assert_equal(buffers[2].start, 0); assert_equal(buffers[2].sample_rate, 48000)
+end)
+
+test("a recording, a clear or a load inside the 0.3 s cancels the pending start reload", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib = local_value("S").lib.buffers
+  local function pending_then(action)
+    load_long_file(context, 1)
+    buffers_lib.set_start(1, 12.0)
+    context.clock.run_for(0.1)
+    action()
+    context.clock.run_for(1)
+  end
+  local restore = fake_record_state(1, "take")
+  pending_then(function() buffers_lib.recording_started(1) end)
+  restore()
+  assert_equal(#context.calls_named("loadBuffer"), 0, "a recording cancels it")
+  pending_then(function() clear_buffer(1) end)
+  assert_equal(#context.calls_named("loadBuffer"), 0, "a clear cancels it")
+  context.clear_engine_calls()
+  pending_then(function() load_buffer(1, "/other.wav") end)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "a load replaces it")
+  assert_equal(loads[1].args[2], "/other.wav"); assert_equal(loads[1].args[3], 0)
+end)
+
+test("set_start does nothing while the slot records", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib, buffers = local_value("S").lib.buffers, local_value("buffers")
+  load_long_file(context, 1)
+  local restore = fake_record_state(1, "playable")
+  buffers_lib.set_start(1, 12.0)
+  context.clock.run_for(1)
+  restore()
+  assert_equal(buffers[1].start, 0); assert_equal(#context.calls_named("loadBuffer"), 0)
+end)
+
+test("cleanup cancels a pending start reload", function()
+  local context = load_strata(); finish_startup(context)
+  load_long_file(context, 1)
+  local_value("S").lib.buffers.set_start(1, 12.0)
+  cleanup()
+  assert_equal(context.clock.pending_count(), 0)
+  context.clock.run_for(1)
+  assert_equal(#context.calls_named("loadBuffer"), 0)
+end)
+
+test("a failed load during a playable recording restores the slot", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2008)
+  assert_true(buffers[3].loaded)
+  local restore = fake_record_state(3, "playable")
+  buffers[3].recording = true
+  load_buffer(3, "/tmp/bad.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 2))
+  restore()
+  assert_equal(buffers[3].name, "drone.wav"); assert_true(buffers[3].loaded)
+  assert_equal(buffers[3].path, "/tmp/drone.wav")
+  -- a replace take still leaves it empty
+  context = load_strata(); finish_startup(context)
+  buffers = local_value("buffers")
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2008)
+  record_buffer(3)
+  load_buffer(3, "/tmp/bad.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 2))
+  assert_equal(buffers[3].name, "empty", "as in 3.2")
+  assert_true(not buffers[3].loaded)
+end)
+
+test("a restored start is clamped to the file's current length", function()
+  local subdir = "data-clamp-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  util.make_dir(context.audio_dir)
+  local path = context.audio_dir .. "shrunk.wav"
+  io.open(path, "w"):close()
+  context.audio.register(path, { channels = 2, frames = 48000 * 60, rate = 48000 })
+  load_buffer(1, path)
+  local_value("S").lib.buffers.set_start(1, 50)
+  cleanup()
+  -- the file was replaced by a 30 s one: 16 s slots leave starts up to 14 s
+  context = load_strata({ data_subdir = subdir, before_init = function(c)
+    c.audio.register(path, { channels = 2, frames = 48000 * 30, rate = 48000 })
+  end })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1); assert_near(loads[1].args[3], 14, 1e-9)
+  assert_near(local_value("buffers")[1].start, 14, 1e-9)
+end)
+
+test("a failed load puts the slot's start back too", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_long_file(context, 1)
+  local_value("S").lib.buffers.set_start(1, 12.0)
+  context.clock.run_for(0.4)
+  load_buffer(1, "/tmp/bad.wav")
+  assert_equal(buffers[1].start, 0)
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))
+  assert_near(buffers[1].start, 12.0, 1e-9, "the start that file had")
+  assert_near(buffers[1].file_seconds, 60, 1e-9)
+end)
+
+-- Put voice voice_idx on buffer slot with a loop
+local function loop_voice(voice_idx, slot, start, length)
+  local S = local_value("S")
+  S.voices[voice_idx].source = S.constants.SOURCE_SYNTH + slot
+  S.voices[voice_idx].extras.loop_start = start
+  S.voices[voice_idx].extras.loop_length = length
+end
+
+test("save_buffer_loop saves the selected voice's loop region", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  loop_voice(2, 1, 0.25, 0.5)
+  S.selected_voice = 2
+  context.clear_engine_calls()
+  assert_true(save_buffer_loop(1))
+  local call = context.calls_named("saveBuffer")[1]
+  assert_equal(call.args[1], 0)
+  assert_true(call.args[2]:match("/strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf1%-loop%.wav$") ~= nil, call.args[2])
+  assert_near(call.args[3], 0.25, 1e-9); assert_near(call.args[4], 0.5, 1e-9)
+  -- its result flashes the loop wording
+  context.polls.fire("bufferSaveResult", (1 * 2) * 8 + 0)
+  show_page("BUFFER")
+  assert_equal(S.lib.ui_flash.text("hints"), "saved buf 1 loop")
+end)
+
+test("save_buffer_loop falls back to the lowest voice on the slot, then the whole slot", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(2, "/tmp/a.wav"); context.polls.fire("bufferState", 1008)
+  loop_voice(4, 2, 0.5, 0.25); loop_voice(6, 2, 0.1, 0.9)
+  S.selected_voice = 1
+  context.clear_engine_calls()
+  assert_true(save_buffer_loop(2))
+  local call = context.calls_named("saveBuffer")[1]
+  assert_equal(call.args[1], 1); assert_near(call.args[3], 0.5, 1e-9); assert_near(call.args[4], 0.25, 1e-9)
+  S.voices[4].source = S.constants.SOURCE_SYNTH; S.voices[6].source = S.constants.SOURCE_SYNTH
+  context.clear_engine_calls()
+  assert_true(save_buffer_loop(2))
+  call = context.calls_named("saveBuffer")[1]
+  assert_equal(call.args[3], 0); assert_equal(call.args[4], 1, "no voice reads the slot: all of it")
+  -- an empty slot and an invalid one save nothing
+  context.clear_engine_calls()
+  assert_equal(save_buffer_loop(3), false); assert_equal(save_buffer_loop(9), false)
+  assert_equal(#context.calls_named("saveBuffer"), 0)
+end)
+
+test("buffers.data saves version 2 with starts and loads version 1 with starts 0", function()
+  local subdir = "data-v2-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  util.make_dir(context.audio_dir)
+  local path = context.audio_dir .. "long.wav"
+  io.open(path, "w"):close()
+  context.audio.register(path, { channels = 2, frames = 48000 * 60, rate = 48000 })
+  load_buffer(1, path)
+  local_value("S").lib.buffers.set_start(1, 12.0)
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.version, 2); assert_equal(saved.paths[1], path)
+  assert_near(saved.starts[1], 12.0, 1e-9)
+  for slot = 2, 8 do assert_equal(saved.starts[slot], 0, "slot " .. slot .. " start") end
+  context = load_strata({ data_subdir = subdir })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1); assert_equal(loads[1].args[2], path); assert_near(loads[1].args[3], 12.0, 1e-9)
+  -- a version 1 file loads with every start 0
+  local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+  file:write(tabutil_text({ version = 1, paths = { path } })); file:close()
+  context = load_strata({ data_subdir = subdir })
+  loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1); assert_equal(loads[1].args[3], 0, "no start in version 1")
+  -- a version 2 file with a damaged starts list loads with starts 0
+  file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+  file:write(tabutil_text({ version = 2, paths = { path }, starts = { "x" } })); file:close()
+  context = load_strata({ data_subdir = subdir })
+  assert_equal(context.calls_named("loadBuffer")[1].args[3], 0)
 end)
 
 end
