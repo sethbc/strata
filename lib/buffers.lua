@@ -737,19 +737,19 @@ return function(S)
   M.buffer_state_changed = buffer_state_changed
   M.BUFFER_SETTLE = BUFFER_SETTLE
   M.display_changed = buffer_display_changed
-  -- A recordBuffer was just sent for the slot (lib/record.lua calls it, after
-  -- it set S.lib.record.state): the slot's start is 0 again and its pending
-  -- start reload is canceled. A replace take (anything but a playable
-  -- recording) is at the server rate and has no file, so it forgets the
-  -- file's rate and length too; a playable one keeps the slot's audio.
-  function M.recording_started(slot)
+  -- A recordBuffer was just sent for the slot (lib/record.lua's record_buffer
+  -- calls it, before it sets buffer.recording, so it says the take's kind):
+  -- the pending start reload is canceled either way. A replace take
+  -- (`playable` false or nil) is at the server rate and has no file, so the
+  -- start is 0 and the file's rate and length are forgotten; a playable
+  -- recording keeps the slot's audio, so it keeps all three until it ends
+  -- (lib/record.lua's "ended" report) or is canceled (it keeps them).
+  function M.recording_started(slot, playable)
     if not valid_buffer_slot(slot) then return end
     cancel_start_reload(slot)
-    local buffer = S.buffers[slot]
-    buffer.start = 0
-    local record_state = S.lib.record.state(slot)
-    if not (record_state and record_state.kind == "playable") then
-      buffer.sample_rate, buffer.file_seconds = nil, nil
+    if not playable then
+      local buffer = S.buffers[slot]
+      buffer.start, buffer.sample_rate, buffer.file_seconds = 0, nil, nil
     end
   end
 

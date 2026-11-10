@@ -8,6 +8,7 @@
 - A save is called saved (console `saved to <path>`, BUFFER `saved buf <n>`) only from its `bufferSaveResult` report, never when `save_buffer` sends it (#127). `buffer_save_result` flashes only for the slot's newest save (by save number), so a late report never speaks for a newer save.
 - `BUFFER_STATE_STRIDE` (top of `lib/buffers.lua`, at the start of a line, where a test finds it) equals the engine's `bufferStateStride`.
 - `BUFFER_DATA_VERSION` is 2 (`starts`); version 1 files still load, with every start 0. A start reload (`set_start`) is canceled by a load, clear or recording in its slot, and never runs while the slot records.
+- A playable recording (a dub) keeps the file's `start`, `sample_rate` and `file_seconds` until its "ended" report makes the slot `take <n>` (start 0, neither field); a canceled one keeps all three (#244). `recording_started` is told the take's kind (`record_buffer` calls it before it sets `recording`, so `S.lib.record.state` cannot say).
 - `buffer_state_changed` marks the slot's peaks stale (`S.lib.waveforms.stale`) when its seconds change to a non-zero value, and reads nothing itself.
 - Lengths come from `S.performance.buffer_seconds` (16 s standard, up to 300 s high), never a constant: `record_buffer` caps a take at it and the BUFFER page sizes its seconds column from it.
 
@@ -31,8 +32,21 @@ On the high tier a slot holds up to `S.performance.buffer_seconds` (60, 120 or 3
 
 `S.buffers[slot].start` (seconds into the slot's file, 0 for a new file) is sent with every load of the slot (`engine.loadBuffer(slot, path, start)`), kept in buffers.data and put back by a failed load (`buffer_state_before_load` and `apply_buffer_state` carry `start`, `sample_rate` and `file_seconds` with the rest). `sample_rate` and `file_seconds` come from `audio.file_info` at each load (nil for a file it cannot open, and after a take or a clear).
 - `S.lib.buffers.set_start(slot, seconds)` clamps to `[0, file_seconds - S.performance.buffer_seconds]` and reloads the file there `FILES.restart_seconds` (0.3 s) after the last call: one clock per slot (`M.start_reload_clocks`), restarted by each call, canceled by `load_buffer`, `clear_buffer`, `recording_started` and its cleanup step (`CLEANUP_ORDER.buffer_start_reload`), and cleared by the clock itself before it calls `load_buffer`. It does nothing for a file that fits the slot, for a slot with no file length, and while `S.lib.record.state(slot)` is non-nil.
-- `S.lib.buffers.recording_started(slot)` (lib/record.lua's `record_buffer` calls it after it sets the state) sets the start to 0 and cancels the pending reload; a replace take (any state but `kind == "playable"`) also forgets `sample_rate` and `file_seconds`, since a take is at the server rate and has no file.
+- `S.lib.buffers.recording_started(slot, playable)` (lib/record.lua's `record_buffer` calls it after it sends `recordBuffer`, with the `playable` it computed) cancels the pending reload either way. A replace take (`playable` false or nil) sets the start to 0 and forgets `sample_rate` and `file_seconds`, since a take is at the server rate and has no file; a playable recording leaves all three, since the slot keeps the file's audio. Its "ended" report (`record_state_changed`, `docs/notes/lua/record.md`) sets them as a replace take does; its "canceled" report changes none of them.
 - `buffer_state_before_load(slot)` keeps the slot's state during a playable recording, so a failed load restores the slot as it was; during a replace take the slot still comes back empty.
+
+### States
+
+The file fields across a recording (`S.buffers[slot]`; `recording` and the take's kind are `lib/record.lua`'s):
+
+| State | `start` | `sample_rate`, `file_seconds` | Entered by |
+|-------|---------|-------------------------------|------------|
+| a file | where the file is read from (0 for a new file) | the file's, from `audio.file_info` (nil if it cannot open) | `load_buffer` |
+| a replace take recording | 0 | nil | `recording_started(slot, false)` |
+| a playable recording (dub) | the file's, unchanged | the file's, unchanged | `recording_started(slot, true)` |
+| a take (`take <n>`) or empty | 0 | nil | the take settling, a dub's "ended" report, `clear_buffer` |
+
+A dub's "canceled" report goes back to the file state with the fields as they were; `set_start` acts only in the file state.
 
 ## Trim
 

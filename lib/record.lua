@@ -140,7 +140,7 @@ return function(S)
       takes[slot] = {number = buffer.records_sent, kind = playable and "playable" or "take",
         phase = armed and "armed" or "recording", started_at = (not armed) and util.time() or nil,
         seconds = seconds, loop = loop}
-      S.lib.buffers.recording_started(slot)
+      S.lib.buffers.recording_started(slot, playable)
       buffer.recording = true
       buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
       buffer.restoring = false
@@ -223,6 +223,8 @@ return function(S)
         buffer.recording = false
         buffer.name = "take " .. slot
         buffer.path = scratch_take_path(slot)
+        -- the take is the scratch file at the server rate, read from its start
+        buffer.start, buffer.sample_rate, buffer.file_seconds = 0, nil, nil
         buffer.loaded = buffer.seconds > 0
         set_buffer_file_param(slot, _path.audio)
         S.lib.waveforms.stale(slot)
