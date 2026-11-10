@@ -133,7 +133,7 @@
         var releasing = releasingSynths[voice];
         var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
         var stillReleasing = { arg key; var synth = releasing[key]; synth.notNil and: { synth.isPlaying } };
-        var superseded = List.new;
+        var superseded = List.new, scanRestart = [];
 
         if ((grainSource[voice] != 0) and: { stillReleasing.(voiceKey) }) {
             this.sendToSynth(releasing[voiceKey].releaseMsg(grainRelease));
@@ -155,15 +155,18 @@
         };
 
         // Grain synth: re-gated only if it was built for the current source
-        // (one built for another source is fading by now)
+        // (one built for another source is fading by now). A re-gated
+        // releasing slot reader restarts its scan, as a new one starts it
+        // at 0 (every grain start restarts the scan).
         if (synths[grainKey].isNil and: { stillReleasing.(grainKey) }) {
             synths[grainKey] = releasing.removeAt(grainKey);
+            if (synths[grainKey].defName.asSymbol == \strataGrainBuf) { scanRestart = [\t_scanReset, 1] };
         };
         if (synths[grainKey].isNil) {
             synths[grainKey] = this.startPlacedGrainSynth(voice);
         } {
             // with the slot as it is now: bufferChanged sends a releasing grain synth bufFrames 0 only
-            this.sendToSynth(synths[grainKey].setMsg(\gate, 1, *(this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice))));
+            this.sendToSynth(synths[grainKey].setMsg(\gate, 1, *(scanRestart ++ this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice))));
         };
 
         if (synths[modKey].isNil and: { stillReleasing.(modKey) }) {

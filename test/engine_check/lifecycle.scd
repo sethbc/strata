@@ -576,4 +576,73 @@ check.((0..(engine.numVoices - 1)).every({ arg voice;
     "lifecycle: ringReaders maps every ring grain synth to its voice (% readers)".format(engine.ringReaders.size));
 h.stopAllVoices;
 check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders empties as ring grain synths free");
+
+// Every grain start restarts the scan (design 3.3 §5.1). A slot whose left
+// channel is a staircase of its position and whose right channel is 1, so
+// the left / right ratio of a voice's grains is where they read (with no
+// pan spread or pan jitter, which would move the ratio).
+{
+    var voice = 1, slot = 7, grainKey = engine.grainKey(voice), posBus = Bus.control(server, 1);
+    var path = h.tempDir +/+ "lifecycle-scan.wav", saved = engine.grainControls[voice].copy;
+    var position, probe, frames, stepFrames, steps = 64, grain, moved, restarted, first;
+    SynthDef(\strataCheckRegateScan, { arg in, peaks;
+        var signal = In.ar(in, 2);
+        Out.kr(peaks, A2K.kr(RunningSum.ar(signal[0].abs, 960) / RunningSum.ar(signal[1].abs, 960).max(0.001)));
+    }).add;
+    server.sync;
+    h.writeTestFile(path, server.sampleRate, (2 * server.sampleRate).round.asInteger, [0, 0]);
+    command.(\loadBuffer, slot, path, 0);
+    h.waitFor({ engine.bufferFrames[slot] > 0 }, 3);
+    0.1.wait; server.sync;
+    frames = engine.bufferFrames[slot];
+    stepFrames = frames div: steps;
+    steps.do({ arg step; engine.buffersL[slot].fill(step * stepFrames, stepFrames, step / steps) });
+    engine.buffersR[slot].fill(0, frames, 1);
+    server.sync;
+    position = { h.readBus(posBus)[0] };
+    probe = Synth.before(engine.synths[engine.voiceMixKey(voice)], \strataCheckRegateScan,
+        [\in, engine.voicePathBus(voice, 1).index, \peaks, posBus.index]);
+    server.sync;
+    [\posSpread, 0, \panSpread, 0, \panJitter, 0, \bufPos, 0, \loopStart, 0, \loopLength, 1, \scrubRate, 0, \scanHold, 0, \bufScan, 0.5].pairsDo({ arg name, value;
+        command.(\setGrainParam, voice, name, value)
+    });
+    command.(\setGrainSource, voice, slot + 1);
+    server.sync;
+    command.(\voiceOn, voice, 200.0, 0.5, 0.0, 0.04, 200.0, 1.0);
+    server.sync;
+    0.15.wait;
+    first = position.value;
+    check.(first < 0.2, "lifecycle: a new grain synth's scan starts at 0 (the grains at %)".format(first));
+
+    1.2.wait;
+    moved = position.value;
+    grain = engine.synths[grainKey];
+    command.(\voiceOff, voice); server.sync;
+    0.05.wait;
+    command.(\voiceOn, voice, 200.0, 0.5, 0.0, 0.04, 200.0, 1.0); server.sync;
+    0.1.wait;
+    restarted = position.value;
+    check.((moved > 0.4) and: { engine.synths[grainKey] === grain } and: { restarted < 0.2 },
+        "lifecycle: a re-gated buffer voice restarts its scan (the grains at %, then %, % the same grain synth)"
+            .format(moved, restarted, if (engine.synths[grainKey] === grain) { "with" } { "NOT with" }));
+
+    // a running voice's voiceOn is no start: its scan goes on
+    1.2.wait;
+    moved = position.value;
+    command.(\voiceOn, voice, 200.0, 0.5, 0.0, 0.04, 200.0, 1.0); server.sync;
+    0.1.wait;
+    restarted = position.value;
+    check.((moved > 0.4) and: { restarted > (moved - 0.1) },
+        "lifecycle: a voiceOn on a running buffer voice keeps its scan (the grains at %, then %)".format(moved, restarted));
+
+    probe.free;
+    command.(\voiceOff, voice);
+    h.stopAllVoices;
+    command.(\setGrainSource, voice, 0);
+    command.(\clearBuffer, slot);
+    engine.grainControls[voice] = saved;
+    server.sync;
+    posBus.free;
+    File.delete(path);
+}.value;
 }
