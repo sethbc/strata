@@ -239,6 +239,22 @@ test("a scene recall that switches a running voice's source forgets its last rec
   assert_equal(S.lib.positions.last_recalled(1), nil, "the level-10 key is forgotten")
 end)
 
+test("a scene recall that switches a stopped voice's source forgets its last recalled bookmark", function()
+  local context, S = buffer_voices()
+  params:set("v1_source", 1)
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "voice 1 is stopped")
+  capture_scene(1)  -- voice 1 stopped, on the synth
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.positions.recall_bookmark(1, 2)
+  assert_equal(S.lib.positions.last_recalled(1), 2)
+  recall_scene(1, 0)
+  assert_equal(S.voices[1].source, 1, "the recall switched the source")
+  assert_true(not S.voices[1].active, "voice 1 is still stopped")
+  assert_equal(S.lib.positions.last_recalled(1), nil, "the mark is forgotten")
+  assert_equal(S.lib.positions.strip_level(1, 2), 6, "the key is an ordinary bookmark again")
+end)
+
 test("a row's LED levels are built once per instant and follow what changes in it", function()
   local _, S = buffer_voices()
   local positions = S.lib.positions

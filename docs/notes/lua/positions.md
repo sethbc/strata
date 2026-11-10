@@ -16,7 +16,7 @@
 
 `lib/positions.lua` (`S.lib.positions`): moving a voice's read position.
 
-**Jumps and bookmarks.** `jump`, `set_loop`, `recall_bookmark` (a jump to the bookmark; `last_recalled(v)` becomes n), `store_bookmark(v, n)` (the playhead, or `buf_pos` mapped into the loop when the voice is not running), `bookmark(v, n)`, `hold_scan(v, on, holder)` (a holder joins or leaves the voice's set; `setGrainParam(v - 1, "scanHold", 1 or 0)` when the set stops or starts being empty, sent while running; see States), `holds_scan(v, holder)` (whether that holder is in the voice's set; false for a bad voice: the arc rejoins by it). `scan_held(v)` and `scrub_rate(v)` are what `S.lib.playheads` reads.
+**Jumps and bookmarks.** `jump`, `set_loop`, `recall_bookmark` (a jump to the bookmark; `last_recalled(v)` becomes n, remembered with the voice's source, and reads nil once the voice's source differs, stopped or not, so a scene recall forgets it too), `store_bookmark(v, n)` (the playhead, or `buf_pos` mapped into the loop when the voice is not running), `bookmark(v, n)`, `hold_scan(v, on, holder)` (a holder joins or leaves the voice's set; `setGrainParam(v - 1, "scanHold", 1 or 0)` when the set stops or starts being empty, sent while running; see States), `holds_scan(v, holder)` (whether that holder is in the voice's set; false for a bad voice: the arc rejoins by it). `scan_held(v)` and `scrub_rate(v)` are what `S.lib.playheads` reads.
 
 **The glide.** `scrub_turned(v)` is called by the arc's ring 1 after each turn of the voice's `buf_pos` (BUFFER's arc, 2b). It ends a glide, records `buf_pos` with the time, and (unless `scrub_friction` is 100%, the ring is direct) starts a clock: after `SCRUB.release_seconds` (0.08 s) with no new turn, the speed over the last `SCRUB.window_seconds` (0.1 s), in loop fractions a second, is sent as `scrubRate` and decays every `1 / PLAYHEADS.update_hz` by `exp(-dt / tau)`, `tau = SCRUB.max_glide_seconds x (1 - friction / 100)` (4 s at 0%). Below `SCRUB.stop_rate` (0.001) it sends 0 and ends. The cleanup step `scrub_glide` (`CLEANUP_ORDER`, 124) stops every glide and releases every holder of every scan hold (one `scanHold 0` per held voice).
 
@@ -44,6 +44,15 @@ Any other combination is illegal (the `"scan holds"` invariant). Transitions:
 | held | held (another holder) | `hold_scan(v, true, holder)` or `hold_scan(v, false, holder)` with another holder left: nothing is sent |
 | held | not held | `hold_scan(v, false, holder)` by the last holder (`scanHold 0`); the cleanup step `scrub_glide`, through `hold_scan` per holder |
 | either | not held | the `bookmarks` record's `sync` (every voice sync: the set emptied, `scanHold 0` sent) |
+
+The last recalled bookmark, per voice (`recalled[v]`, a local of `lib/positions.lua`):
+
+| `recalled[v]` | Meaning |
+|---------------|---------|
+| nil | no mark |
+| `{bookmark, source}` | `recall_bookmark` ran with the voice on `source`; `last_recalled(v)` returns the bookmark only while `S.voices[v].source` is still `source` |
+
+Transitions: `recall_bookmark(v, n)` sets it; the grain-restart and source-change hooks clear it; a source changed any other way (a scene recall of a stopped voice) hides it through `last_recalled`.
 
 A strip's store, per port (the port's record in `S.lib.grid_core.port_state(port).positions`):
 
