@@ -44,7 +44,8 @@ test("include stub loads lib modules and honors overrides", function()
     .. " lfo_destinations = {}, fx_params = {} }, lib = {}, register_start = function() end,"
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
-    .. " register_source_change = function() end, register_scene_field = function() end } end" } }
+    .. " register_source_change = function() end, register_scene_field = function() end,"
+    .. " register_grain_restart = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
@@ -211,6 +212,7 @@ end)
 test("stub clock.advance is one time-ordered scheduler step and moves util.time (#27)", function()
   local context = load_strata()                  -- init's start-up clock sleeps STARTUP.voice_delay_seconds
   stop_frame_clock(); local_value("S").lib.waveforms.stop()                           -- (its 1/15 s ticks would come first)
+  clock.cancel(local_value("S").lib.playheads.clock_id())
   assert_true(STARTUP.voice_delay_seconds < 1, "this test needs the start-up clock to wake before the 1 s sleeps")
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
@@ -337,6 +339,7 @@ end)
 test("stub clock.advance_until fails at once when its coroutine is canceled or nothing is pending (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock(); local_value("S").lib.waveforms.stop()
+  clock.cancel(local_value("S").lib.playheads.clock_id())
   local ticker = clock.run(function() while true do clock.sleep(0.1) end end)
   local target = clock.run(function() clock.sleep(1) end)
   clock.run(function() clock.sleep(0.45); clock.cancel(target) end)
@@ -360,6 +363,7 @@ end)
 test("stub clock ties: equal wake times fire in event-slot order, a sync after a sleep (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock(); local_value("S").lib.waveforms.stop()
+  clock.cancel(local_value("S").lib.playheads.clock_id())
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
   -- a placeholder takes the lowest free slot and B the next; once the

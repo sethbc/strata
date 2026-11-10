@@ -35,6 +35,9 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 
 How buffers are saved, written to disk and restored at startup is described in [Saving and restoring buffers](sources-and-buffers.md#saving-and-restoring-buffers).
 
+## Positions (group)
+- Scrub friction (0-100%, default 100%): how far the arc's scrub ring keeps going when you let go of it. At 100% the ring moves the buffer position directly and stops with your finger; below it, a flick keeps the position moving in the same direction and slows down, for longer the lower the friction (about 4 s at 0%). Saved in PSETs, not in scenes
+
 ## MIDI (group)
 - MIDI device: the port Strata listens to (1-4, default 1)
 - MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
@@ -67,6 +70,7 @@ Each voice includes:
 - Quantize (off/on, default off), first, right after the voice's heading and above its freq, so a PSET sets it before the freq
 - Synthesis parameters (varies by voice type)
 - Source (synth, buf 1-8, input; default synth)
+- Bookmarks 1-4 (buffer voices; 0-1, default 0, 0.25, 0.5 and 0.75): saved positions in the slot, recalled from the grid. Kept in scenes (they fade like other values) and PSETs, never randomized or mutated ([voices and grains](voices-and-grains.md#bookmarks))
 - Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0)
 - Grain size
 - Grain density

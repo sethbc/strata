@@ -27,6 +27,10 @@ Each voice has its own granular processor (reading the voice's synth, a buffer o
 
 Every voice's grains read audio that is already there: a synth voice writes its synth into a 4-second loop of its own, an input voice reads the last seconds of the input, and a buffer voice reads its buffer. So a synth or input voice's grains start a few milliseconds in the past. Raising the pitch makes a grain read faster than the audio arrives, so it starts further back: at pitch 2 a grain length back, and at the extremes (pitch 4, 0.5 s grains) 1.5 s back. In triggered mode a grain instead stays close to the trigger: above pitch 2 it is shortened (at pitch 4 a 0.5 s grain lasts 0.17 s), so an accent never arrives late. Input voices now follow pitchbend and frequency cross-modulation, as buffer voices do.
 
+### Bookmarks
+
+A buffer voice has four bookmarks: saved positions in its slot (0-1 of the slot's length, shown with three decimals), starting at 0, 0.25, 0.5 and 0.75. They are the last rows of the VOICE page for a voice reading a buffer (see [VOICE](pages/voice.md)), so you can set one like any other row, and they are saved in scenes and PSETs (a scene fades them like any other value). A bookmark changes nothing until it is recalled: recalling jumps the voice's grains there (inside its loop, or, if the bookmark lies outside the loop, the loop becomes the whole slot first) and restarts its scan. A bookmark holds a place in the slot, so it means the same place if the loop changes. Randomize and mutations never touch them.
+
 ### Grain variation
 
 Each grain can differ from the one before it. These are the rows of the VOICE page's **variation** section (and PARAMETERS > voice n extras, except quantize, which is listed above the voice's freq); at their defaults every grain plays as in 3.1:

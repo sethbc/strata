@@ -533,7 +533,8 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "waveform loop", "buffer start reload", "buffer polls and timers", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+  "lfos", "playheads clock", "scan holds", "waveform loop", "buffer start reload", "buffer polls and timers",
+  "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -553,6 +554,8 @@ test("cleanup runs every registered step in today's order", function()
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
   header_flash("flash")
   S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.BUFFER)  -- its input meter polls run
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.positions.hold_scan(1, true)  -- a scan hold for cleanup to end
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -581,7 +584,8 @@ test("cleanup runs every registered step in today's order", function()
     { "pattern clock", S.pattern_clock }, { "scene sequencer", S.scene_sequencer_clock },
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
-    { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock } }
+    { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
+    { "playheads clock", S.lib.playheads.clock_id() } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")
@@ -602,6 +606,7 @@ test("cleanup runs every registered step in today's order", function()
   clock.cancel = function(id) observe(clock_steps[id] or ("clock " .. tostring(id))); return real_cancel(id) end
   watch_method(S.drift_metro, "stop", "drift metro")
   watch_method(S.mutation_metro, "stop", "mutation metro")
+  watch_method(S.lib.positions, "hold_scan", "scan holds")
   local real_set = params.set
   params.set = function(self, id, ...)
     if param_steps[id] then observe(param_steps[id]) end
@@ -687,6 +692,7 @@ local function start_steps()
     { "startup clock", voice_sync },
     { "frame clock", { "clock started" } },
     { "waveform loop", { "clock started" } },
+    { "playheads", { "clock started" } },
   }
 end
 

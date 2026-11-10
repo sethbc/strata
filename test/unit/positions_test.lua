@@ -1,24 +1,527 @@
 -- test/unit/positions_test.lua
--- The neutral lib/positions.lua: its functions answer as pinned and send
--- nothing until its Wave 1 package fills them
+-- lib/positions.lua: jumps, loops, bookmarks, the scrub glide and its
+-- friction, the grid's position row and bookmark strip
 -- Run alone: lua test/run.lua positions
 
 return function(h)
-local test, assert_equal, load_strata, local_value = h.test, h.assert_equal, h.load_strata, h.local_value
-local finish_startup = h.finish_startup
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
-test("the neutral positions answers as pinned and sends nothing", function()
-  local context = load_strata(); finish_startup(context)
+-- Voice 1 (running) and voice 2 (running) on slot 1, holding 16 s; voice 3
+-- (stopped) on slot 1 too
+local function buffer_voices()
+  local context = load_strata()
+  finish_startup(context)
   local S = local_value("S")
-  local positions = S.lib.positions
+  S.buffers[1].seconds = 16
+  for voice_idx = 1, 3 do params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1) end
   context.clear_engine_calls()
-  positions.jump(1, 0.5); positions.set_loop(1, 0, 1); positions.recall_bookmark(1, 1); positions.store_bookmark(1, 1)
-  positions.hold_scan(1, true); positions.scrub_turned(1); positions.grid_key(1, 1, 1, 16, 1); positions.strip_key(1, 1, 1, 1)
-  assert_equal(positions.grid_level(1, 1, 16), 0)
-  assert_equal(positions.strip_level(1, 1), 0)
-  assert_equal(positions.bookmark(1, 1), nil)
-  assert_equal(positions.last_recalled(1), nil)
+  return context, S
+end
+
+-- The setGrainParam values for one param name, in order, as {voice, value}
+local function grain_calls(context, name)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == name then table.insert(sent, {voice = call.args[1], value = call.args[3]}) end
+  end
+  return sent
+end
+
+local function last_grain(context, name, engine_voice)
+  local value
+  for _, each in ipairs(grain_calls(context, name)) do
+    if each.voice == engine_voice then value = each.value end
+  end
+  return value
+end
+
+local function loop_of(voice_idx)
+  return params:get("v" .. voice_idx .. "_loop_start"), params:get("v" .. voice_idx .. "_loop_length")
+end
+
+test("a jump inside the loop moves buf_pos and resets the scan", function()
+  local context, S = buffer_voices()
+  params:set("v1_loop_length", 0.5); params:set("v1_loop_start", 0.25)
+  context.clear_engine_calls()
+  S.lib.positions.jump(1, 0.5)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "(0.5 - 0.25) / 0.5")
+  local start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9); assert_near(length, 0.5, 1e-9)
+  assert_equal(#grain_calls(context, "t_scanReset"), 1, "one reset")
+  assert_equal(last_grain(context, "t_scanReset", 0), 1, "to voice 1")
+end)
+
+test("a jump outside the loop resets the loop to the whole slot", function()
+  local _, S = buffer_voices()
+  params:set("v1_loop_length", 0.5); params:set("v1_loop_start", 0.25)
+  S.lib.positions.jump(1, 0.9)
+  local start, length = loop_of(1)
+  assert_near(start, 0, 1e-9); assert_near(length, 1, 1e-9)
+  assert_near(params:get("v1_buf_pos"), 0.9, 1e-9)
+end)
+
+test("a stopped voice's jump sets its position and sends nothing", function()
+  local context, S = buffer_voices()
+  S.lib.positions.jump(3, 0.75)
+  assert_near(params:get("v3_buf_pos"), 0.75, 1e-9)
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "no reset for a stopped voice")
+  S.lib.positions.jump(1, 2)
+  assert_near(params:get("v1_buf_pos"), 1, 1e-9, "a position past the slot stops at its end")
+end)
+
+test("set_loop sets the start, then the length, then jumps to the start", function()
+  local context, S = buffer_voices()
+  S.lib.positions.set_loop(1, 0.25, 0.5)
+  local start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9); assert_near(length, 0.25, 1e-9)
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9)
+  assert_equal(#grain_calls(context, "t_scanReset"), 1)
+end)
+
+test("a two-key press sets the loop from the lower cell's start to the higher cell's end", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  positions.grid_key(1, 1, 5, 16, 1)
+  context.clear_engine_calls()
+  positions.grid_key(1, 1, 9, 16, 1)
+  local start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9); assert_near(length, 0.3125, 1e-9)
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "the jump to the loop's own start")
+  assert_equal(#grain_calls(context, "t_scanReset"), 1)
+  positions.grid_key(1, 1, 9, 0); positions.grid_key(1, 1, 5, 0)
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+
+  positions.grid_key(1, 1, 9, 16, 1)
+  positions.grid_key(1, 1, 5, 16, 1)
+  start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9, "the same loop with the higher key first"); assert_near(length, 0.3125, 1e-9)
+end)
+
+local function release_all(positions, cells, voice_idx, ...)
+  for _, cell in ipairs({...}) do positions.grid_key(1, voice_idx, cell, cells, 0) end
+end
+
+test("a press on a two-key loop's edge cells stays inside it; the next cell resets it", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  local function pair(cells, lo, hi)
+    params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+    positions.grid_key(1, 1, lo, cells, 1); positions.grid_key(1, 1, hi, cells, 1)
+    release_all(positions, cells, 1, hi, lo)
+    local start, length = loop_of(1)
+    assert_near(start, (lo - 1) / cells, 1e-9, "pair " .. lo .. "-" .. hi .. " start")
+    assert_near(length, (hi - lo + 1) / cells, 1e-9, "pair " .. lo .. "-" .. hi .. " length")
+
+    positions.grid_key(1, 1, lo, cells, 1); release_all(positions, cells, 1, lo)
+    local kept_start, kept_length = loop_of(1)
+    assert_near(kept_start, start, 1e-9, "press lo keeps the start"); assert_near(kept_length, length, 1e-9)
+    assert_near(params:get("v1_buf_pos"), 0, 1e-6, "lo is the loop's start")
+
+    positions.grid_key(1, 1, hi, cells, 1); release_all(positions, cells, 1, hi)
+    kept_start, kept_length = loop_of(1)
+    assert_near(kept_start, start, 1e-9, "press hi keeps the start"); assert_near(kept_length, length, 1e-9)
+    assert_near(params:get("v1_buf_pos"), (hi - lo) / (hi - lo + 1), 1e-6, "hi is the loop's last cell")
+
+    if hi < cells then
+      positions.grid_key(1, 1, hi + 1, cells, 1); release_all(positions, cells, 1, hi + 1)
+      local reset_start, reset_length = loop_of(1)
+      assert_near(reset_start, 0, 1e-9, "the next cell resets the loop (" .. lo .. "-" .. hi .. ")")
+      assert_near(reset_length, 1, 1e-9)
+    end
+  end
+  for lo = 1, 15 do
+    for hi = lo + 1, 16 do pair(16, lo, hi) end
+  end
+  pair(8, 3, 6)
+end)
+
+test("a scan hold or a held position key ends when its grid changes page or goes away", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(last_grain(context, "scanHold", 0), 1, "the hold key holds the scan")
+  context.clock.run_for(0.2)
+  assert_equal(#grain_calls(context, "scanHold"), 1, "still held: nothing more sent")
+  S.lib.grid_core.set_page(1, 1)
+  context.clock.run_for(0.1)
+  assert_equal(last_grain(context, "scanHold", 0), 0, "a page change ends it within a tick")
+  assert_equal(#grain_calls(context, "scanHold"), 2, "sent once")
+  context.clock.run_for(0.5)
+  assert_equal(#grain_calls(context, "scanHold"), 2, "and not again")
+
+  -- the grid goes away
+  S.lib.grid_core.set_page(1, 5)
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "hold", 1)
+  context.grid.unplug(1)
+  context.clock.run_for(0.1)
+  assert_equal(last_grain(context, "scanHold", 0), 0, "a removed grid ends it")
+  assert_equal(positions.strip_level(1, "hold"), 4, "and the key is no longer lit")
+
+  -- a held position key ends with the page too
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  positions.grid_key(1, 1, 5, 16, 1)
+  S.lib.grid_core.set_page(1, 1)
+  context.clock.run_for(0.1)
+  S.lib.grid_core.set_page(1, 5)
+  positions.grid_key(1, 1, 9, 16, 1)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "a jump to cell 9")
+  local start, length = loop_of(1)
+  assert_near(start, 0, 1e-9, "the loop unchanged"); assert_near(length, 1, 1e-9)
+end)
+
+test("only buffer voices answer position keys; a stopped one keeps its new position", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  params:set("v1_source", 1)
+  context.clear_engine_calls()
+  local before = params:get("v1_buf_pos")
+  positions.grid_key(1, 1, 5, 16, 1)
+  assert_equal(params:get("v1_buf_pos"), before, "a synth voice's position is unchanged")
   assert_equal(#context.engine_calls, 0, "no engine call")
+  positions.grid_key(1, 1, 5, 16, 0)
+  positions.grid_key(1, 3, 5, 16, 1)
+  assert_near(params:get("v3_buf_pos"), 0.25, 1e-9, "a stopped buffer voice moves")
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "and sends no reset")
+  positions.grid_key(1, 8, 5, 16, 1)
+  positions.grid_key(1, 1, 0, 16, 1)
+  positions.grid_key(1, 3, 17, 16, 1)
+  assert_near(params:get("v3_buf_pos"), 0.25, 1e-9, "a cell outside the row is ignored")
+end)
+
+test("a position press selects the grid voice on the 128s and the 64, never on the 256", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  local plugged = {[1] = {16, 16}, [2] = {16, 8}, [3] = {8, 16}, [4] = {8, 8}}
+  for port, size in pairs(plugged) do context.grid.plug(port, size[1], size[2]) end
+  S.grid_voice_select = 6
+  positions.grid_key(1, 3, 5, 16, 1); positions.grid_key(1, 3, 5, 16, 0)
+  assert_equal(S.grid_voice_select, 6, "the 256 keeps its grid voice")
+  local expected = {[2] = 3, [3] = 4, [4] = 5}
+  for port = 2, 4 do
+    S.grid_voice_select = 6
+    positions.grid_key(port, expected[port], 5, 16, 1); positions.grid_key(port, expected[port], 5, 16, 0)
+    assert_equal(S.grid_voice_select, expected[port], "port " .. port .. " selects the pressed voice")
+  end
+end)
+
+test("bookmarks default to the quarters, are scene fields that crossfade and migrate from version 3", function()
+  local context, S = buffer_voices()
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for n, expected in ipairs({0, 0.25, 0.5, 0.75}) do
+      assert_near(params:get("v" .. voice_idx .. "_bookmark_" .. n), expected, 1e-9)
+    end
+  end
+  assert_equal(S.constants.SCENE_DATA_VERSION, 4)
+  params:set("v1_bookmark_2", 0.75)
+  capture_scene(1)
+  assert_near(S.scenes[1].data.voices[1].extras.bookmark_2, 0.75, 1e-9, "the scene captures it")
+  params:set("v1_bookmark_2", 0.25)
+  recall_scene(1, 1)
+  context.clock.run_for(0.5)
+  local halfway = params:get("v1_bookmark_2")
+  assert_true(halfway > 0.3 and halfway < 0.7, "crossfading at 0.5 s, got " .. halfway)
+  context.clock.run_for(2)
+  assert_near(params:get("v1_bookmark_2"), 0.75, 1e-9, "ends at the scene's value")
+
+  S.scenes[3] = h.deep_copy(S.scenes[1])
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for n = 1, 4 do S.scenes[3].data.voices[voice_idx].extras["bookmark_" .. n] = nil end
+  end
+  migrate_scene(S.scenes[3], 3)
+  assert_true(validate_scene(S.scenes[3]), "the migrated scene validates")
+  recall_scene(3, 0)
+  for n, expected in ipairs({0, 0.25, 0.5, 0.75}) do
+    assert_near(params:get("v1_bookmark_" .. n), expected, 1e-9, "version 3 scene: bookmark " .. n)
+  end
+end)
+
+test("a scene with a bookmark outside 0-1 is rejected", function()
+  local _, S = buffer_voices()
+  capture_scene(1)
+  local function with(value)
+    local scene = h.deep_copy(S.scenes[1])
+    scene.data.voices[1].extras.bookmark_1 = value
+    return validate_scene(scene)
+  end
+  assert_true(not with(1.5), "1.5 is out")
+  assert_true(not with(-0.1), "-0.1 is out")
+  assert_true(with(1), "1 is in")
+  assert_true(with(0), "0 is in")
+end)
+
+test("bookmarks round-trip through a PSET in any order", function()
+  local context, S = buffer_voices()
+  local path = context.data_dir .. "strata-bookmarks.pset"
+  for n, value in ipairs({0.1, 0.2, 0.3, 0.4}) do params:set("v2_bookmark_" .. n, value) end
+  params:write(path)
+  local lines = {}
+  for line in io.lines(path) do table.insert(lines, line) end
+  local shuffled = {}  -- every line once, in reverse
+  for index = #lines, 1, -1 do table.insert(shuffled, lines[index]) end
+  local file = io.open(path, "w"); file:write(table.concat(shuffled, "\n"), "\n"); file:close()
+  for n = 1, 4 do params:set("v2_bookmark_" .. n, 0.9) end
+  params:read(path)
+  for n, value in ipairs({0.1, 0.2, 0.3, 0.4}) do
+    assert_near(params:get("v2_bookmark_" .. n), value, 1e-9, "bookmark " .. n)
+  end
+  assert_near(S.voices[2].extras.bookmark_3, 0.3, 1e-9, "stored too")
+end)
+
+test("store_bookmark takes the playhead, or buf_pos mapped into the loop when stopped", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  params:set("v1_buf_pos", 0.25); params:set("v1_buf_scan", 0.1)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(2)
+  local playhead = S.lib.playheads.position(1)
+  assert_near(playhead, 0.45, 1e-6)
+  positions.store_bookmark(1, 2)
+  assert_near(params:get("v1_bookmark_2"), playhead, 1e-6, "the playhead")
+  assert_near(positions.bookmark(1, 2), playhead, 1e-6)
+
+  params:set("v3_loop_length", 0.5); params:set("v3_loop_start", 0.25); params:set("v3_buf_pos", 0.5)
+  positions.store_bookmark(3, 4)
+  assert_near(params:get("v3_bookmark_4"), 0.5, 1e-9, "0.25 + 0.5 x 0.5")
+  assert_equal(positions.bookmark(1, 5), nil, "no bookmark 5")
+  assert_equal(positions.bookmark(8, 1), nil, "no voice 8")
+end)
+
+test("recall_bookmark jumps and remembers the last recalled", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  assert_equal(positions.last_recalled(1), nil)
+  positions.recall_bookmark(1, 3)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9)
+  assert_equal(positions.last_recalled(1), 3)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 2)
+  assert_equal(positions.last_recalled(1), nil, "a source switch forgets it")
+end)
+
+test("a voice sync sends scrubRate 0 and scanHold 0", function()
+  local context, S = buffer_voices()
+  context.clear_engine_calls()
+  toggle_voice(3)
+  local source_at, rate_at, hold_at
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainSource" and call.args[1] == 2 then source_at = source_at or index end
+    if call.name == "setGrainParam" and call.args[1] == 2 then
+      if call.args[2] == "scrubRate" then rate_at = index; assert_equal(call.args[3], 0) end
+      if call.args[2] == "scanHold" then hold_at = index; assert_equal(call.args[3], 0) end
+    end
+  end
+  assert_true(source_at and rate_at and hold_at and source_at < rate_at and source_at < hold_at,
+    "both after the source")
+  assert_true(S.lib.positions.scrub_rate(3) == 0 and S.lib.positions.scan_held(3) == false, "and the state agrees")
+end)
+
+-- Voice 1's ring turns from buf_pos 0.2 at a speed (loop fractions a second)
+-- for `seconds`, one tick every 0.01 s; the last tick is at the end
+local function fling(context, S, speed, seconds)
+  local position = 0.2
+  params:set("v1_buf_pos", position)
+  for _ = 1, math.floor(seconds / 0.01 + 0.5) do
+    context.clock.run_for(0.01)
+    position = position + speed * 0.01
+    params:set("v1_buf_pos", position)
+    S.lib.positions.scrub_turned(1)
+  end
+end
+
+test("a fling glides and decays with the friction; 100% never glides", function()
+  local context, S = buffer_voices()
+  assert_equal(params:get("scrub_friction"), 100, "the default is 100%")
+  assert_equal(param_default("scrub_friction"), 100)
+  local low, high = param_range("scrub_friction")
+  assert_equal(low, 0); assert_equal(high, 100)
+  fling(context, S, 0.1, 0.3)
+  context.clock.run_for(1)
+  assert_equal(#grain_calls(context, "scrubRate"), 0, "100%: the ring is direct, nothing glides")
+
+  params:set("scrub_friction", 50)  -- tau = 4 x 0.5 = 2 s
+  context.clear_engine_calls()
+  fling(context, S, 0.1, 0.3)
+  context.clock.run_for(0.08 + 0.001)
+  local first = last_grain(context, "scrubRate", 0)
+  assert_near(first, 0.1, 0.02, "the glide starts at the ring's speed over the last 0.1 s")
+  assert_near(S.lib.positions.scrub_rate(1), first, 1e-12, "and positions says so")
+  context.clock.run_for(2 * math.log(2))
+  local halved = last_grain(context, "scrubRate", 0)
+  assert_near(halved / first, 0.5, 0.05, "halves in 2 ln 2 s")
+  context.clock.run_for(30)
+  assert_equal(last_grain(context, "scrubRate", 0), 0, "stops")
+  assert_equal(S.lib.positions.scrub_rate(1), 0)
+  local count = #grain_calls(context, "scrubRate")
+  context.clock.run_for(2)
+  assert_equal(#grain_calls(context, "scrubRate"), count, "and sends nothing more")
+  for _, each in ipairs(grain_calls(context, "scrubRate")) do
+    assert_true(each.value == 0 or math.abs(each.value) >= 0.001, "never a value below 0.001 but 0")
+  end
+end)
+
+test("a new turn, a jump or a source switch ends the glide at once", function()
+  local context, S = buffer_voices()
+  params:set("scrub_friction", 0)
+  local function glide()
+    fling(context, S, 0.2, 0.3)
+    context.clock.run_for(0.2)
+    assert_true(S.lib.positions.scrub_rate(1) > 0.05, "gliding")
+    context.clear_engine_calls()
+  end
+  glide()
+  S.lib.positions.scrub_turned(1)
+  assert_equal(last_grain(context, "scrubRate", 0), 0, "a new turn")
+  assert_equal(S.lib.positions.scrub_rate(1), 0)
+  context.clock.run_for(5)
+  assert_equal(S.lib.positions.scrub_rate(1), 0, "and the turn alone does not restart it")
+
+  glide()
+  S.lib.positions.jump(1, 0.5)
+  assert_equal(last_grain(context, "scrubRate", 0), 0, "a jump")
+  assert_equal(S.lib.positions.scrub_rate(1), 0)
+
+  glide()
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 2)
+  assert_equal(last_grain(context, "scrubRate", 0), 0, "a source switch")
+  assert_equal(S.lib.positions.scrub_rate(1), 0)
+end)
+
+-- Slot 1 with every peak 0.5
+local function half_peaks(S)
+  S.lib.waveforms.bins = function(_, n)
+    local bins = {}
+    for index = 1, n do bins[index] = 0.5 end
+    return bins
+  end
+end
+
+test("grid levels: empty 0, outside the loop 1-3, inside 4-8, held 11, record head 13, playhead 15", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  S.buffers[1].seconds = 0
+  for cell = 1, 16 do assert_equal(positions.grid_level(1, cell, 16), 0, "an empty slot: cell " .. cell) end
+  S.buffers[1].seconds = 16
+  half_peaks(S)
+  params:set("v1_loop_length", 0.5); params:set("v1_loop_start", 0.25)
+  positions.jump(1, 0.5)  -- inside the loop: the playhead is cell 9
+  assert_equal(positions.grid_level(1, 1, 16), 2, "outside: 1 + round(1)")
+  assert_equal(positions.grid_level(1, 16, 16), 2)
+  assert_equal(positions.grid_level(1, 6, 16), 6, "inside: 4 + round(2)")
+  assert_equal(positions.grid_level(1, 9, 16), 15, "the playhead")
+  positions.grid_key(1, 1, 7, 16, 1)  -- the press jumps there: the playhead shows on it
+  assert_equal(positions.grid_level(1, 7, 16), 15, "the playhead wins over a held key")
+  positions.jump(1, 0.5)  -- the head moves on; the key is still down
+  assert_equal(positions.grid_level(1, 7, 16), 11, "a held key")
+  assert_equal(positions.grid_level(1, 6, 16), 6, "its neighbor is unchanged")
+  positions.grid_key(1, 1, 7, 16, 0)
+  assert_equal(positions.grid_level(1, 7, 16), 6, "released")
+  params:set("v1_source", 1)
+  assert_equal(positions.grid_level(1, 6, 16), 0, "a synth voice: dark")
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+
+  S.lib.record.state = function(slot)
+    if slot ~= 1 then return nil end
+    return {number = 1, kind = "playable", phase = "recording", started_at = util.time() - 12, seconds = 16, loop = true}
+  end
+  assert_equal(positions.grid_level(1, 13, 16), 13, "the record head: 12 s of 16 is cell 13")
+  assert_equal(positions.grid_level(1, 12, 16), 6, "no head there")
+  positions.jump(1, 12 / 16)
+  assert_equal(positions.grid_level(1, 13, 16), 15, "the playhead wins")
+  assert_equal(positions.grid_level(3, 1, 16), 15, "a stopped voice shows its start at 15")
+  assert_equal(positions.grid_level(3, 5, 16), 6, "and the rest of its whole-slot loop at 4 + round(2)")
+end)
+
+test("a stopped voice shows its start position at 15", function()
+  local _, S = buffer_voices()
+  half_peaks(S)
+  params:set("v3_buf_pos", 0.5)
+  assert_equal(S.lib.positions.grid_level(3, 9, 16), 15)
+  assert_equal(S.lib.positions.grid_level(3, 8, 16), 6, "inside the whole-slot loop: 4 + round(2)")
+end)
+
+test("strip keys recall, store with store held, hold the scan and restore the whole loop", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 2, 1)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "bookmark 2 recalled at once")
+  positions.strip_key(1, 1, 2, 0)
+  assert_equal(positions.strip_level(1, 2), 10, "the last recalled")
+  assert_equal(positions.strip_level(1, 3), 6, "an unrecalled bookmark")
+
+  params:set("v1_buf_scan", 0.1); S.lib.playheads.reset(1)
+  context.clock.run_for(1)
+  local playhead = S.lib.playheads.position(1)
+  assert_equal(positions.strip_level(1, "store"), 4)
+  positions.strip_key(1, 1, "store", 1)
+  assert_equal(positions.strip_level(1, "store"), 15, "store held")
+  positions.strip_key(1, 1, 3, 1)
+  assert_near(params:get("v1_bookmark_3"), playhead, 1e-6, "a bookmark key with store held stores the playhead")
+  assert_equal(positions.strip_level(1, 3), 15, "pressed with store held")
+  assert_equal(positions.last_recalled(1), 2, "storing recalls nothing")
+  positions.strip_key(1, 1, 3, 0); positions.strip_key(1, 1, "store", 0)
+  assert_equal(positions.strip_level(1, "store"), 4)
+  assert_equal(positions.strip_level(1, 3), 6)
+
+  context.clear_engine_calls()
+  assert_equal(positions.strip_level(1, "hold"), 4)
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(last_grain(context, "scanHold", 0), 1, "hold down")
+  assert_equal(positions.strip_level(1, "hold"), 15)
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(last_grain(context, "scanHold", 0), 0, "hold up")
+  assert_equal(positions.strip_level(1, "hold"), 4)
+
+  assert_equal(positions.strip_level(1, "whole"), 15, "the whole slot")
+  params:set("v1_loop_length", 0.5)
+  assert_equal(positions.strip_level(1, "whole"), 4, "a smaller loop")
+  local pos_before = params:get("v1_buf_pos")
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "whole", 1)
+  local start, length = loop_of(1)
+  assert_near(start, 0, 1e-9); assert_near(length, 1, 1e-9)
+  assert_equal(positions.strip_level(1, "whole"), 15)
+  assert_equal(params:get("v1_buf_pos"), pos_before, "no jump")
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "and no reset")
+end)
+
+test("randomize, mutation and the faders leave bookmarks and friction alone", function()
+  local _, S = buffer_voices()
+  params:set("scrub_friction", 30)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for n = 1, 4 do params:set("v" .. voice_idx .. "_bookmark_" .. n, 0.1 * n) end
+  end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(11)
+  for voice_idx = 1, S.constants.NUM_VOICES do randomize_voice(voice_idx) end
+  for _ = 1, 20 do gentle_mutate() end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for n = 1, 4 do
+      assert_near(params:get("v" .. voice_idx .. "_bookmark_" .. n), 0.1 * n, 1e-9, "voice " .. voice_idx .. " bookmark " .. n)
+    end
+    for _, param_id in ipairs(fader_param_ids(voice_idx)) do
+      assert_true(not param_id:find("bookmark", 1, true) and param_id ~= "scrub_friction", param_id .. " is no fader")
+    end
+  end
+  assert_equal(params:get("scrub_friction"), 30)
+end)
+
+test("the bookmark rows show on VOICE for a buffer voice only", function()
+  local _, S = buffer_voices()
+  local function outline(voice_idx)
+    local ids = {}
+    for _, row in ipairs(voice_page_rows(voice_idx)) do table.insert(ids, row.param_id or row.section) end
+    return table.concat(ids, " ")
+  end
+  assert_true(outline(1):find("v1_bookmark_1 v1_bookmark_2 v1_bookmark_3 v1_bookmark_4", 1, true), "a buffer voice")
+  params:set("v1_source", 1)
+  assert_true(not outline(1):find("bookmark", 1, true), "a synth voice")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  assert_true(not outline(1):find("bookmark", 1, true), "an input voice")
 end)
 
 end
