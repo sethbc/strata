@@ -5,14 +5,14 @@ Where the eight sample buffers are recorded, filled, cleared and saved, where a 
 **Left column.** Eleven fields, four at a time (the list scrolls as the field cursor moves; a brighter mark on the dividing line shows where you are). A small `>` marks the field E3 edits:
 - `v1`...`v7`: the selected voice (picked on MAIN) and its source: `synth`, `buf 1` ... `buf 8` or `input`.
 - `rec`: what a recording takes: the input (`in`), the master before its effects (`pre`) or after them (`post`, Strata's own output only), or one voice (`v1`-`v7`).
-- `dur`: the record duration, up to the buffer length (16 s, or up to 300 s on the high tier). With sync on it becomes `len`, the length in beats (`16b`); when that many beats would not fit in a buffer at the current tempo it shows how many do, with `max` (`8b max`).
+- `dur`: the record duration, up to the buffer length (16 s, or up to 300 s on the high tier). With sync on it becomes `len`, the length in beats (`16b`); when that many beats would not fit in a buffer at the current tempo it shows how many do, with `max` (`8b max`; `<1b max` when not even one beat fits).
 - `lvl`: the record level.
 - `fb`: the record feedback: 0% replaces what the buffer held; above 0 the buffer keeps playing while it records, and each pass keeps the old audio at that level (an overdub).
 - `loop`: `on` records over and over the first `dur` seconds until you stop it.
 - `thr`: `off`, or a level (`-24dB`) the source must reach before the recording starts (it keeps the 10 ms before).
 - `sync`: `off`, or start on the next `beat` or `bar` of the clock.
 - `bm`: the selected voice's bookmark and its position (`2 0.25`). E3 steps through bookmarks 1-4 and jumps the voice to each one it lands on. Dim when the voice is not playing a buffer.
-- `start`: for a file longer than a buffer, how far into the file the buffer starts (`12.0s`); `-` when the file fits. E3 moves it in tenths of a second, ALT+E3 in hundredths; the file reloads from there a moment after you stop turning.
+- `start`: for a file longer than a buffer, how far into the file the buffer starts; `-` when the file fits. It shows hundredths below 10 s (`9.05s`), tenths from 10 s (`12.1s`), whole seconds from 100 s (`123s`), minutes and seconds from 1000 s (`20:34`), then whole minutes (`123m`) and hours (`17h`) for very long files. ALT+E3 moves it by the last digit shown, E3 by that or a tenth of a second, whichever is more; the file reloads from there a moment after you stop turning.
 - `fric`: the arc scrub's friction: 100% stops where you let go; lower lets a fling glide on and slow down.
 
 Settings beside the fields are also in PARAMETERS > record and > positions. Below the fields, `in` is a meter of the live input: eight segments, about 6 dB each from -48 dB, showing the louder of the two channels; the highest segment reached stays lit for 1 s. The meter runs only while this page shows.
