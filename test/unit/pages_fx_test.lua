@@ -335,12 +335,15 @@ test("turned down to 0.3 and later to 0, K3 restores the last mix it rose to", f
   key(3, 1); assert_near(params:get("filter_mix"), 0.8, 1e-6, "decision 1's known cost")
 end)
 
-test("a PSET load leaves the restore value at the loaded mix", function()
+test("a PSET load sets the restore value when it raises the mix; a lower loaded mix leaves it", function()
   filter_mix_row()
   local filter_mix = params:lookup_param("filter_mix")
   params:set("filter_mix", 0.6); filter_mix:bang()
+  assert_near(local_value("S").fx_last_mix.filter, 0.6, 1e-6, "a load that raises the mix sets the restore value")
+  params:set("filter_mix", 0.4); filter_mix:bang()
+  assert_near(local_value("S").fx_last_mix.filter, 0.6, 1e-6, "a lower loaded mix is a fall and leaves it")
   params:set("filter_mix", 0); filter_mix:bang()
-  key(3, 1); assert_near(params:get("filter_mix"), 0.6, 1e-6, "the bang of 0 leaves 0.6")
+  key(3, 1); assert_near(params:get("filter_mix"), 0.6, 1e-6, "K3 restores 0.6")
 end)
 
 end
