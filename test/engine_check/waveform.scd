@@ -317,6 +317,19 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     ran = write.(other);
     check.(ran[0] and: { mover[\alive] } and: { mover[\pending] == 0 },
         "waveform: a peaks write through the mover lands and runs its action (% ms)".format((ran[1] * 1000).round(0.1)));
+    // a failed mv (the target's folder does not exist) with the .part
+    // still there: the mover deletes the .part and creates the failure
+    // file, so finish runs once with false (a save then reports failed, #217)
+    {
+        var part = dir +/+ "failing.wav.check-1.part", results = List.new(4);
+        File.use(part, "w", { arg file; file.write("x") });
+        other.renameIntoPlace(part, dir +/+ "missing-folder/failing.wav", { arg written; results.add(written) });
+        waitFor.({ results.notEmpty and: { mover[\pending] == 0 } });
+        0.1.wait;
+        check.((results.asArray == [false]) and: { File.exists(part).not } and: { (dir +/+ "failing.wav.*").pathMatch.isEmpty } and: { mover[\alive] },
+            "waveform: a failed mv through the mover finishes once with false and leaves no .part, acknowledgment or failure file (got %, left %)".format(
+                results.asArray, (dir +/+ "failing.wav.*").pathMatch));
+    }.value;
     // stopped: that one write renames by subprocess after peaksMoverTimeout;
     // the mover, still running, stays in use, and once it catches up (its
     // late rename finds the .part gone and says nothing) it is used again

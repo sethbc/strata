@@ -544,4 +544,119 @@ checkLongSave.value;
     command.(\clearBuffer, slot); server.sync;
     [path, regionPath, wholePath].do({ arg each; if (File.exists(each)) { File.delete(each) } });
 }.value;
+
+// #217: a save's .part used to be renamed with a blocking systemCmd, which
+// on norns' glibc 2.28 forks sclang (about 2.5 ms per 130 MB of it) and
+// waits for mv, so every save or scratch take held sclang that long. The
+// rename now goes to the mover (renameIntoPlace, docs/notes/engine/waveform.md).
+// A 1 ms SystemClock task looks for the saved file on every tick: the gap
+// in which the file appears spans the rename, so the OS preempting sclang
+// elsewhere in a save cannot fail it. Counted, not the largest: fewer than
+// lateLimit late gaps of ten saves.
+{
+    var slot = 3, saves = 10, gapLimit = 0.003, lateLimit = 3, dir = scratchRoot +/+ "rename-hold";
+    var gaps = List.new(saves), late, sorted;
+    command.(\loadBuffer, slot, stereoPath, 0); 0.5.wait; server.sync;
+    File.mkdir(dir);
+    saves.do({ arg n;
+        var path = dir +/+ "save%.wav".format(n), last = Main.elapsedTime, gap, ticker, count = saveResults.value.size;
+        ticker = Routine({ loop {
+            var now = Main.elapsedTime;
+            if (gap.isNil and: { File.exists(path) }) { gap = now - last };
+            last = now;
+            0.001.wait
+        } }).play(SystemClock);
+        command.(\saveBuffer, slot, path, 0, 1);
+        waitFor.({ saveReportsAfter.(count).notEmpty and: { gap.notNil } }, 3);
+        ticker.stop;
+        gaps.add(gap ? inf);
+        if (File.exists(path)) { File.delete(path) };
+    });
+    late = gaps.count({ arg value; value >= gapLimit });
+    sorted = gaps.copy.sort;
+    check.((gaps.size == saves) and: { late < lateLimit },
+        "files: a save's rename holds sclang under 3 ms, never a fork (% of % rename gaps of a 1 ms task over 3 ms; median % ms, longest % ms)".format(
+            late, saves, (sorted[saves div: 2] * 1000).round(0.01), (sorted.last * 1000).round(0.01)));
+    command.(\clearBuffer, slot); server.sync;
+}.value;
+
+// The mover serves saves too: on an engine of its own (h.engine keeps its
+// mover), a save while the mover is stopped renames by subprocess after
+// peaksMoverTimeout and reports once, also after the mover catches up; a
+// save after the mover is killed renames by subprocess at once and reports
+// once. writeSlot's done is called directly, counting its calls.
+{
+    var dir = scratchRoot +/+ "files-mover/", other, mover, path = dir +/+ "saved.wav", noBoard = scratchRoot +/+ "no-board-model";
+    var save = { arg index, target, timeout = 3;
+        var result = (calls: 0, written: nil, start: Main.elapsedTime);
+        target.writeSlot(index, path, { arg written; result[\calls] = result[\calls] + 1; result[\written] = written; result[\took] = Main.elapsedTime - result[\start] });
+        waitFor.({ result[\calls] > 0 }, timeout);
+        result
+    };
+    var framesAt = { var file = SoundFile.openRead(path); file !? { var count = file.numFrames; file.close; count } };
+    var ran;
+    File.mkdir(dir);
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    mover = other.areaState[\waveform][\mover];
+    h.commandTo(other, \loadBuffer, 0, stereoPath, 0);
+    waitFor.({ other.bufferFrames[0] == 11025 });
+    0.2.wait; server.sync;
+    ran = save.(0, other);
+    check.((ran[\written] == true) and: { framesAt.value == 11025 } and: { mover[\pending] == 0 },
+        "files: a save through the mover lands and reports once (% calls, % ms)".format(ran[\calls], ran[\took] !? { (ran[\took] * 1000).round(0.1) }));
+    File.delete(path);
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    ran = save.(0, other);
+    check.((ran[\written] == true) and: { (ran[\took] ? 0) >= other.peaksMoverTimeout } and: { framesAt.value == 11025 } and: { mover[\pending] == 1 },
+        "files: a save while the mover is stopped renames by subprocess after its timeout (% s, pending %)".format(ran[\took] !? { ran[\took].round(0.01) }, mover[\pending]));
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    waitFor.({ mover[\pending] == 0 });
+    0.2.wait;
+    check.((ran[\calls] == 1) and: { mover[\pending] == 0 } and: { framesAt.value == 11025 } and: { (dir +/+ "*.part").pathMatch.isEmpty },
+        "files: and reports once, also after the mover catches up (% calls, pending %, left %)".format(ran[\calls], mover[\pending], (dir +/+ "*.part").pathMatch));
+    File.delete(path);
+    ("kill -KILL " ++ mover[\pid]).systemCmd;
+    waitFor.({ mover[\exited] == true });
+    ran = save.(0, other);
+    0.2.wait;
+    check.((ran[\calls] == 1) and: { ran[\written] == true } and: { (ran[\took] ? inf) < other.peaksMoverTimeout } and: { framesAt.value == 11025 },
+        "files: a save after the mover is killed renames by subprocess at once and reports once (% calls, % s)".format(ran[\calls], ran[\took] !? { ran[\took].round(0.01) }));
+    h.freeEngine(other);
+    if (File.exists(path)) { File.delete(path) };
+}.value;
+
+// Renames to one path land in write order whatever carries them: an older
+// save's rename waiting in a stopped mover, then the mover's backlog
+// filled by peaks writes, so a newer save to the same path cannot use the
+// mover. The newer one waits for the older one's rename before its own
+// (never a subprocess rename the stopped mover would later overwrite), so
+// the newer file stays, and each save reports once, written.
+{
+    var dir = scratchRoot +/+ "files-mover-order/", other, mover, path = dir +/+ "same.wav", noBoard = scratchRoot +/+ "no-board-model";
+    var older = (calls: 0), newer = (calls: 0), frames;
+    var done = { arg result; { arg written; result[\calls] = result[\calls] + 1; result[\written] = written } };
+    File.mkdir(dir);
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    mover = other.areaState[\waveform][\mover];
+    h.commandTo(other, \loadBuffer, 0, stereoPath, 0);
+    h.commandTo(other, \loadBuffer, 1, h.monoPath, 0);
+    waitFor.({ (other.bufferFrames[0] == 11025) and: { other.bufferFrames[1] == 4410 } });
+    0.2.wait; server.sync;
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    other.writeSlot(0, path, done.(older));
+    waitFor.({ mover[\pending] == 1 });
+    (other.peaksMoverBacklog - 1).do({ other.writeSlotPeaks(2, 100, nil) });
+    other.writeSlot(1, path, done.(newer));
+    0.5.wait;
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    waitFor.({ (older[\calls] > 0) and: { newer[\calls] > 0 } and: { mover[\pending] == 0 } }, 4);
+    0.3.wait;
+    frames = SoundFile.openRead(path) !? { arg file; var count = file.numFrames; file.close; count };
+    check.((frames == 4410) and: { older[\calls] == 1 } and: { newer[\calls] == 1 } and: { older[\written] == true } and: { newer[\written] == true }
+        and: { (dir +/+ "*.part").pathMatch.isEmpty },
+        "files: renames to one path land in write order, the newer save's file stays (% frames; reports % and %, left %)".format(
+            frames, older[\calls], newer[\calls], (dir +/+ "*.part").pathMatch));
+    h.freeEngine(other);
+    if (File.exists(path)) { File.delete(path) };
+}.value;
 }

@@ -8,10 +8,12 @@
     strataAreaFiles {
         ^(
             order: 50,
-            // per slot, the saveBuffer commands received (bufferSaves); then
-            // the files a write interrupted by a crash or power cut left
+            // per slot, the saveBuffer commands received (bufferSaves), the
+            // renames under way (pathRenames); then the files a write
+            // interrupted by a crash or power cut left
             allocState: {
                 areaState[\files][\saves] = Array.fill(numBuffers, 0);
+                areaState[\files][\renames] = Dictionary.new;
                 this.deleteStaleParts
             },
             addCommands: { this.addFileCommands }
@@ -42,6 +44,11 @@
     // Per slot: the saveBuffer commands received, counted from 1 (Lua's
     // save_buffer counts the same), named in bufferSaveResult
     bufferSaves { ^areaState[\files][\saves] }
+
+    // Per output path: the write whose rename into place is under way (its
+    // generation), from the rename's start until it has ended, so a newer
+    // write to the path renames only after it. Holds only renames under way.
+    pathRenames { ^areaState[\files][\renames] }
 
     // One float, as bufferLoadFailed (matron's /poll/value is typed "if"):
     // (save * 2 + failed) * numBuffers + slot index, where save is the slot's
@@ -231,7 +238,10 @@
     // chunks (yielding between chunks from the real time, so a 300 s save
     // never holds up the commands) into a per-write
     // path.<instanceTag>-<n>.part file and renames it into place, so a
-    // reader never sees a half-written file. Each write to a path gets a new
+    // reader never sees a half-written file. The rename goes to the mover
+    // (renameIntoPlace, the waveform area's: no fork of sclang, #217), after
+    // any older write's rename to the path has ended, so renames land in
+    // write order. Each write to a path gets a new
     // generation number: an older write still interleaving when a newer one
     // starts abandons (deleting its .part), so the newest write always wins
     // and two writes never mix. instanceTag keeps another engine instance's
@@ -278,32 +288,53 @@
             var deleteIfThere = { arg file; try { if (File.exists(file)) { File.delete(file) } } };
             // every SoundFile the interleave opens, so an error can close them
             var openFiles = List.new;
-            var written, moved, folder;
+            // handedOff: the .part belongs to its rename (renameIntoPlace),
+            // which reports; never deleted or reported here after that
+            var written, folder, handedOff = false, waitStart;
             try {
                 context.server.sync;
                 written = current.value and: {
                     this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames, openFiles)
                 };
                 tempPaths.do({ arg tempPath; File.delete(tempPath) });
-                // no yield between this check and the rename. The newest write
-                // forgets its generation whether it succeeded or failed, and
-                // reports how it ended (finish); an abandoned one leaves the
-                // newer write's entry alone and reports nothing. A folder at
-                // the path fails the write: mv -f would move the file into it.
+                // an older write's rename to this path still under way (the
+                // mover's, or a subprocess's): wait for it, so renames land in
+                // write order whatever carries them (a newer one by subprocess
+                // could land before an older one the mover still holds). At
+                // most twice peaksMoverTimeout; it ends by then.
+                waitStart = Main.elapsedTime;
+                while { written and: { this.pathRenames[path].notNil }
+                    and: { (Main.elapsedTime - waitStart) < (this.peaksMoverTimeout * 2) } } {
+                    this.yieldToCommands(0.002)
+                };
+                // no yield between this check and the rename's start. The
+                // newest write forgets its generation whether it succeeded or
+                // failed, and reports how it ended (finish); an abandoned one
+                // leaves the newer write's entry alone and reports nothing. A
+                // folder at the path fails the write: mv -f would move the
+                // file into it. The rename goes to the mover (no fork of
+                // sclang, #217) and finish runs once it has ended.
                 if (current.value) {
                     folder = written and: { PathName(path).isFolder };
                     if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
-                    moved = written and: { folder.not }
-                        and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
-                    if (moved) {
-                        postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
-                    } {
-                        if (written and: { folder.not }) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
-                    };
                     writeGenerations.removeAt(path);
-                    finish.(moved);
+                    if (written and: { folder.not }) {
+                        handedOff = true;
+                        this.pathRenames[path] = generation;
+                        this.renameIntoPlace(partPath, path, { arg moved;
+                            if (this.pathRenames[path] == generation) { this.pathRenames.removeAt(path) };
+                            if (moved) {
+                                postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
+                            } {
+                                postln("strata: cannot move " ++ partPath ++ " to " ++ path);
+                            };
+                            finish.(moved);
+                        });
+                    } {
+                        finish.(false);
+                    };
                 };
-                if (File.exists(partPath)) { File.delete(partPath) };
+                if (handedOff.not and: { File.exists(partPath) }) { File.delete(partPath) };
             } { arg error;
                 // an sclang error inside the write (a read, a delete, the
                 // interleave) still ends it: its sound files closed, nothing
@@ -314,10 +345,12 @@
                 postln("strata: cannot write % (%)".format(path, error.class.name));
                 openFiles.do({ arg file; try { if (file.notNil and: { file.isOpen }) { file.close } } });
                 tempPaths.do(deleteIfThere);
-                deleteIfThere.(partPath);
-                if (current.value) {
-                    writeGenerations.removeAt(path);
-                    finish.(false);
+                if (handedOff.not) {
+                    deleteIfThere.(partPath);
+                    if (current.value) {
+                        writeGenerations.removeAt(path);
+                        finish.(false);
+                    };
                 };
             };
         }, SystemClock);
