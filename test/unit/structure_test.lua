@@ -141,7 +141,7 @@ local MODULE_HOMES = {
   ["lib/buffers.lua"] = { "scratch_take_path", "confirm_buffer_audio", "settle_buffer_slot",
     "set_buffer_file_param", "empty_buffer_state", "buffer_state_before_load", "load_buffer",
     "clear_buffer", "buffer_save_path", "save_buffer", "buffer_load_failed", "buffer_save_result",
-    "save_buffers_to_disk", "load_buffers_from_disk" },
+    "save_buffers_to_disk", "load_buffers_from_disk", "save_buffer_loop" },
   ["lib/record.lua"] = { "record_buffer" },
   ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "apply_lfo", "lfo_phase_estimate",
     "add_lfo_params" },
@@ -533,7 +533,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "buffer polls and timers", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+  "lfos", "waveform loop", "buffer start reload", "buffer polls and timers", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -547,6 +547,8 @@ test("cleanup runs every registered step in today's order", function()
   recall_scene(1, 5)
   params:set("lfo_1", 2)
   record_buffer(1)
+  context.audio.register("/tmp/long.wav", { channels = 2, frames = 48000 * 60, rate = 48000 })
+  load_buffer(2, "/tmp/long.wav"); S.lib.buffers.set_start(2, 5)  -- a start reload waits
   buffer_page_flash("flash")
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
   header_flash("flash")
@@ -578,6 +580,7 @@ test("cleanup runs every registered step in today's order", function()
     { "undo clock", local_value("undo_clock") },
     { "pattern clock", S.pattern_clock }, { "scene sequencer", S.scene_sequencer_clock },
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
+    { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
@@ -683,6 +686,7 @@ local function start_steps()
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },
     { "frame clock", { "clock started" } },
+    { "waveform loop", { "clock started" } },
   }
 end
 

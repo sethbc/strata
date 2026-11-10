@@ -14,7 +14,7 @@ local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standard tier (engine standardBufferSeconds)
-local BUFFER_DATA_VERSION = 1 -- Buffer paths file format version (written into buffers.data)
+local BUFFER_DATA_VERSION = 2 -- Buffer paths file format version (written into buffers.data)
 local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
 local NUM_BOOKMARKS = 4       -- Bookmarks per voice (3.3)
 local NORNS_SAMPLE_RATE = 48000  -- norns' server rate, for lengths read from a file's header
@@ -166,6 +166,7 @@ local START_ORDER = {
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   frame_clock = 130,     -- lib/ui/frame.lua
+  waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
@@ -200,6 +201,8 @@ local CLEANUP_ORDER = {
   scene_sequencer = 100,    -- lib/scenes.lua (and its param)
   scene_transition = 110,   -- lib/scenes.lua
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
+  waveforms = 126,          -- lib/waveforms.lua: the peaks read loop
+  buffer_start_reload = 128,  -- lib/buffers.lua: a long file's pending start reload
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
   input_meter = 135,        -- lib/pages/buffer.lua: the BUFFER page's amp_in_l/amp_in_r polls
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks

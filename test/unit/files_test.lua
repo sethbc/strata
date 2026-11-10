@@ -1,22 +1,138 @@
 -- test/unit/files_test.lua
--- The neutral lib/files.lua: its functions answer as pinned and send
--- nothing until its Wave 1 package fills them
+-- lib/files.lua: the folder a slot's files come from, a random file into a
+-- slot, and filling the empty slots
 -- Run alone: lua test/run.lua files
 
 return function(h)
-local test, assert_equal, load_strata, local_value = h.test, h.assert_equal, h.load_strata, h.local_value
-local finish_startup = h.finish_startup
+local test, assert_equal, assert_true = h.test, h.assert_equal, h.assert_true
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
-test("the neutral files answers as pinned and sends nothing", function()
+-- A folder of empty files under the context's audio folder; its path ends in "/"
+local function make_folder(context, name, files)
+  local folder = context.audio_dir .. name .. "/"
+  util.make_dir(folder)
+  for _, file in ipairs(files) do
+    if file:sub(-1) == "/" then util.make_dir(folder .. file) else io.open(folder .. file, "w"):close() end
+  end
+  return folder
+end
+
+-- The text of the BUFFER page's current hint-row flash
+local function flash_text()
+  h.show_page("BUFFER")   -- the hints flash shows only while BUFFER is up
+  return local_value("S").lib.ui_flash.text("hints")
+end
+
+test("folder_for uses the slot's file, then the last chosen folder, then _path.audio", function()
   local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  local files = S.lib.files
+  local files = local_value("S").lib.files
+  load_buffer(1, "/a/x.wav")
+  assert_equal(files.folder_for(1), "/a/", "the slot's own file")
+  assert_equal(files.folder_for(2), _path.audio, "a fresh load: nothing chosen yet")
+  files.note_chosen("/b/y.wav")
+  assert_equal(files.last_folder, "/b/", "note_chosen remembers the folder")
+  assert_equal(files.folder_for(2), "/b/", "an empty slot follows the last chosen folder")
+  assert_equal(files.folder_for(1), "/a/", "a slot with a file keeps its own")
+  clear_buffer(1)
+  assert_equal(files.folder_for(1), "/b/", "a cleared slot has no file")
+end)
+
+test("random_into keeps sound files only and never repeats the current one", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "random", { "a.wav", "B.FLAC", "c.txt", ".d.wav", "sub/" })
+  math.randomseed(7)
+  files.note_chosen(folder .. "x.wav")
+  for _ = 1, 12 do
+    clear_buffer(1)
+    context.clear_engine_calls()
+    assert_true(files.random_into(1), "loaded")
+    local call = context.calls_named("loadBuffer")[1]
+    local name = call.args[2]:match("[^/]*$")
+    assert_true(name == "a.wav" or name == "B.FLAC", "only sound files: " .. name)
+    assert_equal(call.args[3], 0, "from the start")
+  end
+  load_buffer(1, folder .. "a.wav")
+  for _ = 1, 6 do
+    context.clear_engine_calls()
+    assert_true(files.random_into(1))
+    assert_equal(context.calls_named("loadBuffer")[1].args[2], folder .. "B.FLAC", "never the current file")
+    assert_true(files.random_into(1))
+    assert_equal(context.calls_named("loadBuffer")[2].args[2], folder .. "a.wav", "and back")
+  end
+  assert_equal(flash_text(), "buf 1: a.wav", "the flash names the file")
+end)
+
+test("random_into loads the only file again when the folder holds one", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "one", { "only.wav" })
+  load_buffer(1, folder .. "only.wav")
   context.clear_engine_calls()
-  assert_equal(files.folder_for(1), _path.audio)
+  assert_true(files.random_into(1))
+  assert_equal(context.calls_named("loadBuffer")[1].args[2], folder .. "only.wav")
+end)
+
+test("an empty folder flashes no files in it", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "empty", { "notes.txt", "sub/" })
+  files.note_chosen(folder .. "gone.wav")
+  context.clear_engine_calls()
   assert_equal(files.random_into(1), false)
+  assert_equal(flash_text(), "no files in " .. folder)
+  assert_equal(#context.calls_named("loadBuffer"), 0, "nothing loaded")
+  assert_equal(files.random_into(0), false, "an invalid slot loads nothing")
+  assert_equal(files.random_into(9), false)
+end)
+
+test("fill_empty gives distinct files to the empty slots until they run out", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "fill", { "one.wav", "two.aif", "three.ogg" })
+  files.note_chosen(folder .. "x.wav")
+  load_buffer(2, "/elsewhere/a.wav"); load_buffer(5, "/elsewhere/b.wav")
+  record_buffer(3)
+  context.clear_engine_calls()
+  assert_equal(files.fill_empty(), 3, "three files, five empty slots")
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 3)
+  local seen, slots = {}, {}
+  for _, call in ipairs(loads) do
+    assert_true(not seen[call.args[2]], "distinct files")
+    seen[call.args[2]] = true
+    table.insert(slots, call.args[1])
+    assert_equal(call.args[3], 0)
+  end
+  assert_equal(table.concat(slots, ","), "0,3,5", "slots 1, 4 and 6, in order")
+  assert_equal(flash_text(), "filled 3 slots")
+  local buffers = local_value("buffers")
+  assert_true(buffers[7].path == nil and buffers[8].path == nil, "7 and 8 stay empty")
+  assert_true(buffers[3].recording, "the recording slot was left alone")
+  assert_equal(buffers[2].path, "/elsewhere/a.wav", "loaded slots too")
+  -- the folder's files are all in use now: the two empty slots stay empty
+  context.clear_engine_calls()
   assert_equal(files.fill_empty(), 0)
-  files.note_chosen("/x.wav"); assert_equal(files.last_folder, nil)
-  assert_equal(#context.engine_calls, 0, "no engine call")
+  assert_equal(#context.calls_named("loadBuffer"), 0)
+  assert_equal(flash_text(), "filled 0 slots")
+end)
+
+test("fill_empty never gives a file another slot already holds", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "fill-used", { "one.wav", "two.wav", "three.wav" })
+  files.note_chosen(folder .. "x.wav")
+  load_buffer(4, folder .. "one.wav")
+  context.clear_engine_calls()
+  assert_equal(files.fill_empty(), 2, "two files left for seven empty slots")
+  local seen = {}
+  for _, call in ipairs(context.calls_named("loadBuffer")) do
+    assert_true(call.args[2] ~= folder .. "one.wav", "the file slot 4 holds is not repeated")
+    assert_true(not seen[call.args[2]], "distinct")
+    seen[call.args[2]] = true
+  end
+  assert_equal(local_value("buffers")[4].path, folder .. "one.wav")
+  assert_true(local_value("buffers")[3].path == nil, "the rest stay empty")
 end)
 
 end
