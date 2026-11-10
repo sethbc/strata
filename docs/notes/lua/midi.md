@@ -3,6 +3,7 @@
 - MIDI notes never create nodes. A note on starts a stopped voice with `toggle_voice`, then accents it with `engine.retrigger(i - 1, vel / 127)`. Velocity lands on the accent; voices keep their slow attacks.
 - The handler lives on the vport only (`S.midi_device = midi.connect(port)`), never on the raw device. Cleanup detaches it (step 150), before the voices go off.
 - A note off goes to the voice its note on played (`S.midi_state.note_voice`), even if the omni selection moved since.
+- A note has one owning voice: `held[voice][note]` is set exactly when some channel's `note_voice[ch][note]` is that voice (the invariant `midi notes` checks it). A note on whose voice changed releases the previous voice first; a note off clears `held` only through `release_note_hold`, which keeps it while another channel still maps the note to the voice.
 - After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly).
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
@@ -57,7 +58,7 @@ Group `strata_midi`, 3 params:
 ## Notes
 
 Note on (velocity > 0):
-- records the note in `held` and `note_voice`, then calls `midi_note_on(voice, note, vel)`;
+- if the channel's `note_voice` held the note for another voice, releases that voice first (`release_note_hold`, `midi_note_off_for`), then records the note in `held` and `note_voice`, then calls `midi_note_on(voice, note, vel)`;
 - a voice with `v<i>_quantize` on plays the scale tone nearest the note instead (`S.lib.variation.midi_note`, a tie going down; scale off quantizes to semitones, so nothing changes), before any of the below (`docs/notes/lua/variation.md`). The `freq` filter then keeps a note past the freq range on the scale's last tone inside it;
 - a synth source sets `v<i>_freq` to `musicutil.note_num_to_freq(note)`, clamped to `param_range`;
 - a buffer source sets `v<i>_buf_rate` to `2 ^ ((note - 60) / 12)`, clamped (0.25-4);
@@ -68,7 +69,7 @@ Note on (velocity > 0):
 
 Note off (or note on with velocity 0):
 - goes to the voice its note on played (`note_voice`; in omni mode the selection may have moved), or to `midi_target_voice` for a note never seen;
-- is removed from `held`;
+- is removed from `held` by `release_note_hold(voice, note)`, unless another channel's `note_voice` still maps the note to the voice;
 - `midi_note_off_for(voice)`: in `voice off` mode, an active voice with no other held note is stopped with `toggle_voice`.
 - A note during the release starts the voice again through `toggle_voice`/`voiceOn`, and the engine re-gates the releasing synths.
 
@@ -83,3 +84,11 @@ Note off (or note on with velocity 0):
   - in `omni to selected` mode with the previous voice bent (`bend ~= 1`, the wheel off center), it re-centers that voice (`bend` 1) and gives the new selection the wheel's ratio (a stopped voice gets it on start).
   - Per voice mode leaves bends alone.
 - Pitchbend asks for no redraw: nothing on the screen or the arc shows the bend.
+
+## States
+
+A note's owner is the voice in `note_voice[channel][note]`; `held[voice][note]` mirrors those entries.
+
+| Fields | Legal combinations | Transition |
+|--------|--------------------|------------|
+| `note_voice[ch][note]`, `held[voice][note]` | held on a voice exactly while some channel maps the note to it | `midi_event` (note on and note off, through `release_note_hold`); `reset_midi_input` clears both |

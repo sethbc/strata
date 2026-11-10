@@ -93,12 +93,29 @@ return function(S)
     return nil
   end
 
+  -- Drop the voice's hold on a note unless another channel's note on still
+  -- maps that note to the voice
+  function release_note_hold(voice_idx, note)
+    for _, channel_notes in pairs(S.midi_state.note_voice) do
+      if channel_notes[note] == voice_idx then return end
+    end
+    S.midi_state.held[voice_idx][note] = nil
+  end
+
   function midi_event(data)
     local msg = midi.to_msg(data)
     if msg.type == "note_on" and msg.vel > 0 then
       local voice_idx = midi_target_voice(msg.ch)
       if voice_idx then
         S.midi_state.note_voice[msg.ch] = S.midi_state.note_voice[msg.ch] or {}
+        -- a repeated note on whose voice changed (omni, the selection moved)
+        -- releases the voice that owned the note before
+        local previous = S.midi_state.note_voice[msg.ch][msg.note]
+        if previous and previous ~= voice_idx then
+          S.midi_state.note_voice[msg.ch][msg.note] = nil
+          release_note_hold(previous, msg.note)
+          midi_note_off_for(previous)
+        end
         S.midi_state.note_voice[msg.ch][msg.note] = voice_idx
         S.midi_state.held[voice_idx][msg.note] = true
         midi_note_on(voice_idx, msg.note, msg.vel)
@@ -110,7 +127,7 @@ return function(S)
       local voice_idx = (channel_notes and channel_notes[msg.note]) or midi_target_voice(msg.ch)
       if channel_notes then channel_notes[msg.note] = nil end
       if voice_idx then
-        S.midi_state.held[voice_idx][msg.note] = nil
+        release_note_hold(voice_idx, msg.note)
         midi_note_off_for(voice_idx)
       end
     elseif msg.type == "pitchbend" then
@@ -180,6 +197,29 @@ return function(S)
   -- Stop listening to MIDI before the voices go off
   S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
     if S.midi_device then S.midi_device.event = nil end
+  end)
+
+  -- A note is held on a voice exactly while some channel's note on maps it there
+  S.register_invariant("midi notes", function()
+    local owned = {}
+    for _, channel_notes in pairs(S.midi_state.note_voice) do
+      for note, voice_idx in pairs(channel_notes) do
+        owned[voice_idx] = owned[voice_idx] or {}
+        owned[voice_idx][note] = true
+      end
+    end
+    for voice_idx = 1, NUM_VOICES do
+      for note in pairs(S.midi_state.held[voice_idx]) do
+        if not (owned[voice_idx] and owned[voice_idx][note]) then
+          return "note " .. note .. " is held on voice " .. voice_idx .. " but no channel maps it there"
+        end
+      end
+      for note in pairs(owned[voice_idx] or {}) do
+        if not S.midi_state.held[voice_idx][note] then
+          return "note " .. note .. " is mapped to voice " .. voice_idx .. " but not held on it"
+        end
+      end
+    end
   end)
 
   return M
