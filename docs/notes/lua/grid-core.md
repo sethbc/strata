@@ -86,11 +86,11 @@ An entry exists only while its key is held (every release and press clears it). 
 
 ## States: the attached ports
 
-A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_devices[port]` (the device it held when attached), against what the vport holds now (`grid.connect(port).device`). It registers no invariant: the vports change under the script, inside norns' menu, so the two disagree while the menu is open.
+A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_devices[port]` (the device it held when attached), against what the vport holds now (`grid.connect(port).device`). The `attached_devices[port]` entry exists exactly while the port is attached: `attach_grid` sets it, `grid.remove` and `reconcile_ports`' detach clear it, and the `"grid keys"` invariant checks it. Nothing checks the vports against the attachment: they change under the script, inside norns' menu, so the two disagree while the menu is open.
 
 | State of a port | Fields | Meaning |
 |-----------------|--------|---------|
-| Not attached | `S.grids[port]` nil | No key handler from Strata; not drawn, not counted on SETUP |
+| Not attached | `S.grids[port]` nil, `attached_devices[port]` nil | No key handler from Strata; not drawn, not counted on SETUP |
 | Attached | `S.grids[port]` the vport, `attached_devices[port]` its device | Keys reach `grid_key`; drawn and counted while the vport holds a device |
 | Stale (menu open, or before the menu closes) | the vport's device is not `attached_devices[port]`, or it holds a device and `S.grids[port]` is nil | Set right by `reconcile_ports` as the menu closes |
 

@@ -370,6 +370,7 @@ return function(S)
       S.grids[port].key = nil
       S.grids[port] = nil
     end
+    attached_devices[port] = nil
     -- its pending holds never fire (no scene save from a removed grid)
     forget_port(port)
     request_redraw()
@@ -480,8 +481,15 @@ return function(S)
     end
   end)
 
-  -- Only a held key is consumed or waits for a hold
+  -- Only a held key is consumed or waits for a hold; a port has an attached
+  -- device recorded exactly while it is attached
   S.register_invariant("grid keys", function()
+    for port = 1, S.MAX_GRID_PORTS do
+      if (S.grids[port] ~= nil) ~= (attached_devices[port] ~= nil) then
+        return "grid " .. port .. (S.grids[port] and " is attached with no device recorded"
+          or " is not attached but has a device recorded")
+      end
+    end
     for kind, tables in pairs({consumed = consumed_keys, ["hold pending"] = hold_clocks}) do
       for port, columns in pairs(tables) do
         for x, rows in pairs(columns) do
