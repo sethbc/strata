@@ -1,7 +1,8 @@
 -- lib/sequencer.lua
 -- The pattern sequencer: S.patterns (built fresh by the constructor), the
 -- pattern clock and its state (S.pattern_position, S.pattern_sounding_step,
--- S.pattern_playing, S.pattern_clock), pattern edits, the sounding step
+-- S.pattern_playing, S.pattern_clock), pattern edits (every whole-pattern
+-- change through M.replace_pattern), the sounding step
 -- (M.sounding_step, the playhead every grid layout and SEQ draw) and the
 -- step LED levels. Steps accent running voices with engine.retrigger and
 -- never create nodes. The functions stay global.
@@ -39,22 +40,44 @@ return function(S)
     end
   end
 
+  -- A step level from any value: a number floored to a whole level and
+  -- clamped to 0..MAX_STEP_LEVEL; anything else (nil, a string, NaN) is 0
+  local function whole_step_level(value)
+    if type(value) ~= "number" or value ~= value then return 0 end
+    return math.min(MAX_STEP_LEVEL, math.max(0, math.floor(value)))
+  end
+
+  -- Replace voice_idx's whole pattern: step s takes steps[s] as a whole
+  -- level. A voice outside 1..NUM_VOICES or a steps that is not a table
+  -- does nothing. It ends the voice's step-level gesture on every grid
+  -- (#242), so a step held from before never takes a level in the new
+  -- pattern. Every whole-pattern change goes through it; it redraws
+  -- nothing (callers do)
+  function M.replace_pattern(voice_idx, steps)
+    if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 then return end
+    if voice_idx < 1 or voice_idx > NUM_VOICES or type(steps) ~= "table" then return end
+    for step = 1, PATTERN_LENGTH do
+      S.patterns[voice_idx][step] = whole_step_level(steps[step])
+    end
+    S.lib.grid_core.end_step_gestures(voice_idx)
+  end
+
   function clear_pattern(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    for step = 1, PATTERN_LENGTH do
-      S.patterns[voice_idx][step] = 0
-    end
+    M.replace_pattern(voice_idx, {})
   end
 
   function randomize_pattern(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
+    local steps = {}
     for step = 1, PATTERN_LENGTH do
       if math.random() > 0.5 then
-        S.patterns[voice_idx][step] = math.random(8, 15)
+        steps[step] = math.random(8, 15)
       else
-        S.patterns[voice_idx][step] = 0
+        steps[step] = 0
       end
     end
+    M.replace_pattern(voice_idx, steps)
   end
 
   function pattern_toggle()

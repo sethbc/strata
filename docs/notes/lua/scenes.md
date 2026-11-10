@@ -91,7 +91,7 @@ Voice activation:
 - restores lock states (stored as `frozen`) with the scene.
 
 Patterns:
-- restored after all parameter changes;
+- restored after all parameter changes, each voice's through `S.lib.sequencer.replace_pattern` (which ends a step held on the grid, #242);
 - `grid_redraw()` is called so the grid shows them;
 - the pattern sequencer keeps playing if it was running.
 

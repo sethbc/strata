@@ -411,4 +411,40 @@ test("a grid can show page 5 and any_page(5) counts it", function()
   assert_equal(core.page(1), 5, "page 6 is ignored")
 end)
 
+-- #242: every whole-pattern change ends the voice's held step gesture, as
+-- the 256's paste does (#114). On a 256 page 1, row 15 column v clears voice
+-- v and column 8 + v randomizes it
+test("clear, randomize and a scene recall end a held step gesture, as a paste does", function()
+  -- clear
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 3, 1, 1)  -- voice 1 step 3 held: on at 15
+  tap(context, 1, 1, 15)          -- clear voice 1
+  context.grid.press(1, 9, 1, 1)
+  assert_equal(patterns[1][3], 0, "clear: the held step takes no level in the cleared pattern")
+  assert_equal(patterns[1][9], 15, "clear: the next step key toggles its own step")
+  -- randomize
+  context = load_strata(); finish_startup(context)
+  patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 3, 1, 1)
+  tap(context, 1, 9, 15)          -- randomize voice 1
+  local step_3, step_9 = patterns[1][3], patterns[1][9]
+  context.grid.press(1, 9, 1, 1)
+  assert_equal(patterns[1][3], step_3, "randomize: the held step keeps the level randomize gave it")
+  assert_equal(patterns[1][9], step_9 == 0 and 15 or 0, "randomize: step 9 toggles from what randomize gave it")
+  -- a scene recall
+  context = load_strata(); finish_startup(context)
+  patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  for step = 1, 16 do assert_equal(patterns[1][step], 0, "voice 1's pattern starts empty") end
+  capture_scene(1)
+  context.grid.press(1, 3, 1, 1)
+  recall_scene(1, 0)
+  context.grid.press(1, 9, 1, 1)
+  assert_equal(patterns[1][3], 0, "recall: the held step takes no level in the recalled pattern")
+  assert_equal(patterns[1][9], 15, "recall: the next step key toggles its own step")
+end)
+
 end

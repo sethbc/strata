@@ -372,4 +372,17 @@ test("64: a hold in the step views keeps working and never reaches positions", f
   assert_equal(calls, 0, "no strip call from the step views")
 end)
 
+test("switching halves ends a held step gesture", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 8, 8)
+  context.grid.press(1, 3, 1, 1)  -- half 1: voice 1 step 3 held
+  assert_equal(patterns[1][3], 15, "step 3 toggles on at press")
+  context.grid.press(1, 1, 8, 1); context.clock.run_for(0.6); context.grid.press(1, 1, 8, 0)
+  assert_equal(shown_half(1), 2, "the hold showed steps 9-16")
+  context.grid.press(1, 8, 1, 1)
+  assert_equal(patterns[1][16], 15, "column 8 now toggles step 16")
+  assert_equal(patterns[1][3], 15, "the hidden held step takes no level")
+end)
+
 end

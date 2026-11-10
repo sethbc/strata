@@ -10,6 +10,7 @@
 - Held keys are per port: `S.grid_held[port][x][y]` holds the press time while a key is down. `grid_key` clears a key on its release; `grid.remove` and `grid.add` forget the port's held, consumed and step keys and its page; cleanup forgets every port's.
 - A delayed key action goes through `on_hold`, never a clock of its own: a new press or the release of the key, `grid.remove` of its port and cleanup cancel its hold clock, so a grid unplugged mid-hold never saves a scene and no clock errors.
 - Pattern keys go through `step_key` and scene save keys through `scene_save_key` on every layout, so the step-level gesture and the save hold work the same everywhere.
+- Every whole-pattern change ends the voice's step gestures (`end_step_gestures`, run by `S.lib.sequencer.replace_pattern`), and a 64's half switch ends its port's (`end_port_step_gestures`), so a held step never takes a level in a pattern or half it was not pressed in (#242).
 - Each layout's rules are in its own notes file (`docs/notes/lua/grid/layout_256.md`, `layout_128h.md`, `layout_128v.md`, `layout_64.md`); the pattern sequencer's in `docs/notes/lua/sequencer.md`.
 
 ## Owns
@@ -18,7 +19,7 @@
   - State on `S`: `S.grids`, `S.MAX_GRID_PORTS`, the grid UI state (`S.grid_pages[port]`, read through `page(port)`; `S.param_page`, `S.grid_voice_select`), the held keys `S.grid_held[port][x][y]` (press time).
   - `GRID_LAYOUT`, exported as `S.lib.grid_core.GRID_LAYOUT`, which `lib/grid/faders.lua` and `lib/grid/layout_256.lua` alias.
   - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid.add`/`grid.remove` are fields of norns' `grid` table. `grid_layout`, `attach_grid` and `forget_port` are locals of the constructor.
-  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `set_page`, `any_page`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `any_fx_faders`, `scene_save_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`).
+  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `set_page`, `any_page`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `end_port_step_gestures`, `any_fx_faders`, `scene_save_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`).
   - Cleanup step 170: every pending hold canceled and every port's keys forgotten, then every connected grid left dark.
 - `lib/grid/faders.lua` (`S.lib.grid_faders`): the fader maths and fader rows (the 256's parameter page and FX faders today): `fader_param_ids`, `fader_page_count`, `fader_zero_column`, `fader_column_fraction`, `set_param_from_column`, `set_fader_param`, `fader_position`, `voice_level_fader_keys`, `grid_redraw_fader_row`, `grid_redraw_faders`. `BUFFER_FADER_KEYS`, `GRAIN_FADER_KEYS` and `append_fader_ids` are local to it.
 - Unit tests: `test/unit/grid_core_test.lua` (holds, gestures, pages per port, hot-plug); the faders are exercised through the 256's fader page in `test/unit/grid_layout_256_test.lua`.
@@ -57,9 +58,29 @@ Several grids:
 - `on_hold(port, x, y, seconds, fn)`: for a held key, a `clock.run` that sleeps `seconds` and runs `fn` once if the hold is still the pending one. A new press or the release of the key, `grid.remove` of the port and cleanup cancel it. `hold_pending(port, x, y)` is true while it waits.
 - `consume(port, x, y)` marks a held key so its release does nothing; `consumed` reads it. The mark goes with the release.
 - `port_state(port)`: a table for a layout's per-port state, created on demand and dropped when the port's grid is removed.
-- **Step level** (`step_key(port, x, y, z, voice, step, position, positions)`): on press, if another step key of the same voice is held on the same port (one pressed through `step_key`, not one that itself set a level), the most recently pressed of them gets `level_for_position(position, positions)` = `max(1, round(position * MAX_STEP_LEVEL / positions))`, and both keys are consumed; the pressed key does not toggle and stays out of the gesture while held. Otherwise the step toggles at press. `end_step_gestures(voice)` ends the gesture on that voice's held step keys on every port (they stay held; the next step key of the voice toggles its own step): the 256's paste calls it, so a step held from before the paste never takes a level in the pasted pattern. A voice, step or position out of range (not a whole number in 1..`NUM_VOICES`, 1..`PATTERN_LENGTH`, 1..`positions`) does nothing. `position` runs along the voice's shown steps: the column on 256 and 128h (16 positions) and 64 (8, its column count), the row of the voice's column on 128v (16).
+- **Step level** (`step_key(port, x, y, z, voice, step, position, positions)`): on press, if another step key of the same voice is held on the same port (one pressed through `step_key`, not one that itself set a level), the most recently pressed of them gets `level_for_position(position, positions)` = `max(1, round(position * MAX_STEP_LEVEL / positions))`, and both keys are consumed; the pressed key does not toggle and stays out of the gesture while held. Otherwise the step toggles at press. `end_step_gestures(voice)` ends the gesture on that voice's held step keys on every port (they stay held; the next step key of the voice toggles its own step): `S.lib.sequencer.replace_pattern` calls it, so a step held from before a clear, a randomize, a 256's paste or a scene recall never takes a level in the new pattern. `end_port_step_gestures(port)` forgets every step key of one port, whatever the voice (the keys stay held; their releases do nothing): the 64's half switch calls it, so a step held in the half it leaves never takes a level. A voice, step or position out of range (not a whole number in 1..`NUM_VOICES`, 1..`PATTERN_LENGTH`, 1..`positions`) does nothing. `position` runs along the voice's shown steps: the column on 256 and 128h (16 positions) and 64 (8, its column count), the row of the voice's column on 128v (16).
 - **Scene save** (`scene_save_key(port, x, y, z, scene)`): a press arms `on_hold` for `GRID_HOLD.scene_save_seconds` (0.5 s); then `capture_scene(scene)`, `grid_redraw()` and `request_redraw()` (the SCENES page shows the saved slot). Layouts light the key at 15 while `hold_pending` (4 otherwise). A shorter press saves nothing.
 - **Source and slot keys**: `source_key(voice, option)` sets `v<voice>_source` for option 1..`#SOURCE_OPTIONS` (anything else, or a voice outside 1..`NUM_VOICES`, is ignored); `source_level(voice, option)` is 15 for the selected source, 2 for an empty buffer, 4 otherwise. `record_key(slot)`/`clear_key(slot)` call `record_buffer`/`clear_buffer` for slots 1..`NUM_BUFFERS`; `record_level(slot)` is 15 recording, 11 armed (`S.lib.record.state(slot).phase == "armed"`), 8 holding audio, 2 empty; `CLEAR_LEVEL` is 4. Out-of-range levels are 0.
+
+## States: the step-level gesture
+
+The gesture's state is `step_keys[port][x][y]` (local to `lib/grid/core.lua`): `{voice, step, order, level_key}` for a key pressed through `step_key` and still held, alongside `S.grid_held[port][x][y]` (the press time). It registers no invariant.
+
+| State of a key | Fields | Meaning |
+|----------------|--------|---------|
+| Not a step key | `step_keys[port][x][y]` nil | Not held, or held but outside the gesture (ended, or pressed through no `step_key`); a step key of its voice pressed now toggles its own step |
+| Held step | entry with `level_key` nil, `S.grid_held[port][x][y]` set | The newest of these for a voice on a port takes the level of the next step key of that voice on that port |
+| Level key | entry with `level_key = true` (and consumed) | Set a held step's level; never takes a level itself |
+
+An entry exists only while its key is held (every release and press clears it). One function per transition:
+
+| Transition | Function |
+|------------|----------|
+| A step key pressed: held step, or a level key that sets the newest held step's level | `step_key` |
+| A key released, or pressed again with no release seen | `release_key`, `press_key` |
+| The voice's pattern replaced: its entries on every port forgotten | `end_step_gestures(voice)`, from `S.lib.sequencer.replace_pattern` |
+| A 64's half switch: the port's entries forgotten | `end_port_step_gestures(port)` |
+| The port's grid added or removed, cleanup | `forget_port` |
 
 ## LEDs
 

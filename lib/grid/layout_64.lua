@@ -56,9 +56,12 @@ return function(S)
     return grid_core.page(port) == LAYOUT_64.positions_page
   end
 
-  -- The hold's cycle: steps 1-8, steps 9-16, positions, steps 1-8
+  -- The hold's cycle: steps 1-8, steps 9-16, positions, steps 1-8. It ends
+  -- the port's step-level gesture, so a step held in the half it leaves
+  -- never takes a level (#242)
   local function switch_half(port, cols)
     local state = grid_core.port_state(port)
+    grid_core.end_port_step_gestures(port)
     if positions_view(port) then
       grid_core.set_page(port, 1)
       state.half = 1
