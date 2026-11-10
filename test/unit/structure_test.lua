@@ -1064,6 +1064,43 @@ test("the engine's sample paths run no sclang function per sample (#131)", funct
   assert_true((loop or ""):find("this%.interleaveChunk%(") ~= nil, "each chunk goes through interleaveChunk")
 end)
 
+-- The engine check's constant test files (#207): writeConstantFrames builds
+-- one full chunk before its loop and writes it again and again. Building a
+-- chunk per 65536 frames (an index Array of 131072 slots and a Signal each:
+-- 220 of them for the waveform area's 300 s file) crashed sclang 3.13 in
+-- the save that followed, about 1 run in 16 with 16 running at once. The
+-- body of the SC function `var name = { ... };` in text (comments stripped)
+local function sc_function_body(text, name)
+  local stripped = stubs.strip_sc_comments(text)
+  local start = stripped:find("\nvar%s+" .. name .. "%s*=%s*{")
+  if not start then return nil end
+  return stripped:match("%b{}", start)
+end
+
+local function constant_chunk_loop_findings(body)
+  local found = {}
+  local condition, loop = (body or ""):match("while%s*(%b{})%s*(%b{})")
+  if not loop then return { "no while loop" } end
+  for _, pattern in ipairs({ "repeating%.%(", "Signal%.newClear", "FloatArray%.newClear", "%(0%s*%.%." }) do
+    if (condition .. loop):find(pattern) then table.insert(found, pattern) end
+  end
+  if not loop:find("writeData%(") then table.insert(found, "the loop writes nothing") end
+  return found
+end
+
+test("the engine check builds a constant file's chunk once, not per chunk (#207)", function()
+  local old = "{ arg file, frames, values;\n    var left = frames;\n    while { left > 0 } {\n"
+    .. "        file.writeData(repeating.(left.min(65536) * values.size, values));\n        left = left - 65536;\n    };\n}"
+  assert_true(#constant_chunk_loop_findings(old) > 0, "caught: a chunk built in the loop")
+  local file = assert(io.open(repo_root .. "/test/engine_check.scd", "r"))
+  local text = file:read("*a")
+  file:close()
+  local body = sc_function_body(text, "writeConstantFrames")
+  assert_true(body ~= nil, "test/engine_check.scd defines writeConstantFrames")
+  local findings = constant_chunk_loop_findings(body)
+  assert_equal(#findings, 0, "writeConstantFrames' loop builds no chunk (found " .. table.concat(findings, ", ") .. ")")
+end)
+
 test("strata.lua never compares a param type with a string", function()
   -- the check catches both quotes and both orders, and nothing else
   local caught = { 'if p.t == "option" then', "if p.t == 'option' then", 'if param.t ~= "number" then',

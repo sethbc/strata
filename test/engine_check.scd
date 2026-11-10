@@ -409,13 +409,16 @@ var periodic = { arg period, startFrame, frames;
 // (a period longer than a FLAC block) repeated
 var noise = { arg size, level; repeating.(size, Array.fill(4801, { level.rand2 })) };
 // Write `frames` frames of `values` (an Array: one constant per channel)
-// to an open SoundFile, at most 65536 frames at a time
+// to an open SoundFile, at most 65536 frames at a time. Every full chunk is
+// the same, so it is built once and written again and again, and only a
+// shorter last chunk is built apart: building one per chunk (an index Array
+// of 131072 slots and a Signal each, 220 of them for a 300 s file) crashed
+// sclang 3.13 in the 300 s save that followed (#207)
 var writeConstantFrames = { arg file, frames, values;
-    var left = frames;
-    while { left > 0 } {
-        file.writeData(repeating.(left.min(65536) * values.size, values));
-        left = left - 65536;
-    };
+    var chunkFrames = 65536, left = frames;
+    var full = if (frames >= chunkFrames) { repeating.(chunkFrames * values.size, values) };
+    while { left >= chunkFrames } { file.writeData(full); left = left - chunkFrames };
+    if (left > 0) { file.writeData(repeating.(left * values.size, values)) };
 };
 
 // An open sound file compared in every sample with the file at `path`
