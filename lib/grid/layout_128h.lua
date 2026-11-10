@@ -1,6 +1,7 @@
 -- lib/grid/layout_128h.lua
 -- The 16x8 grid: its four pages (1 patterns, 2 faders, 3 scenes, 4 sources,
--- freeze and buffer slots), keys and LEDs. Row 8 works on every page. Registers
+-- freeze and buffer slots) by direct keys, and the positions page (5, reached
+-- from page 4 by its sources key and back), keys and LEDs. Row 8 works on every page. Registers
 -- S.registry.grid_layouts["128h"]. The functions stay global.
 
 return function(S)
