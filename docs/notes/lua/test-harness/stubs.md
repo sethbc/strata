@@ -24,7 +24,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 - `require("lfo")`: `test/stub_lfo.lua`, compared line by line with `lua/lib/lfo.lua`.
   - The library's `lfo_*` params and actions; `reset_phase` and `set("period")` reset and rescale `phase_counter` as the library does.
   - Nothing runs on its own: `context.lfo.tick(instance, raw)` performs one library step, with `raw` 0..1 as the shape output.
-- `midi`: `test/stub_midi.lua`. 16 vports, `to_msg`/`to_data`. Helpers `context.midi.plug(port, name)`, `unplug(port)`, `send(port, msg)`.
+- `midi`: `test/stub_midi.lua`. 16 vports, `to_msg`/`to_data`. Helpers `context.midi.plug(port, name)`, `unplug(port)`, `send(port, msg)`, and `reassign(from_port, to_port)`, which moves a device between vports as SYSTEM > DEVICES does (`update_devices()` only, no `midi.add` or `midi.remove`; the grid's and arc's `reassign` logic).
 - `grid` and `arc`: 4 vports each, mirroring `lua/core/grid.lua` and `arc.lua`; devices are kept by id in `devices[id]`, each named after its id (`grid 1`, `arc 1`), and every event reaches both `device.key`/`delta` and the vport's handler, as norns fires them.
   - `context.grid.plug(port, cols, rows)` and `context.arc.plug(port)` put a new device on the port's vport (its name, `device`, the grid's `cols` and `rows`) and call `grid.add`/`arc.add`; `unplug(port)` calls `remove` with the device the port's vport holds and empties the vport.
   - `context.grid.press(port, x, y, z)`, `context.arc.turn(port, ring, delta)` and `context.arc.push(port, button, state)` deliver an event from the device the port's vport holds now.

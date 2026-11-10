@@ -39,10 +39,17 @@ return function(S)
   -- Listen to MIDI vport `port`. The handler lives on the vport only (as for
   -- grids and arc): norns fires both device.event and vports[port].event, so
   -- setting it on the device as well would play every note twice.
+  -- The device last seen on the selected vport (nil: none, or it was
+  -- unplugged). SYSTEM > DEVICES moves a device with update_devices() only,
+  -- calling neither midi.add nor midi.remove, so a swap is visible only
+  -- against this record (M.reconcile).
+  local attached_device = nil
+
   function attach_midi(port)
     if S.midi_device then S.midi_device.event = nil end
     S.midi_device = midi.connect(port)
     S.midi_device.event = midi_event
+    attached_device = S.midi_device.device
   end
 
   function midi_init()
@@ -58,12 +65,29 @@ return function(S)
   end
 
   function midi.remove(device)
-    if device.port == params:get("midi_device") then reset_midi_input() end
+    if device.port == params:get("midi_device") then
+      reset_midi_input()
+      attached_device = nil
+    end
     -- SETUP shows the port as empty: norns clears the vport as midi.remove
     -- returns, before the next frame draws
     request_redraw()
     print("midi disconnected: " .. tostring(device.name))
   end
+
+  -- Called as the norns menu closes: if the device on the selected vport is
+  -- not the one attached (SYSTEM > DEVICES moved it), give up the notes the
+  -- old one held, as an unplug does, and show the new state. A menu visit that
+  -- moves nothing changes nothing.
+  function M.reconcile()
+    local current = S.midi_device and S.midi_device.device
+    if current == attached_device then return end
+    if attached_device ~= nil then reset_midi_input() end
+    attached_device = current
+    request_redraw()
+  end
+
+  S.register_menu_close(function() M.reconcile() end)
 
   -- The name of the device on the selected port, or "none"
   function midi_device_name()

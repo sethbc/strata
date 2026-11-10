@@ -415,4 +415,56 @@ test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer ra
   local rt = context.calls_named("retrigger"); assert_equal(rt[#rt].args[1], 3, "and the note still accents")
 end)
 
+-- SYSTEM > DEVICES moves a device between vports through update_devices()
+-- only: neither midi.add nor midi.remove runs (#295)
+test("a MIDI device moved off the selected port in SYSTEM > DEVICES gives up the notes it held", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  params:set("midi_note_off", 2)
+  context.midi.plug(1, "keys"); next_frame(context)
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  context.midi.send(1, { type = "pitchbend", val = 16383, ch = 3 })
+  local midi_state = local_value("S").midi_state
+  assert_true(voices[3].active and next(midi_state.held[3]) ~= nil, "a note holds voice 3")
+  assert_true(midi_state.bend[3] > 1, "bent")
+  show_page("SETUP")
+  _menu.set_mode(true); context.midi.reassign(1, 2); _menu.set_mode(false)
+  next_frame(context)
+  for i = 1, local_value("NUM_VOICES") do
+    assert_equal(next(midi_state.held[i]), nil, "no note held on voice " .. i)
+  end
+  assert_equal(next(midi_state.note_voice), nil, "no note remembered")
+  assert_equal(midi_state.bend[3], 1, "the bend is centered")
+  local shown = false
+  for _, entry in ipairs(context.screen.texts) do if entry.text == "midi 1: none" then shown = true end end
+  assert_true(shown, "SETUP shows the port as empty")
+end)
+
+test("a menu visit that moves nothing keeps the held notes", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("midi_note_off", 2)
+  context.midi.plug(1, "keys")
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  local midi_state = local_value("S").midi_state
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_true(next(midi_state.held[3]) ~= nil, "the note is still held")
+  context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 3 })
+  assert_equal(next(midi_state.held[3]), nil, "its note off releases it")
+  assert_true(not local_value("voices")[3].active, "and the voice stops")
+end)
+
+test("a device moved onto the selected port in SYSTEM > DEVICES plays", function()
+  local context = load_strata(); finish_startup(context)
+  context.midi.plug(2, "keys")
+  show_page("SETUP")
+  _menu.set_mode(true); context.midi.reassign(2, 1); _menu.set_mode(false)
+  next_frame(context)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
+  assert_equal(#context.calls_named("retrigger"), 1, "port 1 plays")
+  local shown = false
+  for _, entry in ipairs(context.screen.texts) do if entry.text == "midi 1: keys" then shown = true end end
+  assert_true(shown, "SETUP shows the device's name")
+end)
+
 end
