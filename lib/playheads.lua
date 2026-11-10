@@ -20,7 +20,7 @@ return function(S)
   local clock_id
   -- the page-5 grids' LED levels as of their last redraw (nil: none shown)
   local shown_signature
-  -- the message of the tick error last printed (nil after a good tick)
+  -- the key (`message`) of the tick error last printed (nil after a good tick)
   local last_error
 
   local function valid_voice(voice_idx)
@@ -152,15 +152,14 @@ return function(S)
   -- Run one tick; an error is printed once per distinct message (a good
   -- tick forgets it) and never ends the clock
   local function guarded_tick()
-    local ticked, report = xpcall(tick, with_traceback)
+    local ticked, report = xpcall(tick, draw_error_report)
     if ticked then
       last_error = nil
       return
     end
-    local message = tostring(report):match("^[^\n]*")
-    if message ~= last_error then
-      last_error = message
-      print("strata: playhead tick failed: " .. tostring(report))
+    if report.message ~= last_error then
+      last_error = report.message
+      print("strata: playhead tick failed: " .. report.traceback)
     end
   end
 

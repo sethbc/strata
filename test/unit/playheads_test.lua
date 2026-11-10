@@ -227,6 +227,36 @@ test("a failing tick is reported and the clock keeps ticking", function()
   assert_equal(#context.clock.take_errors(), 0, "the scheduler reported no clock error")
 end)
 
+test("a tick that keeps failing prints its error once, and again after a good tick", function()
+  local context, S = buffer_voice()
+  local lines = {}
+  local real_print = print
+  print = function(text) lines[#lines + 1] = tostring(text) end
+  local ok, err = pcall(function()
+    local failure = "tick boom"
+    S.lib.positions.end_stale_holds = function() if failure then error(failure) end end
+    local function failed_lines()
+      local count = 0
+      for _, line in ipairs(lines) do
+        if line:find("strata: playhead tick failed: ", 1, true) == 1 then count = count + 1 end
+      end
+      return count
+    end
+    context.clock.run_for(0.5)
+    assert_equal(failed_lines(), 1, "the same error on every tick prints once")
+    failure = nil
+    context.clock.run_for(0.2)
+    failure = "tick boom"
+    context.clock.run_for(0.2)
+    assert_equal(failed_lines(), 2, "printed again after a good tick")
+    failure = "another boom"
+    context.clock.run_for(0.2)
+    assert_equal(failed_lines(), 3, "a different message prints at once")
+  end)
+  print = real_print
+  if not ok then error(err, 0) end
+end)
+
 test("the clock ends with cleanup", function()
   local context = buffer_voice()
   local device = page_five_grid(context)
