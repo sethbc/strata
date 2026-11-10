@@ -392,9 +392,10 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
         try { command.(\retrigger, index, 1.0) } { raised = raised + 1 };
     });
     server.sync;
-    check.((raised == 0) and: { synthNames.(context.xg).size == synthsBefore }
+    // <= because a synth released above (voice 4) may free itself between the reads
+    check.((raised == 0) and: { synthNames.(context.xg).size <= synthsBefore }
         and: { engine.synths.size == enginesBefore }
-        and: { releasingTotal.value == releasingBefore },
+        and: { releasingTotal.value <= releasingBefore },
         "voiceOff and retrigger ignore a voice index outside the voices (% raised)".format(raised));
 }.value;
 h.stopAllVoices;
