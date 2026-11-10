@@ -36,8 +36,8 @@ var areas = if (missingAreas.notEmpty) {
         and: { if (requested.isEmpty) { onDemandAreas.includes(name).not } { requested.includes(name) } } })
 };
 // The run's own deadline (s): run_engine_check.sh passes 30 s less than its
-// timeout ($ENGINE_CHECK_TIMEOUT, 570 by default), so a long soak can be given more
-var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 540 } }.value;
+// timeout ($ENGINE_CHECK_TIMEOUT, 1200 by default), so a long soak can be given more
+var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 1170 } }.value;
 var context, engine, h;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
@@ -630,7 +630,7 @@ server.options.numInputBusChannels = 2;
 // explicitly so the worst-case memory check measures norns' budget.
 server.options.memSize = 8192;
 // Whatever hangs (a server.sync to a server that went away), the check ends:
-// a failed run after `deadline` s (540 by default, inside CI's 600 s timeout)
+// a failed run after `deadline` s (1170 by default; CI's shards pass a timeout of 570, so 540, inside their 600 s)
 SystemClock.sched(deadline, {
     ("FAIL engine check did not finish within % s".format(deadline)).postln;
     ("ENGINE CHECK FAILED: timed out after % failures".format(failures)).postln;

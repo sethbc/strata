@@ -921,6 +921,18 @@ test("CI cancels superseded runs of pull requests only, never of main (#51)", fu
 end)
 
 
+test("the engine check's default timeout fits a full local run and CI keeps 570 s (#208)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local step = workflow:match("%- name: Engine check\n(.-)\n\n") or workflow:match("%- name: Engine check\n(.*)$")
+  assert_true(step ~= nil, "the workflow has an Engine check step")
+  assert_true(step:find("ENGINE_CHECK_TIMEOUT=570", 1, true) ~= nil, "CI passes ENGINE_CHECK_TIMEOUT=570")
+  assert_true(step:find("timeout 600", 1, true) ~= nil, "CI keeps its 600 s limit around the shard")
+  assert_true(read_repo_file("test/run_engine_check.sh"):find("ENGINE_CHECK_TIMEOUT:-1200", 1, true) ~= nil,
+    "the runner's default timeout is 1200 s")
+  assert_true(read_repo_file("test/engine_check.scd"):find("{ 1170 }", 1, true) ~= nil,
+    "the check's fallback deadline is 1170 s")
+end)
+
 -- British spellings that must not creep back in (whole words, case-insensitive).
 -- Extend this table; the list lives here, so this file is the one file not scanned.
 -- ("analyses" is left out: it is also the US plural noun.)

@@ -76,10 +76,10 @@ YAML
 # sclang never exits by itself when engine_check.scd or the class library
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
-# seconds: a normal run takes about 3.5 minutes, the check's own deadline is
-# 30 s less (540 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
+# seconds: a full run of every area takes about 9 minutes (3.14.1, 536 s of areas plus start-up), the check's own deadline
+# is 30 s less (1170 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
 # long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too),
-# CI's is 600 s) and killed as soon as sclang reports a compile error.
+# CI passes ENGINE_CHECK_TIMEOUT=570 so each shard stays inside its 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
 # command) signals every descendant, found with POSIX ps (pgrep is not on
@@ -89,7 +89,7 @@ YAML
 # after sclang ends (#152). stdbuf makes sclang's output line-buffered, so
 # an error is in the output file while sclang waits (block-buffered, it
 # never would be).
-sclang_timeout=${ENGINE_CHECK_TIMEOUT:-570}
+sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1200}
 case $sclang_timeout in
   ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
 esac

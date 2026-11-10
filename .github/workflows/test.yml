@@ -100,7 +100,7 @@ jobs:
           cat "$RUNNER_TEMP/jackd.log"; exit 1
 
       - name: Engine check
-        run: SCLANG="$(command -v sclang)" timeout 600 test/run_engine_check.sh "$NORNS_DIR"
+        run: SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=570 timeout 600 test/run_engine_check.sh "$NORNS_DIR"
 
   # The required status check: passes only when every shard passed (a
   # failed, canceled or skipped shard fails it), so branch protection keeps
