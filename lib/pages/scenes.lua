@@ -5,7 +5,8 @@
 -- block below them. E2 runs the cursor (S.cursors.scene) through the slots
 -- and then the fields, E3 edits (a slot: the transition time), K2 recalls
 -- with the transition, K3 recalls at once, ALT+K3 saves (a populated slot
--- asks for a second ALT+K3 within 2 s, while its prompt still shows).
+-- asks for a second ALT+K3 within 2 s: the hint row shows the page's own
+-- prompt meanwhile, and the page animates until it lapses).
 -- M.move_cursor (S.lib.pages_scenes) moves the cursor for E2 and arc ring 1.
 -- Registers its S.registry.pages record (every field but the arc fields,
 -- which are lib/arc/scenes.lua's).
@@ -33,6 +34,13 @@ return function(S)
   -- The overwrite confirmation: the slot it was asked for and when it lapses
   S.scenes_page = {armed_slot = nil, armed_until = 0}
 
+  S.register_invariant("scenes prompt", function()
+    local slot = S.scenes_page.armed_slot
+    if slot ~= nil and not (type(slot) == "number" and slot % 1 == 0 and slot >= 1 and slot <= NUM_SCENES) then
+      return "armed_slot is " .. tostring(slot)
+    end
+  end)
+
   local function slot_position(slot)
     local column = math.ceil(slot / SCENES_PAGE.rows_per_column)
     local row = (slot - 1) % SCENES_PAGE.rows_per_column
@@ -50,16 +58,24 @@ return function(S)
     return string.format("dur %.0fs", params:get(field_id))
   end
 
-  -- The confirmation counts only on the slot it was asked for
-  local function armed_here()
-    return S.scenes_page.armed_slot == S.cursors.scene
+  -- Armed: the confirmation was asked for on the cursor's slot and has not
+  -- lapsed. Only then does the hint row ask and a second ALT+K3 save
+  local function armed()
+    local state = S.scenes_page
+    return state.armed_slot == S.cursors.scene and util.time() < state.armed_until
+  end
+
+  local function disarm()
+    S.scenes_page.armed_slot = nil
+    S.scenes_page.armed_until = 0
+  end
+
+  -- The overwrite prompt for a slot, as the hint row shows it
+  local function overwrite_prompt(slot)
+    return "K3 again: overwrite S" .. slot
   end
 
   local function redraw_scenes()
-    if S.scenes_page.armed_slot and not armed_here() then
-      S.scenes_page.armed_slot = nil
-      S.lib.ui_flash.start("hints", nil)
-    end
     local cursor = S.cursors.scene
     for slot = 1, NUM_SCENES do
       local x, y = slot_position(slot)
@@ -97,34 +113,31 @@ return function(S)
   end
 
   local function scenes_hints(alt_held)
-    if S.scenes_page.armed_slot and not armed_here() then
-      S.scenes_page.armed_slot = nil
-      S.lib.ui_flash.start("hints", nil)
-    end
+    if armed() then return overwrite_prompt(S.scenes_page.armed_slot) end
     if alt_held then return "K3:save" end
     if S.cursors.scene > NUM_SCENES then return "E2:move E3:edit" end
     return "K2:fade K3:recall"
   end
 
-  local function disarm()
-    S.scenes_page.armed_slot = nil
-    S.scenes_page.armed_until = 0
-  end
-
-  -- The overwrite prompt for a slot, as the hint row shows it
-  local function overwrite_prompt(slot)
-    return "K3 again: overwrite S" .. slot
+  -- The frame clock draws the page every frame while this returns true: the
+  -- prompt lapses with no clock of its own. Once it has lapsed (its time
+  -- passed, or the cursor left its slot) it disarms and returns true once
+  -- more, for the frame that takes the prompt off the hint row
+  local function scenes_animates()
+    if S.scenes_page.armed_slot == nil then return false end
+    if not armed() then disarm() end
+    return true
   end
 
   -- Put the scene cursor on stop `slot` (clamped to the slots and fields).
-  -- A move to another stop disarms a pending overwrite confirmation and
-  -- clears its prompt. E2 and arc ring 1 (lib/arc/scenes.lua) move through it
+  -- A move to another stop disarms a pending overwrite confirmation (its
+  -- prompt goes with it). E2 and arc ring 1 (lib/arc/scenes.lua) move through it
   function M.move_cursor(slot)
     local before = S.cursors.scene
     S.lib.ui_cursors.move("scene", slot - before)
     if S.cursors.scene ~= before and S.scenes_page.armed_slot then
       disarm()
-      S.lib.ui_flash.start("hints", nil)
+      request_redraw()
     end
   end
 
@@ -154,25 +167,20 @@ return function(S)
   end
 
   -- ALT+K3: save the cursor slot. A populated slot needs a second ALT+K3
-  -- within arm_seconds on the same slot while its prompt still shows on the
-  -- hint row (another flash that replaced it, a failed buffer load say,
-  -- leaves the press only arming again); any cursor move disarms
+  -- within arm_seconds on the same slot while its prompt shows on the hint
+  -- row: a "hints" flash covering the row (one with no page) leaves the
+  -- press only arming again; any cursor move disarms
   local function scenes_alt_key(n)
     local slot = S.cursors.scene
     if n ~= 3 or slot > NUM_SCENES then return end
     local state = S.scenes_page
-    if S.scenes[slot].populated then
-      local confirmed = state.armed_slot == slot and util.time() < state.armed_until
-        and S.lib.ui_flash.text("hints") == overwrite_prompt(slot)
-      if not confirmed then
-        state.armed_slot = slot
-        state.armed_until = util.time() + SCENES_PAGE.arm_seconds
-        S.lib.ui_flash.start("hints", overwrite_prompt(slot), SCENES_PAGE.arm_seconds, UI_PAGES.index.SCENES)
-        return
-      end
+    if S.scenes[slot].populated and not (armed() and S.lib.ui_flash.text("hints") == nil) then
+      state.armed_slot = slot
+      state.armed_until = util.time() + SCENES_PAGE.arm_seconds
+      request_redraw()
+      return
     end
     disarm()
-    S.lib.ui_flash.start("hints", nil)
     S.lib.scenes.save(slot)
   end
 
@@ -198,7 +206,8 @@ return function(S)
     table.insert(states, state("armed", function()
       populate_all()
       S.cursors.scene = 8
-      S.lib.ui_flash.start("hints", overwrite_prompt(8), SCENES_PAGE.arm_seconds, UI_PAGES.index.SCENES)
+      S.scenes_page.armed_slot = 8
+      S.scenes_page.armed_until = util.time() + SCENES_PAGE.arm_seconds
     end))
     return states
   end
@@ -207,7 +216,7 @@ return function(S)
   -- strata.lua dispatch through S.registry.pages[S.ui_page]
   S.registry.pages[UI_PAGES.index.SCENES] = {name = "SCENES", draw = redraw_scenes, hints = scenes_hints,
     enc = scenes_enc, key = scenes_key, alt_key = scenes_alt_key, arc_button = scenes_arc_button,
-    layout_states = layout_states()}
+    animates = scenes_animates, layout_states = layout_states()}
 
   return M
 end
