@@ -13,8 +13,8 @@ The filter's restore mix (`S.fx_last_mix.filter`, and the mix before the last ch
 
 | Event | Mix | Restore mix | Mix before |
 |-------|-----|-------------|------------|
-| `filter_mix` set higher than the mix before (E3, PARAMS, scene, PSET) | x | x | x |
-| `filter_mix` set equal or lower (a turn down, a fade, a PSET bang of the same value) | x | unchanged | x |
+| `filter_mix` set higher than the mix before (E3, PARAMS; a PSET load or a scene recall counts as a rise only when it raises the mix) | x | x | x |
+| `filter_mix` set equal or lower (a turn down, a fade, a PSET bang of the same value; a PSET load or scene recall of a lower mix is a fall too, decision 1's accepted cost for any fall that is not K3's) | x | unchanged | x |
 | K3 (`toggle_filter_mix`) with a mix above 0 | 0 | the mix at the press | 0 |
 | K3 with a mix of 0 | the restore mix | unchanged | the restore mix (set through the action) |
 
