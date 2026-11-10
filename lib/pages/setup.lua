@@ -69,7 +69,7 @@ return function(S)
   -- performance field above the buffer length): "(next start)" when a
   -- shown field differs from the setting this start used (the engine read
   -- the same file at alloc), "may xrun" for high on a CM3 or Pi 3, and the
-  -- memory step-down ("300 s -> 120 s (memory)") when the high tier runs
+  -- step-down ("300 s -> 120 s (memory)", or "(no meminfo)") when the high tier runs
   -- shorter buffers than the unchanged setting asks for. The buffer length
   -- is offered when the setting or the running tier is high
   local function add_performance_rows(rows)
@@ -91,8 +91,8 @@ return function(S)
     if #notes > 0 then table.insert(rows, note_row(table.concat(notes, ", "))) end
     if buffer_shown and running.tier == "high" and setting.buffer_seconds == start.buffer_seconds
       and running.buffer_seconds < setting.buffer_seconds then
-      table.insert(rows, note_row(string.format("%d s -> %d s (memory)", setting.buffer_seconds,
-        running.buffer_seconds)))
+      table.insert(rows, note_row(string.format("%d s -> %d s (%s)", setting.buffer_seconds,
+        running.buffer_seconds, performance.step_down_cause())))
     end
   end
 
@@ -105,6 +105,8 @@ return function(S)
     add_performance_rows(rows)
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
       and string.format("running: high, %d s", S.performance.buffer_seconds) or "running: standard"})
+    local running_note = S.lib.performance.running_note()
+    if running_note then table.insert(rows, note_row(running_note)) end
     local grid_count, grid_sizes = connected_grids()
     table.insert(rows, {selectable = false, text = "grid: " .. grid_count .. " connected"})
     if grid_count > 0 then
@@ -250,6 +252,11 @@ return function(S)
           reason = "high: setting"}
         S.performance_setting = {performance = "high", buffer_seconds = 300}
         S.performance_start_setting = {performance = "high", buffer_seconds = 300}
+        enc(2, 20)
+      end},
+      {name = "performance: active file not written", setup = function()
+        S.performance = {tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
+          reason = "standard: performance_active.data could not be written"}
         enc(2, 20)
       end},
     }}

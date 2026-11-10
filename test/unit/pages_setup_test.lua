@@ -324,6 +324,28 @@ test("the buffer length field shows only for the high setting or tier", function
   assert_true(not screen_shows(context, "buffer length"), "no buffer length on standard")
 end)
 
+test("SETUP shows why the running tier is not the setting's", function()
+  local context = load_setup({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
+    reason = "standard: performance_active.data could not be written"})
+  local running = entry_named(context, "running: standard")
+  local note = entry_named(context, "active file not written")
+  assert_true(running and note, "the running row and its note show")
+  assert_true(note.y > running.y and note.y - running.y <= 10, "the note is directly under running")
+  assert_screen_layout(context, "SETUP running note at the end")
+  enc(2, -20); redraw()
+  assert_screen_layout(context, "SETUP running note at the start")
+  context = load_setup({tier = "high", buffer_seconds = 16, max_grains = 128, history_seconds = 60,
+    reason = "high: setting; buffer 300 s -> 16 s (meminfo unreadable)"}, "performance high\nbuffer_seconds 300\n")
+  assert_true(screen_shows(context, "300 s -> 16 s (no meminfo)"), "the cause is named")
+  -- a plain reason adds no note row
+  context = load_setup({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
+    reason = "auto: Raspberry Pi 3"})
+  local rows = local_value("S").lib.pages_setup.setup_rows()
+  for _, row in ipairs(rows) do
+    assert_true(row.text ~= "active file not written" and row.text ~= "old active file kept", "no note row")
+  end
+end)
+
 test("high on a CM3 or Pi 3 warns may xrun", function()
   for _, platform in ipairs({ 2, 3 }) do
     local context = load_setup()
