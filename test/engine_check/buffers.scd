@@ -935,13 +935,16 @@ checkLongSlots.value;
     {
         var slot = 2, fileRate = 22050, path = scratchRoot +/+ "buffers-past-end.wav", frames = fileRate * 16;
         writeRegions.(path, "WAV", fileRate, fileRate, frames, 0.1, 0.7);
-        command.(\loadBuffer, slot, path, 100);
-        h.waitFor({ engine.bufferFrames[slot] == frames });
-        0.1.wait; server.sync;
-        check.((engine.bufferFrames[slot] == frames) and: { (bufferSample.(engine.buffersL[slot], 0) - 0.7).abs < 0.001 },
-            "buffers: a start past the file's end loads its last frames (% frames, first sample %)".format(
-                engine.bufferFrames[slot], bufferSample.(engine.buffersL[slot], 0)));
-        command.(\clearBuffer, slot); server.sync;
+        // 100000 s at 22050 Hz is more frames than an int32 holds
+        [100, 100000].do({ arg start;
+            command.(\loadBuffer, slot, path, start);
+            h.waitFor({ engine.bufferFrames[slot] == frames });
+            0.1.wait; server.sync;
+            check.((engine.bufferFrames[slot] == frames) and: { (bufferSample.(engine.buffersL[slot], 0) - 0.7).abs < 0.001 },
+                "buffers: a start past the file's end loads its last frames (start %: % frames, first sample %)".format(
+                    start, engine.bufferFrames[slot], bufferSample.(engine.buffersL[slot], 0)));
+            command.(\clearBuffer, slot); server.sync;
+        });
         File.delete(path);
     }.value;
     // a long file's check seeks too: the peaks it reads begin at the start

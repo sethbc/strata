@@ -91,14 +91,20 @@
 
     // Read a slot's peak buffer (one /b_getn of 64 floats) into sclang: its
     // first usedBins bins spread over waveformPoints, each new bin the
-    // largest of the bins it covers, then run action. A reply that arrives
-    // after something changed the slot stores nothing (it belongs to audio
-    // the slot no longer holds), and action runs either way.
+    // largest of the bins it covers, then run action. A spread (usedBins
+    // under waveformPoints) also goes back into the peak buffer, so sclang
+    // and the buffer keep one overview. A reply that arrives after something
+    // changed the slot stores nothing (it belongs to audio the slot no
+    // longer holds), and action runs either way.
     readSlotPeaks { arg index, usedBins, action;
-        var points = this.waveformPoints, change = slotChanges[index];
+        var points = this.waveformPoints, change = slotChanges[index], used = usedBins.clip(1, points);
         this.slotPeakBuffer(index).getn(0, points, { arg values;
             if (slotChanges[index] == change) {
-                areaState[\waveform][\peaks][index] = this.spreadPeaks(values, usedBins.clip(1, points));
+                if (used < points) {
+                    this.storeSlotPeaks(index, this.spreadPeaks(values, used));
+                } {
+                    areaState[\waveform][\peaks][index] = this.spreadPeaks(values, used);
+                };
             };
             action.value;
         });

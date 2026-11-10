@@ -98,14 +98,17 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
 
 // A replace take's peaks: a check synth fills the peak buffer (bin i holds i / 64)
 {
-    var slot = 3, def = \strataCheckPeakFill, peaks, synth;
+    var slot = 3, def = \strataCheckPeakFill, peaks, synth, values;
+    var fill = {
+        synth = Synth(def, [\buf, engine.slotPeakBuffer(slot).bufnum], engine.context.xg);
+        0.05.wait; synth.free; server.sync;
+    };
     SynthDef(def, { arg buf;
         var phase = Phasor.ar(0, 1, 0, BufFrames.kr(buf));
         BufWr.ar(phase / 64, buf, phase, 1);
     }).add;
     server.sync;
-    synth = Synth(def, [\buf, engine.slotPeakBuffer(slot).bufnum], engine.context.xg);
-    0.05.wait; synth.free; server.sync;
+    fill.value;
     engine.readSlotPeaks(slot, points, { peaks = storedPeaks.(engine, slot) });
     waitFor.({ peaks.notNil });
     check.((0 .. points - 1).every({ arg bin; (peaks[bin] - (bin / points)).abs < 0.0001 }),
@@ -116,6 +119,11 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     // of the first 32 bins spread over 64: new bin b covers old bin b div 2, the largest
     check.((0 .. points - 1).every({ arg bin; (peaks[bin] - ((bin div: 2) / points)).abs < 0.0001 }),
         "waveform: a replace take's peaks and an early stop's spread over 64 (early stop: read back %)".format(peaks.keep(4)));
+    server.sync;
+    values = peakBufferValues.(engine, slot);
+    check.((0 .. points - 1).every({ arg bin; (values[bin] - ((bin div: 2) / points)).abs < 0.0001 }),
+        "waveform: an early stop's spread reaches the peak buffer too (buffer holds %)".format(values.keep(4)));
+    fill.value;
     peaks = nil;
     engine.readSlotPeaks(slot, 3, { peaks = storedPeaks.(engine, slot) });
     waitFor.({ peaks.notNil });
@@ -150,6 +158,20 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
             first !? { first[\generation] }, second !? { second[\generation] }));
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
+}.value;
+
+// The action runs once the rename ends, only if nothing changed the slot
+// since the write began: the clear lands before the rename can end, since
+// both calls run in this one thread
+{
+    var slot = 6, ran = false, unchanged = false;
+    engine.writeSlotPeaks(slot, 100, { unchanged = true });
+    waitFor.({ unchanged });
+    check.(unchanged, "waveform: writeSlotPeaks runs its action once the rename ends");
+    engine.writeSlotPeaks(slot, 100, { ran = true });
+    engine.clearSlot(slot);
+    0.3.wait; server.sync;
+    check.(ran.not, "waveform: a slot changed during the write drops writeSlotPeaks' action");
 }.value;
 
 // The peaks file is in place when the length report leaves: the poll's
