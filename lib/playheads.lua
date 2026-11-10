@@ -129,10 +129,9 @@ return function(S)
     S.lib.positions.end_stale_holds()
     if S.lib.grid_core.any_page(POSITION_PAGE) then
       local signature = S.lib.positions.display_signature()
-      if signature ~= shown_signature then
-        shown_signature = signature
-        grid_redraw()
-      end
+      -- the first look only records: whatever put the grid on this page redrew it
+      if shown_signature ~= nil and signature ~= shown_signature then grid_redraw() end
+      shown_signature = signature
     else
       shown_signature = nil
     end
