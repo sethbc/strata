@@ -16,7 +16,7 @@ The filter's restore mix (`S.fx_last_mix.filter`, and the mix before the last ch
 | `filter_mix` set higher than the mix before (E3, PARAMS, scene, PSET) | x | x | x |
 | `filter_mix` set equal or lower (a turn down, a fade, a PSET bang of the same value) | x | unchanged | x |
 | K3 (`toggle_filter_mix`) with a mix above 0 | 0 | the mix at the press | 0 |
-| K3 with a mix of 0 | the restore mix | unchanged | 0 (the restore starts a new run, so a later turn down below it is the new level) |
+| K3 with a mix of 0 | the restore mix | unchanged | the restore mix (set through the action) |
 
 Known cost (decision 1): turned down from 80% to 30% and later to 0, K3 restores 80%.
 

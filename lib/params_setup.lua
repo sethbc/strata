@@ -37,7 +37,7 @@ return function(S)
   local filter_mix_before = 0  -- the filter mix before its last change (the param's default)
 
   -- FX's K3 on a filter row: a mix above 0 becomes 0 (remembering it), a mix
-  -- of 0 becomes the restore mix and counts as a rise from 0
+  -- of 0 becomes the restore mix
   function M.toggle_filter_mix()
     local mix = params:get("filter_mix")
     if mix > 0 then
@@ -45,7 +45,6 @@ return function(S)
       params:set("filter_mix", 0)
     else
       params:set("filter_mix", S.fx_last_mix.filter)
-      filter_mix_before = 0  -- the restore starts a new run: a later turn down below it is the new level
     end
   end
 
