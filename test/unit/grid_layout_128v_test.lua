@@ -1,6 +1,6 @@
 -- test/unit/grid_layout_128v_test.lua
--- The 8x16 grid layout (lib/grid/layout_128v.lua): pages 1-4 (patterns,
--- faders, scenes, sources) cycled by (8,8)
+-- The 8x16 grid layout (lib/grid/layout_128v.lua): pages 1-5 (patterns,
+-- faders, scenes, sources, positions) cycled by (8,8)
 -- Run alone: lua test/run.lua grid_layout_128v
 
 return function(h)
@@ -13,7 +13,7 @@ local function tap(context, port, x, y)
 end
 -- (8,8) until the port shows the page
 local function show_grid_page(context, port, page)
-  for _ = 1, 4 do
+  for _ = 1, 5 do
     if grid_core().page(port) == page then return end
     tap(context, port, 8, 8)
   end
@@ -23,7 +23,7 @@ end
 test("every 128v grid key runs without error", function()
   local context = load_strata()
   local device = context.grid.plug(1, 8, 16)
-  for page = 1, 4 do
+  for page = 1, 5 do
     show_grid_page(context, 1, page)
     for y = 1, 16 do
       for x = 1, 8 do
@@ -55,12 +55,12 @@ test("grid_redraw draws the 128v layout (I2), on a hot-plugged grid too (I3)", f
   assert_true(lit, "128v layout drew something")
 end)
 
-test("128v (8,8) cycles four pages and shows the page in its LED", function()
+test("128v (8,8) cycles five pages and shows the page in its LED", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 8, 16)
-  local levels = {4, 8, 12, 15}
+  local levels = {3, 6, 9, 12, 15}
   assert_equal(grid_core().page(1), 1, "a grid starts on the patterns page")
-  for _, page in ipairs({1, 2, 3, 4, 1}) do
+  for _, page in ipairs({1, 2, 3, 4, 5, 1}) do
     assert_equal(grid_core().page(1), page)
     assert_equal(device:get_led(8, 8), levels[page], "page " .. page .. " LED level")
     tap(context, 1, 8, 8)
@@ -68,7 +68,7 @@ test("128v (8,8) cycles four pages and shows the page in its LED", function()
   -- pages are per grid
   local other = context.grid.plug(2, 8, 16)
   assert_equal(grid_core().page(2), 1, "a second grid keeps its own page")
-  assert_equal(other:get_led(8, 8), 4)
+  assert_equal(other:get_led(8, 8), 3)
   assert_equal(grid_core().page(1), 2)
 end)
 
@@ -302,7 +302,7 @@ test("128h page 4 column 12 and 128v row 14 toggle freeze", function()
   assert_equal(device:get_led(5, 14), 3)
   assert_equal(device:get_led(8, 14), 0, "column 8 row 14 has no freeze key")
   -- the patterns page shows steps there
-  tap(context, 1, 8, 8)
+  tap(context, 1, 8, 8); tap(context, 1, 8, 8)  -- page 5, then 1
   assert_equal(grid_core().page(1), 1)
 end)
 
@@ -330,6 +330,107 @@ test("128v lights the sounding step between steps, as SEQ does (#113)", function
   pattern_toggle()
   assert_equal(led(1, 2), 9, "stopped: the stored level again")
   assert_equal(led(2, 2), 0)
+end)
+
+-- Voices 1-3 on slot 1 (16 s), as positions_test does
+local function buffer_voices(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  for voice_idx = 1, 3 do params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1) end
+  context.clear_engine_calls()
+  return S
+end
+
+test("128v: columns 1-7 are the voices' positions, row 1 the slot's start", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  show_grid_page(context, 1, 5)
+  S.grid_voice_select = 3
+  tap(context, 1, 1, 5)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "(1,5) jumps voice 1 to cell 5 of 16")
+  assert_equal(S.grid_voice_select, 1, "the press selects the grid voice")
+  tap(context, 1, 2, 1)
+  assert_near(params:get("v2_buf_pos"), 0, 1e-9, "row 1 is the slot's start")
+  context.grid.press(1, 1, 5, 1)
+  context.grid.press(1, 1, 9, 1)
+  assert_near(params:get("v1_loop_start"), 0.25, 1e-9)
+  assert_near(params:get("v1_loop_length"), 0.3125, 1e-9)
+  context.grid.press(1, 1, 9, 0); context.grid.press(1, 1, 5, 0)
+  for voice_idx = 1, 7 do
+    for cell = 1, 16 do
+      assert_equal(device:get_led(voice_idx, cell), S.lib.positions.grid_level(voice_idx, cell, 16),
+        "LED " .. voice_idx .. "," .. cell)
+    end
+  end
+end)
+
+test("128v: column 8 rows 10-16 are the grid voice's strip", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  local positions = S.lib.positions
+  show_grid_page(context, 1, 5)
+  S.grid_voice_select = 1
+  tap(context, 1, 8, 11)
+  assert_equal(positions.last_recalled(1), 2, "(8,11) recalls bookmark 2")
+  params:set("v1_buf_pos", 0.6)
+  context.grid.press(1, 8, 14, 1)
+  tap(context, 1, 8, 12)
+  context.grid.press(1, 8, 14, 0)
+  assert_near(positions.bookmark(1, 3), 0.6, 1e-6, "(8,14) held + (8,12) stores bookmark 3")
+  context.clear_engine_calls()
+  context.grid.press(1, 8, 15, 1)
+  local held
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then held = call.args[3] end
+  end
+  assert_equal(held, 1, "(8,15) held holds the scan")
+  assert_equal(device:get_led(8, 15), positions.strip_level(1, "hold"))
+  context.grid.press(1, 8, 15, 0)
+  held = nil
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then held = call.args[3] end
+  end
+  assert_equal(held, 0, "released: 0")
+  params:set("v1_loop_start", 0.25); params:set("v1_loop_length", 0.5)
+  tap(context, 1, 8, 16)
+  assert_equal(params:get("v1_loop_start"), 0, "(8,16) loop back to whole")
+  for row = 10, 16 do
+    local key = ({1, 2, 3, 4, "store", "hold", "whole"})[row - 9]
+    assert_equal(device:get_led(8, row), positions.strip_level(1, key), "strip LED row " .. row)
+  end
+end)
+
+test("128v: pages 1-4 keep every key and never reach positions", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  local calls = 0
+  for _, name in ipairs({"grid_key", "strip_key"}) do
+    local original = S.lib.positions[name]
+    S.lib.positions[name] = function(...) calls = calls + 1; return original(...) end
+  end
+  for page = 1, 4 do
+    show_grid_page(context, 1, page)
+    for y = 1, 16 do
+      for x = 1, 8 do
+        if not (x == 8 and y == 8) then tap(context, 1, x, y) end
+      end
+    end
+  end
+  assert_equal(calls, 0, "pages 1-4 never call S.lib.positions")
+end)
+
+test("128v: an armed slot's record key lights 11", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  params:set("record_sync", 3)
+  show_grid_page(context, 1, 4)
+  tap(context, 1, 1, 12)
+  context.polls.fire("recordState", 32)
+  grid_redraw()
+  assert_equal(device:get_led(1, 12), 11, "an armed slot's record key")
 end)
 
 end
