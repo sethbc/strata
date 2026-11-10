@@ -29,6 +29,6 @@ Tests: `test/unit/playheads_test.lua` (the integration, an LFO-moved scan, freez
 | State | Fields | Legal values | Transition |
 |-------|--------|--------------|------------|
 | the clock | `clock_id` | nil (stopped) or a running clock | `start_clock` (the start step) and `stop_clock` (cleanup) |
-| the last tick error | `last_error` | nil, or the first line of the error last printed | `guarded_tick`: a good tick sets nil, a failing one prints its traceback once per distinct message |
+| the last tick error | `last_error` | nil, or the `message` key of the error last printed | `guarded_tick`: a good tick sets nil, a failing one prints its traceback once per distinct message |
 
-- The loop runs `tick` through `xpcall(tick, with_traceback)`, so an error in a tick (`end_stale_holds`, a signature, a redraw) is printed as `strata: playhead tick failed: ...` and never ends the clock.
+- The loop runs `tick` through `xpcall(tick, draw_error_report)` (the frame clock's handler, so both clocks key a repeated error alike), so an error in a tick (`end_stale_holds`, a signature, a redraw) is printed as `strata: playhead tick failed: ...` and never ends the clock.
