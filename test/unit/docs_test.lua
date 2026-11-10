@@ -895,6 +895,37 @@ test("CI's engine shards run every engine check area exactly once", function()
     "an engine job gathers the shards")
 end)
 
+test("every CI job has a timeout", function()
+  local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
+  local jobs_text = workflow:match("\njobs:\n(.*)$")
+  assert_true(jobs_text ~= nil, "the workflow has jobs")
+  -- split the jobs at their two-space indent keys
+  local jobs, order, current = {}, {}, nil
+  for line in (jobs_text .. "\n"):gmatch("([^\n]*)\n") do
+    local name = line:match("^  ([%w_%-]+):%s*$")
+    if name then
+      current = name; jobs[name] = {}; order[#order + 1] = name
+    elseif current then
+      local minutes = line:match("^    timeout%-minutes:%s*(%d+)%s*$")
+      if minutes then jobs[current].minutes = tonumber(minutes) end
+      jobs[current].text = (jobs[current].text or "") .. line .. "\n"
+    end
+  end
+  local expected = { lua = 15, ["engine-shard"] = 15, engine = 5 }
+  for _, name in ipairs(order) do
+    assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
+    assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
+    assert_equal(jobs[name].minutes, expected[name], "timeout-minutes of job " .. name)
+  end
+  for name in pairs(expected) do assert_true(jobs[name] ~= nil, "job " .. name .. " exists") end
+  -- the shard's timeout covers its engine check plus setup
+  local seconds = tonumber(jobs["engine-shard"].text:match("name: Engine check\n%s+run:[^\n]-timeout (%d+) "))
+  assert_true(seconds ~= nil, "the engine check step has a timeout in seconds")
+  local setup_seconds = 180
+  assert_true(seconds + setup_seconds <= jobs["engine-shard"].minutes * 60,
+    "the shard's timeout covers its " .. seconds .. " s check plus " .. setup_seconds .. " s of setup")
+end)
+
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
 -- runs: the same Ubuntu release and SuperCollider package
 test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
