@@ -123,7 +123,7 @@ return function(S)
       S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
     end
 
-    local started = clock.run(function()
+    S.pattern_clock = clock.run(function()
       while S.pattern_playing do
         local played, step_error = xpcall(play_step, with_traceback)
         if not played then
@@ -132,6 +132,7 @@ return function(S)
           -- error again for maiden
           S.pattern_clock = nil
           pattern_clock_stop()
+          -- level 0: the message already carries its traceback
           error(step_error, 0)
         end
 
@@ -139,9 +140,6 @@ return function(S)
         clock.sync(1/4)  -- 16th notes
       end
     end)
-    -- A first step that failed has already stopped the pattern (clock.run
-    -- runs it at once): its id must not be recorded
-    if S.pattern_playing then S.pattern_clock = started end
   end
 
   function pattern_clock_stop()
