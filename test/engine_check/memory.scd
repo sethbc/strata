@@ -202,9 +202,10 @@ var checkGuardResumes = {
             Error("memory check: a deliberate error while the groups are paused").throw
         })
     } { caught = true };
-    tick = Synth(\strataCheckTick, [\out, bus.index], engine.processGroup, \addToTail);
-    server.sync; 0.05.wait; first = h.readBus(bus)[0]; 0.1.wait; second = h.readBus(bus)[0];
-    tick.free; server.sync; bus.free;
+    {
+        tick = Synth(\strataCheckTick, [\out, bus.index], engine.processGroup, \addToTail);
+        server.sync; 0.05.wait; first = h.readBus(bus)[0]; 0.1.wait; second = h.readBus(bus)[0];
+    }.protect({ if (tick.notNil) { tick.free }; bus.free });
     check.(caught and: { second > (first + 0.05) },
         "memory: a scenario that errors while the groups are paused leaves them running (caught %, the clock read % then %)".format(caught, first, second));
 };
@@ -302,7 +303,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     // fade are unchanged.
     var engineGroups = [target.voiceGroup, target.processGroup];
     var cutHoldSeconds = 0.01, voicesHeld = false;
-    var pendingHolds = List.new;   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
+    var pendingHolds = List.new(target.numVoices * 2);   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
     var holdVoices = {
         server.sendBundle(nil, *engineGroups.collect({ arg group; ['/n_run', group.nodeID, 0] }));
         voicesHeld = true;
@@ -350,11 +351,15 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         check.(wasHeld and: { cutting.size > 0 } and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start, held in their fade (%: % of %%)".format(
                 label, present, cutting.size, if (wasHeld) { "" } { ", but the scenario never held the voices" }));
-        // the bound (#218): a voice holds one cutting set, and these scenarios'
-        // last switch cuts one grain synth per voice (seven, measured in every
-        // scenario), so a second cutting set kept past a switch makes more
+        // the bound (#218) is these scenarios', not the engine's invariant: a
+        // legal cutting set is up to a grain and a voice synth per voice (a
+        // synth -> buffer switch cuts both), but each case's last switch cuts
+        // one grain synth per voice (seven, measured in every scenario), so a
+        // second cutting set kept past a switch makes more. Whoever hits it:
+        // check whether the scenario change legitimately cuts a voice synth
+        // too before loosening it
         check.(cutting.size <= target.numVoices,
-            "memory: at most one cutting set is held, a grain synth per voice (%: % cutting synths for % voices)".format(
+            "memory: at most one grain synth per voice is cut in these scenarios (each last switch cuts one; check that a scenario change does not legitimately cut a voice synth too before loosening this) (%: % cutting synths for % voices)".format(
                 label, cutting.size, target.numVoices));
         if (report.notNil) { report.value(fits, freeKB) } {
             check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
