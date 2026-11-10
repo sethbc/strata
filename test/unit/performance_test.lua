@@ -228,6 +228,24 @@ test("set_setting writes performance.data through a temporary file and rejects o
   assert_equal(setting.performance, "high"); assert_equal(setting.buffer_seconds, 120)
 end)
 
+test("running_note and step_down_cause read the engine's reason", function()
+  local function reason_of(tier, buffer_seconds, history_seconds, reason)
+    h.write_performance_active({tier = tier, buffer_seconds = buffer_seconds,
+      max_grains = 128, history_seconds = history_seconds, reason = reason})
+    load_strata()
+    return local_value("S").lib.performance
+  end
+  local performance = reason_of("standard", 16, 16, "standard: performance_active.data could not be written")
+  assert_equal(performance.running_note(), "active file not written")
+  performance = reason_of("high", 60, 60, "high: the old performance_active.data (it could not be replaced)")
+  assert_equal(performance.running_note(), "old active file kept")
+  performance = reason_of("high", 60, 60, "auto: Raspberry Pi 4 Model B Rev 1.4")
+  assert_equal(performance.running_note(), nil, "a plain reason has no note")
+  assert_equal(performance.step_down_cause(), "memory")
+  performance = reason_of("high", 16, 60, "high: setting; buffer 300 s -> 16 s (meminfo unreadable)")
+  assert_equal(performance.step_down_cause(), "no meminfo")
+end)
+
 test("a failed write keeps the old setting and returns false", function()
   local context = load_strata()
   local performance = local_value("S").lib.performance

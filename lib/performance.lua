@@ -110,6 +110,26 @@ return function(S)
     S.performance_start_setting = M.setting()
   end
 
+  local function reason_text()
+    return S.performance and S.performance.reason or ""
+  end
+
+  -- Why the running tier is not what the engine meant to write, from the
+  -- engine's reason text (StrataPerformance.sc: unwrittenPerformance): nil
+  -- when the active file was written as decided
+  function M.running_note()
+    local reason = reason_text()
+    if reason:find("could not be written", 1, true) then return "active file not written" end
+    if reason:find("could not be replaced", 1, true) then return "old active file kept" end
+    return nil
+  end
+
+  -- What a memory step-down names as its cause: the engine could not read
+  -- meminfo, or memory was short
+  function M.step_down_cause()
+    return reason_text():find("meminfo unreadable", 1, true) and "no meminfo" or "memory"
+  end
+
   -- The slot length the engine reports (bufferState's slot index
   -- NUM_BUFFERS, lib/buffers.lua). Normally it equals S.performance's; an old
   -- active file the engine could not replace may name more than memory let
