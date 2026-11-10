@@ -569,4 +569,27 @@ test("the bookmark rows show on VOICE for a buffer voice only", function()
   assert_true(not outline(1):find("bookmark", 1, true), "an input voice")
 end)
 
+test("a strip hold's release ends the hold for the voice it was pressed for, after a grid voice change", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, "hold", 1)
+  assert_equal(positions.scan_held(1), true, "voice 1 held")
+  positions.strip_key(1, 2, "hold", 0)
+  assert_equal(positions.scan_held(1), false, "a release naming voice 2 ends voice 1's hold")
+  assert_equal(positions.scan_held(2), false)
+  assert_equal(positions.strip_level(1, "hold"), 4)
+end)
+
+test("a strip store's release ends store for the voice it was pressed for, after a grid voice change", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, "store", 1)
+  assert_equal(positions.strip_level(1, "store"), 15)
+  positions.strip_key(1, 2, "store", 0)
+  assert_equal(positions.strip_level(1, "store"), 4, "a release naming voice 2 ends voice 1's store")
+  params:set("v1_bookmark_3", 0.9)
+  positions.strip_key(1, 1, 3, 1)
+  assert_near(params:get("v1_buf_pos"), 0.9, 1e-9, "the next press recalls instead of storing")
+end)
+
 end
