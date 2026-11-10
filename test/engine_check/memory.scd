@@ -238,6 +238,15 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var startRecording = { command.(\recordBuffer, recordSlot, 8.0, 1.0, 0, 1, 0, 1, 0) };
     var recordingRunning = { h.waitFor({ target.recordSynths[recordSlot].notNil and: { target.recordSynths[recordSlot].isPlaying } }, 3) };
     var stopRecording = { command.(\stopRecord, recordSlot); h.waitFor({ target.recordSynths[recordSlot].isNil }, 3) };
+    // Just after the recording's peaks refresh (every peakRefreshSeconds:
+    // the peaks file's rename is a subprocess, whose start can hold sclang
+    // up for longer than a 50 ms cut), so the last switch and the probes
+    // fall between two refreshes
+    var afterPeakRefresh = {
+        var counters = target.areaState[\record][\peakWrites], count = counters[\refreshes];
+        h.waitFor({ counters[\refreshes] > count }, 1);
+        0.1.wait; server.sync;
+    };
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
     // function of (all allocated, free KB) instead of the floor's own check
@@ -319,6 +328,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     server.sync; 0.2.wait;
     sourceSteps.do({ arg sourceOf, step;
         if (step > 0) { 0.2.wait; server.sync };
+        // the last switch makes the cutting set the probes must meet
+        if (step == (sourceSteps.size - 1)) { afterPeakRefresh.value };
         switchAll.(sourceOf);
     });
     target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
@@ -336,7 +347,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     startAll.value;
     server.sync; 0.2.wait;
     2.do({ arg step;
-        if (step > 0) { 0.2.wait; server.sync };
+        if (step > 0) { 0.2.wait; server.sync; afterPeakRefresh.value };
         target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
     });
     engage.value(command);

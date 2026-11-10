@@ -22,7 +22,9 @@ var record = { arg slot, duration, level = 1.0, feedback = 0, source = 0, thresh
     h.command(\recordBuffer, slot, duration, level, feedback, source, threshold, loop, delay)
 };
 var isRecording = { arg slot; engine.recordSynths[slot].notNil };
-var waitDone = { arg slot, limit = 5; h.waitFor({ isRecording.(slot).not }, limit) };
+// the record synth has freed and the take has ended (its peaks file, which
+// is written asynchronously, then its length) or been canceled
+var waitDone = { arg slot, limit = 5; h.waitFor({ isRecording.(slot).not and: { state[\takes][slot].isNil } }, limit) };
 var reset = { arg slot; h.command(\clearBuffer, slot); server.sync };
 // states of the slot's reports since `start` (an index into the poll's values)
 var reportsFor = { arg slot, start = 0;
@@ -33,6 +35,11 @@ var reportsFor = { arg slot, start = 0;
     }).select({ arg report; report[0] == slot })
 };
 var nowReports = { h.pollValues(\recordState).size };
+// wait (at most limit s) until the slot has reported state since start: a
+// take's end comes after its peaks file is written, which is asynchronous
+var waitReported = { arg slot, start, state, limit = 3;
+    h.waitFor({ reportsFor.(slot, start).any({ arg report; report[2] == state }) }, limit)
+};
 var writeLevelFile = { arg name, duration, level;
     var path = h.tempDir +/+ name;
     h.writeTestFile(path, sampleRate, (duration * sampleRate).round.asInteger, [level, level]);
@@ -456,6 +463,7 @@ test.("record: a delay shorter than the preparation starts the take when it is d
     start = nowReports.value;
     record.(4, 0.2, 1.0, 0, 0, 0, 0, 0.02);
     waitDone.(4, 2);
+    waitReported.(4, start, 2);
     states = reportsFor.(4, start).collect(_[2]);
     check.(state[\lastLateLine].notNil and: { state[\lastLateLine].contains("strata: buffer 5 recording started") }
         and: { state[\lastLateLine].contains("ms late") } and: { states.includes(1) } and: { engine.bufferFrames[4] > 0 },
@@ -546,11 +554,16 @@ test.("record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with
     var loopSeconds = 6.0, oldLevel = 0.5, voices = 4;
     var path = writeLevelFile.("guard.wav", loopSeconds, oldLevel), results = List.new;
     var rates = [[4, 0], [1, 0], [0.5, 0], [4, 1], [1, 1]];   // [|rate|, reverse probability]
-    h.command(\loadBuffer, 2, path, 0);
-    h.waitFor({ engine.bufferFrames[2] > 0 }, 3);
     rates.do({ arg pair;
         var rate = pair[0], reverse = pair[1], delay = 0.3, source, probes, buses, id = server.nextNodeID;
-        var group = Group.tail(context.xg);
+        var group;
+        // the old audio afresh for each rate: the last rate's recording
+        // stopped part way, and its stop fade would be a seam the head is
+        // not at (a grain reading across it flips sign too)
+        h.command(\loadBuffer, 2, path, 0);
+        h.waitFor({ engine.bufferFrames[2] > 0 }, 3);
+        settle.(0.1);
+        group = Group.tail(context.xg);
         buses = voices.collect({ Bus.control(server, 2) });
         probes = voices.collect({ arg voice;
             Synth(\strataCheckRecSeam, [\in, state[\voiceTaps][voice], \out, buses[voice]], group);
@@ -581,6 +594,9 @@ test.("record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with
         group.free; server.sync; buses.do(_.free);
         h.stopAllVoices;
     });
+    // (with the guard disabled, measured 3.14.1: 0.019 at rate 4, 0.031 at
+    // -1, 0.032 at -4; with it, 0 at every rate once each rate starts from
+    // fresh old audio)
     check.(results.every({ arg each; each[2].every({ arg value; value < 1e-3 }) }),
         "record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with 0.5 s grains (% , largest sign-flip product per voice)".format(
             results.collect({ arg each; [each[0], each[1], each[2].maxItem.round(1e-5)] })));
@@ -660,7 +676,7 @@ test.("record: recordState reports armed, recording, ended and canceled with the
     number = engine.areaState[\record][\recordCounts][2] + 1;
     record.(2, 0.15, 1.0, 0, 0, 0, 0, 0.2);
     waitDone.(2, 2);
-    settle.(0.1);
+    waitReported.(2, start, 2);
     record.(2, 0.15, 1.0, 0, 0, 0.9);
     settle.(0.1);
     h.command(\clearBuffer, 2);
@@ -675,7 +691,7 @@ test.("record: reports carry their record number", {
     var start = nowReports.value, reports, number = engine.areaState[\record][\recordCounts][1];
     record.(1, 0.1);
     waitDone.(1, 2);
-    settle.(0.1);
+    waitReported.(1, start, 2);
     reports = reportsFor.(1, start);
     check.(reports.notEmpty and: { reports.every({ arg each; each[1] == (number + 1) }) },
         "record: reports carry their record number (reports %, record number %)".format(reports, number + 1));
@@ -760,7 +776,7 @@ test.("record: a take with no delay or threshold reports recording and ended, ne
     var start = nowReports.value, states;
     record.(1, 0.1);
     waitDone.(1, 2);
-    settle.(0.1);
+    waitReported.(1, start, 2);
     states = reportsFor.(1, start).collect(_[2]);
     check.(states == [1, 2], "record: a take with no delay or threshold reports recording and ended, never armed (states %)".format(states));
 });
@@ -777,10 +793,11 @@ test.("record: a clear cancels an armed recording and reports canceled", {
 
 // ---- the end of a take -----------------------------------------------------
 test.("record: a take writes its peaks, then reports its length, then writes the scratch take", {
-    var steps, slot = 1;
+    var steps, slot = 1, start = nowReports.value;
     record.(slot, 0.1);
     waitDone.(slot, 2);
-    settle.(0.1);
+    waitReported.(slot, start, 2);
+    settle.(0.05);
     steps = state[\endSteps] !? { arg all; all[slot] !? _.asArray };
     check.((steps == [\peaksRead, \peaksWritten, \reported, \scratchWritten]),
         "record: a take writes its peaks, then reports its length, then writes the scratch take (steps %)".format(steps));
