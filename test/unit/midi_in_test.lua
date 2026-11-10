@@ -456,15 +456,63 @@ end)
 test("a device moved onto the selected port in SYSTEM > DEVICES plays", function()
   local context = load_strata(); finish_startup(context)
   context.midi.plug(2, "keys")
-  show_page("SETUP")
-  _menu.set_mode(true); context.midi.reassign(2, 1); _menu.set_mode(false)
+  show_page("SETUP"); next_frame(context)
+  local function screen_has(text)
+    for _, entry in ipairs(context.screen.texts) do if entry.text == text then return true end end
+    return false
+  end
+  assert_true(screen_has("midi 1: none"), "SETUP shows port 1 with no device")
+  local pages = local_value("UI_PAGES")
+  assert_true(not pages.screen_dirty, "nothing waits to be drawn")
+  -- the move, then the reconcile alone (the menu's other close hooks ask for
+  -- redraws too, so only a direct call shows what this one asks for)
+  context.midi.reassign(2, 1)
+  assert_true(not pages.screen_dirty, "the move itself asks for no redraw")
+  local_value("S").lib.midi_in.reconcile()
+  assert_true(pages.screen_dirty, "the reconcile requested a redraw")
   next_frame(context)
+  assert_true(screen_has("midi 1: keys"), "SETUP shows the device's name")
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_equal(#context.calls_named("retrigger"), 1, "port 1 plays")
+end)
+
+test("two MIDI devices swapped in SYSTEM > DEVICES give up the held notes", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("midi_note_off", 2)
+  context.midi.plug(1, "keys"); context.midi.plug(2, "pads")
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  local midi_state = local_value("S").midi_state
+  assert_true(next(midi_state.held[3]) ~= nil, "a note is held from port 1")
+  show_page("SETUP"); next_frame(context)
+  _menu.set_mode(true)
+  -- as norns ends up: keys on port 2, pads on port 1
+  context.midi.reassign(1, 2)  -- port 2 takes keys' name; port 1 becomes none
+  midi.connect(1).name = "pads"; midi.update_devices()
+  _menu.set_mode(false); next_frame(context)
+  assert_equal(midi.connect(1).device.name, "pads", "pads is on port 1")
+  assert_equal(midi.connect(2).device.name, "keys", "keys is on port 2")
+  for i = 1, local_value("NUM_VOICES") do
+    assert_equal(next(midi_state.held[i]), nil, "no note held on voice " .. i)
+  end
+  assert_equal(next(midi_state.note_voice), nil, "no note remembered")
   local shown = false
-  for _, entry in ipairs(context.screen.texts) do if entry.text == "midi 1: keys" then shown = true end end
-  assert_true(shown, "SETUP shows the device's name")
+  for _, entry in ipairs(context.screen.texts) do if entry.text == "midi 1: pads" then shown = true end end
+  assert_true(shown, "SETUP shows the other device's name")
+end)
+
+test("an unplug of the selected port's device, then a menu visit, resets once", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("midi_note_off", 2)
+  context.midi.plug(1, "keys")
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  local midi_state = local_value("S").midi_state
+  context.midi.unplug(1)
+  assert_equal(next(midi_state.held[3]), nil, "the unplug reset the notes")
+  context.midi.plug(1, "keys")
+  context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 3 })
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_true(midi_state.held[3][62], "the new note survives the menu visit: no second reset")
 end)
 
 end

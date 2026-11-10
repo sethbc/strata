@@ -48,7 +48,7 @@ Group `strata_midi`, 3 params:
   - norns clears the vport as `midi.remove` returns (`Midi.update_devices`), before the next frame draws.
   - So `midi_device_name()` (the selected vport's name, or `none` without a device) then shows the port as empty.
 - The module keeps `attached_device`, the device last seen on the selected vport (set in `attach_midi`, nil after `midi.remove` took the selected port's device).
-- SYSTEM > DEVICES moves a device between ports through `update_devices()` only (no `midi.add`, no `midi.remove`). `M.reconcile()` runs as the menu closes: when `S.midi_device.device` is not `attached_device`, it calls `reset_midi_input()` if a device had been attached (its note offs and bend returns will not arrive), remembers the new device and requests a redraw. A menu visit that moves nothing does nothing.
+- SYSTEM > DEVICES moves a device between ports through `update_devices()` only (no `midi.add`, no `midi.remove`). `M.reconcile()` runs as the menu closes: when `S.midi_device.device` is not `attached_device`, it calls `reset_midi_input()` if a device had been attached (its note offs and bend returns will not arrive), remembers the new device and requests a redraw. A menu visit that moves nothing does nothing. A device moved off the selected port and back inside one menu visit is the same device when the menu closes, so its held notes stay.
 - `cleanup` clears `S.midi_device.event`.
 
 ## Routing
