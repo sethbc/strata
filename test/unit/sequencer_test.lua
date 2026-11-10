@@ -155,6 +155,30 @@ test("an error in a step stops the pattern clock and shows it stopped (#243)", f
   pattern_toggle()
 end)
 
+test("an error in the first step leaves no clock recorded (#243)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.patterns[1][1] = 15
+  if S.voices[1].active then toggle_voice(1) end
+  local real_toggle_voice, raised = toggle_voice, false
+  toggle_voice = function(voice_idx)
+    if not raised then raised = true; error("first step failed") end
+    return real_toggle_voice(voice_idx)
+  end
+  -- the stub raises a first step's error to the caller, as norns' clock.run does
+  local started, start_error = pcall(pattern_clock_start)
+  local errors = context.clock.take_errors()
+  toggle_voice = real_toggle_voice
+  assert_true(raised, "the first step ran")
+  assert_true((not started and tostring(start_error):find("first step failed", 1, true)) or #errors == 1, "the error reached the caller or the scheduler")
+  assert_equal(S.pattern_clock, nil, "no clock id recorded")
+  assert_equal(S.pattern_playing, false, "shown stopped")
+  assert_equal(S.lib.sequencer.sounding_step(), nil, "no step sounds")
+  pattern_toggle()
+  assert_equal(S.pattern_playing, true, "one press plays again")
+  pattern_toggle()
+end)
+
 test("replace_pattern copies sixteen whole levels in range and ignores a bad voice", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

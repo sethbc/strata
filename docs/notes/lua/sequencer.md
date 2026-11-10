@@ -35,7 +35,7 @@
   | stopped | false | nil | nil |
   | playing | true | the running clock's id | nil before the first step plays, then the step played last |
 
-  Transitions: `pattern_clock_start()` (stopped or playing to playing; cancels a running clock first), `pattern_clock_stop()` (to stopped; also cleanup step 90), and the error path (a step raised: `S.pattern_clock = nil`, `pattern_clock_stop()`, error raised again). A step that fails on the clock's first run, which `clock.run` makes at once, leaves the clock id unrecorded.
+  Transitions: `pattern_clock_start()` (stopped or playing to playing; cancels a running clock first), `pattern_clock_stop()` (to stopped; also cleanup step 90), and the error path (a step raised: `S.pattern_clock = nil`, `pattern_clock_stop()`, error raised again). A step that fails on the clock's first run, which `clock.run` makes at once, leaves the clock id unrecorded, because `clock.run` re-raises before it returns (so no guard is needed around the assignment). On norns `clock.run` resumes the new coroutine at once and re-raises its error, so a first-step error propagates to the caller of `pattern_clock_start`; the stub does the same, and a later step's error is reported by the scheduler.
 
 - Cleanup stops the pattern clock, so no clock coroutine is left behind.
 
