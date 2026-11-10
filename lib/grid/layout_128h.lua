@@ -160,11 +160,7 @@ return function(S)
         elseif page == LAYOUT_128H.sources_page then
           local key = strip_key_of(x, y)
           if key then
-            -- to the voice the key was pressed for, whatever the grid voice is now
-            local pressed = grid_core.port_state(port).strip_voice
-            local voice_idx = pressed and pressed[key] or S.grid_voice_select
-            if pressed then pressed[key] = nil end
-            S.lib.positions.strip_key(port, voice_idx, key, 0)
+            S.lib.positions.strip_key(port, S.grid_voice_select, key, 0)
           end
         end
       end
@@ -183,9 +179,6 @@ return function(S)
     elseif page == 4 then
       local key = strip_key_of(x, y)
       if key then
-        local state = grid_core.port_state(port)
-        state.strip_voice = state.strip_voice or {}
-        state.strip_voice[key] = S.grid_voice_select
         S.lib.positions.strip_key(port, S.grid_voice_select, key, z)
       else
         source_page_key(x, y)

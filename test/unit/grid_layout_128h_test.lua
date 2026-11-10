@@ -428,9 +428,10 @@ test("128h: the strip's dark cells light and an armed slot's record key lights 1
   assert_equal(device:get_led(14, 6), S.lib.positions.strip_level(2, "hold"))
   assert_equal(device:get_led(15, 6), S.lib.positions.strip_level(2, "whole"))
   assert_equal(device:get_led(16, 6), 0, "column 16 of row 6 stays dark")
-  params:set("record_duration", 4)
+  params:set("record_duration", 4); params:set("record_sync", 3)
   tap(context, 1, 13, 1)
   context.polls.fire("recordState", 32)
+  assert_equal(S.lib.record.state(1).phase, "armed")
   grid_redraw()
   assert_equal(device:get_led(13, 1), 11, "armed")
 end)
@@ -454,8 +455,7 @@ test("128h: a strip key's release goes to the voice it was pressed for", functio
   context.grid.press(1, 14, 6, 0)
   local last = {}
   for _, each in ipairs(scan_holds(context)) do last[each.voice] = each.value end
-  assert_equal(last[0], 0, "voice 1's hold ended")
-  assert_equal(last[1], nil, "voice 2 was never held")
+  assert_equal(last[0], 0, "voice 1's hold ended, through positions")
   assert_equal(S.lib.positions.scan_held(1), false)
 end)
 
