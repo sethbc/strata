@@ -777,7 +777,28 @@ test("256: position LEDs follow grid_level for every voice", function()
     end
   end
   for cell = 1, 16 do assert_equal(device:get_led(cell, 3), 0, "voice 3 is not a buffer voice") end
-  assert_true(device:get_led(1, 1) > 0, "voice 1's row is lit")
+  params:set("v1_buf_pos", 0.45)
+  S.lib.playheads.reset(1)
+  grid_redraw()
+  assert_equal(device:get_led(8, 1), 15, "the playhead cell (0.45 of 16 is cell 8)")
+  assert_equal(device:get_led(1, 1) < 15, true, "and not the others")
+end)
+
+test("256: rows 8 and 16 on page 5 keep their page 1 and 2 actions", function()
+  local context, S, device = page5_grid()
+  grid_tap(context, 12, 8)
+  local playing = S.pattern_playing
+  grid_tap(context, 1, 8)  -- transport: play/stop
+  assert_equal(S.pattern_playing, not playing, "row 8 columns 1-4 play and stop")
+  grid_tap(context, 1, 8)
+  local tempo = params:get("tempo")
+  grid_tap(context, 7, 8)  -- tempo +1
+  assert_equal(params:get("tempo"), tempo + 1, "row 8 tempo keys")
+  assert_equal(S.lib.grid_core.page(1), 5, "still page 5")
+  grid_tap(context, 2, 16)
+  assert_true(S.frozen[2], "row 16 columns 1-7 lock")
+  assert_equal(device:get_led(2, 16), 12, "and show it")
+  grid_tap(context, 2, 16)
 end)
 
 test("256: voice v's strip on row 8 + v recalls, stores, holds and restores the whole loop", function()
@@ -835,7 +856,14 @@ test("256: an armed slot's record key lights 11", function()
   assert_equal(S.lib.grid_core.record_level(1), 11)
   grid_redraw()
   assert_equal(device:get_led(1, 1), 11, "armed")
-  context.polls.fire("recordState", 40 + 0)
+  -- the engine reports recording for take 1 of slot 1: ((1 * 4) + 1) * 8 + 0
+  context.polls.fire("recordState", ((1 * 4) + 1) * 8 + 0)
+  assert_equal(S.lib.grid_core.record_level(1), 15, "recording")
+  context.polls.fire("recordState", ((1 * 4) + 3) * 8 + 0)  -- canceled
+  S.buffers[1].loaded = true
+  assert_equal(S.lib.grid_core.record_level(1), 8, "loaded")
+  S.buffers[1].loaded = false
+  assert_equal(S.lib.grid_core.record_level(1), 2, "empty")
 end)
 
 end
