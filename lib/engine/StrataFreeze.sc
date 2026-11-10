@@ -186,6 +186,9 @@
             ^this
         };
         state[\frozen][voice] = true;
+        // kept, so a grain synth a start or re-gate builds is frozen too
+        // (unfreezeVoice keeps 0; a mode change unfreezes, then freezes)
+        grainControls[voice][\freeze] = 1;
         state[\mode][voice] = mode;
         state[\source][voice] = source;
         this.ringChanges[voice] = this.ringChanges[voice] + 1;
@@ -365,15 +368,49 @@
         this.pointAtVoiceRing(voice);
     }
 
-    // Set the voice's live input grain synth to read the voice ring at
-    // history 0 (GrainBuf latches its buffer per grain: seamless), and count
-    // it among the voice ring's readers
+    // Set the voice's live input grain synth to read what grainReadPairs
+    // says (the copy, once it is in: the voice ring at history 0; GrainBuf
+    // latches its buffer per grain: seamless), and count it among the voice
+    // ring's readers
     pointAtVoiceRing { arg voice;
-        var synth = synths[this.grainKey(voice)], ring = this.ringBuffersFor(voice, 0);
+        var synth = synths[this.grainKey(voice)];
         if (synth.isNil or: { grainSource[voice] != this.inputSource }) { ^this };
-        this.sendToSynth(synth.setMsg(\bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index,
-            \history, 0));
-        areaState[\freeze][\inputReaders][synth] = (voice: voice, until: nil);
+        this.sendToSynth(synth.setMsg(*this.grainReadPairs(voice)));
+        this.noteInputReader(voice, synth);
+    }
+
+    // Whether the voice's grain synth reads its input copy: the voice is on
+    // the input, frozen on the input, and the copy is in its ring
+    readsInputCopy { arg voice;
+        ^(grainSource[voice] == this.inputSource) and: { this.frozenOnInput(voice) }
+            and: { areaState[\freeze][\copied][voice] }
+    }
+
+    // What a voice's ring grain synth reads, as strataGrainRing controls:
+    // the one answer the start, the re-gate (grainControlPairs) and a freeze
+    // (pointAtVoiceRing) all send. The synth source reads its voice's 4 s
+    // ring at history 0 (history is for the input ring, so a voice that
+    // leaves the input never reads a wrapped ring); the input source the
+    // input ring at the voice's history, or its frozen copy (the voice
+    // ring) at history 0; a buffer source nothing (empty).
+    grainReadPairs { arg voice;
+        var source = grainSource[voice], ring, history = 0;
+        case
+        { source == 0 } { ring = this.ringBuffersFor(voice, 0) }
+        { source == this.inputSource } {
+            if (this.readsInputCopy(voice)) { ring = this.ringBuffersFor(voice, 0) } {
+                ring = this.ringBuffersFor(voice, source);
+                history = grainControls[voice][\history] ? 0;
+            };
+        }
+        { ^[] };
+        ^[\bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index, \history, history]
+    }
+
+    // Count a grain synth among the voice ring's readers (inputReaders)
+    // while it reads the voice's input copy
+    noteInputReader { arg voice, synth;
+        if (this.readsInputCopy(voice)) { areaState[\freeze][\inputReaders][synth] = (voice: voice, until: nil) };
     }
 
     // Set the input grain synths reading the voice ring back to the input
