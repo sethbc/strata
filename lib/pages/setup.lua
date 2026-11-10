@@ -192,7 +192,9 @@ return function(S)
       or performance.PERFORMANCE.buffer_choices
     local value = performance.setting()[field.key]
     local stepped = step_choice(choices, value, d)
-    if stepped ~= value then performance.set_setting(field.key, stepped) end
+    if stepped ~= value and not performance.set_setting(field.key, stepped) then
+      S.lib.ui_flash.start("hints", "setting not saved", nil, UI_PAGES.index.SETUP)
+    end
   end
 
   -- E2 moves over the fields, E3 edits the one under the cursor

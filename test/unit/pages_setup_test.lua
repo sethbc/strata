@@ -255,6 +255,23 @@ local function load_setup(active, setting_text)
   return context
 end
 
+test("a setting that could not be saved shows the old value and says so", function()
+  local context = load_setup()
+  local real_open = io.open
+  io.open = function(path, mode, ...)
+    if mode == "w" and tostring(path):match("performance%.data%.part$") then return nil, "refused" end
+    return real_open(path, mode, ...)
+  end
+  local ok, err = pcall(function()
+    enc(3, 1); redraw()
+  end)
+  io.open = real_open
+  assert(ok, err)
+  assert_equal(hint_text(context), "setting not saved", "the hint row says so")
+  assert_equal(value_beside(context, "performance"), "auto", "the old value shows")
+  assert_true(not screen_shows(context, "(next start)"), "nothing waits for the next start")
+end)
+
 local HIGH_60 = {tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60, reason = "high: setting"}
 
 test("SETUP shows the setting, (next start) and the running tier", function()

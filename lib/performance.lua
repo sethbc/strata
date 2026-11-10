@@ -164,15 +164,16 @@ return function(S)
 
   -- Change one key ("performance" or "buffer_seconds") and save the
   -- setting: written to a temporary file in the folder, then renamed over
-  -- performance.data, so a crash never leaves half a file. Returns false
-  -- (changing nothing) for an unknown key or a value outside its choices
+  -- performance.data, so a crash never leaves half a file. Returns true only
+  -- when performance.data holds the new value; false (changing nothing,
+  -- S.performance_setting included) for an unknown key, a value outside its
+  -- choices or a failed write, which prints one console line
   function M.set_setting(key, value)
     local choices = key == "performance" and PERFORMANCE.choices
       or key == "buffer_seconds" and PERFORMANCE.buffer_choices
     if not choices or not includes(choices, value) then return false end
     local setting = M.setting()
     setting[key] = value
-    S.performance_setting = setting
     local path = data_dir() .. PERFORMANCE.setting_file
     local part_path = path .. ".part"
     util.make_dir(data_dir())
@@ -186,7 +187,9 @@ return function(S)
     if not (written and os.rename(part_path, path)) then
       os.remove(part_path)
       print("strata: cannot write " .. path)
+      return false
     end
+    S.performance_setting = setting
     request_redraw()
     return true
   end
