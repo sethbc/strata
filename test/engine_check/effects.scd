@@ -23,9 +23,10 @@ var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, 
 var sentBy, setsControl, broadcasts;
 var floodCount = 640;
 
-// The defs in xg, in node order, from the filter on (the chain at its tail)
+// The defs in xg, in node order, from the filter on (the chain at its
+// tail; the record area's tap group, which follows the master, left out)
 chainTail = {
-    var names = h.synthNames(context.xg);
+    var names = h.synthNames(context.xg).reject({ arg name; [\strataTapPreMaster, \strataRecord].includes(name) });
     names.copyRange(names.indexOf(\strataFilter) ? names.size, names.size - 1).asArray
 };
 // How many delay nodes the engine group holds

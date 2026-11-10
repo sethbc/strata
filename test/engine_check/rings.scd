@@ -154,7 +154,7 @@ nodes = h.synthTree(engine.voiceGroup);
 writers = nodes.copyRange(nodes.size - (engine.numVoices + 1), nodes.size - 1);
 check.(nodes.count({ arg node; node.def == \strataRingWrite }) == (engine.numVoices + 1)
     and: { writers.every({ arg node; node.def == \strataRingWrite }) }
-    and: { nodes.any({ arg node; node.def == \strataRecord }) } and: { nodes.any({ arg node; node.def == engine.voiceSynthDefs[2] }) },
+    and: { h.synthTree(engine.context.xg).any({ arg node; node.def == \strataRecord }) } and: { nodes.any({ arg node; node.def == engine.voiceSynthDefs[2] }) },
     "rings: one writer per voice plus the input writer, at the tail of voiceGroup (got %)".format(nodes.collect(_.def)));
 ringOk = writers.every({ arg node, index;
     var isInput = index == engine.numVoices;

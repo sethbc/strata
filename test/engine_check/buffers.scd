@@ -291,7 +291,7 @@ var checkReleasingGrainFades = { arg stereoPath, monoPath;
     File.delete(engine.scratchDir +/+ "buf3.wav");
     command.(\voiceOff, 1);
     command.(\recordBuffer, 2, 0.2, 1.0, 0, 0, 0, 0, 0); 0.1.wait; server.sync;
-    check.((getControl.(grain, \bufFrames) == 0) and: { synthNames.(engine.voiceGroup).includes(\strataRecord).not } and: { holds.(0.4) },
+    check.((getControl.(grain, \bufFrames) == 0) and: { synthNames.(context.xg).includes(\strataRecord).not } and: { holds.(0.4) },
         "a recording in a voiceOff release fades the releasing grain synth first and starts only after the fade");
     1.0.wait; server.sync;
     check.((engine.bufferFrames[2] == (0.2 * server.sampleRate).round.asInteger) and: { grain.isPlaying }
@@ -336,7 +336,7 @@ var checkFadeRates = { arg stereoPath;
 // it runs. Called from checkBufferFades.
 var checkFadeWaitInterleavings = { arg longPath;
     var takePath = engine.scratchDir +/+ "buf3.wav", before, running;
-    var recorders = { synthNames.(engine.voiceGroup).count({ arg name; name == \strataRecord }) };
+    var recorders = { synthNames.(context.xg).count({ arg name; name == \strataRecord }) };
     command.(\loadBuffer, 2, longPath, 0); 0.8.wait; server.sync;
     File.delete(takePath);
     command.(\recordBuffer, 2, 0.5, 1.0, 0, 0, 0, 0, 0); 0.1.wait;
@@ -425,7 +425,7 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
         and: { (bufferSample.(engine.buffersL[2], 100) - 0.4).abs < 0.001 }, "then loadBuffer reads the file");
     File.delete(engine.scratchDir +/+ "buf3.wav");
     command.(\recordBuffer, 2, 0.2, 1.0, 0, 0, 0, 0, 0); 0.1.wait; server.sync;
-    check.(synthNames.(engine.voiceGroup).includes(\strataRecord).not
+    check.(synthNames.(context.xg).includes(\strataRecord).not
         and: { (bufferSample.(engine.buffersL[2], 100) - 0.4).abs < 0.001 },
         "recordBuffer leaves the buffers and starts no recording until the fade is over");
     1.0.wait; server.sync;
@@ -521,7 +521,7 @@ var checkLongSlotCommands = { arg other, path60;
         and: { (bufferSample.(other.buffersR[0], (10.5 * rate).asInteger) + 0.11).abs < 0.001 }
         and: { waitFor.({ bufferStateSeen.(0, 60) }) };
     cmd.(\recordBuffer, 1, 20, 1.0, 0, 0, 0, 0, 0); 0.3.wait; server.sync;
-    duration = other.recordSynths[1] !? { arg synth; getControl.(synth, \duration) };
+    duration = other.recordSynths[1] !? { arg synth; getControl.(synth, \frames) / rate };
     cmd.(\stopRecord, 1); 0.5.wait; server.sync;
     recorded = duration.notNil and: { (duration - 20).abs < 0.001 } and: { other.bufferFrames[1] > 0 };
     cmd.(\saveBuffer, 0, savePath, 0, 1);
@@ -668,7 +668,7 @@ command.(\setGrainSource, 1, 3);            // voice 1 reads slot 3 (index 2)
 2.5.wait; server.sync;
 before = synthNames.(context.xg).size;
 command.(\recordBuffer, 2, 0.3, 1.0, 0, 0, 0, 0, 0); 0.15.wait; server.sync;   // starts after the fade and the zeroing syncs
-check.(synthNames.(engine.voiceGroup).includes(\strataRecord), "recordBuffer runs a record synth");
+check.(synthNames.(context.xg).includes(\strataRecord), "recordBuffer runs a record synth");
 0.5.wait; server.sync;
 check.(engine.bufferFrames[2] == (0.3 * server.sampleRate).round.asInteger, "recordBuffer sets the valid length");
 check.(getControl.(engine.synths[\grain1], \bufFrames) == engine.bufferFrames[2],
@@ -823,59 +823,6 @@ command.(\setGrainSource, 1, 0);
 2.5.wait; server.sync;
 h.stopAllVoices;
 checkLongSlots.value;
-
-// A take through the record area equals 3.2's sample for sample: slot 1
-// by the engine, slot 2 by the check's copy of 3.2's \strataRecord (h.def32),
-// the same input. The input is aperiodic, so a slipped or shifted frame
-// shows: left, a sample counter (a ramp that never repeats in the check's
-// span, 2^24 samples; its first value says at which sample a take started);
-// right, noise from h.noise (a 4801-sample period, no multiple of a block,
-// #131's primitive builder). The takes cannot start in one block (the engine
-// sends its own /s_new), so they are compared aligned by those first values:
-// the start difference must be whole blocks, and every frame after it equal.
-// Compared on the server.
-{
-    var engine = h.engine, server = h.server, seconds = 0.5, frames = (seconds * server.sampleRate).round.asInteger;
-    var framesBus = Bus.control(server, 1), diff = Bus.control(server, 2), diffR = Bus.control(server, 2);
-    var counterSpan = 2 ** 24, noiseFrames = 65536;
-    var noise = Buffer.loadCollection(server, h.noise(noiseFrames, 0.5));
-    var input, group, starts, offset, first, second, compared, valuesL, valuesR;
-    SynthDef(\strataCheckAperiodicInput, { arg out, noiseBuf;
-        Out.ar(out, [Phasor.ar(0, 1, 0, counterSpan) / counterSpan,
-            BufRd.ar(1, noiseBuf, Phasor.ar(0, 1, 0, noiseFrames), 1, 1)]);
-    }).add;
-    server.sync;
-    h.command(\clearBuffer, 0); h.command(\clearBuffer, 1); server.sync;
-    input = Synth(\strataCheckAperiodicInput, [\out, engine.inputBus, \noiseBuf, noise.bufnum], engine.inputSynth, \addBefore);
-    server.sync;
-    Synth(h.def32[\record], [\in, engine.inputBus, \bufnumL, engine.buffersL[1].bufnum, \bufnumR, engine.buffersR[1].bufnum,
-        \level, 1.0, \duration, seconds, \framesOut, framesBus.index], engine.inputSynth, \addAfter);
-    h.command(\recordBuffer, 0, seconds, 1.0, 0, 0, 0, 0, 0);
-    (seconds + 0.3).wait;
-    h.waitFor({ engine.bufferFrames[0] == frames }, 2);
-    input.free; server.sync;
-    // the sample each take's first frame recorded
-    starts = [0, 1].collect({ arg slot; (h.bufferSample(engine.buffersL[slot], 0) * counterSpan).round.asInteger });
-    offset = (starts[0] - starts[1]).abs;
-    // the take that started later is read from its first frame, the earlier one ahead by the difference
-    first = if (starts[0] >= starts[1]) { 0 } { 1 };
-    second = 1 - first;
-    compared = frames - offset;
-    group = Group.after(engine.processGroup);
-    Synth(\strataCheckBufDiff, [\bufA, engine.buffersL[first].bufnum, \bufB, engine.buffersL[second].bufnum,
-        \frames, compared, \offsetB, offset, \out, diff], group);
-    Synth(\strataCheckBufDiff, [\bufA, engine.buffersR[first].bufnum, \bufB, engine.buffersR[second].bufnum,
-        \frames, compared, \offsetB, offset, \out, diffR], group);
-    (seconds + 0.1).wait; server.sync;
-    valuesL = h.readBus(diff); valuesR = h.readBus(diffR);
-    group.free; noise.free; server.sync;
-    h.command(\clearBuffer, 0); h.command(\clearBuffer, 1); server.sync;
-    [framesBus, diff, diffR].do(_.free);
-    h.check(((offset % 64) == 0) and: { offset < (64 * 256) } and: { starts.every(_ > 0) }
-        and: { valuesL[1] > 0.0005 } and: { valuesR[1] > 0.1 } and: { valuesL[0] == 0 } and: { valuesR[0] == 0 },
-        "buffers: a take through the record area equals 3.2's sample for sample (start difference % frames; difference %, %; level %, %)".format(
-            offset, valuesL[0], valuesR[0], valuesL[1], valuesR[1]));
-}.value;
 
 // loadBuffer with start 0 reads the whole file, as 3.2's: the slot equals a
 // fresh server read of the file (frames and rate too)

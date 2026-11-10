@@ -94,7 +94,8 @@ check.(true, "commands on a never-started voice do not throw (M6)");
 
 // Node ordering inside context.xg (M5)
 h.startAllVoices;
-names = synthNames.(context.xg);
+// (the record area's tap group, after the master, is the record area's check)
+names = synthNames.(context.xg).reject({ arg name; [\strataTapPreMaster, \strataRecord].includes(name) });
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;

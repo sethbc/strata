@@ -37,7 +37,7 @@ SynthDef(\strataCheckLoopStarts, { arg out, t_reset = 0, validFrames = 48000, du
     var scanPhase = Phasor.ar(reset, bufScan * SampleDur.ir, 0, 1);
     var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
     var pos = engine.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, K2A.ar(rate), K2A.ar(durFrames), validFrames,
-        loopStart, loopLength);
+        loopStart, loopLength, engine.areaState[\record][\idleHead].index);
     var start = pos * validFrames, reverse = rate < 0;
     var lowest = start - (durFrames * reverse), highest = start + (durFrames * (1 - reverse));
     var old = (bufPos + scanPhase + spreadDraw).wrap(0, 1)
@@ -59,7 +59,7 @@ SynthDef(\strataCheckLoopReverse, { arg out, bufnumL, bufnumR, bufFrames = 1, bu
     posSpread = 0, loopStart = 0, loopLength = 1, grainSize = 0.2, density = 40;
     var trig = Impulse.ar(density);
     var read = engine.slotGrainReader(bufnumL, bufnumR, bufFrames, 1, bufPos, 1, bufScan, posSpread, 0,
-        loopStart, loopLength, 0, 0, 0).value(trig, DC.ar(-1), grainSize, 0);
+        loopStart, loopLength, 0, 0, 0, engine.areaState[\record][\idleHead].index).value(trig, DC.ar(-1), grainSize, 0);
     Out.ar(out, GrainBuf.ar(2, trig, read[\dur], read[\bufL], read[\rate], read[\pos], 2, 0, -1, engine.maxGrains)
         * read[\level]);
 }).add;
