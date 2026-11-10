@@ -917,6 +917,49 @@ test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds 
             refreshes, reportsAfter, engine.bufferFrames[slot]));
 });
 
+// #210: a refresh used to rename its .part through a subprocess of its own,
+// whose fork held sclang for 4-6 ms here (2.5 ms per 130 MB of sclang, so
+// more on a Pi), and a command arriving then waited for it: every refresh
+// made a 1 ms SystemClock task wait over refreshGapLimit, and every message
+// sent as a refresh's write starts waited over refreshHoldLimit. Counted,
+// not the largest, so one scheduling spike on a loaded machine (four checks
+// at once) cannot fail it: fewer than lateLimit of the ticker's gaps through
+// a loop recording's refreshes, and fewer than lateLimit of the ten pings.
+test.("record: a command sent during a peaks refresh is handled within 2 ms", {
+    var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2;
+    var counters = state[\peakWrites], before, refreshes;
+    var latenesses = List.new(10), ping, sent, gaps = List.new(8), longestGap = 0, last, ticker, lateGaps, latePings;
+    record.(slot, 0.25, 1.0, 0, 0, 0, 1);
+    settle.(0.1);
+    before = counters[\refreshes];
+    last = Main.elapsedTime;
+    ticker = Routine({ loop {
+        var now = Main.elapsedTime, gap = now - last;
+        longestGap = longestGap.max(gap);
+        if ((gap >= refreshGapLimit) and: { gaps.size < 8 }) { gaps.add(gap) };
+        last = now;
+        0.001.wait
+    } }).play(SystemClock);
+    tickerSeconds.wait;
+    ticker.stop;
+    ping = OSCFunc({ latenesses.add(Main.elapsedTime - sent) }, '/strataCheckRefreshPing');
+    10.do({
+        sent = Main.elapsedTime;
+        NetAddr.localAddr.sendMsg('/strataCheckRefreshPing');
+        engine.writeRecordPeaks(slot, engine.bufferFrames[slot], nil);
+        0.05.wait;
+    });
+    ping.free;
+    h.command(\stopRecord, slot);
+    waitDone.(slot, 2);
+    refreshes = counters[\refreshes] - before;
+    lateGaps = gaps.size;
+    latePings = latenesses.count({ arg value; value >= refreshHoldLimit });
+    check.((refreshes >= 18) and: { latenesses.size == 10 } and: { latePings < lateLimit } and: { lateGaps < lateLimit },
+        "record: a command sent during a peaks refresh is handled within 2 ms (% of 10 pings late, longest % ms; % 1 ms task gaps over 3 ms, longest % ms; % refreshes)".format(
+            latePings, latenesses.maxItem !? { arg value; (value * 1000).round(0.01) }, lateGaps, (longestGap * 1000).round(0.01), refreshes));
+});
+
 guardBus.free;
 engine.recordStatePoll.stop;
 h.stopAllVoices;
