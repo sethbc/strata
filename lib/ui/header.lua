@@ -17,6 +17,7 @@ return function(S)
 
   local HEADER_Y = 8
   local HINT_ROW_Y = 62
+  local HINT_ROW_WIDTH = 128
 
   -- The eight page dots, the current page's bright
   local function draw_page_dots()
@@ -37,15 +38,25 @@ return function(S)
     screen.fill()
   end
 
-  local function any_slot_recording()
+  -- "REC" while any slot records (a slot waiting to start, armed by a beat,
+  -- a bar or a level, does not count), else "ARM" while one is armed, else nil
+  local function record_indicator()
+    local armed = false
     for slot = 1, NUM_BUFFERS do
-      if S.buffers[slot] and S.buffers[slot].recording then return true end
+      if S.buffers[slot] and S.buffers[slot].recording then
+        local state = S.lib.record.state(slot)
+        if state and state.phase == "armed" then
+          armed = true
+        else
+          return "REC"
+        end
+      end
     end
-    return false
+    return armed and "ARM" or nil
   end
 
   -- [M] while mutations run, the play mark while patterns play, REC while
-  -- any buffer slot records
+  -- any buffer slot records, ARM in its place while a slot only waits to start
   local function draw_indicators()
     if params:get("mutation_enabled") == 1 then
       screen.move(HEADER.mutation_x, HEADER_Y)
@@ -53,10 +64,11 @@ return function(S)
       screen.text("[M]")
     end
     if S.pattern_playing then draw_play_mark(HEADER.play_x) end
-    if any_slot_recording() then
+    local record = record_indicator()
+    if record then
       screen.move(HEADER.rec_x, HEADER_Y)
       screen.level(15)
-      screen.text("REC")
+      screen.text(record)
     end
   end
 
@@ -96,10 +108,17 @@ return function(S)
     end
   end
 
+  -- The hint row, cut to the screen (a flash can name a long file or
+  -- folder); the last cut is kept, so a steady hint is measured once
+  local hint_cut = {text = nil, cut = nil}
   function draw_hints(text)
+    if text ~= hint_cut.text then
+      hint_cut.text = text
+      hint_cut.cut = type(text) == "string" and S.lib.ui_text.fit_text(text, HINT_ROW_WIDTH) or text
+    end
     screen.level(4)
     screen.move(0, HINT_ROW_Y)
-    screen.text(text)
+    screen.text(hint_cut.cut)
   end
 
   return M

@@ -2,13 +2,14 @@
 
 - Transient texts go through `S.lib.ui_flash` (one clock per slot, canceled before a new flash in that slot starts, and at cleanup). Never give a page its own flash clock.
 - The header has no `dens:`: master density is on FX's first row, MAIN's arc ring 1 and in params.
+- `draw_hints` cuts its text to the screen's 128 px (`fit_text`), so a flash naming a long file or folder never leaves the screen; the flash itself keeps its whole text. Only a changed text is measured again.
 
 ## Header and flashes
 
 `draw_header()` (`lib/ui/header.lua`), y=8, positions in `S.constants.HEADER`:
 - Page title at x 0, level 15. 04B_03 capitals advance about 6 px, so the longest titles, `BUFFER` and `SCENES`, end near x 36.
 - Eight page dots: 2×2 filled rects (`dot_size`) at y 4 (`dot_y`) from x 40 (`dots_x`), 4 px apart (`dot_spacing`), so x 40-69. The current page's at level 15 (`current_dot_level`), the rest at 3 (`dot_level`).
-- Indicators, each only while active: `[M]` at x 76 (`mutation_x`, level 6) while `mutation_enabled` is 1 (abbreviated to make room for the play mark, `REC` and the scene); the play mark at x 90 (`play_x`) while `S.pattern_playing`; `REC` at x 96 (`rec_x`, level 15) while any `S.buffers[slot].recording`.
+- Indicators, each only while active: `[M]` at x 76 (`mutation_x`, level 6) while `mutation_enabled` is 1 (abbreviated to make room for the play mark, `REC` and the scene); the play mark at x 90 (`play_x`) while `S.pattern_playing`; `REC` at x 96 (`rec_x`, level 15) while any `S.buffers[slot].recording` that is not armed (3.3: `S.lib.record.state(slot).phase` other than `"armed"`, or no state), else `ARM` in its place while a slot is armed (waiting for a beat, a bar or a level) and none records.
 - The play mark is a filled 3×5 triangle pointing right: three 1-px-wide rects, 5, 3 and 1 px tall, from y 3 (`play_y`), level 15.
 - A record with `header_status()` returning a string: the text at x 79 (`status_x`, level 10, cut with `fit_text` to end by x 114) and the play mark at x 73 (`status_play_x`, while patterns play; three clear pixels before the text) replace `[M]`, the play mark and `REC`. Returning nil keeps the indicators. The dots stay.
 - Scene indicator `S1`-`S8` (`S.current_scene`) right-aligned at x 127 (`scene_right`): level 10 while the scene sequencer runs, 6 when static.

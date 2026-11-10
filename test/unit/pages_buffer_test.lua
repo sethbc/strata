@@ -47,23 +47,44 @@ local function slot_row_text(context, y)
   return table.concat(parts, " ")
 end
 
--- The left column's field rows: label -> {value, level, cursor}
+-- The left column's visible field rows, top to bottom: {label, value,
+-- level, cursor, y}. A label may be cut to fit beside a wide value (the
+-- layout estimate is wider than the norns font), so field_named matches a
+-- label by its start
 local function field_rows(context)
   local page = local_value("BUFFER_PAGE")
-  local fields = {}
-  for index, label in ipairs({ "src", "dur", "lvl" }) do
+  local rows = {}
+  for index = 1, page.field_visible do
     local y = page.field_first_y + (index - 1) * page.field_spacing
-    local row = {}
+    local row = { y = y }
     for _, entry in ipairs(texts_on_row(context, y)) do
       if entry.x < page.divider_x then
         if entry.text == ">" then row.cursor = true
-        elseif entry.text == label then row.level = entry.level
-        else row.value = entry.text end
+        elseif entry.x == page.label_x and entry.align == "left" then row.label = entry.text; row.level = entry.level
+        elseif entry.align == "right" then row.value = entry.text end
       end
     end
-    fields[label] = row
+    if row.label then table.insert(rows, row) end
   end
-  return fields
+  return rows
+end
+
+local function field_named(context, label)
+  for _, row in ipairs(field_rows(context)) do
+    if #row.label >= 2 and label:sub(1, #row.label) == row.label then return row end
+  end
+  return {}
+end
+
+local function field_labels(context)
+  local labels = {}
+  for _, row in ipairs(field_rows(context)) do table.insert(labels, row.label) end
+  return table.concat(labels, " ")
+end
+
+-- Move the field cursor to field n (1-based) with ALT+E2
+local function to_field(n)
+  key(1, 1); enc(2, -20); enc(2, n - 1); key(1, 0)
 end
 
 -- The input meter's segments: the count drawn at the lit level and the
@@ -97,7 +118,7 @@ test("E2 picks a slot and leaves the selected voice", function()
   assert_equal(cursor.slot, 5, "the slot cursor stays across a page change")
   assert_equal(local_value("selected_voice"), 3, "MAIN's E2 still picks the voice BUFFER shows")
   redraw()
-  assert_true(h.screen_shows(context, "FOLDER"), "BUFFER shows the selected voice")
+  assert_equal(field_rows(context)[1].label, "v3", "the first field names the selected voice")
 end)
 
 test("ALT+E2 moves the field cursor and E3 edits that field", function()
@@ -109,32 +130,34 @@ test("ALT+E2 moves the field cursor and E3 edits that field", function()
   enc(3, 2); assert_equal(params:get("v4_source"), 3, "E3 on field 1 steps v<sel>_source")
   assert_equal(cursor.slot, 1, "E3 leaves the slot cursor")
   redraw()
-  local fields = field_rows(context)
-  assert_equal(fields.src.value, "buf 2", "the source field shows the voice's source")
-  assert_true(fields.src.cursor, "the cursor marks the source field")
-  assert_equal(fields.src.level, 15, "the field under the cursor is bright")
-  assert_equal(fields.dur.level, 4, "the others dim")
+  local source, record_source = field_named(context, "v4"), field_named(context, "rec")
+  assert_equal(source.value, "buf 2", "the source field shows the voice's source")
+  assert_true(source.cursor, "the cursor marks the source field")
+  assert_equal(source.level, 15, "the field under the cursor is bright")
+  assert_equal(record_source.level, 4, "the others dim")
   -- ALT+E2 moves the field cursor, not the slot cursor
-  with_alt(function() enc(2, 1) end)
-  assert_equal(cursor.field, 2, "ALT+E2 moves to field 2")
+  with_alt(function() enc(2, 2) end)
+  assert_equal(cursor.field, 3, "ALT+E2 moves to field 3")
   assert_equal(cursor.slot, 1, "and leaves the slot cursor")
-  -- field 2: record_duration
+  -- field 3: record_duration
   local duration = params:get("record_duration")
-  enc(3, 2); assert_true(params:get("record_duration") > duration, "E3 on field 2 sets the duration")
-  redraw(); fields = field_rows(context)
-  assert_true(fields.dur.cursor and not fields.src.cursor, "the cursor marks the duration")
-  assert_equal(fields.dur.value, string.format("%.1fs", params:get("record_duration")))
-  -- field 3: record_level
-  with_alt(function() enc(2, 5) end)
-  assert_equal(cursor.field, 3, "the field cursor stops at field 3")
+  enc(3, 2); assert_true(params:get("record_duration") > duration, "E3 on field 3 sets the duration")
+  redraw()
+  assert_true(field_named(context, "dur").cursor and not field_named(context, "v4").cursor, "the cursor marks the duration")
+  assert_equal(field_named(context, "dur").value, string.format("%.1fs", params:get("record_duration")))
+  -- field 4: record_level
+  with_alt(function() enc(2, 1) end)
+  assert_equal(cursor.field, 4)
   params:set("record_level", 1)
-  enc(3, -10); assert_near(params:get("record_level"), 0.8, 1e-6, "E3 on field 3 sets the record level")
+  enc(3, -10); assert_near(params:get("record_level"), 0.8, 1e-6, "E3 on field 4 sets the record level")
   -- ALT+E3 is fine adjustment: a tenth as far
   with_alt(function() enc(3, 10) end)
   assert_near(params:get("record_level"), 0.82, 1e-6, "ALT+E3 moves a tenth as far")
-  redraw(); fields = field_rows(context)
-  assert_equal(fields.lvl.value, string.format("%.2f", params:get("record_level")))
-  with_alt(function() enc(2, -5) end)
+  redraw()
+  assert_equal(field_named(context, "lvl").value, string.format("%.2f", params:get("record_level")))
+  with_alt(function() enc(2, 20) end)
+  assert_equal(cursor.field, 11, "the field cursor stops at field 11")
+  with_alt(function() enc(2, -20) end)
   assert_equal(cursor.field, 1, "and at field 1")
   assert_equal(params:get("v4_source"), 3, "the source was left alone meanwhile")
 end)
@@ -178,6 +201,7 @@ test("K2 released loads into the cursor slot", function()
   assert_equal(#loads, 1, "the choice loads")
   assert_equal(loads[1].args[1], 3, "into slot 4 (engine slot 3)")
   assert_equal(params:get("buf4_file"), "/tmp/b.wav")
+  assert_equal(local_value("S").lib.files.last_folder, "/tmp/", "the chosen file's folder is the next random folder")
   -- a canceled choice loads nothing
   tap(2); context.clear_engine_calls()
   context.fileselect.last.callback("cancel")
@@ -241,7 +265,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   context.set_time(101.6); redraw()
   assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
   context.set_time(101.7); redraw()
-  assert_equal(hint_text(context), "K2:load K3:rec", "the normal hint after 1.5 s")
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "the normal hint after 1.5 s")
   -- an empty slot: nothing saved, the hint says so
   enc(2, 1)   -- slot 4, empty
   context.clear_engine_calls()
@@ -279,7 +303,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   key(2, 0); context.fileselect.close()
 end)
 
-test("slots sit 7 px apart, six at a time, with a scroll marker", function()
+test("slots sit 7 px apart, three at a time, with a scroll marker", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local page = local_value("BUFFER_PAGE")
   load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1016)
@@ -293,12 +317,9 @@ test("slots sit 7 px apart, six at a time, with a scroll marker", function()
     return slots, rows
   end
   local slots, rows = shown_slots()
-  assert_equal(table.concat(slots, " "), "1 2 3 4 5 6", "six slots show")
-  for index = 2, #slots do
-    assert_equal(rows[slots[index]] - rows[slots[index - 1]], 7, "rows 7 px apart")
-  end
-  assert_true(rows[1] > 8 + TEXT_HEIGHT - 1, "the first row below the header")
-  assert_true(rows[6] < HINT_ROW_Y - TEXT_HEIGHT + 1, "the last row above the hint row")
+  assert_equal(table.concat(slots, " "), "1 2 3", "three slots show")
+  assert_equal(rows[1], 37, "the first row at y 37"); assert_equal(rows[2], 44); assert_equal(rows[3], 51)
+  assert_true(rows[3] < HINT_ROW_Y - TEXT_HEIGHT + 1, "the last row above the hint row")
   local function marker()
     for _, line in ipairs(context.screen.lines) do
       if line.x1 == 127 and line.x2 == 127 then return line end
@@ -310,11 +331,10 @@ test("slots sit 7 px apart, six at a time, with a scroll marker", function()
   assert_equal(slot_row_text(context, rows[1]), "1 -", "an empty slot shows -")
   assert_equal(slot_row_text(context, rows[2]), "2 drone 16.0s", "a loaded slot: name and seconds")
   assert_true(not h.screen_shows(context, "0.0s"), "no 0.0s anywhere")
-  assert_true(not h.screen_shows(context, "v1"), "only the cursor row lists its voices")
   -- the cursor row is bright and lists the voices reading it
   enc(2, 2); redraw()
   slots, rows = shown_slots()
-  assert_equal(table.concat(slots, " "), "2 3 4 5 6 7", "one row above the cursor stays in view")
+  assert_equal(table.concat(slots, " "), "2 3 4", "one row above the cursor stays in view")
   -- under the layout test's width estimate the name keeps its minimum width, so
   -- the voices shorten to "v2+" (the full list shows with a narrower font, below)
   assert_equal(slot_row_text(context, rows[3]), "3 x v2+ 2.5s", "the cursor row shows its voices, shortened")
@@ -328,7 +348,7 @@ test("slots sit 7 px apart, six at a time, with a scroll marker", function()
   -- the end of the list
   enc(2, 5); redraw()
   slots = shown_slots()
-  assert_equal(table.concat(slots, " "), "3 4 5 6 7 8", "slot 8 shows at the bottom")
+  assert_equal(table.concat(slots, " "), "6 7 8", "slot 8 shows at the bottom")
   local bottom_marker = marker()
   assert_true(bottom_marker.y1 > top_marker.y1, "the marker moves down")
   -- a recording slot shows REC
@@ -418,23 +438,23 @@ end)
 test("BUFFER hints", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   enc(2, 2)
-  redraw(); assert_equal(hint_text(context), "K2:load K3:rec", "a slot that is not recording")
+  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "a slot that is not recording")
   record_buffer(3); redraw()
-  assert_equal(hint_text(context), "K2:load K3:stop", "the cursor slot records")
+  assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "the cursor slot records")
   enc(2, 1); redraw()
-  assert_equal(hint_text(context), "K2:load K3:rec", "another slot's recording is not the cursor's")
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "another slot's recording is not the cursor's")
   enc(2, -1)
   record_buffer(3); redraw()
-  assert_equal(hint_text(context), "K2:load K3:...", "the take waits for the engine")
+  assert_equal(hint_text(context), "K2:ld/rnd K3:...", "the take waits for the engine")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:clear K3:save", "with ALT")
+  assert_equal(hint_text(context), "K2:clr/fill K3:sv/trim", "with ALT")
   assert_screen_layout(context, "BUFFER with ALT")
   key(1, 0); redraw()
-  assert_equal(hint_text(context), "K2:load K3:...")
+  assert_equal(hint_text(context), "K2:ld/rnd K3:...")
   -- the same whatever the selected voice's source
   for _, source in ipairs({ 1, 4, 10 }) do
     params:set("v1_source", source); context.polls.fire("bufferState", 2003); redraw()
-    assert_equal(hint_text(context), "K2:load K3:rec", "source " .. source)
+    assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "source " .. source)
   end
 end)
 
@@ -693,25 +713,21 @@ test("the superseded-selector release acts only as the menu closes, and never br
   assert_true(table.concat(context.printed, "\n"):find("release failed", 1, true), "the error is printed")
 end)
 
-test("BUFFER page draws the voice, its fields, the meter and the slot rows", function()
+test("BUFFER page draws its fields, the meter and the slot rows", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local page = local_value("BUFFER_PAGE")
   local _, set_selected = find_upvalue("selected_voice")
   set_selected(6); params:set("v6_source", 3)   -- karplus on buf 2
   load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1016)
-  load_buffer(5, "/tmp/x.wav"); context.polls.fire("bufferState", 4002.5)
-  params:set("record_duration", 2); record_buffer(6)
+  load_buffer(3, "/tmp/x.wav"); context.polls.fire("bufferState", 2002.5)
+  params:set("record_duration", 2)
   redraw()
-  local left_name
-  for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 0 and entry.y == page.name_y then left_name = entry.text end
-  end
-  assert_equal(left_name, "KARPLUS")
-  local fields = field_rows(context)
-  assert_equal(fields.src.value, "buf 2"); assert_equal(fields.dur.value, "2.0s"); assert_equal(fields.lvl.value, "1.00")
+  assert_equal(field_labels(context), "v6 rec dur lvl", "the first four fields")
+  assert_equal(field_named(context, "v6").value, "buf 2"); assert_equal(field_named(context, "dur").value, "2.0s")
+  assert_equal(field_named(context, "lvl").value, "1.00"); assert_equal(field_named(context, "rec").value, "in")
   local divider
   for _, line in ipairs(context.screen.lines) do
-    if line.x1 == page.divider_x and line.x2 == page.divider_x then divider = line end
+    if line.x1 == page.divider_x and line.x2 == page.divider_x and line.level == 1 then divider = line end
   end
   assert_true(divider ~= nil, "a divider between the columns")
   for _, entry in ipairs(context.screen.texts) do
@@ -734,14 +750,14 @@ test("BUFFER page draws the voice, its fields, the meter and the slot rows", fun
   end
   assert_equal(slot_row_text(context, rows[1]), "1 -"); assert_equal(row_level(1), 15, "the cursor row bright")
   assert_equal(slot_row_text(context, rows[2]), "2 drone 16.0s"); assert_equal(row_level(2), 6, "a loaded slot")
+  assert_equal(slot_row_text(context, rows[3]), "3 x 2.5s")
+  clear_buffer(3); redraw(); rows = slot_rows(context)
   assert_equal(row_level(3), 2, "an empty slot dim")
-  assert_equal(slot_row_text(context, rows[5]), "5 x 2.5s")
-  assert_equal(slot_row_text(context, rows[6]), "6 - REC", "REC while recording"); assert_equal(row_level(6), 6)
   -- the input source: the field says so
   params:set("v6_source", 10); redraw()
-  assert_equal(field_rows(context).src.value, "input")
+  assert_equal(field_named(context, "v6").value, "input")
   params:set("v6_source", 1); redraw()
-  assert_equal(field_rows(context).src.value, "synth")
+  assert_equal(field_named(context, "v6").value, "synth")
   local _, _, segments = meter_state(context)
   assert_equal(segments, 8, "the meter's eight segments")
 end)
@@ -769,11 +785,11 @@ test("BUFFER page layout holds for every voice, source, buffer state and cursor"
     set_buffers(state)
     for voice_idx = 1, 7 do
       set_selected(voice_idx)
-      for source = 1, 10 do
+      for _, source in ipairs({ 1, 2, 5, 9, 10 }) do
         params:set("v" .. voice_idx .. "_source", source)
         for _, slot in ipairs({ 1, 4, 8 }) do
           cursor.slot = slot
-          for field = 1, 3 do
+          for field = 1, 11 do
             cursor.field = field
             show_page("BUFFER")
             assert_screen_layout(context, string.format("BUFFER, %s, voice %d source %d, slot %d field %d",
@@ -791,19 +807,20 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
   local grid_device = context.grid.plug(1, 16, 16)
   show_page("BUFFER")
   h.assert_drawn_on_next_frame(context, arc_hardware, "bufferState report", function()
-    context.polls.fire("bufferState", 3005)
+    context.polls.fire("bufferState", 1005)
   end)
   assert_true(h.screen_shows(context, "5.0s"), "BUFFER shows the reported seconds")
-  -- the cursor slot records; no report comes, so the take settles empty
-  record_buffer(1)
+  -- slot 3 records (not the cursor's: a recording cursor slot animates the
+  -- page, 3.3); no report comes, so the take settles empty
+  record_buffer(3)
   h.assert_drawn_on_next_frame(context, arc_hardware, "recording timer end", function()
-    h.wake_buffer_clock(context, 1)
+    h.wake_buffer_clock(context, 3)
   end)
-  assert_true(h.screen_shows(context, "K2:load K3:..."), "BUFFER shows the take finishing")
+  assert_true(local_value("buffers")[3].finishing and h.screen_shows(context, "REC"), "BUFFER shows the take finishing")
   h.assert_drawn_on_next_frame(context, arc_hardware, "fallback settle", function()
-    h.wake_buffer_clock(context, 1)
+    h.wake_buffer_clock(context, 3)
   end)
-  assert_true(h.screen_shows(context, "K2:load K3:rec"), "BUFFER shows the take settled")
+  assert_true(not h.screen_shows(context, "REC"), "BUFFER shows the take settled")
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
 end)
 
@@ -813,8 +830,12 @@ test("BUFFER's layout states draw clear of each other", function()
   assert_true(type(record.layout_states) == "table" and #record.layout_states > 0, "BUFFER lists layout states")
   local names = {}
   for _, state in ipairs(record.layout_states) do names[state.name] = true end
-  for _, name in ipairs({ "slot 1", "slot 8", "field dur", "field lvl", "long names", "every slot recording",
-    "saving flash", "saved flash", "save failed flash", "busy flash", "empty flash", "load failed flash", "meter peak",
+  for _, name in ipairs({ "slot 1", "slot 8", "field source", "field rec", "field dur", "field lvl", "field fb",
+    "field loop", "field thr", "field sync", "field bm", "field start", "field fric", "long names", "every slot recording",
+    "saving flash", "saving loop flash", "saved flash", "saved loop flash", "save failed flash", "busy flash", "empty flash",
+    "load failed flash", "random file flash", "filled flash", "no files flash", "meter peak",
+    "armed", "take recording", "take finishing", "dub recording", "loop recording", "len 16b max",
+    "seven heads on one slot", "record head", "a long file's start", "a long file's start (high, 300 s)",
     "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)" }) do
     assert_true(names[name], "a layout state " .. name)
   end
@@ -936,11 +957,11 @@ end
 test("the record duration reaches the tier's buffer length", function()
   write_high_tier(60)
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  with_alt(function() enc(2, 1) end)   -- the duration field
+  to_field(3)   -- the duration field
   for _ = 1, 40 do enc(3, 5) end
   assert_equal(params:get("record_duration"), 60, "E3 takes the duration to the slot length")
   redraw()
-  assert_equal(field_rows(context).dur.value, "60.0s", "the field shows it")
+  assert_equal(field_named(context, "dur").value, "60.0s", "the field shows it")
   assert_screen_layout(context, "BUFFER with a 60 s duration")
   context.clear_engine_calls()
   tap(3)
@@ -949,7 +970,7 @@ test("the record duration reaches the tier's buffer length", function()
   assert_near(call.args[2], 60, 1e-9, "for the tier's 60 s")
   -- on standard it stops at 16
   context = load_strata(); finish_startup(context); show_page("BUFFER")
-  with_alt(function() enc(2, 1) end)
+  to_field(3)
   for _ = 1, 40 do enc(3, 5) end
   assert_equal(params:get("record_duration"), 16, "standard stops at 16 s")
 end)
@@ -960,7 +981,7 @@ test("BUFFER shows 65 s as 1:05 and 16.5 s as today", function()
   local cases = { { 65, "1:05" }, { 16.5, "16.5s" }, { 59.9, "59.9s" }, { 60, "1:00" }, { 59.96, "1:00" },
     { 299.4, "4:59" }, { 300, "5:00" }, { 0.5, "0.5s" } }
   for index, case in ipairs(cases) do
-    local slot = (index - 1) % 6 + 1   -- the six rows shown with the cursor on slot 1
+    local slot = (index - 1) % 3 + 1   -- the three rows shown with the cursor on slot 1
     load_buffer(slot, "/tmp/x" .. index .. ".wav")
     context.polls.fire("bufferState", (slot - 1) * 1000 + case[1])
     redraw()
@@ -1010,5 +1031,384 @@ test("BUFFER shows a long file the engine is checking as loading", function()
   redraw()
   assert_equal(slot_row_text(context, rows[1]), "1 long 2:00", "then its own length")
 end)
+
+-- 3.3: the record fields, the waveform with its heads and bookmarks, the
+-- recording states, the holds (design 3.3 section 8.1)
+
+-- Write slot's peaks file as the engine does (lib/waveforms.lua reads it on
+-- a later frame tick), for a slot of `seconds` at 48 kHz
+local function write_peaks(slot, values, seconds)
+  local folder = local_value("S").lib.scenes.scene_data_dir
+  util.make_dir(folder)
+  local parts = {}
+  for index, value in ipairs(values) do parts[index] = string.format("%.3f", value) end
+  local file = assert(io.open(folder .. "buf" .. slot .. ".peaks", "w"))
+  file:write(string.format("strata-peaks 1\nslot %d\nframes %d\nrate 48000\ngeneration 1\npeaks %s\n",
+    slot, math.floor(seconds * 48000), table.concat(parts, " ")))
+  file:close()
+end
+
+-- Slot 1 loaded with 12 s whose peaks are all `peak`, read in
+local function slot_with_peaks(context, peak)
+  local values = {}
+  for index = 1, 64 do values[index] = peak end
+  load_buffer(1, "/tmp/wave.wav")
+  write_peaks(1, values, 12)
+  context.polls.fire("bufferState", 12)
+  context.clock.run_for(0.2)
+end
+
+-- The waveform's columns: vertical lines inside x 60-123, y 11-27 (not a
+-- head, which spans all of it), by x
+local function waveform_columns(context)
+  local columns = {}
+  for _, line in ipairs(context.screen.lines) do
+    local top, bottom = math.min(line.y1, line.y2), math.max(line.y1, line.y2)
+    if line.x1 == line.x2 and line.x1 >= 60 and line.x1 <= 123 and top >= 11 and bottom <= 27
+      and not (top == 11 and bottom == 27) then
+      columns[line.x1] = line
+    end
+  end
+  return columns
+end
+
+-- Start or stop a voice (voice 1 runs after startup)
+local function set_running(voice_idx, running)
+  if local_value("voices")[voice_idx].active ~= running then toggle_voice(voice_idx) end
+end
+
+-- Vertical head lines spanning y 11-27, by x
+local function head_lines(context)
+  local heads = {}
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == line.x2 and math.min(line.y1, line.y2) == 11 and math.max(line.y1, line.y2) == 27 then
+      heads[line.x1] = line
+    end
+  end
+  return heads
+end
+
+test("BUFFER's fields scroll four at a time and edit their params", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local cursor = local_value("buffer_page")
+  with_alt(function() for _ = 1, 4 do enc(2, 1) end end)
+  assert_equal(cursor.field, 5, "the cursor on fb")
+  redraw()
+  assert_equal(field_labels(context), "lvl fb loop thr", "one row of context above the cursor")
+  local rows = field_rows(context)
+  for index, y in ipairs({ 16, 24, 32, 40 }) do assert_equal(rows[index].y, y, "row " .. index .. " at y " .. y) end
+  assert_true(rows[2].cursor, "the cursor marks fb")
+  enc(3, 5); assert_near(params:get("record_feedback"), 5, 1e-9, "E3 sets the record feedback")
+  redraw(); assert_equal(field_named(context, "fb").value, "5%")
+  with_alt(function() for _ = 1, 6 do enc(2, 1) end end)
+  assert_equal(cursor.field, 11, "the cursor on fric")
+  redraw()
+  assert_equal(field_labels(context), "sync bm start fric", "the last page")
+  assert_equal(field_named(context, "fric").value, "100%")
+  enc(3, -1); assert_near(params:get("scrub_friction"), 99, 1e-9, "E3 sets the friction")
+  assert_screen_layout(context, "BUFFER on fric")
+  -- the scroll marker sits on the divider, brighter than it
+  local page, marker = local_value("BUFFER_PAGE"), nil
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == page.divider_x and line.x2 == page.divider_x and line.level == 4 then marker = line end
+  end
+  assert_true(marker ~= nil, "the fields' scroll marker on the divider at level 4")
+end)
+
+test("the len field shows beats with sync on and 16b max when capped", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  to_field(3)
+  params:set("record_sync", 2); params:set("record_beats", 16)
+  redraw()
+  assert_equal(field_named(context, "len").value, "16b", "16 beats at 120 BPM fit the slot")
+  enc(3, 1); assert_equal(params:get("record_beats"), 17, "E3 sets the beats with sync on")
+  params:set("record_beats", 16)
+  params:set("clock_tempo", 30); redraw()
+  assert_equal(field_named(context, "len").value, "8b max", "16 beats at 30 BPM are 32 s: 8 beats fit")
+  assert_screen_layout(context, "BUFFER len capped")
+  params:set("record_sync", 1); redraw()
+  assert_equal(field_named(context, "dur").value, string.format("%.1fs", params:get("record_duration")),
+    "sync off: the duration")
+end)
+
+test("the bm field steps 1-4 and recalls the bookmark it lands on", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("v1_source", 2)   -- voice 1 on slot 1
+  to_field(9)
+  redraw()
+  assert_equal(field_named(context, "bm").value, "1 0.00", "nothing recalled: bookmark 1")
+  enc(3, 1)
+  redraw()
+  assert_equal(field_named(context, "bm").value, "2 0.25")
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-6, "bookmark 2 recalled")
+  assert_equal(local_value("S").lib.positions.last_recalled(1), 2)
+  enc(3, 3); redraw()
+  assert_equal(field_named(context, "bm").value, "4 0.75", "it stops at 4")
+  assert_near(params:get("v1_buf_pos"), 0.75, 1e-6)
+  assert_equal(field_named(context, "bm").level, 15, "bright under the cursor")
+  params:set("v1_source", 1); redraw()
+  assert_equal(field_named(context, "bm").level, 4, "a synth voice: dim even under the cursor")
+end)
+
+test("the start field shows - for a file that fits and 12.0s for a long one", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local buffers = local_value("buffers")
+  context.audio.register("/tmp/ten.wav", { channels = 2, frames = 48000 * 10, rate = 48000 })
+  load_buffer(1, "/tmp/ten.wav"); context.polls.fire("bufferState", 10)
+  to_field(10)
+  redraw()
+  assert_equal(field_named(context, "start").value, "-", "a file that fits")
+  context.clear_engine_calls()
+  enc(3, 5); context.clock.run_for(0.5)
+  assert_equal(buffers[1].start, 0, "E3 does nothing")
+  assert_equal(#context.calls_named("loadBuffer"), 0)
+  context.audio.register("/tmp/sixty.wav", { channels = 2, frames = 48000 * 60, rate = 48000 })
+  load_buffer(1, "/tmp/sixty.wav"); context.polls.fire("bufferState", 16)
+  context.clear_engine_calls()
+  for _ = 1, 120 do enc(3, 1) end
+  redraw()
+  assert_equal(field_named(context, "start").value, "12.0s", "tenths")
+  with_alt(function() for _ = 1, 5 do enc(3, 1) end end)
+  redraw()
+  assert_equal(field_named(context, "start").value, "12.05s", "ALT+E3: hundredths")
+  assert_screen_layout(context, "BUFFER with a long file's start")
+  assert_equal(#context.calls_named("loadBuffer"), 0, "no reload while E3 turns")
+  context.clock.run_for(0.31)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "one reload 0.3 s after the last detent")
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], "/tmp/sixty.wav")
+  assert_near(loads[1].args[3], 12.05, 1e-6)
+end)
+
+test("K2 released before 0.5 s opens the file selector, after 0.5 s loads a random file", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  assert_equal(local_value("BUFFER_PAGE").hold_seconds, 0.5)
+  local randoms = {}
+  S.lib.files.random_into = function(slot) table.insert(randoms, slot); return true end
+  enc(2, 2)
+  context.fileselect.last = nil
+  context.set_time(100); key(2, 1); context.set_time(100.3); key(2, 0)
+  assert_true(context.fileselect.last ~= nil, "a short K2 opens the file selector")
+  assert_equal(#randoms, 0)
+  context.fileselect.close(); context.fileselect.last = nil
+  context.set_time(101); key(2, 1); context.set_time(101.6); key(2, 0)
+  assert_equal(context.fileselect.last, nil, "a held K2 opens nothing")
+  assert_equal(table.concat(randoms, " "), "3", "and loads a random file into the cursor slot")
+end)
+
+test("ALT+K2 clears on release before 0.5 s and fills the empty slots after it", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local fills = 0
+  S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 4)
+  context.clear_engine_calls()
+  context.set_time(100); key(1, 1); key(2, 1)
+  assert_equal(#context.calls_named("clearBuffer"), 0, "nothing at the press")
+  context.set_time(100.2); key(2, 0); key(1, 0)
+  local clears = context.calls_named("clearBuffer")
+  assert_equal(#clears, 1, "a short ALT+K2 clears"); assert_equal(clears[1].args[1], 0)
+  assert_equal(fills, 0)
+  context.clear_engine_calls()
+  context.set_time(101); key(1, 1); key(2, 1); context.set_time(101.7); key(2, 0); key(1, 0)
+  assert_equal(fills, 1, "a held ALT+K2 fills the empty slots")
+  assert_equal(#context.calls_named("clearBuffer"), 0, "and clears nothing")
+end)
+
+test("ALT+K3 saves the slot on release before 0.5 s and its loop region after it", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 4)
+  context.clear_engine_calls()
+  context.set_time(100); key(1, 1); key(3, 1)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing at the press")
+  context.set_time(100.2); key(3, 0); key(1, 0); redraw()
+  local saves = context.calls_named("saveBuffer")
+  assert_equal(#saves, 1, "a short ALT+K3 saves")
+  assert_equal(saves[1].args[1], 0); assert_equal(saves[1].args[3], 0); assert_equal(saves[1].args[4], 1)
+  assert_true(not saves[1].args[2]:find("-loop", 1, true), "the whole slot")
+  assert_equal(hint_text(context), "saving buf 1")
+  context.clear_engine_calls()
+  context.set_time(101); key(1, 1); key(3, 1); context.set_time(101.7); key(3, 0); key(1, 0); redraw()
+  saves = context.calls_named("saveBuffer")
+  assert_equal(#saves, 1, "a held ALT+K3 saves the loop region")
+  assert_true(saves[1].args[2]:match("%-buf1%-loop%.wav$") ~= nil, "to a -loop file: " .. saves[1].args[2])
+  assert_equal(saves[1].args[3], 0); assert_equal(saves[1].args[4], 1)
+  assert_equal(hint_text(context), "saving buf 1 loop")
+  context.polls.fire("bufferSaveResult", (2 * 2 + 0) * 8 + 0); next_frame(context)
+  assert_equal(hint_text(context), "saved buf 1 loop")
+  -- busy while recording, held or not
+  record_buffer(1); context.clear_engine_calls()
+  context.set_time(110); key(1, 1); key(3, 1); context.set_time(110.7); key(3, 0); key(1, 0); redraw()
+  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
+  assert_equal(hint_text(context), "buf 1 busy")
+end)
+
+test("ALT+K2 keeps its release when K1 comes up first", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local fills = 0
+  S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
+  context.clear_engine_calls(); context.fileselect.last = nil
+  context.set_time(100); key(1, 1); key(2, 1); key(1, 0); context.set_time(100.2); key(2, 0)
+  assert_equal(#context.calls_named("clearBuffer"), 1, "a short ALT+K2 clears")
+  assert_equal(context.calls_named("clearBuffer")[1].args[1], 0)
+  assert_equal(context.fileselect.last, nil, "no file selector")
+  context.clear_engine_calls()
+  context.set_time(101); key(1, 1); key(2, 1); key(1, 0); context.set_time(101.7); key(2, 0)
+  assert_equal(fills, 1, "a held ALT+K2 fills")
+  assert_equal(#context.calls_named("clearBuffer"), 0)
+  assert_equal(context.fileselect.last, nil, "still no file selector")
+end)
+
+test("K3 records, stops and cancels while armed; the hint follows", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec")
+  params:set("record_threshold", 2)   -- waits for -48 dB: armed
+  context.clear_engine_calls(); tap(3)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
+  assert_equal(local_value("S").lib.record.state(1).phase, "armed")
+  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "stop while armed")
+  tap(3)
+  assert_equal(#context.calls_named("stopRecord"), 1, "K3 again cancels the armed recording")
+  assert_equal(context.calls_named("stopRecord")[1].args[1], 0)
+  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:...", "while the take finishes")
+  context.polls.fire("recordState", (1 * 4 + 3) * 8 + 0)   -- canceled
+  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec")
+  params:set("record_threshold", 1)
+  tap(3); redraw()
+  assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "stop while recording")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:clr/fill K3:sv/trim", "with ALT held")
+  key(1, 0)
+end)
+
+test("the rec, thr and sync fields show their values", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  for _, case in ipairs({ { 1, "in" }, { 2, "pre" }, { 3, "post" }, { 6, "v3" }, { 10, "v7" } }) do
+    params:set("record_source", case[1]); redraw()
+    assert_equal(field_named(context, "rec").value, case[2], "record source " .. case[1])
+  end
+  to_field(7)
+  redraw(); assert_equal(field_named(context, "thr").value, "off")
+  params:set("record_threshold", 6); redraw()
+  assert_equal(field_named(context, "thr").value, "-24dB")
+  assert_equal(field_named(context, "sync").value, "off")
+  params:set("record_sync", 3); redraw()
+  assert_equal(field_named(context, "sync").value, "bar")
+  assert_equal(field_named(context, "loop").value, "off")
+  params:set("record_loop", 2); redraw()
+  assert_equal(field_named(context, "loop").value, "on")
+end)
+
+test("the selected voice's bookmarks tick at y 30-31, the last recalled at 15", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local function ticks()
+    local found = {}
+    for _, rect in ipairs(context.screen.rects) do
+      if rect.y == 30 and rect.h == 2 and rect.w == 1 then found[rect.x] = rect.level end
+    end
+    return found
+  end
+  params:set("v1_source", 2); redraw()
+  local found = ticks()
+  for _, x in ipairs({ 60, 76, 92, 108 }) do assert_equal(found[x], 6, "a tick at x " .. x) end
+  local S = local_value("S")
+  S.lib.positions.recall_bookmark(1, 2); redraw()
+  found = ticks()
+  assert_equal(found[76], 15, "the last recalled bright"); assert_equal(found[60], 6)
+  params:set("v1_source", 3); redraw()
+  assert_equal(next(ticks()), nil, "voice 1 on another slot: none")
+end)
+
+test("the waveform draws 64 columns with the loop brighter and a flat line when empty", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  slot_with_peaks(context, 0.5)
+  params:set("v1_source", 2)
+  params:set("v1_loop_start", 0.25); params:set("v1_loop_length", 0.5)
+  redraw()
+  local columns, count = waveform_columns(context), 0
+  for x = 60, 123 do
+    local line = columns[x]
+    assert_true(line ~= nil, "a column at x " .. x)
+    count = count + 1
+    assert_equal(math.min(line.y1, line.y2), 15, "half-height 4 above y 19")
+    assert_equal(math.max(line.y1, line.y2), 23, "and below it")
+    assert_equal(line.level, (x >= 76 and x <= 107) and 8 or 3, "the loop brighter at x " .. x)
+  end
+  assert_equal(count, 64)
+  params:set("v1_source", 1); redraw()
+  columns = waveform_columns(context)
+  for x = 60, 123 do assert_equal(columns[x].level, 6, "no selected voice on the slot: level 6") end
+  enc(2, 1); redraw()   -- slot 2, empty
+  local flat
+  for _, line in ipairs(context.screen.lines) do
+    if line.y1 == 19 and line.y2 == 19 and line.x1 == 60 and line.x2 == 123 then flat = line end
+  end
+  assert_true(flat ~= nil and flat.level == 1, "an empty slot: a flat line at level 1")
+  assert_equal(next(waveform_columns(context)), nil, "and no columns")
+end)
+
+test("each running voice on the slot draws its playhead, the selected one at 15", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("v1_source", 2); params:set("v3_source", 2)
+  params:set("v1_buf_pos", 0.25); params:set("v3_buf_pos", 0.5)
+  params:set("v1_grain_spread", 0.25)
+  set_running(1, true); set_running(3, true)
+  redraw()
+  local heads = head_lines(context)
+  assert_true(heads[76] ~= nil and heads[76].level == 15, "the selected voice's head at 15")
+  assert_true(heads[92] ~= nil and heads[92].level == 8, "another voice's at 8")
+  local spread
+  for _, line in ipairs(context.screen.lines) do
+    if line.y1 == 28 and line.y2 == 28 and line.x1 == 68 and line.x2 == 84 then spread = line end
+  end
+  assert_true(spread ~= nil and spread.level == 4, "voice 1's spread at y 28, level 4")
+  set_running(1, false); set_running(3, false)
+  -- the slot recording playably: a dotted record head
+  params:set("record_feedback", 50)
+  context.set_time(200); record_buffer(1); context.set_time(202)   -- 2 s of 8
+  redraw()
+  local dots = {}
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.x == 76 and rect.w == 1 and rect.h == 1 and rect.level == 12 then table.insert(dots, rect.y) end
+  end
+  table.sort(dots)
+  assert_equal(table.concat(dots, " "), "11 13 15 17 19 21 23 25 27", "every other pixel at the record head")
+end)
+
+test("BUFFER animates while a voice reads the cursor slot or it records", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]
+  set_running(1, false)
+  assert_true(record.animates ~= nil and not record.animates(), "nothing moves")
+  params:set("v1_source", 2); set_running(1, true)
+  assert_true(record.animates(), "voice 1 runs on the cursor slot")
+  set_running(1, false)
+  assert_true(not record.animates(), "stopped")
+  params:set("v1_source", 1)
+  params:set("record_feedback", 50); record_buffer(1)
+  assert_true(record.animates(), "the slot records playably")
+end)
+
+test("slot rows show ARM, REC, DUB and LOOP", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("record_threshold", 2); record_buffer(1)
+  params:set("record_threshold", 1); record_buffer(2)
+  params:set("record_feedback", 50); record_buffer(3)
+  params:set("record_loop", 2); record_buffer(4)
+  local function state_text(slot)
+    local rows = slot_rows(context)
+    for _, entry in ipairs(texts_on_row(context, rows[slot])) do
+      if entry.align == "right" and entry.x == 124 then return entry.text end
+    end
+  end
+  redraw()
+  assert_equal(state_text(1), "ARM"); assert_equal(state_text(2), "REC"); assert_equal(state_text(3), "DUB")
+  assert_screen_layout(context, "BUFFER with ARM, REC and DUB")
+  enc(2, 3); redraw()
+  assert_equal(state_text(4), "LOOP")
+end)
+
 
 end
