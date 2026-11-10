@@ -58,6 +58,19 @@ test("128v: the faders page's column 7 locks and unlocks voices 1-7", function()
     assert_equal(device:get_led(7, y), 0, "column 7 row " .. y .. " stays dark")
   end
   for i = 1, 7 do assert_true(not frozen[i], "rows 1-9 lock no voice") end
+  -- column 6 is inert: no lock, no fader param and no fader page changes
+  local fader_ids = fader_param_ids(local_value("grid_voice_select"))
+  local values_before, page_before = {}, local_value("param_page")
+  for i, id in ipairs(fader_ids) do values_before[i] = params:get(id) end
+  for _, y in ipairs({3, 12}) do
+    tap(context, 1, 6, y)
+    assert_equal(device:get_led(6, y), 0, "column 6 row " .. y .. " stays dark")
+  end
+  for i = 1, 7 do assert_true(not frozen[i], "column 6 locks no voice") end
+  for i, id in ipairs(fader_ids) do
+    assert_equal(params:get(id), values_before[i], "column 6 changed no fader param: " .. id)
+  end
+  assert_equal(local_value("param_page"), page_before, "column 6 changed no fader page")
   -- on page 1 a press at (7, 12) is voice 7's step 12, as before
   show_grid_page(context, 1, 1)
   local step_before = local_value("S").patterns[7][12]
