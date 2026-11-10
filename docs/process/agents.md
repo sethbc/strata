@@ -17,7 +17,7 @@ The process runs on the superpowers skills. The session doing a step invokes its
 - **Workspace**: `superpowers:using-git-worktrees`. A worker starts in the worktree made for it and makes no other. The controller stays in the main checkout.
 - **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan and on every resume. Packages run in parallel, one worktree and pull request each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
 - **Code**: `superpowers:test-driven-development`, by every worker whose package changes code or tests. A docs-only package skips it.
-- **Review**: `superpowers:requesting-code-review`, by the controller for each package, with "Review" below as the reviewer's criteria.
+- **Review**: a plan's packages are reviewed with `superpowers:subagent-driven-development`'s own task-reviewer and re-review templates, with "Review" below as the reviewer's criteria; `superpowers:requesting-code-review`, by the controller, is for a review outside a plan's task loop (a design, a docs change, a release).
 - **Finishing**: `superpowers:finishing-a-development-branch`, by the controller at the end of a plan. The choice is always its pull request option, never a local merge: `main` takes rebase merges only.
 
 ## The ledger
@@ -67,7 +67,7 @@ Every problem found along the way (by a worker, a reviewer or the controller) ge
 
 ## Review
 
-A reviewer checks one package against its brief, then its build quality. It is a gate for the task, not a merge review. The controller dispatches it through `superpowers:requesting-code-review`, with this section as its criteria.
+A reviewer checks one package against its brief, then its build quality. It is a gate for the task, not a merge review. The controller dispatches it through `superpowers:subagent-driven-development`'s task-reviewer and re-review templates, with this section as its criteria.
 - Inputs: the brief, the plan's common instructions and constraints, the worker's report and the diff file the dispatch names. Files outside the diff are read with `git show origin/<branch>:<path>` from the main checkout, and only for a concrete named risk.
 - Read-only: never modify a working tree, index, HEAD or branch, never dispatch agents, never rerun the full suites (the report carries the evidence). A focused check for a specific doubt is fine in a temporary worktree inside the reviewer's own scratch folder, removed after: `lua test/run.lua <filter>`, or one engine area with `STRATA_ENGINE_CHECK_AREAS=<area>` on a port of its own.
 - Flag any edit outside the package's files that is not a registration line or a minimal fix of a test its intended change broke, and any interface whose name or shape differs from the brief, the plan or the merged code (other packages build against those names).
