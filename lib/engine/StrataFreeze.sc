@@ -48,8 +48,10 @@
     // \copied (an input voice's copy is in its ring and its grain synth
     // reads it), \copies (the number of its latest input copy), \faded
     // (ring readers a pending copy set to ringLevel 0). \inputReaders: the
-    // input grain synths set to read their voice ring -> (voice, until: nil
-    // while they do, the time they stop counting once set back).
+    // input grain synths that read their voice ring's copy (pointed at it,
+    // started on it or re-gated onto it: noteInputReader) -> (voice, until:
+    // nil while they do, the time they stop counting once set back);
+    // pruned when a synth frees (forgetInputReader).
     // \spectralBuffers: on the high tier, each voice's [left, right] FFT
     // buffers for its spectral writer (see addFreezeDefs), else empty.
     allocFreezeState {

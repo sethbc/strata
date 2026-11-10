@@ -363,7 +363,9 @@ check.((getControl.(live, \bufL) == inputRing[0].bufnum) and: { state[\copied][3
     and: { fading.notNil } and: { fading.isPlaying.not or: { getControl.(fading, \ringLevel) == 1 } },
     "freeze: an unfreeze inside the copy's wait wins (no copy: the voice ring reads %)".format(readings.round(0.001)));
 // a grain synth restarted inside the copy's wait reads the input ring at
-// the voice's history, then the copy once it is in
+// the voice's history, then the copy once it is in (a 1 s wait for this
+// check and the next, so the readings inside it have about 0.9 s to spare)
+engine.bufferFadeWait = 1.0;
 command.(\setGrainSource, 3, 0); server.sync;
 engine.synths[engine.voiceKey(3)] !? { arg synth; synth.set(\out, quietBus.index) };
 0.3.wait;
@@ -374,13 +376,38 @@ command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
 ok = restartGrain.(3);
 live = grainOf.(3);
 readings = [fading.notNil, state[\copied][3].not, getControl.(live, \bufL) == inputRing[0].bufnum, getControl.(live, \history)];
-h.waitFor({ state[\copied][3] }, 1);
+h.waitFor({ state[\copied][3] }, 2);
 server.sync;
 check.(ok and: { readings[0] } and: { readings[1] } and: { readings[2] } and: { readings[3] == 2 }
     and: { getControl.(live, \bufL) == voiceRing.(3)[0].bufnum } and: { getControl.(live, \history) == 0 },
     "freeze: a restart inside a copy's wait reads the input ring, then the copy (fading %, waiting %, input ring %, history %)".format(
         readings[0], readings[1], readings[2], readings[3]));
 command.(\setGrainParam, 3, \freeze, 0.0);
+// a voiceOff inside the copy's wait: the copy lands while the voice is
+// stopped (no live grain synth to point at it), and a voiceOn inside the
+// release re-gates the same grain synth onto the copy, with no freeze
+// resend; the unfreeze sets it back
+command.(\setGrainSource, 3, 0); server.sync;
+engine.synths[engine.voiceKey(3)] !? { arg synth; synth.set(\out, quietBus.index) };
+0.3.wait;
+command.(\setGrainSource, 3, engine.inputSource); server.sync;
+fading = fadingRingReader.(3);
+old = grainOf.(3);
+command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
+0.05.wait;
+command.(\voiceOff, 3); server.sync;
+readings = [fading.notNil, state[\copied][3].not];
+ok = h.waitFor({ state[\copied][3] }, 2);
+startInput.(3); server.sync;
+live = grainOf.(3);
+readings = readings ++ [ok, live === old, getControl.(live, \bufL) == voiceRing.(3)[0].bufnum,
+    getControl.(live, \history) == 0,
+    state[\inputReaders][live].notNil and: { state[\inputReaders][live][\until].isNil }];
+command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
+readings = readings ++ [getControl.(live, \bufL) == inputRing[0].bufnum, getControl.(live, \history) == 2];
+check.(readings.every({ arg value; value == true }),
+    "freeze: a grain synth re-gated onto a copy that landed while its voice was stopped is set back by the unfreeze (fading, waiting, copied, same node, on the copy, history 0, a reader, back on the input ring, history 2: %)".format(
+        readings));
 engine.bufferFadeWait = savedFadeWait;
 command.(\setGrainParam, 3, \history, 0.0);
 // a frozen input voice switched to its synth: unfrozen, its writer reads the voice bus again
