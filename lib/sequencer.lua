@@ -97,36 +97,51 @@ return function(S)
     S.pattern_position = 1
     S.pattern_sounding_step = nil
 
-    S.pattern_clock = clock.run(function()
-      while S.pattern_playing do
-        -- This step sounds from now on: every grid redraw until the next
-        -- step (the one below, a voice it starts, a key press) shows it
-        S.pattern_sounding_step = S.pattern_position
+    local function play_step()
+      -- This step sounds from now on: every grid redraw until the next
+      -- step (the one below, a voice it starts, a key press) shows it
+      S.pattern_sounding_step = S.pattern_position
 
-        -- Trigger voices that have active steps
-        for voice_idx = 1, NUM_VOICES do
-          if S.patterns[voice_idx][S.pattern_position] > 0 then
-            if S.voices[voice_idx].active then
-              -- Voice is already running: accent it in place, at the step's
-              -- level (1-15) as velocity. A step must never create new synth
-              -- nodes (toggling would stack whole voice/grain/mod chains
-              -- through their long release tails).
-              engine.retrigger(voice_idx - 1, S.patterns[voice_idx][S.pattern_position] / MAX_STEP_LEVEL)
-            else
-              -- Voice is off - turn it on
-              toggle_voice(voice_idx)
-            end
+      -- Trigger voices that have active steps
+      for voice_idx = 1, NUM_VOICES do
+        if S.patterns[voice_idx][S.pattern_position] > 0 then
+          if S.voices[voice_idx].active then
+            -- Voice is already running: accent it in place, at the step's
+            -- level (1-15) as velocity. A step must never create new synth
+            -- nodes (toggling would stack whole voice/grain/mod chains
+            -- through their long release tails).
+            engine.retrigger(voice_idx - 1, S.patterns[voice_idx][S.pattern_position] / MAX_STEP_LEVEL)
+          else
+            -- Voice is off - turn it on
+            toggle_voice(voice_idx)
           end
         end
+      end
 
-        -- Show the step that just played, then advance to the next one
-        grid_redraw()
-        S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
+      -- Show the step that just played, then advance to the next one
+      grid_redraw()
+      S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
+    end
+
+    local started = clock.run(function()
+      while S.pattern_playing do
+        local played, step_error = xpcall(play_step, with_traceback)
+        if not played then
+          -- Forget our own id first, so the stop never cancels this clock
+          -- from inside itself, then show the pattern stopped and raise the
+          -- error again for maiden
+          S.pattern_clock = nil
+          pattern_clock_stop()
+          error(step_error, 0)
+        end
 
         -- Wait for next step based on tempo
         clock.sync(1/4)  -- 16th notes
       end
     end)
+    -- A first step that failed has already stopped the pattern (clock.run
+    -- runs it at once): its id must not be recorded
+    if S.pattern_playing then S.pattern_clock = started end
   end
 
   function pattern_clock_stop()
