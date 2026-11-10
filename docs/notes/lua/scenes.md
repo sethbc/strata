@@ -111,7 +111,7 @@ Order of voice changes (#46):
 
 So a recall sends at most one full sync per voice, after its params. An instant recall and a smooth transition (which ends in `recall_scene_instant`) both leave the engine with the Lua state of every running voice.
 
-A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2), and a fade that does not land puts it back (#253, below). A failed `recall_scene_instant` redraws the screen and grids before it raises its error, so they show the scene that is current and whatever was applied.
+A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2), and a fade that does not land puts it back (#253, below). A failed `recall_scene_instant(scene_num, scene_data, current_if_failed)` never makes its scene current: it sets `S.current_scene` to `current_if_failed` when one is given (a fade's landing passes its `previous`; nil leaves the current scene as it is), then redraws the screen and grids once and raises its error, so they show the scene that is current and whatever was applied.
 
 ### Smooth transitions
 
@@ -132,12 +132,12 @@ A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3
 | idle | false | nil | nil | nil | nil | the last scene that landed (0 = none) |
 | fading | true | the `util.time()` its next step or end is due | the scene it goes to | the current scene before it | its clock (or a lost id, which the sequencer's overrun ends) | `target` |
 
-- idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition: it sets all five fields together, `previous` to `S.current_scene` and `S.current_scene` to the target, before the first step runs (so its redraw lights the target).
+- idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition. Before the first step runs it sets five of the six columns, in this order: `S.scene_transition_active` (true), `next_step_due` (now), `target` (n), `previous` (`S.current_scene`) and `S.current_scene` (n), so the first step's redraw lights the target. The sixth, `S.scene_transition_clock`, is assigned when `clock.run` returns, after the first step (nil while it runs).
 - fading to idle: only `end_scene_transition(how)`, local to `lib/scenes.lua`. It clears every field and returns the fade's `previous`. How it ends:
   - `"canceled"`: `cancel_scene_transition()` (the sequencer's overrun, a scenes file load, cleanup). It cancels the clock, sets `S.current_scene` back to `previous`, and redraws the screen and grids when that changed the scene.
   - `"superseded"`: a new recall. The same, without the redraw: the recall redraws itself (and a failed `recall_scene_instant` redraws before it raises).
   - `"failed"`: a fade step's error, inside the clock. The id is forgotten; `previous` is put back and redrawn, then the error is raised again.
-  - `"landing"`: the fade's end, inside the clock. The id is forgotten and the target stays current while `recall_scene_instant` applies it, so no grid or screen redraw inside that recall (a voice it starts or stops) shows `previous`. Only if the recall fails does the clock set `S.current_scene` to the `previous` it was handed, redraw, and raise the error again.
+  - `"landing"`: the fade's end, inside the clock. The id is forgotten and the target stays current while `recall_scene_instant` applies it, so no grid or screen redraw inside that recall (a voice it starts or stops) shows `previous`. The landing passes the `previous` that `end_scene_transition` returns to `recall_scene_instant` as `current_if_failed`: only if the recall fails is `previous` current again, set before that recall's one failure redraw.
 - So the current scene is always the last one that landed or the one now fading: a fade superseded by another keeps the first fade's `previous`, since the second reads the scene the first put back.
 - The `"scene transition"` invariant (`S.register_invariant`) checks that `next_step_due` and `target` are set exactly while the flag is, and that no clock is kept while idle.
 
