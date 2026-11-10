@@ -181,19 +181,21 @@ return function(S)
     draw_details()
   end
 
+  -- What ALT+K2 does for a voice, the one decision the hint shows and the
+  -- key acts on: "undo" within UNDO_SECONDS of its randomize, else "locked"
+  -- (randomize leaves a locked voice alone), else "rand"
+  local function alt_k2_action(voice_idx)
+    if undo_available(voice_idx) then return "undo" end
+    if S.frozen[voice_idx] then return "locked" end
+    return "rand"
+  end
+
   -- The hint row (redraw() draws it after the page): K2 and K3, or with ALT
-  -- ALT+K2 (undo within UNDO_SECONDS, else locked for a locked voice, else
-  -- randomize) and ALT+K3 (lock)
+  -- ALT+K2 (alt_k2_action) and ALT+K3 (lock)
   local function main_hints(alt_held)
     local voice_idx = S.selected_voice
     if alt_held then
-      local k2 = "rand"
-      if undo_available(voice_idx) then
-        k2 = "undo"
-      elseif S.frozen[voice_idx] then
-        k2 = "locked"  -- randomize leaves a locked voice alone
-      end
-      return "K2:" .. k2 .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
+      return "K2:" .. alt_k2_action(voice_idx) .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
     end
     return "K2:field K3:" .. (S.voices[voice_idx].active and "stop" or "start")
   end
@@ -221,14 +223,15 @@ return function(S)
     end
   end
 
-  -- ALT+K2: undo the selected voice's randomize while its window lasts,
-  -- else randomize it (a locked voice is left alone). ALT+K3: lock/unlock
+  -- ALT+K2 acts on alt_k2_action: undo, randomize, or nothing for a locked
+  -- voice. ALT+K3: lock/unlock
   local function main_alt_key(n)
     local voice_idx = S.selected_voice
     if n == 2 then
-      if undo_available(voice_idx) then
+      local action = alt_k2_action(voice_idx)
+      if action == "undo" then
         undo_randomize()
-      else
+      elseif action == "rand" then
         randomize_voice(voice_idx)
       end
     elseif n == 3 then
