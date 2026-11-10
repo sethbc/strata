@@ -2,7 +2,7 @@
 
 - The page file sets every record field but the arc fields; SCENES' rings are `lib/arc/scenes.lua`'s (`docs/notes/lua/arc-pages.md`).
 - The overwrite prompt is the page's own state, never a flash (#255): the page never starts or ends a `"hints"` flash. The confirmation is `S.scenes_page = {armed_slot, armed_until}`, and it is armed while `armed_slot` is the cursor's slot and `util.time() < armed_until` (2 s after the arming press). While armed, `hints` returns the prompt (`K3 again: overwrite S<n>`), with or without ALT, so a flash scoped to another page (BUFFER's load reports) cannot hide it.
-- A second ALT+K3 saves only while armed and no flash covers the hint row (`S.lib.ui_flash.text("hints") == nil`). Under a covering flash (one with no page) the press only arms again: never save without the prompt on screen.
+- A second ALT+K3 saves only while armed and no flash covers the hint row (`S.lib.ui_flash.text("hints") == nil`). Under a covering flash (a hints flash showing on SCENES: one with no page, or one scoped to SCENES) the press only arms again: never save without the prompt on screen.
 - `draw` and `hints` write no state and never call `S.lib.ui_flash` or `request_redraw()`. The prompt lapses through the record's `animates` (the frame clock draws the page every frame while it returns true): false when nothing is armed, true while armed, and once the arming has lapsed (its time passed, or the cursor left the slot by a route other than `move_cursor`) it disarms and returns true once more, for the frame that takes the prompt off the hint row.
 - Every E2 or ring move of the cursor goes through `S.lib.pages_scenes.move_cursor(slot)` (E2 and arc ring 1): it puts `S.cursors.scene` on `slot`, clamped to the slots and fields, and, when the cursor moved, disarms (and asks for a redraw). A move by another route (setting `S.cursors.scene` directly) is never armed, since `armed` compares the slot, and the next frame disarms it, except a move away and back within one frame. The cursor must never carry a confirmation to another slot (Review Focus 5).
 - The invariant `"scenes prompt"` (`S.register_invariant`): `armed_slot` is nil or a slot in 1..`NUM_SCENES`.
@@ -24,7 +24,7 @@ The overwrite confirmation (`S.scenes_page`, #255):
 | State | `armed_slot` | `armed_until` | Hint row | `animates()` |
 |-------|-----|-----|-----|-----|
 | idle | nil | 0 | the page's hints | false |
-| armed | the cursor's slot (1..`NUM_SCENES`) | a `util.time()` still ahead | `K3 again: overwrite S<armed_slot>` (unless a flash with no page covers it) | true |
+| armed | the cursor's slot (1..`NUM_SCENES`) | a `util.time()` still ahead | `K3 again: overwrite S<armed_slot>` (unless a hints flash showing on SCENES covers it) | true |
 | lapsed | a slot, but not the cursor's, or with `armed_until` passed | as set | the page's hints | true once: it disarms |
 
 - idle or lapsed to armed, armed to armed: ALT+K3 on a populated slot that is not armed or whose prompt a flash covers (`scenes_alt_key`) sets `armed_slot` to the slot and `armed_until` to now plus 2 s.
