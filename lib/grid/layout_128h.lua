@@ -20,6 +20,7 @@ return function(S)
     play_last_column = 4,     -- columns 1-4 play/stop
     page_first_column = 5,    -- columns 5-8 pages 1-4
     num_pages = 4,
+    sequencer_position_level = 10,  -- page 3: the scene sequencer's position on row 1
     voice_first_column = 9,   -- columns 9-15 voice on/off
     voice_cycle_column = 16,  -- the next voice for page 2's faders
     -- page 2: faders on rows 1-4 (FADER_ROWS), then these rows
@@ -211,8 +212,12 @@ return function(S)
   -- Page 3: the scenes (simplified from the 256's)
   local function redraw_scene_page(port, grid_device)
     for i = 1, NUM_SCENES do
-      -- Row 1: Scene recall (instant)
+      -- Row 1: Scene recall (instant). The sequencer's position at 10 while
+      -- it runs, the current scene at 15
       local brightness = S.scenes[i].populated and 8 or 2
+      if S.scene_sequencer_enabled and S.scene_sequencer_position == i then
+        brightness = LAYOUT_128H.sequencer_position_level
+      end
       if S.current_scene == i then brightness = 15 end
       grid_device:led(i, 1, brightness)
       -- Row 2: Scene recall (with transition)

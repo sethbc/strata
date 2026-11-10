@@ -266,6 +266,28 @@ test("128h scene saves need a hold", function()
   context.grid.press(1, 4, 3, 0)
 end)
 
+test("128h: the scene page lights the sequencer's position at 10, the current scene at 15", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device = context.grid.plug(1, 16, 8)
+  tap(context, 1, 7, 8)  -- page 3
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  S.current_scene = 1
+  S.scene_sequencer_enabled = true
+  S.scene_sequencer_position = 2
+  grid_redraw()
+  assert_equal(device:get_led(2, 1), 10, "the sequencer position at 10")
+  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
+  assert_equal(device:get_led(3, 1), 8, "another populated scene at 8")
+  S.scene_sequencer_position = 1
+  grid_redraw()
+  assert_equal(device:get_led(1, 1), 15, "the current scene wins over the position")
+  S.scene_sequencer_enabled = false
+  S.scene_sequencer_position = 2
+  grid_redraw()
+  assert_equal(device:get_led(2, 1), 8, "a stopped sequencer shows no position")
+end)
+
 test("two 128h grids keep their own pages", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
