@@ -289,8 +289,8 @@ return function(S)
       if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
       return
     end
-    if selects_grid_voice(port) then select_grid_voice(voice_idx) end
     if not buffer_voice(voice_idx) then return end
+    if selects_grid_voice(port) then select_grid_voice(voice_idx) end
     local record = record_of(port)
     local held = record.held
     if held and held.voice == voice_idx and held.cells == cells and held.cell ~= cell then
@@ -343,6 +343,7 @@ return function(S)
   -- LEDs ------------------------------------------------------------------
 
   local function round(value) return math.floor(value + 0.5) end
+  local context_cache = {}  -- row_context's last result per voice and cell count
 
   -- What a position row needs from a voice, fetched once for all its cells:
   -- nil when it is not a buffer voice or its slot holds nothing. A stopped
@@ -355,17 +356,28 @@ return function(S)
     local head = S.lib.playheads.position(voice_idx)
     if not head then head = start + params:get(param_id(voice_idx, "buf_pos")) * length end
     local record_head = S.lib.playheads.record_head(slot)
-    local held_cells = {}
+    local held_cells, held_key = {}, ""
     for _, record in pairs(records) do
       local held = record.held
-      if held and held.voice == voice_idx and held.cells == cells then held_cells[held.cell] = true end
+      if held and held.voice == voice_idx and held.cells == cells then
+        held_cells[held.cell] = true
+        held_key = held_key .. held.cell .. ";"
+      end
     end
-    return {
+    local head_cell = S.lib.playheads.cell_of(head, cells)
+    local record_cell = record_head and S.lib.playheads.cell_of(record_head, cells)
+    -- the context (its bins table above all) is reused within one instant
+    -- while nothing it shows changed, so a redraw's cells share one
+    local now = util.time()
+    local key = table.concat({start, length, head_cell, record_cell or "-", S.buffers[slot].seconds, held_key}, ",")
+    local cached = context_cache[voice_idx .. ":" .. cells]
+    if cached and cached.time == now and cached.key == key then return cached.context end
+    local context = {
       bins = S.lib.waveforms.bins(slot, cells), start = start, length = length, cells = cells,
-      head_cell = S.lib.playheads.cell_of(head, cells),
-      record_cell = record_head and S.lib.playheads.cell_of(record_head, cells),
-      held_cells = held_cells,
+      head_cell = head_cell, record_cell = record_cell, held_cells = held_cells,
     }
+    context_cache[voice_idx .. ":" .. cells] = {time = now, key = key, context = context}
+    return context
   end
 
   local function cell_level(context, cell)
@@ -500,7 +512,10 @@ return function(S)
 
   -- A grain restart (a running voice's source switch; a voiceOn) ends the
   -- glide; a source switch forgets the last recalled bookmark
-  S.register_grain_restart(function(voice_idx) end_glide(voice_idx) end)
+  S.register_grain_restart(function(voice_idx)
+    end_glide(voice_idx)
+    recalled[voice_idx] = nil  -- source-change hooks never run during a scene recall; this does
+  end)
   S.register_source_change(function(voice_idx) recalled[voice_idx] = nil end)
 
   -- cleanup: no glide runs on, no scan stays held

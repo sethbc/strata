@@ -29,7 +29,7 @@ end
 local RECORD_SYNC = {beats_per_bar = 4, lead_seconds = 0.25}
 local FILES = {restart_seconds = 0.3}       -- lib/files.lua
 local WAVEFORMS = {refresh_seconds = 0.5}   -- lib/waveforms.lua
-local PLAYHEADS = {update_hz = 15, grid_page = 5}  -- lib/playheads.lua (grid_page: the grids' position page)
+local PLAYHEADS = {update_hz = 15}          -- lib/playheads.lua
 -- The arc scrub's friction glide (lib/positions.lua): ring 1 idle for
 -- release_seconds starts a glide at the speed over the last window_seconds,
 -- which decays with tau = max_glide_seconds x (1 - friction) and ends below

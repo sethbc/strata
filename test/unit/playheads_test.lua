@@ -155,6 +155,9 @@ test("moving: a slot a running voice reads, or that records", function()
   assert_true(not S.lib.playheads.moving(1), "voice 1 stopped")
   stub_recording(S, 2, 4, true, 0)
   assert_true(S.lib.playheads.moving(2), "a recording slot moves")
+  S.lib.record.state = function() return {number = 1, kind = "playable", phase = "armed", started_at = util.time(),
+    seconds = 4, loop = true} end
+  assert_true(not S.lib.playheads.moving(2), "an armed slot waits: BUFFER does not animate")
 end)
 
 -- The refresh count of a grid on port 1 showing page 5
@@ -180,13 +183,16 @@ test("the clock redraws the grid when a page-5 grid's LED levels change", functi
   context.clock.run_for(1)
   assert_equal(device.refresh_count, before + 1, "and no more")
 
+  params:set("v1_loop_start", 0.25)
+  context.clock.run_for(1 / 15 + 0.01)
+  assert_equal(device.refresh_count, before + 2, "a loop start change: one redraw")
   params:set("v1_loop_length", 0.5)
   context.clock.run_for(1 / 15 + 0.01)
-  assert_equal(device.refresh_count, before + 2, "a loop change: one redraw")
+  assert_equal(device.refresh_count, before + 3, "a loop length change: one redraw")
 
   params:set("v1_bookmark_2", 0.9)
   context.clock.run_for(1 / 15 + 0.01)
-  assert_equal(device.refresh_count, before + 3, "a bookmark change: one redraw")
+  assert_equal(device.refresh_count, before + 4, "a bookmark change: one redraw")
 
   S.lib.grid_core.set_page(1, 1)
   context.clock.run_for(0.2)
