@@ -45,7 +45,7 @@ The file fields across a recording (`S.buffers[slot]`; `recording` and the take'
 | a replace take recording | 0 | nil | `recording_started(slot, false)` |
 | a playable recording (dub) | the file's, unchanged | the file's, unchanged | `recording_started(slot, true)` |
 | a file again, after a canceled dub | the file's, unchanged | the file's, unchanged | a dub's "canceled" report (`record_state_changed` in `lib/record.lua`) |
-| a take (`take <n>`) or empty | 0 | nil | a replace take settling (`settle_buffer_slot`; `recording_started` already set the fields), a dub's "ended" report (`record_state_changed`), `clear_buffer` |
+| a take (`take <n>`) or empty | 0 | nil | a replace take settling (`settle_buffer_slot`; `recording_started` already set the fields), a dub's "ended" report (`record_state_changed`), a replace take's "canceled" report (`record_state_changed`: empty), `clear_buffer` |
 
 `set_start` acts only in the file state.
 
