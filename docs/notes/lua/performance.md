@@ -28,6 +28,6 @@ The engine decides the tier at `alloc` and writes `performance_active.data` befo
 |-------|-------|--------------|
 | `S.performance_setting` | the setting as `performance.data` holds it (read from the file on first use) | `{performance, buffer_seconds}` from the choices, or nil until read |
 | `S.performance_start_setting` | the setting this start used, copied by `read_active` | the same shape, never changed after the start |
-| `S.performance` | the tier the engine runs (`performance_active.data`) | a tier record, never written by `set_setting`; its `reason` is the engine's text, which `running_note()` (`active file not written` for "could not be written", `old active file kept` for "could not be replaced", else nil) and `step_down_cause()` (`no meminfo` for "meminfo unreadable", else `memory`) read; both are pure reads and hold no state |
+| `S.performance` | the tier the engine runs (`performance_active.data`) | a tier record, never written by `set_setting`; its `reason` is the engine's text, which `running_note()` (`active file not written` for "could not be written", `old active file kept` for "could not be replaced", else nil) and `step_down_cause()` (`meminfo` for "meminfo unreadable", else `memory`) read; both are pure reads and hold no state |
 
 The setting differs from the start setting only after a successful `set_setting` (SETUP then shows `(next start)`). The one transition is `set_setting`: it changes `S.performance_setting` only after `performance.data` is in place, so the cache never names a value the file lacks.

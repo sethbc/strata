@@ -127,7 +127,7 @@ return function(S)
   -- What a memory step-down names as its cause: the engine could not read
   -- meminfo, or memory was short
   function M.step_down_cause()
-    return reason_text():find("meminfo unreadable", 1, true) and "no meminfo" or "memory"
+    return reason_text():find("meminfo unreadable", 1, true) and "meminfo" or "memory"
   end
 
   -- The slot length the engine reports (bufferState's slot index

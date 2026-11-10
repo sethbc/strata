@@ -327,20 +327,24 @@ end)
 test("SETUP shows why the running tier is not the setting's", function()
   local context = load_setup({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
     reason = "standard: performance_active.data could not be written"})
+  local with_note_rows
   local running = entry_named(context, "running: standard")
   local note = entry_named(context, "active file not written")
   assert_true(running and note, "the running row and its note show")
-  assert_true(note.y > running.y and note.y - running.y <= 10, "the note is directly under running")
+  with_note_rows = #local_value("S").lib.pages_setup.setup_rows()
+  assert_true(note.y > running.y and note.y - running.y == local_value("S").lib.pages_setup.SETUP_PAGE.spacing, "the note is directly under running")
   assert_screen_layout(context, "SETUP running note at the end")
   enc(2, -20); redraw()
   assert_screen_layout(context, "SETUP running note at the start")
   context = load_setup({tier = "high", buffer_seconds = 16, max_grains = 128, history_seconds = 60,
     reason = "high: setting; buffer 300 s -> 16 s (meminfo unreadable)"}, "performance high\nbuffer_seconds 300\n")
-  assert_true(screen_shows(context, "300 s -> 16 s (no meminfo)"), "the cause is named")
+  assert_true(screen_shows(context, "300 s -> 16 s (meminfo)"), "the cause is named")
+  assert_screen_layout(context, "SETUP meminfo step-down")
   -- a plain reason adds no note row
   context = load_setup({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
     reason = "auto: Raspberry Pi 3"})
   local rows = local_value("S").lib.pages_setup.setup_rows()
+  assert_equal(#rows + 1, with_note_rows, "the note adds exactly one row")
   for _, row in ipairs(rows) do
     assert_true(row.text ~= "active file not written" and row.text ~= "old active file kept", "no note row")
   end
