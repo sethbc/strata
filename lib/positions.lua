@@ -324,24 +324,34 @@ return function(S)
       if z == 1 then
         record_of(port).store[voice_idx] = page
       elseif records[port] then
-        -- one store key per port: its release ends it for every voice it
-        -- was pressed for, whatever voice the release names
-        records[port].store = {}
-        records[port].pressed = {}
+        -- on the layouts that select a grid voice (one store key per port)
+        -- the release ends store for every armed voice, whatever voice it
+        -- names; the 256 has a store key per voice
+        if selects_grid_voice(port) then
+          records[port].store = {}
+          records[port].pressed = {}
+        else
+          records[port].store[voice_idx] = nil
+          records[port].pressed[voice_idx] = nil
+        end
       end
     elseif key == "hold" then
       if z == 1 then
         record_of(port).hold[voice_idx] = page
         M.hold_scan(voice_idx, true)
       else
-        -- one hold key per port: its release ends the hold for every voice
-        -- it was pressed for, whatever voice the release names
-        local held_voices = {voice_idx}
+        -- likewise one hold key per port where a grid voice is selected:
+        -- the release ends the hold for every held voice (each once)
+        local ended = {[voice_idx] = true}
         if records[port] then
-          for held_voice in pairs(records[port].hold) do held_voices[#held_voices + 1] = held_voice end
-          records[port].hold = {}
+          if selects_grid_voice(port) then
+            for held_voice in pairs(records[port].hold) do ended[held_voice] = true end
+            records[port].hold = {}
+          else
+            records[port].hold[voice_idx] = nil
+          end
         end
-        for _, held_voice in ipairs(held_voices) do M.hold_scan(held_voice, false) end
+        for held_voice in pairs(ended) do M.hold_scan(held_voice, false) end
       end
     elseif key == "whole" and z == 1 then
       whole_loop(voice_idx)

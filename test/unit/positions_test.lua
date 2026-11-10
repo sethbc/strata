@@ -569,8 +569,14 @@ test("the bookmark rows show on VOICE for a buffer voice only", function()
   assert_true(not outline(1):find("bookmark", 1, true), "an input voice")
 end)
 
+-- A stand-in for a connected grid of a size (what `selects_grid_voice` reads)
+local function with_grid(S, cols, rows)
+  S.grids[1] = {cols = cols, rows = rows}
+end
+
 test("a strip hold's release ends the hold for the voice it was pressed for, after a grid voice change", function()
   local _, S = buffer_voices()
+  with_grid(S, 16, 8)
   local positions = S.lib.positions
   positions.strip_key(1, 1, "hold", 1)
   assert_equal(positions.scan_held(1), true, "voice 1 held")
@@ -578,10 +584,12 @@ test("a strip hold's release ends the hold for the voice it was pressed for, aft
   assert_equal(positions.scan_held(1), false, "a release naming voice 2 ends voice 1's hold")
   assert_equal(positions.scan_held(2), false)
   assert_equal(positions.strip_level(1, "hold"), 4)
+  S.grids[1] = nil
 end)
 
 test("a strip store's release ends store for the voice it was pressed for, after a grid voice change", function()
   local _, S = buffer_voices()
+  with_grid(S, 16, 8)
   local positions = S.lib.positions
   positions.strip_key(1, 1, "store", 1)
   assert_equal(positions.strip_level(1, "store"), 15)
@@ -590,6 +598,38 @@ test("a strip store's release ends store for the voice it was pressed for, after
   params:set("v1_bookmark_3", 0.9)
   positions.strip_key(1, 1, 3, 1)
   assert_near(params:get("v1_buf_pos"), 0.9, 1e-9, "the next press recalls instead of storing")
+  S.grids[1] = nil
+end)
+
+test("a strip hold's release sends one scanHold 0 for the voice it names and holds", function()
+  local context, S = buffer_voices()
+  with_grid(S, 16, 8)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, "hold", 1)
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(#grain_calls(context, "scanHold"), 1, "voice 1 once")
+  S.grids[1] = nil
+end)
+
+test("on a 256 each strip's hold and store release ends only its own voice", function()
+  local _, S = buffer_voices()
+  with_grid(S, 16, 16)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, "hold", 1); positions.strip_key(1, 2, "hold", 1)
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(positions.scan_held(1), false)
+  assert_equal(positions.scan_held(2), true, "voice 2's key is still down")
+  positions.strip_key(1, 2, "hold", 0)
+  assert_equal(positions.scan_held(2), false)
+
+  positions.strip_key(1, 1, "store", 1); positions.strip_key(1, 2, "store", 1)
+  positions.strip_key(1, 1, "store", 0)
+  params:set("v2_bookmark_3", 0.9)
+  positions.strip_key(1, 2, 3, 1)
+  assert_true(math.abs(params:get("v2_bookmark_3") - 0.9) > 1e-6, "voice 2's store key is still down: the press stored")
+  assert_equal(positions.last_recalled(2), nil, "storing recalls nothing")
+  S.grids[1] = nil
 end)
 
 end
