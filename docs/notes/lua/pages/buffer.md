@@ -73,10 +73,23 @@ The fields (`BUFFER_FIELDS`, each `{name, label, value(), param_id() or enc(d), 
   - else `buf <n> empty`.
 - `buffer_save_result` (`lib/buffers.lua`) flashes `saved buf <n>` (`saved buf <n> loop`) or `buf <n> save failed` when the engine reports how the slot's newest save ended; a report of an older save flashes nothing.
 - `buffer_load_failed` flashes `buf <n> load failed`; a playable recording into a slot at another rate flashes `buf <n>: replaced (rate)` (`lib/record.lua`).
-- Hints: `K2:ld/rnd K3:rec` (`K3:stop` while the cursor slot records or is armed, `K3:...` while it is `finishing`); with ALT `K2:clr/fill K3:sv/trim`.
-- `animates()`: `S.lib.playheads.moving(cursor slot)`, true while a running voice reads the slot or it records, so `draw_frame` redraws the screen every frame then.
+- Hints: while a hold key is down (see Held keys below) `buffer_hints` returns its release text instead; else `K2:ld/rnd K3:rec` (`K3:stop` while the cursor slot records or is armed, `K3:...` while it is `finishing`); with ALT `K2:clr/fill K3:sv/trim`.
+- `animates()`: `held_hint() ~= nil` (a hold key is down, so the hint changes at 0.5 s with no clock of the page's own), or `S.lib.playheads.moving(cursor slot)`, true while a running voice reads the slot or it records, so `draw_frame` redraws the screen every frame then.
 
 The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5, UI_PAGES.index.BUFFER)`. `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s); its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it (`docs/notes/lua/ui/header-and-flashes.md`).
+
+## Held keys
+
+A key counts as down for the hint (`held_hint()`) while `S.key_press_page[n]` is BUFFER's index and `pressed_at[n]` is set; `S.key_press_alt[n]` picks the plain or ALT texts. Plain K3 records at the press and has no hold. A "hints" flash covers the hold hint (`redraw()` draws the flash first).
+
+| State | `pressed_at[n]` | `S.key_press_page[n]` | `S.key_press_alt[n]` | Hint row |
+|-------|-----------------|-----------------------|----------------------|----------|
+| up | nil | nil | nil | the page's own hints |
+| down short (under 0.5 s) | time | BUFFER | nil (K2) or true (ALT+K2, ALT+K3) | `K2 up: load`, `K2 up: clear` or `K3 up: save` |
+| down long (0.5 s or more) | time | BUFFER | as above | `K2 up: random`, `K2 up: fill` or `K3 up: save loop` |
+| taken (menu, selector or page change) | stale or nil | nil | nil | the page's own hints |
+
+Transitions: the press (`buffer_key`, `buffer_alt_key`) notes `pressed_at`, the release (`held_long`) clears it, and `forget_held_keys` or a page change clears `S.key_press_page`, which ends the hint even if `pressed_at` is stale.
 
 ## Input meter
 

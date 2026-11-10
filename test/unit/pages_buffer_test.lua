@@ -1533,4 +1533,61 @@ test("BUFFER's measured widths are bounded", function()
 end)
 
 
+test("the hint row names what a held key's release will do, and changes at 0.5 s", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  S.lib.files.random_into = function() return true end
+  local record = S.registry.pages[local_value("UI_PAGES").index.BUFFER]
+  local function row(expected, message)
+    assert_equal(hint_text(context), expected, message)
+    assert_screen_layout(context, "BUFFER hold hint " .. expected)
+  end
+  context.set_time(100); redraw()
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "nothing down")
+  assert_true(not record.animates(), "nothing moves, nothing is down")
+  key(2, 1); redraw()
+  row("K2 up: load", "K2 down short")
+  assert_true(record.animates(), "the page animates while K2 is down")
+  context.set_time(100.6); next_frame(context)
+  row("K2 up: random", "K2 down 0.5 s")
+  key(2, 0); redraw()
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "K2 up: the page's own hints")
+  assert_true(not record.animates(), "and it stops animating")
+  -- ALT+K2
+  context.set_time(110)
+  key(1, 1); key(2, 1); redraw()
+  row("K2 up: clear", "ALT+K2 short")
+  context.set_time(110.6); next_frame(context)
+  row("K2 up: fill", "ALT+K2 held")
+  key(2, 0); key(1, 0)
+  -- ALT+K3
+  context.set_time(120)
+  key(1, 1); key(3, 1); redraw()
+  row("K3 up: save", "ALT+K3 short")
+  assert_true(record.animates(), "animates while ALT+K3 is down")
+  context.set_time(120.6); next_frame(context)
+  row("K3 up: save loop", "ALT+K3 held")
+  key(3, 0); key(1, 0); redraw()
+  assert_true(not record.animates(), "all up")
+  -- plain K3 has no hold
+  context.set_time(130); key(3, 1); redraw()
+  assert_true(hint_text(context) ~= "K3 up: save", "plain K3 shows no hold hint")
+end)
+
+test("the menu opening ends the hold hint", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local record = S.registry.pages[local_value("UI_PAGES").index.BUFFER]
+  context.set_time(100)
+  key(2, 1); redraw()
+  assert_equal(hint_text(context), "K2 up: load")
+  _menu.set_mode(true); _menu.set_mode(false); redraw()
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "the menu took the key")
+  assert_true(not record.animates(), "nothing moves on the slot")
+  key(2, 1); show_page("SCENES"); show_page("BUFFER"); redraw()
+  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "a page change took the key")
+  assert_true(not record.animates())
+end)
+
+
 end
