@@ -35,12 +35,32 @@ return function(S)
     unfrozen_level = 3,
     freeze_hold_level = 15, -- column 8 of row 16 while held
     freeze_key_level = 4,   -- and while not
+    positions_page = 5,     -- row 8 column 12 shows it (15 lit on it, 4 otherwise)
+    positions_key_column = 12,
+    positions_key_level = 4,
+    strip_first_row = 9,    -- page 5: voice v's bookmark strip is on row 8 + v
+    strip_key_columns = {[1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = "store", [7] = "hold", [8] = "whole"},
   }
 
   -- 16x16 grid layout
   function grid_key_256(port, x, y, z)
-    if z == 0 then return end  -- presses only
     local page = grid_core.page(port)
+    if page == LAYOUT_256.positions_page and y ~= 8 and y ~= 16 then
+      -- Page 5: positions on rows 1-7, each voice's strip on row 8 + v
+      -- (presses and releases: a held key makes a loop or a hold)
+      local strip_voice = y - LAYOUT_256.strip_first_row + 1
+      if y <= NUM_VOICES then
+        S.lib.positions.grid_key(port, y, x, 16, z)
+      elseif strip_voice >= 1 and strip_voice <= NUM_VOICES and LAYOUT_256.strip_key_columns[x] then
+        S.lib.positions.strip_key(port, strip_voice, LAYOUT_256.strip_key_columns[x], z)
+      end
+      return
+    end
+    if z == 0 then return end  -- presses only
+    if y == 8 and x == LAYOUT_256.positions_key_column then
+      grid_core.set_page(port, LAYOUT_256.positions_page)
+      return
+    end
     -- Handle page navigation first (always accessible from row 8)
     if y == 8 and x >= 13 and x <= 16 then
       -- Page selection (always accessible)
@@ -187,7 +207,21 @@ return function(S)
 
   function grid_redraw_256(port, grid_device)
     local page = grid_core.page(port)
-    if page == 3 then
+    if page == LAYOUT_256.positions_page then
+      -- Page 5: each voice's 16 positions (rows 1-7), its strip on row
+      -- 8 + v, rows 8 and 16 as on pages 1, 2 and 4
+      for voice_idx = 1, NUM_VOICES do
+        for cell = 1, 16 do
+          grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, 16))
+        end
+        local y = LAYOUT_256.strip_first_row + voice_idx - 1
+        for x, key in pairs(LAYOUT_256.strip_key_columns) do
+          grid_device:led(x, y, S.lib.positions.strip_level(voice_idx, key))
+        end
+      end
+      grid_redraw_256_transport(port, grid_device)
+      grid_redraw_256_lock(port, grid_device)
+    elseif page == 3 then
       -- Scene page
       -- Row 1: Scene recall (instant). The sequencer's position (the next
       -- scene it recalls) at 10 while it runs, the current scene at 15
@@ -285,6 +319,8 @@ return function(S)
     for i = 1, 4 do
       grid_device:led(12 + i, 8, i == page and 15 or 2)
     end
+    grid_device:led(LAYOUT_256.positions_key_column, 8,
+      page == LAYOUT_256.positions_page and 15 or LAYOUT_256.positions_key_level)
   end
 
   -- 256 row 8: pattern controls, tempo and page indicators

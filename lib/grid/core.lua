@@ -274,10 +274,12 @@ return function(S)
     if whole_number_in(slot, 1, NUM_BUFFERS) then clear_buffer(slot) end
   end
 
-  -- 15 recording, 8 holding audio, 2 empty
+  -- 15 recording, 11 armed (waiting to start), 8 holding audio, 2 empty
   function M.record_level(slot)
     if not whole_number_in(slot, 1, NUM_BUFFERS) then return 0 end
     local buffer = S.buffers[slot]
+    local take = S.lib.record.state(slot)
+    if take and take.phase == "armed" then return 11 end
     if buffer.recording then return 15 end
     return buffer.loaded and 8 or 2
   end
