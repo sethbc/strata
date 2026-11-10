@@ -64,6 +64,24 @@ test("SCENES shows eight slots in two columns", function()
   assert_screen_layout(context, "SCENES")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("SCENES blinks the slot a fade goes to, one change per step", function()
+  local context = started_on_scenes()
+  capture_scene(1); capture_scene(2)
+  local function number_level(slot)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == tostring(slot) and entry.y > 9 and entry.y < 46 then return entry.level end
+    end
+  end
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(0.1); redraw()                          -- step 2
+  assert_equal(number_level(2), 4, "step 2: the target's slot is dark")
+  assert_screen_layout(context, "SCENES while the fading target is dark")
+  context.clock.run_for(0.1); redraw()                          -- step 3
+  assert_equal(number_level(2), 15, "step 3: the target's slot shows")
+  assert_screen_layout(context, "SCENES while the fading target shows")
+end)
+
 test("E2 runs through the slots then the fields; E3 edits", function()
   local context, S = started_on_scenes()
   assert_equal(S.cursors.scene, 1, "starts on slot 1")

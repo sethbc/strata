@@ -619,6 +619,19 @@ test("the scene page lights the sequencer position at 10 and the current scene a
   assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("the scene page blinks the recall key of the scene a fade goes to", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  tap(context, 15, 8)  -- page 3
+  capture_scene(1); capture_scene(2)
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(0.1)                                    -- step 2
+  assert_equal(device:get_led(2, 1), 8, "step 2: the target's recall key at its populated level")
+  context.clock.run_for(0.1)                                    -- step 3
+  assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
+end)
+
 test("row 16 columns 1-7 lock voices", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)

@@ -8,7 +8,7 @@
 - A paste onto the copied voice changes nothing (the pattern stays as edited since the copy, the clipboard stays). Column 16 is the only way to drop the clipboard.
 - A paste writes through `S.lib.sequencer.replace_pattern(target, clipboard.steps)`, which calls `grid_core.end_step_gestures(target)`: a step of the target voice held (on any grid) from before the paste never takes a level in the pasted pattern; the next key on that voice toggles its own step.
 - The tempo keys light from `grid_core.held(port, x, 8)` (15 held, 4 otherwise); `grid_key` redraws after every press and release, so the layout keeps no lit state of its own. Each tempo press calls `header_flash("tempo <bpm>")` with the tempo it lands on.
-- Scene page row 1: the sequencer position (`S.scene_sequencer_position`, the next scene it recalls) at 10 only while `S.scene_sequencer_enabled`; the current scene at 15 wins over it.
+- Scene page row 1: the sequencer position (`S.scene_sequencer_position`, the next scene it recalls) at 10 only while `S.scene_sequencer_enabled`; the current scene at 15 wins over it. "Current" is `S.lib.scenes.shows_current(i)`: the scene a fade goes to drops to its level without it after each even fade step, so it blinks until the fade lands (#254).
 - The layout's keys and levels are in the `LAYOUT_256` table at the top of the constructor (no new locals per value).
 
 ## Owns

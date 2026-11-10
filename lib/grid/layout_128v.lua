@@ -192,7 +192,7 @@ return function(S)
     for i = 1, NUM_SCENES do
       local recall_level = S.scenes[i].populated and 8 or 2
       if i == sequencer_position then recall_level = LAYOUT_128V.scene_position_level end
-      if i == S.current_scene then recall_level = 15 end
+      if S.lib.scenes.shows_current(i) then recall_level = 15 end
       grid_device:led(LAYOUT_128V.scene_recall_column, i, recall_level)
       grid_device:led(LAYOUT_128V.scene_fade_column, i, S.scenes[i].populated and 6 or 2)
       local save_column = LAYOUT_128V.scene_save_column

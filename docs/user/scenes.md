@@ -28,7 +28,7 @@ Perfect for creating structured ambient compositions with multiple movements or 
 **Manual Scene Performance**:
 - Press row 1 buttons for instant scene changes (good for rhythmic switching)
 - Press row 2 buttons for smooth crossfades (good for ambient transitions). Saving into the scene a crossfade is heading for stores the sound as it is at that moment; the crossfade still ends on the scene as it was recalled
-- A crossfade's scene shows as current (on the screen's `S1`-`S8` and the grid) from its start. If the crossfade does not land (the sequencer cancels it, scenes are loaded from disk, or an error stops it), the scene before it is current again, since the crossfade's own scene was never fully applied. A recall that interrupts a crossfade makes its own scene current; if that recall fails too, the last scene that landed is current
+- A crossfade's scene shows as current (on the screen's `S1`-`S8`, the SCENES page and the grid) from its start, and blinks until the crossfade lands: it changes with each of the crossfade's 20 steps (every 0.1 s for a 2 s crossfade), then stays lit. A blinking scene is still on its way, so a save during it stores a half-faded sound. If the crossfade does not land (the sequencer cancels it, scenes are loaded from disk, or an error stops it), the scene before it is current again, since the crossfade's own scene was never fully applied. A recall that interrupts a crossfade makes its own scene current; if that recall fails too, the last scene that landed is current
 - Adjust transition time in PARAMETERS to control crossfade duration
 
 **Automatic Scene Sequencing**:

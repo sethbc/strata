@@ -218,7 +218,7 @@ return function(S)
       if S.scene_sequencer_enabled and S.scene_sequencer_position == i then
         brightness = LAYOUT_128H.sequencer_position_level
       end
-      if S.current_scene == i then brightness = 15 end
+      if S.lib.scenes.shows_current(i) then brightness = 15 end
       grid_device:led(i, 1, brightness)
       -- Row 2: Scene recall (with transition)
       grid_device:led(i, 2, S.scenes[i].populated and 6 or 2)

@@ -27,6 +27,7 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Hold to save a scene** - a scene save key (row 3 of the scene page on the 16×16 and 16×8, column 3 on the 8×16) saves only once held for half a second. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene. A save flashes `saved S<n>` in the header
 - **Holding the scan** - a positions page's hold key stops a buffer voice's own scan while you hold it. The scan stays held until everything holding it lets go: another grid's hold key, or the arc's ring 1 turned with ALT on the BUFFER page. The key lights while the voice's scan is held, whoever holds it, and stays dim for a voice that does not read a buffer. Starting or restarting a voice ends its hold, even with the key still down (the key goes dim); press it again to hold
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved, and a grid's scan hold lets go
+- **A crossfading scene blinks** - on the scene page of the 16×16, 16×8 and 8×16, the recall key of the scene a crossfade goes to blinks, once per crossfade step, until the crossfade lands; then it stays at full brightness
 
 ## Pattern Sequencer Features
 

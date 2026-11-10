@@ -145,6 +145,21 @@ test("the header shows [M], the play mark and REC only while active", function()
   assert_equal(header_text(context, "REC"), nil, "REC gone")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("the scene a fade goes to blinks in the header, one change per step", function()
+  local context = load_strata(); finish_startup(context)
+  capture_scene(1); capture_scene(2)
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(0.1); redraw()                          -- step 2
+  local mark = header_text(context, "S2")
+  assert_true(mark, "the target's mark is drawn while dark")
+  assert_equal(mark.level, 2, "step 2: the mark is dark")
+  assert_screen_layout(context, "the header while the fading target is dark")
+  context.clock.run_for(0.1); redraw()                          -- step 3
+  assert_equal(header_text(context, "S2").level, 6, "step 3: its level with the sequencer off")
+  assert_screen_layout(context, "the header while the fading target shows")
+end)
+
 test("a page's header_status replaces [M], the play mark and REC", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

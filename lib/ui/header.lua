@@ -100,10 +100,12 @@ return function(S)
       end
     end
 
-    -- Scene indicator (right-aligned to the screen edge)
+    -- Scene indicator (right-aligned to the screen edge); the scene a fade
+    -- goes to blinks, dark at 2 (#254)
     if S.current_scene > 0 then
       screen.move(HEADER.scene_right, HEADER_Y)
-      screen.level(S.scene_sequencer_enabled and 10 or 6)
+      local scene_level = S.scene_sequencer_enabled and 10 or 6
+      screen.level(S.lib.scenes.shows_current(S.current_scene) and scene_level or 2)
       screen.text_right("S" .. S.current_scene)
     end
   end
