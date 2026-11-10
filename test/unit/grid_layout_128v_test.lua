@@ -457,4 +457,24 @@ test("128v positions page: releases on column 8 rows 1-9 do nothing, synth voice
   assert_equal(S.voices[3].active, was_active, "a release on pages 1-4 is ignored")
 end)
 
+test("128v: releasing hold after the grid voice changed still ends the first voice's hold", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  show_grid_page(context, 1, 5)
+  S.grid_voice_select = 1
+  local function last_hold(engine_voice)
+    local value
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == engine_voice and call.args[2] == "scanHold" then value = call.args[3] end
+    end
+    return value
+  end
+  context.grid.press(1, 8, 15, 1)
+  assert_equal(last_hold(0), 1, "voice 1 holds the scan")
+  S.grid_voice_select = 2
+  context.grid.press(1, 8, 15, 0)
+  assert_equal(last_hold(0), 0, "released: voice 1's hold ends")
+end)
+
 end
