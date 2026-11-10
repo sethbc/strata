@@ -259,4 +259,19 @@ test("an LFO keeps its offset when turned on or off, and a baseline change zeroe
   assert_equal(params:get("lfo_offset_2"), 10, "and on/off keeps the new one")
 end)
 
+test("setting a running LFO's state on again restarts its phase and the dot, as the library does (#251)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("lfo_1", 2)
+  local fresh = lfo_phase_estimate(1)
+  local fresh_counter = lfo.phase_counter
+  context.clock.run_for(0.3)
+  assert_true(math.abs(lfo_phase_estimate(1) - fresh) > 0.01, "the dot has moved since the start")
+  local resets = lfo.reset_count
+  params:lookup_param("lfo_1"):bang()  -- the library's state action ends with lfo_bang, which bangs lfo_reset_1
+  assert_equal(lfo.reset_count, resets + 1, "the library reset its phase")
+  assert_near(lfo.phase_counter, fresh_counter, 1e-9, "to the reset target's phase")
+  assert_near(lfo_phase_estimate(1), fresh, 1e-9, "and the dot restarted with it")
+end)
+
 end

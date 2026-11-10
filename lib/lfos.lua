@@ -235,7 +235,7 @@ return function(S)
           restore_lfo_destination(n)
           S.lfo_last_raw[n] = nil
         else
-          note_lfo_reset(n)  -- LFO:start resets the phase
+          note_lfo_reset(n)  -- the library's state action resets the phase on every bang (through lfo_reset_<n>)
         end
       end)
       wrap_param_action("lfo_depth_" .. n, nil, function(depth)
