@@ -556,6 +556,113 @@ test("an error inside a scene transition's fade clears the transition flag", fun
   assert_equal(local_value("scene_transition_clock"), nil, "clock cleared after a later step")
 end)
 
+-- Scenes 1-3 hold voice 1 at 1000, 400 and 700 Hz and it now plays 200 Hz,
+-- so every step of a fade between them sets v1_freq
+local function capture_freq_scenes()
+  for scene, freq in ipairs({ 1000, 400, 700 }) do
+    params:set("v1_freq", freq); capture_scene(scene)
+  end
+  params:set("v1_freq", 200)
+end
+
+-- The running fade's next step raises, in the transition's clock
+local function fail_next_fade_step(context)
+  params:set_action("v1_freq", function() error("fade failed") end)
+  wake(context, "scene_transition_clock")
+  local errors = context.clock.take_errors()
+  assert_true(#errors == 1 and errors[1]:find("fade failed", 1, true), "the step's error is raised")
+  params:set_action("v1_freq", function() end)
+end
+
+test("a fade whose step fails leaves the previous scene current", function()
+  local context = load_strata(); finish_startup(context)
+  capture_freq_scenes()
+  recall_scene(2, 0); recall_scene(1, 4)
+  assert_equal(local_value("current_scene"), 1, "the fading target is current from its first step")
+  fail_next_fade_step(context)
+  assert_equal(local_value("current_scene"), 2, "the previous scene is current again")
+  local transition = local_value("SCENE_TRANSITION")
+  assert_equal(transition.target, nil, "no target once the fade is over")
+  assert_equal(transition.previous, nil, "no previous once the fade is over")
+  next_frame(context)
+  assert_true(screen_shows(context, "S2"), "the header shows the previous scene")
+
+  -- the fade's end fails: the filter type switches only there
+  context = load_strata(); finish_startup(context)
+  params:set("filter_type", 3); capture_freq_scenes(); params:set("filter_type", 1); capture_scene(2)
+  recall_scene(2, 0); recall_scene(1, 2)
+  next_frame(context)
+  params:set_action("filter_type", function() error("landing failed") end)
+  context.clock.run_for(2.5, 0.001)
+  local errors = context.clock.take_errors()
+  assert_true(#errors == 1 and errors[1]:find("landing failed", 1, true), "the end's error is raised")
+  assert_equal(local_value("current_scene"), 2, "a fade whose end fails leaves the previous scene current")
+  next_frame(context)
+  assert_true(screen_shows(context, "S2"), "and the header shows it")
+end)
+
+test("a canceled fade leaves the previous scene current", function()
+  local context = load_strata(); finish_startup(context)
+  capture_freq_scenes()
+  recall_scene(2, 0); recall_scene(1, 4)
+  assert_equal(local_value("current_scene"), 1, "the fading target is current at once")
+  cancel_scene_transition()
+  assert_equal(local_value("current_scene"), 2, "a canceled fade puts the previous scene back")
+  assert_equal(local_value("SCENE_TRANSITION").target, nil, "no target once canceled")
+
+  -- the scene sequencer cancels a fade that overran
+  context = load_strata(); finish_startup(context)
+  capture_sequencer_scenes()
+  recall_scene(2, 0)
+  local recalls = run_scene_sequencer(context, 4, 4, 1)          -- scene 1's 4 s fade is running
+  assert_equal(local_value("current_scene"), 1, "the sequencer's fading target is current")
+  local current_at_next_recall
+  local sequencer_recall = recall_scene
+  recall_scene = function(scene_num, transition_time)
+    current_at_next_recall = local_value("current_scene")
+    return sequencer_recall(scene_num, transition_time)
+  end
+  clock.cancel(local_value("scene_transition_clock"))            -- its clock is lost: it overruns
+  context.clock.run_for(3.5, 0.001)
+  assert_equal(#recalls, 2, "the sequencer canceled the overrun fade and moved on")
+  assert_equal(current_at_next_recall, 2, "the overrun fade left scene 2 current")
+
+  -- a scenes file loaded during a fade
+  context = load_strata(); finish_startup(context)
+  capture_freq_scenes(); save_scenes_to_disk()
+  recall_scene(2, 0); recall_scene(1, 4)
+  context.clock.run_for(1, 0.001)
+  load_scenes_from_disk()
+  assert_equal(local_value("current_scene"), 2, "the load's cancel puts the previous scene back")
+  assert_equal(local_value("SCENE_TRANSITION").target, nil, "no target after the load")
+end)
+
+test("a fade superseded by a fade that fails goes back to the last scene that landed", function()
+  local context = load_strata(); finish_startup(context)
+  capture_freq_scenes()
+  recall_scene(1, 0); recall_scene(2, 4); recall_scene(3, 4)
+  local transition = local_value("SCENE_TRANSITION")
+  assert_equal(local_value("current_scene"), 3, "the newest fade's target is current")
+  assert_equal(transition.target, 3, "the fade goes to scene 3")
+  assert_equal(transition.previous, 1, "from scene 1, the last that landed")
+  fail_next_fade_step(context)
+  assert_equal(local_value("current_scene"), 1, "the last scene that landed is current again")
+  -- an instant recall superseding a fade makes its own scene current
+  recall_scene(2, 4); recall_scene(3, 0)
+  assert_equal(local_value("current_scene"), 3, "the instant recall's scene is current")
+  assert_equal(transition.target, nil, "no fade is running")
+end)
+
+test("a fade that lands makes its target current", function()
+  local context = load_strata(); finish_startup(context)
+  capture_freq_scenes()
+  recall_scene(2, 0); recall_scene(1, 2)
+  context.clock.run_for(2.5, 0.001)
+  assert_equal(local_value("current_scene"), 1, "the landed fade's target is current")
+  assert_equal(local_value("SCENE_TRANSITION").target, nil, "no target once it landed")
+  assert_equal(local_value("scene_transition_active"), false, "the fade is over")
+end)
+
 -- An error in a sequenced recall (here the first step of its fade, which
 -- runs inside the sequencer's own clock) is reported and the sequencer
 -- keeps going: the recall has already cleared its transition state
