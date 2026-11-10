@@ -208,14 +208,17 @@ var checkRecordSizes = {
 // 8192 KB pool (memSize, set before boot), probeCount 256 KB probes (twelve
 // on standard: 3 MB, 3.5's second note per voice plus 1 MB; fourteen on
 // high: 3.5 MB; see docs/notes/engine/memory.md) are sent right after the
-// last command, with no sync between, inside the 50 ms kill fade, then the
-// flood of small probes (what is left beyond them) and the node tree, in
-// that order: the cutting synths must still be there (so the probes meet
-// the real peak) and every 256 KB probe must allocate. run_engine_check.sh
-// also fails on any "alloc failed". engage (optional) runs right after each
-// scenario's last command, before the probes (the high run's spectral
-// freeze). The all-buffer worst case: every voice switched between three
-// slots 0.2 s apart, so it holds a live, a fading and a cutting
+// last command, inside the 50 ms kill fade, then the flood of small probes
+// (what is left beyond them) and the node tree, in that order: the cutting
+// synths must still be there (so the probes meet the real peak) and every
+// 256 KB probe must allocate. run_engine_check.sh also fails on any "alloc
+// failed". The cut synths are held in their fade while the probes run
+// (#209: holdVoices and probeHeadroom), so the measurement never depends
+// on how fast sclang gets from the last command to the probes. engage
+// (optional) runs right after each scenario's last command, before the
+// probes (the high run's spectral freeze). The all-buffer worst case:
+// every voice switched between three slots 0.2 s apart, so it holds a
+// live, a fading and a cutting
 // \strataGrainBuf (21 in all, the largest grain def). Eight recordings: the
 // spaced mixed case with every slot recording an input take, twelve probes
 // on both tiers (recordingFits gathers each tier's answer for one check).
@@ -250,27 +253,58 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         h.waitFor({ counters[\refreshes] > count }, 1);
         0.1.wait; server.sync;
     };
+    // Holding the cut synths (#209). On a loaded machine sclang can take
+    // longer than the 50 ms kill fade to get from a scenario's last command
+    // to the probes, and the cut synths would be gone before the probes met
+    // them. So the commands that make the last cutting set run with the
+    // engine's voice and grain synths paused (holdVoices: voiceGroup and
+    // processGroup get /n_run 0 before them, so no fade advances however long
+    // sclang takes). probeHeadroom then, in one bundle, lets the groups run
+    // again and starts one \strataCheckCutHold per cutting synth, which
+    // pauses that synth cutHoldSeconds later, on the server's clock: by then
+    // every synth has run its first blocks (where a GrainBuf or a DelayN
+    // takes its memory), and each cut synth stays in its fade, holding its
+    // memory, until the probes are done; then it runs on and frees itself.
+    // Only the check's own messages pause anything: the engine and its 50 ms
+    // fade are unchanged.
+    var engineGroups = [target.voiceGroup, target.processGroup];
+    var cutHoldSeconds = 0.01, voicesHeld = false;
+    var holdVoices = {
+        server.sendBundle(nil, *engineGroups.collect({ arg group; ['/n_run', group.nodeID, 0] }));
+        voicesHeld = true;
+    };
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
     // function of (all allocated, free KB) instead of the floor's own check
     var probeHeadroom = { arg label, scenario = "worst case", count, report;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
+        var holds = cutting.collect({ server.nextNodeID }), resumedAt, wasHeld = voicesHeld;
         var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
         count = count ? probeCount;
         scenario = scenario ? "worst case";
+        server.sendBundle(nil, *(engineGroups.collect({ arg group; ['/n_run', group.nodeID, 1] })
+            ++ [cutting, holds].flop.collect({ arg pair;
+                ['/s_new', \strataCheckCutHold, pair[1], 1, 0, \node, pair[0], \seconds, cutHoldSeconds]
+            })));
+        resumedAt = Main.elapsedTime;
+        voicesHeld = false;
         probes = count.collect({ arg index;
             Synth(\strataCheckMemProbe, [\out, probeBus.index + index], target.processGroup, \addToTail)
         });
         flood = floodStart.value;
-        // which cutting synths still exist, asked right after: /n_query
-        // answers /n_info for each one there and (errors off) nothing for one gone
+        // which cutting synths still exist, asked once the flood is in and
+        // at least two fades after the groups ran again, so a cut synth the
+        // holds missed (or one the engine freed early) is gone by then:
+        // /n_query answers /n_info for each one there and (errors off)
+        // nothing for one gone
+        ((resumedAt + (2 * target.switchCutTime)) - Main.elapsedTime).max(0).wait;
         watcher = OSCFunc({ arg msg; infos.add(msg[1]) }, '/n_info', server.addr);
         server.sendBundle(nil, ['/error', -1], *cutting.collect({ arg id; ['/n_query', id] }));
         freeKB = (count * 256) + (floodResult.(flood) * probeKB) + reserveKB;
         watcher.free;
         present = cutting.count({ arg id; infos.includes(id) });
         if (scenario.contains("all-buffer")) {
-            // by now the 50 ms cuts have ended: 14 left, plus the 7 that were cutting
+            // the 7 cutting (held in their fade) and the 14 live and fading
             var running = h.synthNames(target.processGroup).count({ arg name; name == \strataGrainBuf });
             check.((present == target.numVoices) and: { running >= (target.numVoices * 2) },
                 "memory: the all-buffer case holds 21 strataGrainBuf (% cutting, % still running after the cuts)".format(present, running));
@@ -278,12 +312,17 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         values = h.readBus(probeBus).keep(count);
         fits = (values.size == count) and: { values.every({ arg value; value > 0.5 }) };
         figures.add(freeKB.round(1));
-        check.((cutting.size > 0) and: { present == cutting.size },
-            "memory: the cutting synths are still there when the probes start (%: % of %)".format(label, present, cutting.size));
+        check.(wasHeld and: { cutting.size > 0 } and: { present == cutting.size },
+            "memory: the cutting synths are still there when the probes start, held in their fade (%: % of %%)".format(
+                label, present, cutting.size, if (wasHeld) { "" } { ", but the scenario never held the voices" }));
         if (report.notNil) { report.value(fits, freeKB) } {
             check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
                 floorLabel, target.tier, scenario, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
         };
+        // the holds go and the cut synths finish their fade (errors off: one
+        // the check found gone has been reported already)
+        server.sendBundle(nil, ['/error', -1], *(holds.collect({ arg id; ['/n_free', id] })
+            ++ cutting.collect({ arg id; ['/n_run', id, 1] })));
         probes.do(_.free);
         probeBus.setAll(0);
         2.5.wait; server.sync;
@@ -293,15 +332,19 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     server.sync; 0.2.wait;
     sourceSteps.do({ arg sourceOf, step;
         if (step > 0) { 0.2.wait; server.sync };
+        // the last switch makes the cutting set the probes must meet
+        if (step == (sourceSteps.size - 1)) { holdVoices.value };
         switchAll.(sourceOf);
     });
     target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
     startAll.value;
     engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted");
+    holdVoices.value;
     sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
     engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, each switched three times at once");
+    holdVoices.value;
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, target.numBuffers + 1); command.(\voiceOff, voice) });
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
     target.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
@@ -315,7 +358,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     startAll.value;
     server.sync; 0.2.wait;
     2.do({ arg step;
-        if (step > 0) { 0.2.wait; server.sync };
+        if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
         target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
     });
     engage.value(command);
@@ -332,7 +375,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     sourceSteps.do({ arg sourceOf, step;
         if (step > 0) { 0.2.wait; server.sync };
         // the last switch makes the cutting set the probes must meet
-        if (step == (sourceSteps.size - 1)) { afterPeakRefresh.value };
+        if (step == (sourceSteps.size - 1)) { afterPeakRefresh.value; holdVoices.value };
         switchAll.(sourceOf);
     });
     target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
@@ -350,7 +393,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     startAll.value;
     server.sync; 0.2.wait;
     2.do({ arg step;
-        if (step > 0) { 0.2.wait; server.sync; afterPeakRefresh.value };
+        if (step > 0) { 0.2.wait; server.sync; afterPeakRefresh.value; holdVoices.value };
         target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
     });
     engage.value(command);
@@ -366,6 +409,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     server.sync; 0.2.wait;
     sourceSteps.do({ arg sourceOf, step;
         if (step > 0) { 0.2.wait; server.sync };
+        // the last switch makes the cutting set the probes must meet
+        if (step == (sourceSteps.size - 1)) { holdVoices.value };
         switchAll.(sourceOf);
     });
     target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
@@ -426,6 +471,11 @@ var checkHighWorstCase = {
 SynthDef(\strataCheckPoolProbe, { arg out;
     var padding = NamedControl.kr(\padding, 0 ! 240);
     Out.kr(out, DC.kr(1) + (padding[0] * 0));
+}).add;
+// The check's hold on a cut synth (#209): pauses node `node` once it has run
+// `seconds` (Pause acts when its gate changes, here from 1 to 0)
+SynthDef(\strataCheckCutHold, { arg node = -1, seconds = 0.01;
+    Pause.kr(Sweep.kr(0, 1) < seconds, node);
 }).add;
 // The flood's reserve: a 64 KB DelayN (16384 floats)
 SynthDef(\strataCheckReserveProbe, { arg out; Out.kr(out, A2K.kr(DelayN.ar(DC.ar(1), 0.25, 0.01))) }).add;
