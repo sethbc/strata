@@ -714,7 +714,24 @@ test("the fading target blinks once per step and is steady when it lands", funct
   local context = load_strata(); finish_startup(context)
   local scenes = local_value("S").lib.scenes
   capture_freq_scenes()
-  recall_scene(1, 0); recall_scene(2, 2)
+  recall_scene(1, 0)
+  -- while step 1 sets its params (a param action can redraw the grid) no
+  -- step has been applied yet: the target is lit from the recall
+  local freq_param = params:lookup_param("v1_freq")
+  local real_action, seen = freq_param.action, nil
+  freq_param.action = function(value)
+    if seen == nil then
+      seen = {step = local_value("SCENE_TRANSITION").step, target = scenes.fading_to(),
+        shows = scenes.shows_current(2)}
+    end
+    return real_action(value)
+  end
+  recall_scene(2, 2)
+  freq_param.action = real_action
+  assert_true(seen, "step 1 set v1_freq")
+  assert_equal(seen.target, 2, "inside step 1 the fade goes to scene 2")
+  assert_equal(seen.step, nil, "before step 1 is applied there is no step")
+  assert_equal(seen.shows, true, "the target is lit before step 1 is applied")
   assert_equal(scenes.fading_to(), 2, "the fade goes to scene 2")
   assert_equal(local_value("SCENE_TRANSITION").step, 1, "the recall applied step 1")
   assert_equal(scenes.shows_current(2), true, "step 1: the target shows")

@@ -632,6 +632,31 @@ test("the scene page blinks the recall key of the scene a fade goes to", functio
   assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
 end)
 
+-- #254: during the scene sequencer's fade its position is the target, so the
+-- key blinks between 15 and the position's 10
+test("the scene sequencer's fading target blinks between 15 and its position's 10", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  tap(context, 15, 8)  -- page 3
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 2); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(0.05)                                   -- the sequencer recalls scene 1: step 1
+  local S = S_table()
+  assert_equal(S.lib.scenes.fading_to(), 1, "the sequencer fades to scene 1")
+  assert_equal(S.scene_sequencer_position, 1, "its position is the target")
+  assert_equal(device:get_led(1, 1), 15, "step 1: the target's recall key at 15")
+  context.clock.run_for(0.1)                                    -- step 2
+  assert_equal(device:get_led(1, 1), 10, "step 2: the key at the position's 10")
+  context.clock.run_for(0.1)                                    -- step 3
+  assert_equal(device:get_led(1, 1), 15, "step 3: at 15 again")
+  context.clock.run_for(2)                                      -- the fade lands
+  assert_equal(S.lib.scenes.fading_to(), nil, "the fade landed")
+  assert_equal(device:get_led(1, 1), 15, "the landed scene is steady at 15")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
 test("row 16 columns 1-7 lock voices", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)

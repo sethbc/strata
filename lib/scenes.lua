@@ -426,9 +426,9 @@ return function(S)
       -- scene_transition_active, SCENE_TRANSITION.next_step_due, target and
       -- previous are always set together here (step by each step) and
       -- cleared together by end_scene_transition: the sequencer's wait
-      -- reads the due time whenever the flag is set. The target is current from the first
-      -- step (the grids light it at once); previous is the scene the
-      -- transition's end puts back
+      -- reads the due time whenever the flag is set. The target is current
+      -- from the first step (the grids light it at once); previous is the
+      -- scene the transition's end puts back
       S.scene_transition_active = true
       S.SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
       S.SCENE_TRANSITION.target = scene_num
@@ -463,7 +463,9 @@ return function(S)
         -- Final state: exact values plus the non-continuous params. The
         -- target stays current while recall_scene_instant applies it (no
         -- redraw inside it shows the previous scene); only if that fails
-        -- is the previous scene current again
+        -- is the previous scene current again. current_if_failed covers an
+        -- error in the recall's param block only: one raised after it
+        -- (replace_pattern, update_voice_list) leaves the target current
         recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"))
       end)
       -- its first step has run and drawn the target as current
@@ -955,13 +957,14 @@ return function(S)
 
   -- Whether the displays light `slot` as the current scene: the scene a fade
   -- goes to blinks, shown after its odd steps and dark after its even ones,
-  -- and is steady once it lands (#254). The header, SCENES and the grids'
-  -- recall keys all ask this
+  -- and is steady once it lands (#254). It is lit from the recall: while
+  -- step 1 sets its params no step is applied yet. The header, SCENES and
+  -- the grids' recall keys all ask this
   function M.shows_current(slot)
     if slot ~= S.current_scene then return false end
     if M.fading_to() ~= slot then return true end
     local step = S.SCENE_TRANSITION.step
-    return step ~= nil and step % 2 == 1
+    return step == nil or step % 2 == 1
   end
 
   M.scene_data_dir = scene_data_dir
