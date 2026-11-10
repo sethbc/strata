@@ -51,8 +51,8 @@
     }
 
     addBufferCommands {
-        // msg: slot index (0-7), sound file path, start seconds (3.3's
-        // argument: read from the beginning until the files package)
+        // msg: slot index (0-7), sound file path, start seconds into the
+        // file (at its own rate; clipped to the file; 0 = the beginning)
         this.addCommand(\loadBuffer, "isf", { arg msg;
             this.loadSlot(msg[1], msg[2].asString, msg[3]);
         });
@@ -171,32 +171,44 @@
     // or stop, or a later load that took effect, arrived meanwhile
     // (loadsSuperseded). bufferLoads counts at the command either way, so
     // bufferLoadFailed's numbering is the same.
+    // start: seconds into the file at its own rate, clipped to the file. The
+    // check and the read both begin at that frame, and at most bufferSeconds
+    // from it fit. A start past the file's end loads its last frames, as
+    // many as the slot holds (a stale start, the file having been replaced
+    // by a shorter one, still loads something a player can hear). The check
+    // also makes the load's peaks (one FloatArray), which become the slot's
+    // only if the load takes effect (applyLoad).
     loadSlot { arg index, path, start = 0;
-        var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled;
+        var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled, startFrame, slotFrames, peaks;
         if (this.validBuffer(index).not) { ^this };
         bufferLoads[index] = bufferLoads[index] + 1;
         load = bufferLoads[index];
         file = SoundFile.openRead(path.standardizePath);
         if (file.isNil) { ^this.rejectLoad(index, load, "cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
-        frames = [file.numFrames, (sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
+        slotFrames = [(sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
+        startFrame = (start.max(0) * sampleRate).floor.asInteger;
+        if (startFrame >= file.numFrames) { startFrame = (file.numFrames - slotFrames).max(0) };
+        frames = (file.numFrames - startFrame).min(slotFrames);
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
         damaged = "sound file " ++ path ++ " is damaged (it stops decoding early)";
         if (frames < 1) { file.close; ^this.rejectLoad(index, load, "sound file " ++ path ++ " is empty") };
+        file.seek(startFrame, 0);
+        peaks = FloatArray.newClear(this.waveformPoints);
         if (frames <= this.loadCheckAtOnceFrames) {
-            decodes = this.fileDecodes(file, frames);
+            decodes = this.fileDecodes(file, frames, false, peaks);
             file.close;
             if (decodes.not) { ^this.rejectLoad(index, load, damaged) };
-            ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate)
+            ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
         };
         // a long file: whatever the check finds, the recording is over (Lua's load_buffer ends it)
         canceled = this.slotRecording(index);
         if (canceled) { this.cancelSlotRecording(index, load - 1) };
         fork({
-            decodes = this.fileDecodes(file, frames, true);
+            decodes = this.fileDecodes(file, frames, true, peaks);
             file.close;
             if (load > this.loadsSuperseded(index)) {
-                if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate) } {
+                if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks) } {
                     this.rejectLoad(index, load, damaged, canceled)
                 };
             };
@@ -223,7 +235,10 @@
     // that fails (/fail for /b_readChannel: the file vanished, or became
     // unreadable, after the checks) leaves the slot zeroed, so it stays
     // empty and the load is reported as failed with the slot emptied.
-    applyLoad { arg index, load, path, frames, rightChannel, sampleRate;
+    // A load that read its frames sets the slot's peaks and writes its peaks
+    // file first, and reports its length once the file is in place, so every
+    // bufferState report that announces audio finds it there.
+    applyLoad { arg index, load, path, frames, rightChannel, sampleRate, startFrame, peaks;
         var change, readFailed, failWatcher, bufnums;
         this.stopRecording(index);
         change = this.slotChanged(index, load);
@@ -242,8 +257,8 @@
                 if ((msg[1].asSymbol == '/b_readChannel') and: { bufnums.includes(msg[3]) }
                     and: { msg[2].asString.contains("'" ++ path.standardizePath ++ "'") }) { readFailed = true };
             }, '/fail', context.server.addr);
-            buffersL[index].readChannel(path.standardizePath, 0, frames, 0, false, [0]);
-            buffersR[index].readChannel(path.standardizePath, 0, frames, 0, false, [rightChannel]);
+            buffersL[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [0]);
+            buffersR[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [rightChannel]);
             fork({
                 context.server.sync;  // answered once both reads are done (after any /fail)
                 failWatcher.free;
@@ -251,14 +266,18 @@
                     postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " emptied");
                     if (slotChanges[index] == change) {
                         bufferSampleRates[index] = context.server.sampleRate;
+                        this.clearSlotPeaks(index);
                         this.bufferChanged(index);
                     };
                     bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, true));
                 } {
                     if (slotChanges[index] == change) {
-                        bufferFrames[index] = frames;
                         bufferSampleRates[index] = sampleRate;
-                        this.bufferChanged(index);
+                        this.storeSlotPeaks(index, peaks);
+                        this.writeSlotPeaks(index, frames, {
+                            bufferFrames[index] = frames;
+                            this.bufferChanged(index);
+                        });
                     };
                 };
             }, SystemClock);
@@ -329,6 +348,7 @@
         change = this.slotChanged(index);
         bufferFrames[index] = 0;
         bufferSampleRates[index] = context.server.sampleRate;
+        this.clearSlotPeaks(index);
         this.bufferChanged(index);
         this.afterSlotFade(index, change, {
             buffersL[index].zero;

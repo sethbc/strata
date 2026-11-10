@@ -20,8 +20,7 @@
 
     addFileCommands {
         // msg: slot index, path of the stereo 16-bit WAV to write, start and
-        // length (3.3's region, fractions of the valid region: the whole
-        // slot until the files package)
+        // length (fractions of the valid region; 0 and 1 write all of it)
         this.addCommand(\saveBuffer, "isff", { arg msg;
             this.saveSlot(msg[1], msg[2].asString, msg[3], msg[4]);
         });
@@ -76,22 +75,39 @@
     // 48 kHz), more than an MP3's encoder delay and padding (under 2 x 1152
     // frames), so a header count that overshoots by a codec's padding still
     // loads, while damage before the last block is caught. Each read gets a
-    // fresh chunk array (the last read may run past `frames`): see
-    // freshReadArray.
+    // fresh chunk array: see freshReadArray.
     // yielding: called inside a routine, which yields after every chunk
     // (yieldToCommands), so a long file (a 300 s FLAC takes seconds on a Pi)
     // never holds up the commands meanwhile.
-    fileDecodes { arg file, frames, yielding = false;
-        var remaining = frames, chunk, decoded;
-        while { remaining > 0 } {
-            chunk = this.freshReadArray(loadCheckFrames * file.numChannels);
+    // peaks (a FloatArray of waveformPoints, or nil): filled with the
+    // largest absolute sample of each bin across the channels, clipped to 1.
+    // The reads are bin-aligned: at most loadCheckFrames, ending at the next
+    // bin boundary, so no chunk spans two bins. A bin's peak is Signal's
+    // peak, a C primitive: no array and no sclang function per sample
+    // (maxItem and minItem call a function for every sample, #131).
+    fileDecodes { arg file, frames, yielding = false, peaks;
+        var channels = file.numChannels, done = 0, bin = 0, binEnd, wanted, chunk, decoded;
+        peaks = peaks ?? { FloatArray.newClear(this.waveformPoints) };
+        while { done < frames } {
+            // a file shorter than the bins leaves some of them empty: skipped, never read
+            binEnd = this.peakBinEnd(bin, frames);
+            while { binEnd <= done } { bin = bin + 1; binEnd = this.peakBinEnd(bin, frames) };
+            wanted = loadCheckFrames.min(binEnd - done);
+            chunk = this.freshReadArray(wanted * channels);
             file.readData(chunk);  // shrinks chunk to the samples decoded
-            decoded = chunk.size div: file.numChannels;
-            remaining = remaining - decoded;
-            if ((decoded < loadCheckFrames) and: { remaining > 0 }) { ^remaining <= loadShortfallFrames };
-            if (yielding and: { remaining > 0 }) { this.yieldToCommands(0) };
+            decoded = chunk.size div: channels;
+            if (decoded > 0) { peaks[bin] = peaks[bin].max(chunk.peak.min(1.0)) };
+            done = done + decoded;
+            if ((decoded < wanted) and: { done < frames }) { ^(frames - done) <= loadShortfallFrames };
+            if (yielding and: { done < frames }) { this.yieldToCommands(0) };
         };
         ^true
+    }
+
+    // The first frame after a load's bin (integers, so every frame is in
+    // exactly one bin). Bin waveformPoints - 1 ends at `frames`.
+    peakBinEnd { arg bin, frames;
+        ^((bin + 1) * frames) div: this.waveformPoints
     }
 
     // A new Signal (a FloatArray) of `size` for one SoundFile readData.
@@ -101,7 +117,8 @@
     // 3.13 the engine check's buffers, files and effects areas crashed 11 of
     // 12 runs with the arrays reused and 1 of 8 with fresh ones (#131). A
     // structure test checks every readData in the engine reads into one. A
-    // Signal, so the interleave can clip a chunk with a C primitive.
+    // Signal, so the interleave can clip a chunk and the peak scan measure
+    // one with C primitives.
     freshReadArray { arg size;
         ^Signal.newClear(size)
     }
@@ -225,12 +242,22 @@
     // true once the file is in place, false when nothing was written (an
     // empty slot, at once; a folder that cannot be made, a short write or a
     // failed rename); never for a write a newer one abandoned.
+    // start and length are fractions of the valid region (V frames): the
+    // write takes frames [start * V, (start + length) * V). A region of less
+    // than one frame writes nothing, posts why and calls done with false.
     writeSlot { arg index, path, done, start = 0, length = 1;
-        var frames = bufferFrames[index];
+        var valid = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
-        var generation, tempPaths, partPath;
-        if (frames < 1) {
+        var firstFrame, frames, generation, tempPaths, partPath;
+        if (valid < 1) {
             postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
+            done.value(false);
+            ^this
+        };
+        firstFrame = (start.clip(0, 1) * valid).round.asInteger;
+        frames = ((start + length).clip(0, 1) * valid).round.asInteger - firstFrame;
+        if ((frames < 1) or: { (length * valid) < 1 }) {
+            postln("strata: the region of buffer " ++ (index + 1) ++ " is under one frame; nothing written to " ++ path);
             done.value(false);
             ^this
         };
@@ -242,8 +269,8 @@
             Platform.defaultTempDir +/+ "strata-buf%-%-%-%.wav".format(index + 1, instanceTag, generation, side)
         });
         partPath = path ++ "." ++ instanceTag ++ "-" ++ generation ++ ".part";
-        buffersL[index].write(tempPaths[0], "wav", "float", frames);
-        buffersR[index].write(tempPaths[1], "wav", "float", frames);
+        buffersL[index].write(tempPaths[0], "wav", "float", frames, firstFrame);
+        buffersR[index].write(tempPaths[1], "wav", "float", frames, firstFrame);
         fork({
             var current = { writeGenerations[path] == generation };
             // done runs at most once, whatever happens below
@@ -305,8 +332,8 @@
 
     // Called inside a routine. Returns false (and writes nothing more) as
     // soon as keepGoing is false, i.e. a newer write to the same path began,
-    // or when the output cannot be written. frames is the slot's valid
-    // length: a temporary file holding fewer (the server's write ran out of
+    // or when the output cannot be written. frames is the length written (of
+    // the region): a temporary file holding fewer (the server's write ran out of
     // disk: a 300 s save needs about 115 MB of them) or an output that ends
     // short is a failed write, posted as one, so writeSlot never renames a
     // truncated file over the old one. openFiles (a List, from writeSlot)

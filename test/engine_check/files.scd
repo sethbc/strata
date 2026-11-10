@@ -491,4 +491,57 @@ checkLongSave.value;
     check.((data[0] == 0) and: { data[1] == (rate * 2) },
         "files: saveBuffer with 0 and 1 writes what 3.2's saveBuffer wrote (difference %, % frames)".format(data[0], data[1]));
 }.value;
+
+// 3.3's region saves: a slot of four quarters of known levels
+{
+    var rate = server.sampleRate.asInteger, slot = 5, quarter = rate div: 4, frames = quarter * 4;
+    var path = scratchRoot +/+ "files-quarters.wav", file;
+    var regionPath = scratchRoot +/+ "files-quarter-region.wav", wholePath = scratchRoot +/+ "files-whole-region.wav", smallPath = scratchRoot +/+ "files-tiny-region.wav";
+    var frameAt = { arg soundFile, frame;
+        var data = FloatArray.newClear(2);
+        soundFile.seek(frame, 0);
+        soundFile.readData(data);
+        data[0]
+    };
+    var save = { arg savePath, start, length;
+        var reports = saveResults.value.size;
+        command.(\saveBuffer, slot, savePath, start, length);
+        waitFor.({ saveResults.value.size > reports }, 4);
+        saveResults.value.last
+    };
+    var result, saved, count, first, last;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    file.openWrite(path);
+    [0.1, 0.2, 0.3, 0.4].do({ arg level; h.writeConstantFrames(file, quarter, [level, level.neg]) });
+    file.close;
+    command.(\loadBuffer, slot, path, 0);
+    h.waitFor({ engine.bufferFrames[slot] == frames });
+    0.1.wait; server.sync;
+    // [0.25, 0.75) of the valid region: the second and third quarters
+    result = save.(regionPath, 0.25, 0.5);
+    saved = SoundFile.openRead(regionPath);
+    #count, first, last = if (saved.notNil) {
+        var values = [saved.numFrames, frameAt.(saved, 0), frameAt.(saved, (quarter * 2) - 1)];
+        saved.close;
+        values
+    } { [0, 0, 0] };
+    check.((result[2] == false) and: { count == (quarter * 2) }
+        and: { (first - 0.2).abs < 0.001 } and: { (last - 0.3).abs < 0.001 },
+        "files: saveBuffer of a region writes those frames (% frames, first %, last %)".format(count, first, last));
+    // 0, 1: the whole valid region
+    result = save.(wholePath, 0, 1);
+    saved = SoundFile.openRead(wholePath);
+    count = saved !? { arg each; var value = each.numFrames; each.close; value } ? 0;
+    check.((result[2] == false) and: { count == frames },
+        "files: saveBuffer of 0, 1 writes the whole valid region (% of % frames)".format(count, frames));
+    // less than one frame: nothing written, reported failed
+    [[0.25, 0], [0.5, 0.25 / frames]].do({ arg region;
+        result = save.(smallPath, region[0], region[1]);
+        check.((result[2] == true) and: { File.exists(smallPath).not },
+            "files: a region under one frame writes nothing and reports failed (start %, length %: failed %, file %)".format(
+                region[0], region[1], result[2], File.exists(smallPath)));
+    });
+    command.(\clearBuffer, slot); server.sync;
+    [path, regionPath, wholePath].do({ arg each; if (File.exists(each)) { File.delete(each) } });
+}.value;
 }
