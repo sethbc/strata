@@ -302,10 +302,10 @@ test("a hints flash shows only on its owning page", function()
   show_page("SETUP"); buffer_page_flash("buf 2 load failed")
   show_page("BUFFER"); assert_equal(hint_text(context), "buf 2 load failed", "BUFFER shows it once up")
   show_page("SETUP"); assert_equal(hint_text(context), setup_hints, "SETUP never does")
-  -- a page-owned prompt (as SCENES will raise) stays on its page
+  -- a page-scoped hints flash (as BUFFER's load reports raise) stays on its page
   local SCENES = S.constants.UI_PAGES.index.SCENES
-  show_page("SCENES"); S.lib.ui_flash.start("hints", "K3 again: overwrite S3", 2, SCENES); redraw()
-  assert_equal(hint_text(context), "K3 again: overwrite S3")
+  show_page("SCENES"); S.lib.ui_flash.start("hints", "scenes note", 2, SCENES); redraw()
+  assert_equal(hint_text(context), "scenes note")
   show_page("SETUP"); assert_equal(hint_text(context), setup_hints, "not over SETUP's keys")
   -- without a page, a hints flash shows on whatever page is up
   S.lib.ui_flash.start("hints", "anywhere", 1.5); redraw()

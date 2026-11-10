@@ -168,8 +168,8 @@ return function(S)
 
   -- ALT+K3: save the cursor slot. A populated slot needs a second ALT+K3
   -- within arm_seconds on the same slot while its prompt shows on the hint
-  -- row: a "hints" flash covering the row (one with no page) leaves the
-  -- press only arming again; any cursor move disarms
+  -- row: a "hints" flash showing on SCENES covers it and leaves the press
+  -- only arming again; any cursor move disarms
   local function scenes_alt_key(n)
     local slot = S.cursors.scene
     if n ~= 3 or slot > NUM_SCENES then return end
