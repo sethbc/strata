@@ -143,9 +143,12 @@
             // the folder finds it once alloc is done. A name still there
             // then means a mover that never started reading: given up, as
             // one that cannot be opened is
+            // Elapsed time, never the waits counted: norns allocs in a fork
+            // that runs every allocState with no sync between, so it can be
+            // behind schedule and run its late waits back to back
             if (thisThread.isKindOf(Routine)) {
-                var waited = 0;
-                while { File.exists(fifo) and: { waited < this.peaksMoverTimeout } } { 0.002.wait; waited = waited + 0.002 };
+                var started = Main.elapsedTime;
+                while { File.exists(fifo) and: { (Main.elapsedTime - started) < this.peaksMoverTimeout } } { 0.002.wait };
                 if (File.exists(fifo)) { this.abandonPeaksMover(mover, fifo, "it never opened " ++ fifo) };
             };
         } {

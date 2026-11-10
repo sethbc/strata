@@ -381,6 +381,38 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
         "waveform: a mover that never removes its FIFO's name is given up at alloc (alive %, FIFO left %, exited %, write % s)".format(
             mover[\alive], fifoLeft, mover[\exited], ran[1].round(0.01)));
     h.freeEngine(other);
+    // alloc's wait is real time, not scheduled time: norns allocs in a
+    // fork (Crone.setEngine, a TempoClock routine) that runs every area's
+    // allocState with no sync between, so it can be behind schedule and run
+    // its late waits back to back (this check's own routine is on AppClock,
+    // which counts from real time, so the step runs in a fork too). A fork
+    // 1.5 s behind (sclang held by a blocking sleep) starts a mover whose sh
+    // removes the FIFO's name after 0.5 s: the wait must last until then,
+    // and keep the mover
+    File.use(fakeShellDir +/+ "sh", "w", { arg file; file.write("#!/bin/sh\nsleep 0.5\nexec /bin/sh \"$@\"\n") });
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    other.stopPeaksMover;
+    waitFor.({ other.areaState[\waveform][\mover][\exited] == true }, 3);
+    {
+        var started = Condition(false);
+        fork {
+            0.01.wait;
+            "sleep 1.5".systemCmd;
+            "PATH".setenv(fakeShellDir ++ ":" ++ path);
+            protect { other.startPeaksMover } { "PATH".setenv(path) };
+            started.test = true;
+            started.signal;
+        };
+        h.awaitReply(started);
+    }.value;
+    "PATH".setenv(path);
+    mover = other.areaState[\waveform][\mover];
+    fifoLeft = File.exists(other.peaksMoverPath);
+    ran = write.(other);
+    check.(mover[\alive] and: { fifoLeft.not } and: { ran[0] } and: { ran[1] < 0.5 } and: { mover[\pending] == 0 },
+        "waveform: alloc's wait for the mover counts real time, so a routine behind schedule keeps a mover that opens late (alive %, FIFO left %, write % s)".format(
+            mover[\alive], fifoLeft, ran[1].round(0.01)));
+    h.freeEngine(other);
     File.delete(fakeShellDir +/+ "sh");
     (dir +/+ "*.peaks").pathMatch.do({ arg each; File.delete(each) });
 }.value;
