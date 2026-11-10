@@ -330,4 +330,46 @@ test("64: the step views keep every key", function()
   assert_equal(calls, 0, "the step views never reach positions")
 end)
 
+test("64: the positions view is per port", function()
+  local context = positions_grid()
+  context.grid.plug(2, 8, 8)
+  switch_half(context, 1); switch_half(context, 1)
+  assert_equal(grid_core().page(1), 5, "port 1 shows positions")
+  assert_equal(grid_core().page(2), 1, "port 2 stays on its steps")
+  switch_half(context, 2)
+  assert_equal(grid_core().page(2), 1); assert_equal(shown_half(2), 2, "port 2 switches its own half")
+  assert_equal(grid_core().page(1), 5)
+end)
+
+test("64: a position key whose release comes after the view switched leaks nothing", function()
+  local context, S = positions_grid()
+  local positions = S.lib.positions
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+  context.grid.press(1, 7, 3, 1)  -- scan hold down
+  assert_true(positions.scan_held(1), "held")
+  context.grid.press(1, 8, 1, 1)  -- a loop anchor
+  switch_half(context, 1)         -- the view leaves positions
+  assert_equal(grid_core().page(1), 1)
+  context.grid.press(1, 7, 3, 0); context.grid.press(1, 8, 1, 0)
+  positions.end_stale_holds()
+  assert_true(not positions.scan_held(1), "no stuck scan hold")
+  context.grid.press(1, 1, 2, 1); context.grid.press(1, 1, 2, 0)
+  assert_near(params:get("v1_loop_length"), 1, 1e-9, "no stale anchor made a loop")
+end)
+
+test("64: a hold in the step views keeps working and never reaches positions", function()
+  local context, S = positions_grid()
+  local calls = 0
+  local original = S.lib.positions.strip_key
+  S.lib.positions.strip_key = function() calls = calls + 1 end
+  context.grid.press(1, 3, 2, 1)
+  context.clock.run_for(0.6)
+  context.grid.press(1, 3, 2, 0)
+  context.grid.press(1, 6, 3, 1); context.clock.run_for(0.6); context.grid.press(1, 6, 3, 0)
+  S.lib.positions.strip_key = original
+  assert_equal(calls, 0, "no strip call from the step views")
+end)
+
 end

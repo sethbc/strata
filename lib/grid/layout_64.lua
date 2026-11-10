@@ -28,6 +28,8 @@ return function(S)
     voice_row = 7,            -- columns 1-7 pick the grid voice
     positions_play_levels = {playing = 15, stopped = 6},
     voice_levels = {selected = 15, buffer = 6, other = 2},
+    dark = 0,
+    voice_toggle_levels = {on = 12, off = 4},
   }
   M.LAYOUT = LAYOUT_64
 
@@ -137,9 +139,13 @@ return function(S)
     return LAYOUT_64.blink_levels[(beat + 1) % 2 + 1]
   end
 
-  local function positions_redraw(grid_device)
+  local function voice_toggle_level(voice_idx)
+    return S.voices[voice_idx].active and LAYOUT_64.voice_toggle_levels.on or LAYOUT_64.voice_toggle_levels.off
+  end
+
+  local function positions_redraw(port, grid_device)
     local voice_idx = S.grid_voice_select
-    local width = 8
+    local width = visible_steps(grid_device.cols)
     for row = 1, #LAYOUT_64.position_rows do
       for x = 1, width do
         local cell = (row - 1) * width + x
@@ -148,10 +154,10 @@ return function(S)
     end
     for x = 1, width do
       local key = LAYOUT_64.strip_keys[x]
-      grid_device:led(x, LAYOUT_64.strip_row, key and S.lib.positions.strip_level(voice_idx, key) or 0)
+      grid_device:led(x, LAYOUT_64.strip_row, key and S.lib.positions.strip_level(voice_idx, key) or LAYOUT_64.dark)
     end
     for y = LAYOUT_64.strip_row + 1, LAYOUT_64.voice_row - 1 do
-      for x = 1, width do grid_device:led(x, y, 0) end
+      for x = 1, width do grid_device:led(x, y, LAYOUT_64.dark) end
     end
     for i = 1, NUM_VOICES do
       local level = LAYOUT_64.voice_levels.other
@@ -162,12 +168,12 @@ return function(S)
     grid_device:led(LAYOUT_64.play_column, LAYOUT_64.control_row,
       S.pattern_playing and LAYOUT_64.positions_play_levels.playing or LAYOUT_64.positions_play_levels.stopped)
     for i = 1, NUM_VOICES do
-      grid_device:led(LAYOUT_64.first_voice_column + i - 1, LAYOUT_64.control_row, S.voices[i].active and 12 or 4)
+      grid_device:led(LAYOUT_64.first_voice_column + i - 1, LAYOUT_64.control_row, voice_toggle_level(i))
     end
   end
 
   function grid_redraw_64(port, grid_device)
-    if positions_view(port) then positions_redraw(grid_device); return end
+    if positions_view(port) then positions_redraw(port, grid_device); return end
     -- Rows 1-7: the shown half of each 16-step pattern (step_brightness
     -- lights the sounding step when it is in this half); the sequencer
     -- still plays all PATTERN_LENGTH steps
@@ -181,7 +187,7 @@ return function(S)
     -- Row 8: play / half, voices 1-7
     grid_device:led(LAYOUT_64.play_column, LAYOUT_64.control_row, play_level(port, cols))
     for i = 1, NUM_VOICES do
-      grid_device:led(LAYOUT_64.first_voice_column + i - 1, LAYOUT_64.control_row, S.voices[i].active and 12 or 4)
+      grid_device:led(LAYOUT_64.first_voice_column + i - 1, LAYOUT_64.control_row, voice_toggle_level(i))
     end
   end
 
