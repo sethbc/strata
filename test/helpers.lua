@@ -416,7 +416,6 @@ end
 -- helpers shared by several unit files
 ---------------------------------------------------------------------------
 
--- index engine calls for one voice by command and key
 -- Run fn with one step of set_setting's save of performance.data failing:
 -- kind "open" (the "w" open of the .part file returns nil), "write" (the
 -- file's write fails; the file is closed for real) or "rename" (os.rename onto
@@ -448,6 +447,7 @@ local function with_failing_setting_write(kind, fn)
   if not ok then error(err, 0) end
 end
 
+-- index engine calls for one voice by command and key
 local function engine_state_for_voice(calls, engine_voice)
   local state = { voice = {}, grain = {}, source = {}, amp_amt = {}, freq_amt = {} }
   for _, call in ipairs(calls) do
