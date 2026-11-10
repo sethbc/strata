@@ -61,8 +61,8 @@ LFO:
 BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` per ring, drawn with `arc_ring_fill_param`, so `buf_scan` is bipolar):
 - plain: ring 1 `v<selected>_buf_pos` (every tick calls `S.lib.positions.scrub_turned(voice)`, which starts the friction glide), 2 `v<selected>_loop_start`, 3 `v<selected>_loop_length`, 4 `v<selected>_buf_scan`;
 - ALT: ring 1 as plain, 2 `v<selected>_buf_rate`, 3 `scrub_friction`, 4 `record_feedback`;
-- the first ALT ring 1 tick calls `hold_scan(voice, true)` on the selected voice and remembers it (`held_voice`); the `S.register_alt_release` hook releases that voice, never the then-selected one. ALT+K2 and ALT+K3 never hold;
-- rings adjust the voice's params whatever its source, drawn at 15 for a buffer-sourced voice, 4 otherwise; ALT ring 4 (a global param) always 12. Record duration and level are on the screen only.
+- the first ALT ring 1 tick calls `hold_scan(voice, true)` on the selected voice and remembers it (`held_voice`); if the selected voice changes while ALT is held, the next ALT ring 1 tick releases the old voice's hold and holds the new one; the `S.register_alt_release` hook releases whichever is held, never the then-selected one. ALT+K2 and ALT+K3 never hold;
+- rings adjust the voice's params whatever its source, drawn at 15 for a buffer-sourced voice, 4 otherwise; ALT ring 4 (a global param) always 12. Record duration and level are on the screen only. The friction ring (ALT ring 3, a global param) follows the voice's level (15 or 4) by design (3.3 design §11); only ALT ring 4 is always 12.
 
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
 - Ring 1: the scene cursor over E2's stops (slots 1..`NUM_SCENES`, then `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).

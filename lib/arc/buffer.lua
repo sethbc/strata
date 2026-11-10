@@ -29,7 +29,8 @@ return function(S)
     return ring.param_id or ("v" .. S.selected_voice .. "_" .. ring.voice_key)
   end
 
-  -- The voice whose scan the ALT ring 1 holds (nil when none)
+  -- The voice whose scan the ALT ring 1 holds (nil when none); selecting
+  -- another voice while ALT is held moves the hold to it
   local held_voice
 
   local function turn_ring(ring, delta)
@@ -48,7 +49,8 @@ return function(S)
   local function arc_buffer_alt_delta(n, delta)
     local ring = ARC_BUFFER_ALT_RINGS[n]
     if not ring then return end
-    if n == 1 and held_voice == nil then
+    if n == 1 and held_voice ~= S.selected_voice then
+      if held_voice then S.lib.positions.hold_scan(held_voice, false) end
       held_voice = S.selected_voice
       S.lib.positions.hold_scan(held_voice, true)
     end
