@@ -318,6 +318,15 @@ test("a layout record says whether a position press selects the grid voice", fun
   context.grid.plug(1, 16, 8)
   assert_equal(grid_core().layout_of(1), layouts["128h"], "a connected 128h's record")
   assert_equal(grid_core().layout_of(2), nil, "a port with no grid")
+  context.grid.plug(3, 12, 12)
+  assert_equal(grid_core().layout_of(3), nil, "a size with no layout")
+  -- so a position press there selects no grid voice
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
+  S.grid_voice_select = 6
+  S.lib.positions.grid_key(3, 2, 5, 16, 1); S.lib.positions.grid_key(3, 2, 5, 16, 0)
+  assert_equal(S.grid_voice_select, 6, "the grid voice is unchanged")
 end)
 
 test("a scene saved on a hold shows on the SCENES page on the next frame", function()

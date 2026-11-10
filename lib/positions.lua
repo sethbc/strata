@@ -357,8 +357,19 @@ return function(S)
         else
           M.recall_bookmark(voice_idx, key)
         end
-      elseif records[port] and records[port].pressed[voice_idx] == key then
-        records[port].pressed[voice_idx] = nil
+      elseif records[port] then
+        -- on the layouts that select a grid voice the release ends the key
+        -- for whichever voice it was pressed for (the grid voice may have
+        -- changed since, as for hold and store, #221); the 256's ends only
+        -- its own voice's
+        local pressed = records[port].pressed
+        if selects_grid_voice(port) then
+          for pressed_voice, pressed_key in pairs(pressed) do
+            if pressed_key == key then pressed[pressed_voice] = nil end
+          end
+        elseif pressed[voice_idx] == key then
+          pressed[voice_idx] = nil
+        end
       end
     elseif key == "store" then
       if z == 1 then
