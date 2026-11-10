@@ -377,5 +377,22 @@ command.(\setVoiceParam, 4, \width, 0.3);
 command.(\retrigger, 4, 0.5);
 command.(\setModSpeed, 4, 2.0);
 check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synths");
+// an index outside the voices, or not an integer, is ignored (#262)
+{
+    var raised = 0, synthsBefore, enginesBefore;
+    h.command(\voiceOn, 0, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+    server.sync;
+    synthsBefore = synthNames.(context.xg).size;
+    enginesBefore = engine.synths.size;
+    [-1, engine.numVoices, 99, 1.5].do({ arg index;
+        try { command.(\voiceOff, index) } { raised = raised + 1 };
+        try { command.(\retrigger, index, 1.0) } { raised = raised + 1 };
+    });
+    server.sync;
+    check.((raised == 0) and: { synthNames.(context.xg).size == synthsBefore }
+        and: { engine.synths.size == enginesBefore }
+        and: { engine.releasingSynths.size == engine.numVoices },
+        "voiceOff and retrigger ignore a voice index outside the voices (% raised)".format(raised));
+}.value;
 h.stopAllVoices;
 }
