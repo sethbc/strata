@@ -190,6 +190,25 @@ var checkRecordSizes = {
     group.free; privateBus.free; controlBus.free;
 };
 
+// A scenario that errors while the groups are paused still leaves them
+// running (#218): guardedHold pauses them, throws inside a guarded body
+// (caught here), and a Sweep in processGroup must then advance
+var checkGuardResumes = {
+    var bus = Bus.control(server, 1), groups = [engine.voiceGroup, engine.processGroup], tick, first, second, caught = false;
+    try {
+        guardedHold.value(groups, List.new, {
+            server.sendBundle(nil, *groups.collect({ arg group; ['/n_run', group.nodeID, 0] }));
+            server.sync;
+            Error("memory check: a deliberate error while the groups are paused").throw
+        })
+    } { caught = true };
+    tick = Synth(\strataCheckTick, [\out, bus.index], engine.processGroup, \addToTail);
+    server.sync; 0.05.wait; first = h.readBus(bus)[0]; 0.1.wait; second = h.readBus(bus)[0];
+    tick.free; server.sync; bus.free;
+    check.(caught and: { second > (first + 0.05) },
+        "memory: a scenario that errors while the groups are paused leaves them running (caught %, the clock read % then %)".format(caught, first, second));
+};
+
 // The worst cases (inside the check routine), on an engine (h.engine or
 // the high one): every voice at the largest grain size and density Lua
 // sends, switched synth -> buffer -> input -> synth. Spaced: each switch
@@ -225,6 +244,19 @@ var checkRecordSizes = {
 // Returns the free KB at each peak.
 var rateFilePath = h.tempDir +/+ "memory-rate.wav";
 var recordingFits = List.new;
+// Runs body; however it ends (an error included), the groups the scenario
+// paused run again and the holds and the cut synths they paused are freed
+// and run (#218), so a failed scenario never leaves the engine paused for
+// the areas that follow. holdPairs: the [hold, cut synth] node pairs made so
+// far (errors off in the bundle: a synth that finished its fade is gone)
+var guardedHold = { arg groups, holdPairs, body;
+    body.protect({
+        server.sendBundle(nil, ['/error', -1], *(groups.collect({ arg group; ['/n_run', group.nodeID, 1] })
+            ++ holdPairs.collect({ arg pair; ['/n_free', pair[0]] })
+            ++ holdPairs.collect({ arg pair; ['/n_run', pair[1], 1] })));
+        holdPairs.clear;
+    });
+};
 var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var command = { arg name ... args; h.commandTo(target, name, *args) };
     var startVoice = { arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 200.0, 1.0) };
@@ -244,10 +276,11 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var startRecording = { command.(\recordBuffer, recordSlot, 8.0, 1.0, 0, 1, 0, 1, 0) };
     var recordingRunning = { h.waitFor({ target.recordSynths[recordSlot].notNil and: { target.recordSynths[recordSlot].isPlaying } }, 3) };
     var stopRecording = { command.(\stopRecord, recordSlot); h.waitFor({ target.recordSynths[recordSlot].isNil }, 3) };
-    // Just after the recording's peaks refresh (every peakRefreshSeconds:
-    // the peaks file's rename is a subprocess, whose start can hold sclang
-    // up for longer than a 50 ms cut), so the last switch and the probes
-    // fall between two refreshes
+    // Just after the recording's peaks refresh (every peakRefreshSeconds),
+    // so the last switch and the probes fall between two refreshes: a margin
+    // kept from when the rename was a subprocess whose start held sclang
+    // past a 50 ms cut; since #210 it goes through the waveform area's
+    // long-lived mover and a refresh holds sclang under 1 ms
     var afterPeakRefresh = {
         var counters = target.areaState[\record][\peakWrites], count = counters[\refreshes];
         h.waitFor({ counters[\refreshes] > count }, 1);
@@ -269,6 +302,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     // fade are unchanged.
     var engineGroups = [target.voiceGroup, target.processGroup];
     var cutHoldSeconds = 0.01, voicesHeld = false;
+    var pendingHolds = List.new;   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
     var holdVoices = {
         server.sendBundle(nil, *engineGroups.collect({ arg group; ['/n_run', group.nodeID, 0] }));
         voicesHeld = true;
@@ -288,6 +322,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
             })));
         resumedAt = Main.elapsedTime;
         voicesHeld = false;
+        pendingHolds.addAll([holds, cutting].flop);
         probes = count.collect({ arg index;
             Synth(\strataCheckMemProbe, [\out, probeBus.index + index], target.processGroup, \addToTail)
         });
@@ -315,6 +350,12 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         check.(wasHeld and: { cutting.size > 0 } and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start, held in their fade (%: % of %%)".format(
                 label, present, cutting.size, if (wasHeld) { "" } { ", but the scenario never held the voices" }));
+        // the bound (#218): a voice holds one cutting set, and these scenarios'
+        // last switch cuts one grain synth per voice (seven, measured in every
+        // scenario), so a second cutting set kept past a switch makes more
+        check.(cutting.size <= target.numVoices,
+            "memory: at most one cutting set is held, a grain synth per voice (%: % cutting synths for % voices)".format(
+                label, cutting.size, target.numVoices));
         if (report.notNil) { report.value(fits, freeKB) } {
             check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
                 floorLabel, target.tier, scenario, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
@@ -323,107 +364,115 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         // the check found gone has been reported already)
         server.sendBundle(nil, ['/error', -1], *(holds.collect({ arg id; ['/n_free', id] })
             ++ cutting.collect({ arg id; ['/n_run', id, 1] })));
+        pendingHolds.clear;
         probes.do(_.free);
         probeBus.setAll(0);
         2.5.wait; server.sync;
     };
-    probeBus.setAll(0); server.sync;
-    startAll.value;
-    server.sync; 0.2.wait;
-    sourceSteps.do({ arg sourceOf, step;
-        if (step > 0) { 0.2.wait; server.sync };
-        // the last switch makes the cutting set the probes must meet
-        if (step == (sourceSteps.size - 1)) { holdVoices.value };
-        switchAll.(sourceOf);
-    });
-    target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
-    startAll.value;
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted");
-    holdVoices.value;
-    sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, each switched three times at once");
-    holdVoices.value;
-    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, target.numBuffers + 1); command.(\voiceOff, voice) });
-    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
-    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer)");
-    h.stopAllVoices(target);
-    // all-buffer: 21 \strataGrainBuf, reading slots that hold audio
-    target.numBuffers.do({ arg slot; command.(\loadBuffer, slot, h.stereoPath, 0) });
-    h.waitFor({ target.bufferFrames.every({ arg frames; frames > 0 }) }, 3);
-    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
-    startAll.value;
-    server.sync; 0.2.wait;
-    2.do({ arg step;
-        if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
-        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
-    });
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart", "all-buffer worst case");
-    h.stopAllVoices(target);
-    // the same two worst cases with one recording running
-    command.(\clearBuffer, recordSlot); server.sync;
-    command.(\loadBuffer, recordSlot, rateFilePath, 0);
-    h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
-    startRecording.value;
-    recordingRunning.value;
-    startAll.value;
-    server.sync; 0.2.wait;
-    sourceSteps.do({ arg sourceOf, step;
-        if (step > 0) { 0.2.wait; server.sync };
-        // the last switch makes the cutting set the probes must meet
-        if (step == (sourceSteps.size - 1)) { afterPeakRefresh.value; holdVoices.value };
-        switchAll.(sourceOf);
-    });
-    target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
-    startAll.value;
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, one recording", "worst case with a recording");
-    stopRecording.value;
-    h.stopAllVoices(target);
-    command.(\clearBuffer, recordSlot); server.sync;
-    command.(\loadBuffer, recordSlot, rateFilePath, 0);
-    h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
-    startRecording.value;
-    recordingRunning.value;
-    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
-    startAll.value;
-    server.sync; 0.2.wait;
-    2.do({ arg step;
-        if (step > 0) { 0.2.wait; server.sync; afterPeakRefresh.value; holdVoices.value };
-        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
-    });
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, one recording", "all-buffer worst case with a recording");
-    stopRecording.value;
-    h.stopAllVoices(target);
-    command.(\clearBuffer, recordSlot); server.sync;
-    // eight recordings at the mixed worst case (spaced, as the first
-    // scenario), one per source kind
-    target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, recordingSources[slot], 0, 0, 0) });
-    recordingsStarted = h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
-    startAll.value;
-    server.sync; 0.2.wait;
-    sourceSteps.do({ arg sourceOf, step;
-        if (step > 0) { 0.2.wait; server.sync };
-        // the last switch makes the cutting set the probes must meet
-        if (step == (sourceSteps.size - 1)) { holdVoices.value };
-        switchAll.(sourceOf);
-    });
-    target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
-    startAll.value;
-    engage.value(command);
-    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, eight slots recording", nil, recordingProbes,
-        { arg fits, freeKB;
-            recordingFits.add([target.tier, fits and: { recordingsStarted }
-                and: { target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, freeKB.round(10)]);
+    // every scenario runs guarded: an error in one still resumes the groups and frees the holds (#218)
+    guardedHold.value(engineGroups, pendingHolds, {
+        probeBus.setAll(0); server.sync;
+        startAll.value;
+        server.sync; 0.2.wait;
+        sourceSteps.do({ arg sourceOf, step;
+            if (step > 0) { 0.2.wait; server.sync };
+            // the last switch makes the cutting set the probes must meet
+            if (step == (sourceSteps.size - 1)) { holdVoices.value };
+            switchAll.(sourceOf);
         });
-    target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
-    h.stopAllVoices(target);
-    probeBus.free;
+        target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
+        startAll.value;
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted");
+        holdVoices.value;
+        sourceSteps.do({ arg sourceOf; switchAll.(sourceOf) });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, each switched three times at once");
+        holdVoices.value;
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, target.numBuffers + 1); command.(\voiceOff, voice) });
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0); startVoice.(voice) });
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer)");
+        h.stopAllVoices(target);
+        // all-buffer: 21 \strataGrainBuf, reading slots that hold audio
+        target.numBuffers.do({ arg slot; command.(\loadBuffer, slot, h.stereoPath, 0) });
+        h.waitFor({ target.bufferFrames.every({ arg frames; frames > 0 }) }, 3);
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
+        startAll.value;
+        server.sync; 0.2.wait;
+        2.do({ arg step;
+            // the hold is only for step > 0: the first switch's cut synths are
+            // gone in the 0.2 s before the second, so only the second switch
+            // makes the cutting set the probes must meet (the scenarios above
+            // hold at their last of three switches, `step == size - 1`)
+            if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
+        });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart", "all-buffer worst case");
+        h.stopAllVoices(target);
+        // the same two worst cases with one recording running
+        command.(\clearBuffer, recordSlot); server.sync;
+        command.(\loadBuffer, recordSlot, rateFilePath, 0);
+        h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
+        startRecording.value;
+        recordingRunning.value;
+        startAll.value;
+        server.sync; 0.2.wait;
+        sourceSteps.do({ arg sourceOf, step;
+            if (step > 0) { 0.2.wait; server.sync };
+            // the last switch makes the cutting set the probes must meet
+            if (step == (sourceSteps.size - 1)) { afterPeakRefresh.value; holdVoices.value };
+            switchAll.(sourceOf);
+        });
+        target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
+        startAll.value;
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, one recording", "worst case with a recording");
+        stopRecording.value;
+        h.stopAllVoices(target);
+        command.(\clearBuffer, recordSlot); server.sync;
+        command.(\loadBuffer, recordSlot, rateFilePath, 0);
+        h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
+        startRecording.value;
+        recordingRunning.value;
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
+        startAll.value;
+        server.sync; 0.2.wait;
+        2.do({ arg step;
+            if (step > 0) { 0.2.wait; server.sync; afterPeakRefresh.value; holdVoices.value };
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
+        });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, one recording", "all-buffer worst case with a recording");
+        stopRecording.value;
+        h.stopAllVoices(target);
+        command.(\clearBuffer, recordSlot); server.sync;
+        // eight recordings at the mixed worst case (spaced, as the first
+        // scenario), one per source kind
+        target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, recordingSources[slot], 0, 0, 0) });
+        recordingsStarted = h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
+        startAll.value;
+        server.sync; 0.2.wait;
+        sourceSteps.do({ arg sourceOf, step;
+            if (step > 0) { 0.2.wait; server.sync };
+            // the last switch makes the cutting set the probes must meet
+            if (step == (sourceSteps.size - 1)) { holdVoices.value };
+            switchAll.(sourceOf);
+        });
+        target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
+        startAll.value;
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, eight slots recording", nil, recordingProbes,
+            { arg fits, freeKB;
+                recordingFits.add([target.tier, fits and: { recordingsStarted }
+                    and: { target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, freeKB.round(10)]);
+            });
+        target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
+        h.stopAllVoices(target);
+        probeBus.free;
+    });
     figures
 };
 
@@ -477,6 +526,8 @@ SynthDef(\strataCheckPoolProbe, { arg out;
 SynthDef(\strataCheckCutHold, { arg node = -1, seconds = 0.01;
     Pause.kr(Sweep.kr(0, 1) < seconds, node);
 }).add;
+// A clock in the groups: its output advances only while they run
+SynthDef(\strataCheckTick, { arg out; Out.kr(out, Sweep.kr(0, 1)) }).add;
 // The flood's reserve: a 64 KB DelayN (16384 floats)
 SynthDef(\strataCheckReserveProbe, { arg out; Out.kr(out, A2K.kr(DelayN.ar(DC.ar(1), 0.25, 0.01))) }).add;
 server.sync;
@@ -490,6 +541,7 @@ checkRecordSizes.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
     "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
         idleFreeKB.round(10), probeKB.round(0.1)));
+checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
