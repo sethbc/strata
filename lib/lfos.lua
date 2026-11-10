@@ -234,9 +234,8 @@ return function(S)
         if state == 1 then
           restore_lfo_destination(n)
           S.lfo_last_raw[n] = nil
-        else
-          note_lfo_reset(n)  -- the library's state action resets the phase on every bang (through lfo_reset_<n>)
         end
+        -- the dot restarts through the lfo_reset_<n> wrapper: the library's state action ends with lfo_bang (#251)
       end)
       wrap_param_action("lfo_depth_" .. n, nil, function(depth)
         if depth == 0 then restore_lfo_destination(n) end
