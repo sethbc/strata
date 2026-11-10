@@ -168,7 +168,9 @@ return function(S)
   -- sequencer cancels it and moves on. next_step_due (nil when no fade runs)
   -- is the running fade's progress: util.time() when its next step or its end
   -- is due. It is set and cleared together with scene_transition_active, as
-  -- wait_for_scene_transition reads it whenever the flag is set
+  -- wait_for_scene_transition reads it whenever the flag is set; so are
+  -- target (the scene the fade goes to) and previous (the current scene
+  -- before it), nil when no fade runs (#253)
   S.SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
 
   local function is_number(value)
@@ -312,13 +314,29 @@ return function(S)
     return debug.traceback(tostring(message), 2)
   end
 
-  function cancel_scene_transition()
-    if S.scene_transition_clock then
-      clock.cancel(S.scene_transition_clock)
-      S.scene_transition_clock = nil
-    end
+  -- The one way a transition ends (#253): the fade's scene was never
+  -- applied, so the scene current before it is current again (a fade's end
+  -- then lets recall_scene_instant make the target current once it has
+  -- applied it). cancel_clock cancels the transition's clock; inside that
+  -- clock (a failed step, the end) its id is only forgotten. quiet leaves
+  -- the redraw to the caller, which redraws itself
+  local function end_scene_transition(cancel_clock, quiet)
+    if cancel_clock and S.scene_transition_clock then clock.cancel(S.scene_transition_clock) end
+    S.scene_transition_clock = nil
+    local restored = S.scene_transition_active and S.current_scene ~= S.SCENE_TRANSITION.previous
+    if S.scene_transition_active then S.current_scene = S.SCENE_TRANSITION.previous end
     S.scene_transition_active = false
     S.SCENE_TRANSITION.next_step_due = nil
+    S.SCENE_TRANSITION.target = nil
+    S.SCENE_TRANSITION.previous = nil
+    if restored and not quiet then
+      request_redraw()
+      grid_redraw()
+    end
+  end
+
+  function cancel_scene_transition()
+    end_scene_transition(true)
   end
 
   -- Snapshot {id, start, target, step} for every continuous param a smooth
@@ -383,9 +401,10 @@ return function(S)
 
     transition_time = transition_time or 0
 
-    -- Any new recall supersedes a transition that is still running, and
-    -- ends the randomize undo
-    cancel_scene_transition()
+    -- Any new recall supersedes a transition that is still running (which
+    -- puts its previous scene back: this recall redraws), and ends the
+    -- randomize undo
+    end_scene_transition(true, true)
     clear_undo()
 
     if transition_time > 0 then
@@ -394,20 +413,25 @@ return function(S)
       local scene_data = S.scenes[scene_num].data
       local targets = scene_transition_targets(scene_data)
 
-      -- scene_transition_active and SCENE_TRANSITION.next_step_due are always
-      -- set and cleared together (here, at the fade's end or error, and in
-      -- cancel_scene_transition): the sequencer's wait reads the due time
-      -- whenever the flag is set
+      -- scene_transition_active, SCENE_TRANSITION.next_step_due, target and
+      -- previous are always set together here and cleared together by
+      -- end_scene_transition: the sequencer's wait reads the due time
+      -- whenever the flag is set. The target is current from the first
+      -- step (the grids light it at once); previous is the scene the
+      -- transition's end puts back
       S.scene_transition_active = true
       S.SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
+      S.SCENE_TRANSITION.target = scene_num
+      S.SCENE_TRANSITION.previous = S.current_scene
+      S.current_scene = scene_num
       S.scene_transition_clock = clock.run(function()
         local step_time = transition_time / S.SCENE_TRANSITION.steps
 
         for step = 1, S.SCENE_TRANSITION.steps do
           local mix = step / S.SCENE_TRANSITION.steps
           -- the flag must not outlive an error in a param action (the
-          -- sequencer waits for it): clear it, then raise the error again,
-          -- with its traceback
+          -- sequencer waits for it): end the transition (the previous scene
+          -- is current again), then raise the error again, with its traceback
           local stepped, step_error = xpcall(function()
             for _, target in ipairs(targets) do
               local value = util.linlin(0, 1, target.start, target.target, mix)
@@ -418,31 +442,24 @@ return function(S)
             grid_redraw()  -- keep the parameter faders moving with the fade
           end, with_traceback)
           if not stepped then
-            S.scene_transition_clock = nil
-            S.scene_transition_active = false
-            S.SCENE_TRANSITION.next_step_due = nil
+            end_scene_transition(false)
             error(step_error, 0)
           end
           S.SCENE_TRANSITION.next_step_due = util.time() + step_time
           clock.sleep(step_time)
         end
 
-        -- Final state: exact values plus the non-continuous params
-        S.scene_transition_clock = nil
-        S.scene_transition_active = false
-        S.SCENE_TRANSITION.next_step_due = nil
+        -- Final state: exact values plus the non-continuous params. The end
+        -- puts the previous scene back; recall_scene_instant makes the
+        -- target current once it is applied, and redraws either way
+        end_scene_transition(false, true)
         recall_scene_instant(scene_num, scene_data)
       end)
+      -- its first step has run and drawn the target as current
     else
-      -- Instant recall
+      -- Instant recall: it makes the scene current when it is applied
       recall_scene_instant(scene_num)
     end
-
-    S.current_scene = scene_num
-    request_redraw()
-    -- a fade's first step redrew the grid before current_scene was set; an
-    -- instant recall sets it and redraws the grid itself
-    if transition_time > 0 then grid_redraw() end
   end
 
   -- Apply a scene immediately: scene_data, or the slot's data when nil. The
@@ -520,7 +537,13 @@ return function(S)
         sync_voice_values_to_engine(i)
       end
     end
-    if not recalled then error(recall_error, 0) end
+    -- a failed recall leaves the current scene as it was (the previous one,
+    -- at a fade's end): show it and whatever was applied
+    if not recalled then
+      request_redraw()
+      grid_redraw()
+      error(recall_error, 0)
+    end
 
     -- Restore patterns
     for i = 1, NUM_VOICES do
@@ -871,13 +894,18 @@ return function(S)
     cancel_scene_transition()
   end)
 
-  -- A fade runs exactly while its next step is due, and no transition clock
-  -- outlives the fade
+  -- A fade runs exactly while its next step is due and it has a target, and
+  -- no transition clock outlives the fade
   S.register_invariant("scene transition", function()
     local due = S.SCENE_TRANSITION.next_step_due
     if S.scene_transition_active ~= (due ~= nil) then
       return "scene_transition_active is " .. tostring(S.scene_transition_active)
         .. " but next_step_due is " .. tostring(due)
+    end
+    local target = S.SCENE_TRANSITION.target
+    if (target ~= nil) ~= S.scene_transition_active then
+      return "scene_transition_active is " .. tostring(S.scene_transition_active)
+        .. " but SCENE_TRANSITION.target is " .. tostring(target)
     end
     if not S.scene_transition_active and S.scene_transition_clock ~= nil then
       return "no transition is active but scene_transition_clock is " .. tostring(S.scene_transition_clock)

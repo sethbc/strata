@@ -4,7 +4,7 @@
 - Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, lock and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
 - A recall stops the voices it stops before setting their sources and params, starts the voices it starts after their params, and sends at most one full sync per running voice whose source changed (`S.scene_recall_in_progress`).
 - Every recall clears the randomize undo (`clear_undo`, `lib/mutation.lua`): `recall_scene` after validation, `recall_scene_instant` at its start.
-- Every recall cancels a running transition first. The transition clock clears `S.scene_transition_active` and `S.scene_transition_clock` on every exit (end, cancel, error).
+- Every recall cancels a running transition first. Every exit of a transition (end, cancel, error) goes through the one local `end_scene_transition`, which clears `S.scene_transition_active`, `S.scene_transition_clock` and the `SCENE_TRANSITION` fields together and puts the previous scene back as current (#253): a fade that does not land never leaves its target current. Inside the transition's clock its id is forgotten, never canceled.
 - The sequencer never cuts a transition short. It waits for the transition's end, bounded by `SCENE_TRANSITION.overrun_seconds` measured from the fade's progress, never from its start.
 - `load_scenes_from_disk` runs `tab.load` through `pcall`. On any failure it keeps the current scenes and moves the file aside, or blocks the autosave (`S.scene_autosave_blocked`), so a bad file is never overwritten.
 - Bounds-check the scene number (1..`NUM_SCENES`) and check the slot is populated before recalling.
@@ -16,7 +16,7 @@
 
 `lib/scenes.lua` (`S.lib.scenes`) holds the whole scene system:
 - `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`);
-- `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION`;
+- `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target` and `previous`);
 - capture, recall, transitions, the scene sequencer, migration, validation and scenes.data;
 - the global `with_traceback` error handler;
 - `S.lib.scenes.scene_data_dir` and `S.lib.scenes.move_aside_unloadable_file`, used by `lib/buffers.lua`;
@@ -111,7 +111,7 @@ Order of voice changes (#46):
 
 So a recall sends at most one full sync per voice, after its params. An instant recall and a smooth transition (which ends in `recall_scene_instant`) both leave the engine with the Lua state of every running voice.
 
-A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2).
+A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2), and a fade that does not land puts it back (#253, below). A failed `recall_scene_instant` redraws the screen and grids before it raises its error, so they show the scene that is current and whatever was applied.
 
 ### Smooth transitions
 
@@ -121,11 +121,24 @@ A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3
 - Not interpolated: mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), lock and active states, tempo, filter type and mutation settings, a registered voice param's discrete keys (`discrete`) and a registered field with `discrete = true`. They switch at the end through `recall_scene_instant()`, which also lands every param exactly on its target.
 - The registered voice params that are not discrete crossfade like the built-in ones (`scene_transition_targets`, by key name); a registered field without `discrete` crossfades with the continuous globals.
 - `recall_scene_instant` sets a voice's extras (by key name) after its source, params, grain and crossmod values, so a discrete one such as freeze lands after the source it belongs to.
-- Any recall calls `cancel_scene_transition()` first, which cancels the clock and clears `S.scene_transition_active`.
-- `S.scene_transition_clock` / `S.scene_transition_active` track the running transition; `cancel_scene_transition()` clears both.
+- Any recall ends a running transition first (`end_scene_transition`, which cancels the clock; quietly, as the recall redraws itself).
+- `S.scene_transition_clock` / `S.scene_transition_active` track the running transition; `cancel_scene_transition()` ends it.
 - A successful `load_scenes_from_disk()` cancels a running transition before it replaces the scenes. Otherwise the fade's end would apply the file's data for that slot, or fail on a slot that is now empty. The fade stops where it is.
 
-The transition clock clears `S.scene_transition_active` and `S.scene_transition_clock` on every exit:
+#### States
+
+| State | `S.scene_transition_active` | `SCENE_TRANSITION.next_step_due` | `SCENE_TRANSITION.target` | `SCENE_TRANSITION.previous` | `S.scene_transition_clock` | `S.current_scene` |
+|-------|-----|-----|-----|-----|-----|-----|
+| idle | false | nil | nil | nil | nil | the last scene that landed (0 = none) |
+| fading | true | the `util.time()` its next step or end is due | the scene it goes to | the current scene before it | its clock (or a lost id, which the sequencer's overrun ends) | `target` |
+
+- idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition: it sets all five fields together, `previous` to `S.current_scene` and `S.current_scene` to the target, before the first step runs (so its redraw lights the target).
+- fading to idle: only `end_scene_transition(cancel_clock, quiet)`, local to `lib/scenes.lua`. It sets `S.current_scene` back to `previous`, clears every field and, unless `quiet`, redraws the screen and grids when that changed the scene. Its callers: `cancel_scene_transition()` (the sequencer's overrun, a scenes file load, cleanup), a new recall (quiet), a fade step's error (inside the clock: the id is forgotten), and the fade's end (inside the clock, quiet), after which `recall_scene_instant` makes the target current if it is applied.
+- So the current scene is always the last one that landed or the one now fading: a fade superseded by another keeps the first fade's `previous`, since the second reads the scene the first put back.
+- The `"scene transition"` invariant (`S.register_invariant`) checks that `next_step_due` and `target` are set exactly while the flag is, and that no clock is kept while idle.
+- A fade's end restores `previous` before `recall_scene_instant` applies the target: a grid redraw inside that recall (a voice it starts or stops, from a key other than a grid key) shows `previous` until the recall sets the target.
+
+Every exit of the transition clock ends the transition:
 - at its end, before `recall_scene_instant`, which it passes the scene data it read when the fade started;
 - when canceled;
 - when a param action raises an error during a fade step. Each step runs in an `xpcall` with the global handler `with_traceback`, outside the `clock.sleep`, and the error is raised again with its traceback, so maiden shows where the param action failed. `with_traceback` adds a traceback only when the message has none yet.
