@@ -763,6 +763,38 @@ return function(S)
     end
   end)
 
+  -- What the slot holds, derived from its fields and its take
+  -- (S.lib.record.state), the first case that applies: "armed", "finishing",
+  -- "loop" / "dub" / "recording" (a playable take that loops, one that does
+  -- not, a replace take), "loading" (a load the engine has not confirmed,
+  -- checking or not), "loaded", "unsettled" (a named load that reported no
+  -- length yet; a later report adopts it), "missing" (a remembered file not
+  -- found on start), "empty". nil for a slot out of range. The fill, the
+  -- BUFFER page and the grid read it, through is_free
+  function M.status(slot)
+    if type(slot) ~= "number" or not S.buffers[slot] then return nil end
+    local buffer = S.buffers[slot]
+    local take = S.lib.record.state(slot)
+    if take and take.phase == "armed" then return "armed" end
+    if buffer.finishing then return "finishing" end
+    if buffer.recording then
+      if take and take.kind == "playable" then return take.loop and "loop" or "dub" end
+      return "recording"
+    end
+    if buffer.confirm_since ~= nil then return "loading" end
+    if buffer.loaded then return "loaded" end
+    if buffer.settled_empty == "load" or buffer.settled_empty == "restore" then return "unsettled" end
+    if buffer.missing_path then return "missing" end
+    return "empty"
+  end
+
+  -- A slot nothing holds or awaits: "empty", or "missing" (its remembered
+  -- file is only a path); false for a slot out of range
+  function M.is_free(slot)
+    local status = M.status(slot)
+    return status == "empty" or status == "missing"
+  end
+
   M.valid_buffer_slot = valid_buffer_slot
   M.buffer_state_changed = buffer_state_changed
   M.BUFFER_SETTLE = BUFFER_SETTLE

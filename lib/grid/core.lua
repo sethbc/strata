@@ -263,14 +263,11 @@ return function(S)
     params:set("v" .. voice_idx .. "_source", option)
   end
 
-  -- 15 the selected source, 2 an empty buffer, 4 any other
+  -- 15 the selected source, 2 a free buffer (S.lib.buffers.is_free), 4 any other
   function M.source_level(voice_idx, option)
     if not valid_source(voice_idx, option) then return 0 end
     if option == S.voices[voice_idx].source then return 15 end
-    local slot = option - SOURCE_SYNTH
-    if S.lib.buffers.valid_buffer_slot(slot) and not (S.buffers[slot].loaded or S.buffers[slot].recording) then
-      return 2
-    end
+    if S.lib.buffers.is_free(option - SOURCE_SYNTH) then return 2 end
     return 4
   end
 

@@ -345,14 +345,14 @@ return function(S)
   end
 
   -- A slot with no name (nothing loaded, recorded or remembered) shows "-";
-  -- an empty one (no name, no audio reported, not recording) shows no
-  -- seconds either
+  -- a free one (S.lib.buffers.is_free: empty, or a remembered file missing
+  -- on start) shows no seconds either
   local function slot_has_name(buffer)
     return buffer.name ~= "empty"
   end
 
-  local function slot_is_empty(buffer)
-    return not slot_has_name(buffer) and not buffer.recording and not (buffer.seconds > 0)
+  local function slot_is_empty(slot)
+    return S.lib.buffers.is_free(slot)
   end
 
   -- The voices reading a slot ("v2 v6"), cut to max_width a whole voice at
@@ -407,7 +407,7 @@ return function(S)
   local function draw_slot_row(row, y, selected, value_right)
     local slot = row.slot
     local buffer = S.buffers[slot]
-    local empty = slot_is_empty(buffer)
+    local empty = slot_is_empty(slot)
     local level = 2
     if selected then
       level = 15

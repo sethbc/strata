@@ -135,4 +135,21 @@ test("fill_empty never gives a file another slot already holds", function()
   assert_true(local_value("buffers")[3].path == nil, "the rest stay empty")
 end)
 
+test("fill_empty leaves a named load the engine has not reported yet", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local folder = make_folder(context, "fill-unsettled", { "a.wav", "b.wav", "c.wav", "d.wav", "e.wav", "f.wav",
+    "g.wav", "h.wav", "i.wav" })
+  files.note_chosen(folder .. "x.wav")
+  load_buffer(2, "/elsewhere/slow.wav")
+  context.set_time(util.time() + 1.1); context.polls.fire("bufferState", 1000)
+  assert_equal(local_value("S").lib.buffers.status(2), "unsettled", "named, no length reported")
+  context.clear_engine_calls()
+  assert_equal(files.fill_empty(), 7, "the seven other slots")
+  local slots = {}
+  for _, call in ipairs(context.calls_named("loadBuffer")) do table.insert(slots, call.args[1]) end
+  assert_equal(table.concat(slots, ","), "0,2,3,4,5,6,7", "no load into slot 2 (index 1)")
+  assert_equal(local_value("buffers")[2].path, "/elsewhere/slow.wav", "the unsettled load keeps its file")
+end)
+
 end

@@ -1389,4 +1389,54 @@ test("buffers.data saves version 2 with starts and loads version 1 with starts 0
   assert_equal(context.calls_named("loadBuffer")[1].args[3], 0)
 end)
 
+test("status names what a slot holds, one answer for every reader", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib = local_value("S").lib.buffers
+  local status, is_free = buffers_lib.status, buffers_lib.is_free
+  local function every_slot_has_a_status()
+    for slot = 1, 8 do assert_true(status(slot) ~= nil, "slot " .. slot .. " has a status") end
+  end
+  assert_equal(status(1), "empty", "a fresh slot"); assert_true(is_free(1))
+  load_buffer(1, "/tmp/a.wav")
+  assert_equal(status(1), "loading", "the engine has not confirmed the load"); assert_true(not is_free(1))
+  context.polls.fire("bufferState", 4)
+  assert_equal(status(1), "loaded")
+  -- a named load whose length the engine has not reported after the settle time
+  load_buffer(2, "/tmp/slow.wav")
+  context.set_time(util.time() + 1.1); context.polls.fire("bufferState", 1000)
+  assert_equal(status(2), "unsettled"); assert_true(not is_free(2), "an unsettled load is not free")
+  context.polls.fire("bufferState", 1004)
+  assert_equal(status(2), "loaded", "a later report adopts it")
+  every_slot_has_a_status()
+  -- a replace take, then its timer ends
+  params:set("record_feedback", 0)
+  record_buffer(3)
+  assert_equal(status(3), "recording"); assert_true(not is_free(3))
+  wake_buffer_clock(context, 3)
+  assert_equal(status(3), "finishing")
+  -- playable recordings that wait for the source's level
+  params:set("record_feedback", 50); params:set("record_threshold", 6)
+  record_buffer(1)
+  assert_equal(status(1), "armed")
+  context.polls.fire("recordState", 40)   -- slot 1's first recording starts
+  assert_equal(status(1), "dub")
+  params:set("record_loop", 2)
+  record_buffer(4)
+  assert_equal(status(4), "armed")
+  context.polls.fire("recordState", 43)   -- slot 4's first recording starts
+  assert_equal(status(4), "loop")
+  every_slot_has_a_status()
+  -- a remembered file missing at start
+  local subdir = "status-missing-" .. math.random(1, 1e9)
+  context = load_strata({ data_subdir = subdir })
+  util.make_dir(context.data_dir .. "strata/")
+  local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+  file:write(tabutil_text({ version = 2, paths = { context.audio_dir .. "gone.wav" }, starts = { 0 } })); file:close()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  buffers_lib = local_value("S").lib.buffers
+  assert_equal(buffers_lib.status(1), "missing"); assert_true(buffers_lib.is_free(1), "a missing file's slot is free")
+  assert_equal(buffers_lib.status(0), nil, "slot 0 is out of range"); assert_equal(buffers_lib.status(9), nil)
+  assert_true(not buffers_lib.is_free(0) and not buffers_lib.is_free(9), "out of range is never free")
+end)
+
 end
