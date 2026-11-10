@@ -182,12 +182,18 @@ return function(S)
   end
 
   -- The hint row (redraw() draws it after the page): K2 and K3, or with ALT
-  -- ALT+K2 (randomize, or undo within UNDO_SECONDS) and ALT+K3 (lock)
+  -- ALT+K2 (undo within UNDO_SECONDS, else locked for a locked voice, else
+  -- randomize) and ALT+K3 (lock)
   local function main_hints(alt_held)
     local voice_idx = S.selected_voice
     if alt_held then
-      return "K2:" .. (undo_available(voice_idx) and "undo" or "rand")
-        .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
+      local k2 = "rand"
+      if undo_available(voice_idx) then
+        k2 = "undo"
+      elseif S.frozen[voice_idx] then
+        k2 = "locked"  -- randomize leaves a locked voice alone
+      end
+      return "K2:" .. k2 .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
     end
     return "K2:field K3:" .. (S.voices[voice_idx].active and "stop" or "start")
   end

@@ -6,7 +6,7 @@
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).
 - The main parameter comes from `main_param_entry(voice_idx)` (`MAIN_PARAMS`, `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
-- Every ALT action goes through the record's `alt_key` (`alt_action`): ALT+K2 undoes only while `undo_available(S.selected_voice)`, else randomizes; ALT+K3 is `toggle_lock`. The ALT hint reads the same two conditions, so it never offers an undo the key would not run.
+- Every ALT action goes through the record's `alt_key` (`alt_action`): ALT+K2 undoes only while `undo_available(S.selected_voice)`, else randomizes; ALT+K3 is `toggle_lock`. The ALT hint reads the same conditions, so it never offers an undo the key would not run, and says `locked` instead of `rand` when the voice is locked (randomize would do nothing).
 - A locked voice's fields are drawn at the same levels as an unlocked one's (the selected field 15, the others 4); `[L]` is drawn at 15.
 - The status row (y 26) holds `OFF [L] [T] [F]` at its widest, ending by x 127 (fixed x: 65, 84, 99, 113). `[F]` comes from `S.lib.freeze.is_frozen` (3.2's audio freeze, `docs/notes/lua/freeze.md`), never from `S.frozen` (the lock); the voice list has no room for it.
 - The name on y 18 is cut with `fit_text` to end `LAYOUT.name_gap` px before the right-aligned source, so the two never overlap. Under the harness estimate RESONATOR and KARPLUS are cut; with the norns font only RESONATOR is (`RESONAT`).
@@ -23,7 +23,7 @@
 - K2 steps the cursor `S.main_field` 1 → 2 → 3 → 1. One cursor for every voice: each voice has three fields, so it never needs clamping.
 - K3 starts or stops the selected voice (`toggle_voice`); the arc button does the same.
 - ALT+K2: `undo_randomize()` while `undo_available(S.selected_voice)` (the `UNDO_SECONDS` window after a randomize of this voice; `lib/mutation.lua`), else `randomize_voice(S.selected_voice)` (a locked voice is left alone). ALT+K3: `toggle_lock(S.selected_voice)`.
-- Hint row: `K2:field K3:start|stop`; with ALT `K2:rand|undo K3:lock|unlock`. The undo window's end redraws the hint without input (the undo clock calls `request_redraw()`).
+- Hint row: `K2:field K3:start|stop`; with ALT `K2:undo|locked|rand K3:lock|unlock` (undo while available, else locked for a locked voice, else rand). The undo window's end redraws the hint without input (the undo clock calls `request_redraw()`).
 
 ## Main parameter and fields
 

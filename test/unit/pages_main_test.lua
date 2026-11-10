@@ -285,7 +285,7 @@ test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", func
   -- ALT+K3 locks, then unlocks
   tap(3); assert_true(frozen[1], "ALT+K3 locks")
   assert_true(local_value("voices")[1].active, "ALT+K3 never stops the voice")
-  redraw(); assert_equal(hint_text(context), "K2:rand K3:unlock")
+  redraw(); assert_equal(hint_text(context), "K2:locked K3:unlock")
   tap(3); assert_true(not frozen[1], "ALT+K3 unlocks")
   -- the undo window ends after 5 s
   tap(2)
@@ -311,6 +311,26 @@ test("ALT+K2 does nothing to a locked voice", function()
   key(1, 1); tap(2); key(1, 0)
   assert_equal(params:get("v1_freq"), freq, "a locked voice is not randomized")
   assert_true(not undo_available(1), "nothing to undo")
+end)
+
+test("ALT's K2 hint reads locked for a locked voice", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("MAIN")
+  toggle_lock(1)
+  local ids = { "v1_freq", "v1_grain_size", "v1_grain_pitch" }
+  local before = {}
+  for _, id in ipairs(ids) do before[id] = params:get(id) end
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:locked K3:unlock", "locked voice, nothing to undo")
+  tap(2)
+  for _, id in ipairs(ids) do assert_equal(params:get(id), before[id], id .. " unchanged by ALT+K2") end
+  key(1, 0)
+  -- a voice randomized and then locked, inside the undo window, still offers undo
+  select_voice(2)
+  key(1, 1); tap(2); tap(3); redraw()
+  assert_true(undo_available(2), "voice 2 has an undo")
+  assert_equal(hint_text(context), "K2:undo K3:unlock", "undo wins over locked")
+  key(1, 0)
 end)
 
 test("MAIN hints follow the voice state", function()
