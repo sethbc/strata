@@ -228,30 +228,21 @@ test("set_setting writes performance.data through a temporary file and rejects o
   assert_equal(setting.performance, "high"); assert_equal(setting.buffer_seconds, 120)
 end)
 
--- Run body with io.open failing for a "w" open of the performance.data
--- temporary file; io.open is put back on every exit
-local function with_failing_part_write(body)
-  local real_open = io.open
-  io.open = function(path, mode, ...)
-    if mode == "w" and tostring(path):match("performance%.data%.part$") then return nil, "refused" end
-    return real_open(path, mode, ...)
-  end
-  local ok, err = pcall(body)
-  io.open = real_open
-  if not ok then error(err, 0) end
-end
-
 test("a failed write keeps the old setting and returns false", function()
   local context = load_strata()
   local performance = local_value("S").lib.performance
   local path = context.data_dir .. "strata/performance.data"
-  with_failing_part_write(function()
-    assert_true(not performance.set_setting("performance", "high"), "the write failed")
-  end)
-  assert_equal(performance.setting().performance, "auto", "the old setting stays")
-  assert_equal(read_file(path), nil, "no performance.data")
+  for _, kind in ipairs({ "open", "write", "rename" }) do
+    h.with_failing_setting_write(kind, function()
+      assert_true(not performance.set_setting("performance", "high"), kind .. ": the save failed")
+    end)
+    assert_equal(performance.setting().performance, "auto", kind .. ": the old setting stays")
+    assert_equal(read_file(path), nil, kind .. ": no performance.data")
+    assert_equal(read_file(path .. ".part"), nil, kind .. ": no .part file left")
+  end
   assert_true(performance.set_setting("performance", "high"), "the write works again")
   assert_equal(performance.setting().performance, "high")
+  assert_equal(read_file(path), "performance high\nbuffer_seconds 60\n")
 end)
 
 test("the engine stub's recordBuffer limit follows the active file", function()

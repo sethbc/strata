@@ -417,6 +417,37 @@ end
 ---------------------------------------------------------------------------
 
 -- index engine calls for one voice by command and key
+-- Run fn with one step of set_setting's save of performance.data failing:
+-- kind "open" (the "w" open of the .part file returns nil), "write" (the
+-- file's write fails; the file is closed for real) or "rename" (os.rename onto
+-- performance.data fails). io.open and os.rename are put back on every exit,
+-- and an error in fn is raised again
+local function with_failing_setting_write(kind, fn)
+  if kind ~= "open" and kind ~= "write" and kind ~= "rename" then
+    error("with_failing_setting_write: kind is open, write or rename", 2)
+  end
+  local real_open, real_rename = io.open, os.rename
+  local function is_part(path, mode)
+    return mode == "w" and tostring(path):match("performance%.data%.part$") ~= nil
+  end
+  io.open = function(path, mode, ...)
+    if not is_part(path, mode) then return real_open(path, mode, ...) end
+    if kind == "open" then return nil, "refused" end
+    local file = real_open(path, mode, ...)
+    if kind ~= "write" or not file then return file end
+    return { write = function() return nil end, close = function() return file:close() end }
+  end
+  if kind == "rename" then
+    os.rename = function(from, to)
+      if tostring(to):match("performance%.data$") then return nil, "refused" end
+      return real_rename(from, to)
+    end
+  end
+  local ok, err = pcall(fn)
+  io.open, os.rename = real_open, real_rename
+  if not ok then error(err, 0) end
+end
+
 local function engine_state_for_voice(calls, engine_voice)
   local state = { voice = {}, grain = {}, source = {}, amp_amt = {}, freq_amt = {} }
   for _, call in ipairs(calls) do
@@ -646,6 +677,7 @@ return {
   run_test = run_test,
   check_invariants = check_invariants,
   allow_broken_invariants = allow_broken_invariants,
+  with_failing_setting_write = with_failing_setting_write,
   assert_true = assert_true,
   assert_equal = assert_equal,
   assert_near = assert_near,
