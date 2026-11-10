@@ -80,5 +80,12 @@ return function(S)
     M.cancel_all()
   end)
 
+  -- A flash showing a text has the clock that ends it
+  S.register_invariant("flash slots", function()
+    for slot, state in pairs(M.slots) do
+      if state.text ~= nil and state.clock == nil then return slot .. " shows '" .. state.text .. "' with no clock" end
+    end
+  end)
+
   return M
 end

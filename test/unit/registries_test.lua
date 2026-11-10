@@ -674,6 +674,22 @@ test("register_grain_restart and register_alt_release refuse a non-function", fu
   assert_equal(#S.registry.alt_release, alt_release, "no ALT release hook added")
 end)
 
+test("register_invariant checks its arguments and refuses a duplicate name", function()
+  load_strata()
+  local S = local_value("S")
+  local count = #S.registry.invariants
+  assert_true(not pcall(S.register_invariant, "", function() end), "an empty name is refused")
+  assert_true(not pcall(S.register_invariant, "probe invariant", "x"), "a non-function is refused")
+  assert_true(not pcall(S.register_invariant, "pattern clock", function() end), "a second pattern clock is refused")
+  assert_equal(#S.registry.invariants, count, "nothing refused was added")
+  local function holds() end
+  S.register_invariant("probe invariant", holds)
+  assert_equal(#S.registry.invariants, count + 1, "a new name with a function is accepted")
+  local record = S.registry.invariants[count + 1]
+  assert_equal(record.name, "probe invariant", "the record's name")
+  assert_equal(record.fn, holds, "the record's function")
+end)
+
 test("a record's scene_ranges reject an extra outside its range", function()
   local context = load_with(function(S)
     S.register_voice_params(probe_record({
