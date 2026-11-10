@@ -1274,4 +1274,44 @@ test("the engine check runner stops the scsynth a crashed sclang left behind (#1
   assert_true(not alive, "the orphaned server is stopped through its PID file: " .. output)
 end)
 
+
+-- The peak scan (#131): fileDecodes and every method of StrataFiles.sc it
+-- calls allocate no array per sample and run no sclang function per sample.
+-- Signal peak is a C primitive; maxItem and minItem are Collection methods
+-- that call a function for every sample.
+local function peak_scan_findings(text, name)
+  local found = {}
+  local body = sc_method_body(text, name) or ""
+  for _, pattern in ipairs({ "%.abs", "[%s%(]abs%(", "copyRange", "collect", "maxItem", "minItem" }) do
+    if body:find(pattern) then found[#found + 1] = name .. ": " .. pattern end
+  end
+  if body:find("FloatArray%.fill%s*%([^,]+,%s*{") then found[#found + 1] = name .. ": FloatArray.fill with a function" end
+  for _, target in ipairs(stale_reads(body)) do found[#found + 1] = name .. ": stale readData " .. target end
+  return found
+end
+
+test("the peak scan allocates nothing per sample", function()
+  assert_equal(#peak_scan_findings("\n  caught { var a; b = c.abs; }", "caught"), 1, "caught: a per-sample abs")
+  assert_equal(#peak_scan_findings("\n  caught { var a; b = chunk.maxItem; }", "caught"), 1, "caught: maxItem")
+  assert_equal(#peak_scan_findings("\n  caught { x = FloatArray.fill(n, { 0 }) }", "caught"), 1, "caught: a fill with a function")
+  assert_equal(#peak_scan_findings("\n  caught { chunk = this.freshReadArray(8);\nfile.readData(chunk); b = chunk.peak }", "caught"), 0, "allowed: fresh reads and peak")
+  local text
+  for _, file in ipairs(engine_files()) do
+    if file.path:match("StrataFiles%.sc$") then text = file.text end
+  end
+  assert_true(text ~= nil, "the engine sources hold StrataFiles.sc")
+  local names, seen = { "fileDecodes" }, { fileDecodes = true }
+  for called in (sc_method_body(text, "fileDecodes") or ""):gmatch("this%.([%a_][%w_]*)") do
+    if not seen[called] and sc_method_body(text, called) then
+      seen[called] = true
+      names[#names + 1] = called
+    end
+  end
+  assert_true(#names >= 2, "fileDecodes calls methods of StrataFiles.sc (found " .. #names .. ")")
+  for _, name in ipairs(names) do
+    local findings = peak_scan_findings(text, name)
+    assert_equal(#findings, 0, table.concat(findings, ", "))
+  end
+end)
+
 end

@@ -904,4 +904,57 @@ checkLongSlots.value;
         and: { valuesL[0] == 0 } and: { valuesR[0] == 0 },
         "buffers: loadBuffer with start 0 loads as 3.2's loadBuffer (difference %, %)".format(valuesL[0], valuesR[0]));
 }.value;
+
+// A load from a start point (3.3): the slot holds the file from that frame.
+// Each file has two regions, so which frames were read shows in the slot.
+{
+    var rate = server.sampleRate.asInteger, writeRegions, wav, flac, longPath, other, peaks;
+    writeRegions = { arg path, format, fileRate, firstFrames, secondFrames, first, second;
+        var file = SoundFile.new.headerFormat_(format).sampleFormat_("int16").numChannels_(2).sampleRate_(fileRate);
+        file.openWrite(path);
+        h.writeConstantFrames(file, firstFrames, [first, first.neg]);
+        h.writeConstantFrames(file, secondFrames, [second, second.neg]);
+        file.close;
+    };
+    wav = scratchRoot +/+ "buffers-start.wav"; flac = scratchRoot +/+ "buffers-start.flac";
+    [wav, flac].do({ arg path, i;
+        var slot = 2, half = rate div: 2;
+        writeRegions.(path, ["WAV", "FLAC"][i], rate, half, half, 0.1, 0.7);
+        command.(\loadBuffer, slot, path, 0.5);
+        h.waitFor({ engine.bufferFrames[slot] == half });
+        0.1.wait; server.sync;
+        check.((engine.bufferFrames[slot] == half)
+            and: { (bufferSample.(engine.buffersL[slot], 0) - 0.7).abs < 0.001 }
+            and: { (bufferSample.(engine.buffersR[slot], half - 1) + 0.7).abs < 0.001 },
+            "buffers: loadBuffer from a start reads from that frame (WAV and FLAC) (% frames, first sample %)".format(
+                engine.bufferFrames[slot], bufferSample.(engine.buffersL[slot], 0)));
+        command.(\clearBuffer, slot); server.sync;
+        File.delete(path);
+    });
+    // past the end: the slot's length of its last frames (a 17 s file at 22050 Hz, on a 16 s slot)
+    {
+        var slot = 2, fileRate = 22050, path = scratchRoot +/+ "buffers-past-end.wav", frames = fileRate * 16;
+        writeRegions.(path, "WAV", fileRate, fileRate, frames, 0.1, 0.7);
+        command.(\loadBuffer, slot, path, 100);
+        h.waitFor({ engine.bufferFrames[slot] == frames });
+        0.1.wait; server.sync;
+        check.((engine.bufferFrames[slot] == frames) and: { (bufferSample.(engine.buffersL[slot], 0) - 0.7).abs < 0.001 },
+            "buffers: a start past the file's end loads its last frames (% frames, first sample %)".format(
+                engine.bufferFrames[slot], bufferSample.(engine.buffersL[slot], 0)));
+        command.(\clearBuffer, slot); server.sync;
+        File.delete(path);
+    }.value;
+    // a long file's check seeks too: the peaks it reads begin at the start
+    longPath = scratchRoot +/+ "buffers-start-long.wav";
+    writeRegions.(longPath, "WAV", rate, rate * 2, rate * 20, 0.9, 0.2);
+    other = startHighEngine.("start-long");
+    h.commandTo(other, \loadBuffer, 2, longPath, 2);
+    h.waitFor({ other.bufferFrames[2] == (rate * 20) }, 10);
+    0.1.wait; server.sync;
+    peaks = other.areaState[\waveform][\peaks][2];
+    check.((other.bufferFrames[2] == (rate * 20)) and: { (peaks.maxItem - 0.2).abs < 0.001 },
+        "buffers: a long file's check starts at the start (% frames, largest peak %)".format(other.bufferFrames[2], peaks.maxItem));
+    h.freeEngine(other);
+    File.delete(longPath);
+}.value;
 }
