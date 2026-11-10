@@ -612,7 +612,7 @@ test("a strip hold's release sends one scanHold 0 for the voice it names and hol
   S.grids[1] = nil
 end)
 
-test("on a 256 each strip's hold and store release ends only its own voice", function()
+test("on a 256 a strip hold's release ends only its own voice", function()
   local _, S = buffer_voices()
   with_grid(S, 16, 16)
   local positions = S.lib.positions
@@ -622,13 +622,22 @@ test("on a 256 each strip's hold and store release ends only its own voice", fun
   assert_equal(positions.scan_held(2), true, "voice 2's key is still down")
   positions.strip_key(1, 2, "hold", 0)
   assert_equal(positions.scan_held(2), false)
+  S.grids[1] = nil
+end)
 
+test("on a 256 a strip store's release ends only its own voice: voice 2's next bookmark press stores", function()
+  local context, S = buffer_voices()
+  with_grid(S, 16, 16)
+  local positions = S.lib.positions
   positions.strip_key(1, 1, "store", 1); positions.strip_key(1, 2, "store", 1)
   positions.strip_key(1, 1, "store", 0)
   params:set("v2_bookmark_3", 0.9)
+  params:set("v2_buf_pos", 0.2)
+  context.clear_engine_calls()
   positions.strip_key(1, 2, 3, 1)
-  assert_true(math.abs(params:get("v2_bookmark_3") - 0.9) > 1e-6, "voice 2's store key is still down: the press stored")
-  assert_equal(positions.last_recalled(2), nil, "storing recalls nothing")
+  assert_true(math.abs(params:get("v2_bookmark_3") - 0.9) > 1e-6, "the press stored the playhead")
+  assert_equal(positions.last_recalled(2), nil, "and recalled nothing")
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "no jump was sent")
   S.grids[1] = nil
 end)
 
