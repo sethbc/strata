@@ -1300,6 +1300,23 @@ test("ALT+K2 clears on release before 0.5 s and fills the empty slots after it",
   assert_equal(#context.calls_named("clearBuffer"), 0, "and clears nothing")
 end)
 
+test("ALT+K2 held from BUFFER to another page and back clears nothing", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local fills = 0
+  S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 4)
+  context.clear_engine_calls()
+  context.set_time(100); key(1, 1); key(2, 1)
+  show_page("SCENES"); show_page("BUFFER")
+  context.set_time(100.2); key(2, 0); key(1, 0)
+  assert_equal(#context.calls_named("clearBuffer"), 0, "a short ALT+K2 after the round trip clears nothing")
+  context.set_time(101); key(1, 1); key(2, 1)
+  show_page("SCENES"); show_page("BUFFER")
+  context.set_time(101.7); key(2, 0); key(1, 0)
+  assert_equal(fills, 0, "a held ALT+K2 after the round trip fills nothing")
+end)
+
 test("ALT+K3 saves the slot on release before 0.5 s and its loop region after it", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 4)
