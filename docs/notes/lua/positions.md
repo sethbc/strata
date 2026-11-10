@@ -1,8 +1,26 @@
 ## Must not break
 
-- Until its Wave 1 package fills it, every function here is neutral: it answers as pinned in `test/unit/positions_test.lua` and sends no engine command. Wave 1 keeps every name and signature.
-- The module is a constructor ending with `  return M` and `end`; its table is `S.lib.positions`.
+- **A jump** (`jump(v, p)`): inside the voice's loop (`loop_start - 1e-6 <= p < loop_start + loop_length - 1e-6`, since the params return values a rounding away from a cell's fraction) `buf_pos` becomes `(p - loop_start) / loop_length`; outside, `loop_start` 0, `loop_length` 1 and `buf_pos` p. Everything but the reset goes through `params:set`, then `setGrainParam(v - 1, "t_scanReset", 1)` while the voice runs, the glide ends and the playhead resets. Only buffer voices respond; a stopped voice's position still changes and sends nothing.
+- `set_loop(v, a, b)` sets `loop_start`, then `loop_length`, then jumps to a (the order the loop clamps need, `docs/notes/lua/loops.md`).
+- **The scan hold, the glide's rate and the last recalled bookmark are transient**: never params, scenes or PSETs. The `bookmarks` record's `sync` sends `scrubRate 0` and `scanHold 0` in every voice sync (after the source), so a started voice never inherits a glide or a hold. Anything that changes the hold or the rate calls `S.lib.playheads.advance(v)` first.
+- **A grain restart ends the glide** (`S.register_grain_restart`), so does a jump or a new ring turn. A source switch forgets the last recalled bookmark (`S.register_source_change`).
+- **A held grid key lives in `S.lib.grid_core.port_state(port).positions`** (the held position key with the page it was pressed on, the hold, store and pressed-bookmark keys per voice). It ends within a playhead tick (the hold sends `scanHold 0`, the held key is dropped) when the state is gone (the grid was removed) or `S.lib.grid_core.page(port)` is not the page of the press; a key event checks it first too. Never keep a held key anywhere else (`records` here only finds the state again).
+- Bookmarks are one registered voice-param record (`bookmarks`, count 4, `fader = false`): continuous scene fields (`scene_ranges` 0-1 each, so a scene outside it is rejected), defaults 0, 0.25, 0.5, 0.75 (also the migration defaults, scenes from version 3), PSET-safe in any order (nothing reads them in a filter), never randomized, mutated or on the fader pages.
+- `scrub_friction` is `controlspec.new(0, 100, "lin", 0, 100, "%", 0.01)` in the group `strata_positions` (step 0, quantum 0.01); it is not a scene field.
 
 ## Owns
 
-`lib/positions.lua`: moving a voice's read position: jumps, loops, bookmarks, scan hold and scrub. The header comment says what each function will do.
+`lib/positions.lua` (`S.lib.positions`): moving a voice's read position.
+
+**Jumps and bookmarks.** `jump`, `set_loop`, `recall_bookmark` (a jump to the bookmark; `last_recalled(v)` becomes n), `store_bookmark(v, n)` (the playhead, or `buf_pos` mapped into the loop when the voice is not running), `bookmark(v, n)`, `hold_scan(v, on)` (`setGrainParam(v - 1, "scanHold", 1 or 0)`, buffer voices, sent while running). `scan_held(v)` and `scrub_rate(v)` are what `S.lib.playheads` reads.
+
+**The glide.** `scrub_turned(v)` is called by the arc's ring 1 after each turn of the voice's `buf_pos` (BUFFER's arc, 2b). It ends a glide, records `buf_pos` with the time, and (unless `scrub_friction` is 100%, the ring is direct) starts a clock: after `SCRUB.release_seconds` (0.08 s) with no new turn, the speed over the last `SCRUB.window_seconds` (0.1 s), in loop fractions a second, is sent as `scrubRate` and decays every `1 / PLAYHEADS.update_hz` by `exp(-dt / tau)`, `tau = SCRUB.max_glide_seconds x (1 - friction / 100)` (4 s at 0%). Below `SCRUB.stop_rate` (0.001) it sends 0 and ends. The cleanup step `scrub_glide` (`CLEANUP_ORDER`, 124) stops every glide and scan hold.
+
+**Grid.** `grid_key(port, v, cell, cells, z)`: a press jumps to `(cell - 1) / cells`; with another key of the same voice's row held, it sets the loop `[(lo - 1) / cells, hi / cells]` (the second key is not remembered as held, its release does nothing). Only buffer voices respond. On the 128h, 128v and 64 (read from `S.grids[port]`'s `cols` and `rows`: `grid_layout` is local to `lib/grid/core.lua`) a position press first calls `select_grid_voice(v)`, whatever the voice's source; the 256 never selects.
+`grid_level(v, cell, cells)` (design 3.3 section 9): 0 for a voice that is not a buffer voice or whose slot reports 0 s; the voice's playhead cell 15 (a stopped voice shows where it will start: `buf_pos` mapped into its loop), the record head's 13, a held key 11, then 4 + round(peak x 4) in the loop (the cell's middle inside `[loop_start, loop_start + loop_length)`) or 1 + round(peak x 2) outside, from `S.lib.waveforms.bins(slot, cells)` (no bins: peak 0).
+`strip_key(port, v, key, z)` and `strip_level(v, key)`: keys 1-4 recall (store held: store the playhead, level 15 while pressed), 6 otherwise and 10 for the last recalled; `"store"` and `"hold"` 15 held, 4 otherwise (`hold` is momentary `scanHold`); `"whole"` sets the loop back to the whole slot with no jump, level 15 when it is, 4 otherwise. The strip takes no buffer-voice condition for its levels; its keys act on buffer voices only.
+`display_signature()`: every LED level a page-5 grid shows plus the bookmark values, as one string; the playhead clock redraws when it changes (`docs/notes/lua/playheads.md`).
+
+**Params.** `add_params()` (the `positions` record in `lib/params_setup.lua`, after `buffers`): `scrub_friction`. The `bookmarks` record adds `v<i>_bookmark_1..4` (three decimals) and VOICE's `bookmarks` section for a buffer voice; its `layout_states` put each voice on buffer 1 with the cursor on bookmark 1.
+
+Tests: `test/unit/positions_test.lua`.

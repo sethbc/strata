@@ -29,7 +29,12 @@ end
 local RECORD_SYNC = {beats_per_bar = 4, lead_seconds = 0.25}
 local FILES = {restart_seconds = 0.3}       -- lib/files.lua
 local WAVEFORMS = {refresh_seconds = 0.5}   -- lib/waveforms.lua
-local PLAYHEADS = {update_hz = 15}          -- lib/playheads.lua
+local PLAYHEADS = {update_hz = 15, grid_page = 5}  -- lib/playheads.lua (grid_page: the grids' position page)
+-- The arc scrub's friction glide (lib/positions.lua): ring 1 idle for
+-- release_seconds starts a glide at the speed over the last window_seconds,
+-- which decays with tau = max_glide_seconds x (1 - friction) and ends below
+-- stop_rate (loop fractions a second)
+local SCRUB = {release_seconds = 0.08, window_seconds = 0.1, max_glide_seconds = 4, stop_rate = 0.001}
 
 -- The standard performance tier's values. S.performance starts as a copy
 -- (lib/params_setup.lua); lib/performance.lua fills it at init, before
@@ -167,6 +172,7 @@ local START_ORDER = {
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   frame_clock = 130,     -- lib/ui/frame.lua
   waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
+  playheads = 150,       -- lib/playheads.lua: the playhead clock
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
@@ -201,6 +207,8 @@ local CLEANUP_ORDER = {
   scene_sequencer = 100,    -- lib/scenes.lua (and its param)
   scene_transition = 110,   -- lib/scenes.lua
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
+  playheads = 122,          -- lib/playheads.lua: the playhead clock
+  scrub_glide = 124,        -- lib/positions.lua: the scrub glides and the scan holds
   waveforms = 126,          -- lib/waveforms.lua: the peaks read loop
   buffer_start_reload = 128,  -- lib/buffers.lua: a long file's pending start reload
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
@@ -233,6 +241,7 @@ return {
   FILES = FILES,
   WAVEFORMS = WAVEFORMS,
   PLAYHEADS = PLAYHEADS,
+  SCRUB = SCRUB,
   WAVEFORM_POINTS = 64,  -- Points of a slot's peak curve (engine waveformPoints)
   GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,

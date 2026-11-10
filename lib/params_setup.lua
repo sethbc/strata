@@ -419,6 +419,8 @@ return function(S)
     end
   end)
 
+  register_params("positions", function() S.lib.positions.add_params() end)
+
   register_params("midi", function()
     -- MIDI input (CC mapping is norns' own PARAMS > MAP). The group size must
     -- match the params below exactly.

@@ -13,6 +13,10 @@ Below it, five rows at a time, the voice's parameters in six sections, each unde
 - **variation** - reverse, pitch, pan and size jitter, intervals, interval probability and quantize (see [Voices and Granular Processing](../voices-and-grains.md))
 - **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out) and its delay and reverb sends (see [Global Controls and Effects](../effects.md))
 
+### Bookmarks
+
+A voice reading a buffer has a seventh section, **bookmarks**: four rows, `bookmark 1` to `bookmark 4`, each a position in the buffer (0-1 of its length, default 0, 0.25, 0.5 and 0.75). E3 edits one like any row. The rows only hold the positions: the grid's bookmark keys (and, in a later release, pattern steps) recall them. See [Voices and Granular Processing](../voices-and-grains.md#bookmarks).
+
 ### Freeze
 
 E3 on the freeze row turns it on or off. A frozen voice's grains keep playing what they were playing, while pitch, spread, grain size and density still move:

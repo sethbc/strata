@@ -764,7 +764,9 @@ test("scene recall: one full sync per voice whose source changed, after its para
       for _, grain_key in pairs(record.grain_keys or {}) do
         registered[type(grain_key) == "table" and grain_key.name or grain_key] = true
       end
-      -- and what a record's sync sends after them (lib/variation.lua's)
+      -- and what a record's sync sends after them (lib/positions.lua's bookmarks)
+      if record.name == "bookmarks" then registered.scrubRate, registered.scanHold = true, true end
+      -- (lib/variation.lua's)
       if record.name == "variation" then
         for index = 1, local_value("S").lib.variation.VARIATION.max_intervals do registered["interval" .. index] = true end
         registered.intervalCount, registered.scaleNote = true, true
