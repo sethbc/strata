@@ -141,7 +141,8 @@ SynthDef(\strataCheckRecFirstAbove, { arg buf, count, threshold, out;
 SynthDef(\strataCheckRecSteps, { arg buf, count, out;
     var phase = Sweep.ar(0, SampleRate.ir).min(count.max(1) - 1);
     var x = BufRd.ar(1, buf, phase, 0, 1);
-    Out.kr(out, A2K.kr(Peak.ar((x - Delay1.ar(x)).abs)));
+    // (from the second frame: Delay1 starts from 0, not from the first frame)
+    Out.kr(out, A2K.kr(Peak.ar((x - Delay1.ar(x)).abs * (phase > 0.5))));
 }).add;
 SynthDef(\strataCheckLevelSource, { arg out, level = 0.5; Out.ar(out, K2A.ar(level) ! 2) }).add;
 // value = seconds since the synth started: its first sample is 0
@@ -155,6 +156,19 @@ SynthDef(\strataCheckCapture, { arg in, buf;
 SynthDef(\strataCheckGuard, { arg frame, lowest, highest, rate, durFrames, recHead, out;
     var moved = engine.slotHeadGuard(K2A.ar(frame), lowest, highest, rate, durFrames, recHead);
     Out.kr(out, A2K.kr(moved));
+}).add;
+// the record head's timecode: frame / the slot's length on the left, 0.5 on the right
+SynthDef(\strataCheckRecTimecode, { arg out, frames, scale;
+    Out.ar(out, [Phasor.ar(0, 1, 0, frames) * scale, DC.ar(0.5)]);
+}).add;
+// a voice's read positions from a timecode slot (left / right x 0.5,
+// where the right is above 0.01), its peak and any bad value
+SynthDef(\strataCheckReadPositions, { arg in, out;
+    var sig = In.ar(in, 2), valid = sig[1] > 0.01;
+    var position = (sig[0] / sig[1].max(0.01)) * 0.5;
+    var codes = CheckBadValues.ar(sig, 0, 0);
+    Out.kr(out, [A2K.kr(Peak.ar(position * valid)), A2K.kr(Peak.ar((1 - position) * valid)),
+        A2K.kr(Peak.ar(sig.abs.sum)), A2K.kr(Peak.ar(((codes > 0.5) * (codes < 2.5)).sum))]);
 }).add;
 SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, fxMix, out;
     Out.ar(out, engine.masterSum(in, delayIn, reverbIn, fxMix));
@@ -634,40 +648,124 @@ test.("record: the head bus reads -1 after the record synth frees", {
         "record: the head bus reads -1 after the record synth frees (during %, after %)".format(during, after));
 });
 test.("record: a loop shorter than the guard zone keeps its grains sounding inside the valid region", {
-    var loopSeconds = 0.25, v = 4.0, path = writeLevelFile.("short.wav", v, 0.5), source, peakBus, badBus, peak, bad, group;
-    var d = (loopSeconds * sampleRate).round.asInteger, validFrames = (v * sampleRate).round.asInteger;
-    var durFrames = 0.5 * 4 * sampleRate, highest = (validFrames - engine.grainEndMargin - durFrames).max(0);
-    var head = 0.1 * sampleRate, positions;
+    // The slot holds a timecode (left: frame / V, right 0.5): a grain's
+    // left over its right is its read position, whatever its window, while
+    // grains do not overlap (density 1.9 with 0.5 s grains; overlapping
+    // grains would average their positions). Past V the buffers read 2 and
+    // 0.5 (position 2), so a read outside the valid region shows. The loop
+    // recording writes the same timecode into the first D, started on the
+    // take's own block (a timestamp), so the slot stays one.
+    var loopSeconds = 0.25, v = 4.0, frames = (v * sampleRate).round.asInteger, d = (loopSeconds * sampleRate).round.asInteger;
+    var path = h.tempDir +/+ "timecode.wav", file, ramp, delay = 0.3, id = server.nextNodeID, group, busesOut, values;
+    var durFrames = 0.5 * 4 * sampleRate, highest = (frames - engine.grainEndMargin - durFrames).max(0);
+    ramp = h.rampSignal(frames) / frames;
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(sampleRate);
+    file.openWrite(path);
+    file.writeData(h.stereoOf(ramp, h.repeating(frames, [0.5])));
+    file.close;
+    h.command(\loadBuffer, 2, path, 0);
+    h.waitFor({ engine.bufferFrames[2] == frames }, 3);
+    engine.buffersL[2].fill(frames, engine.buffersL[2].numFrames - frames, 2.0);
+    engine.buffersR[2].fill(frames, engine.buffersR[2].numFrames - frames, 0.5);
+    server.sync;
+    record.(2, loopSeconds, 1.0, 0, 0, 0, 1, delay);
+    server.sendBundle(delay, ['/s_new', \strataCheckRecTimecode, id, 2, inputSynth.nodeID,
+        \out, engine.inputBus.index, \frames, d, \scale, 1 / frames]);
+    (delay + 0.05).wait;
+    h.command(\setGrainSource, 0, 3);
+    h.command(\voiceOn, 0, 110.0, 0.5, 0.0, 0.5, 1.9, 4.0);
+    [[\loopStart, 0], [\loopLength, loopSeconds / v], [\posSpread, 1], [\panSpread, 0], [\panJitter, 0]].do({ arg pair;
+        h.command(\setGrainParam, 0, pair[0], pair[1]) });
+    busesOut = Bus.control(server, 5);
+    group = Group.tail(context.xg);
+    Synth(\strataCheckReadPositions, [\in, state[\voiceTaps][0], \out, busesOut], group);
+    server.sync;
+    2.5.wait;
+    values = h.readBus(busesOut);
+    h.command(\stopRecord, 2);
+    h.command(\voiceOff, 0);
+    waitDone.(2);
+    server.sendBundle(nil, ['/n_free', id]);
+    group.free; server.sync; busesOut.free;
+    // values: [largest position, largest of 1 - position, peak, bad values]
+    check.((values[0] <= ((highest + durFrames) / frames + 1e-3)) and: { (1 - values[1]) >= -1e-3 }
+        and: { values[2] > 0.0316 } and: { values[3] < 0.5 },
+        "record: a loop shorter than the guard zone keeps its grains sounding inside the valid region (read positions % to % of the slot, last legal %, peak %, bad %)".format(
+            (1 - values[1]).round(1e-4), values[0].round(1e-4), ((highest + durFrames) / frames).round(1e-4), values[2], values[3]));
+});
+
+test.("record: a retake's wait leaves the head bus at -1", {
+    var during, wait, path = writeLevelFile.("retake.wav", 1.0, 0.3);
+    h.command(\loadBuffer, 2, path, 0);
+    h.waitFor({ engine.bufferFrames[2] > 0 });
+    record.(2, 0.5, 1.0, 0.5, 0, 0, 1);
+    settle.(0.2);
+    during = h.readBus(state[\headBuses][2]);
+    // a synced playable retake replaces it: the old head must not linger
+    record.(2, 0.5, 1.0, 0.5, 0, 0, 1, 1.0);
+    settle.(0.5);
+    wait = h.readBus(state[\headBuses][2]);
+    h.command(\stopRecord, 2);
+    waitDone.(2, 2);
+    check.((during[0] >= 0) and: { wait == [-1.0, 0.0] },
+        "record: a retake's wait leaves the head bus at -1 (running %, during the retake's wait %)".format(during, wait));
+});
+test.("record: the frames bus counts from arming, past a one-shot's last block", {
+    // a record synth of its own (private buffers and buses), gated off 32
+    // frames before its length: its release runs past frames, where the
+    // head wraps; the count must not
+    var frames = (0.3 * sampleRate).round.asInteger, bufs = 2.collect({ Buffer.alloc(server, sampleRate, 1) });
+    var peaks = Buffer.alloc(server, engine.waveformPoints, 1), framesBus = Bus.control(server, 1), headBus = Bus.control(server, 2);
+    var id = server.nextNodeID, counted;
+    server.sync;
+    server.sendBundle(0.1, ['/s_new', \strataRecord, id, 1, (state[\tapGroup] ?? { context.xg }).nodeID,
+        \in, engine.inputBus.index, \bufnumL, bufs[0].bufnum, \bufnumR, bufs[1].bufnum, \frames, frames, \peakFrames, frames,
+        \peakBuf, peaks.bufnum, \framesOut, framesBus.index, \headOut, headBus.index, \replyID, 99]);
+    server.sendBundle(0.1 + ((frames - 32) / sampleRate), ['/error', -1], ['/n_set', id, \gate, 0]);
+    (0.1 + 0.3 + 0.2).wait; server.sync;
+    counted = h.readBusValue(framesBus) + blockSize;
+    server.sendBundle(nil, ['/error', -1], ['/n_free', id]);
+    server.sync;
+    bufs.do(_.free); peaks.free; framesBus.free; headBus.free;
+    check.(counted >= frames,
+        "record: the frames bus counts from arming, past a one-shot's last block (% counted for a % frame take)".format(counted, frames));
+});
+test.("record: a threshold take's peak bins follow the written audio, after its pre-roll", {
+    // D 0.32 s: 5 ms bins, so the pre-roll moves a burst at the crossing
+    // to bins 2-3 (from frame 480); the source itself has it in bin 0
+    var values, id = server.nextNodeID;
+    record.(0, 0.32, 1.0, 0, 0, 0.25);
+    settle.(0.1);
+    // a 5 ms burst, timestamped (two plain messages could land in one block)
+    server.sendBundle(0.05, ['/s_new', \strataCheckLevelSource, id, 2, inputSynth.nodeID, \out, engine.inputBus.index, \level, 0.5]);
+    server.sendBundle(0.055, ['/n_free', id]);
+    waitDone.(0, 2);
+    values = { var condition = Condition(false), result;
+        engine.slotPeakBuffer(0).getn(0, engine.waveformPoints, { arg array; result = array; condition.test = true; condition.signal });
+        h.awaitReply(condition); result }.value;
+    check.(values.notNil and: { values[0] < 0.1 } and: { values.copyRange(1, 4).maxItem > 0.3 },
+        "record: a threshold take's peak bins follow the written audio, after its pre-roll (bins %)".format(values !? { values.keep(5) }));
+});
+test.("record: a stop as the recording arms fades it out and keeps what it wrote", {
+    var path = writeLevelFile.("arming.wav", 1.0, 0.3), source, delay = 0.3, peak, start = nowReports.value, states;
     h.command(\loadBuffer, 2, path, 0);
     h.waitFor({ engine.bufferFrames[2] > 0 });
     source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
     server.sync;
-    record.(2, loopSeconds, 1.0, 0.5, 0, 0, 1);
-    h.command(\setGrainSource, 0, 3);
-    h.command(\voiceOn, 0, 110.0, 0.5, 0.0, 0.5, 20.0, 4.0);
-    h.command(\setGrainParam, 0, \loopStart, 0);
-    h.command(\setGrainParam, 0, \loopLength, loopSeconds / v);
-    h.command(\setGrainParam, 0, \posSpread, 1);
-    peakBus = Bus.control(server, 2); badBus = Bus.control(server, 2);
-    group = Group.tail(context.xg);
-    Synth(\strataCheckPeak, [\in, state[\voiceTaps][0], \out, peakBus], group);
-    Synth(\strataCheckBadValues, [\in, state[\voiceTaps][0], \out, badBus], group);
-    server.sync;
-    1.0.wait;
-    peak = h.readBus(peakBus)[0];
-    bad = h.readBus(badBus)[0];
+    record.(2, 0.5, 1.0, 0.5, 0, 0, 0, delay);
+    // 5 ms before its timestamp: the server computes ahead of the clock
+    // (its latency, a JACK period here), so it may well have armed and
+    // written already, its reply not yet in. Kept (faded out) or canceled
+    // (nothing written), never cut off part way through its fade in
+    (delay - 0.005).wait;
     h.command(\stopRecord, 2);
-    h.command(\voiceOff, 0);
-    waitDone.(2);
-    source.free; group.free; server.sync; peakBus.free; badBus.free;
-    // every start is in the zone (it is 1.5 s wide, the loop 0.25 s), so
-    // the guard moves each one: it must stay inside [lowest, highest]
-    positions = [0, 0.05, 0.1, 0.2, 0.24].collect({ arg seconds;
-        guardFrame.(seconds * sampleRate, 4, durFrames, head, d, 0, highest)
-    });
-    check.((peak > 0.0316) and: { bad < 0.5 } and: { positions.every({ arg position; position.inclusivelyBetween(0, highest) }) },
-        "record: a loop shorter than the guard zone keeps its grains sounding inside the valid region (peak %, bad %, positions %, highest %)".format(
-            peak, bad, positions.round(1), highest));
+    waitDone.(2, 2);
+    source.free; server.sync;
+    peak = stepPeak.(engine.buffersL[2], (0.2 * sampleRate).round.asInteger);
+    states = reportsFor.(2, start).collect(_[2]);
+    check.((peak < 0.01) and: { engine.bufferFrames[2] == (1.0 * sampleRate).round.asInteger }
+        and: { [2, 3].includes(states.last) },
+        "record: a stop as the recording arms fades it out and keeps what it wrote (largest step %, states %)".format(peak, states));
 });
 
 // ---- the recordState reports ----------------------------------------------

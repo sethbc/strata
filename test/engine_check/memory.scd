@@ -165,11 +165,14 @@ var sizeOf = { arg start;
 var checkRecordSizes = {
     var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 40), group = Group.after(engine.processGroup), recordKB, guardKB, plainKB;
     var slotFrames = engine.buffersL[0].numFrames;
-    SynthDef(\strataCheckGuardSize, { arg frame = 1000, recHead;
-        Out.kr(controlBus.index, A2K.kr(engine.slotHeadGuard(K2A.ar(frame), 0, 1e7, 1, 2000, recHead)));
+    // every input of the guard a signal, as in \strataGrainBuf (constants
+    // would fold its arithmetic away), in both graphs
+    SynthDef(\strataCheckGuardSize, { arg frame = 1000, lowest = 0, highest = 1e7, rate = 1, durFrames = 2000, recHead;
+        Out.kr(controlBus.index, A2K.kr(engine.slotHeadGuard(K2A.ar(frame), K2A.ar(lowest), K2A.ar(highest), K2A.ar(rate),
+            K2A.ar(durFrames), recHead)));
     }).add;
-    SynthDef(\strataCheckGuardPlain, { arg frame = 1000, recHead;
-        Out.kr(controlBus.index, A2K.kr(K2A.ar(frame)));
+    SynthDef(\strataCheckGuardPlain, { arg frame = 1000, lowest = 0, highest = 1e7, rate = 1, durFrames = 2000, recHead;
+        Out.kr(controlBus.index, A2K.kr(K2A.ar(frame) + (K2A.ar(lowest) + K2A.ar(highest) + K2A.ar(rate) + K2A.ar(durFrames) * 0)));
     }).add;
     server.sync;
     recordKB = sizeOf.({ arg index;
