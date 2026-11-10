@@ -409,6 +409,27 @@ check.(ok and: { live.defName.asSymbol == \strataGrainBuf } and: { state[\inputR
 command.(\setGrainParam, 3, \freeze, 0.0);
 command.(\voiceOff, 3);
 command.(\setGrainSource, 3, 0);
+// inputReaders forgets a reader that frees: a frozen input voice stopped
+// and started three times (Lua resending freeze after each voiceOn) counts
+// only its live grain synth
+command.(\setGrainSource, 3, engine.inputSource);
+startInput.(3);
+command.(\setGrainParam, 3, \freeze, 1.0);
+ok = h.waitFor({ state[\copied][3] }, 2);
+3.do({
+    old = grainOf.(3);
+    command.(\voiceOff, 3);
+    ok = ok and: { h.waitFor({ old.isPlaying.not }, engine.grainRelease + 1) };
+    startInput.(3);
+    command.(\setGrainParam, 3, \freeze, 1.0);
+});
+server.sync;
+check.(ok and: { state[\inputReaders].size == 1 } and: { state[\inputReaders].keys.asArray[0] === grainOf.(3) },
+    "freeze: inputReaders forgets a reader that frees (% entries, % of them freed)".format(
+        state[\inputReaders].size, state[\inputReaders].keys.count({ arg synth; synth.isPlaying.not })));
+command.(\setGrainParam, 3, \freeze, 0.0);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
 
 // ---- A buffer voice: the scan stops, spread still moves ----
 // slot 6 holds a 1 s ramp (left 0 -> 1, right 1), so a grain's read is its

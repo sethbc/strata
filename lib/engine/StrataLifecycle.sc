@@ -191,6 +191,7 @@
             cuttingSynths[voice].remove(synth);
             grainSlots.removeAt(synth);
             this.ringReaders.removeAt(synth);
+            this.forgetInputReader(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case

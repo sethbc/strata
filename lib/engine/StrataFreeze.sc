@@ -169,8 +169,9 @@
 
     // Freeze a voice's source (the freeze grain param). A voice already
     // frozen on this source in this mode keeps its freeze; its live grain
-    // synth is only pointed at the copy again (one voiceOn started reads the
-    // input ring). Frozen on another source or mode (the source changed
+    // synth is only pointed at the copy again (Lua resends freeze after
+    // voiceOn; the grain synth voiceOn starts or re-gates already reads it:
+    // grainReadPairs). Frozen on another source or mode (the source changed
     // while the voice was stopped), it is unfrozen first. Each freeze is a
     // ring change, so a copy still waiting for an earlier freeze never runs.
     freezeVoice { arg voice;
@@ -411,6 +412,12 @@
     // while it reads the voice's input copy
     noteInputReader { arg voice, synth;
         if (this.readsInputCopy(voice)) { areaState[\freeze][\inputReaders][synth] = (voice: voice, until: nil) };
+    }
+
+    // A grain synth that frees reads nothing: inputReaders holds only
+    // playing synths (watchVoiceSynth's onFree, as ringReaders)
+    forgetInputReader { arg synth;
+        areaState[\freeze][\inputReaders].removeAt(synth);
     }
 
     // Set the input grain synths reading the voice ring back to the input
