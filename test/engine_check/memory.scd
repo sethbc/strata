@@ -1,9 +1,9 @@
 // test/engine_check/memory.scd
 // Real-time memory: the grain UGens' fixed sizes, what each grain synth
 // takes of the pool, and the worst cases (spaced switches, a burst, fast
-// recalls, every voice on three buffer slots, eight recordings) on norns'
-// 8192 KB pool: 3 MB left on standard, 3.5 MB on high (3 MB on both tiers
-// with eight recordings running).
+// recalls, every voice on three buffer slots, the worst cases with one
+// recording, eight recordings) on norns' 8192 KB pool: 3 MB left on standard,
+// 3.5 MB on high (3 MB on both tiers with eight recordings running).
 //
 // Everything is measured with allocation probes, as on SuperCollider 3.13
 // (norns' and CI's version, which has no /rtMemoryStatus):
@@ -131,8 +131,9 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    check.((sizes.size == 2) and: { (sizes - sizes32).every({ arg saving; saving <= -12 }) },
-        "memory: each grain synth is at least 12 KB under 3.2's (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
+    // (the buffer def pays for the head guard: about 8 KB of its 16 KB saving)
+    check.((sizes.size == 2) and: { (sizes[0] - sizes32[0]) <= -12 } and: { (sizes[1] - sizes32[1]) <= -6 },
+        "memory: each grain synth is under 3.2's (at least 12 KB for the ring, 6 KB for the buffer def with its head guard) (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
     // the stage's size (design 3.3 §0c.6; it fails above 40 KB, the budget 3.4 keeps)
     stageKB = if (SynthDescLib.global.at(\strataVoiceMix).isNil) { 0 } {
         var before = floodFit.value, synths, after;
@@ -146,6 +147,44 @@ var checkGrainSynthSizes = {
     };
     check.((stageKB > 0) and: { stageKB < 40 }, "memory: a voice's mix stage takes under 40 KB of the pool (% KB; estimate 35-37)".format(stageKB.round(0.1)));
     group.free; privateBus.free;
+};
+
+// What one \strataRecord takes of the pool (a loop recording, with its
+// pre-roll), and the head guard's size: the small probes that fit with and
+// without twenty of each. The guard is measured as its own graph against a
+// check-only graph with the same inputs that returns the frame as it came
+// (slotHeadGuard is what \strataGrainBuf adds: StrataLoop.sc).
+var sizeOf = { arg start;
+    var count = 20, before = floodFit.value, synths, after;
+    synths = count.collect({ arg index; start.value(index) });
+    server.sync; 0.1.wait;
+    after = floodFit.value;
+    synths.do(_.free); server.sync;
+    (before - after) * probeKB / count
+};
+var checkRecordSizes = {
+    var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 40), group = Group.after(engine.processGroup), recordKB, guardKB, plainKB;
+    var slotFrames = engine.buffersL[0].numFrames;
+    SynthDef(\strataCheckGuardSize, { arg frame = 1000, recHead;
+        Out.kr(controlBus.index, A2K.kr(engine.slotHeadGuard(K2A.ar(frame), 0, 1e7, 1, 2000, recHead)));
+    }).add;
+    SynthDef(\strataCheckGuardPlain, { arg frame = 1000, recHead;
+        Out.kr(controlBus.index, A2K.kr(K2A.ar(frame)));
+    }).add;
+    server.sync;
+    recordKB = sizeOf.({ arg index;
+        Synth(\strataRecord, [\in, privateBus, \bufnumL, engine.buffersL[0].bufnum, \bufnumR, engine.buffersR[0].bufnum,
+            \level, 0, \feedback, 1, \loop, 1, \frames, slotFrames, \peakFrames, slotFrames, \peakBuf, engine.slotPeakBuffer(0).bufnum,
+            \framesOut, controlBus.index + 20 + index, \headOut, controlBus.index + index, \replyID, 99], group)
+    });
+    guardKB = sizeOf.({ arg index; Synth(\strataCheckGuardSize, [\recHead, engine.areaState[\record][\idleHead].index], group) });
+    plainKB = sizeOf.({ arg index; Synth(\strataCheckGuardPlain, [\recHead, engine.areaState[\record][\idleHead].index], group) });
+    check.((recordKB > 0) and: { recordKB <= 24 },
+        "memory: a record synth takes about 15 KB (% KB of the pool, by allocation probes)".format(recordKB.round(0.1)));
+    check.(((guardKB - plainKB) > 0) and: { (guardKB - plainKB) <= 8 },
+        "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it)".format(
+            (guardKB - plainKB).round(0.1), guardKB.round(0.1), plainKB.round(0.1)));
+    group.free; privateBus.free; controlBus.free;
 };
 
 // The worst cases (inside the check routine), on an engine (h.engine or
@@ -178,6 +217,7 @@ var checkGrainSynthSizes = {
 // spaced mixed case with every slot recording an input take, twelve probes
 // on both tiers (recordingFits gathers each tier's answer for one check).
 // Returns the free KB at each peak.
+var rateFilePath = h.tempDir +/+ "memory-rate.wav";
 var recordingFits = List.new;
 var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var command = { arg name ... args; h.commandTo(target, name, *args) };
@@ -188,6 +228,16 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var slotOf = { arg voice, step; ((voice + step) % target.numBuffers) + 1 };
     var probeBus = Bus.control(server, probeCount), figures = List.new;
     var recordingProbes = 12, recordingsStarted;
+    // the eight recordings, one per source kind: input, pre-master,
+    // post-master, voices 1-5 (recordBuffer's source: 0, 1, 2, 3-7)
+    var recordingSources = [0, 1, 2, 3, 4, 5, 6, 7];
+    // a slot a voice reads, at the server rate, so its recording is playable
+    // (the head guard runs in that voice's grain synths); a loop recording
+    // of the pre-master bus
+    var recordSlot = 0;
+    var startRecording = { command.(\recordBuffer, recordSlot, 8.0, 1.0, 0, 1, 0, 1, 0) };
+    var recordingRunning = { h.waitFor({ target.recordSynths[recordSlot].notNil and: { target.recordSynths[recordSlot].isPlaying } }, 3) };
+    var stopRecording = { command.(\stopRecord, recordSlot); h.waitFor({ target.recordSynths[recordSlot].isNil }, 3) };
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
     // function of (all allocated, free KB) instead of the floor's own check
@@ -195,6 +245,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
         var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
         count = count ? probeCount;
+        scenario = scenario ? "worst case";
         probes = count.collect({ arg index;
             Synth(\strataCheckMemProbe, [\out, probeBus.index + index], target.processGroup, \addToTail)
         });
@@ -206,7 +257,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         freeKB = (count * 256) + (floodResult.(flood) * probeKB) + reserveKB;
         watcher.free;
         present = cutting.count({ arg id; infos.includes(id) });
-        if (scenario == "all-buffer worst case") {
+        if (scenario.contains("all-buffer")) {
             // by now the 50 ms cuts have ended: 14 left, plus the 7 that were cutting
             var running = h.synthNames(target.processGroup).count({ arg name; name == \strataGrainBuf });
             check.((present == target.numVoices) and: { running >= (target.numVoices * 2) },
@@ -258,8 +309,44 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     engage.value(command);
     probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart", "all-buffer worst case");
     h.stopAllVoices(target);
-    // eight recordings at the mixed worst case (spaced, as the first scenario)
-    target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, 0, 0, 0, 0) });
+    // the same two worst cases with one recording running
+    command.(\clearBuffer, recordSlot); server.sync;
+    command.(\loadBuffer, recordSlot, rateFilePath, 0);
+    h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
+    startRecording.value;
+    recordingRunning.value;
+    startAll.value;
+    server.sync; 0.2.wait;
+    sourceSteps.do({ arg sourceOf, step;
+        if (step > 0) { 0.2.wait; server.sync };
+        switchAll.(sourceOf);
+    });
+    target.numVoices.do({ arg voice; command.(\voiceOff, voice) });
+    startAll.value;
+    engage.value(command);
+    probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, one recording", "worst case with a recording");
+    stopRecording.value;
+    h.stopAllVoices(target);
+    command.(\clearBuffer, recordSlot); server.sync;
+    command.(\loadBuffer, recordSlot, rateFilePath, 0);
+    h.waitFor({ target.bufferFrames[recordSlot] == (server.sampleRate.round.asInteger) }, 3);
+    startRecording.value;
+    recordingRunning.value;
+    target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
+    startAll.value;
+    server.sync; 0.2.wait;
+    2.do({ arg step;
+        if (step > 0) { 0.2.wait; server.sync };
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
+    });
+    engage.value(command);
+    probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, one recording", "all-buffer worst case with a recording");
+    stopRecording.value;
+    h.stopAllVoices(target);
+    command.(\clearBuffer, recordSlot); server.sync;
+    // eight recordings at the mixed worst case (spaced, as the first
+    // scenario), one per source kind
+    target.numBuffers.do({ arg slot; command.(\recordBuffer, slot, 8.0, 1.0, 0, recordingSources[slot], 0, 0, 0) });
     recordingsStarted = h.waitFor({ target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, 3);
     startAll.value;
     server.sync; 0.2.wait;
@@ -330,10 +417,12 @@ SynthDef(\strataCheckPoolProbe, { arg out;
 SynthDef(\strataCheckReserveProbe, { arg out; Out.kr(out, A2K.kr(DelayN.ar(DC.ar(1), 0.25, 0.01))) }).add;
 server.sync;
 
+h.writeTestFile(rateFilePath, server.sampleRate.round.asInteger, server.sampleRate.round.asInteger, [0.3, 0.3]);
 probeKB = smallProbeKB.value;
 idleFreeKB = (floodFit.value * probeKB) + reserveKB;
 checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
+checkRecordSizes.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
     "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
         idleFreeKB.round(10), probeKB.round(0.1)));
