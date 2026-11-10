@@ -19,7 +19,7 @@ A grid of any other size stays dark.
 
 Lock keys (lit = the voice is locked): the 16×16 on row 16, the 16×8 on row 7 of its faders page, the 8×16 on column 7 rows 10-16 of its faders page. The 8×8 has none.
 
-On the scene page of the 16×16, 16×8 and 8×16, the current scene's recall key is bright. While a crossfade goes to a scene, its recall key blinks, once per crossfade step, until the crossfade lands; then it stays at full brightness.
+On the 16×16, 16×8 and 8×16, the recall key of the scene a crossfade goes to blinks until the crossfade lands (see each layout's scene page).
 
 ## Holds and Two-Key Gestures
 
