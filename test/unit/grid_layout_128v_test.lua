@@ -39,6 +39,33 @@ test("every 128v grid key runs without error", function()
   assert_true(device.refresh_count > 0, "128v grid was redrawn")
 end)
 
+test("128v: the faders page's column 7 locks and unlocks voices 1-7", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local frozen = local_value("S").frozen
+  show_grid_page(context, 1, 2)
+  -- column 7 rows 10-16: voices 1-7, lit 12 locked and 2 not
+  tap(context, 1, 7, 12)
+  assert_true(frozen[3], "column 7 row 12 locks voice 3")
+  assert_equal(device:get_led(7, 12), 12, "a locked voice's key is lit 12")
+  assert_equal(device:get_led(7, 10), 2, "an unlocked voice's key is lit 2")
+  tap(context, 1, 7, 12)
+  assert_true(not frozen[3], "a second press unlocks")
+  assert_equal(device:get_led(7, 12), 2, "unlocked again, lit 2")
+  -- rows 1-9 of column 7 stay dark and do nothing
+  for y = 1, 9 do
+    tap(context, 1, 7, y)
+    assert_equal(device:get_led(7, y), 0, "column 7 row " .. y .. " stays dark")
+  end
+  for i = 1, 7 do assert_true(not frozen[i], "rows 1-9 lock no voice") end
+  -- on page 1 a press at (7, 12) is voice 7's step 12, as before
+  show_grid_page(context, 1, 1)
+  local step_before = local_value("S").patterns[7][12]
+  tap(context, 1, 7, 12)
+  assert_true(local_value("S").patterns[7][12] ~= step_before, "page 1 (7, 12) toggles step 12")
+  assert_true(not frozen[3], "page 1 locks nothing")
+end)
+
 test("grid_redraw draws the 128v layout (I2), on a hot-plugged grid too (I3)", function()
   local context = load_strata()
   local device = context.grid.plug(2, 8, 16)
@@ -198,9 +225,10 @@ test("128v faders page: vertical faders, page selector, voice select", function(
   tap(context, 1, 4, 16)
   local fader_8_min = param_range(ids[8])
   assert_near(params:get(ids[8]), fader_8_min, 1e-6, "page 2's fader 4 is fader 8")
-  -- columns 6-7 are dark
+  -- column 6 and column 7 rows 1-9 are dark (column 7 rows 10-16 are the lock keys)
   for y = 1, 16 do
-    assert_equal(device:get_led(6, y) + device:get_led(7, y), 0, "columns 6-7 dark, row " .. y)
+    local column_7 = y <= 9 and device:get_led(7, y) or 0
+    assert_equal(device:get_led(6, y) + column_7, 0, "dark keys, row " .. y)
   end
   -- column 8 rows 10-16 select the voice
   tap(context, 1, 8, 12)

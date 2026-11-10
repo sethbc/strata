@@ -17,6 +17,8 @@ Each size has its own layout:
 
 A grid of any other size stays dark.
 
+Lock keys (lit = the voice is locked): the 16×16 on row 16, the 16×8 on row 7 of its faders page, the 8×16 on column 7 rows 10-16 of its faders page. The 8×8 has none.
+
 ## Holds and Two-Key Gestures
 
 Strata knows which keys of each grid are held, so a key can act on a hold, and a second key can change what a held key does:

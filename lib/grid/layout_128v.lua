@@ -28,6 +28,11 @@ return function(S)
     -- column 5 the fader page selector
     fader_page_column = 5,
     fader_bottom_row = 16,
+    -- column 7 rows 10-16: voices 1-7's lock keys (locked 12, others 2)
+    lock_column = 7,
+    lock_first_row = 10,
+    locked_level = 12,
+    unlocked_level = 2,
     -- scenes page
     scene_recall_column = 1,
     scene_fade_column = 2,
@@ -68,6 +73,8 @@ return function(S)
       set_fader_param(S.grid_voice_select, fader_index(x), fader_column_for_row(y))
     elseif x == LAYOUT_128V.fader_page_column and y <= fader_page_count(S.grid_voice_select) then
       S.param_page = y
+    elseif x == LAYOUT_128V.lock_column and y >= LAYOUT_128V.lock_first_row then
+      toggle_lock(y - LAYOUT_128V.lock_first_row + 1)
     end
   end
 
@@ -170,6 +177,10 @@ return function(S)
     for x = 1, GRID_LAYOUT.fader_rows do
       local param_id = ids[fader_index(x)]
       if param_id then grid_redraw_128v_fader(grid_device, x, param_id) end
+    end
+    for voice_idx = 1, NUM_VOICES do
+      grid_device:led(LAYOUT_128V.lock_column, LAYOUT_128V.lock_first_row + voice_idx - 1,
+        S.frozen[voice_idx] and LAYOUT_128V.locked_level or LAYOUT_128V.unlocked_level)
     end
     for page = 1, fader_page_count(S.grid_voice_select) do
       grid_device:led(LAYOUT_128V.fader_page_column, page, page == S.param_page and 15 or 4)
