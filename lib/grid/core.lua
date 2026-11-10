@@ -124,6 +124,12 @@ return function(S)
     return port_states[port]
   end
 
+  -- The port's layout state if it has one, else nil: reads without
+  -- creating it (an invariant, a check for a port whose grid left)
+  function M.existing_port_state(port)
+    return port_states[port]
+  end
+
   local function cancel_hold(port, x, y)
     local clock_id = key_value(hold_clocks, port, x, y)
     if clock_id == nil then return end

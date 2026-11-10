@@ -800,6 +800,23 @@ test("a hold let go after the voice left its buffer is forgotten", function()
   assert_equal(positions.scan_held(1), false, "the release forgets it")
 end)
 
+-- The final review's item 5: an invariant only reads, and a grid that left
+-- gets no layout state back from the module that forgets its keys
+test("checking the invariants after a grid left leaves no port state behind", function()
+  local context, S = buffer_voices()
+  local positions, grid_core = S.lib.positions, S.lib.grid_core
+  context.grid.plug(1, 16, 8)
+  grid_core.set_page(1, 4)
+  positions.strip_key(1, 1, "store", 1)  -- the port's record exists
+  context.grid.unplug(1)
+  assert_equal(grid_core.existing_port_state(1), nil, "the unplug emptied the port's state")
+  assert_equal(#h.check_invariants(), 0, "every invariant holds")
+  assert_equal(grid_core.existing_port_state(1), nil, "checking the invariants created none")
+  context.clock.run_for(0.2)
+  assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_up, "the tick ended the gone grid's store")
+  assert_equal(grid_core.existing_port_state(1), nil, "nor did the tick that forgot the record")
+end)
+
 test("cleanup and an unplugged grid release their holds", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions

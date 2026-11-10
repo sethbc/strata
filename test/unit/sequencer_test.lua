@@ -155,6 +155,28 @@ test("an error in a step stops the pattern clock and shows it stopped (#243)", f
   pattern_toggle()
 end)
 
+-- The final review's item 3: the header's play mark and SEQ's column follow
+test("a step's error asks the screen to redraw the stopped pattern", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local UI_PAGES = local_value("UI_PAGES")
+  S.patterns[1][2] = 15  -- step 2 fails, on the clock's first wake-up
+  if S.voices[1].active then toggle_voice(1) end
+  local real_toggle_voice, raised = toggle_voice, false
+  toggle_voice = function(voice_idx)
+    if not raised then raised = true; error("step failed") end
+    return real_toggle_voice(voice_idx)
+  end
+  pattern_clock_start()
+  UI_PAGES.screen_dirty = false
+  wake(context, "pattern_clock")
+  local errors = context.clock.take_errors()
+  toggle_voice = real_toggle_voice
+  assert_equal(#errors, 1, "one clock error")
+  assert_equal(S.pattern_playing, false, "stopped")
+  assert_true(UI_PAGES.screen_dirty, "the stop asks for a redraw")
+end)
+
 test("an error in the first step leaves no clock recorded (#243)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

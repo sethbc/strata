@@ -128,10 +128,12 @@ return function(S)
         local played, step_error = xpcall(play_step, with_traceback)
         if not played then
           -- Forget our own id first, so the stop never cancels this clock
-          -- from inside itself, then show the pattern stopped and raise the
+          -- from inside itself, then show the pattern stopped (the grid, and
+          -- the header's play mark and SEQ on the screen) and raise the
           -- error again for maiden
           S.pattern_clock = nil
           pattern_clock_stop()
+          request_redraw()
           -- level 0: the message already carries its traceback
           error(step_error, 0)
         end

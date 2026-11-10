@@ -882,7 +882,7 @@ test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
   context.arc.turn(1, 1, 5)
   assert_true(S.scenes_page.armed_slot == nil, "moving the cursor disarms")
   redraw()
-  assert_true(hint_text(context) ~= "K3 again: overwrite S1", "the hint row no longer asks")
+  assert_true(hint_text(context) ~= "ALT+K3: overwrite S1", "the hint row no longer asks")
 end)
 
 test("SCENES ring 1 moves the cursor through the page's move_cursor", function()

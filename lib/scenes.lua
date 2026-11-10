@@ -322,7 +322,8 @@ return function(S)
   -- - "failed" (a step raised) and "landing" (the fade's end, before
   --   recall_scene_instant): inside the clock, whose id is only forgotten.
   -- A fade that does not land never applied its scene, so the scene current
-  -- before it is current again, redrawn unless superseded. A landing keeps
+  -- before it is current again; a canceled or failed one is redrawn (also a
+  -- fade back to the current scene, whose blink phase ends). A landing keeps
   -- the target current while recall_scene_instant applies it.
   -- Returns the fade's previous scene (nil when no fade ran)
   local function end_scene_transition(how)
@@ -331,14 +332,16 @@ return function(S)
       clock.cancel(S.scene_transition_clock)
     end
     S.scene_transition_clock = nil
-    local restored = S.scene_transition_active and how ~= "landing" and S.current_scene ~= previous
-    if restored then S.current_scene = previous end
+    local was_active = S.scene_transition_active
+    if was_active and how ~= "landing" and S.current_scene ~= previous then S.current_scene = previous end
     S.scene_transition_active = false
     S.SCENE_TRANSITION.next_step_due = nil
     S.SCENE_TRANSITION.target = nil
     S.SCENE_TRANSITION.previous = nil
     S.SCENE_TRANSITION.step = nil
-    if restored and how ~= "superseded" then
+    -- a fade that ends canceled or failed is redrawn even when it went back
+    -- to the current scene: the blink phase (step) changed
+    if was_active and (how == "canceled" or how == "failed") then
       request_redraw()
       grid_redraw()
     end

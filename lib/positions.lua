@@ -107,11 +107,13 @@ return function(S)
   end
 
   -- The hold changes (the holders were just changed to match): bring the
-  -- playhead estimate up to now first
+  -- playhead estimate up to now first. Every grid's hold key shows it,
+  -- whoever changed it (a grid key, the arc, a grid that left, cleanup)
   local function set_scan_hold(voice_idx, on)
     S.lib.playheads.advance(voice_idx)
     scan_hold[voice_idx] = on
     send_grain(voice_idx, "scanHold", on and 1 or 0)
+    grid_redraw()
   end
 
   -- A holder (any non-nil key, "caller" by default; the grid passes
@@ -266,7 +268,8 @@ return function(S)
   -- was removed (its state is gone), and each key pressed on a page the
   -- grid no longer shows
   local function end_stale_port(port, record)
-    local gone = S.lib.grid_core.port_state(port).positions ~= record
+    local state = S.lib.grid_core.existing_port_state(port)  -- a gone port gets no state back
+    local gone = state == nil or state.positions ~= record
     local page = S.lib.grid_core.page(port)
     for voice_idx, pressed_page in pairs(record.hold) do
       if gone or pressed_page ~= page then
@@ -626,7 +629,8 @@ return function(S)
   -- layout that selects a grid voice, a key per voice (store) on the others
   S.register_invariant("strip store", function()
     for port, record in pairs(records) do
-      local layout = S.lib.grid_core.port_state(port).positions == record and S.lib.grid_core.layout_of(port)
+      local state = S.lib.grid_core.existing_port_state(port)  -- reads only: never creates a gone port's state
+      local layout = state ~= nil and state.positions == record and S.lib.grid_core.layout_of(port)
       if layout and layout.selects_grid_voice and next(record.store) ~= nil then
         return "grid " .. port .. " selects a grid voice but holds store per voice"
       elseif layout and not layout.selects_grid_voice and record.store_down ~= nil then

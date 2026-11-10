@@ -22,6 +22,11 @@ end
 -- The scene's data table (for "unchanged" checks)
 local function scene_data(S, slot) return S.scenes[slot].data end
 
+-- The overwrite prompt names the keys that answer it: with ALT up, and
+-- with ALT held (the final review's item 8)
+local function prompt(slot) return "ALT+K3: overwrite S" .. slot end
+local function alt_prompt(slot) return "K3 again: overwrite S" .. slot end
+
 test("SCENES shows eight slots in two columns", function()
   local context, S = started_on_scenes()
   capture_scene(2); capture_scene(3)
@@ -121,7 +126,7 @@ test("ALT+K3 saves an empty slot at once", function()
   alt_tap(3)
   assert_true(S.scenes[4].populated, "saved without a question")
   redraw()
-  assert_true(hint_text(context) ~= "K3 again: overwrite S4", "no confirmation asked")
+  assert_true(hint_text(context) ~= prompt(4), "no confirmation asked")
 end)
 
 test("ALT+K3 on a populated slot asks once more within 2 s", function()
@@ -132,7 +137,7 @@ test("ALT+K3 on a populated slot asks once more within 2 s", function()
   alt_tap(3)
   assert_equal(scene_data(S, 3), first, "the first press does not save")
   assert_equal(S.lib.ui_flash.text("header"), nil, "the arming press flashes no save")
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S3", "hint flash asks again")
+  redraw(); assert_equal(hint_text(context), prompt(3), "hint flash asks again")
   context.clock.run_for(1)
   alt_tap(3)
   assert_true(scene_data(S, 3) ~= first, "the second press within 2 s saves")
@@ -143,9 +148,9 @@ test("ALT+K3 on a populated slot asks once more within 2 s", function()
   context.clock.run_for(2.01)
   alt_tap(3)
   assert_equal(scene_data(S, 3), second, "a press after 2 s only arms again")
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S3", "and asks again")
+  redraw(); assert_equal(hint_text(context), prompt(3), "and asks again")
   -- the prompt shows on SCENES only
-  show_page("FX"); assert_true(hint_text(context) ~= "K3 again: overwrite S3", "not on another page")
+  show_page("FX"); assert_true(hint_text(context) ~= prompt(3), "not on another page")
 end)
 
 test("moving the cursor disarms the overwrite", function()
@@ -158,7 +163,7 @@ test("moving the cursor disarms the overwrite", function()
   enc(2, 1)
   alt_tap(3)
   assert_equal(scene_data(S, 4), s4, "S4 is not overwritten by S3's confirmation")
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S4", "S4 asks for its own")
+  redraw(); assert_equal(hint_text(context), prompt(4), "S4 asks for its own")
   alt_tap(3)
   assert_true(scene_data(S, 4) ~= s4, "S4's own second press saves")
 end)
@@ -167,10 +172,10 @@ test("the overwrite flash goes when the cursor leaves the slot by another route"
   local context, S = started_on_scenes()
   capture_scene(3)
   enc(2, 2); alt_tap(3)
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S3", "armed")
+  redraw(); assert_equal(hint_text(context), prompt(3), "armed")
   S.cursors.scene = 6   -- as the arc moves it
   next_frame(context)
-  assert_true(hint_text(context) ~= "K3 again: overwrite S3", "no prompt over another slot")
+  assert_true(hint_text(context) ~= prompt(3), "no prompt over another slot")
   assert_equal(S.scenes_page.armed_slot, nil, "disarmed")
 end)
 
@@ -179,13 +184,13 @@ test("a replaced overwrite prompt never confirms: ALT+K3 asks again", function()
   capture_scene(1)
   local first = scene_data(S, 1)
   alt_tap(3)
-  redraw(); assert_equal(hint_text(context), "K3 again: overwrite S1", "armed on S1")
+  redraw(); assert_equal(hint_text(context), prompt(1), "armed on S1")
   -- a hints flash with no page covers the prompt
   S.lib.ui_flash.start("hints", "tempo 120")
   context.clock.run_for(0.5)
   alt_tap(3)
   assert_equal(scene_data(S, 1), first, "S1 is not overwritten without its prompt showing")
-  context.clock.run_for(1.1); redraw(); assert_equal(hint_text(context), "K3 again: overwrite S1", "the prompt shows again")
+  context.clock.run_for(1.1); redraw(); assert_equal(hint_text(context), prompt(1), "the prompt shows again")
   alt_tap(3)
   assert_true(scene_data(S, 1) ~= first, "a second ALT+K3 under the prompt saves")
 end)
@@ -212,7 +217,7 @@ test("S.lib.pages_scenes.move_cursor moves, disarms and clears the prompt", func
 end)
 
 -- #255: the prompt is the page's own hint, not a "hints" flash
-local PROMPT_S1 = "K3 again: overwrite S1"
+local PROMPT_S1, ALT_PROMPT_S1 = prompt(1), alt_prompt(1)
 
 test("the overwrite prompt is the page's hint while armed and lapses after 2 s", function()
   local context, S = started_on_scenes()
@@ -220,7 +225,7 @@ test("the overwrite prompt is the page's hint while armed and lapses after 2 s",
   local first = scene_data(S, 1)
   context.set_time(100); alt_tap(3)
   redraw(); assert_equal(hint_text(context), PROMPT_S1, "the hint row asks")
-  key(1, 1); redraw(); assert_equal(hint_text(context), PROMPT_S1, "with ALT held too"); key(1, 0)
+  key(1, 1); redraw(); assert_equal(hint_text(context), ALT_PROMPT_S1, "with ALT held: K3 again"); key(1, 0)
   assert_equal(scene_data(S, 1), first, "nothing saved")
   assert_true(S.lib.ui_flash.text("hints") == nil, "no hints flash carries it")
   local UI_PAGES = local_value("UI_PAGES")
@@ -273,6 +278,26 @@ test("drawing SCENES asks for no redraw and ends no flash", function()
   S.registry.pages[S.constants.UI_PAGES.index.SCENES].hints(false)
   assert_equal(S.lib.ui_flash.text("hints"), "tempo 120", "nor do the hints end it")
   assert_true(not UI_PAGES.screen_dirty, "or ask for a redraw")
+end)
+
+test("the overwrite prompt names the keys that answer it, with ALT held and with ALT up", function()
+  local context, S = started_on_scenes()
+  capture_scene(1)
+  local first = scene_data(S, 1)
+  alt_tap(3)
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3 again: overwrite S1", "ALT held: K3 again overwrites")
+  key(1, 0); redraw()
+  assert_equal(hint_text(context), "ALT+K3: overwrite S1", "ALT up: ALT+K3 overwrites")
+  local recalls = {}
+  local real = recall_scene
+  recall_scene = function(slot, time) table.insert(recalls, slot .. ":" .. string.format("%g", time)) end
+  tap(3)
+  recall_scene = real
+  assert_equal(table.concat(recalls, ","), "1:0", "a plain K3 still recalls")
+  assert_equal(scene_data(S, 1), first, "and overwrites nothing")
+  alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "ALT+K3 within 2 s overwrites")
 end)
 
 test("SCENES hints", function()

@@ -95,7 +95,7 @@ return function(S)
 
   -- Drop the voice's hold on a note unless another channel's note on still
   -- maps that note to the voice
-  function release_note_hold(voice_idx, note)
+  local function release_note_hold(voice_idx, note)
     for _, channel_notes in pairs(S.midi_state.note_voice) do
       if channel_notes[note] == voice_idx then return end
     end

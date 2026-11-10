@@ -747,6 +747,40 @@ test("the fading target blinks once per step and is steady when it lands", funct
   assert_equal(scenes.shows_current(2), true, "the landed scene is steady")
 end)
 
+-- The final review's item 2: a fade back to the current scene changes no
+-- current scene, but its end still changes the blink phase
+test("a fade back to the current scene that ends at a dark step redraws the steady mark", function()
+  local context = load_strata(); finish_startup(context)
+  local scenes = local_value("S").lib.scenes
+  local UI_PAGES = local_value("UI_PAGES")
+  capture_freq_scenes()
+  local grid_redraws = 0
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function() grid_redraws = grid_redraws + 1; return real_grid_redraw() end
+  local ok, err = pcall(function()
+    for _, how in ipairs({ "canceled", "failed" }) do
+      recall_scene(2, 0); params:set("v1_freq", 200)  -- a tweak after the recall: the fade moves v1_freq back
+      assert_equal(local_value("current_scene"), 2, how .. ": scene 2 is current")
+      recall_scene(2, 2); context.clock.run_for(0.1)
+      assert_equal(local_value("SCENE_TRANSITION").step, 2, how .. ": step 2")
+      assert_equal(scenes.shows_current(2), false, how .. ": step 2 shows the mark dark")
+      grid_redraws = 0
+      UI_PAGES.screen_dirty = false
+      if how == "canceled" then
+        cancel_scene_transition()
+      else
+        fail_next_fade_step(context)
+      end
+      assert_equal(local_value("current_scene"), 2, how .. ": scene 2 is still current")
+      assert_equal(scenes.shows_current(2), true, how .. ": the mark is steady again")
+      assert_true(grid_redraws >= 1, how .. ": the grid is redrawn")
+      assert_true(UI_PAGES.screen_dirty, how .. ": the screen is asked to redraw")
+    end
+  end)
+  grid_redraw = real_grid_redraw
+  if not ok then error(err, 0) end
+end)
+
 test("a superseded fade's target stops blinking at once", function()
   local context = load_strata(); finish_startup(context)
   local scenes = local_value("S").lib.scenes
