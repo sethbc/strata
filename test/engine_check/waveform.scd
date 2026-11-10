@@ -330,6 +330,35 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
             "waveform: a failed mv through the mover finishes once with false and leaves no .part, acknowledgment or failure file (got %, left %)".format(
                 results.asArray, (dir +/+ "failing.wav.*").pathMatch));
     }.value;
+    // the same failed mv, with the mover too slow: stopped, so the write
+    // times out and renames by subprocess, whose mv (an mv on PATH that
+    // sleeps 1 s first) runs only after the mover, continued, has failed
+    // its own and deleted the .part. The fallback finds the .part gone, and
+    // the mover's failure file says the write was lost: finish runs once
+    // with false, never a false "written"
+    {
+        var part = dir +/+ "slow-failing.wav.check-2.part", results = List.new(4), path = "PATH".getenv;
+        var slowMvDir = scratchRoot +/+ "waveform-slow-mv";
+        File.mkdir(slowMvDir);
+        File.use(slowMvDir +/+ "mv", "w", { arg file; file.write("#!/bin/sh\nsleep 1\nPATH=" ++ path.shellQuote ++ "\nexec mv \"$@\"\n") });
+        ("chmod 755 " ++ (slowMvDir +/+ "mv").shellQuote).systemCmd;
+        File.use(part, "w", { arg file; file.write("x") });
+        ("kill -STOP " ++ mover[\pid]).systemCmd;
+        // sclang's PATH, which the fallback's shell inherits, holds the
+        // slow mv only until the fallback has started (the mover's own
+        // shell started before and keeps the real mv)
+        "PATH".setenv(slowMvDir ++ ":" ++ path);
+        other.renameIntoPlace(part, dir +/+ "missing-folder/slow-failing.wav", { arg written; results.add(written) });
+        (other.peaksMoverTimeout + 0.2).wait;
+        "PATH".setenv(path);
+        ("kill -CONT " ++ mover[\pid]).systemCmd;
+        waitFor.({ results.notEmpty and: { mover[\pending] == 0 } }, 4);
+        0.3.wait;
+        check.((results.asArray == [false]) and: { File.exists(part).not } and: { (dir +/+ "slow-failing.wav.*").pathMatch.isEmpty } and: { mover[\alive] },
+            "waveform: a failed mv by a mover too slow for its timeout still finishes once with false (got %, left %)".format(
+                results.asArray, (dir +/+ "slow-failing.wav.*").pathMatch));
+        File.delete(slowMvDir +/+ "mv");
+    }.value;
     // stopped: that one write renames by subprocess after peaksMoverTimeout;
     // the mover, still running, stays in use, and once it catches up (its
     // late rename finds the .part gone and says nothing) it is used again

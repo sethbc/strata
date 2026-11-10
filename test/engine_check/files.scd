@@ -552,7 +552,12 @@ checkLongSave.value;
 // A 1 ms SystemClock task looks for the saved file on every tick: the gap
 // in which the file appears spans the rename, so the OS preempting sclang
 // elsewhere in a save cannot fail it. Counted, not the largest: fewer than
-// lateLimit late gaps of ten saves.
+// lateLimit late gaps of ten saves. This is a measurement more than a
+// guard: the fork it replaced cost 3.5-4 ms here (median 3.49 ms against
+// the 3 ms limit), but 2.2-2.7 ms on a faster machine with a smaller
+// sclang, which would pass, and the gap depends on scheduling under load.
+// The regression guard is the stopped-mover save below: only a save whose
+// rename goes to the mover waits out peaksMoverTimeout there.
 {
     var slot = 3, saves = 10, gapLimit = 0.003, lateLimit = 3, dir = scratchRoot +/+ "rename-hold";
     var gaps = List.new(saves), late, sorted;
@@ -656,6 +661,69 @@ checkLongSave.value;
         and: { (dir +/+ "*.part").pathMatch.isEmpty },
         "files: renames to one path land in write order, the newer save's file stays (% frames; reports % and %, left %)".format(
             frames, older[\calls], newer[\calls], (dir +/+ "*.part").pathMatch));
+    h.freeEngine(other);
+    if (File.exists(path)) { File.delete(path) };
+}.value;
+
+// A write waiting for an older write's rename stops waiting as soon as a
+// newer write to the path supersedes it: its .part goes at once (not when
+// the older rename ends, up to peaksMoverTimeout later), it reports
+// nothing, and the newest write's file lands.
+{
+    var dir = scratchRoot +/+ "files-mover-superseded/", other, mover, path = (dir +/+ "same.wav").standardizePath, noBoard = scratchRoot +/+ "no-board-model";
+    var older = (calls: 0), middle = (calls: 0), newest = (calls: 0), frames, middlePart, partLeft;
+    var done = { arg result; { arg written; result[\calls] = result[\calls] + 1; result[\written] = written } };
+    File.mkdir(dir);
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    mover = other.areaState[\waveform][\mover];
+    h.commandTo(other, \loadBuffer, 0, stereoPath, 0);
+    h.commandTo(other, \loadBuffer, 1, h.monoPath, 0);
+    waitFor.({ (other.bufferFrames[0] == 11025) and: { other.bufferFrames[1] == 4410 } });
+    0.2.wait; server.sync;
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    other.writeSlot(0, path, done.(older));
+    waitFor.({ mover[\pending] == 1 });
+    other.writeSlot(1, path, done.(middle));
+    middlePart = path ++ "." ++ other.instanceTag ++ "-" ++ other.writeGenerations[path] ++ ".part";
+    // the middle write has interleaved and waits on the older rename
+    0.3.wait;
+    other.writeSlot(0, path, done.(newest));
+    0.1.wait;
+    partLeft = File.exists(middlePart);
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    waitFor.({ (older[\calls] > 0) and: { newest[\calls] > 0 } and: { mover[\pending] == 0 } }, 5);
+    0.3.wait;
+    frames = SoundFile.openRead(path) !? { arg file; var count = file.numFrames; file.close; count };
+    check.(partLeft.not and: { middle[\calls] == 0 } and: { older[\calls] == 1 } and: { newest[\calls] == 1 } and: { newest[\written] == true }
+        and: { frames == 11025 } and: { (dir +/+ "*.part").pathMatch.isEmpty },
+        "files: a write superseded while it waits for an older rename stops at once and reports nothing (.part left %, reports % % %, % frames)".format(
+            partLeft, older[\calls], middle[\calls], newest[\calls], frames));
+    h.freeEngine(other);
+    if (File.exists(path)) { File.delete(path) };
+}.value;
+
+// An error in starting the rename (renameIntoPlace throwing: here a mover
+// whose pending count is unreadable) leaves no rename scheduled, so the
+// write itself reports failed, once, deletes its .part and leaves no
+// rename marked under way for the path (a later write would wait on it).
+{
+    var dir = scratchRoot +/+ "files-mover-throw/", other, mover, path = (dir +/+ "throw.wav").standardizePath, noBoard = scratchRoot +/+ "no-board-model";
+    var result = (calls: 0);
+    File.mkdir(dir);
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    mover = other.areaState[\waveform][\mover];
+    h.commandTo(other, \loadBuffer, 1, h.monoPath, 0);
+    waitFor.({ other.bufferFrames[1] == 4410 });
+    0.2.wait; server.sync;
+    other.areaState[\waveform][\mover] = (alive: true, pending: nil);
+    other.writeSlot(1, path, { arg written; result[\calls] = result[\calls] + 1; result[\written] = written });
+    waitFor.({ result[\calls] > 0 }, 2);
+    0.2.wait;
+    other.areaState[\waveform][\mover] = mover;
+    check.((result[\calls] == 1) and: { result[\written] == false } and: { other.pathRenames[path].isNil }
+        and: { File.exists(path).not } and: { (dir +/+ "*.part").pathMatch.isEmpty },
+        "files: a rename that cannot start reports failed once and leaves nothing (% calls, written %, under way %, left %)".format(
+            result[\calls], result[\written], other.pathRenames[path], (dir +/+ "*.part").pathMatch));
     h.freeEngine(other);
     if (File.exists(path)) { File.delete(path) };
 }.value;

@@ -87,8 +87,8 @@
     // subprocess while there is none. sclang writes each rename to a FIFO
     // as three lines, the .part, the path and an acknowledgment file; the
     // shell runs mv -f for each, in order, then creates the acknowledgment,
-    // or, for a failed mv whose .part is still there, deletes the .part
-    // and creates the failure file (moverFailPath) instead. sclang
+    // or, for a failed mv whose .part is still there, creates the failure
+    // file (moverFailPath) instead and then deletes the .part. sclang
     // opens its end read-write ("r+": it holds a reader too, so a mover
     // that died never SIGPIPEs sclang) and close-on-exec ("e": no
     // later child holds it open, so the mover ends on EOF when free closes
@@ -124,12 +124,15 @@
     startPeaksMover {
         var fifo = this.peaksMoverPath, file;
         var mover = (alive: false, exited: false, freed: false, pending: 0, pid: nil, file: nil);
-        // a failed mv fails the write only if the .part is still there: one
-        // a timed-out write renamed by subprocess is gone, and that write
-        // was not lost. The caller's finish posts a failure.
+        // a failed mv fails the write only if the .part is still there (one
+        // a timed-out write renamed by subprocess is gone): the failure file
+        // first, then the .part goes, so a fallback that finds the .part
+        // gone also finds the failure (or the poll has noted it). A failure
+        // file that cannot be made leaves the .part, and the fallback's own
+        // mv reports. The caller's finish posts a failure.
         var script = "rm -f -- \"$0\"; while IFS= read -r part && IFS= read -r path && IFS= read -r ack; do "
             ++ "if mv -f -- \"$part\" \"$path\" 2>/dev/null || [ ! -e \"$part\" ]; then : > \"$ack\"; "
-            ++ "else rm -f -- \"$part\"; : > \"${ack%.ack.part}.fail.part\"; fi; done";
+            ++ "else : > \"${ack%.ack.part}.fail.part\" && rm -f -- \"$part\"; fi; done";
         areaState[\waveform][\mover] = mover;
         try { File.mkdir(fifo.dirname) };
         // a name left by an engine of an earlier sclang session (instanceTag
@@ -199,10 +202,13 @@
     // that catches up is used again. Only a mover that is gone stops its use.
     renameIntoPlace { arg partPath, path, finish;
         var mover = areaState[\waveform][\mover], ackPath = this.peaksAckPath(partPath), started, finished = false;
-        var failPath = this.moverFailPath(partPath);
+        // moverFailed: the poll consumed the mover's failure file, so a
+        // fallback that finds the .part gone knows the write was lost
+        var failPath = this.moverFailPath(partPath), moverFailed = false;
+        var partGone = { moverFailed.not and: { File.exists(failPath).not } };
         var usable = mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
             and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) };
-        var bySubprocess = { if (finished.not) { finished = true; this.renameBySubprocess(partPath, path, finish) } };
+        var bySubprocess = { if (finished.not) { finished = true; this.renameBySubprocess(partPath, path, finish, partGone) } };
         if (usable and: {
             try { mover[\file].write(partPath ++ "\n" ++ path ++ "\n" ++ ackPath ++ "\n"); mover[\file].flush; true } { false }
         }) {
@@ -213,6 +219,7 @@
                 { mover[\freed] } { nil }  // the engine was freed: its actions are dropped
                 { File.exists(ackPath) or: { File.exists(failPath) } } {
                     var written = File.exists(failPath).not;
+                    moverFailed = written.not;
                     try { File.delete(if (written) { ackPath } { failPath }) };
                     mover[\pending] = mover[\pending] - 1;
                     if (finished.not) { finished = true; finish.(written) };
@@ -233,13 +240,18 @@
     }
 
     // mv -f through unixCmd (asynchronous, but the fork holds sclang a few
-    // ms). A failed mv whose .part is gone lost nothing: the mover renamed
-    // it first (a write that timed out on it)
-    renameBySubprocess { arg partPath, path, finish;
+    // ms). A failed mv whose .part is gone means the mover took it first (a
+    // write that timed out on it): written is then partGone's answer
+    // (renameIntoPlace's: the mover left no failure file), true without one
+    renameBySubprocess { arg partPath, path, finish, partGone;
         ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).unixCmd({ arg exitCode;
             var written = exitCode == 0;
             if (written.not) {
-                if (try { File.exists(partPath) } { true }) { try { File.delete(partPath) } } { written = true };
+                if (try { File.exists(partPath) } { true }) {
+                    try { File.delete(partPath) }
+                } {
+                    written = partGone.value ? true;
+                };
             };
             finish.(written);
         }, false);

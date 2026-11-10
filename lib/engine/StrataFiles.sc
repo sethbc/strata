@@ -289,8 +289,10 @@
             // every SoundFile the interleave opens, so an error can close them
             var openFiles = List.new;
             // handedOff: the .part belongs to its rename (renameIntoPlace),
-            // which reports; never deleted or reported here after that
-            var written, folder, handedOff = false, waitStart;
+            // which reports; never deleted or reported here after that.
+            // newest: it passed the newest-write check, so it reports even
+            // after its writeGenerations entry has gone
+            var written, folder, handedOff = false, renameEnded = false, newest = false, waitStart;
             try {
                 context.server.sync;
                 written = current.value and: {
@@ -303,7 +305,8 @@
                 // could land before an older one the mover still holds). At
                 // most twice peaksMoverTimeout; it ends by then.
                 waitStart = Main.elapsedTime;
-                while { written and: { this.pathRenames[path].notNil }
+                // A write a newer one supersedes stops waiting at once.
+                while { written and: { this.pathRenames[path].notNil } and: { current.value }
                     and: { (Main.elapsedTime - waitStart) < (this.peaksMoverTimeout * 2) } } {
                     this.yieldToCommands(0.002)
                 };
@@ -315,13 +318,13 @@
                 // file into it. The rename goes to the mover (no fork of
                 // sclang, #217) and finish runs once it has ended.
                 if (current.value) {
+                    newest = true;
                     folder = written and: { PathName(path).isFolder };
                     if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
                     writeGenerations.removeAt(path);
                     if (written and: { folder.not }) {
-                        handedOff = true;
-                        this.pathRenames[path] = generation;
                         this.renameIntoPlace(partPath, path, { arg moved;
+                            renameEnded = true;
                             if (this.pathRenames[path] == generation) { this.pathRenames.removeAt(path) };
                             if (moved) {
                                 postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
@@ -330,6 +333,9 @@
                             };
                             finish.(moved);
                         });
+                        // scheduled: from here the rename owns the .part and reports
+                        handedOff = true;
+                        if (renameEnded.not) { this.pathRenames[path] = generation };
                     } {
                         finish.(false);
                     };
@@ -345,12 +351,11 @@
                 postln("strata: cannot write % (%)".format(path, error.class.name));
                 openFiles.do({ arg file; try { if (file.notNil and: { file.isOpen }) { file.close } } });
                 tempPaths.do(deleteIfThere);
+                // no rename scheduled: nothing else will report
                 if (handedOff.not) {
                     deleteIfThere.(partPath);
-                    if (current.value) {
-                        writeGenerations.removeAt(path);
-                        finish.(false);
-                    };
+                    if (current.value) { writeGenerations.removeAt(path); newest = true };
+                    if (newest) { finish.(false) };
                 };
             };
         }, SystemClock);
