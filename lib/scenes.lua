@@ -314,29 +314,36 @@ return function(S)
     return debug.traceback(tostring(message), 2)
   end
 
-  -- The one way a transition ends (#253): the fade's scene was never
-  -- applied, so the scene current before it is current again (a fade's end
-  -- then lets recall_scene_instant make the target current once it has
-  -- applied it). cancel_clock cancels the transition's clock; inside that
-  -- clock (a failed step, the end) its id is only forgotten. quiet leaves
-  -- the redraw to the caller, which redraws itself
-  local function end_scene_transition(cancel_clock, quiet)
-    if cancel_clock and S.scene_transition_clock then clock.cancel(S.scene_transition_clock) end
+  -- The one way a transition ends (#253), `how` it ends:
+  -- - "canceled" (cancel_scene_transition) and "superseded" (a new recall,
+  --   which redraws itself): the clock is canceled;
+  -- - "failed" (a step raised) and "landing" (the fade's end, before
+  --   recall_scene_instant): inside the clock, whose id is only forgotten.
+  -- A fade that does not land never applied its scene, so the scene current
+  -- before it is current again, redrawn unless superseded. A landing keeps
+  -- the target current while recall_scene_instant applies it.
+  -- Returns the fade's previous scene (nil when no fade ran)
+  local function end_scene_transition(how)
+    local previous = S.SCENE_TRANSITION.previous
+    if (how == "canceled" or how == "superseded") and S.scene_transition_clock then
+      clock.cancel(S.scene_transition_clock)
+    end
     S.scene_transition_clock = nil
-    local restored = S.scene_transition_active and S.current_scene ~= S.SCENE_TRANSITION.previous
-    if S.scene_transition_active then S.current_scene = S.SCENE_TRANSITION.previous end
+    local restored = S.scene_transition_active and how ~= "landing" and S.current_scene ~= previous
+    if restored then S.current_scene = previous end
     S.scene_transition_active = false
     S.SCENE_TRANSITION.next_step_due = nil
     S.SCENE_TRANSITION.target = nil
     S.SCENE_TRANSITION.previous = nil
-    if restored and not quiet then
+    if restored and how ~= "superseded" then
       request_redraw()
       grid_redraw()
     end
+    return previous
   end
 
   function cancel_scene_transition()
-    end_scene_transition(true)
+    end_scene_transition("canceled")
   end
 
   -- Snapshot {id, start, target, step} for every continuous param a smooth
@@ -404,7 +411,7 @@ return function(S)
     -- Any new recall supersedes a transition that is still running (which
     -- puts its previous scene back: this recall redraws), and ends the
     -- randomize undo
-    end_scene_transition(true, true)
+    end_scene_transition("superseded")
     clear_undo()
 
     if transition_time > 0 then
@@ -442,18 +449,27 @@ return function(S)
             grid_redraw()  -- keep the parameter faders moving with the fade
           end, with_traceback)
           if not stepped then
-            end_scene_transition(false)
+            end_scene_transition("failed")
             error(step_error, 0)
           end
           S.SCENE_TRANSITION.next_step_due = util.time() + step_time
           clock.sleep(step_time)
         end
 
-        -- Final state: exact values plus the non-continuous params. The end
-        -- puts the previous scene back; recall_scene_instant makes the
-        -- target current once it is applied, and redraws either way
-        end_scene_transition(false, true)
-        recall_scene_instant(scene_num, scene_data)
+        -- Final state: exact values plus the non-continuous params. The
+        -- target stays current while recall_scene_instant applies it (no
+        -- redraw inside it shows the previous scene); only if that fails
+        -- is the previous scene current again
+        local previous = end_scene_transition("landing")
+        local landed, landing_error = xpcall(function()
+          recall_scene_instant(scene_num, scene_data)
+        end, with_traceback)
+        if not landed then
+          S.current_scene = previous
+          request_redraw()
+          grid_redraw()
+          error(landing_error, 0)
+        end
       end)
       -- its first step has run and drawn the target as current
     else
@@ -537,8 +553,9 @@ return function(S)
         sync_voice_values_to_engine(i)
       end
     end
-    -- a failed recall leaves the current scene as it was (the previous one,
-    -- at a fade's end): show it and whatever was applied
+    -- a failed recall leaves the current scene as it was (the last that
+    -- landed, when this recall superseded a fade): show it and whatever was
+    -- applied
     if not recalled then
       request_redraw()
       grid_redraw()

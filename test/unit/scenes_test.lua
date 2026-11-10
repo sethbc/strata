@@ -653,6 +653,30 @@ test("a fade superseded by a fade that fails goes back to the last scene that la
   assert_equal(transition.target, nil, "no fade is running")
 end)
 
+test("a fade's landing keeps its target current while it applies it", function()
+  local context = load_strata(); finish_startup(context)
+  capture_sequencer_scenes()                     -- scene 2 starts voice 3, scene 1 stops it
+  recall_scene(1, 0); recall_scene(2, 2)
+  for _ = 1, local_value("SCENE_TRANSITION").steps - 1 do
+    wake(context, "scene_transition_clock")      -- every step; the end is next
+  end
+  local seen = {}
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function()
+    table.insert(seen, local_value("current_scene"))
+    return real_grid_redraw()
+  end
+  local landed, landing_error = pcall(wake, context, "scene_transition_clock")
+  grid_redraw = real_grid_redraw
+  assert_true(landed, "the landing ran: " .. tostring(landing_error))
+  assert_true(local_value("voices")[3].active, "the landing started voice 3")
+  assert_true(#seen >= 2, "the landing redrew the grid mid-way and at its end")
+  for index, scene in ipairs(seen) do
+    assert_equal(scene, 2, "grid redraw " .. index .. " during the landing shows the target")
+  end
+  assert_equal(local_value("current_scene"), 2, "the target is current")
+end)
+
 test("a fade that lands makes its target current", function()
   local context = load_strata(); finish_startup(context)
   capture_freq_scenes()
