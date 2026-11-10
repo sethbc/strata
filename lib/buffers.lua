@@ -764,8 +764,9 @@ return function(S)
   end)
 
   -- What the slot holds, derived from its fields and its take
-  -- (S.lib.record.state), the first case that applies: "armed", "finishing",
-  -- "loop" / "dub" / "recording" (a playable take that loops, one that does
+  -- (S.lib.record.state), the first case that applies: "finishing" (whatever
+  -- the take's phase: an armed replace take stopped with K3 finishes too),
+  -- "armed", "loop" / "dub" / "recording" (a playable take that loops, one that does
   -- not, a replace take), "loading" (a load the engine has not confirmed,
   -- checking or not), "loaded", "unsettled" (a named load that reported no
   -- length yet; a later report adopts it), "missing" (a remembered file not
@@ -775,8 +776,8 @@ return function(S)
     if type(slot) ~= "number" or not S.buffers[slot] then return nil end
     local buffer = S.buffers[slot]
     local take = S.lib.record.state(slot)
-    if take and take.phase == "armed" then return "armed" end
     if buffer.finishing then return "finishing" end
+    if take and take.phase == "armed" then return "armed" end
     if buffer.recording then
       if take and take.kind == "playable" then return take.loop and "loop" or "dub" end
       return "recording"
