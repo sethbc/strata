@@ -73,7 +73,8 @@ return function(S)
   -- when every row fits (or the track has no length). It never leaves
   -- top..bottom and is always at least 1 px shorter than the track, so even
   -- a list one row longer than the view moves it between its two views.
-  function M.draw_marker(first, visible, count, top, bottom)
+  -- x: the marker's column (default MARKER_X, 127)
+  function M.draw_marker(first, visible, count, top, bottom, x)
     if count <= visible then return end
     local track = bottom - top
     if track < 1 then return end
@@ -82,9 +83,10 @@ return function(S)
     local travel = track - length
     local fraction = math.min(math.max((first - 1) / (count - visible), 0), 1)
     local y = top + math.floor(travel * fraction + 0.5)
+    x = x or MARKER_X
     screen.level(4)
-    screen.move(MARKER_X, y)
-    screen.line(MARKER_X, y + length)
+    screen.move(x, y)
+    screen.line(x, y + length)
     screen.stroke()
   end
 

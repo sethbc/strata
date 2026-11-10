@@ -131,4 +131,20 @@ test("draw calls draw_row for the visible rows and marks the cursor row", functi
   assert_equal(seen[5][2], 56); assert_equal(seen[1][4], 124)
   assert_equal(#context.screen.lines, 1, "one scroll marker")
 end)
+test("the scroll marker can sit at another x, with the same geometry", function()
+  local FL = field_list()
+  local screen = load_strata().screen
+  for first = 1, 8 do
+    screen.clear(); FL.draw_marker(first, 4, 11, 10, 41)
+    local default = screen.lines[1]
+    screen.clear(); FL.draw_marker(first, 4, 11, 10, 41, 56)
+    local moved = screen.lines[1]
+    assert_equal(#screen.lines, 1, "one marker line")
+    assert_equal(moved.x1, 56); assert_equal(moved.x2, 56)
+    assert_equal(moved.y1, default.y1, "first " .. first .. ": the same top")
+    assert_equal(moved.y2, default.y2, "first " .. first .. ": the same bottom")
+  end
+end)
+
+
 end

@@ -785,7 +785,7 @@ test("BUFFER page layout holds for every voice, source, buffer state and cursor"
     set_buffers(state)
     for voice_idx = 1, 7 do
       set_selected(voice_idx)
-      for _, source in ipairs({ 1, 2, 5, 9, 10 }) do
+      for source = 1, 10 do
         params:set("v" .. voice_idx .. "_source", source)
         for _, slot in ipairs({ 1, 4, 8 }) do
           cursor.slot = slot
@@ -1126,6 +1126,9 @@ test("the len field shows beats with sync on and 16b max when capped", function(
   params:set("clock_tempo", 30); redraw()
   assert_equal(field_named(context, "len").value, "8b max", "16 beats at 30 BPM are 32 s: 8 beats fit")
   assert_screen_layout(context, "BUFFER len capped")
+  params:set("clock_tempo", 3); redraw()
+  assert_equal(field_named(context, "len").value, "<1b max", "at 3 BPM not one beat fits: the take is 16 s")
+  assert_screen_layout(context, "BUFFER len under a beat")
   params:set("record_sync", 1); redraw()
   assert_equal(field_named(context, "dur").value, string.format("%.1fs", params:get("record_duration")),
     "sync off: the duration")
@@ -1150,7 +1153,7 @@ test("the bm field steps 1-4 and recalls the bookmark it lands on", function()
   assert_equal(field_named(context, "bm").level, 4, "a synth voice: dim even under the cursor")
 end)
 
-test("the start field shows - for a file that fits and 12.0s for a long one", function()
+test("the start field shows - for a file that fits and steps at the resolution it shows", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local buffers = local_value("buffers")
   context.audio.register("/tmp/ten.wav", { channels = 2, frames = 48000 * 10, rate = 48000 })
@@ -1162,22 +1165,102 @@ test("the start field shows - for a file that fits and 12.0s for a long one", fu
   enc(3, 5); context.clock.run_for(0.5)
   assert_equal(buffers[1].start, 0, "E3 does nothing")
   assert_equal(#context.calls_named("loadBuffer"), 0)
-  context.audio.register("/tmp/sixty.wav", { channels = 2, frames = 48000 * 60, rate = 48000 })
-  load_buffer(1, "/tmp/sixty.wav"); context.polls.fire("bufferState", 16)
+  context.audio.register("/tmp/hour.wav", { channels = 2, frames = 48000 * 3600, rate = 48000 })
+  load_buffer(1, "/tmp/hour.wav"); context.polls.fire("bufferState", 16)
   context.clear_engine_calls()
-  for _ = 1, 120 do enc(3, 1) end
-  redraw()
-  assert_equal(field_named(context, "start").value, "12.0s", "tenths")
-  with_alt(function() for _ = 1, 5 do enc(3, 1) end end)
-  redraw()
-  assert_equal(field_named(context, "start").value, "12.05s", "ALT+E3: hundredths")
+  local function shown() redraw(); return field_named(context, "start").value end
+  local function fine(d) with_alt(function() enc(3, d) end) end
+  -- below 10 s: hundredths; E3 a tenth, ALT+E3 a hundredth
+  enc(3, 1); assert_equal(shown(), "0.10s", "E3 below 10 s: a tenth")
+  fine(5); assert_equal(shown(), "0.15s", "ALT+E3 below 10 s: a hundredth")
+  for _ = 1, 20 do enc(3, 1) end
+  assert_equal(shown(), "2.15s", "hundredths kept while E3 steps tenths")
+  local set_start = local_value("S").lib.buffers.set_start
+  set_start(1, 11)
+  for _ = 1, 10 do enc(3, 1) end
+  assert_equal(shown(), "12.0s", "from 10 s: tenths")
+  fine(5); assert_equal(shown(), "12.5s", "ALT+E3 from 10 s: a tenth")
   assert_screen_layout(context, "BUFFER with a long file's start")
   assert_equal(#context.calls_named("loadBuffer"), 0, "no reload while E3 turns")
   context.clock.run_for(0.31)
   local loads = context.calls_named("loadBuffer")
   assert_equal(#loads, 1, "one reload 0.3 s after the last detent")
-  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], "/tmp/sixty.wav")
-  assert_near(loads[1].args[3], 12.05, 1e-6)
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], "/tmp/hour.wav")
+  assert_near(loads[1].args[3], 12.5, 1e-6)
+  for _ = 1, 30 do enc(3, -1) end
+  assert_equal(shown(), "9.50s", "back below 10 s: hundredths")
+  fine(5); assert_equal(shown(), "9.55s")
+  -- from 100 s whole seconds; from 1000 s minutes and seconds; one second a detent
+  set_start(1, 123.4); assert_equal(shown(), "123s", "from 100 s: whole seconds")
+  enc(3, 1); assert_equal(shown(), "124s", "E3: a second")
+  fine(-1); assert_equal(shown(), "123s", "ALT+E3: a second")
+  set_start(1, 1234.4); assert_equal(shown(), "20:34", "from 1000 s: minutes and seconds")
+  enc(3, 1); assert_equal(shown(), "20:35")
+  fine(1); assert_equal(shown(), "20:36")
+  set_start(1, 999.6); assert_equal(shown(), "16:40", "999.6 rounds to 1000 s")
+  set_start(1, 9.996); assert_equal(shown(), "10.0s", "9.996 rounds to 10.0 s")
+end)
+
+-- A width estimate at least as wide as norns' screen font (norns.ttf at 8
+-- px): the stub's per character, or the font's advance where that is wider
+-- ("m" is 6 px in the font, 5 in the stub)
+local DEVICE_WIDTHS = { m = 6 }
+local function device_safe_width(stub_extents, text)
+  local width = 0
+  for char in tostring(text):gmatch("[^\128-\191][\128-\191]*") do
+    width = width + math.max(stub_extents(char), DEVICE_WIDTHS[char] or 0)
+  end
+  return width
+end
+
+test("every start value keeps the start label whole", function()
+  local stub_extents = screen.text_extents
+  screen.text_extents = function(text) return device_safe_width(stub_extents, text), 8 end
+  local ok, problem = pcall(function()
+    for _, case in ipairs({ { tier = 16, file = 3600 }, { tier = 300, file = 3600 }, { tier = 300, file = 600 },
+      { tier = 300, file = 6 * 3600 } }) do
+      if case.tier ~= 16 then
+        h.write_performance_active({ tier = "high", buffer_seconds = case.tier, max_grains = 128,
+          history_seconds = 60, reason = "high: setting" })
+      end
+      local context = load_strata(); finish_startup(context); show_page("BUFFER")
+      local path = "/tmp/long" .. case.file .. ".wav"
+      context.audio.register(path, { channels = 2, frames = 48000 * case.file, rate = 48000 })
+      load_buffer(1, path); context.polls.fire("bufferState", case.tier)
+      to_field(10)
+      local set_start = local_value("S").lib.buffers.set_start
+      local starts = {}
+      for value = 0, 10, 0.01 do table.insert(starts, value) end
+      for value = 10, 100, 0.1 do table.insert(starts, value) end
+      for value = 100, case.file, 7 do table.insert(starts, value) end
+      for _, edge in ipairs({ 9.994, 9.995, 9.999, 99.94, 99.95, 99.99, 999.4, 999.5, 5999.4, 5999.5, 59999.4,
+        59999.5, case.file - case.tier }) do table.insert(starts, edge) end
+      local where = case.file .. " s file on a " .. case.tier .. " s tier"
+      for _, value in ipairs(starts) do
+        set_start(1, value); redraw()
+        local row = field_named(context, "start")
+        assert_equal(row.label, "start", where .. ": the label whole at " .. value .. " (" .. tostring(row.value) .. ")")
+      end
+      -- every detent changes what is shown, both ways, in every band
+      for _, value in ipairs({ 0.5, 9.95, 10, 55.5, 99.9, 100, 500, 999, 1000, 3000, 5999, 6000, 7000 }) do
+        if value + 120 < case.file - case.tier then
+          for _, step in ipairs({ { false, 1 }, { false, -1 }, { true, 1 }, { true, -1 } }) do
+            set_start(1, value); redraw()
+            local before = field_named(context, "start").value
+            if step[1] then key(1, 1) end
+            enc(3, step[2])
+            if step[1] then key(1, 0) end
+            redraw()
+            local after = field_named(context, "start").value
+            assert_true(after ~= before, string.format("%s: %s%+d at %s changes %s", where, step[1] and "ALT+E3 " or "E3 ",
+              step[2], value, before))
+          end
+        end
+      end
+    end
+  end)
+  screen.text_extents = stub_extents
+  assert_true(ok, tostring(problem))
 end)
 
 test("K2 released before 0.5 s opens the file selector, after 0.5 s loads a random file", function()
@@ -1301,12 +1384,12 @@ test("the rec, thr and sync fields show their values", function()
   assert_equal(field_named(context, "loop").value, "on")
 end)
 
-test("the selected voice's bookmarks tick at y 30-31, the last recalled at 15", function()
+test("the selected voice's bookmarks tick at y 29-30, the last recalled at 15", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local function ticks()
     local found = {}
     for _, rect in ipairs(context.screen.rects) do
-      if rect.y == 30 and rect.h == 2 and rect.w == 1 then found[rect.x] = rect.level end
+      if rect.y == 29 and rect.h == 2 and rect.w == 1 then found[rect.x] = rect.level end
     end
     return found
   end
@@ -1358,7 +1441,7 @@ test("each running voice on the slot draws its playhead, the selected one at 15"
   redraw()
   local heads = head_lines(context)
   assert_true(heads[76] ~= nil and heads[76].level == 15, "the selected voice's head at 15")
-  assert_true(heads[92] ~= nil and heads[92].level == 8, "another voice's at 8")
+  assert_true(heads[92] ~= nil and heads[92].level == 11, "another voice's at 11, over the loop's 8")
   local spread
   for _, line in ipairs(context.screen.lines) do
     if line.y1 == 28 and line.y2 == 28 and line.x1 == 68 and line.x2 == 84 then spread = line end
@@ -1408,6 +1491,27 @@ test("slot rows show ARM, REC, DUB and LOOP", function()
   assert_screen_layout(context, "BUFFER with ARM, REC and DUB")
   enc(2, 3); redraw()
   assert_equal(state_text(4), "LOOP")
+end)
+
+
+test("BUFFER's measured widths are bounded", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.audio.register("/tmp/hour.wav", { channels = 2, frames = 48000 * 3600, rate = 48000 })
+  load_buffer(1, "/tmp/hour.wav"); context.polls.fire("bufferState", 16)
+  to_field(10)
+  local set_start = local_value("S").lib.buffers.set_start
+  local stub_extents, probes = screen.text_extents, 0
+  screen.text_extents = function(text)
+    if text == "0.10s" then probes = probes + 1 end
+    return stub_extents(text)
+  end
+  set_start(1, 0.1); redraw(); redraw()
+  local first = probes
+  for index = 1, 300 do set_start(1, 0.1 + index / 100); redraw() end
+  set_start(1, 0.1); redraw()
+  screen.text_extents = stub_extents
+  assert_equal(first, 1, "a text is measured once")
+  assert_equal(probes, 2, "after 300 other texts the cache was cleared, so it is measured again")
 end)
 
 

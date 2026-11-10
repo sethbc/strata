@@ -41,14 +41,14 @@ return function(S)
   -- name_min_width px (the voices shorten to "v2+" first). Strings in a row
   -- stay column_gap px apart. levels: the waveform, heads and ticks.
   -- hold_seconds: K2, ALT+K2 and ALT+K3 released this long after their
-  -- press act as holds. start_step, start_fine_step: E3 and ALT+E3 on start
+  -- press act as holds.
   S.BUFFER_PAGE = {
     field_first_y = 16,
     field_spacing = 8,
     field_visible = 4,
     cursor_x = 0,
     label_x = 5,
-    label_gap = 3,
+    label_gap = 0,          -- the layout estimate is wider than the font, so the font leaves a gap
     field_value_right = 54,
     meter_y = 49,
     meter_x = 17,
@@ -68,10 +68,10 @@ return function(S)
     wave_center_y = 19,
     wave_half_height = 8,
     spread_y = 28,
-    bookmark_y = 30,
+    bookmark_y = 29,        -- y 29-30: y 31 stays clear above the slot rows' glyphs
     bookmark_height = 2,
-    levels = {divider = 1, field_marker = 4, wave_inside = 8, wave_outside = 3, wave_unread = 6, wave_empty = 1,
-      head = 15, other_head = 8, spread = 4, record_head = 12, bookmark = 6, recalled = 15},
+    levels = {divider = 1, wave_inside = 8, wave_outside = 3, wave_unread = 6, wave_empty = 1,
+      head = 15, other_head = 11, spread = 4, record_head = 12, bookmark = 6, recalled = 15},
     row_first_y = 37,
     row_spacing = 7,        -- three rows at y 37-51, clear of the hint row at y 62
     visible_rows = 3,
@@ -84,8 +84,19 @@ return function(S)
     minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
     checking_text = "...",  -- the length of a slot whose long file the engine is still checking
     hold_seconds = 0.5,
-    start_step = 0.1,
-    start_fine_step = 0.01,
+    -- the start field: below `below` s it shows the start rounded to `step`
+    -- s, as `format` of start / `unit`, so the label "start" always fits
+    -- whole beside it; ALT+E3 moves one step, E3 at least start_min_step
+    start_bands = {
+      {below = 10, step = 0.01, unit = 1, format = "%.2fs"},
+      {below = 100, step = 0.1, unit = 1, format = "%.1fs"},
+      {below = 1000, step = 1, unit = 1, format = "%ds"},
+      {below = 6000, step = 1, unit = 1, format = "m:ss"},
+      {below = 60000, step = 60, unit = 60, format = "%dm"},
+      {below = math.huge, step = 3600, unit = 3600, format = "%dh"},
+    },
+    start_min_step = 0.1,
+    cache_limit = 256,      -- measured widths and cut texts kept, at most, before they are forgotten
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
@@ -109,26 +120,32 @@ return function(S)
   end
 
   -- Measured text widths, kept per string: the values, seconds and voices
-  -- texts repeat from frame to frame, so a steady redraw measures nothing
-  local measured_widths = {}
+  -- texts repeat from frame to frame, so a steady redraw measures nothing.
+  -- Bounded: past cache_limit entries they are all forgotten (a turn
+  -- through a long file's start makes a new text at every detent)
+  local measured = {widths = {}, count = 0, cuts = {}, cut_count = 0}
   local function text_width(text)
-    local width = measured_widths[text]
+    local width = measured.widths[text]
     if not width then
+      if measured.count >= PAGE.cache_limit then measured.widths, measured.count = {}, 0 end
       width = screen.text_extents(text)
-      measured_widths[text] = width
+      measured.widths[text] = width
+      measured.count = measured.count + 1
     end
     return width
   end
 
   -- Texts cut to a width, per text and width (cut once, a character at a
-  -- time): the field labels beside a wide value, the slot names
-  local cut_texts = {}
+  -- time): the field labels beside a wide value. Bounded as the widths
   local function cut_text(text, max_width)
-    cut_texts[text] = cut_texts[text] or {}
-    local cut = cut_texts[text][max_width]
+    local cuts = measured.cuts[text]
+    local cut = cuts and cuts[max_width]
     if not cut then
+      if measured.cut_count >= PAGE.cache_limit then measured.cuts, measured.cut_count = {}, 0 end
       cut = S.lib.ui_text.fit_text(text, max_width)
-      cut_texts[text][max_width] = cut
+      measured.cuts[text] = measured.cuts[text] or {}
+      measured.cuts[text][max_width] = cut
+      measured.cut_count = measured.cut_count + 1
     end
     return cut
   end
@@ -166,10 +183,12 @@ return function(S)
   local function synced() return params:get("record_sync") > 1 end
 
   -- "16b", or the beats a slot holds at this tempo with " max" when the
-  -- record beats need longer than a slot
+  -- record beats need longer than a slot ("<1b max" when not one beat
+  -- fits: the take is then a slot long, under a beat)
   local function beats_text()
     local beats = params:get("record_beats")
     local fit = math.floor(S.performance.buffer_seconds / clock.get_beat_sec() + 1e-9)
+    if fit < 1 then return "<1b max" end
     if beats > fit then return fit .. "b max" end
     return beats .. "b"
   end
@@ -192,23 +211,39 @@ return function(S)
     return buffer.path ~= nil and buffer.file_seconds ~= nil and buffer.file_seconds > S.performance.buffer_seconds
   end
 
-  -- "12.0s", "12.05s" once a fine step leaves hundredths, "-" for a file that fits
+  -- The band a start shows in (start_bands), and the start rounded to its
+  -- step: the first band whose rounding stays below its end (9.996 is 10.0)
+  local function start_band(start)
+    for _, band in ipairs(PAGE.start_bands) do
+      local rounded = math.floor(start / band.step + 0.5) * band.step
+      if rounded < band.below then return band, rounded end
+    end
+  end
+
+  -- "9.05s", "12.1s", "1234s" is "20:34", "123m", "17h"; "-" for a file that fits
   local function start_text()
     local slot = cursor_slot()
     if not long_file(slot) then return "-" end
-    local start = S.buffers[slot].start or 0
-    if math.abs(start * 10 - math.floor(start * 10 + 0.5)) > 1e-6 then return string.format("%.2fs", start) end
-    return string.format("%.1fs", start)
+    local band, rounded = start_band(S.buffers[slot].start or 0)
+    local whole = math.floor(rounded + 0.5)
+    if band.format == "m:ss" then return string.format("%d:%02d", math.floor(whole / 60), whole % 60) end
+    if band.unit > 1 then return string.format(band.format, math.floor(rounded / band.unit + 0.5)) end
+    if band.step >= 1 then return string.format(band.format, whole) end
+    return string.format(band.format, rounded)
   end
 
-  -- E3 on start: tenths (ALT+E3 hundredths), through set_start (which
-  -- clamps it and reloads the file once E3 rests)
+  -- E3 on start: one step of the band it shows (at least start_min_step),
+  -- ALT+E3 one step, so every detent changes what is shown; the result
+  -- rounded to its own band's step, through set_start (which clamps it and
+  -- reloads the file once E3 rests)
   local function start_enc(d)
     local slot = cursor_slot()
     if not long_file(slot) then return end
-    local step = S.alt_held and PAGE.start_fine_step or PAGE.start_step
-    local start = (S.buffers[slot].start or 0) + d * step
-    S.lib.buffers.set_start(slot, math.floor(start * 100 + 0.5) / 100)
+    local start = S.buffers[slot].start or 0
+    local band = start_band(start)
+    local step = S.alt_held and band.step or math.max(PAGE.start_min_step, band.step)
+    local _, rounded = start_band(math.max(0, start + d * step))
+    S.lib.buffers.set_start(slot, rounded)
   end
 
   local BUFFER_FIELDS = {
@@ -282,15 +317,8 @@ return function(S)
       local index = first + offset
       draw_field_row(BUFFER_FIELDS[index], PAGE.field_first_y + offset * PAGE.field_spacing, index == cursor)
     end
-    local top = PAGE.field_first_y - 6
-    local track = (PAGE.field_visible - 1) * PAGE.field_spacing + 7
-    local length = math.max(math.min(math.floor(track * PAGE.field_visible / #BUFFER_FIELDS + 0.5), track - 1), 1)
-    local fraction = (first - 1) / (#BUFFER_FIELDS - PAGE.field_visible)
-    local y = top + math.floor((track - length) * fraction + 0.5)
-    screen.level(LEVELS.field_marker)
-    screen.move(PAGE.divider_x, y)
-    screen.line(PAGE.divider_x, y + length)
-    screen.stroke()
+    list.draw_marker(first, PAGE.field_visible, #BUFFER_FIELDS, PAGE.field_first_y - 6,
+      PAGE.field_first_y + (PAGE.field_visible - 1) * PAGE.field_spacing + 1, PAGE.divider_x)
   end
 
   ---------------------------------------------------------------------------
@@ -968,7 +996,7 @@ return function(S)
       params:set("record_feedback", 50); record_buffer(1)
       context.clock.run_for(3)
     end},
-    {name = "a long file's start", setup = function(context) LAYOUT.long_file_start(context, 60, 12.05) end},
+    {name = "a long file's start", setup = function(context) LAYOUT.long_file_start(context, 60, 9.05) end},
     {name = "a long file's start (high, 300 s)", setup = function(context)
       LAYOUT.as_300_s_tier(); LAYOUT.long_file_start(context, 3600, 1234.56) end},
     {name = "eight slots of 4:59 (high, 300 s)", setup = function(context)
