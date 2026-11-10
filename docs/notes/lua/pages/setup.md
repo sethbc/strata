@@ -11,7 +11,7 @@
 
 ## Owns
 
-- `lib/pages/setup.lua` (`S.lib.pages_setup`): the SETUP record, `redraw_setup`, `setup_key`, `setup_hints`, `setup_enc` (global), `S.setup_cursor`, `layout_states`; on the module, `SETUP_FIELDS` and `setup_rows()` (the rows as drawn now, for the tests).
+- `lib/pages/setup.lua` (`S.lib.pages_setup`): the SETUP record, `redraw_setup`, `setup_key`, `setup_hints`, `setup_enc` (global), `S.setup_cursor`, `layout_states`; on the module, `SETUP_FIELDS`, `SETUP_PAGE` (the page's layout constants: row spacing, note indent, ..., exported for the tests) and `setup_rows()` (the rows as drawn now, for the tests).
 - Its unit tests: `test/unit/pages_setup_test.lua`.
 
 ## The page
