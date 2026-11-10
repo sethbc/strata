@@ -327,12 +327,13 @@ end)
 test("SETUP shows why the running tier is not the setting's", function()
   local context = load_setup({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
     reason = "standard: performance_active.data could not be written"})
-  local with_note_rows
   local running = entry_named(context, "running: standard")
   local note = entry_named(context, "active file not written")
   assert_true(running and note, "the running row and its note show")
-  with_note_rows = #local_value("S").lib.pages_setup.setup_rows()
-  assert_true(note.y > running.y and note.y - running.y == local_value("S").lib.pages_setup.SETUP_PAGE.spacing, "the note is directly under running")
+  local with_note_rows = #local_value("S").lib.pages_setup.setup_rows()
+  local spacing = local_value("S").lib.pages_setup.SETUP_PAGE.spacing
+  assert_true(note.y > running.y and note.y - running.y == spacing,
+    "the note is directly under running")
   assert_screen_layout(context, "SETUP running note at the end")
   enc(2, -20); redraw()
   assert_screen_layout(context, "SETUP running note at the start")
