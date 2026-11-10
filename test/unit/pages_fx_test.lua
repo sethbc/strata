@@ -34,7 +34,7 @@ test("FX page K3 restores the last non-zero filter mix however it was set", func
   enc(3, 50); assert_near(params:get("filter_mix"), 0.5, 1e-6, "E3 sets the mix to 0.5")
   enc(3, -50); assert_equal(params:get("filter_mix"), 0, "E3 brings it to 0")
   key(3, 1); assert_near(params:get("filter_mix"), 0.5, 1e-6, "K3 restores the mix E3 last set")
-  params:set("filter_mix", 0.3); params:set("filter_mix", 0)  -- PARAMS menu, scene recall, ...
+  params:set("filter_mix", 0); params:set("filter_mix", 0.3); params:set("filter_mix", 0)  -- PARAMS menu, scene recall, ... (a rise)
   key(3, 1); assert_near(params:get("filter_mix"), 0.3, 1e-6, "K3 restores a mix set through params")
 end)
 
