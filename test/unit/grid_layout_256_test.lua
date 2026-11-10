@@ -733,4 +733,109 @@ test("256 lights the sounding step between steps, as SEQ does (#113)", function(
   assert_equal(led(2, 2), 0)
 end)
 
+-- 3.3 (Task 2c): page 5, the positions page, and the armed record key
+local function page5_grid()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  local device = context.grid.plug(1, 16, 16)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_loop_length", 1); params:set("v1_loop_start", 0)
+  return context, S, device
+end
+
+test("256: the key at x 12, y 8 shows page 5 and lights 15 there, 4 elsewhere", function()
+  local context, S, device = page5_grid()
+  assert_equal(S.lib.grid_core.page(1), 1)
+  grid_tap(context, 12, 8)
+  assert_equal(S.lib.grid_core.page(1), 5, "page 5")
+  assert_equal(device:get_led(12, 8), 15, "lit on page 5")
+  grid_tap(context, 13, 8)
+  assert_equal(S.lib.grid_core.page(1), 1, "page 1's key is (13, 8)")
+  assert_equal(device:get_led(12, 8), 4, "dim elsewhere")
+end)
+
+test("256: a position press jumps and a held pair sets the loop", function()
+  local context, S = page5_grid()
+  grid_tap(context, 12, 8)
+  grid_tap(context, 5, 1)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "the jump")
+  context.grid.press(1, 5, 1, 1); context.grid.press(1, 9, 1, 1)
+  context.grid.press(1, 9, 1, 0); context.grid.press(1, 5, 1, 0)
+  assert_near(params:get("v1_loop_start"), 0.25, 1e-9)
+  assert_near(params:get("v1_loop_length"), 0.3125, 1e-9, "the raw fraction of the exp spec or the mapped length, whichever the param holds")
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9)
+end)
+
+test("256: position LEDs follow grid_level for every voice", function()
+  local context, S, device = page5_grid()
+  grid_tap(context, 12, 8)
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for cell = 1, 16 do
+      assert_equal(device:get_led(cell, voice_idx), S.lib.positions.grid_level(voice_idx, cell, 16),
+        "voice " .. voice_idx .. " cell " .. cell)
+    end
+  end
+  for cell = 1, 16 do assert_equal(device:get_led(cell, 3), 0, "voice 3 is not a buffer voice") end
+  assert_true(device:get_led(1, 1) > 0, "voice 1's row is lit")
+end)
+
+test("256: voice v's strip on row 8 + v recalls, stores, holds and restores the whole loop", function()
+  local context, S, device = page5_grid()
+  grid_tap(context, 12, 8)
+  grid_tap(context, 2, 9)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "bookmark 2")
+  params:set("v1_buf_pos", 0.6)
+  context.grid.press(1, 6, 9, 1); context.grid.press(1, 3, 9, 1)
+  context.grid.press(1, 3, 9, 0); context.grid.press(1, 6, 9, 0)
+  assert_near(params:get("v1_bookmark_3"), 0.6, 0.05, "stored at the playhead")
+  context.clear_engine_calls()
+  context.grid.press(1, 7, 9, 1)
+  local held
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then held = call.args[3] end
+  end
+  assert_equal(held, 1, "scanHold 1 down")
+  context.grid.press(1, 7, 9, 0)
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then held = call.args[3] end
+  end
+  assert_equal(held, 0, "scanHold 0 up")
+  params:set("v1_loop_length", 0.5)
+  grid_tap(context, 8, 9)
+  assert_near(params:get("v1_loop_start"), 0, 1e-9, "whole loop")
+  assert_equal(device:get_led(8, 9), S.lib.positions.strip_level(1, "whole"))
+  for y = 9, 15 do
+    for x = 9, 16 do assert_equal(device:get_led(x, y), 0, "dark " .. x .. "," .. y) end
+  end
+end)
+
+test("256: pages 1-4 never reach positions", function()
+  local context, S = page5_grid()
+  local positions = S.lib.positions
+  for _, name in ipairs({"grid_key", "strip_key"}) do
+    positions[name] = function() error("positions." .. name .. " called") end
+  end
+  for page = 1, 4 do
+    grid_tap(context, 12 + page, 8)
+    for y = 1, 16 do for x = 1, 16 do
+      if not (y == 8 and x >= 12) then context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
+    end end
+  end
+end)
+
+test("256: an armed slot's record key lights 11", function()
+  local context, S, device = page5_grid()
+  params:set("record_sync", 3)
+  grid_tap(context, 16, 8)
+  assert_equal(device:get_led(1, 1), 2, "empty")
+  record_buffer(1)
+  context.polls.fire("recordState", 32)
+  assert_equal(S.lib.record.state(1).phase, "armed")
+  assert_equal(S.lib.grid_core.record_level(1), 11)
+  grid_redraw()
+  assert_equal(device:get_led(1, 1), 11, "armed")
+  context.polls.fire("recordState", 40 + 0)
+end)
+
 end

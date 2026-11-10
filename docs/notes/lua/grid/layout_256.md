@@ -20,6 +20,8 @@
 
 Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10; rows 14-15 voice select/toggle and pattern clear/randomize; row 16 lock and copy/paste.
 
+Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1, 2 and 4. Page 1's key is (13, 8).
+
 ## Row 8: tempo keys
 
 `LAYOUT_256.tempo_steps` maps columns 5-8 to -10, -1, +1, +10. A press calls `params:delta("tempo", step)` (the `tempo` param drives `clock_tempo`) and `header_flash(string.format("tempo %d", ...))` with the new tempo, so the screen's header shows it for 1.5 s on any page. `grid_redraw_256_transport` lights a held tempo key at 15 (`grid_core.held`), the others at 4.
