@@ -30,16 +30,16 @@
     }
 
     // The voice-level (buffer and input sources) and grain controls a grain
-    // synth for the voice's current source takes. The synth source reads its
-    // voice's 4 s ring at history 0, whatever history the voice keeps (that
-    // is for the input ring), so a voice that leaves the input never reads
-    // a wrapped ring.
+    // synth for the voice's current source takes, then the ring it reads and
+    // the history it reads it at (grainReadPairs, the freeze area's answer;
+    // empty for a buffer source), last so they win over the kept history:
+    // the synth source's ring at history 0, the input ring at the voice's
+    // history, or a frozen input voice's copy at history 0.
     grainControlPairs { arg voice;
         var defName = this.grainDefFor(voice);
         var pairs = this.controlPairs(defName, grainControls[voice]);
         if (grainSource[voice] != 0) { pairs = this.controlPairs(defName, voiceControls[voice]) ++ pairs };
-        if (grainSource[voice] == 0) { pairs = pairs ++ [\history, 0] };
-        ^pairs
+        ^pairs ++ this.grainReadPairs(voice)
     }
 
     // The grain synth for the voice's current source, with its current
@@ -51,10 +51,12 @@
     // rateLevel 0 makes the bend and frequency crossmod term 1) and its mod
     // buses on the silent bus, never control bus 0 (the input amplitude
     // follower on norns); the input source's reads the input ring with
-    // them on, as a buffer source's strataGrainBuf does. A strataGrainRing
-    // is kept in ringReaders and a strataGrainBuf in grainSlots (with its
-    // slot, so a slot change reaches it in its release too: bufferChanged)
-    // until it frees.
+    // them on, as a buffer source's strataGrainBuf does. The ring a
+    // strataGrainRing reads comes with its grain controls (grainControlPairs).
+    // A strataGrainRing is kept in ringReaders (and, reading a frozen input
+    // voice's copy, in the freeze area's inputReaders) and a strataGrainBuf
+    // in grainSlots (with its slot, so a slot change reaches it in its
+    // release too: bufferChanged) until it frees.
     startGrainSynth { arg voice, target, addAction;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
@@ -62,24 +64,20 @@
 
         case
         { source == 0 } {
-            args = args ++ this.ringPairs(voice) ++ [\rateLevel, 0, \pan, 0,
+            args = args ++ [\rateLevel, 0, \pan, 0,
                 \modBus1, silentBus.index, \modBus2, silentBus.index, \modBus3, silentBus.index];
         }
-        { source == this.inputSource } { args = args ++ this.ringPairs(voice) ++ [\rateLevel, 1] }
+        { source == this.inputSource } { args = args ++ [\rateLevel, 1] }
         { args = args ++ [\rateLevel, 1] ++ this.bufferSlotPairs(voice) };
         synth = this.watchVoiceSynth(voice, this.grainKey(voice),
             Synth(defName, args ++ this.grainControlPairs(voice), target, addAction));
         case
         { defName == \strataGrainBuf } { grainSlots[synth] = source - 1 }
-        { defName == \strataGrainRing } { this.ringReaders[synth] = voice };
+        { defName == \strataGrainRing } {
+            this.ringReaders[synth] = voice;
+            this.noteInputReader(voice, synth);
+        };
         ^synth
-    }
-
-    // The ring a synth- or input-sourced voice reads, as strataGrainRing
-    // controls (ringBuffersFor); empty for a buffer source
-    ringPairs { arg voice;
-        var ring = this.ringBuffersFor(voice, grainSource[voice]);
-        ^if (ring.isNil) { [] } { [\bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index] }
     }
 
     // A buffer-sourced voice's slot as strataGrainBuf controls (bufnums,
@@ -165,8 +163,10 @@
         if (synths[grainKey].isNil) {
             synths[grainKey] = this.startPlacedGrainSynth(voice);
         } {
-            // with the slot as it is now: bufferChanged sends a releasing grain synth bufFrames 0 only
+            // with the slot as it is now: bufferChanged sends a releasing grain
+            // synth bufFrames 0 only; with the ring grainControlPairs gives
             this.sendToSynth(synths[grainKey].setMsg(\gate, 1, *(scanRestart ++ this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice))));
+            this.noteInputReader(voice, synths[grainKey]);
         };
 
         if (synths[modKey].isNil and: { stillReleasing.(modKey) }) {

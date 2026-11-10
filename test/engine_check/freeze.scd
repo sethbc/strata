@@ -25,6 +25,7 @@ var probeGroup, quietBus, nowBus, clockBus, readOut, rectEnv, timecode, started;
 var timeReads, startTimecodeVoice, now, phaseMoves, grainOf, fadingRingReader, voiceRing, inputRing;
 var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
 var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles;
+var old, readsCopy, restartGrain, startInput;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, largest read, smallest read, seconds with a grain]. Reads only
@@ -110,6 +111,26 @@ startTimecodeVoice = { arg voice, source, size, density, pitch;
 fadingRingReader = { arg voice;
     engine.fadingSynths[voice].detect({ arg synth; synth.isPlaying and: { synth.defName.asSymbol == \strataGrainRing } })
 };
+// Whether an input voice's grain synth reads its frozen copy: the voice
+// ring at history 0, frozen, counted among the copy's readers
+readsCopy = { arg voice, synth;
+    var entry = state[\inputReaders][synth];
+    (getControl.(synth, \bufL) == voiceRing.(voice)[0].bufnum) and: { getControl.(synth, \phaseBus) == rings[\phaseBuses][voice].index }
+        and: { getControl.(synth, \history) == 0 } and: { getControl.(synth, \freeze) == 1 }
+        and: { entry.notNil } and: { entry[\until].isNil }
+};
+// Free a voice's live grain synth on the server behind sclang's back (a
+// release that ended just as a gate came, as lifecycle.scd provokes it):
+// whether the engine started another
+restartGrain = { arg voice;
+    var freed = grainOf.(voice), restarted;
+    server.sendMsg(\n_free, freed.nodeID);
+    restarted = h.waitFor({ grainOf.(voice).notNil and: { grainOf.(voice) !== freed } }, 0.3);
+    server.sync;
+    restarted
+};
+// voiceOn for a voice whose source is already set
+startInput = { arg voice; command.(\voiceOn, voice, 100.0, 0.2, 0.0, 0.1, 10.0, 1.0) };
 
 timecode = Synth(\strataCheckFreezeTimecode, [\out, engine.granBuses[0], \out2, engine.inputBus,
     \now, nowBus, \nowKr, clockBus], engine.voiceGroup, \addToHead);
@@ -248,6 +269,40 @@ check.(ok and: { readings[0] } and: { readings[1] } and: { readings[2] == 2 }
     "freeze: the live input grain synth is a ring reader while frozen and for 0.5 s after unfreeze (frozen %, 0.2 s after %, back on the input ring %, history %)".format(
         ok, readings[0], readings[1], readings[2]));
 
+// ---- A frozen input voice's grain synth reads the copy, however it starts ----
+// (no freeze resend after voiceOn: what a grain synth reads is the engine's
+// own answer, not Lua's)
+command.(\setGrainParam, 3, \freeze, 1.0);
+ok = h.waitFor({ state[\copied][3] }, 0.3);
+server.sync;
+// re-gated inside its release: the same node
+command.(\voiceOff, 3);
+startInput.(3); server.sync;
+check.(ok and: { grainOf.(3) === live } and: { getControl.(live, \history) == 0 }
+    and: { getControl.(live, \bufL) == voiceRing.(3)[0].bufnum },
+    "freeze: a re-gated grain synth of a frozen input voice keeps reading the copy at history 0 (history %)".format(
+        getControl.(live, \history)));
+// a new grain synth once the old one has freed
+command.(\voiceOff, 3);
+ok = h.waitFor({ live.isPlaying.not }, engine.grainRelease + 1);
+startInput.(3); server.sync;
+live = grainOf.(3);
+check.(ok and: { readsCopy.(3, live) },
+    "freeze: a frozen input voice's new grain synth reads the copy (bufL is the voice ring's %)".format(
+        getControl.(live, \bufL) == voiceRing.(3)[0].bufnum));
+// restarted by a late gate (its release ended as the gate came)
+old = live;
+ok = restartGrain.(3);
+live = grainOf.(3);
+check.(ok and: { live !== old } and: { readsCopy.(3, live) },
+    "freeze: a grain synth restarted by a late gate on a frozen input voice reads the copy (bufL is the voice ring's %)".format(
+        getControl.(live, \bufL) == voiceRing.(3)[0].bufnum));
+// an unfreeze reaches the restarted reader
+command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
+check.((getControl.(live, \bufL) == inputRing[0].bufnum) and: { getControl.(live, \history) == 2 },
+    "freeze: an unfreeze reaches a restarted reader (back on the input ring at history %)".format(getControl.(live, \history)));
+0.6.wait;   // past freezeLeaveSeconds: the next freeze finds no reader
+
 // ---- The fade before a copy ----
 engine.bufferFadeWait = 0.4;
 // a refreeze inside that window: the live synth fades, the copy waits
@@ -307,6 +362,25 @@ check.((getControl.(live, \bufL) == inputRing[0].bufnum) and: { state[\copied][3
     and: { readings.every({ arg value; value != 1 }) }
     and: { fading.notNil } and: { fading.isPlaying.not or: { getControl.(fading, \ringLevel) == 1 } },
     "freeze: an unfreeze inside the copy's wait wins (no copy: the voice ring reads %)".format(readings.round(0.001)));
+// a grain synth restarted inside the copy's wait reads the input ring at
+// the voice's history, then the copy once it is in
+command.(\setGrainSource, 3, 0); server.sync;
+engine.synths[engine.voiceKey(3)] !? { arg synth; synth.set(\out, quietBus.index) };
+0.3.wait;
+command.(\setGrainSource, 3, engine.inputSource); server.sync;
+fading = fadingRingReader.(3);
+command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
+0.05.wait;
+ok = restartGrain.(3);
+live = grainOf.(3);
+readings = [fading.notNil, state[\copied][3].not, getControl.(live, \bufL) == inputRing[0].bufnum, getControl.(live, \history)];
+h.waitFor({ state[\copied][3] }, 1);
+server.sync;
+check.(ok and: { readings[0] } and: { readings[1] } and: { readings[2] } and: { readings[3] == 2 }
+    and: { getControl.(live, \bufL) == voiceRing.(3)[0].bufnum } and: { getControl.(live, \history) == 0 },
+    "freeze: a restart inside a copy's wait reads the input ring, then the copy (fading %, waiting %, input ring %, history %)".format(
+        readings[0], readings[1], readings[2], readings[3]));
+command.(\setGrainParam, 3, \freeze, 0.0);
 engine.bufferFadeWait = savedFadeWait;
 command.(\setGrainParam, 3, \history, 0.0);
 // a frozen input voice switched to its synth: unfrozen, its writer reads the voice bus again
@@ -318,6 +392,23 @@ check.(state[\frozen][3].not and: { writerNodes.size == 1 } and: { writerNodes[0
     and: { phaseMoves.(rings[\phaseBuses][3]) },
     "freeze: a source switch unfreezes an input voice (its writer reads its voice bus and runs)");
 command.(\voiceOff, 3);
+// a source changed while a frozen input voice was stopped: the grain synth
+// voiceOn starts reads the new source and is no reader of the copy
+command.(\setGrainSource, 3, engine.inputSource);
+startInput.(3);
+command.(\setGrainParam, 3, \freeze, 1.0);
+ok = h.waitFor({ state[\copied][3] }, 2);
+old = grainOf.(3);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 1);
+ok = ok and: { h.waitFor({ old.isPlaying.not }, engine.grainRelease + 1) };
+startInput.(3); server.sync;
+live = grainOf.(3);
+check.(ok and: { live.defName.asSymbol == \strataGrainBuf } and: { state[\inputReaders][live].isNil },
+    "freeze: a source changed while a frozen input voice was stopped starts on the new source (%)".format(live.defName));
+command.(\setGrainParam, 3, \freeze, 0.0);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
 
 // ---- A buffer voice: the scan stops, spread still moves ----
 // slot 6 holds a 1 s ramp (left 0 -> 1, right 1), so a grain's read is its
@@ -427,6 +518,8 @@ server.sync; 0.05.wait;
 check.((other.areaState[\freeze][\mode][0] == \hold) and: { writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }) == 1 }
     and: { phaseMoves.(other.areaState[\rings][\phaseBuses][0]).not },
     "freeze: a mode change while frozen freezes again in the new mode");
+check.(other.grainControls[0][\freeze] == 1,
+    "freeze: a freezeMode change keeps a frozen voice's freeze control (kept %)".format(other.grainControls[0][\freeze]));
 other.numVoices.do({ arg voice; otherCommand.(\setGrainParam, voice, \freeze, 0.0) });
 h.stopAllVoices(other);
 h.freeEngine(other);
