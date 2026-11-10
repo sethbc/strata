@@ -25,7 +25,7 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
 
 ## The Header and the Hint Row
 
-Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records, and the `S1`-`S8` scene indicator (brighter while the scene sequencer runs). The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
+Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S8` scene indicator (brighter while the scene sequencer runs). The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
 
 The bottom row shows the page's key hints. A short message (a saved buffer, a failed load, ...) can take it for 1.5 s, on the page that raised it.
 

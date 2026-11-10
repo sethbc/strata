@@ -351,4 +351,43 @@ test("the screen stub records filled and outlined rects", function()
   screen.rect(0, 0, 1, 1); screen.fill()
   assert_equal(#context.screen.rects, 1); assert_equal(context.screen.rects[1].filled, true)
 end)
+test("the header shows ARM while a slot is armed and none records", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("MAIN")
+  local function at_rec_x()
+    local found = {}
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.x == 96 and entry.y == 8 then table.insert(found, entry.text) end
+    end
+    return table.concat(found, " ")
+  end
+  redraw(); assert_equal(at_rec_x(), "", "nothing at x 96")
+  params:set("record_threshold", 2)   -- waits for the input's level: armed
+  record_buffer(1); redraw()
+  assert_equal(at_rec_x(), "ARM", "ARM while slot 1 is armed")
+  assert_screen_layout(context, "the header with ARM")
+  params:set("record_threshold", 1)
+  record_buffer(2); redraw()
+  assert_equal(at_rec_x(), "REC", "REC once a slot records, no ARM")
+  record_buffer(2); record_buffer(1)   -- stop both
+  context.polls.fire("recordState", (1 * 4 + 3) * 8 + 0)   -- slot 1's armed recording canceled
+  context.polls.fire("bufferState", 1000 + 3)            -- slot 2's take settles
+  redraw()
+  assert_equal(at_rec_x(), "", "neither: nothing at x 96")
+end)
+
+
+test("the hint row is cut to the screen", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("BUFFER")
+  local long = "no files in /home/we/dust/audio/a_long_folder_name/another_long_one/"
+  buffer_page_flash(long); redraw()
+  local shown = hint_text(context)
+  assert_true(#shown < #long and long:sub(1, #shown) == shown, "the flash is cut: " .. shown)
+  assert_true(select(2, text_span({ x = 0, text = shown, align = "left" })) <= 128, "and ends on the screen")
+  assert_equal(local_value("S").lib.ui_flash.text("hints"), long, "the flash itself keeps its text")
+  assert_screen_layout(context, "BUFFER with a long flash")
+end)
+
+
 end

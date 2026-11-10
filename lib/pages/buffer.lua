@@ -1,15 +1,19 @@
 -- lib/pages/buffer.lua
--- The BUFFER page: the selected voice and three fields (its source, the
--- record duration and level) with an input meter on the left, the eight
--- buffer slots on the right (S.BUFFER_PAGE for the layout and the file
--- selector, S.buffer_page for the cursors). E2 picks a slot, ALT+E2 a
--- field, E3 edits the field; K3 records into the cursor slot (or stops),
--- K2's release loads a file into it (the file selector, which redraw() in
--- strata.lua draws while it is open), ALT+K2 clears it and ALT+K3 saves
--- it. The input meter's polls run only while the page shows. Registers its
--- S.registry.pages record and a cleanup step; INPUT_METER,
--- input_meter_segments and the meter state are fields of this module's
--- table (S.lib.pages_buffer). The functions that were global stay global.
+-- The BUFFER page (3.3): eleven fields on the left (the selected voice's
+-- source and the record settings, a bookmark, a long file's start, the
+-- scrub friction), four at a time, over an input meter; on the right the
+-- cursor slot's waveform with its voices' playheads, the record head and
+-- the selected voice's bookmarks, over three of the eight slot rows
+-- (S.BUFFER_PAGE for the layout and the file selector, S.buffer_page for
+-- the cursors). E2 picks a slot, ALT+E2 a field, E3 edits the field; K3
+-- records into the cursor slot (or stops); K2 and ALT+K2/ALT+K3 act on
+-- release, by how long they were held (hold_seconds): K2 opens the file
+-- selector or loads a random file, ALT+K2 clears or fills the empty slots,
+-- ALT+K3 saves the slot or its loop region. The input meter's polls run
+-- only while the page shows. Registers its S.registry.pages record and a
+-- cleanup step; INPUT_METER, input_meter_segments and the meter state are
+-- fields of this module's table (S.lib.pages_buffer). The functions that
+-- were global stay global.
 
 return function(S)
   local M = {}
@@ -18,24 +22,33 @@ return function(S)
   local UI_PAGES = S.constants.UI_PAGES
   local fileselect = require "fileselect"
 
-  -- BUFFER page layout. Left column (x 0 to divider_x - 2): the voice's
-  -- name at name_y, the three fields from field_first_y (the cursor ">" at
-  -- cursor_x, the label at label_x, the value right-aligned at
-  -- field_value_right), then the input meter on meter_y: "in" at label_x
-  -- and eight segment_width x segment_height segments from meter_x. Right
-  -- column: visible_rows slot rows from row_first_y, row_spacing apart
-  -- (the list scrolls, with field_list's scroll marker at x 127): the slot
-  -- number at slot_x, the name from name_x, the seconds (or REC) right-
-  -- aligned at value_right; the cursor row also lists the voices reading
-  -- the slot, right-aligned before its seconds, at most voices_max_width
-  -- wide and never into the name's first name_min_width px (the voices
-  -- shorten to "v2+" first). Strings in a row stay column_gap px apart.
+  -- BUFFER page layout. Left column (x 0 to divider_x - 2): field_visible
+  -- field rows from field_first_y, field_spacing apart (the cursor ">" at
+  -- cursor_x, the label at label_x, cut to end label_gap px before the
+  -- value, which is right-aligned at field_value_right), their scroll marker
+  -- on the divider; then the input meter on meter_y: "in" at label_x and
+  -- eight segment_width x segment_height segments from meter_x. Right
+  -- column: the cursor slot's waveform, wave_columns columns from wave_x
+  -- (one per peak), wave_top to wave_bottom around wave_center_y, a column
+  -- wave_half_height px each way at a peak of 1; the heads over it (a voice's
+  -- spread on spread_y, the record head dotted); the bookmark ticks
+  -- (bookmark_height px from bookmark_y); then visible_rows slot rows from
+  -- row_first_y, row_spacing apart (field_list's scroll marker at x 127):
+  -- the slot number at slot_x, the name from name_x, the seconds or the
+  -- recording's state right-aligned at value_right; the cursor row also
+  -- lists the voices reading the slot, right-aligned before its seconds, at
+  -- most voices_max_width wide and never into the name's first
+  -- name_min_width px (the voices shorten to "v2+" first). Strings in a row
+  -- stay column_gap px apart. levels: the waveform, heads and ticks.
+  -- hold_seconds: K2, ALT+K2 and ALT+K3 released this long after their
+  -- press act as holds. start_step, start_fine_step: E3 and ALT+E3 on start
   S.BUFFER_PAGE = {
-    name_y = 16,
-    field_first_y = 24,
+    field_first_y = 16,
     field_spacing = 8,
+    field_visible = 4,
     cursor_x = 0,
     label_x = 5,
+    label_gap = 3,
     field_value_right = 54,
     meter_y = 49,
     meter_x = 17,
@@ -48,9 +61,20 @@ return function(S)
     divider_x = 56,
     divider_top = 10,
     divider_bottom = 52,
-    row_first_y = 16,
-    row_spacing = 7,        -- six rows at y 16-51, clear of the hint row at y 62
-    visible_rows = 6,
+    wave_x = 60,
+    wave_columns = 64,
+    wave_top = 11,
+    wave_bottom = 27,
+    wave_center_y = 19,
+    wave_half_height = 8,
+    spread_y = 28,
+    bookmark_y = 30,
+    bookmark_height = 2,
+    levels = {divider = 1, field_marker = 4, wave_inside = 8, wave_outside = 3, wave_unread = 6, wave_empty = 1,
+      head = 15, other_head = 8, spread = 4, record_head = 12, bookmark = 6, recalled = 15},
+    row_first_y = 37,
+    row_spacing = 7,        -- three rows at y 37-51, clear of the hint row at y 62
+    visible_rows = 3,
     slot_x = 59,
     name_x = 65,
     value_right = 124,      -- clear of the scroll marker at x 127
@@ -59,50 +83,33 @@ return function(S)
     name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
     minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
     checking_text = "...",  -- the length of a slot whose long file the engine is still checking
+    hold_seconds = 0.5,
+    start_step = 0.1,
+    start_fine_step = 0.01,
     file_selector_open = false,     -- K2's file selector owns the screen: redraw() draws it
     file_selector_callback = nil,   -- the callback K2 gave fileselect.enter
     script_key = nil,               -- Strata's key and enc as K2 opened the selector
     script_enc = nil
   }
   local PAGE = S.BUFFER_PAGE
+  local LEVELS = PAGE.levels
 
   -- The cursors: slot (1..NUM_BUFFERS, what E2 picks and the keys act on)
   -- and field (1..#BUFFER_FIELDS, what ALT+E2 picks and E3 edits)
   S.buffer_page = {slot = 1, field = 1}
 
-  -- The left column's fields: label, the param E3 edits and its value text
-  local BUFFER_FIELDS = {
-    {label = "src", param_id = function() return "v" .. S.selected_voice .. "_source" end,
-      value = function() return voice_source_label(S.selected_voice) end},
-    {label = "dur", param_id = function() return "record_duration" end,
-      value = function() return string.format("%.1fs", params:get("record_duration")) end},
-    {label = "lvl", param_id = function() return "record_level" end,
-      value = function() return string.format("%.2f", params:get("record_level")) end},
-  }
-
-  -- The cursors, put back in range (a stray value never indexes past the
-  -- slots or fields)
-  local function cursor_slot()
-    S.buffer_page.slot = util.clamp(math.floor(tonumber(S.buffer_page.slot) or 1), 1, NUM_BUFFERS)
-    return S.buffer_page.slot
-  end
-
-  local function cursor_field()
-    S.buffer_page.field = util.clamp(math.floor(tonumber(S.buffer_page.field) or 1), 1, #BUFFER_FIELDS)
-    return BUFFER_FIELDS[S.buffer_page.field]
-  end
-
-  -- Show `text` (a save result, a failed load) in BUFFER's hint row
-  -- for HEADER.flash_seconds (1.5 s), through the shared "hints" flash
-  -- (lib/ui/flash.lua), owned by BUFFER: redraw() draws it there instead of
-  -- the key hints while BUFFER is up (other pages keep their own hints), and
-  -- its clock asks for a redraw when it ends
+  -- Show `text` (a save result, a failed load, a random file) in BUFFER's
+  -- hint row for HEADER.flash_seconds (1.5 s), through the shared "hints"
+  -- flash (lib/ui/flash.lua), owned by BUFFER: redraw() draws it there
+  -- instead of the key hints while BUFFER is up (other pages keep their own
+  -- hints; draw_hints cuts it to the screen), and its clock asks for a
+  -- redraw when it ends
   function buffer_page_flash(text)
     S.lib.ui_flash.start("hints", text, S.constants.HEADER.flash_seconds, UI_PAGES.index.BUFFER)
   end
 
-  -- Measured text widths, kept per string: the seconds and voices texts
-  -- repeat from frame to frame, so a steady redraw measures nothing
+  -- Measured text widths, kept per string: the values, seconds and voices
+  -- texts repeat from frame to frame, so a steady redraw measures nothing
   local measured_widths = {}
   local function text_width(text)
     local width = measured_widths[text]
@@ -113,15 +120,182 @@ return function(S)
     return width
   end
 
-  -- The voice's name cut to the left column, per name (the cut never
-  -- changes, so it is measured once)
-  local voice_names = {}
-  local function voice_display_name(name)
-    if not voice_names[name] then
-      voice_names[name] = S.lib.ui_text.fit_text(string.upper(name), PAGE.divider_x - 2)
+  -- Texts cut to a width, per text and width (cut once, a character at a
+  -- time): the field labels beside a wide value, the slot names
+  local cut_texts = {}
+  local function cut_text(text, max_width)
+    cut_texts[text] = cut_texts[text] or {}
+    local cut = cut_texts[text][max_width]
+    if not cut then
+      cut = S.lib.ui_text.fit_text(text, max_width)
+      cut_texts[text][max_width] = cut
     end
-    return voice_names[name]
+    return cut
   end
+
+  local function cursor_slot()
+    S.buffer_page.slot = util.clamp(math.floor(tonumber(S.buffer_page.slot) or 1), 1, NUM_BUFFERS)
+    return S.buffer_page.slot
+  end
+
+  ---------------------------------------------------------------------------
+  -- The fields: name (layout states), label, value(), and either param_id()
+  -- (E3 is enc_param_delta) or enc(d); active() false dims the row
+  ---------------------------------------------------------------------------
+
+  local function voice_param(key) return "v" .. S.selected_voice .. "_" .. key end
+
+  local function option_text(id)
+    local param = params:lookup_param(id)
+    return param.options[params:get(id)] or ""
+  end
+
+  -- 5% (a fine step shows its tenth: 99.5%)
+  local function percent_text(value)
+    local whole = math.floor(value + 0.5)
+    if math.abs(value - whole) < 1e-6 then return string.format("%d%%", whole) end
+    return string.format("%.1f%%", value)
+  end
+
+  local RECORD_SOURCE_TEXTS = {input = "in", ["pre-master"] = "pre", ["post-master"] = "post"}
+  local function record_source_text()
+    local name = option_text("record_source")
+    return RECORD_SOURCE_TEXTS[name] or (name:match("^voice (%d+)$") and "v" .. name:match("^voice (%d+)$")) or name
+  end
+
+  local function synced() return params:get("record_sync") > 1 end
+
+  -- "16b", or the beats a slot holds at this tempo with " max" when the
+  -- record beats need longer than a slot
+  local function beats_text()
+    local beats = params:get("record_beats")
+    local fit = math.floor(S.performance.buffer_seconds / clock.get_beat_sec() + 1e-9)
+    if beats > fit then return fit .. "b max" end
+    return beats .. "b"
+  end
+
+  -- The bookmark the bm field shows: the selected voice's last recalled, else 1
+  local function shown_bookmark()
+    return S.lib.positions.last_recalled(S.selected_voice) or 1
+  end
+
+  -- E3 on bm: step 1..NUM_BOOKMARKS and recall the bookmark it lands on
+  local function bookmark_enc(d)
+    local shown = shown_bookmark()
+    local n = util.clamp(shown + d, 1, S.constants.NUM_BOOKMARKS)
+    if n ~= shown then S.lib.positions.recall_bookmark(S.selected_voice, n) end
+  end
+
+  -- The cursor slot holds a file longer than a slot (its start can move)
+  local function long_file(slot)
+    local buffer = S.buffers[slot]
+    return buffer.path ~= nil and buffer.file_seconds ~= nil and buffer.file_seconds > S.performance.buffer_seconds
+  end
+
+  -- "12.0s", "12.05s" once a fine step leaves hundredths, "-" for a file that fits
+  local function start_text()
+    local slot = cursor_slot()
+    if not long_file(slot) then return "-" end
+    local start = S.buffers[slot].start or 0
+    if math.abs(start * 10 - math.floor(start * 10 + 0.5)) > 1e-6 then return string.format("%.2fs", start) end
+    return string.format("%.1fs", start)
+  end
+
+  -- E3 on start: tenths (ALT+E3 hundredths), through set_start (which
+  -- clamps it and reloads the file once E3 rests)
+  local function start_enc(d)
+    local slot = cursor_slot()
+    if not long_file(slot) then return end
+    local step = S.alt_held and PAGE.start_fine_step or PAGE.start_step
+    local start = (S.buffers[slot].start or 0) + d * step
+    S.lib.buffers.set_start(slot, math.floor(start * 100 + 0.5) / 100)
+  end
+
+  local BUFFER_FIELDS = {
+    {name = "source", label = function() return "v" .. S.selected_voice end,
+      param_id = function() return voice_param("source") end,
+      value = function() return voice_source_label(S.selected_voice) end},
+    {name = "rec", label = "rec", param_id = function() return "record_source" end, value = record_source_text},
+    {name = "dur", label = function() return synced() and "len" or "dur" end,
+      param_id = function() return synced() and "record_beats" or "record_duration" end,
+      value = function()
+        if synced() then return beats_text() end
+        return string.format("%.1fs", params:get("record_duration"))
+      end},
+    {name = "lvl", label = "lvl", param_id = function() return "record_level" end,
+      value = function() return string.format("%.2f", params:get("record_level")) end},
+    {name = "fb", label = "fb", param_id = function() return "record_feedback" end,
+      value = function() return percent_text(params:get("record_feedback")) end},
+    {name = "loop", label = "loop", param_id = function() return "record_loop" end,
+      value = function() return option_text("record_loop") end},
+    {name = "thr", label = "thr", param_id = function() return "record_threshold" end,
+      value = function() return (option_text("record_threshold"):gsub(" ", "")) end},
+    {name = "sync", label = "sync", param_id = function() return "record_sync" end,
+      value = function() return option_text("record_sync") end},
+    {name = "bm", label = "bm", enc = bookmark_enc,
+      active = function() return voice_uses_buffer(S.selected_voice) end,
+      value = function()
+        local n = shown_bookmark()
+        return string.format("%d %.2f", n, S.lib.positions.bookmark(S.selected_voice, n) or 0)
+      end},
+    {name = "start", label = "start", enc = start_enc, value = start_text},
+    {name = "fric", label = "fric", param_id = function() return "scrub_friction" end,
+      value = function() return percent_text(params:get("scrub_friction")) end},
+  }
+
+  local function cursor_field()
+    S.buffer_page.field = S.lib.ui_field_list.clamp(BUFFER_FIELDS, S.buffer_page.field)
+    return BUFFER_FIELDS[S.buffer_page.field]
+  end
+
+  -- One field row at y: the value right-aligned, the label cut to end
+  -- label_gap px before it, ">" on the cursor's row. The cursor's row at 15,
+  -- the others 4; a row that does nothing for the selected voice (bm on a
+  -- voice that reads no buffer) 4 under the cursor, 2 elsewhere
+  local function draw_field_row(field, y, selected)
+    local level = selected and 15 or 4
+    if field.active and not field.active() then level = selected and 4 or 2 end
+    local value = field.value()
+    local label = type(field.label) == "function" and field.label() or field.label
+    screen.level(level)
+    if selected then
+      screen.move(PAGE.cursor_x, y)
+      screen.text(">")
+    end
+    screen.move(PAGE.field_value_right, y)
+    screen.text_right(value)
+    local room = PAGE.field_value_right - text_width(value) - PAGE.label_gap - PAGE.label_x
+    label = cut_text(label, room)
+    if label ~= "" then
+      screen.move(PAGE.label_x, y)
+      screen.text(label)
+    end
+  end
+
+  -- The field rows in view (one above the cursor kept), then their scroll
+  -- marker on the divider (field_list's geometry, drawn at divider_x)
+  local function draw_fields()
+    local cursor = cursor_field() and S.buffer_page.field
+    local list = S.lib.ui_field_list
+    local first = list.first_visible(BUFFER_FIELDS, cursor, PAGE.field_visible)
+    for offset = 0, math.min(PAGE.field_visible, #BUFFER_FIELDS - first + 1) - 1 do
+      local index = first + offset
+      draw_field_row(BUFFER_FIELDS[index], PAGE.field_first_y + offset * PAGE.field_spacing, index == cursor)
+    end
+    local top = PAGE.field_first_y - 6
+    local track = (PAGE.field_visible - 1) * PAGE.field_spacing + 7
+    local length = math.max(math.min(math.floor(track * PAGE.field_visible / #BUFFER_FIELDS + 0.5), track - 1), 1)
+    local fraction = (first - 1) / (#BUFFER_FIELDS - PAGE.field_visible)
+    local y = top + math.floor((track - length) * fraction + 0.5)
+    screen.level(LEVELS.field_marker)
+    screen.move(PAGE.divider_x, y)
+    screen.line(PAGE.divider_x, y + length)
+    screen.stroke()
+  end
+
+  ---------------------------------------------------------------------------
+  -- The slot rows
+  ---------------------------------------------------------------------------
 
   -- A slot's name for the screen, cut to max_width: the file name without
   -- its extension. Cached per slot and width until the name changes (load,
@@ -180,6 +354,17 @@ return function(S)
   end
   M.slot_seconds_text = slot_seconds_text
 
+  -- What a recording slot shows for its length: ARM while it waits to
+  -- start, REC for a replace take, DUB for a playable one-shot, LOOP for a
+  -- loop recording; nil when it does not record
+  local function slot_record_text(slot)
+    if not S.buffers[slot].recording then return nil end
+    local state = S.lib.record.state(slot)
+    if state and state.phase == "armed" then return "ARM" end
+    if state and state.kind == "playable" then return state.loop and "LOOP" or "DUB" end
+    return "REC"
+  end
+
   -- The widest length a slot of this tier shows: its buffer length, or below
   -- a minute ("59.9s", wider than "5:00") when the tier's slots reach one
   local function widest_seconds_width()
@@ -189,8 +374,8 @@ return function(S)
     return width
   end
 
-  -- One slot row at y: slot number, name and seconds (or REC); the cursor
-  -- row is bright and also lists the voices reading the slot
+  -- One slot row at y: slot number, name and seconds (or the recording's
+  -- state); the cursor row is bright and also lists the voices reading it
   local function draw_slot_row(row, y, selected, value_right)
     local slot = row.slot
     local buffer = S.buffers[slot]
@@ -209,7 +394,7 @@ return function(S)
     local name_right = value_right - widest_seconds_width() - PAGE.column_gap
     if not empty then
       -- "..." while the engine checks a long file (the old length is still reported)
-      local seconds = buffer.recording and "REC"
+      local seconds = slot_record_text(slot)
         or (buffer.checking_from ~= nil and PAGE.checking_text or slot_seconds_text(buffer.seconds))
       screen.move(value_right, y)
       screen.text_right(seconds)
@@ -228,6 +413,100 @@ return function(S)
     if name ~= "" then
       screen.move(PAGE.name_x, y)
       screen.text(name)
+    end
+  end
+
+  ---------------------------------------------------------------------------
+  -- The waveform, its heads and the bookmarks (the cursor slot's)
+  ---------------------------------------------------------------------------
+
+  -- The column (x) a fraction of the slot is in
+  local function wave_x_of(fraction)
+    return PAGE.wave_x + S.lib.playheads.cell_of(fraction, PAGE.wave_columns) - 1
+  end
+
+  -- Column k is a vertical line of half-height round(peak x
+  -- wave_half_height): inside the selected voice's loop at wave_inside,
+  -- outside it at wave_outside (when that voice reads the slot), else at
+  -- wave_unread; a stroke per run of one level. An empty slot, or one with
+  -- no valid peaks, is a flat line at wave_empty
+  local function draw_waveform(slot)
+    local peaks = S.lib.waveforms.bins(slot, PAGE.wave_columns)
+    local center = PAGE.wave_center_y
+    if not peaks then
+      screen.level(LEVELS.wave_empty)
+      screen.move(PAGE.wave_x, center)
+      screen.line(PAGE.wave_x + PAGE.wave_columns - 1, center)
+      screen.stroke()
+      return
+    end
+    local reads = voice_buffer_slot(S.selected_voice) == slot
+    local loop_start, loop_end = 0, 1
+    if reads then
+      loop_start = params:get(voice_param("loop_start"))
+      loop_end = loop_start + params:get(voice_param("loop_length"))
+    end
+    local drawing = nil
+    for column = 1, PAGE.wave_columns do
+      local level = LEVELS.wave_unread
+      if reads then
+        local middle = (column - 0.5) / PAGE.wave_columns
+        level = (middle >= loop_start and middle < loop_end) and LEVELS.wave_inside or LEVELS.wave_outside
+      end
+      if level ~= drawing then
+        if drawing then screen.stroke() end
+        screen.level(level)
+        drawing = level
+      end
+      local half = math.floor(util.clamp(peaks[column], 0, 1) * PAGE.wave_half_height + 0.5)
+      local x = PAGE.wave_x + column - 1
+      screen.move(x, center - half)
+      screen.line(x, center + half)
+    end
+    screen.stroke()
+  end
+
+  -- One running voice's head: a line over the waveform at its playhead,
+  -- its spread on spread_y
+  local function draw_head(voice_idx, level)
+    local position = S.lib.playheads.position(voice_idx)
+    if not position then return end
+    local spread = S.lib.playheads.spread(voice_idx) or 0
+    if spread > 0 then
+      screen.level(LEVELS.spread)
+      screen.move(wave_x_of(position - spread / 2), PAGE.spread_y)
+      screen.line(wave_x_of(position + spread / 2), PAGE.spread_y)
+      screen.stroke()
+    end
+    local x = wave_x_of(position)
+    screen.level(level)
+    screen.move(x, PAGE.wave_top)
+    screen.line(x, PAGE.wave_bottom)
+    screen.stroke()
+  end
+
+  -- The heads of the voices reading the slot (the selected voice's last,
+  -- brightest), the record head dotted while the slot records playably,
+  -- and the selected voice's bookmark ticks when it reads the slot
+  local function draw_heads(slot)
+    local selected = S.selected_voice
+    for voice_idx = 1, NUM_VOICES do
+      if voice_idx ~= selected and voice_buffer_slot(voice_idx) == slot then draw_head(voice_idx, LEVELS.other_head) end
+    end
+    if voice_buffer_slot(selected) == slot then draw_head(selected, LEVELS.head) end
+    local record_head = S.lib.playheads.record_head(slot)
+    if record_head then
+      local x = wave_x_of(record_head)
+      screen.level(LEVELS.record_head)
+      for y = PAGE.wave_top, PAGE.wave_bottom, 2 do screen.rect(x, y, 1, 1) end
+      screen.fill()
+    end
+    if voice_buffer_slot(selected) ~= slot then return end
+    local recalled = S.lib.positions.last_recalled(selected)
+    for n = 1, S.constants.NUM_BOOKMARKS do
+      screen.level(n == recalled and LEVELS.recalled or LEVELS.bookmark)
+      screen.rect(wave_x_of(S.lib.positions.bookmark(selected, n) or 0), PAGE.bookmark_y, 1, PAGE.bookmark_height)
+      screen.fill()
     end
   end
 
@@ -345,48 +624,30 @@ return function(S)
   for slot = 1, NUM_BUFFERS do slot_list_rows[slot] = {label = tostring(slot), slot = slot} end
 
   function redraw_buffer()
-    local v = S.voices[S.selected_voice]
-    cursor_field()
-    local field_cursor = S.buffer_page.field
-
-    -- Left column: voice, the three fields, the input meter
-    screen.level(15)
-    screen.move(0, PAGE.name_y)
-    screen.text(voice_display_name(v.name))
-    for index, field in ipairs(BUFFER_FIELDS) do
-      local y = PAGE.field_first_y + (index - 1) * PAGE.field_spacing
-      local selected = index == field_cursor
-      screen.level(selected and 15 or 4)
-      if selected then
-        screen.move(PAGE.cursor_x, y)
-        screen.text(">")
-      end
-      screen.move(PAGE.label_x, y)
-      screen.text(field.label)
-      screen.move(PAGE.field_value_right, y)
-      screen.text_right(field.value())
-    end
-    draw_input_meter()
-
-    screen.level(1)
+    local slot = cursor_slot()
+    -- the divider first: the fields' scroll marker is drawn over it
+    screen.level(LEVELS.divider)
     screen.move(PAGE.divider_x, PAGE.divider_top)
     screen.line(PAGE.divider_x, PAGE.divider_bottom)
     screen.stroke()
-
-    -- Right column: the slots, scrolled to keep one row above the cursor
-    S.lib.ui_field_list.draw(slot_list_rows, cursor_slot(), {
+    draw_fields()
+    draw_input_meter()
+    draw_waveform(slot)
+    draw_heads(slot)
+    -- the slots, scrolled to keep one row above the cursor
+    S.lib.ui_field_list.draw(slot_list_rows, slot, {
       visible = PAGE.visible_rows, first_y = PAGE.row_first_y, spacing = PAGE.row_spacing,
       value_right = PAGE.value_right}, draw_slot_row)
   end
 
   -- The hint row's keys (redraw() draws the "hints" flash instead while
-  -- one shows): "..." while the cursor slot's take that ended waits for the
-  -- engine (K3 does nothing then)
+  -- one shows): "stop" while the cursor slot records or is armed, "..."
+  -- while its take that ended waits for the engine (K3 does nothing then)
   local function buffer_hints(alt_held)
-    if alt_held then return "K2:clear K3:save" end
+    if alt_held then return "K2:clr/fill K3:sv/trim" end
     local buffer = S.buffers[cursor_slot()]
     local record_hint = buffer.finishing and "..." or (buffer.recording and "stop" or "rec")
-    return "K2:load K3:" .. record_hint
+    return "K2:ld/rnd K3:" .. record_hint
   end
 
   -- E2 picks a slot, E3 edits the field under the field cursor
@@ -394,59 +655,92 @@ return function(S)
     if n == 2 then
       S.buffer_page.slot = util.clamp(cursor_slot() + d, 1, NUM_BUFFERS)
     elseif n == 3 then
-      enc_param_delta(n, cursor_field().param_id(), d)
+      local field = cursor_field()
+      if field.enc then
+        field.enc(d)
+      else
+        enc_param_delta(n, field.param_id(), d)
+      end
     end
   end
 
   -- ALT+E2 moves the field cursor; ALT+E3 goes on to buffer_enc (fine
-  -- adjustment, through enc_param_delta)
+  -- adjustment, through enc_param_delta or the start field's own step)
   local function buffer_alt_enc(n, d)
     if n ~= 2 then return false end
-    cursor_field()
-    S.buffer_page.field = util.clamp(S.buffer_page.field + d, 1, #BUFFER_FIELDS)
+    S.buffer_page.field = S.lib.ui_field_list.move(BUFFER_FIELDS, S.buffer_page.field, d)
     return true
   end
 
-  -- K3 (press) and the arc's button record into the cursor slot, or stop
-  -- early while it records. K2 acts on release (buffer_key_release)
+  -- K3 (press) and the arc's button record into the cursor slot, stop it
+  -- early while it records, or cancel it while it is armed
   local function record_cursor_slot()
     record_buffer(cursor_slot())
   end
 
-  local function buffer_key(n)
-    if n == 3 then record_cursor_slot() end
+  -- When K2 and K3 last went down (util.time()), plain or with ALT: their
+  -- release acts by how long they were held, so no clock is needed
+  local pressed_at = {}
+  local function held_long(n)
+    local at = pressed_at[n]
+    pressed_at[n] = nil
+    return at ~= nil and util.time() - at >= PAGE.hold_seconds
   end
 
-  -- Save the cursor slot, shown in the hint row: a slot recording or
-  -- awaiting its take is busy (nothing to save yet); otherwise save_buffer
-  -- saves only a slot the engine reports holding audio. A save sent shows
-  -- saving until the engine reports how it ended: buffer_save_result then
-  -- flashes saved or save failed.
-  local function save_cursor_slot()
+  local function buffer_key(n)
+    if n == 2 then
+      pressed_at[2] = util.time()
+    elseif n == 3 then
+      record_cursor_slot()
+    end
+  end
+
+  -- Save the cursor slot (or, `loop`, its loop region: save_buffer_loop),
+  -- shown in the hint row: a slot recording or awaiting its take is busy
+  -- (nothing to save yet); otherwise a save goes only to a slot the engine
+  -- reports holding audio. A save sent shows saving until the engine
+  -- reports how it ended: buffer_save_result then flashes saved or failed.
+  local function save_cursor_slot(loop)
     local slot = cursor_slot()
     local buffer = S.buffers[slot]
     if buffer.recording or buffer.finishing then
       buffer_page_flash("buf " .. slot .. " busy")
       return
     end
-    buffer_page_flash(save_buffer(slot) and ("saving buf " .. slot) or ("buf " .. slot .. " empty"))
+    local sent
+    if loop then sent = save_buffer_loop(slot) else sent = save_buffer(slot) end
+    buffer_page_flash(sent and ("saving buf " .. slot .. (loop and " loop" or "")) or ("buf " .. slot .. " empty"))
   end
 
-  -- ALT+K2 clears the cursor slot, ALT+K3 saves it. An ALT press releases
-  -- through alt_key_release (none here), never key_release, so ALT+K2
-  -- never opens the file selector, even when K1 comes up first
+  -- ALT+K2 and ALT+K3 act on release (design 3.3 section 8.1, the one
+  -- exception to acting through alt_action at the press): the press only
+  -- notes its time. An ALT press releases through alt_key_release, never
+  -- key_release, so ALT+K2 never opens the file selector, even when K1
+  -- comes up first
   local function buffer_alt_key(n)
+    pressed_at[n] = util.time()
+  end
+
+  -- ALT+K2 released: clear the cursor slot, or held, fill every empty slot;
+  -- ALT+K3 released: save the cursor slot, or held, its loop region
+  local function buffer_alt_key_release(n)
+    local long = held_long(n)
     if n == 2 then
-      clear_buffer(cursor_slot())
+      if long then S.lib.files.fill_empty() else clear_buffer(cursor_slot()) end
     elseif n == 3 then
-      save_cursor_slot()
+      save_cursor_slot(long)
     end
   end
 
-  -- K2 released: open the file selector for the cursor slot
+  -- K2 released: held, a random file into the cursor slot; else open the
+  -- file selector for it
   local function buffer_key_release(n)
     if n ~= 2 then return end
     local slot = cursor_slot()
+    if held_long(2) then
+      S.lib.files.random_into(slot)
+      return
+    end
     -- the selector takes every key while open, so keys held now are released
     -- there, never reaching key(): forget them
     forget_held_keys()
@@ -456,8 +750,10 @@ return function(S)
     -- and on a cancel alike, they draw the selector instead
     local function file_chosen(path)
       -- loaded directly (it also shows the path in buf<n>_file): setting the
-      -- param would do nothing when it already holds this path
+      -- param would do nothing when it already holds this path. Its folder
+      -- is where the next random file comes from
       if path ~= "cancel" then
+        S.lib.files.note_chosen(path)
         load_buffer(slot, path)
       end
       close_buffer_file_selector()
@@ -512,19 +808,24 @@ return function(S)
     close_buffer_file_selector()
   end
 
+  ---------------------------------------------------------------------------
   -- The states the layout tests and the page renders draw (each on a fresh
   -- script with BUFFER shown)
-  local LONG_NAMES = {"WWWWWWWWWWWWWWWWWWWW.wav", "a_very_long_field_recording_name.aiff", "MMMM", "x",
-    "café_crème_très_longue.wav", "no_extension_but_long", "drone", "field_rec.flac"}
+  ---------------------------------------------------------------------------
 
-  local function load_long_names(context)
+  local LAYOUT = {
+    long_names = {"WWWWWWWWWWWWWWWWWWWW.wav", "a_very_long_field_recording_name.aiff", "MMMM", "x",
+      "café_crème_très_longue.wav", "no_extension_but_long", "drone", "field_rec.flac"},
+  }
+
+  function LAYOUT.load_long_names(context)
     for slot = 1, NUM_BUFFERS do
-      load_buffer(slot, "/tmp/" .. LONG_NAMES[(slot - 1) % #LONG_NAMES + 1])
+      load_buffer(slot, "/tmp/" .. LAYOUT.long_names[(slot - 1) % #LAYOUT.long_names + 1])
       context.polls.fire("bufferState", (slot - 1) * 1000 + S.performance.buffer_seconds)
     end
   end
 
-  local function voices_on_slot(slot, count)
+  function LAYOUT.voices_on_slot(slot, count)
     for voice = 1, count do params:set("v" .. voice .. "_source", slot + 1) end
   end
 
@@ -532,7 +833,7 @@ return function(S)
   -- the duration's range ends at the slot length (the script's own start
   -- read a standard tier). The param gets a copy of its spec with the wider
   -- range, so the spec it was built with never changes
-  local function as_300_s_tier()
+  function LAYOUT.as_300_s_tier()
     S.performance = {tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60, reason = "high: setting"}
     -- the param keeps its position in the range: put its value back
     local duration = params:get("record_duration")
@@ -544,78 +845,172 @@ return function(S)
   end
 
   -- Every slot reports `seconds` (load_long_names, then the new length)
-  local function slots_report(context, seconds)
-    load_long_names(context)
+  function LAYOUT.slots_report(context, seconds)
+    LAYOUT.load_long_names(context)
     for slot = 1, NUM_BUFFERS do context.polls.fire("bufferState", (slot - 1) * 1000 + seconds) end
   end
 
   -- The engine's bufferSaveResult report of the slot's newest save
   -- ((save number * 2 + failed) * NUM_BUFFERS + slot index)
-  local function save_result_value(slot, failed)
+  function LAYOUT.save_result_value(slot, failed)
     return (S.buffers[slot].saves_sent * 2 + (failed and 1 or 0)) * NUM_BUFFERS + slot - 1
   end
 
+  -- Slot 1 loaded with 12 s whose peaks rise and fall, as the engine writes
+  -- them (the page's waveform reads them on a later frame tick)
+  function LAYOUT.slot_with_peaks(context)
+    load_buffer(1, "/tmp/" .. LAYOUT.long_names[7])
+    local values = {}
+    for index = 1, S.constants.WAVEFORM_POINTS do
+      values[index] = string.format("%.3f", 0.5 + 0.45 * math.sin(index / 3) * math.sin(index / 17))
+    end
+    local folder = S.lib.scenes.scene_data_dir
+    util.make_dir(folder)
+    local file = io.open(folder .. "buf1.peaks", "w")
+    if file then
+      file:write("strata-peaks 1\nslot 1\nframes " .. (12 * 48000) .. "\nrate 48000\ngeneration 1\npeaks "
+        .. table.concat(values, " ") .. "\n")
+      file:close()
+    end
+    context.polls.fire("bufferState", 12)
+    context.clock.run_for(0.2)
+  end
+
+  -- A file longer than a slot loaded into slot 1, its start at `start`,
+  -- the cursor on the start field
+  function LAYOUT.long_file_start(context, seconds, start)
+    local path = "/tmp/" .. LAYOUT.long_names[2]
+    context.audio.files[path] = {2, 48000 * seconds, 48000}
+    load_buffer(1, path)
+    context.polls.fire("bufferState", S.performance.buffer_seconds)
+    S.lib.buffers.set_start(1, start)
+    S.buffer_page.field = 10
+  end
+
+  -- Each field on the cursor, at a wide value
+  local FIELD_VALUES = {
+    source = function() params:set("v1_source", 10) end,
+    rec = function() params:set("record_source", 3) end,
+    dur = function() params:set("record_duration", S.performance.buffer_seconds) end,
+    lvl = function() params:set("record_level", 0.5) end,
+    fb = function() params:set("record_feedback", 99.5) end,
+    loop = function() params:set("record_loop", 2) end,
+    thr = function() params:set("record_threshold", 2) end,
+    sync = function() params:set("record_sync", 2) end,
+    bm = function() params:set("v1_source", 2); S.lib.positions.recall_bookmark(1, 4) end,
+    start = function() end,
+    fric = function() params:set("scrub_friction", 99.5) end,
+  }
+
   local BUFFER_INDEX = UI_PAGES.index.BUFFER
   local layout_states = {
-    {name = "slot 1", setup = function(context) load_long_names(context); voices_on_slot(1, 2) end},
+    {name = "slot 1", setup = function(context) LAYOUT.load_long_names(context); LAYOUT.voices_on_slot(1, 2) end},
     {name = "slot 8", setup = function(context)
-      load_long_names(context); voices_on_slot(8, 2); S.buffer_page.slot = NUM_BUFFERS end},
-    {name = "field dur", setup = function() S.buffer_page.field = 2; params:set("record_duration", S.performance.buffer_seconds) end},
-    {name = "field lvl", setup = function() S.buffer_page.field = 3; params:set("record_level", 0.5) end},
+      LAYOUT.load_long_names(context); LAYOUT.voices_on_slot(8, 2); S.buffer_page.slot = NUM_BUFFERS end},
     {name = "long names", setup = function(context)
-      load_long_names(context); voices_on_slot(4, NUM_VOICES); S.buffer_page.slot = 4 end},
+      LAYOUT.load_long_names(context); LAYOUT.voices_on_slot(4, NUM_VOICES); S.buffer_page.slot = 4 end},
     {name = "every slot recording", setup = function()
       for slot = 1, NUM_BUFFERS do record_buffer(slot) end
-      voices_on_slot(1, 1)
+      LAYOUT.voices_on_slot(1, 1)
     end},
-    {name = "saving flash", setup = function(context)
-      load_long_names(context); alt_action(BUFFER_INDEX, 3) end},
+    {name = "saving flash", setup = function(context) LAYOUT.load_long_names(context); save_cursor_slot(false) end},
+    {name = "saving loop flash", setup = function(context) LAYOUT.load_long_names(context); save_cursor_slot(true) end},
     {name = "saved flash", setup = function(context)
-      load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; alt_action(BUFFER_INDEX, 3)
-      context.polls.fire("bufferSaveResult", save_result_value(NUM_BUFFERS, false))
+      LAYOUT.load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; save_cursor_slot(false)
+      context.polls.fire("bufferSaveResult", LAYOUT.save_result_value(NUM_BUFFERS, false))
+    end},
+    {name = "saved loop flash", setup = function(context)
+      LAYOUT.load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; save_cursor_slot(true)
+      context.polls.fire("bufferSaveResult", LAYOUT.save_result_value(NUM_BUFFERS, false))
     end},
     {name = "save failed flash", setup = function(context)
-      load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; alt_action(BUFFER_INDEX, 3)
-      context.polls.fire("bufferSaveResult", save_result_value(NUM_BUFFERS, true))
+      LAYOUT.load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; save_cursor_slot(false)
+      context.polls.fire("bufferSaveResult", LAYOUT.save_result_value(NUM_BUFFERS, true))
     end},
-    {name = "busy flash", setup = function() record_buffer(1); alt_action(BUFFER_INDEX, 3) end},
-    {name = "empty flash", setup = function() alt_action(BUFFER_INDEX, 3) end},
+    {name = "busy flash", setup = function() record_buffer(1); save_cursor_slot(false) end},
+    {name = "empty flash", setup = function() save_cursor_slot(false) end},
     {name = "load failed flash", setup = function() buffer_page_flash("buf 8 load failed") end},
+    {name = "random file flash", setup = function() buffer_page_flash("buf 8: " .. LAYOUT.long_names[2]) end},
+    {name = "filled flash", setup = function() buffer_page_flash("filled 8 slots") end},
+    {name = "no files flash", setup = function()
+      buffer_page_flash("no files in " .. _path.audio .. "a_long_folder_name/another_one/") end},
     {name = "meter peak", setup = function(context)
       context.polls.fire("amp_in_l", 1); context.polls.fire("amp_in_r", 0.2)
       context.polls.fire("amp_in_l", 0.05)
     end},
+    -- every recording state on the cursor slot, read by voice 1
+    {name = "armed", setup = function()
+      LAYOUT.voices_on_slot(1, 1); params:set("record_threshold", 2); record_buffer(1) end},
+    {name = "take recording", setup = function() LAYOUT.voices_on_slot(1, 1); record_buffer(1) end},
+    {name = "take finishing", setup = function() LAYOUT.voices_on_slot(1, 1); record_buffer(1); record_buffer(1) end},
+    {name = "dub recording", setup = function(context)
+      LAYOUT.slot_with_peaks(context); LAYOUT.voices_on_slot(1, 1)
+      params:set("record_feedback", 50); record_buffer(1)
+    end},
+    {name = "loop recording", setup = function(context)
+      LAYOUT.slot_with_peaks(context); LAYOUT.voices_on_slot(1, 1)
+      params:set("record_loop", 2); record_buffer(1)
+    end},
+    {name = "len 16b max", setup = function()
+      params:set("record_sync", 2); params:set("record_beats", 40); S.buffer_page.field = 3 end},
+    -- every voice running on one slot, the selected one's loop a part of it
+    {name = "seven heads on one slot", setup = function(context)
+      LAYOUT.slot_with_peaks(context); LAYOUT.voices_on_slot(1, NUM_VOICES)
+      params:set("v1_loop_start", 0.2); params:set("v1_loop_length", 0.5)
+      for voice = 1, NUM_VOICES do
+        params:set("v" .. voice .. "_buf_pos", (voice - 1) / NUM_VOICES)
+        if not S.voices[voice].active then toggle_voice(voice) end
+      end
+    end},
+    {name = "record head", setup = function(context)
+      LAYOUT.slot_with_peaks(context); LAYOUT.voices_on_slot(1, 1)
+      if not S.voices[1].active then toggle_voice(1) end
+      params:set("record_feedback", 50); record_buffer(1)
+      context.clock.run_for(3)
+    end},
+    {name = "a long file's start", setup = function(context) LAYOUT.long_file_start(context, 60, 12.05) end},
+    {name = "a long file's start (high, 300 s)", setup = function(context)
+      LAYOUT.as_300_s_tier(); LAYOUT.long_file_start(context, 3600, 1234.56) end},
     {name = "eight slots of 4:59 (high, 300 s)", setup = function(context)
-      as_300_s_tier(); slots_report(context, 299.4); voices_on_slot(1, 2)
-      S.buffer_page.field = 2; params:set("record_duration", 300)
+      LAYOUT.as_300_s_tier(); LAYOUT.slots_report(context, 299.4); LAYOUT.voices_on_slot(1, 2)
+      S.buffer_page.field = 3; params:set("record_duration", 300)
     end},
     {name = "a recording at 1:05 (high, 300 s)", setup = function(context)
-      as_300_s_tier(); slots_report(context, 299.4)
+      LAYOUT.as_300_s_tier(); LAYOUT.slots_report(context, 299.4)
       context.polls.fire("bufferState", 1065)   -- slot 2 holds 1:05
       record_buffer(1)                           -- slot 1 records (for the default 8 s)
-      voices_on_slot(2, NUM_VOICES); S.buffer_page.slot = 2
-      S.buffer_page.field = 2; params:set("record_duration", 65)
+      LAYOUT.voices_on_slot(2, NUM_VOICES); S.buffer_page.slot = 2
+      S.buffer_page.field = 3; params:set("record_duration", 65)
     end},
     -- long files the engine is still checking: "..." for their length, over
     -- a slot that held 4:59 (the cursor's, with every voice) and over the rest
     {name = "long files checking (high, 300 s)", setup = function(context)
-      as_300_s_tier(); slots_report(context, 299.4)
+      LAYOUT.as_300_s_tier(); LAYOUT.slots_report(context, 299.4)
       for slot = 1, 3 do
-        local path = "/tmp/" .. LONG_NAMES[slot]
+        local path = "/tmp/" .. LAYOUT.long_names[slot]
         context.audio.files[path] = {2, 48000 * 240, 48000}
         load_buffer(slot, path)
       end
-      voices_on_slot(1, NUM_VOICES)
+      LAYOUT.voices_on_slot(1, NUM_VOICES)
       params:set("record_duration", 240)
     end},
   }
+  for index, field in ipairs(BUFFER_FIELDS) do
+    table.insert(layout_states, {name = "field " .. field.name, setup = function()
+      S.buffer_page.field = index
+      FIELD_VALUES[field.name]()
+    end})
+  end
 
   -- The page's record, at BUFFER's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc rings
-  -- are lib/arc/buffer.lua's; its arc button records, as K3 does
+  -- are lib/arc/buffer.lua's; its arc button records, as K3 does. It
+  -- animates while something on the cursor slot moves (a voice reads it, or
+  -- it records), so the heads move at the frame rate
   S.registry.pages[BUFFER_INDEX] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, alt_enc = buffer_alt_enc, key = buffer_key, key_release = buffer_key_release,
-    alt_key = buffer_alt_key, enter = start_input_meter, leave = stop_input_meter,
+    alt_key = buffer_alt_key, alt_key_release = buffer_alt_key_release, enter = start_input_meter,
+    leave = stop_input_meter, animates = function() return S.lib.playheads.moving(cursor_slot()) end,
     arc_button = record_cursor_slot, layout_states = layout_states}
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.input_meter, function()

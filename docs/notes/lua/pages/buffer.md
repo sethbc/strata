@@ -2,54 +2,78 @@
 
 - While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector (`fileselect.redraw()`), never the page, so no frame-clock redraw draws over the file list.
 - `buffer_key_release` calls `forget_held_keys()` just before `fileselect.enter`: the selector takes the keys, so a key held then would never be released to the script.
-- ALT+K2 (clear) releases through `alt_key_release` (BUFFER has none), never `key_release`, so it never opens the file selector, even when K1 comes up first (K1 down, K2 down, K1 up, K2 up). BUFFER never reads `S.key_press_page[2]` to change what K3 does: the K2+K3 save gesture is gone (ALT+K3 saves), and a K2 pressed with ALT is still in `S.key_press_page`.
+- K2, ALT+K2 and ALT+K3 act on release, by how long they were held: the press only notes `util.time()` (`pressed_at`), and the release compares it with `S.BUFFER_PAGE.hold_seconds` (0.5 s). No clock. ALT+K2 and ALT+K3 are the one exception to acting through `alt_action` at the press (design 3.3 §8.1, Question 20): `alt_key` notes the press, `alt_key_release` acts.
+- An ALT press releases through `alt_key_release`, never `key_release`, so ALT+K2 never opens the file selector or loads a random file, even when K1 comes up first (K1 down, K2 down, K1 up, K2 up). BUFFER never reads `S.key_press_page[2]` to change what K3 does: the K2+K3 save gesture is gone (ALT+K3 saves), and a K2 pressed with ALT is still in `S.key_press_page`.
 - Every key and the arc button act on the slot cursor (`S.buffer_page.slot`), never on the selected voice's buffer: K3 records into it whether or not a voice reads it.
-- BUFFER's flashes go through `buffer_page_flash` (the shared "hints" flash, owned by BUFFER), never a clock of the page's own; they show only while BUFFER is up.
-- A save while the slot is `recording` or `finishing` saves nothing (`buf <n> busy`).
-- A save never shows `saved buf <n>` before the engine's `bufferSaveResult` report says the file is written (#127): ALT+K3 shows `saving buf <n>`, and `buffer_save_result` the result.
+- BUFFER's flashes go through `buffer_page_flash` (the shared "hints" flash, owned by BUFFER), never a clock of the page's own; they show only while BUFFER is up. `draw_hints` cuts a long one to the screen.
+- A save (either kind) while the slot is `recording` or `finishing` saves nothing (`buf <n> busy`).
+- A save never shows `saved buf <n>` before the engine's `bufferSaveResult` report says the file is written (#127): ALT+K3 shows `saving buf <n>` (`saving buf <n> loop`), and `buffer_save_result` the result.
 - `fileselect` is required (`require "fileselect"`), never read as a global.
 - The input meter's polls (`amp_in_l`, `amp_in_r`) run only while BUFFER shows: the record's `enter` starts them, `leave` and cleanup step `input_meter` (135) stop them and clear their callbacks, so a value already on its way asks for no redraw. They are looked up with `poll.set` at each `enter`, never kept from an earlier one or from load time (norns replaces its poll objects when it re-registers the polls). A norns without them leaves the meter dark.
 - A poll value asks for a redraw only when the drawn level or held peak changes. The peak's expiry is checked at draw time, so it goes out even with no new poll value.
-- The slot list scrolls (six of eight rows visible). Rows and the scroll marker go through `S.lib.ui_field_list.draw`; no slot text reaches x 127 (the marker), and nothing in the left column crosses the divider.
-- A redraw measures no text it measured before: slot names are cut once per name and width, the voice name once, and the seconds and voices texts' widths are memoized.
+- Both lists scroll through `S.lib.ui_field_list` (`first_visible`, `move`, `clamp`, and `draw` for the slots): the slots' marker at x 127, the fields' marker drawn by the page on the divider (x 56, level 4 over the divider's 1), with field_list's geometry. No slot text reaches x 127, and nothing in the left column crosses the divider.
+- A redraw measures no text it measured before: value, seconds and voices widths are memoized, field labels and slot names are cut once per text and width.
+- The page reads the waveform, heads and bookmarks only through `S.lib.waveforms.bins`, `S.lib.playheads` (`position`, `spread`, `record_head`, `cell_of`, `moving`) and `S.lib.positions` (`bookmark`, `last_recalled`, `recall_bookmark`); it never reads a peaks file and sends no engine command of its own. `draw()` never asks for a redraw: `animates()` (`S.lib.playheads.moving(cursor slot)`) moves the heads at the frame rate.
+- The `bm` field recalls through `S.lib.positions.recall_bookmark` only when the shown bookmark changes, so turning past 1 or 4 never restarts the scan again. The `start` field moves the start only through `S.lib.buffers.set_start` (it clamps, does nothing while the slot records, and reloads once E3 rests).
 
 ## Owns
 
-- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key`, `enter`, `leave`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)` and the meter state `S.lib.pages_buffer.meter` (`amps`, `peak`, `peak_at`, `shown`, `polls`); cleanup step `input_meter`.
-- The buffers themselves (`S.buffers`, `record_buffer`, `load_buffer`, `clear_buffer`, `save_buffer`, `buffer_load_failed`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`).
+- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key`, `alt_key_release`, `enter`, `leave`, `animates`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout, levels, `hold_seconds`, the start steps and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)`, `slot_seconds_text(seconds)` and the meter state `S.lib.pages_buffer.meter` (`amps`, `peak`, `peak_at`, `shown`, `polls`); cleanup step `input_meter`.
+- The buffers themselves (`S.buffers`, `load_buffer`, `clear_buffer`, `save_buffer`, `save_buffer_loop`, `buffer_load_failed`, `S.lib.buffers.set_start`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`); recording (`record_buffer`, `S.lib.record.state`) is `lib/record.lua`'s; random files and filling (`S.lib.files`) are `lib/files.lua`'s; peaks, playheads and positions are `lib/waveforms.lua`'s, `lib/playheads.lua`'s and `lib/positions.lua`'s.
 - Its unit tests: `test/unit/pages_buffer_test.lua`. Its rings: `lib/arc/buffer.lua` (`docs/notes/lua/arc-pages.md`).
 
 ## Cursors
 
-`S.buffer_page = {slot = 1, field = 1}`: `slot` 1..`NUM_BUFFERS` (E2), `field` 1..3 (ALT+E2): source (`v<selected>_source`), duration (`record_duration`), level (`record_level`). Both clamp at their ends and are put back in range before use. They persist across page changes; the slot cursor does not follow the selected voice.
+`S.buffer_page = {slot = 1, field = 1}`: `slot` 1..`NUM_BUFFERS` (E2), `field` 1..11 (ALT+E2, through `ui_field_list.move`). Both clamp at their ends and are put back in range before use. They persist across page changes; the slot cursor does not follow the selected voice.
+
+The fields (`BUFFER_FIELDS`, each `{name, label, value(), param_id() or enc(d), active()?}`; E3 is `enc_param_delta(3, param_id(), d)`, so ALT+E3 is fine adjustment, unless the field has its own `enc`):
+
+| # | Label | Shows | E3 |
+|---|---|---|---|
+| 1 | `v<sel>` | `voice_source_label`: `synth`, `buf 2`, `input` | `v<sel>_source` |
+| 2 | `rec` | `in`, `pre`, `post`, `v1`-`v7` (from `RECORD_SOURCES`) | `record_source` |
+| 3 | `dur` / `len` (sync on) | `8.0s`; `16b`, or `<n>b max` when the beats need more than a slot (`n` = whole beats a slot holds at the tempo) | `record_duration` / `record_beats` |
+| 4 | `lvl` | `1.00` | `record_level` |
+| 5 | `fb` | `50%` (`99.5%` after a fine step) | `record_feedback` |
+| 6 | `loop` | `off`, `on` | `record_loop` |
+| 7 | `thr` | `off`, `-24dB` (the option without its space) | `record_threshold` |
+| 8 | `sync` | `off`, `beat`, `bar` | `record_sync` |
+| 9 | `bm` | `2 0.25`: the selected voice's last recalled bookmark (else 1) and its position; dim unless the voice reads a buffer | steps 1..`NUM_BOOKMARKS` and recalls the one it lands on |
+| 10 | `start` | the cursor slot's start, `12.0s` (`12.05s` once a fine step leaves hundredths), or `-` when its file fits a slot (no `file_seconds`, or not longer than `S.performance.buffer_seconds`) | tenths (`start_step`), ALT+E3 hundredths (`start_fine_step`), rounded to hundredths, through `set_start`; nothing for a file that fits |
+| 11 | `fric` | `100%` | `scrub_friction` |
 
 ## Layout
 
-`S.BUFFER_PAGE` holds every position.
-- Left column (x 0-54): the selected voice's name in capitals at y 16 (cut to the column with `fit_text`); the three fields at y 24, 32, 40 (`field_first_y`, `field_spacing` 8): `>` at x 0 on the field cursor's row, the label (`src`, `dur`, `lvl`) at x 5, the value right-aligned at x 54 (`voice_source_label`, `%.1fs`, `%.2f`; the duration keeps `%.1fs` up to `300.0s`, since its 0.5 s steps matter). The cursor's row at level 15, the others 4.
+`S.BUFFER_PAGE` holds every position, `S.BUFFER_PAGE.levels` every level.
+- Divider at x 56, y 10-52 (level 1), drawn first.
+- Left column (x 0-54): four field rows at y 16, 24, 32, 40 (`field_first_y`, `field_spacing` 8, `field_visible` 4), one row above the cursor kept in view (`first_visible`): `>` at x 0 on the cursor's row, the value right-aligned at x 54, the label at x 5 cut (`fit_text`) to end 3 px (`label_gap`) before the value. Under the layout test's width estimate a wide value cuts its label (`le` beside `32b max`, `sta` beside `12.05s`); the norns font is narrower and shows them whole. The cursor's row at level 15, the others 4; `bm` while the selected voice reads no buffer 4 under the cursor, 2 elsewhere. The fields' scroll marker on the divider at level 4, with field_list's geometry (track y 10-41).
 - Input meter on y 49: `in` at x 5, then eight 3x5 px filled segments from x 17, 1 px apart (x 17-48): lit segments at level 10, the held peak segment (when above the level) at 15, the rest at 1.
-- Divider at x 56, y 10-52 (level 1).
-- Right column: `S.lib.ui_field_list.draw` with six visible rows from y 16, 7 px apart (y 16-51), one row above the cursor kept in view, the scroll marker at x 127 (y 10 to 52). Each row:
+- Waveform of the cursor slot: `S.lib.waveforms.bins(slot, 64)`, one column per peak at x 60-123 (`wave_x`, `wave_columns`), column k a vertical line of half-height `round(peak × 8)` around y 19 (`wave_center_y`, `wave_half_height`), inside y 11-27. Level 8 inside the selected voice's loop (the column's middle in `[loop_start, loop_start + loop_length)`) and 3 outside when that voice reads the slot, 6 when it does not; a stroke per run of one level. No peaks (an empty slot, no valid peaks file): a flat line y 19, x 60-123, level 1.
+- Heads, after it, at `wave_x - 1 + cell_of(fraction, 64)`: each running voice reading the slot (`S.lib.playheads.position`) a line y 11-27, the selected voice's at 15 (drawn last), others 8, its spread (`S.lib.playheads.spread`, centered on the head, as the engine's draw of ±spread/2) a line on y 28 at level 4; the record head (`S.lib.playheads.record_head`, while the slot records playably) 1x1 px rects every other pixel from y 11 to 27 at level 12.
+- Bookmarks of the selected voice when it reads the slot: 1x2 px filled rects at y 30-31, level 6, the last recalled (`S.lib.positions.last_recalled`) 15.
+- Slots: `S.lib.ui_field_list.draw` with three visible rows from y 37, 7 px apart (y 37, 44, 51), one row above the cursor kept in view, the scroll marker at x 127 (y 31-52). Each row:
   - slot number at x 59;
   - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name (`name == "empty"`);
-  - the length, `REC`, or `...` (`PAGE.checking_text`) while the engine checks a long file the slot is loading (`checking_from` set, `docs/notes/lua/buffers.md`), right-aligned at x 124; none for an empty slot (no name, no reported audio, not recording). `slot_seconds_text` (`S.lib.pages_buffer.slot_seconds_text`): below `minute_from` (59.95 s) `%.1fs` (`16.5s`), from there on minutes and whole seconds (`1:05`, `4:59`, `5:00`), so a length that rounds to 60.0 shows `1:00`, never `60.0s`;
-  - names in other rows end 3 px before the widest length the tier shows (`widest_seconds_width`: `16.0s` on standard; on a tier of 60 s and more the wider of its buffer length as `m:ss` and `59.9s`); on the cursor row the voices reading the slot (`v2 v6`, built from `voice_buffer_slot`) are right-aligned 3 px before that row's own seconds, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` when they do not fit (`v2+`), and the name gets what is left. Under the layout test's width estimate a two-voice list always shortens to `v2+`; the norns font is narrower.
+  - right-aligned at x 124: while recording, `ARM` (armed: `S.lib.record.state(slot).phase == "armed"`), `REC` (a replace take, or a recording slot with no state), `DUB` (playable, one-shot) or `LOOP` (playable, loop); else `...` (`PAGE.checking_text`) while the engine checks a long file (`checking_from`), else the length; none for an empty slot (no name, no reported audio, not recording). `slot_seconds_text`: below `minute_from` (59.95 s) `%.1fs` (`16.5s`), from there on `m:ss` (`1:05`, `4:59`, `5:00`);
+  - names in other rows end 3 px before the widest length the tier shows (`widest_seconds_width`); on the cursor row the voices reading the slot (`v2 v6`) are right-aligned 3 px before that row's own length or state, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` (`v2+`).
 - Row level: the cursor row 15, a loaded or recording slot 6, others 2.
-- `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), each field, long names with every voice on one slot, every slot recording, the saved, busy, empty and load-failed flashes, the meter with a held peak, and three as on a 300 s tier (`as_300_s_tier` sets `S.performance` and gives the duration param a copy of its spec with the 300 s range, never changing the spec it was built with): eight slots of 4:59 with the duration at `300.0s`, a recording beside a 1:05 take read by every voice, with the duration at `65.0s`, and three long files still being checked (`...`) over slots of 4:59, every voice on the cursor's.
+- The bookmark ticks (y 30-31) sit one pixel above the first slot row's glyphs (y 32-36): the design's positions, kept as given.
+- `layout_states`: slot 1 and slot 8 (long names, voices on the cursor slot), long names with every voice on one slot, every slot recording, each field on the cursor at a wide value (`field <name>`), `len 16b max` (40 beats at 120 BPM: `32b max`), the saving, saving loop, saved, saved loop, save failed, busy, empty, load failed, random file, filled and no files flashes, the meter with a held peak, every recording state on the cursor slot (`armed`, `take recording`, `take finishing`, `dub recording`, `loop recording`), seven heads on one slot (a peaks file written as the engine writes it, every voice running, voice 1's loop a part of the slot), the record head (3 s into an 8 s playable recording), a long file's start on standard (`12.05s`) and on a 300 s tier (`1234.56s`), and three as on a 300 s tier (`as_300_s_tier` sets `S.performance` and gives the duration param a copy of its spec with the 300 s range, never changing the spec it was built with): eight slots of 4:59 with the duration at `300.0s`, a recording beside a 1:05 take read by every voice, and three long files still being checked (`...`).
 
 ## Controls
 
-- E2 moves the slot cursor; ALT+E2 the field cursor (`alt_enc` returns true for E2 only). E3 is `enc_param_delta(3, <field param>, d)`, so ALT+E3 is fine adjustment (it only shows on the level: the duration's 0.5 s step and the source's options keep whole steps).
-- K3 press and the arc button (`arc_button`): `record_buffer(slot)` (toggles: stops early while recording; does nothing while `finishing`).
-- K2 release: the file selector for the cursor slot (below). K2's press does nothing; K3 while K2 is held just records.
-- ALT+K2 (`alt_key(2)`): `clear_buffer(slot)`.
-- ALT+K3 (`alt_key(3)`): saves, shown by `buffer_page_flash(text)`:
-  - `buf <n> busy` (and no `save_buffer` call) while the slot is `recording` or `finishing`;
-  - else `saving buf <n>` when `save_buffer` sent the save (it returns true when the slot reports audio, `seconds > 0`);
+- E2 moves the slot cursor; ALT+E2 the field cursor (`alt_enc` returns true for E2 only). E3 edits the field (table above); ALT+E3 is fine adjustment.
+- K3 press and the arc button (`arc_button`): `record_buffer(slot)`: records, stops early while recording (keeping what was captured), cancels while armed; does nothing while `finishing`.
+- K2 release: before 0.5 s the file selector for the cursor slot (below); held 0.5 s or more, `S.lib.files.random_into(slot)` (it flashes `buf <n>: <name>` or `no files in <folder>`). K2's press only notes its time; K3 while K2 is held just records.
+- ALT+K2 release: before 0.5 s `clear_buffer(slot)`; after, `S.lib.files.fill_empty()` (it flashes `filled <k> slots` or `no files in <folder>`).
+- ALT+K3 release: before 0.5 s saves the whole slot (`save_buffer`), after it its loop region (`save_buffer_loop`, trim), shown by `buffer_page_flash(text)`:
+  - `buf <n> busy` (and no save) while the slot is `recording` or `finishing`;
+  - else `saving buf <n>` (`saving buf <n> loop`) when the save was sent (the slot reports audio, `seconds > 0`);
   - else `buf <n> empty`.
-- `buffer_save_result` (`lib/buffers.lua`) flashes `saved buf <n>` or `buf <n> save failed` when the engine reports how the slot's newest save ended (`bufferSaveResult`); a report of an older save flashes nothing.
-- `buffer_load_failed` flashes `buf <n> load failed` when the engine reports a failed load (see the buffers table in `docs/notes/engine/buffers.md`).
-- Hints: `K2:load K3:rec` (`K3:stop` while the cursor slot records, `K3:...` while it is `finishing`); with ALT `K2:clear K3:save`.
+- `buffer_save_result` (`lib/buffers.lua`) flashes `saved buf <n>` (`saved buf <n> loop`) or `buf <n> save failed` when the engine reports how the slot's newest save ended; a report of an older save flashes nothing.
+- `buffer_load_failed` flashes `buf <n> load failed`; a playable recording into a slot at another rate flashes `buf <n>: replaced (rate)` (`lib/record.lua`).
+- Hints: `K2:ld/rnd K3:rec` (`K3:stop` while the cursor slot records or is armed, `K3:...` while it is `finishing`); with ALT `K2:clr/fill K3:sv/trim`.
+- `animates()`: `S.lib.playheads.moving(cursor slot)`, true while a running voice reads the slot or it records, so `draw_frame` redraws the screen every frame then.
 
 The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5, UI_PAGES.index.BUFFER)`. `redraw()` draws it on BUFFER's hint row instead of the key hints while it shows (a failed load reported while another page is up shows if BUFFER comes up within 1.5 s); its clock asks for a redraw when it ends; a new flash cancels the previous clock; cleanup step 140 cancels it (`docs/notes/lua/ui/header-and-flashes.md`).
 
@@ -62,7 +86,7 @@ The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5,
 
 ## The file selector (K2 release)
 
-- K2 release calls `fileselect.enter(_path.audio, cb)`. `cb` calls `load_buffer(slot, path)` unless the path is `"cancel"`, then clears `S.BUFFER_PAGE.file_selector_open` and asks for a redraw (the next frame draws the page).
+- K2 released before `hold_seconds` calls `fileselect.enter(_path.audio, cb)`. `cb` calls `S.lib.files.note_chosen(path)` (its folder becomes the next random folder) and `load_buffer(slot, path)` unless the path is `"cancel"`, then clears `S.BUFFER_PAGE.file_selector_open` and asks for a redraw (the next frame draws the page).
 - `fileselect` is `lib/pages/buffer.lua`'s `local fileselect = require "fileselect"`. `strata.lua` requires it too, for `redraw()`, as norns' own `core/menu.lua` does: the library is a module, not a global.
 - `buffer_key_release` sets the flag just before `fileselect.enter`. While it is set, `redraw()` calls `fileselect.redraw()` (lib/fileselect.lua's `fs.redraw`, which draws the file list) instead of the page.
 - Why the flag: from play mode `fs.enter` calls `norns.menu.init()`, whose `_menu.set_mode(false)` puts Strata's `redraw` back in the global. Without the flag, the selector's own `redraw()` call and every frame-clock redraw (asked for by `key()`, buffer polls, sequencer steps, MIDI, grid/arc events) would draw over the file list.
