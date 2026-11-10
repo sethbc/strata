@@ -224,7 +224,7 @@ return function(S)
         buffer.name = "take " .. slot
         buffer.path = scratch_take_path(slot)
         -- the take is the scratch file at the server rate, read from its start
-        buffer.start, buffer.sample_rate, buffer.file_seconds = 0, nil, nil
+        buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
         buffer.loaded = buffer.seconds > 0
         set_buffer_file_param(slot, _path.audio)
         S.lib.waveforms.stale(slot)

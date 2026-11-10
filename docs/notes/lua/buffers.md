@@ -49,6 +49,8 @@ The file fields across a recording (`S.buffers[slot]`; `recording` and the take'
 
 `set_start` acts only in the file state.
 
+`sent_start` is the start of the load last sent for the slot. `set_start` writes `start` at once and reloads 0.3 s later, so during that wait `start` is ahead of the file the engine holds; a load's snapshot (`buffer_state_before_load`) records `sent_start`, so a failed start reload puts the previous start back (#245). It is 0 at init, after `clear_buffer`, a replace take (`recording_started(slot, false)`), a dub's "ended" report and `empty_buffer_state`; `load_buffer` sets it to the start it sends and `apply_buffer_state` to the state's start. `buffers.data` saves `start`. No invariant states `start == sent_start`: a remembered file missing on start keeps its start with no load sent.
+
 ## Trim
 
 `save_buffer_loop(slot)` (global) saves the loop region of the selected voice if it reads the slot, else of the lowest-numbered voice that does, else the whole slot (`engine.saveBuffer(slot, path, start, length)`, fractions), to `<audio>/strata/<YYYYMMDD-HHMMSS>-buf<n>-loop.wav`. Its `pending_saves` entry has `loop = true`, so the result flashes `saved buf <n> loop`.

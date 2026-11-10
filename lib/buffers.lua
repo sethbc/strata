@@ -54,7 +54,7 @@ return function(S)
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
       loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, records_sent = 0,
-      checking_from = nil, checking_load = nil, start = 0, sample_rate = nil, file_seconds = nil}
+      checking_from = nil, checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil}
   end
   -- the engine's bufferState, bufferLoadFailed and bufferSaveResult polls (nil if missing)
   S.buffer_polls = {state = nil, load_failed = nil, save_result = nil}
@@ -85,7 +85,9 @@ return function(S)
   -- (docs/notes/engine/files.md); 30 s leaves a Pi's slower FLAC decoding
   -- about 45 times that.
   -- start: seconds into the slot's file the load began at (0 for a new file;
-  -- sent with every load of the slot, kept in buffers.data); sample_rate and
+  -- sent with every load of the slot, kept in buffers.data; set_start moves it
+  -- ahead of its reload); sent_start: the start of the load last sent, what a
+  -- failed load puts back (#245); sample_rate and
   -- file_seconds: the loaded file's rate and length from audio.file_info, nil
   -- for a take, a clear or a file it cannot read (set_start
   -- clamps the start to what the file leaves after a slot's length)
@@ -181,7 +183,7 @@ return function(S)
   function empty_buffer_state(settled_empty)
     return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
       confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio, checking_from = nil,
-      checking_load = nil, start = 0, sample_rate = nil, file_seconds = nil}
+      checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil}
   end
 
   -- What a load replaces in the slot, for buffer_load_failed to put back: the
@@ -200,7 +202,7 @@ return function(S)
       settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
       missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file"),
       checking_from = buffer.checking_from, checking_load = buffer.checking_load,
-      start = buffer.start, sample_rate = buffer.sample_rate, file_seconds = buffer.file_seconds}
+      start = buffer.sent_start, sample_rate = buffer.sample_rate, file_seconds = buffer.file_seconds}
   end
 
   -- Give the slot a state from buffer_state_before_load or
@@ -218,6 +220,7 @@ return function(S)
     buffer.checking_from = state.checking_from
     buffer.checking_load = state.checking_load
     buffer.start = state.start or 0
+    buffer.sent_start = buffer.start
     buffer.sample_rate, buffer.file_seconds = state.sample_rate, state.file_seconds
     set_buffer_file_param(slot, state.file_param)
   end
@@ -317,7 +320,7 @@ return function(S)
     buffer.confirm_since = util.time()
     buffer.path = path
     buffer.missing_path = nil
-    buffer.start = start
+    buffer.start, buffer.sent_start = start, start
     buffer.sample_rate, buffer.file_seconds = file_length(path)
     buffer.checking_from = checked_before_load(path) and buffer.seconds or nil
     buffer.checking_load = buffer.checking_from ~= nil and buffer.loads_sent or nil
@@ -343,7 +346,7 @@ return function(S)
     buffer.path = nil
     buffer.missing_path = nil
     buffer.checking_from, buffer.checking_load = nil, nil
-    buffer.start, buffer.sample_rate, buffer.file_seconds = 0, nil, nil
+    buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
     buffer_display_changed()
   end
@@ -749,7 +752,7 @@ return function(S)
     cancel_start_reload(slot)
     if not playable then
       local buffer = S.buffers[slot]
-      buffer.start, buffer.sample_rate, buffer.file_seconds = 0, nil, nil
+      buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     end
   end
 
