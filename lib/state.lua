@@ -38,6 +38,7 @@ return function()
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
     grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
     alt_release = {},   -- fn(), run when ALT goes from held to not held
+    menu_close = {},    -- fn(), run after the norns menu closes (lib/ui/menu_watch.lua)
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
   }
 
@@ -194,6 +195,15 @@ return function()
   function M.register_alt_release(fn)
     require_arg(type(fn) == "function", "register_alt_release", "a hook is a function")
     table.insert(M.registry.alt_release, fn)
+  end
+
+  -- fn() runs each time the norns menu closes (_menu.set_mode(false)),
+  -- after norns' own set_mode returns, each in its own pcall. The menu
+  -- watch reads the registry as its start step builds the wrapper, so
+  -- hooks are registered at include time
+  function M.register_menu_close(fn)
+    require_arg(type(fn) == "function", "register_menu_close", "a hook is a function")
+    table.insert(M.registry.menu_close, fn)
   end
 
   -- A state invariant of the registering module: fn() returns nil while it

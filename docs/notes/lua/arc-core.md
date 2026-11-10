@@ -2,6 +2,7 @@
 
 - Handlers live on the vport only (`arc.connect(port)`), never on the raw device passed to `arc.add`.
 - Strata follows one arc: on the vport of the device (`device.port`, port 1 if unassigned; at init the first vport holding a device). While one is connected, `arc.add` of another arc is ignored and `arc.remove` disconnects only the connected one.
+- `S.arc_connected` is exactly whether the followed vport holds a device (the `"arc connection"` invariant). An arc moved in SYSTEM > DEVICES gets no `arc.add` or `arc.remove` (norns calls `update_devices()` only), so `S.lib.arc_core.reconcile()` runs as the norns menu closes (#256).
 - Every ring is filled through `arc_ring_fill` from `param_fraction`, or through `arc_ring_fill_bipolar` (which reads `param_fraction` itself) for a range through 0, never from a hardcoded range and never with a bare `segment` (a full turn would light nothing). `arc_ring_fill_param` picks between them.
 - Every continuous ring sweeps its param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`; a ring never has a scale of its own (the exceptions are listed in `docs/notes/lua/arc-pages.md`).
 - Whole-step rings carry their spare ticks through `arc_whole_steps(key, delta, ticks_per_step)` under a key of their own (`S.arc_ticks[key]`), never in a table of their own, so a page change (`set_ui_page`, which calls `forget_arc_ticks()`) forgets them all.
@@ -13,13 +14,14 @@
 ## Owns
 
 - `lib/arc/core.lua` (`S.lib.arc_core`), what every page shares:
-  - `S.arc_device`, `S.arc_connected`;
+  - `S.arc_device`, `S.arc_connected`, and `reconcile()` on `S.lib.arc_core` (a menu-close hook);
   - `S.arc_ticks` (carried ticks per key);
   - `arc_sweep_param`, `arc_ring_fill`, `arc_ring_fill_bipolar`, `arc_ring_fill_param`, `arc_whole_steps`, `forget_arc_ticks`, `attach_arc`, `first_arc_port`, `arc_init`, `arc.add`/`arc.remove`, `forget_arc_lfo_period_ticks`;
   - the norns entry points `arc_delta`, `arc_key` and `arc_redraw`;
   - all global but `attach_arc` and `page_ring_handler`, locals of the constructor (`arc.add`/`arc.remove` are fields of norns' `arc` table);
-  - cleanup step 180: the arc left dark.
-- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, the one followed arc, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
+  - cleanup step 180: the arc left dark;
+  - the invariant `"arc connection"`: `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)`.
+- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
 
 ## Device lifecycle
 
@@ -29,7 +31,26 @@
   - It acts only when the removed device is on the connected vport (`S.arc_device == arc.connect(port)`), so another arc neither replaces nor disconnects it.
   - Removing the followed arc attaches `first_arc_port(port)`, the first other vport holding a device, if any. norns clears the removed vport only after `arc.remove` returns, so its port is skipped (issue #49).
   - It disconnects only when there is no other arc.
+- `S.lib.arc_core.reconcile()`: SYSTEM > DEVICES moves an arc between ports through norns' `update_devices()` alone (`lua/core/menu/devices.lua`), with no `arc.add` or `arc.remove`, so the followed vport can go empty, or fill, under the script. As the norns menu closes (registered with `S.register_menu_close`): when the followed vport holds no device, follow `first_arc_port()` if there is one (through `attach_arc`), else `S.arc_connected = false`; when it holds one, `S.arc_connected = true`. Then `request_redraw()` (the rings, and SETUP's arc state).
 - Handlers live on the vport only, as for grids and MIDI.
+
+## States: the followed arc
+
+| State | Fields | Meaning |
+|-------|--------|---------|
+| Before init | `S.arc_device` nil, `S.arc_connected` false | No arc followed yet |
+| Followed, connected | `S.arc_device` a vport holding a device, `S.arc_connected` true | Turns and the button reach the pages; the rings are drawn; SETUP shows `arc: connected` |
+| Followed, none | `S.arc_device` a vport holding no device, `S.arc_connected` false | Its handlers stay, for an arc that arrives on that port; SETUP shows `arc: none` |
+
+The invariant `"arc connection"` holds outside the norns menu: `S.arc_connected` is true exactly when `S.arc_device` holds a device. One function per transition:
+
+| Transition | Function |
+|------------|----------|
+| Follow the first arc at init (or port 1 with none) | `arc_init` |
+| An arc plugged in while none is connected | `arc.add` |
+| The followed arc unplugged: follow another, or none | `arc.remove` |
+| The menu closes after SYSTEM > DEVICES moved the arc | `S.lib.arc_core.reconcile` |
+| Attach a vport (any of the above) | `attach_arc` |
 
 ## Dispatch
 

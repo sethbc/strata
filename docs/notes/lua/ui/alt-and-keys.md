@@ -3,6 +3,7 @@
 - A key release acts only on the page where the key went down (`S.key_press_page`). Keys held while the norns menu opens are forgotten.
 - Every ALT+K2/ALT+K3 action goes through `alt_action(page, n)`, never a direct `alt_key` call; the one exception is BUFFER's ALT+K2 and ALT+K3, which act on release in `alt_key_release`, by how long they were held, while their `alt_key` only notes the press (`docs/notes/lua/pages/buffer.md`). A key pressed with ALT releases through `alt_key_release`, never `key_release`, even when K1 comes up first (on BUFFER, an ALT+K2 release must never open the file selector). `forget_held_keys` clears `S.alt_held` and `S.key_press_alt`. When ALT goes from held to not held (`S.lib.ui_alt.set(false)`, `forget_held_keys`), the `S.registry.alt_release` hooks run (`S.register_alt_release`).
 - `unwatch_menu_opening()` puts `_menu.set_mode` back only if it is still Strata's wrapper; otherwise Strata's wrapper becomes a pass-through.
+- The menu watch's wrapper never lets a failure stop the menu closing: the file selector release and each `S.registry.menu_close` hook run in their own `pcall`, and it calls only upvalues (no script-global lookup).
 
 ## ALT
 
@@ -30,7 +31,8 @@ Keys held into the menu:
 - Without it, a key released in the menu would stay held on the page it went down on.
 - It also runs the moment the menu opens. Every way into the menu (K1, a script error, a keyboard's menu key) calls `_menu.set_mode(true)`, which `lua/core/menu.lua` and `keyboard.lua` look up on `_menu` at each call.
 - So `watch_menu_opening()` (from its start step, `START_ORDER.menu_watch`) wraps it in `menu_watch.wrapper`: call norns' function, then `forget_keys_held_through_menu()` when `mode == true`.
-- The wrapper holds norns' function and `forget_keys_held_through_menu` as upvalues (no script-global lookup).
+- The wrapper holds norns' function, `forget_keys_held_through_menu`, `release_superseded_file_selector` and the `S.registry.menu_close` list as upvalues (no script-global lookup).
+- As the menu closes (`mode == false`, while the watch is active), after norns' `set_mode(false)` returns, the wrapper runs each `S.registry.menu_close` hook (`S.register_menu_close(fn)`) in order, each in its own `pcall`: a hook that fails prints `strata: menu close hook failed: <error>`, and the next hook still runs and the menu still closes. The list is read when the wrapper is built (the `menu_watch` start step), so hooks register at include time (or in a test's `before_init`). The hooks today: `S.lib.grid_core.reconcile_ports` and `S.lib.arc_core.reconcile`, since SYSTEM > DEVICES moves a grid or arc to another port with no `add` or `remove` (`docs/notes/lua/grid-core.md`, `docs/notes/lua/arc-core.md`).
 - `unwatch_menu_opening()`, cleanup's second step (after the tempo handler, before anything that can fail), puts `menu_watch.original_set_mode` back only if `_menu.set_mode` is still Strata's wrapper. Otherwise (something wrapped it later) it leaves that wrapper in place and turns Strata's into a pass-through (`menu_watch.active = false`).
 - The 10 Hz tick stays as a fallback.
 - norns has no key-state query.

@@ -285,6 +285,32 @@ test("the arc keeps drawing while the norns menu is open (#49)", function()
   _menu.set_mode(false)
 end)
 
+-- SYSTEM > DEVICES moves an arc through update_devices() only, never arc.add
+-- or arc.remove (#256)
+test("an arc moved to another port in SYSTEM > DEVICES is followed once the menu closes", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.arc.plug(1)
+  _menu.set_mode(true)
+  context.arc.reassign(1, 3)
+  _menu.set_mode(false)
+  assert_true(S.arc_connected, "the moved arc is connected")
+  local density = params:lookup_param("master_density")
+  local before = density.raw
+  show_page("MAIN")
+  context.arc.turn(3, 1, 20)
+  assert_near(density.raw - before, 20 / 512, 1e-9, "a ring turn on port 3 moves its param")
+  -- the arc's vport emptied (its name given to a port with no device), with
+  -- no other arc
+  _menu.set_mode(true)
+  arc.connect(3).name = "none"
+  context.arc.update_devices()
+  _menu.set_mode(false)
+  assert_true(not S.arc_connected, "no arc is connected")
+  show_page("SETUP"); enc(2, 20); redraw()
+  assert_true(h.screen_shows(context, "arc: none"), "SETUP shows arc: none")
+end)
+
 -- norns' menu takes the screen, keys and encoders only (lua/core/menu.lua's
 -- set_mode swaps redraw, key and the encoder callback); arc and grid input
 -- stays with the script, so both keep showing what changes (#169)

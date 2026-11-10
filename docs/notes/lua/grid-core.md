@@ -9,6 +9,7 @@
 - Pages are per port (`S.lib.grid_core.page(port)`, `set_page`); a check for a page shown anywhere uses `any_page(n)`, and one for the FX faders `any_fx_faders()` (page 4 is FX only on the 256). There is no global grid page.
 - Held keys are per port: `S.grid_held[port][x][y]` holds the press time while a key is down. `grid_key` clears a key on its release; `grid.remove` and `grid.add` forget the port's held, consumed and step keys and its page; cleanup forgets every port's.
 - A delayed key action goes through `on_hold`, never a clock of its own: a new press or the release of the key, `grid.remove` of its port and cleanup cancel its hold clock, so a grid unplugged mid-hold never saves a scene and no clock errors.
+- A grid moved to another port in SYSTEM > DEVICES gets no `grid.add` or `grid.remove` (norns' menu calls `update_devices()` only, `lua/core/menu/devices.lua`), so `reconcile_ports()` runs as the norns menu closes (a `S.register_menu_close` hook) and brings `S.grids` back in line with the vports (#256).
 - Pattern keys go through `step_key` and scene save keys through `scene_save_key` on every layout, so the step-level gesture and the save hold work the same everywhere.
 - Every whole-pattern change ends the voice's step gestures (`end_step_gestures`, run by `S.lib.sequencer.replace_pattern`), and a 64's half switch ends its port's (`end_port_step_gestures`), so a held step never takes a level in a pattern or half it was not pressed in (#242).
 - Each layout's rules are in its own notes file (`docs/notes/lua/grid/layout_256.md`, `layout_128h.md`, `layout_128v.md`, `layout_64.md`); the pattern sequencer's in `docs/notes/lua/sequencer.md`.
@@ -18,11 +19,11 @@
 - `lib/grid/core.lua` (`S.lib.grid_core`): the device lifecycle and what every layout shares.
   - State on `S`: `S.grids`, `S.MAX_GRID_PORTS`, the grid UI state (`S.grid_pages[port]`, read through `page(port)`; `S.param_page`, `S.grid_voice_select`), the held keys `S.grid_held[port][x][y]` (press time).
   - `GRID_LAYOUT`, exported as `S.lib.grid_core.GRID_LAYOUT`, which `lib/grid/faders.lua` and `lib/grid/layout_256.lua` alias.
-  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid.add`/`grid.remove` are fields of norns' `grid` table. `grid_layout`, `attach_grid` and `forget_port` are locals of the constructor.
-  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `set_page`, `any_page`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `end_port_step_gestures`, `any_fx_faders`, `scene_save_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`).
+  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid.add`/`grid.remove` are fields of norns' `grid` table. `grid_layout`, `attach_grid`, `attached_devices` and `forget_port` are locals of the constructor.
+  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `set_page`, `any_page`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `end_port_step_gestures`, `any_fx_faders`, `reconcile_ports`, `scene_save_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`).
   - Cleanup step 170: every pending hold canceled and every port's keys forgotten, then every connected grid left dark.
 - `lib/grid/faders.lua` (`S.lib.grid_faders`): the fader maths and fader rows (the 256's parameter page and FX faders today): `fader_param_ids`, `fader_page_count`, `fader_zero_column`, `fader_column_fraction`, `set_param_from_column`, `set_fader_param`, `fader_position`, `voice_level_fader_keys`, `grid_redraw_fader_row`, `grid_redraw_faders`. `BUFFER_FADER_KEYS`, `GRAIN_FADER_KEYS` and `append_fader_ids` are local to it.
-- Unit tests: `test/unit/grid_core_test.lua` (holds, gestures, pages per port, hot-plug); the faders are exercised through the 256's fader page in `test/unit/grid_layout_256_test.lua`.
+- Unit tests: `test/unit/grid_core_test.lua` (holds, gestures, pages per port, hot-plug, a grid moved in SYSTEM > DEVICES); the faders are exercised through the 256's fader page in `test/unit/grid_layout_256_test.lua`.
 
 Strata supports several grids at once and adapts its layout to each grid's size.
 
@@ -32,7 +33,8 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 - `grid.add(device)`: norns' callback when a grid connects (hot-plug).
 - `grid_key(port, x, y, z)`: norns' key callback (on the vport). It ignores a port with no grid and a key outside the grid, runs the press or release through the layout (`handle_key`) with `grid_redraw()` held (`key_repaint.handling`), then repaints every grid once and requests a screen redraw.
 - `grid.remove(device)`: norns' callback when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot, and forgets the port (`forget_port`): its pending holds are canceled, its held, consumed and step keys, its `port_state` and its page are dropped. `grid.add` forgets the port too, so a grid plugged in starts with no held keys, on page 1.
-- `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). Both `grid_init` and `grid.add` go through `attach_grid(port)`.
+- `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). `grid_init`, `grid.add` and `reconcile_ports` go through `attach_grid(port)`, which also records the device the vport holds then (`attached_devices[port]`).
+- `S.lib.grid_core.reconcile_ports()`: SYSTEM > DEVICES moves a grid between ports through norns' `update_devices()` alone, which rewrites the vports' `device`, `cols` and `rows` and the device's `port` but calls neither `grid.add` nor `grid.remove`. So, as the norns menu closes (registered with `S.register_menu_close`), for each port 1..`S.MAX_GRID_PORTS`: a vport holding a device that is not attached, or another device than `attached_devices[port]`, is forgotten and attached, as `grid.add` does; an attached port whose vport is empty loses its `key` handler and its `S.grids` slot and is forgotten, as `grid.remove` does. Then `grid_redraw()` and `request_redraw()` (SETUP counts the grids). A grid moved from port 1 to 2 thus starts on port 2 with no held keys, on page 1, and port 1 is no longer drawn.
 - Why never the raw device: devices have no `.device` field (so `grid_redraw` would skip them), and norns fires both `device.key` and `vports[port].key`, so handlers on both would run every press twice. The arc uses the same vport-only pattern (`attach_arc`).
 
 ## Layouts
@@ -80,7 +82,22 @@ An entry exists only while its key is held (every release and press clears it). 
 | A key released, or pressed again with no release seen | `release_key`, `press_key` |
 | The voice's pattern replaced: its entries on every port forgotten | `end_step_gestures(voice)`, from `S.lib.sequencer.replace_pattern` |
 | A 64's half switch: the port's entries forgotten | `end_port_step_gestures(port)` |
-| The port's grid added or removed, cleanup | `forget_port` |
+| The port's grid added or removed (also through `reconcile_ports` as the menu closes), cleanup | `forget_port` |
+
+## States: the attached ports
+
+A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_devices[port]` (the device it held when attached), against what the vport holds now (`grid.connect(port).device`). It registers no invariant: the vports change under the script, inside norns' menu, so the two disagree while the menu is open.
+
+| State of a port | Fields | Meaning |
+|-----------------|--------|---------|
+| Not attached | `S.grids[port]` nil | No key handler from Strata; not drawn, not counted on SETUP |
+| Attached | `S.grids[port]` the vport, `attached_devices[port]` its device | Keys reach `grid_key`; drawn and counted while the vport holds a device |
+| Stale (menu open, or before the menu closes) | the vport's device is not `attached_devices[port]`, or it holds a device and `S.grids[port]` is nil | Set right by `reconcile_ports` as the menu closes |
+
+| Transition | Function |
+|------------|----------|
+| Attach (init, hot-plug, the menu closing) | `attach_grid`, from `grid_init`, `grid.add`, `reconcile_ports` |
+| Detach (unplug, the menu closing) | `grid.remove`, `reconcile_ports` |
 
 ## LEDs
 

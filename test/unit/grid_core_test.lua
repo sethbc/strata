@@ -460,4 +460,32 @@ test("a scene saved on a grid hold flashes saved in the header", function()
   assert_equal(S.lib.ui_flash.text("header"), "saved S4")
 end)
 
+-- SYSTEM > DEVICES moves a grid through update_devices() only, never
+-- grid.add or grid.remove (#256)
+test("a grid moved to another port in SYSTEM > DEVICES works once the menu closes", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 8)
+  _menu.set_mode(true)
+  context.grid.reassign(1, 2)
+  _menu.set_mode(false)
+  local grids = local_value("S").grids
+  assert_equal(grids[1], nil, "port 1 is no longer attached")
+  assert_equal(grids[2], grid.connect(2), "port 2 is attached")
+  local before = patterns[1][1]
+  tap(context, 2, 1, 1)
+  assert_true(patterns[1][1] ~= before, "a step press on port 2 toggles voice 1 step 1")
+  h.show_page("SETUP"); enc(2, 20); redraw()
+  assert_true(h.screen_shows(context, "grid: 1 connected"), "SETUP counts the moved grid")
+  -- another grid moved onto an attached port replaces its grid: the port
+  -- starts over, as a grid plugged in does
+  context.grid.plug(3, 16, 8)
+  grid_core().set_page(2, 3)
+  _menu.set_mode(true)
+  context.grid.reassign(3, 2)
+  _menu.set_mode(false)
+  assert_equal(grids[3], nil, "port 3 is no longer attached")
+  assert_equal(grid_core().page(2), 1, "port 2 starts on page 1 with the other grid")
+end)
+
 end
