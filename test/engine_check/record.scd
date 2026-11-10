@@ -921,23 +921,29 @@ test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds 
 // whose fork held sclang for 4-6 ms here (2.5 ms per 130 MB of sclang, so
 // more on a Pi), and a command arriving then waited for it: every refresh
 // made a 1 ms SystemClock task wait over refreshGapLimit, and every message
-// sent as a refresh's write starts waited over refreshHoldLimit. Counted,
-// not the largest, so one scheduling spike on a loaded machine (four checks
-// at once) cannot fail it: fewer than lateLimit of the ticker's gaps through
-// a loop recording's refreshes, and fewer than lateLimit of the ten pings.
+// sent as a refresh's write starts waited over refreshHoldLimit. The pings
+// are the main proof; the ticker counts only its gaps that span a refresh
+// (the refresh count changed during the gap), so the OS preempting sclang
+// on a loaded machine (four checks at once) between refreshes cannot fail
+// it. Counted, not the largest: fewer than lateLimit late pings of ten, and
+// fewer than lateLimit late refresh gaps of at least minimumRefreshGaps.
 test.("record: a command sent during a peaks refresh is handled within 2 ms", {
-    var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2;
-    var counters = state[\peakWrites], before, refreshes;
-    var latenesses = List.new(10), ping, sent, gaps = List.new(8), longestGap = 0, last, ticker, lateGaps, latePings;
+    var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2, minimumRefreshGaps = 5;
+    var counters = state[\peakWrites], before, refreshes, lastCount;
+    var latenesses = List.new(10), ping, sent, refreshGaps = List.new(16), longestGap = 0, last, ticker, lateGaps, latePings;
     record.(slot, 0.25, 1.0, 0, 0, 0, 1);
     settle.(0.1);
     before = counters[\refreshes];
     last = Main.elapsedTime;
+    lastCount = before;
     ticker = Routine({ loop {
-        var now = Main.elapsedTime, gap = now - last;
-        longestGap = longestGap.max(gap);
-        if ((gap >= refreshGapLimit) and: { gaps.size < 8 }) { gaps.add(gap) };
+        var now = Main.elapsedTime, gap = now - last, count = counters[\refreshes];
+        if ((count != lastCount) and: { refreshGaps.size < 16 }) {
+            refreshGaps.add(gap);
+            longestGap = longestGap.max(gap);
+        };
         last = now;
+        lastCount = count;
         0.001.wait
     } }).play(SystemClock);
     tickerSeconds.wait;
@@ -953,11 +959,11 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
     refreshes = counters[\refreshes] - before;
-    lateGaps = gaps.size;
+    lateGaps = refreshGaps.count({ arg gap; gap >= refreshGapLimit });
     latePings = latenesses.count({ arg value; value >= refreshHoldLimit });
-    check.((refreshes >= 18) and: { latenesses.size == 10 } and: { latePings < lateLimit } and: { lateGaps < lateLimit },
-        "record: a command sent during a peaks refresh is handled within 2 ms (% of 10 pings late, longest % ms; % 1 ms task gaps over 3 ms, longest % ms; % refreshes)".format(
-            latePings, latenesses.maxItem !? { arg value; (value * 1000).round(0.01) }, lateGaps, (longestGap * 1000).round(0.01), refreshes));
+    check.((refreshGaps.size >= minimumRefreshGaps) and: { latenesses.size == 10 } and: { latePings < lateLimit } and: { lateGaps < lateLimit },
+        "record: a command sent during a peaks refresh is handled within 2 ms (% of 10 pings late, longest % ms; % of % refresh gaps of a 1 ms task over 3 ms, longest % ms; % refreshes)".format(
+            latePings, latenesses.maxItem !? { arg value; (value * 1000).round(0.01) }, lateGaps, refreshGaps.size, (longestGap * 1000).round(0.01), refreshes));
 });
 
 guardBus.free;

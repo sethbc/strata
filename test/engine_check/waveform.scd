@@ -286,23 +286,29 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
 }.value;
 
 // The peaks mover (#210): one long-lived shell renames every peaks file, so a
-// write never forks sclang. Its FIFO's name is gone once both ends are open,
-// a write through it lands, a stopped mover times out into a subprocess
-// rename, a killed one cannot SIGPIPE sclang (which holds a reader) and is
-// used no more, and free ends it. Engines of their own, so h.engine keeps
-// its mover.
+// write never forks sclang. Engines of their own, so h.engine keeps its
+// mover. Its FIFO's name is gone once both ends are open; a write through it
+// lands; a stopped mover makes that one write rename by subprocess (one
+// action), stays in use and is used again once it catches up; a killed one
+// is noticed by its exit action and cannot SIGPIPE sclang (which holds a
+// reader); a second engine's mover never holds the first's FIFO open
+// (close-on-exec), so freeing the first ends its mover; and a mover that
+// never removes the FIFO's name is given up at alloc.
 {
-    var dir = scratchRoot +/+ "waveform-mover/", mover, other, slot = 3, ran, peaksPath, fifo, exited;
+    var dir = scratchRoot +/+ "waveform-mover/", mover, other, second, slot = 3, ran, peaksPath, fifo, exited, calls;
+    var noBoard = scratchRoot +/+ "no-board-model";
     var alive = { arg pid; ("kill -0 " ++ pid ++ " 2>/dev/null").systemCmd == 0 };
     var write = { arg target;
         var done = false, start = Main.elapsedTime, took;
-        target.writeSlotPeaks(slot, 100, { done = true });
+        calls = 0;
+        target.writeSlotPeaks(slot, 100, { calls = calls + 1; done = true });
         waitFor.({ done }, 3);
         took = Main.elapsedTime - start;
         [done and: { File.exists(peaksPath) } and: { (dir +/+ "*.peaks.*.part").pathMatch.isEmpty }, took]
     };
+    var fakeShellDir = scratchRoot +/+ "waveform-slow-sh", path, fifoLeft;
     File.mkdir(dir);
-    other = h.startEngine((settingsDir: dir, modelPath: scratchRoot +/+ "no-board-model"));
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
     mover = other.areaState[\waveform][\mover];
     peaksPath = other.peaksPath(slot);
     fifo = other.peaksMoverPath;
@@ -311,28 +317,71 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     ran = write.(other);
     check.(ran[0] and: { mover[\alive] } and: { mover[\pending] == 0 },
         "waveform: a peaks write through the mover lands and runs its action (% ms)".format((ran[1] * 1000).round(0.1)));
-    // stopped: the write waits moverTimeout, then renames by a subprocess
+    // stopped: that one write renames by subprocess after peaksMoverTimeout;
+    // the mover, still running, stays in use, and once it catches up (its
+    // late rename finds the .part gone and says nothing) it is used again
     ("kill -STOP " ++ mover[\pid]).systemCmd;
     ran = write.(other);
-    check.(ran[0] and: { mover[\alive].not } and: { ran[1] >= other.peaksMoverTimeout },
-        "waveform: a stopped mover times out into a subprocess rename (% s, alive %)".format(ran[1].round(0.01), mover[\alive]));
-    // killed (SIGKILL ends a stopped process, which never reads the pair):
-    // a write straight into its FIFO cannot SIGPIPE sclang, which holds a
-    // reader, and a peaks write renames by a subprocess at once
+    check.(ran[0] and: { mover[\alive] } and: { ran[1] >= other.peaksMoverTimeout } and: { mover[\pending] == 1 },
+        "waveform: a stopped mover's write renames by subprocess and the mover stays in use (% s, alive %, pending %)".format(
+            ran[1].round(0.01), mover[\alive], mover[\pending]));
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    waitFor.({ mover[\pending] == 0 }, 3);
+    0.2.wait;
+    check.((calls == 1) and: { mover[\pending] == 0 },
+        "waveform: a write whose rename timed out runs its action once, also after the mover catches up (actions %, pending %)".format(calls, mover[\pending]));
+    ran = write.(other);
+    check.(ran[0] and: { ran[1] < 0.5 } and: { mover[\alive] },
+        "waveform: a mover that caught up renames the next write itself (% ms)".format((ran[1] * 1000).round(0.1)));
+    h.freeEngine(other);
+    // killed before any timeout: its exit action stops its use, a write
+    // straight into its FIFO cannot SIGPIPE sclang, and a peaks write
+    // renames by subprocess at once
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    mover = other.areaState[\waveform][\mover];
     ("kill -KILL " ++ mover[\pid]).systemCmd;
-    waitFor.({ mover[\exited] == true }, 3);
+    exited = waitFor.({ mover[\exited] == true }, 3);
+    check.(exited and: { mover[\alive].not },
+        "waveform: a killed mover's exit action stops its use (exited %, alive %)".format(mover[\exited], mover[\alive]));
     mover[\file].write("orphan\nline\n"); mover[\file].flush;
     ran = write.(other);
-    check.(ran[0] and: { mover[\exited] == true } and: { ran[1] < other.peaksMoverTimeout },
+    check.(ran[0] and: { ran[1] < other.peaksMoverTimeout },
         "waveform: after the mover is killed, a peaks write renames by a subprocess and sclang lives (% s)".format(ran[1].round(0.01)));
     h.freeEngine(other);
-    // free ends a live mover: EOF on its FIFO once sclang closes the only writer
-    other = h.startEngine((settingsDir: dir, modelPath: scratchRoot +/+ "no-board-model"));
+    // close-on-exec: a second engine started while the first's FIFO is
+    // open, so its mover (a child of sclang) would inherit that end without
+    // it; freeing the first must still end the first's mover
+    other = h.startEngine((settingsDir: dir, modelPath: noBoard));
     mover = other.areaState[\waveform][\mover];
+    second = h.startEngine((settingsDir: dir, modelPath: noBoard));
     h.freeEngine(other);
     exited = waitFor.({ mover[\exited] == true }, 3);
-    check.(exited and: { alive.(mover[\pid]).not },
-        "waveform: freeing the engine ends its peaks mover (exited %)".format(mover[\exited]));
+    check.(exited and: { alive.(mover[\pid]).not } and: { second.areaState[\waveform][\mover][\alive] },
+        "waveform: freeing an engine ends its peaks mover while another engine's mover runs (exited %)".format(mover[\exited]));
+    mover = second.areaState[\waveform][\mover];
+    h.freeEngine(second);
+    exited = waitFor.({ mover[\exited] == true }, 3);
+    check.(exited, "waveform: freeing the engine ends its peaks mover (exited %)".format(mover[\exited]));
+    // a mover that has not removed the FIFO's name when alloc's wait ends
+    // (an sh on PATH that sleeps first) is given up: the name goes, the
+    // shell is ended and writes rename by subprocess at once
+    File.mkdir(fakeShellDir);
+    File.use(fakeShellDir +/+ "sh", "w", { arg file; file.write("#!/bin/sh\nsleep 3\nexec /bin/sh \"$@\"\n") });
+    ("chmod 755 " ++ (fakeShellDir +/+ "sh").shellQuote).systemCmd;
+    path = "PATH".getenv;
+    "PATH".setenv(fakeShellDir ++ ":" ++ path);
+    other = protect { h.startEngine((settingsDir: dir, modelPath: noBoard)) } { "PATH".setenv(path) };
+    "PATH".setenv(path);
+    mover = other.areaState[\waveform][\mover];
+    fifo = other.peaksMoverPath;
+    fifoLeft = File.exists(fifo);
+    exited = waitFor.({ mover[\exited] == true }, 3);
+    ran = write.(other);
+    check.(mover[\alive].not and: { fifoLeft.not } and: { exited } and: { ran[0] } and: { ran[1] < 0.5 },
+        "waveform: a mover that never removes its FIFO's name is given up at alloc (alive %, FIFO left %, exited %, write % s)".format(
+            mover[\alive], fifoLeft, mover[\exited], ran[1].round(0.01)));
+    h.freeEngine(other);
+    File.delete(fakeShellDir +/+ "sh");
     (dir +/+ "*.peaks").pathMatch.do({ arg each; File.delete(each) });
 }.value;
 
