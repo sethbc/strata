@@ -1,46 +1,76 @@
 -- lib/arc/buffer.lua
--- The BUFFER page's arc rings: the selected voice's buffer position and
--- rate, the recording duration and level. Sets arc_delta and arc_redraw on
--- BUFFER's S.registry.pages record.
+-- The BUFFER page's arc rings: the selected voice's buffer position, loop
+-- start, loop length and scan; with ALT held its buffer rate, the scrub
+-- friction and the record feedback. Sets arc_delta, arc_redraw,
+-- arc_alt_delta and arc_alt_redraw on BUFFER's S.registry.pages record.
 
 return function(S)
   local M = {}
 
-  -- BUFFER page rings: the selected voice's buffer position and rate, then
-  -- the recording duration and level. Param id suffixes after "v<i>_" for
-  -- the voice rings. Each sweeps its range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks.
+  -- Rings 1-4 plain and with ALT. voice_key: the param id suffix after
+  -- "v<i>_"; param_id: a global param. always_level: the ring's level
+  -- whatever the voice's source. Each sweeps its range in
+  -- UI_PAGES.ARC_TICKS_PER_SWEEP ticks (arc_sweep_param).
   local ARC_BUFFER_RINGS = {
-    {voice_key = "buf_pos"},
-    {voice_key = "buf_rate"},
-    {param_id = "record_duration"},
-    {param_id = "record_level"}
+    {voice_key = "buf_pos", scrub = true},
+    {voice_key = "loop_start"},
+    {voice_key = "loop_length"},
+    {voice_key = "buf_scan"}
   }
+  local ARC_BUFFER_ALT_RINGS = {
+    {voice_key = "buf_pos", scrub = true},
+    {voice_key = "buf_rate"},
+    {param_id = "scrub_friction"},
+    {param_id = "record_feedback", always_level = 12}
+  }
+  local ARC_BUFFER_LEVELS = {buffer = 15, other = 4}
 
-  local function arc_buffer_ring_param(ring)
+  local function ring_param(ring)
     return ring.param_id or ("v" .. S.selected_voice .. "_" .. ring.voice_key)
   end
 
-  -- Rings 1-2 adjust the voice's buffer params whatever its source (they are
-  -- ready when it switches to a buffer)
+  -- The voice whose scan the ALT ring 1 holds (nil when none)
+  local held_voice
+
+  local function turn_ring(ring, delta)
+    local voice = S.selected_voice
+    arc_sweep_param(ring_param(ring), delta)
+    if ring.scrub then S.lib.positions.scrub_turned(voice) end
+  end
+
   local function arc_buffer_delta(n, delta)
     local ring = ARC_BUFFER_RINGS[n]
-    if ring then
-      arc_sweep_param(arc_buffer_ring_param(ring), delta)
+    if ring then turn_ring(ring, delta) end
+  end
+
+  -- ALT ring 1 also holds the selected voice's own scan, once, until ALT
+  -- comes up (the release hook below)
+  local function arc_buffer_alt_delta(n, delta)
+    local ring = ARC_BUFFER_ALT_RINGS[n]
+    if not ring then return end
+    if n == 1 and held_voice == nil then
+      held_voice = S.selected_voice
+      S.lib.positions.hold_scan(held_voice, true)
+    end
+    turn_ring(ring, delta)
+  end
+
+  local function draw_rings(arc_port, rings)
+    local uses_buffer = voice_uses_buffer(S.selected_voice)
+    local voice_level = uses_buffer and ARC_BUFFER_LEVELS.buffer or ARC_BUFFER_LEVELS.other
+    for n, ring in ipairs(rings) do
+      arc_ring_fill_param(arc_port, n, ring_param(ring), ring.always_level or voice_level)
     end
   end
 
-  -- Rings 1-2 are bright for a buffer-sourced voice and dim otherwise (the
-  -- buffer params do nothing then); the recording rings are always lit
-  local function arc_buffer_redraw(arc_port)
-    local uses_buffer = voice_uses_buffer(S.selected_voice)
-    for n, ring in ipairs(ARC_BUFFER_RINGS) do
-      local level = 12
-      if ring.voice_key then
-        level = uses_buffer and 15 or 4
-      end
-      arc_ring_fill(arc_port, n, param_fraction(arc_buffer_ring_param(ring)), level)
-    end
-  end
+  local function arc_buffer_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_RINGS) end
+  local function arc_buffer_alt_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_ALT_RINGS) end
+
+  S.register_alt_release(function()
+    local voice = held_voice
+    held_voice = nil
+    if voice then S.lib.positions.hold_scan(voice, false) end
+  end)
 
   -- BUFFER's record (lib/pages/buffer.lua) gains its rings: arc_delta and
   -- arc_redraw in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
@@ -48,6 +78,8 @@ return function(S)
   assert(record, "lib/arc/buffer.lua: no BUFFER page record in S.registry.pages")
   record.arc_delta = arc_buffer_delta
   record.arc_redraw = arc_buffer_redraw
+  record.arc_alt_delta = arc_buffer_alt_delta
+  record.arc_alt_redraw = arc_buffer_alt_redraw
 
   return M
 end

@@ -47,12 +47,19 @@ On the **LFO** page:
 
 On the **BUFFER** page:
 
-- **Ring 1** - Selected voice's buffer position
-- **Ring 2** - Selected voice's buffer rate
-- **Ring 3** - Record duration
-- **Ring 4** - Record level
+- **Ring 1** - Selected voice's buffer position. With the scrub friction below 100% a fast turn glides on after you let go
+- **Ring 2** - Loop start
+- **Ring 3** - Loop length
+- **Ring 4** - Buffer scan (center is 0: a clockwise fill scans forward, a counter-clockwise fill backward)
 
-Rings 1 and 2 adjust the voice's buffer parameters whatever its source (ready for when it switches to a buffer), but are drawn dim unless the source is a buffer.
+With **ALT** (K1) held:
+
+- **Ring 1** - Buffer position, and the voice's own scan stops while ALT is held
+- **Ring 2** - Buffer rate
+- **Ring 3** - Scrub friction
+- **Ring 4** - Record feedback
+
+The rings adjust the voice's buffer parameters whatever its source (ready for when it switches to a buffer), but are drawn dim unless the source is a buffer. Record duration and level are set on the screen.
 
 On the **SCENES** page:
 
@@ -81,5 +88,5 @@ The button runs the page's main action, on the pages that give it one (each page
 - SEQ: step and level rings at 15, tempo and voice rings at 12
 - FX: level 12; frequency and delay time follow their exponential curve
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
-- BUFFER: rings 1-2 bright (15) for a buffer-sourced voice, dim (4) otherwise; rings 3-4 at 12
+- BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12
 - SCENES: level 12

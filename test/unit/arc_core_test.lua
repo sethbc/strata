@@ -134,12 +134,12 @@ test("ALT switches to the page's ALT rings", function()
   arc_redraw()
   assert_equal(alt_draws, 1, "and the FX rings are drawn")
   -- a page without ALT rings keeps its own under ALT
-  show_page("BUFFER")
-  local duration = params:get("record_duration")
+  show_page("LFO")
+  local depth = params:get("lfo_depth_1")
   S.alt_held = true
-  context.arc.turn(1, 3, 100)
+  context.arc.turn(1, 1, 100)
   S.alt_held = false
-  assert_true(params:get("record_duration") > duration, "BUFFER has no ALT rings: ring 3 stays record duration")
+  assert_true(params:get("lfo_depth_1") > depth, "LFO has no ALT rings: ring 1 stays lfo depth")
 end)
 
 test("the arc button calls the page's arc_button", function()
