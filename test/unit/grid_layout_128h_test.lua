@@ -288,6 +288,19 @@ test("128h: the scene page lights the sequencer's position at 10, the current sc
   assert_equal(device:get_led(2, 1), 8, "a stopped sequencer shows no position")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("128h: the scene page blinks the recall key of the scene a fade goes to", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 8)
+  tap(context, 1, 7, 8)  -- page 3
+  capture_scene(1); capture_scene(2)
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(0.1)                                    -- step 2
+  assert_equal(device:get_led(2, 1), 8, "step 2: the target's recall key at its populated level")
+  context.clock.run_for(0.1)                                    -- step 3
+  assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
+end)
+
 test("two 128h grids keep their own pages", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")

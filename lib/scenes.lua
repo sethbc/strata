@@ -170,7 +170,9 @@ return function(S)
   -- is due. It is set and cleared together with scene_transition_active, as
   -- wait_for_scene_transition reads it whenever the flag is set; so are
   -- target (the scene the fade goes to) and previous (the current scene
-  -- before it), nil when no fade runs (#253)
+  -- before it), nil when no fade runs (#253), and step (the number of the
+  -- fade step applied last, set before its redraws: the target blinks by it,
+  -- #254)
   S.SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
 
   local function is_number(value)
@@ -335,6 +337,7 @@ return function(S)
     S.SCENE_TRANSITION.next_step_due = nil
     S.SCENE_TRANSITION.target = nil
     S.SCENE_TRANSITION.previous = nil
+    S.SCENE_TRANSITION.step = nil
     if restored and how ~= "superseded" then
       request_redraw()
       grid_redraw()
@@ -421,9 +424,9 @@ return function(S)
       local targets = scene_transition_targets(scene_data)
 
       -- scene_transition_active, SCENE_TRANSITION.next_step_due, target and
-      -- previous are always set together here and cleared together by
-      -- end_scene_transition: the sequencer's wait reads the due time
-      -- whenever the flag is set. The target is current from the first
+      -- previous are always set together here (step by each step) and
+      -- cleared together by end_scene_transition: the sequencer's wait
+      -- reads the due time whenever the flag is set. The target is current from the first
       -- step (the grids light it at once); previous is the scene the
       -- transition's end puts back
       S.scene_transition_active = true
@@ -445,6 +448,7 @@ return function(S)
               if target.step then value = util.round(value, target.step) end
               params:set(target.id, value)
             end
+            S.SCENE_TRANSITION.step = step  -- these redraws show its phase
             request_redraw()
             grid_redraw()  -- keep the parameter faders moving with the fade
           end, with_traceback)
@@ -906,8 +910,8 @@ return function(S)
     cancel_scene_transition()
   end)
 
-  -- A fade runs exactly while its next step is due and it has a target, and
-  -- no transition clock outlives the fade
+  -- A fade runs exactly while its next step is due, it has a target and a
+  -- step applied last, and no transition clock outlives the fade
   S.register_invariant("scene transition", function()
     local due = S.SCENE_TRANSITION.next_step_due
     if S.scene_transition_active ~= (due ~= nil) then
@@ -918,6 +922,11 @@ return function(S)
     if (target ~= nil) ~= S.scene_transition_active then
       return "scene_transition_active is " .. tostring(S.scene_transition_active)
         .. " but SCENE_TRANSITION.target is " .. tostring(target)
+    end
+    local step = S.SCENE_TRANSITION.step
+    if (step ~= nil) ~= S.scene_transition_active then
+      return "scene_transition_active is " .. tostring(S.scene_transition_active)
+        .. " but SCENE_TRANSITION.step is " .. tostring(step)
     end
     if not S.scene_transition_active and S.scene_transition_clock ~= nil then
       return "no transition is active but scene_transition_clock is " .. tostring(S.scene_transition_clock)
@@ -936,6 +945,23 @@ return function(S)
     grid_redraw()
     request_redraw()
     return true
+  end
+
+  -- The scene a running fade goes to, else nil
+  function M.fading_to()
+    if S.scene_transition_active then return S.SCENE_TRANSITION.target end
+    return nil
+  end
+
+  -- Whether the displays light `slot` as the current scene: the scene a fade
+  -- goes to blinks, shown after its odd steps and dark after its even ones,
+  -- and is steady once it lands (#254). The header, SCENES and the grids'
+  -- recall keys all ask this
+  function M.shows_current(slot)
+    if slot ~= S.current_scene then return false end
+    if M.fading_to() ~= slot then return true end
+    local step = S.SCENE_TRANSITION.step
+    return step ~= nil and step % 2 == 1
   end
 
   M.scene_data_dir = scene_data_dir

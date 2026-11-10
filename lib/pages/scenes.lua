@@ -64,7 +64,7 @@ return function(S)
     for slot = 1, NUM_SCENES do
       local x, y = slot_position(slot)
       local populated = S.scenes[slot].populated
-      local level = slot == S.current_scene and 15 or 4
+      local level = S.lib.scenes.shows_current(slot) and 15 or 4
       screen.level(level)
       screen.move(x, y)
       screen.text(tostring(slot))

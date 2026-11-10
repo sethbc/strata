@@ -312,6 +312,19 @@ test("128v scenes page", function()
   assert_equal(device:get_led(1, 2), 2, "no position while the sequencer is off")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("128v: the scenes page blinks the recall key of the scene a fade goes to", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  show_grid_page(context, 1, 3)
+  capture_scene(1); capture_scene(2)
+  recall_scene(1, 0); recall_scene(2, 2)
+  context.clock.run_for(0.1)                                    -- step 2
+  assert_equal(device:get_led(1, 2), 8, "step 2: the target's recall key at its populated level")
+  context.clock.run_for(0.1)                                    -- step 3
+  assert_equal(device:get_led(1, 2), 15, "step 3: the target's recall key at 15")
+end)
+
 test("128v removing the grid mid-save saves nothing", function()
   local context = load_strata(); finish_startup(context)
   local scenes = local_value("scenes")

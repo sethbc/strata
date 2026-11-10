@@ -5,6 +5,7 @@
 - A recall stops the voices it stops before setting their sources and params, starts the voices it starts after their params, and sends at most one full sync per running voice whose source changed (`S.scene_recall_in_progress`).
 - Every recall clears the randomize undo (`clear_undo`, `lib/mutation.lua`): `recall_scene` after validation, `recall_scene_instant` at its start.
 - Every recall cancels a running transition first. Every exit of a transition (end, cancel, error) goes through the one local `end_scene_transition(how)`, which clears `S.scene_transition_active`, `S.scene_transition_clock` and the `SCENE_TRANSITION` fields together (#253). A fade that does not land puts the previous scene back as current, never leaving its target current; a landing keeps the target current while `recall_scene_instant` applies it, so no redraw during the landing shows the previous scene, and puts the previous scene back only if that recall fails. Inside the transition's clock its id is forgotten, never canceled.
+- Every display of the current scene (the header's `S<n>`, SCENES' slot, the grids' recall keys) asks `S.lib.scenes.shows_current(slot)`, never compares with `S.current_scene` itself, so the scene a fade goes to blinks on all of them alike and is steady once it lands (#254). `SCENE_TRANSITION.step` is set before each step's redraws and cleared by `end_scene_transition` before a landing applies its scene.
 - The sequencer never cuts a transition short. It waits for the transition's end, bounded by `SCENE_TRANSITION.overrun_seconds` measured from the fade's progress, never from its start.
 - `load_scenes_from_disk` runs `tab.load` through `pcall`. On any failure it keeps the current scenes and moves the file aside, or blocks the autosave (`S.scene_autosave_blocked`), so a bad file is never overwritten.
 - Bounds-check the scene number (1..`NUM_SCENES`) and check the slot is populated before recalling.
@@ -16,7 +17,8 @@
 
 `lib/scenes.lua` (`S.lib.scenes`) holds the whole scene system:
 - `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`);
-- `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target` and `previous`);
+- `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target`, `previous` and `step`);
+- `S.lib.scenes.fading_to()` (the scene a running fade goes to, else nil) and `S.lib.scenes.shows_current(slot)` (whether the displays light the slot as the current scene);
 - capture, recall, transitions, the scene sequencer, migration, validation and scenes.data;
 - the global `with_traceback` error handler;
 - `S.lib.scenes.scene_data_dir` and `S.lib.scenes.move_aside_unloadable_file`, used by `lib/buffers.lua`;
@@ -123,23 +125,25 @@ A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3
 - `recall_scene_instant` sets a voice's extras (by key name) after its source, params, grain and crossmod values, so a discrete one such as freeze lands after the source it belongs to.
 - Any recall ends a running transition first (`end_scene_transition("superseded")`, which cancels the clock without a redraw, as the recall redraws itself).
 - `S.scene_transition_clock` / `S.scene_transition_active` track the running transition; `cancel_scene_transition()` ends it.
+- The fade cue (#254): each step sets `SCENE_TRANSITION.step` to its number (1 to 20; the first runs inside the recall) after its params and before its `request_redraw()` and `grid_redraw()`. `shows_current(slot)` is true when `slot == S.current_scene` and either `fading_to()` is not the slot or `step` is odd, so the target is lit after steps 1, 3, 5, ... and dark after the even ones: a 2 s fade changes every 0.1 s. Dark is each display's level without the current scene: the header's `S<n>` at 2 (its level is 10 with the scene sequencer on, 6 without), SCENES' slot at 4, a recall key at 8 (populated) or 10 (the sequencer's position). `end_scene_transition` clears `step`, so a landing's redraws, a cancel and a superseding recall all show the current scene steady.
 - A successful `load_scenes_from_disk()` cancels a running transition before it replaces the scenes. Otherwise the fade's end would apply the file's data for that slot, or fail on a slot that is now empty. The fade stops where it is.
 
 #### States
 
-| State | `S.scene_transition_active` | `SCENE_TRANSITION.next_step_due` | `SCENE_TRANSITION.target` | `SCENE_TRANSITION.previous` | `S.scene_transition_clock` | `S.current_scene` |
-|-------|-----|-----|-----|-----|-----|-----|
-| idle | false | nil | nil | nil | nil | the last scene that landed (0 = none) |
-| fading | true | the `util.time()` its next step or end is due | the scene it goes to | the current scene before it | its clock (or a lost id, which the sequencer's overrun ends) | `target` |
+| State | `S.scene_transition_active` | `SCENE_TRANSITION.next_step_due` | `SCENE_TRANSITION.target` | `SCENE_TRANSITION.previous` | `SCENE_TRANSITION.step` | `S.scene_transition_clock` | `S.current_scene` |
+|-------|-----|-----|-----|-----|-----|-----|-----|
+| idle | false | nil | nil | nil | nil | nil | the last scene that landed (0 = none) |
+| fading | true | the `util.time()` its next step or end is due | the scene it goes to | the current scene before it | the number of the step applied last (1-20) | its clock (or a lost id, which the sequencer's overrun ends) | `target` |
 
-- idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition. Before the first step runs it sets five of the six columns, in this order: `S.scene_transition_active` (true), `next_step_due` (now), `target` (n), `previous` (`S.current_scene`) and `S.current_scene` (n), so the first step's redraw lights the target. The sixth, `S.scene_transition_clock`, is assigned when `clock.run` returns, after the first step (nil while it runs).
+- idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition. Before the first step runs it sets five of the seven columns, in this order: `S.scene_transition_active` (true), `next_step_due` (now), `target` (n), `previous` (`S.current_scene`) and `S.current_scene` (n), so the first step's redraw lights the target. The first step, which runs inside `clock.run`, sets `step` (1) before its redraws. The seventh, `S.scene_transition_clock`, is assigned when `clock.run` returns, after the first step (nil while it runs).
+- fading to fading: each later step sets `step` to its number before its redraws (the only write of `step` outside `end_scene_transition`).
 - fading to idle: only `end_scene_transition(how)`, local to `lib/scenes.lua`. It clears every field and returns the fade's `previous`. How it ends:
   - `"canceled"`: `cancel_scene_transition()` (the sequencer's overrun, a scenes file load, cleanup). It cancels the clock, sets `S.current_scene` back to `previous`, and redraws the screen and grids when that changed the scene.
   - `"superseded"`: a new recall. The same, without the redraw: the recall redraws itself (and a failed `recall_scene_instant` redraws before it raises).
   - `"failed"`: a fade step's error, inside the clock. The id is forgotten; `previous` is put back and redrawn, then the error is raised again.
   - `"landing"`: the fade's end, inside the clock. The id is forgotten and the target stays current while `recall_scene_instant` applies it, so no grid or screen redraw inside that recall (a voice it starts or stops) shows `previous`. The landing passes the `previous` that `end_scene_transition` returns to `recall_scene_instant` as `current_if_failed`: only if the recall fails is `previous` current again, set before that recall's one failure redraw.
 - So the current scene is always the last one that landed or the one now fading: a fade superseded by another keeps the first fade's `previous`, since the second reads the scene the first put back.
-- The `"scene transition"` invariant (`S.register_invariant`) checks that `next_step_due` and `target` are set exactly while the flag is, and that no clock is kept while idle.
+- The `"scene transition"` invariant (`S.register_invariant`) checks that `next_step_due`, `target` and `step` are set exactly while the flag is (`step` is nil exactly when no fade runs), and that no clock is kept while idle.
 
 Every exit of the transition clock ends the transition:
 - at its end, before `recall_scene_instant`, which it passes the scene data it read when the fade started;

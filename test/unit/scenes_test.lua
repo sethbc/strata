@@ -709,6 +709,44 @@ test("a fade that lands makes its target current", function()
   assert_equal(local_value("scene_transition_active"), false, "the fade is over")
 end)
 
+-- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
+test("the fading target blinks once per step and is steady when it lands", function()
+  local context = load_strata(); finish_startup(context)
+  local scenes = local_value("S").lib.scenes
+  capture_freq_scenes()
+  recall_scene(1, 0); recall_scene(2, 2)
+  assert_equal(scenes.fading_to(), 2, "the fade goes to scene 2")
+  assert_equal(local_value("SCENE_TRANSITION").step, 1, "the recall applied step 1")
+  assert_equal(scenes.shows_current(2), true, "step 1: the target shows")
+  assert_equal(scenes.shows_current(1), false, "the previous scene is not current")
+  context.clock.run_for(0.1)
+  assert_equal(local_value("SCENE_TRANSITION").step, 2, "one step per 0.1 s")
+  assert_equal(scenes.shows_current(2), false, "step 2: the target is dark")
+  context.clock.run_for(0.1)
+  assert_equal(scenes.shows_current(2), true, "step 3: the target shows again")
+  context.clock.run_for(2.5)
+  assert_equal(scenes.fading_to(), nil, "the fade landed")
+  assert_equal(local_value("SCENE_TRANSITION").step, nil, "no step once it landed")
+  assert_equal(scenes.shows_current(2), true, "the landed scene is steady")
+end)
+
+test("a superseded fade's target stops blinking at once", function()
+  local context = load_strata(); finish_startup(context)
+  local scenes = local_value("S").lib.scenes
+  capture_freq_scenes()
+  recall_scene(2, 2); context.clock.run_for(0.1)                 -- step 2: the target is dark
+  recall_scene(3, 0)
+  assert_equal(scenes.fading_to(), nil, "an instant recall ends the fade")
+  assert_equal(local_value("SCENE_TRANSITION").step, nil, "no step")
+  assert_equal(scenes.shows_current(3), true, "the instant recall's scene shows")
+  assert_equal(scenes.shows_current(2), false, "the abandoned target does not")
+  recall_scene(2, 2); context.clock.run_for(0.1)
+  cancel_scene_transition()
+  assert_equal(scenes.fading_to(), nil, "a cancel ends the fade")
+  assert_equal(local_value("SCENE_TRANSITION").step, nil, "no step")
+  assert_equal(scenes.shows_current(3), true, "the previous scene shows steady")
+end)
+
 -- An error in a sequenced recall (here the first step of its fade, which
 -- runs inside the sequencer's own clock) is reported and the sequencer
 -- keeps going: the recall has already cleared its transition state
