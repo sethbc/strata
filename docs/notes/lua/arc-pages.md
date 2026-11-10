@@ -58,10 +58,11 @@ LFO:
   - `forget_arc_lfo_period_ticks()` (`forget_arc_ticks("lfo:4")`) clears it when `S.selected_lfo` changes and when the selected LFO's `lfo_mode_<n>` changes (a `wrap_param_action` after-hook added in `add_lfo_params`), so it never steps another LFO or mode.
   - The depth rings keep theirs (until the page changes, which forgets every carry).
 
-BUFFER (`ARC_BUFFER_RINGS`, `{voice_key | param_id}` per ring):
-- ring 1 `v<selected>_buf_pos`, ring 2 `v<selected>_buf_rate`, ring 3 `record_duration`, ring 4 `record_level`, each drawn to `param_fraction` of a turn;
-- rings 1-2 adjust the voice's buffer params whatever its source (they apply once it switches to a buffer), drawn at 15 for a buffer-sourced voice, 4 otherwise;
-- rings 3-4 at 12.
+BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` per ring, drawn with `arc_ring_fill_param`, so `buf_scan` is bipolar):
+- plain: ring 1 `v<selected>_buf_pos` (every tick calls `S.lib.positions.scrub_turned(voice)`, which starts the friction glide), 2 `v<selected>_loop_start`, 3 `v<selected>_loop_length`, 4 `v<selected>_buf_scan`;
+- ALT: ring 1 as plain, 2 `v<selected>_buf_rate`, 3 `scrub_friction`, 4 `record_feedback`;
+- the first ALT ring 1 tick calls `hold_scan(voice, true)` on the selected voice and remembers it (`held_voice`); the `S.register_alt_release` hook releases that voice, never the then-selected one. ALT+K2 and ALT+K3 never hold;
+- rings adjust the voice's params whatever its source, drawn at 15 for a buffer-sourced voice, 4 otherwise; ALT ring 4 (a global param) always 12. Record duration and level are on the screen only.
 
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
 - Ring 1: the scene cursor over E2's stops (slots 1..`NUM_SCENES`, then `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
@@ -77,4 +78,4 @@ SETUP: no rings.
   - ring 2 (the main param): 15 active, 4 stopped;
   - rings 3-4 and every ALT ring: 12 active, 3 stopped.
 - VOICE: the cursor row's ring 15, the others 12. SEQ: rings 1-2 at 15, 3-4 at 12. SCENES at 12.
-- FX rings at 12. BUFFER rings 1-2 at 15 (buffer source) or 4, rings 3-4 at 12. LFO depth rings at 15 (running) or 4, ring 4 at 12.
+- FX rings at 12. BUFFER rings at 15 (buffer source) or 4, ALT ring 4 at 12. LFO depth rings at 15 (running) or 4, ring 4 at 12.

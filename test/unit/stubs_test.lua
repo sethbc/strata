@@ -45,7 +45,7 @@ test("include stub loads lib modules and honors overrides", function()
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
-    .. " register_grain_restart = function() end } end" } }
+    .. " register_grain_restart = function() end, register_alt_release = function() end } end" } }
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 

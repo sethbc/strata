@@ -15,8 +15,9 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
   -- rings drawn (with at least one segment) on each page: SETUP none,
-  -- SCENES two (rings 3-4 dark)
-  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 4, FX = 4, LFO = 4, BUFFER = 4, SCENES = 2, SETUP = 0 }
+  -- SCENES two (rings 3-4 dark); BUFFER's scan ring (bipolar, at 0) lights
+  -- one LED without a segment
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 4, FX = 4, LFO = 4, BUFFER = 3, SCENES = 2, SETUP = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -77,7 +78,7 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
   assert_equal(lit(4), 64, "LFO ring 4 (" .. clocked_id .. ") at maximum")
   params:set(clocked_id, 1); arc_redraw()
   assert_equal(lit(4), 0, "LFO ring 4 (" .. clocked_id .. ") at minimum")
-  check("BUFFER", { "v" .. voice .. "_buf_pos", "v" .. voice .. "_buf_rate", "record_duration", "record_level" }, "BUFFER")
+  check("BUFFER", { "v" .. voice .. "_buf_pos", "v" .. voice .. "_loop_start", "v" .. voice .. "_loop_length" }, "BUFFER")
 end)
 
 test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings", function()
@@ -139,7 +140,7 @@ test("every continuous arc ring sweeps its param's range in 512 ticks, following
   for ring, param_id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do
     sweep("FX", ring, param_id, "FX ring " .. ring)
   end
-  for ring, param_id in ipairs({ "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }) do
+  for ring, param_id in ipairs({ "v1_buf_pos" }) do
     sweep("BUFFER", ring, param_id, "BUFFER ring " .. ring)
   end
   -- LFO ring 4 in free mode (the selected LFO's period); its depth rings and
@@ -164,36 +165,118 @@ test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", 
   assert_equal(params:get("master_density"), density, "density is not on the FX rings")
 end)
 
-test("arc BUFFER page: buf_pos, buf_rate, record duration and level", function()
+-- the setGrainParam sends of one name: {voice, value}
+local function grain_sends(context, name)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == name then table.insert(sent, {voice = call.args[1], value = call.args[3]}) end
+  end
+  return sent
+end
+
+local function raw_fraction(id) return params:get_raw(id) end
+
+test("BUFFER's rings are position, loop start, loop length and scan", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.arc.plug(1)
+  params:set("v1_source", 2)
+  params:set("v1_buf_pos", 0); params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+  local scan_low = params:get("v1_buf_scan")
+  context.arc.turn(1, 1, 64); assert_near(params:get("v1_buf_pos"), 0.125, 1e-6, "ring 1 buf_pos")
+  context.arc.turn(1, 2, 64); assert_near(params:get("v1_loop_start"), 0.125, 1e-6, "ring 2 loop_start")
+  local length_before = raw_fraction("v1_loop_length")
+  context.arc.turn(1, 3, -64)
+  assert_near(raw_fraction("v1_loop_length"), length_before - 0.125, 1e-6, "ring 3 loop_length (raw fraction)")
+  local scan_before = raw_fraction("v1_buf_scan")
+  context.arc.turn(1, 4, 64)
+  assert_near(raw_fraction("v1_buf_scan"), scan_before + 0.125, 1e-6, "ring 4 buf_scan")
+  assert_true(params:get("v1_buf_scan") ~= scan_low, "buf_scan moved")
+end)
+
+test("BUFFER's ALT rings are rate, friction and record feedback", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local device = context.arc.plug(1)
   params:set("v1_source", 2)
-  params:set("v1_buf_pos", 0.5); params:set("v1_buf_rate", 1)
-  params:set("record_duration", 8); params:set("record_level", 1)
-  context.arc.turn(1, 1, 20); assert_near(params:get("v1_buf_pos"), 0.5 + 20 / 512, 1e-6, "ring 1 buf_pos")
-  context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > 1, "ring 2 buf_rate")
-  context.arc.turn(1, 3, 100); assert_true(params:get("record_duration") > 8, "ring 3 record duration")
-  context.arc.turn(1, 4, 100); assert_true(params:get("record_level") > 1, "ring 4 record level")
+  key(1, 1)
+  local rate_before = raw_fraction("v1_buf_rate")
+  context.arc.turn(1, 2, 64)
+  assert_near(raw_fraction("v1_buf_rate"), rate_before + 0.125, 1e-6, "ALT ring 2 buf_rate")
+  assert_equal(params:get("scrub_friction"), 100)
+  context.arc.turn(1, 3, -64); assert_near(params:get("scrub_friction"), 87.5, 1e-6, "ALT ring 3 friction")
+  params:set("record_feedback", 0)
+  context.arc.turn(1, 4, 256); assert_near(params:get("record_feedback"), 50, 1e-6, "ALT ring 4 feedback")
   next_frame(context)
-  local ids = { "v1_buf_pos", "v1_buf_rate", "record_duration", "record_level" }
-  for ring, param_id in ipairs(ids) do
-    assert_near(device.segments[ring].to, param_fraction(param_id) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. param_id)
+  assert_near(device.segments[4].to, math.pi, 1e-6, "half the ring")
+  assert_equal(device.segments[4].level, 12, "ALT ring 4 always 12")
+  assert_equal(device.segments[2].level, 15, "ALT ring 2 bright for a buffer voice")
+  params:set("v1_source", 1); next_frame(context)
+  assert_equal(device.segments[2].level, 4, "dim for a synth voice")
+  assert_equal(device.segments[4].level, 12)
+  key(1, 0)
+end)
+
+test("ring 1 with ALT holds the scan until K1 comes up, and ALT+K2 or ALT+K3 never does", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.arc.plug(1)
+  local S = local_value("S")
+  params:set("v1_source", 2); params:set("v2_source", 2)
+  context.clear_engine_calls()
+  key(1, 1)
+  context.arc.turn(1, 1, 1)
+  local holds = grain_sends(context, "scanHold")
+  assert_equal(#holds, 1, "one scanHold")
+  assert_equal(holds[1].voice, 0); assert_equal(holds[1].value, 1)
+  context.arc.turn(1, 1, 1)
+  assert_equal(#grain_sends(context, "scanHold"), 1, "a second tick sends nothing more")
+  S.selected_voice = 2
+  key(1, 0)
+  holds = grain_sends(context, "scanHold")
+  assert_equal(#holds, 2); assert_equal(holds[2].voice, 0, "released on the voice it was held on")
+  assert_equal(holds[2].value, 0)
+  S.selected_voice = 1
+  context.clear_engine_calls()
+  key(1, 1); key(2, 1); key(2, 0); key(3, 1); key(3, 0); key(1, 0)
+  assert_equal(#grain_sends(context, "scanHold"), 0, "ALT+K2 and ALT+K3 never hold")
+end)
+
+test("ring 1 starts a glide below 100% friction", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  context.arc.plug(1)
+  params:set("v1_source", 2); params:set("v1_buf_pos", 0.2)
+  params:set("scrub_friction", 50)
+  context.clear_engine_calls()
+  for _ = 1, 10 do context.clock.run_for(0.01); context.arc.turn(1, 1, 8) end
+  context.clock.run_for(0.1)
+  local rates = grain_sends(context, "scrubRate")
+  local peak = 0
+  for _, each in ipairs(rates) do peak = math.max(peak, each.value) end
+  assert_true(peak > 0, "a scrubRate above 0 was sent")
+  params:set("scrub_friction", 100); context.clock.run_for(5); context.clear_engine_calls()
+  for _ = 1, 10 do context.clock.run_for(0.01); context.arc.turn(1, 1, 8) end
+  context.clock.run_for(0.2)
+  assert_equal(#grain_sends(context, "scrubRate"), 0, "100%: none sent")
+end)
+
+test("ring fills follow the params' ranges; scan is bipolar", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local device = context.arc.plug(1)
+  local function lit(ring)
+    local count = 0
+    for x = 1, 64 do if device:get_led(ring, x) > 0 then count = count + 1 end end
+    return count
   end
-  assert_equal(device.segments[1].level, 15, "buffer voice: ring 1 bright")
-  assert_equal(device.segments[3].level, 12)
-  -- a synth voice: rings 1-2 still set its buffer params, drawn dim
-  params:set("v1_source", 1); local rate = params:get("v1_buf_rate")
-  context.arc.turn(1, 2, 100); assert_true(params:get("v1_buf_rate") > rate, "ring 2 still adjusts buf_rate")
+  params:set("v1_source", 2)
+  params:set("v1_buf_pos", 0.5); params:set("v1_buf_scan", 0)
   next_frame(context)
-  assert_equal(device.segments[1].level, 4, "not buffer-sourced: ring 1 dim")
-  assert_equal(device.segments[2].level, 4, "not buffer-sourced: ring 2 dim")
-  assert_equal(device.segments[4].level, 12, "record rings stay lit")
-  -- the selected voice (picked on MAIN; BUFFER's E2 picks a slot) follows
-  show_page("MAIN"); enc(2, 1); show_page("BUFFER")
-  local position = params:get("v2_buf_pos"); local voice1_position = params:get("v1_buf_pos")
-  context.arc.turn(1, 1, 20)
-  assert_true(params:get("v2_buf_pos") > position, "ring 1 follows the selected voice")
-  assert_equal(params:get("v1_buf_pos"), voice1_position, "the previous voice's buf_pos is left alone")
+  for ring = 1, 3 do assert_equal(device.segments[ring].level, 15, "ring " .. ring .. " bright") end
+  assert_equal(device:get_led(4, 1), local_value("ARC_BIPOLAR_ZERO_LEVEL"), "ring 4 at 0: the zero LED")
+  assert_near(device.segments[1].to, math.pi, 1e-6, "buf_pos 0.5 fills half ring 1")
+  assert_equal(lit(4), 1, "scan 0 lights only the zero LED")
+  params:set("v1_buf_scan", 2); next_frame(context)
+  assert_true(lit(4) > 30, "positive scan fills clockwise")
+  params:set("v1_source", 1); next_frame(context)
+  for ring = 1, 4 do assert_equal(device.segments[ring].level, 4, "synth voice: ring " .. ring .. " dim") end
+  assert_true(lit(4) > 30)
 end)
 
 test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
