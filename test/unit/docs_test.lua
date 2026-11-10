@@ -998,4 +998,81 @@ test("text uses US spelling", function()
   assert_true(#found == 0, "use US spelling:\n" .. table.concat(found, "\n"))
 end)
 
+local function read_repo_file(path)
+  local file = assert(io.open(repo_root .. "/" .. path, "r"))
+  local text = file:read("*a"); file:close()
+  return text
+end
+
+-- The orders in the first cell of a notes table: the rows under the line that
+-- starts with `heading`, up to the first line that is not a table row
+local function table_orders(text, heading)
+  local orders, inside = {}, false
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if not inside then
+      inside = line:sub(1, #heading) == heading
+    elseif line:sub(1, 1) == "|" then
+      local order = line:match("^|%s*(%d+)%s*|")
+      if order then orders[tonumber(order)] = true end
+    elseif next(orders) then
+      break
+    end
+  end
+  return orders
+end
+
+test("the notes' start and cleanup tables list every step of START_ORDER and CLEANUP_ORDER", function()
+  load_strata()
+  local constants = local_value("S").constants
+  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
+  local problems = {}
+  for _, kind in ipairs({{"START_ORDER", "start"}, {"CLEANUP_ORDER", "cleanup"}}) do
+    local rows = table_orders(notes, "The sequence (`" .. kind[1] .. "`")
+    local expected = {}
+    for name, order in pairs(constants[kind[1]]) do
+      expected[order] = true
+      if not rows[order] then table.insert(problems, kind[2] .. " step " .. order .. " (" .. name .. ") has no row") end
+    end
+    for order in pairs(rows) do
+      if not expected[order] then table.insert(problems, kind[2] .. " row " .. order .. " is in no " .. kind[1]) end
+    end
+    assert_true(next(rows) ~= nil, "found the " .. kind[2] .. " table")
+  end
+  table.sort(problems)
+  assert_true(#problems == 0, table.concat(problems, "\n"))
+end)
+
+test("every constant AGENTS.md quotes with a value has that value", function()
+  load_strata()
+  local constants = local_value("S").constants
+  local paragraph = read_repo_file("AGENTS.md"):match("%*%*Named constants, never magic numbers%.%*%*[^\n]*")
+  assert_true(paragraph ~= nil, "found the Named constants paragraph")
+  local problems, checked = {}, 0
+  for name, value in paragraph:gmatch("`([%u_]+)` %((%d+)[,)]") do
+    checked = checked + 1
+    if constants[name] ~= tonumber(value) then
+      table.insert(problems, name .. ": AGENTS.md says " .. value .. ", constants has " .. tostring(constants[name]))
+    end
+  end
+  assert_true(checked >= 10, "the paragraph quotes at least ten values, saw " .. checked)
+  assert_true(#problems == 0, table.concat(problems, "\n"))
+end)
+
+test("state-and-voices.md names every registry", function()
+  load_strata()
+  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
+  -- the "Owns" bullet for lib/state.lua is where the registries are listed
+  local owned = notes:match("\n  %- `S%.registry`[^\n]*")
+  assert_true(owned ~= nil, "found the S.registry bullet under Owns")
+  notes = owned
+  local missing, count = {}, 0
+  for name in pairs(local_value("S").registry) do
+    count = count + 1
+    if not notes:find("`" .. name .. "`", 1, true) then table.insert(missing, name) end
+  end
+  table.sort(missing)
+  assert_true(count >= 14, "the registry has its keys, saw " .. count)
+  assert_true(#missing == 0, "not named in backticks: " .. table.concat(missing, ", "))
+end)
+
 end
