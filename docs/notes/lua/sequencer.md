@@ -11,7 +11,7 @@
 
 - `lib/sequencer.lua` (`S.lib.sequencer`):
   - `S.patterns` (built fresh by its constructor), the pattern clock state (`S.pattern_position`, `S.pattern_sounding_step`, `S.pattern_playing`, `S.pattern_clock`);
-  - `toggle_pattern_step`, `clear_pattern`, `randomize_pattern`, `pattern_toggle`, `pattern_clock_start`, `pattern_clock_stop`, `step_brightness` (global) and `S.lib.sequencer.sounding_step()` and `S.lib.sequencer.replace_pattern(voice, steps)`;
+  - `toggle_pattern_step`, `clear_pattern`, `randomize_pattern`, `pattern_toggle`, `pattern_clock_start`, `pattern_clock_stop`, `step_brightness` (global), `S.lib.sequencer.sounding_step()` and `S.lib.sequencer.replace_pattern(voice, steps)`;
   - cleanup step 90: the pattern clock stopped.
 - Its unit tests: `test/unit/sequencer_test.lua`. The grid keys that edit patterns are in `docs/notes/lua/grid-core.md` (`step_key`) and each layout's notes.
 

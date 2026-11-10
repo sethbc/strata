@@ -237,8 +237,10 @@ return function(S)
   -- End the step-level gesture on every step key held on one port, whatever
   -- the voice: a 64's half switch calls it, so a step held in the half no
   -- longer shown never takes a level. The keys stay held; their releases do
+  -- nothing. A port that is not a whole number in 1..S.MAX_GRID_PORTS does
   -- nothing
   function M.end_port_step_gestures(port)
+    if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
     step_keys[port] = nil
   end
 

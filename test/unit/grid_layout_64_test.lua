@@ -385,4 +385,26 @@ test("switching halves ends a held step gesture", function()
   assert_equal(patterns[1][3], 15, "the hidden held step takes no level")
 end)
 
+test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN raise nothing)", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  local S = local_value("S")
+  context.grid.plug(1, 8, 8)
+  context.grid.press(1, 3, 1, 1)  -- voice 1 step 3 held: on at 15
+  local before = {}
+  for key in pairs(S.grid_held) do before[#before + 1] = key end
+  local core = grid_core()
+  core.end_port_step_gestures(nil)
+  core.end_port_step_gestures(0 / 0)
+  for _, port in ipairs({0, 1.5, S.MAX_GRID_PORTS + 1, "1", -1}) do
+    core.end_port_step_gestures(port)
+  end
+  local after = {}
+  for key in pairs(S.grid_held) do after[#after + 1] = key end
+  assert_equal(#after, #before, "no port entry made")
+  context.grid.press(1, 4, 1, 1)
+  assert_equal(patterns[1][3], 8, "port 1's held step still takes the level (4 * 15 / 8 = 7.5 -> 8)")
+  assert_equal(patterns[1][4], 0, "the level key does not toggle")
+end)
+
 end
