@@ -36,6 +36,7 @@ Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a 
 - While K1 is held the hint row shows the page's ALT keys
 - **ALT+K2** and **ALT+K3** take the page's ALT actions instead of K2's and K3's. Where a page has no ALT action for a key (FX, SETUP, and ALT+K2 on SCENES) they do nothing: they never run the plain K2 or K3 action
 - A key pressed with K1 held stays an ALT press until it is released, even if K1 comes up first (on BUFFER such a K2 never opens the file browser)
+- On BUFFER, while K2, ALT+K2 or ALT+K3 is held, the hint row says what letting go will do, and changes after half a second
 - **ALT+E2** and **ALT+E3** take a page's ALT turns where it has them; elsewhere they act as E2 and E3 (E3 in fine steps, below)
 
 ## Fine Adjustment

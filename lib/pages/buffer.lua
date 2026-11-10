@@ -668,10 +668,40 @@ return function(S)
       value_right = PAGE.value_right}, draw_slot_row)
   end
 
+  -- When K2 and K3 last went down (util.time()), plain or with ALT: their
+  -- release acts by how long they were held, so no clock is needed
+  local pressed_at = {}
+  local function held_long(n)
+    local at = pressed_at[n]
+    pressed_at[n] = nil
+    return at ~= nil and util.time() - at >= PAGE.hold_seconds
+  end
+
+  -- The hold hint's texts per key, {before hold_seconds, from it}: a key
+  -- counts as down while it went down on this page (S.key_press_page, which
+  -- a page change, the norns menu and the file selector clear) and the page
+  -- noted its press. Plain K3 records at the press and has no hold
+  local HOLD_HINTS = {
+    plain = {[2] = {"K2 up: load", "K2 up: random"}},
+    alt = {[2] = {"K2 up: clear", "K2 up: fill"}, [3] = {"K3 up: save", "K3 up: save loop"}},
+  }
+  local function held_hint()
+    for n = 2, 3 do
+      local texts = (S.key_press_alt[n] and HOLD_HINTS.alt or HOLD_HINTS.plain)[n]
+      if texts and pressed_at[n] and S.key_press_page[n] == UI_PAGES.index.BUFFER then
+        return texts, pressed_at[n]
+      end
+    end
+  end
+
   -- The hint row's keys (redraw() draws the "hints" flash instead while
-  -- one shows): "stop" while the cursor slot records or is armed, "..."
-  -- while its take that ended waits for the engine (K3 does nothing then)
+  -- one shows): while K2, ALT+K2 or ALT+K3 is down, what its release will
+  -- do, changing at hold_seconds (the frame clock redraws: animates); else
+  -- "stop" while the cursor slot records or is armed, "..." while its take
+  -- that ended waits for the engine (K3 does nothing then)
   local function buffer_hints(alt_held)
+    local texts, at = held_hint()
+    if texts then return util.time() - at >= PAGE.hold_seconds and texts[2] or texts[1] end
     if alt_held then return "K2:clr/fill K3:sv/trim" end
     local buffer = S.buffers[cursor_slot()]
     local record_hint = buffer.finishing and "..." or (buffer.recording and "stop" or "rec")
@@ -704,15 +734,6 @@ return function(S)
   -- early while it records, or cancel it while it is armed
   local function record_cursor_slot()
     record_buffer(cursor_slot())
-  end
-
-  -- When K2 and K3 last went down (util.time()), plain or with ALT: their
-  -- release acts by how long they were held, so no clock is needed
-  local pressed_at = {}
-  local function held_long(n)
-    local at = pressed_at[n]
-    pressed_at[n] = nil
-    return at ~= nil and util.time() - at >= PAGE.hold_seconds
   end
 
   local function buffer_key(n)
@@ -1035,11 +1056,12 @@ return function(S)
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc rings
   -- are lib/arc/buffer.lua's; its arc button records, as K3 does. It
   -- animates while something on the cursor slot moves (a voice reads it, or
-  -- it records), so the heads move at the frame rate
+  -- it records), so the heads move at the frame rate; also while a hold hint
+  -- shows, so the hint changes at hold_seconds
   S.registry.pages[BUFFER_INDEX] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, alt_enc = buffer_alt_enc, key = buffer_key, key_release = buffer_key_release,
     alt_key = buffer_alt_key, alt_key_release = buffer_alt_key_release, enter = start_input_meter,
-    leave = stop_input_meter, animates = function() return S.lib.playheads.moving(cursor_slot()) end,
+    leave = stop_input_meter, animates = function() return held_hint() ~= nil or S.lib.playheads.moving(cursor_slot()) end,
     arc_button = record_cursor_slot, layout_states = layout_states}
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.input_meter, function()
