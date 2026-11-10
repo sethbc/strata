@@ -12,6 +12,8 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PLAYHEADS = S.constants.PLAYHEADS
+  -- the page the grids show positions on (design 3.3 section 9)
+  local POSITION_PAGE = 5
 
   -- per voice: {phase = the scan's phase (0-1), at = the time it is true at}
   local heads = {}
@@ -108,7 +110,8 @@ return function(S)
   -- Whether something on a slot moves: a running voice reads it, or it records
   function M.moving(slot)
     if type(slot) ~= "number" or slot < 1 or slot > NUM_BUFFERS or slot % 1 ~= 0 then return false end
-    if S.lib.record.state(slot) ~= nil then return true end
+    local state = S.lib.record.state(slot)
+    if state and state.phase == "recording" then return true end
     for voice_idx = 1, NUM_VOICES do
       if running_buffer_voice(voice_idx) and voice_buffer_slot(voice_idx) == slot then return true end
     end
@@ -124,7 +127,7 @@ return function(S)
       if running_buffer_voice(voice_idx) then M.advance(voice_idx) end
     end
     S.lib.positions.end_stale_holds()
-    if S.lib.grid_core.any_page(PLAYHEADS.grid_page) then
+    if S.lib.grid_core.any_page(POSITION_PAGE) then
       local signature = S.lib.positions.display_signature()
       if signature ~= shown_signature then
         shown_signature = signature

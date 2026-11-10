@@ -202,12 +202,57 @@ test("a position press selects the grid voice on the 128s and the 64, never on t
   S.grid_voice_select = 6
   positions.grid_key(1, 3, 5, 16, 1); positions.grid_key(1, 3, 5, 16, 0)
   assert_equal(S.grid_voice_select, 6, "the 256 keeps its grid voice")
-  local expected = {[2] = 3, [3] = 4, [4] = 5}
+  local expected = {[2] = 3, [3] = 2, [4] = 1}  -- voices 1-3 read buffers
   for port = 2, 4 do
     S.grid_voice_select = 6
     positions.grid_key(port, expected[port], 5, 16, 1); positions.grid_key(port, expected[port], 5, 16, 0)
     assert_equal(S.grid_voice_select, expected[port], "port " .. port .. " selects the pressed voice")
   end
+end)
+
+test("a press on a synth or input voice's row never changes the grid voice, on any layout", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  params:set("v4_source", 1)
+  params:set("v5_source", S.constants.SOURCE_INPUT)
+  context.grid.plug(2, 16, 8); context.grid.plug(3, 8, 16); context.grid.plug(4, 8, 8)
+  for port = 2, 4 do
+    S.grid_voice_select = 6
+    positions.grid_key(port, 4, 5, 16, 1); positions.grid_key(port, 4, 5, 16, 0)
+    positions.grid_key(port, 5, 5, 16, 1); positions.grid_key(port, 5, 5, 16, 0)
+    assert_equal(S.grid_voice_select, 6, "port " .. port .. ": the grid voice stays")
+    positions.grid_key(port, 3, 5, 16, 1); positions.grid_key(port, 3, 5, 16, 0)
+    assert_equal(S.grid_voice_select, 3, "port " .. port .. ": a buffer voice's row selects it")
+  end
+end)
+
+test("a scene recall that switches a running voice's source forgets its last recalled bookmark", function()
+  local context, S = buffer_voices()
+  params:set("v1_source", 1)
+  capture_scene(1)  -- voice 1 on the synth
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.positions.recall_bookmark(1, 3)
+  assert_equal(S.lib.positions.last_recalled(1), 3)
+  assert_true(S.voices[1].active, "voice 1 runs")
+  recall_scene(1, 0)
+  assert_equal(S.voices[1].source, 1, "the recall switched the source")
+  assert_equal(S.lib.positions.last_recalled(1), nil, "the level-10 key is forgotten")
+end)
+
+test("a row's LED levels are built once per instant and follow what changes in it", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  local calls = 0
+  local real_bins = S.lib.waveforms.bins
+  S.lib.waveforms.bins = function(...) calls = calls + 1; return real_bins(...) end
+  for cell = 1, 16 do positions.grid_level(1, cell, 16) end
+  assert_equal(calls, 1, "one bins read for 16 cells")
+  positions.jump(1, 0.5)
+  assert_equal(positions.grid_level(1, 9, 16), 15, "a moved head shows at once")
+  positions.grid_key(1, 1, 3, 16, 1)
+  assert_equal(positions.grid_level(1, 3, 16), 15, "a pressed cell too (the jump moved the head there)")
+  S.buffers[1].seconds = 0
+  assert_equal(positions.grid_level(1, 3, 16), 0, "an emptied slot goes dark")
 end)
 
 test("bookmarks default to the quarters, are scene fields that crossfade and migrate from version 3", function()
