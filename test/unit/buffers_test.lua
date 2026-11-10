@@ -1275,6 +1275,51 @@ test("save_buffer and save_buffer_loop say why they sent nothing", function()
   end
 end)
 
+test("the busy edges: an armed take and a finishing take refuse, an ended dub saves", function()
+  local function loaded_context()
+    local context = load_strata(); finish_startup(context)
+    load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+    context.clock.run_for(2)
+    return context
+  end
+  local function record_report(slot, state)
+    return ((local_value("buffers")[slot].records_sent * 4) + state) * 8 + slot - 1
+  end
+  local function refuses(context, slot)
+    for _, save in ipairs({save_buffer, save_buffer_loop}) do
+      context.clear_engine_calls()
+      local sent, reason = save(slot)
+      assert_equal(sent, false); assert_equal(reason, "busy")
+      assert_equal(#context.calls_named("saveBuffer"), 0)
+    end
+  end
+  -- armed: waiting for the source's level, not recording yet
+  local context = loaded_context()
+  params:set("record_threshold", 6); params:set("record_feedback", 50)
+  record_buffer(1)
+  assert_true(local_value("buffers")[1].recording, "an armed recording has recording set")
+  refuses(context, 1)
+  -- a replace take that ended and waits for the engine
+  context = loaded_context()
+  params:set("record_feedback", 0)
+  record_buffer(1)
+  context.polls.fire("recordState", record_report(1, 2))
+  assert_true(local_value("buffers")[1].finishing, "the ended take is finishing")
+  refuses(context, 1)
+  -- a dub that just ended is take 1: saved
+  context = loaded_context()
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  context.polls.fire("recordState", record_report(1, 2))
+  assert_equal(local_value("buffers")[1].name, "take 1")
+  assert_true(not local_value("buffers")[1].recording)
+  for _, save in ipairs({save_buffer, save_buffer_loop}) do
+    context.clear_engine_calls()
+    assert_equal(save(1), true)
+    assert_equal(#context.calls_named("saveBuffer"), 1)
+  end
+end)
+
 test("save_buffer_loop saves the selected voice's loop region", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
