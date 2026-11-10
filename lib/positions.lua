@@ -70,9 +70,12 @@ return function(S)
     return params:get(param_id(voice_idx, "bookmark_" .. n))
   end
 
-  -- The bookmark a voice last recalled, or nil
+  -- The bookmark a voice last recalled, while it still has the source it
+  -- recalled it on, or nil
   function M.last_recalled(voice_idx)
-    return valid_voice(voice_idx) and recalled[voice_idx] or nil
+    local last = valid_voice(voice_idx) and recalled[voice_idx]
+    if last and last.source == S.voices[voice_idx].source then return last.bookmark end
+    return nil
   end
 
   -- Send a grain param to a voice's engine synth while it runs
@@ -172,7 +175,7 @@ return function(S)
   function M.recall_bookmark(voice_idx, n)
     if not buffer_voice(voice_idx) or not valid_bookmark(n) then return end
     M.jump(voice_idx, M.bookmark(voice_idx, n))
-    recalled[voice_idx] = n
+    recalled[voice_idx] = {bookmark = n, source = S.voices[voice_idx].source}
   end
 
   -- Bookmark n becomes the voice's playhead, or, stopped, its buf_pos mapped
@@ -484,7 +487,7 @@ return function(S)
       if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
         return LEVELS.stored
       end
-      if recalled[voice_idx] == key then return LEVELS.recalled end
+      if M.last_recalled(voice_idx) == key then return LEVELS.recalled end
       return LEVELS.bookmark
     elseif key == "hold" then
       -- the hold itself, whoever holds it
