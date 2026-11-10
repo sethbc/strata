@@ -327,6 +327,10 @@ test("a layout record says whether a position press selects the grid voice", fun
   S.grid_voice_select = 6
   S.lib.positions.grid_key(3, 2, 5, 16, 1); S.lib.positions.grid_key(3, 2, 5, 16, 0)
   assert_equal(S.grid_voice_select, 6, "the grid voice is unchanged")
+  -- the same press on the 128h (port 1) selects voice 2: the 12x12 ignored
+  -- it for want of a layout
+  S.lib.positions.grid_key(1, 2, 5, 16, 1); S.lib.positions.grid_key(1, 2, 5, 16, 0)
+  assert_equal(S.grid_voice_select, 2, "a 128h's press selects the voice")
 end)
 
 test("a scene saved on a hold shows on the SCENES page on the next frame", function()
