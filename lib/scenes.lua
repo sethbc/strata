@@ -460,16 +460,7 @@ return function(S)
         -- target stays current while recall_scene_instant applies it (no
         -- redraw inside it shows the previous scene); only if that fails
         -- is the previous scene current again
-        local previous = end_scene_transition("landing")
-        local landed, landing_error = xpcall(function()
-          recall_scene_instant(scene_num, scene_data)
-        end, with_traceback)
-        if not landed then
-          S.current_scene = previous
-          request_redraw()
-          grid_redraw()
-          error(landing_error, 0)
-        end
+        recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"))
       end)
       -- its first step has run and drawn the target as current
     else
@@ -485,7 +476,9 @@ return function(S)
   -- voice the recall starts is synced by toggle_voice instead. A voice the
   -- recall stops is stopped before its params are set, and one it starts is
   -- started after them.
-  function recall_scene_instant(scene_num, scene_data)
+  -- current_if_failed (a fade's landing passes its previous scene) is the
+  -- scene current if the recall fails; nil leaves the current scene as it is.
+  function recall_scene_instant(scene_num, scene_data, current_if_failed)
     scene_data = scene_data or S.scenes[scene_num].data
     clear_undo()  -- a recall ends the randomize undo (a fade's end too)
     local source_changed = {}
@@ -553,10 +546,12 @@ return function(S)
         sync_voice_values_to_engine(i)
       end
     end
-    -- a failed recall leaves the current scene as it was (the last that
-    -- landed, when this recall superseded a fade): show it and whatever was
-    -- applied
+    -- a failed recall never makes its scene current: a fade's landing puts
+    -- its previous scene back (current_if_failed); otherwise the current
+    -- scene stays (the last that landed, when this recall superseded a
+    -- fade). One redraw shows it and whatever was applied
     if not recalled then
+      if current_if_failed ~= nil then S.current_scene = current_if_failed end
       request_redraw()
       grid_redraw()
       error(recall_error, 0)

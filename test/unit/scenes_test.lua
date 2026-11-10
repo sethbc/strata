@@ -592,11 +592,23 @@ test("a fade whose step fails leaves the previous scene current", function()
   params:set("filter_type", 3); capture_freq_scenes(); params:set("filter_type", 1); capture_scene(2)
   recall_scene(2, 0); recall_scene(1, 2)
   next_frame(context)
-  params:set_action("filter_type", function() error("landing failed") end)
-  context.clock.run_for(2.5, 0.001)
+  local failed, after_failure = false, {}
+  params:set_action("filter_type", function() failed = true; error("landing failed") end)
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function()
+    if failed then table.insert(after_failure, local_value("current_scene")) end
+    return real_grid_redraw()
+  end
+  local ran, run_error = pcall(context.clock.run_for, 2.5, 0.001)
+  grid_redraw = real_grid_redraw
+  assert_true(ran, "the clocks ran: " .. tostring(run_error))
   local errors = context.clock.take_errors()
   assert_true(#errors == 1 and errors[1]:find("landing failed", 1, true), "the end's error is raised")
   assert_equal(local_value("current_scene"), 2, "a fade whose end fails leaves the previous scene current")
+  assert_equal(#after_failure, 1, "one grid redraw after the failure")
+  for index, scene in ipairs(after_failure) do
+    assert_equal(scene, 2, "grid redraw " .. index .. " after the failure shows the previous scene")
+  end
   next_frame(context)
   assert_true(screen_shows(context, "S2"), "and the header shows it")
 end)
@@ -651,6 +663,16 @@ test("a fade superseded by a fade that fails goes back to the last scene that la
   recall_scene(2, 4); recall_scene(3, 0)
   assert_equal(local_value("current_scene"), 3, "the instant recall's scene is current")
   assert_equal(transition.target, nil, "no fade is running")
+  -- an instant recall superseding a fade that fails: the last scene that landed
+  recall_scene(1, 0); recall_scene(2, 4)
+  params:set_action("v1_freq", function() error("recall failed") end)
+  local ok, message = pcall(recall_scene, 3, 0)
+  params:set_action("v1_freq", function() end)
+  assert_true(not ok and tostring(message):find("recall failed", 1, true), "the recall's error is raised")
+  assert_equal(local_value("current_scene"), 1, "the last scene that landed is current")
+  assert_equal(transition.target, nil, "no target")
+  assert_equal(transition.previous, nil, "no previous")
+  assert_equal(local_value("scene_transition_active"), false, "no fade is running")
 end)
 
 test("a fade's landing keeps its target current while it applies it", function()
