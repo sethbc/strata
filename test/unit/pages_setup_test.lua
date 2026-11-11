@@ -118,7 +118,7 @@ test("every SETUP field shows its own label on its row", function()
     enc(2, 1)
     if S.setup_cursor == before then break end
   end
-  assert_equal(seen, 9, "the nine fields (no buffer length on the standard setting)")
+  assert_equal(seen, 13, "the thirteen fields: nine, and four grid rotations (no buffer length on the standard setting)")
 end)
 
 test("SETUP's save and load fields run the function their record holds", function()
@@ -147,8 +147,8 @@ test("SETUP scrolls with a marker and reaches both ends", function()
   show_page("SETUP")
   enc(2, 20)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 9, "the cursor is on performance, the last field")
-  assert_true(screen_shows(context, "load scenes"), "load scenes is drawn")
+  assert_equal(local_value("S").setup_cursor, 13, "the cursor is on performance, the last field")
+  assert_true(screen_shows(context, "grid 4 rotation"), "the field above it, grid 4 rotation, is drawn")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
@@ -417,7 +417,11 @@ local write_text = h.write_text
 local function cursor_on(label)
   local S = local_value("S")
   enc(2, -20)
-  while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= label do enc(2, 1) end
+  while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= label do
+    local before = S.setup_cursor
+    enc(2, 1)
+    if S.setup_cursor == before then error("no field " .. label, 2) end
+  end
 end
 
 -- The status rows' texts, joined by "|"
@@ -530,6 +534,57 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   os.remove(dir .. "buffers.data.part/inside"); os.remove(dir .. "buffers.data.part")
   S.lib.scenes.save(1); load_buffer(2, "/tmp/two.wav")
   assert_true(not status_texts():find("not saved", 1, true), status_texts())
+end)
+
+
+-- #323: a rotation per grid port (S.lib.grid_core.set_rotation), kept in
+-- grids.data; 90 or 270 stands a 128 upright as the 8x16
+test("SETUP's grid rotation fields turn each port's grid (#323)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local core = S.lib.grid_core
+  local device = context.grid.plug(1, 16, 8)
+  show_page("SETUP")
+  for port = 1, 4 do
+    cursor_on("grid " .. port .. " rotation"); redraw()
+    assert_equal(value_beside(context, "grid " .. port .. " rotation"), "0", "port " .. port .. " at 0")
+    assert_equal(hint_text(context), "E2:field E3:value", "the hints")
+  end
+  cursor_on("grid 1 rotation")
+  enc(3, 1); redraw()
+  assert_equal(core.rotation(1), 1, "E3 right: rotation 1")
+  assert_equal(value_beside(context, "grid 1 rotation"), "90", "shown as 90")
+  assert_equal(device.rotation_value, 1, "the grid is turned")
+  assert_equal(core.layout_of(1), S.registry.grid_layouts["128v"], "a 16x8 turned is the 8x16 layout")
+  enc(3, 5); redraw()
+  assert_equal(value_beside(context, "grid 1 rotation"), "270", "clamped at 270")
+  enc(3, -1); redraw()
+  assert_equal(value_beside(context, "grid 1 rotation"), "180")
+  assert_equal(core.layout_of(1), S.registry.grid_layouts["128h"], "180 is the 16x8 again")
+  enc(3, -5); redraw()
+  assert_equal(value_beside(context, "grid 1 rotation"), "0", "clamped at 0")
+  enc(2, 20); redraw()
+  assert_true(screen_shows(context, "16x8"), "the sizes line")
+  cursor_on("grid 1 rotation"); enc(3, 1)
+  enc(2, 20); redraw()
+  assert_true(screen_shows(context, "8x16"), "the sizes line follows the rotation")
+  cursor_on("grid 3 rotation"); enc(3, 2); redraw()
+  assert_equal(value_beside(context, "grid 3 rotation"), "180", "a port with no grid keeps a setting")
+  assert_equal(core.rotation(3), 2)
+  assert_screen_layout(context, "SETUP grid rotations")
+end)
+
+test("a grid rotation that cannot be saved keeps its value and says so", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device = context.grid.plug(1, 16, 8)
+  os.execute("mkdir -p '" .. context.data_dir .. "strata/grids.data.part/inside'")
+  show_page("SETUP"); cursor_on("grid 1 rotation")
+  enc(3, 1); next_frame(context)
+  assert_equal(S.lib.grid_core.rotation(1), 0, "not set")
+  assert_equal(device.rotation_value, 0, "the grid is not turned")
+  assert_equal(hint_text(context), "setting not saved", "the hint row says so")
+  assert_equal(value_beside(context, "grid 1 rotation"), "0", "the old value shows")
 end)
 
 end

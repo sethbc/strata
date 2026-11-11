@@ -19,7 +19,7 @@
 - `S.midi_device`, `S.midi_state`;
 - notes, velocity, pitchbend, hot-plug (`attach_midi`, `midi_init`, `midi.add`/`midi.remove`, `midi_event`, `midi_note_on`, `midi_note_off_for`, `midi_pitchbend`, `midi_set_bend`, `midi_bend_follow_selection`, `reset_midi_input`, `midi_target_voice`, `midi_device_name`);
 - the MIDI constants, `S.lib.midi_in.MIDI`, which the MIDI params in `lib/params_setup.lua` read;
-- cleanup step 150: the MIDI handler detached.
+- cleanup step 150: the MIDI handler detached, and `midi.add`/`midi.remove` set to no-ops (norns' SLEEP runs only `cleanup()`, #468).
 
 MIDI notes, velocity and pitchbend play the voices (3.0 design §5).
 

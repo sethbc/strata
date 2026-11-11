@@ -98,7 +98,8 @@ test("64 row 8 columns 2-8 toggle voices 1-7", function()
     local was_active = voices[voice_idx].active
     tap(context, 1, voice_idx + 1, 8)
     assert_true(voices[voice_idx].active ~= was_active, "(" .. (voice_idx + 1) .. ",8) toggles voice " .. voice_idx)
-    assert_equal(device:get_led(voice_idx + 1, 8), voices[voice_idx].active and 12 or 4, "voice " .. voice_idx .. " LED")
+    assert_equal(device:get_led(voice_idx + 1, 8), voices[voice_idx].active and 12 or 2,
+      "voice " .. voice_idx .. " LED (the shared levels, #526)")
   end
   assert_true(voices[7].active, "voice 7 is reachable")
 end)

@@ -1,11 +1,13 @@
 -- lib/pages/setup.lua
 -- The SETUP page: a field list (MIDI port, channel mode, mutations on/off,
--- rate, probability, amount, save scenes, load scenes, the performance
--- setting and its buffer length) with the status lines (the running tier,
+-- rate, probability, amount, save scenes, load scenes, each grid port's
+-- rotation, the performance setting and its buffer length) with the status
+-- lines (the running tier,
 -- grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
 -- value, K3 runs a save/load field. It scrolls like FX
 -- (S.lib.ui_field_list). The performance fields edit the setting
--- (S.lib.performance), not params. Registers its S.registry.pages record.
+-- (S.lib.performance), the rotation fields S.lib.grid_core's, not params.
+-- Registers its S.registry.pages record.
 -- The functions that were global stay global.
 
 return function(S)
@@ -31,6 +33,11 @@ return function(S)
     -- write that failed
     file_texts = {kept = " unreadable, kept", unreadable = " file unreadable", ["not saved"] = " file not saved",
       kept_note = "as ", in_place_note = "not saved over"},
+    -- a grid port's rotation field (kind "rotation", #323): its setting
+    -- (S.lib.grid_core.rotation, 0-3) shown in degrees; the fields, one per
+    -- port, are made at the first look (grid core sets S.MAX_GRID_PORTS)
+    rotation_degrees = 90,
+    rotation_fields = {},
   }
   M.SETUP_PAGE = SETUP_PAGE
 
@@ -141,6 +148,16 @@ return function(S)
     end
   end
 
+  -- The grid ports' rotation fields, one per port, connected or not: a row
+  -- never comes or goes above a field (the cursor is a row index)
+  local function add_rotation_rows(rows)
+    local fields = SETUP_PAGE.rotation_fields
+    for port = 1, S.MAX_GRID_PORTS do
+      fields[port] = fields[port] or {label = "grid " .. port .. " rotation", kind = "rotation", port = port}
+      table.insert(rows, fields[port])
+    end
+  end
+
   -- The fields, then the data files' problems and the status lines (no
   -- cursor stops). The sizes line exists only while a grid is connected.
   -- Restored buffers are confirmed by the engine; missing files are
@@ -148,6 +165,7 @@ return function(S)
   function M.setup_rows()
     local rows = {}
     for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
+    add_rotation_rows(rows)
     add_performance_rows(rows)
     add_data_file_rows(rows)
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
@@ -172,6 +190,9 @@ return function(S)
   local setup_rows = M.setup_rows
 
   local function field_value(field)
+    if field.kind == "rotation" then
+      return tostring(S.lib.grid_core.rotation(field.port) * SETUP_PAGE.rotation_degrees)
+    end
     if field.kind == "performance" then
       local value = S.lib.performance.setting()[field.key]
       return field.key == "buffer_seconds" and (value .. " s") or value
@@ -194,7 +215,7 @@ return function(S)
     else
       screen.level(selected and 15 or 4)
       screen.text(row.label)
-      if row.kind == "param" or row.kind == "performance" then
+      if row.kind == "param" or row.kind == "performance" or row.kind == "rotation" then
         screen.move(value_right, y)
         screen.text_right(field_value(row))
       end
@@ -246,13 +267,27 @@ return function(S)
     end
   end
 
+  -- E3 on a grid port's rotation field: the next or previous quarter turn
+  -- (clamped at 0 and 270), saved at once (grids.data) and applied to the
+  -- grid on the port
+  local function step_rotation_field(field, d)
+    local core = S.lib.grid_core
+    local rotation = core.rotation(field.port)
+    local stepped = util.clamp(rotation + d, 0, core.MAX_ROTATION)
+    if stepped ~= rotation and not core.set_rotation(field.port, stepped) then
+      S.lib.ui_flash.start("hints", "setting not saved", nil, UI_PAGES.index.SETUP)
+    end
+  end
+
   -- E2 moves over the fields, E3 edits the one under the cursor
   function setup_enc(n, d)
     if n == 2 then
       S.setup_cursor = field_list.move(setup_rows(), S.setup_cursor, d)
     elseif n == 3 then
       local field = setup_rows()[S.setup_cursor]
-      if field and field.kind == "performance" then
+      if field and field.kind == "rotation" then
+        step_rotation_field(field, d)
+      elseif field and field.kind == "performance" then
         step_performance_field(field, d)
       elseif field and field.kind == "param" then
         if field.param_id == "mutation_enabled" then
@@ -302,6 +337,9 @@ return function(S)
         S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
         S.buffer_file.problem = "not saved"
         enc(2, 20)
+      end},
+      {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
+        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 8)
       end},
       {name = "buffers missing", setup = function()
         S.buffers[1].missing_path = "/x/a.wav"; S.buffers[2].missing_path = "/x/b.wav"

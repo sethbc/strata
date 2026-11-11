@@ -1,8 +1,10 @@
 -- lib/grid/faders.lua
--- The 256 grid's faders: which params a voice's fader pages show, the
--- column <-> value mapping (following each param's warp, with a zero column
--- for ranges that span 0) and the fader rows' LEDs. The functions stay
--- global.
+-- The grid faders, which the 256 (its parameter page and FX faders), the
+-- 16x8 and the 8x16 (their faders pages) draw and set alike: which params a
+-- voice's fader pages show, the column <-> value mapping (following each
+-- param's warp, with a zero column for ranges that span 0), the fader rows'
+-- LEDs, the fader page keys' level and the drift tick's redraw when a shown
+-- fader moved (follow_faders). The functions stay global.
 
 return function(S)
   local M = {}
@@ -31,7 +33,7 @@ return function(S)
     return keys
   end
 
-  -- Ordered param IDs for the 256-grid fader page: the voice's synthesis
+  -- Ordered param IDs for a voice's fader pages (on every layout): the voice's synthesis
   -- params (param_order), or BUFFER_FADER_KEYS and the level and pan for a
   -- buffer source, then the grain params, then the nine crossmod slot values
   -- (source, amp mod, freq mod for each slot). An input source has no buffer
@@ -142,8 +144,45 @@ return function(S)
     grid_device:led(position, y, 15)
   end
 
+  -- What a faders page shows of the faders, as one string: the grid voice,
+  -- its fader page, its page count and the shown faders' columns. A param
+  -- set anywhere (the screen, the arc, a MIDI map, PARAMETERS, the drift)
+  -- reaches the grid through follow_faders, which the drift tick runs (#324)
+  local shown_faders  -- the string as of the last look (nil: no grid on page 2)
+
+  function M.faders_signature()
+    local voice_idx = S.grid_voice_select
+    local ids = fader_param_ids(voice_idx)
+    local parts = {voice_idx, S.param_page, math.ceil(#ids / GRID_LAYOUT.fader_rows)}
+    for row = 1, GRID_LAYOUT.fader_rows do
+      local param_id = ids[(S.param_page - 1) * GRID_LAYOUT.fader_rows + row]
+      parts[#parts + 1] = param_id and fader_position(param_id) or 0
+    end
+    return table.concat(parts, ",")
+  end
+
+  -- While a grid shows the faders page, redraw the grids when what the
+  -- faders show changed since the last look (the first look draws too), so
+  -- idle ticks repaint nothing
+  function M.follow_faders()
+    if not S.lib.grid_core.any_page(S.constants.GRID_PAGES.faders) then
+      shown_faders = nil
+      return
+    end
+    local signature = M.faders_signature()
+    if signature ~= shown_faders then grid_redraw() end
+    shown_faders = signature
+  end
+
+  -- A fader page's key (the 256's row 13, the 16x8's row 5, the 8x16's
+  -- column 5): the page shown picked, the others not (the core's levels)
+  function M.fader_page_level(page)
+    local levels = S.lib.grid_core.LEVELS
+    return page == S.param_page and levels.picked or levels.unpicked
+  end
+
   -- Fader rows 9-12 for the selected voice's fader page. Row 13 shows the
-  -- fader pages, selected at 15.
+  -- fader pages (fader_page_level).
   function grid_redraw_faders(grid_device)
     local ids = fader_param_ids(S.grid_voice_select)
     for row = 1, GRID_LAYOUT.fader_rows do
@@ -153,7 +192,7 @@ return function(S)
       end
     end
     for page = 1, fader_page_count(S.grid_voice_select) do
-      grid_device:led(page, GRID_LAYOUT.param_page_row, page == S.param_page and 15 or 4)
+      grid_device:led(page, GRID_LAYOUT.param_page_row, M.fader_page_level(page))
     end
   end
 

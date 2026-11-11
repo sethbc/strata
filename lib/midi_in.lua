@@ -271,9 +271,13 @@ return function(S)
     midi_init()
   end)
 
-  -- Stop listening to MIDI before the voices go off
+  -- Stop listening to MIDI before the voices go off, and hand hot-plug back
+  -- (no-ops, as norns' midi.cleanup() leaves them at a script change; SLEEP
+  -- runs only cleanup(), #468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
     if S.midi_device then S.midi_device.event = nil end
+    midi.add = function() end
+    midi.remove = function() end
   end)
 
   -- A note is held on a voice exactly while some channel's note on maps it there

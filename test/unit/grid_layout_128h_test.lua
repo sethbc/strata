@@ -109,8 +109,8 @@ test("128h row 8 columns 5-8 pick pages 1-4 and light the shown one", function()
     tap(context, 1, 4 + page, 8)
     assert_equal(grid_core().page(1), page, "column " .. (4 + page) .. " shows page " .. page)
     for column = 5, 8 do
-      assert_equal(device:get_led(column, 8), column - 4 == page and 15 or 4,
-        "page " .. page .. ": row 8 column " .. column)
+      assert_equal(device:get_led(column, 8), column - 4 == page and 15 or 2,
+        "page " .. page .. ": row 8 column " .. column .. " (the shared page levels, #526)")
     end
   end
 end)
@@ -255,7 +255,7 @@ test("128h page 4 LEDs come from source_level, record_level and CLEAR_LEVEL", fu
       assert_equal(device:get_led(x, voice_idx), core.source_level(voice_idx, x),
         "voice " .. voice_idx .. " source column " .. x)
     end
-    assert_equal(device:get_led(11, voice_idx), 0, "column 11 dark")
+    assert_equal(device:get_led(11, voice_idx), voice_idx == 1 and 15 or 0, "column 11 marks the grid voice, 1 (#444)")
     assert_equal(device:get_led(12, voice_idx), 3, "column 12 the freeze key (not frozen: 3)")
   end
   assert_equal(device:get_led(9, 4), 15, "the selected empty buffer lights 15")
@@ -299,42 +299,30 @@ test("128h scene saves need a hold", function()
   context.grid.press(1, 4, 3, 0)
 end)
 
--- #303: row 1's levels for scenes 1-4 while the sequencer runs through the
--- clock (scenes 1-3, length 3)
-test("128h: the scene page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
+-- #452: the scene keys show the core's levels (grid_core_test.lua holds
+-- the rule: the next slot, the current scene, the blink)
+test("128h page 3: the scene keys show the core's levels (#452)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 8)
+  local core = grid_core()
   tap(context, 1, 7, 8)  -- page 3
   capture_scene(1); capture_scene(2); capture_scene(3)
-  params:set("scene_sequence_length", 3)
+  params:set("scene_sequence_length", 4)
   params:set("scene_transition_time", 0); params:set("scene_duration", 4)
-  local function row_1()
-    local levels = {}
-    for x = 1, 4 do levels[x] = device:get_led(x, 1) end
-    return table.concat(levels, " ")
-  end
   params:set("scene_sequencer_enabled", 1)
-  context.clock.run_for(1, 0.001)
-  assert_equal(row_1(), "15 10 8 2", "1 s: scene 1 playing, scene 2 next at 10")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "8 15 10 2", "5 s: scene 2 playing, scene 3 next")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "10 8 15 2", "9 s: scene 3 playing, scene 1 next (wrapped)")
+  context.clock.run_for(1, 0.001)  -- scene 1 playing, scene 2 next
+  context.grid.press(1, 5, 3, 1)
+  local seen = {}
+  for i = 1, 8 do
+    assert_equal(device:get_led(i, 1), core.scene_recall_level(i), "recall key " .. i)
+    assert_equal(device:get_led(i, 2), core.scene_fade_level(i), "fade key " .. i)
+    assert_equal(device:get_led(i, 3), core.scene_save_level(1, i, 3), "save key " .. i)
+    seen[device:get_led(i, 1)] = true
+  end
+  assert_true(seen[15] and seen[10] and seen[8] and seen[2], "the recall keys show all four levels")
+  assert_equal(core.scene_save_level(1, 5, 3), 15, "scene 5's save is pending")
+  context.grid.press(1, 5, 3, 0)
   params:set("scene_sequencer_enabled", 0)
-  assert_equal(row_1(), "8 8 15 2", "a stopped sequencer lights no next scene")
-end)
-
--- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
-test("128h: the scene page blinks the recall key of the scene a fade goes to", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.grid.plug(1, 16, 8)
-  tap(context, 1, 7, 8)  -- page 3
-  capture_scene(1); capture_scene(2)
-  recall_scene(1, 0); recall_scene(2, 2)
-  context.clock.run_for(0.1)                                    -- step 2
-  assert_equal(device:get_led(2, 1), 8, "step 2: the target's recall key at its populated level")
-  context.clock.run_for(0.1)                                    -- step 3
-  assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
 end)
 
 test("two 128h grids keep their own pages", function()
@@ -448,11 +436,11 @@ test("128h: the grid voice's strip on page 4 recalls, stores, holds and restores
   select_grid_voice(2)
   tap(context, 1, 14, 5)
   assert_near(params:get("v2_buf_pos"), 0.25, 1e-6, "bookmark 2")
+  params:set("v2_buf_pos", 0.6)
   context.grid.press(1, 13, 6, 1)
   context.grid.press(1, 15, 5, 1); context.grid.press(1, 15, 5, 0)
   context.grid.press(1, 13, 6, 0)
-  assert_near(params:get("v2_bookmark_3"), params:get("v2_buf_pos"), 1, "bookmark 3 stored")
-  assert_true(S.lib.positions.bookmark(2, 3) ~= nil)
+  assert_near(S.lib.positions.bookmark(2, 3), 0.6, 1e-6, "(13,6) held + (15,5) stores bookmark 3")
   context.clear_engine_calls()
   context.grid.press(1, 14, 6, 1)
   local held
@@ -702,6 +690,35 @@ test("128h: the page 4 cells next to the strip still act", function()
   assert_equal(#context.calls_named("clearBuffer"), 1, "a clear key")
   tap(context, 1, 14, 1)
   assert_equal(#context.calls_named("recordBuffer"), 1, "a record key")
+end)
+
+
+-- Every LED of the grid as one string
+local function frame(device)
+  local levels = {}
+  for y = 1, 8 do
+    for x = 1, 16 do levels[#levels + 1] = device:get_led(x, y) end
+  end
+  return table.concat(levels, " ")
+end
+
+-- #444: page 4's strip acts on the grid voice; column 11 of its row names it
+test("128h page 4 marks the grid voice in column 11, so the cycle key changes an LED (#444)", function()
+  local context, S, device = position_setup()
+  params:set("v4_source", S.constants.SOURCE_SYNTH + 1)  -- voices 3 and 4 on the same slot
+  tap(context, 1, 8, 8)  -- page 4
+  select_grid_voice(3); grid_redraw()
+  local voice_3 = frame(device)
+  for y = 1, 7 do
+    assert_equal(device:get_led(11, y), y == 3 and grid_core().LEVELS.picked or 0, "column 11 row " .. y)
+  end
+  tap(context, 1, 16, 8)  -- the cycle key: voice 4
+  assert_equal(S.grid_voice_select, 4, "the cycle key picks voice 4")
+  assert_true(frame(device) ~= voice_3, "the frame changed")
+  assert_equal(device:get_led(11, 4), grid_core().LEVELS.picked, "column 11 marks row 4")
+  assert_equal(device:get_led(11, 3), 0, "and row 3 no longer")
+  tap(context, 1, 11, 4)
+  assert_equal(S.grid_voice_select, 4, "the marker is not a key")
 end)
 
 end

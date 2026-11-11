@@ -61,7 +61,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
-| 80 | connect the grids (`grid_init`) | `lib/grid/core.lua` |
+| 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 90 | listen for MIDI (`midi_init`) | `lib/midi_in.lua` |
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
@@ -121,10 +121,10 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
 | 135 | stop the BUFFER page's `amp_in_l` and `amp_in_r` input meter polls (`stop_input_meter`) | `lib/pages/buffer.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
-| 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
+| 150 | detach the MIDI handler, before the voices go off, and set `midi.add`/`midi.remove` to no-ops | `lib/midi_in.lua` |
 | 160 | `engine.voiceOff` for every running voice (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
-| 170 | leave every connected grid dark | `lib/grid/core.lua` |
-| 180 | leave the arc dark | `lib/arc/core.lua` |
+| 170 | clear every grid vport's key handler, leave its grid dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
+| 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
 
 Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).

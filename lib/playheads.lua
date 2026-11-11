@@ -13,7 +13,7 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PLAYHEADS = S.constants.PLAYHEADS
   -- the page the grids show positions on (design 3.3 section 9)
-  local POSITION_PAGE = 5
+  local POSITION_PAGE = S.constants.GRID_PAGES.positions
 
   -- per voice: {phase = the scan's phase (0-1), at = the time it is true at}
   local heads = {}

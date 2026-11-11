@@ -1837,6 +1837,7 @@ local function make_grid()
     grid.vports[port] = {
       name = "none", device = nil, key = nil, cols = 0, rows = 0,
       led = wrap_method("led"), all = wrap_method("all"), refresh = wrap_method("refresh"),
+      rotation = wrap_method("rotation"),
     }
   end
   function grid.connect(port) return grid.vports[port or 1] end
@@ -1852,6 +1853,22 @@ local function make_grid()
     grid.next_id = grid.next_id + 1
     device.name = "grid " .. device.id
     device.port = port
+    -- Grid:rotation(val) (lua/core/grid.lua): matron turns the device to
+    -- rotation val (0-3, a quarter turn each, from the device's own size),
+    -- its rows and cols are read again (swapped for 1 and 3, as libmonome
+    -- reports them), then update_devices() copies them to its vport
+    device.native_cols, device.native_rows, device.rotation_value = cols, rows, 0
+    function device:rotation(val)
+      if not is_integer(val) or val < 0 or val > 3 then error("grid rotation must be 0-3, got " .. tostring(val), 2) end
+      self.rotation_value = val
+      if val % 2 == 1 then
+        self.cols, self.rows = self.native_rows, self.native_cols
+      else
+        self.cols, self.rows = self.native_cols, self.native_rows
+      end
+      self:all(0)
+      update_devices(grid)
+    end
     grid.devices[device.id] = device
     local vport = grid.vports[port]
     vport.device = device

@@ -150,6 +150,18 @@ local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 -- to save; the 64's half toggle (column 1) switches halves after this hold
 local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
 
+-- The grid pages, numbered alike on every layout (#451: the 64 shows 1 and
+-- 5), and the cells of a voice's position row on every layout
+local GRID_PAGES = {patterns = 1, faders = 2, scenes = 3, sources = 4, positions = 5, count = 5,
+  position_cells = 16}
+
+-- The key levels every grid layout shares (#526; lib/grid/core.lua reads
+-- them): a voice's on/off key (running, stopped), a page key (shown,
+-- other), a pick key (the grid voice or the fader page shown, the others),
+-- a lock key and the play keys
+local GRID_LEVELS = {voice_running = 12, voice_stopped = 2, page_shown = 15, page_other = 2,
+  picked = 15, unpicked = 4, locked = 12, unlocked = 2, playing = 15, stopped = 4}
+
 -- init()'s start steps in the order it runs them, after the params are
 -- added and their actions wrapped: each module registers its own with
 -- S.register_start(START_ORDER.<step>, fn) (lib/state.lua). The UI first,
@@ -264,6 +276,8 @@ return {
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
   GRID_HOLD = GRID_HOLD,
+  GRID_PAGES = GRID_PAGES,
+  GRID_LEVELS = GRID_LEVELS,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
   DETENT = DETENT,

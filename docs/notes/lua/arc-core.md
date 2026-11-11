@@ -19,7 +19,7 @@
   - `arc_sweep_param`, `arc_ring_fill`, `arc_ring_fill_position`, `arc_ring_fill_bipolar`, `arc_ring_fill_param`, `arc_whole_steps`, `forget_arc_ticks`, `attach_arc`, `first_arc_port`, `arc_init`, `arc.add`/`arc.remove`, `forget_arc_lfo_period_ticks`;
   - the norns entry points `arc_delta`, `arc_key` and `arc_redraw`;
   - all global but `attach_arc` and `page_ring_handler`, locals of the constructor (`arc.add`/`arc.remove` are fields of norns' `arc` table);
-  - cleanup step 180: the arc left dark;
+  - cleanup step 180: the followed vport's `delta` and `key` cleared, the arc left dark, and `arc.add`/`arc.remove` set to no-ops (norns' SLEEP runs only `cleanup()`, #468);
   - the invariant `"arc connection"`: `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)`.
 - Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, a portless device, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
 

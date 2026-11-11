@@ -24,9 +24,10 @@ return function(S)
   S.MAX_GRID_PORTS = 4
   S.grids = {}
 
-  -- Grid UI state. Each port shows its own page (M.page): 1 patterns,
-  -- 2 parameters, 3 scenes, 4 buffers (the 256 adds FX faders), 5 positions
-  local MAX_GRID_PAGES = 5
+  -- Grid UI state. Each port shows its own page (M.page), numbered alike on
+  -- every layout (S.constants.GRID_PAGES): 1 patterns, 2 faders, 3 scenes,
+  -- 4 sources and buffers (the 256 adds the FX faders), 5 positions
+  local MAX_GRID_PAGES = S.constants.GRID_PAGES.count
   S.grid_pages = {}
   S.param_page = 1
   S.grid_voice_select = 1
@@ -75,14 +76,13 @@ return function(S)
   -- set on press and cleared on release, on the port's grid.remove and in
   -- cleanup. Private to this module, per port and key: the pending hold
   -- clocks (hold_clocks), the consumed keys (consumed_keys), the step keys
-  -- the step-level gesture sees (step_keys: {voice, step, order, level_key})
+  -- the step-level gesture sees (step_keys: {voice, step, level_key})
   -- and each port's layout state (port_states)
   S.grid_held = {}
   local hold_clocks = {}
   local consumed_keys = {}
   local step_keys = {}
   local port_states = {}
-  local press_count = 0  -- orders presses made at the same util.time()
 
   -- tables[port][x][y], or nil
   local function key_value(tables, port, x, y)
@@ -167,7 +167,6 @@ return function(S)
   end
 
   local function press_key(port, x, y)
-    press_count = press_count + 1
     -- a press with no release before it (a missed event) starts over
     cancel_hold(port, x, y)
     set_key_value(consumed_keys, port, x, y, nil)
@@ -187,41 +186,43 @@ return function(S)
     return math.min(level, MAX_STEP_LEVEL)
   end
 
-  -- The most recently pressed step key of the voice held on this port, other
-  -- than (x, y) and keys that set a level: its entry and coordinates, or nil
-  local function latest_held_step(port, voice_idx, x, y)
-    local latest, latest_x, latest_y
+  -- The voice's held step on this port, other than (x, y): its entry and
+  -- coordinates, or nil. A voice has at most one (#450): step_key records a
+  -- key as a held step only while the voice has none, and every later key
+  -- of the voice is a level key, which never counts
+  local function held_step(port, voice_idx, x, y)
     for key_x, rows in pairs(step_keys[port] or {}) do
       for key_y, entry in pairs(rows) do
         if entry.voice == voice_idx and not entry.level_key and not (key_x == x and key_y == y)
-          and M.held(port, key_x, key_y) ~= nil and (latest == nil or entry.order > latest.order) then
-          latest, latest_x, latest_y = entry, key_x, key_y
+          and M.held(port, key_x, key_y) ~= nil then
+          return entry, key_x, key_y
         end
       end
     end
-    return latest, latest_x, latest_y
+    return nil
   end
 
-  -- A pattern key. The step toggles at press, unless another step key of the
-  -- same voice is held on this port: then the most recently pressed of those
+  -- A pattern key. The step toggles at press and the key becomes the voice's
+  -- held step on this port, unless the voice already has one: then that step
   -- gets this key's level (its position, 1..positions, along the voice's
-  -- shown steps) and both keys are consumed. Releases do nothing. A voice,
-  -- step or position out of range does nothing, so only valid steps are
-  -- ever recorded as held (and later take a level)
+  -- shown steps), both keys are consumed and this key is a level key for as
+  -- long as it is down (it never takes a level itself). Releases do nothing.
+  -- A voice, step or position out of range does nothing, so only valid
+  -- steps are ever recorded as held (and later take a level)
   function M.step_key(port, x, y, z, voice_idx, step, position, positions)
     if z ~= 1 then return end
     if not whole_number_in(voice_idx, 1, NUM_VOICES) or not whole_number_in(step, 1, PATTERN_LENGTH) then return end
     if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
-    local held_step, held_x, held_y = latest_held_step(port, voice_idx, x, y)
-    if held_step then
-      S.patterns[voice_idx][held_step.step] = M.level_for_position(position, positions)
+    local held, held_x, held_y = held_step(port, voice_idx, x, y)
+    if held then
+      S.patterns[voice_idx][held.step] = M.level_for_position(position, positions)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
-      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, order = press_count, level_key = true})
+      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
       return
     end
     toggle_pattern_step(voice_idx, step)
-    set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, order = press_count})
+    set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step})
   end
 
   -- End the step-level gesture on voice_idx's held step keys, on every port:
@@ -257,6 +258,52 @@ return function(S)
     M.on_hold(port, x, y, GRID_HOLD.scene_save_seconds, function()
       S.lib.scenes.save(scene_num)
     end)
+  end
+
+  -- The key levels every layout shares (S.constants.GRID_LEVELS, #526): a
+  -- voice's on/off key, a lock key and the play keys from the state they
+  -- show; the page and pick keys' pairs are read from M.LEVELS
+  local LEVELS = S.constants.GRID_LEVELS
+  M.LEVELS = LEVELS
+
+  function M.voice_level(voice_idx)
+    if not whole_number_in(voice_idx, 1, NUM_VOICES) then return 0 end
+    return S.voices[voice_idx].active and LEVELS.voice_running or LEVELS.voice_stopped
+  end
+
+  function M.lock_level(voice_idx)
+    if not whole_number_in(voice_idx, 1, NUM_VOICES) then return 0 end
+    return S.frozen[voice_idx] and LEVELS.locked or LEVELS.unlocked
+  end
+
+  function M.play_level()
+    return S.pattern_playing and LEVELS.playing or LEVELS.stopped
+  end
+
+  -- The scene keys' levels, one rule for every layout with a scenes page
+  -- (#452): a recall key 8 for a saved scene, 2 for an empty slot, 10 for
+  -- the slot the running sequencer recalls next (#303), 15 for the current
+  -- scene, which wins (S.lib.scenes.shows_current: the scene a fade goes to
+  -- blinks, #254); a fade key 6 saved, 2 empty; a save key 15 while its
+  -- hold is pending, 4 otherwise. A slot outside 1..NUM_SCENES is 0
+  local SCENE_LEVELS = {saved = 8, empty = 2, next = 10, current = 15, fade_saved = 6,
+    save_pending = 15, save_idle = 4}
+
+  function M.scene_recall_level(slot)
+    if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
+    if S.lib.scenes.shows_current(slot) then return SCENE_LEVELS.current end
+    if slot == S.lib.scenes.sequencer_next_slot() then return SCENE_LEVELS.next end
+    return S.scenes[slot].populated and SCENE_LEVELS.saved or SCENE_LEVELS.empty
+  end
+
+  function M.scene_fade_level(slot)
+    if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
+    return S.scenes[slot].populated and SCENE_LEVELS.fade_saved or SCENE_LEVELS.empty
+  end
+
+  -- The save key at (x, y) on the port
+  function M.scene_save_level(port, x, y)
+    return M.hold_pending(port, x, y) and SCENE_LEVELS.save_pending or SCENE_LEVELS.save_idle
   end
 
   local function valid_source(voice_idx, option)
@@ -339,9 +386,54 @@ return function(S)
   -- Per attached port, the device its vport held when attached (reconcile_ports)
   local attached_devices = {}
 
-  -- Store a grid port's vport and route its key events to grid_key. Handlers
-  -- live on the vport only: norns fires both device.key and vports[port].key,
-  -- so also setting them on the device would run grid_key twice per press.
+  -- The rotation setting per port (#323, a SETUP setting, never a param):
+  -- norns' Grid:rotation, 0-3 (0, 90, 180 and 270 degrees; 1 or 3 stands a
+  -- 128 upright as the 8x16), kept in grids.data in the data folder and read
+  -- at the grids' start step (settings[port], nil reads as 0). sizes[port]
+  -- is the size ("16x8") an attached port's grid reported when it was last
+  -- attached or turned: one that reports another, turned outside Strata,
+  -- starts over (follow_size)
+  local GRID_ROTATION = {file = "grids.data", version = 1, last = 3, settings = {}, sizes = {}}
+
+  local function rotation_path() return _path.data .. "strata/" .. GRID_ROTATION.file end
+
+  local function size_of(grid_port) return grid_port.cols .. "x" .. grid_port.rows end
+
+  M.MAX_ROTATION = GRID_ROTATION.last
+
+  -- The port's rotation setting, 0-3
+  function M.rotation(port)
+    return GRID_ROTATION.settings[port] or 0
+  end
+
+  -- Read grids.data (parsed, never run: S.lib.data_files.read): each port's
+  -- whole number 0-3 is its setting; anything else (no file, one that does
+  -- not parse, another version, a bad entry) reads as 0
+  local function read_rotations()
+    local settings = {}
+    local value, problem, why = S.lib.data_files.read(rotation_path())
+    if type(value) == "table" and value.version == GRID_ROTATION.version and type(value.rotation) == "table" then
+      for port = 1, S.MAX_GRID_PORTS do
+        if whole_number_in(value.rotation[port], 0, GRID_ROTATION.last) then settings[port] = value.rotation[port] end
+      end
+    elseif value ~= nil or problem == "unreadable" then
+      print("strata: " .. GRID_ROTATION.file .. " not used (" .. tostring(why or "not grid settings")
+        .. "): every grid rotation is 0")
+    end
+    GRID_ROTATION.settings = settings
+  end
+
+  -- Turn the port's grid to its setting (norns reads its rows and cols again
+  -- and updates the vport) and note the size it reports
+  local function apply_rotation(port, grid_port)
+    grid_port:rotation(M.rotation(port))
+    GRID_ROTATION.sizes[port] = size_of(grid_port)
+  end
+
+  -- Store a grid port's vport, route its key events to grid_key and turn the
+  -- grid to the port's rotation. Handlers live on the vport only: norns
+  -- fires both device.key and vports[port].key, so also setting them on the
+  -- device would run grid_key twice per press.
   local function attach_grid(port)
     local grid_port = grid.connect(port)
     S.grids[port] = grid_port
@@ -349,10 +441,52 @@ return function(S)
     grid_port.key = function(x, y, z)
       grid_key(port, x, y, z)
     end
+    apply_rotation(port, grid_port)
     return grid_port
   end
 
+  -- A port whose grid reports another size than when it was attached or
+  -- turned (a rotation made outside Strata: no add, no remove) starts over,
+  -- as a grid plugged in does. Run before a key and a redraw reach it
+  local function follow_size(port, grid_port)
+    local size = size_of(grid_port)
+    if GRID_ROTATION.sizes[port] == size then return end
+    forget_port(port)
+    GRID_ROTATION.sizes[port] = size
+  end
+
+  -- Set the port's rotation (a whole number 0-3): written to grids.data
+  -- first, so a write that fails sets nothing (false); then a grid on the
+  -- port is turned and the port starts over, as a grid plugged in does (its
+  -- page, held keys, holds and layout state forgotten), and the grids and
+  -- the screen redraw. false for a port or rotation out of range
+  function M.set_rotation(port, rotation)
+    if not whole_number_in(port, 1, S.MAX_GRID_PORTS) or not whole_number_in(rotation, 0, GRID_ROTATION.last) then
+      return false
+    end
+    if rotation == M.rotation(port) then return true end
+    local settings = {}
+    for each_port = 1, S.MAX_GRID_PORTS do settings[each_port] = M.rotation(each_port) end
+    settings[port] = rotation
+    util.make_dir(_path.data .. "strata/")
+    local written, problem = S.lib.data_files.write(rotation_path(), {version = GRID_ROTATION.version, rotation = settings})
+    if not written then
+      print("strata: " .. GRID_ROTATION.file .. " not saved: " .. tostring(problem))
+      return false
+    end
+    GRID_ROTATION.settings = settings
+    local grid_port = S.grids[port]
+    if grid_port and grid_port.device then
+      forget_port(port)
+      apply_rotation(port, grid_port)
+    end
+    grid_redraw()
+    request_redraw()
+    return true
+  end
+
   function grid_init()
+    read_rotations()
     -- Connect up to 4 grids
     for port = 1, S.MAX_GRID_PORTS do
       if grid.connect(port).device then
@@ -384,6 +518,7 @@ return function(S)
       S.grids[port] = nil
     end
     attached_devices[port] = nil
+    GRID_ROTATION.sizes[port] = nil
     -- its pending holds never fire (no scene save from a removed grid)
     forget_port(port)
     request_redraw()
@@ -408,6 +543,7 @@ return function(S)
         attached.key = nil
         S.grids[port] = nil
         attached_devices[port] = nil
+        GRID_ROTATION.sizes[port] = nil
         forget_port(port)
         print("grid " .. port .. " disconnected")
       end
@@ -443,6 +579,7 @@ return function(S)
   function grid_key(port, x, y, z)
     local grid_port = S.grids[port]
     if not grid_port then return end
+    follow_size(port, grid_port)
     if x < 1 or x > grid_port.cols or y < 1 or y > grid_port.rows then return end
 
     key_repaint.handling = true
@@ -460,18 +597,28 @@ return function(S)
     S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
   end
 
+  -- Per layout name: the key (`message`) of its redraw error last printed
+  local redraw_errors = {}
+
+  -- Each grid is cleared, drawn by its layout and refreshed. A layout's
+  -- redraw runs contained (the frame's contained_call, #441): its error is
+  -- printed once per distinct message, the grid is still refreshed, the
+  -- grids after it are drawn, and whoever asked for the redraw (a key, a
+  -- voice toggle, the pattern clock, a poll) goes on
   function grid_redraw()
     if next(S.grids) == nil then return end  -- no grids: nothing to do
     if key_repaint.handling then return end  -- grid_key paints once the key is handled
 
     for port, grid_port in pairs(S.grids) do
       if grid_port.device then
-        local layout = S.registry.grid_layouts[grid_layout(grid_port)]
+        follow_size(port, grid_port)
+        local name = grid_layout(grid_port)
+        local layout = S.registry.grid_layouts[name]
 
         grid_port:all(0)
 
         if layout then
-          layout.redraw(port, grid_port)
+          S.lib.ui_frame.contained_call(redraw_errors, name, "grid redraw", layout.redraw, port, grid_port)
         end
 
         grid_port:refresh()
@@ -485,13 +632,19 @@ return function(S)
   end)
 
   -- On exit cancel every pending hold (no scene save during cleanup), forget
-  -- the held keys and leave every connected grid dark
+  -- the held keys, clear every vport's key handler and leave its grid dark,
+  -- and hand hot-plug back (no-ops; norns' grid.cleanup() restores its own
+  -- at a script change). norns' SLEEP runs only cleanup() before the system
+  -- shuts down, so a key or a grid plugged meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
     for port = 1, S.MAX_GRID_PORTS do forget_port(port) end
     for _, grid_port in pairs(S.grids) do
+      grid_port.key = nil
       grid_port:all(0)
       grid_port:refresh()
     end
+    grid.add = function() end
+    grid.remove = function() end
   end)
 
   -- Only a held key is consumed or waits for a hold; a port has an attached
