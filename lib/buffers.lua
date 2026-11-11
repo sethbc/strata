@@ -61,13 +61,17 @@ return function(S)
   -- take_unsaved: the engine could not write the newest recording's scratch
   -- take (takeWriteFailed) before the take settled, so it settles with no
   -- path (false otherwise; a load, clear or recording resets it).
+  -- awaiting_zero: a load sent over audio waits for the 0 s the engine
+  -- reports when the load takes effect; until then a report of audio is
+  -- the old audio's (one sent before the load reached the engine) and
+  -- settles nothing (#401). false otherwise.
   S.buffers = {}
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
       loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, records_sent = 0,
       checking_from = nil, checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil,
-      kept_state = nil, take_unsaved = false}
+      kept_state = nil, take_unsaved = false, awaiting_zero = false}
   end
   -- the engine's bufferState, bufferLoadFailed, bufferSaveResult and
   -- takeWriteFailed polls (nil if missing)
@@ -183,6 +187,7 @@ return function(S)
     local buffer = S.buffers[slot]
     local is_take = buffer.finishing
     buffer.confirm_since = nil
+    buffer.awaiting_zero = false
     if is_take then
       cancel_buffer_recording_timer(slot)
       buffer.finishing = false
@@ -326,6 +331,9 @@ return function(S)
     buffer.missing_path = state.missing_path
     buffer.checking_from = state.checking_from
     buffer.checking_load = state.checking_load
+    -- (the engine reports a load's 0 s before any later report of that
+    -- slot, so whatever a state put back was waiting for has come)
+    buffer.awaiting_zero = false
     buffer.start = state.start or 0
     buffer.sent_start = buffer.start
     buffer.sample_rate, buffer.file_seconds = state.sample_rate, state.file_seconds
@@ -468,6 +476,12 @@ return function(S)
     buffer.checking_from = (S.buffer_polls.state ~= nil and checked_before_load(path, start)) and buffer.seconds or nil
     buffer.checking_load = buffer.checking_from ~= nil and buffer.loads_sent or nil
     if buffer.checking_load then start_check_notice(slot, buffer.checking_load) end
+    -- over audio, the engine reports 0 s when the load takes effect: until
+    -- then a report of audio is the old audio's (a check waits for a report
+    -- that differs instead; without the polls no report could end the
+    -- wait, and without the failure report a bad file would wait forever)
+    buffer.awaiting_zero = buffer.checking_from == nil and buffer.seconds > 0
+      and S.buffer_polls.state ~= nil and S.buffer_polls.load_failed ~= nil
     buffer_display_changed()
   end
 
@@ -487,6 +501,7 @@ return function(S)
     buffer.settled_empty = false
     buffer.kept_state = nil
     buffer.take_unsaved = false
+    buffer.awaiting_zero = false
     buffer.seconds = 0
     buffer.confirm_since = nil
     buffer.path = nil
@@ -751,7 +766,9 @@ return function(S)
     -- its "canceled" or "recording" report, or the finishing fallback
     local take = buffer.finishing and S.lib.record.state(slot) or nil
     local stopped_armed = take ~= nil and take.phase == "armed"
-    if buffer.confirm_since ~= nil and not stopped_armed
+    -- a load over audio settles only after its 0 s report (awaiting_zero)
+    if buffer.awaiting_zero and not has_audio then buffer.awaiting_zero = false end
+    if buffer.confirm_since ~= nil and not stopped_armed and not buffer.awaiting_zero
       and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
       settle_buffer_slot(slot)
       changed = true
@@ -1059,6 +1076,9 @@ return function(S)
       if buffer.checking_from ~= nil and buffer.confirm_since == nil then
         return "slot " .. slot .. " is checking a load but awaits no report (confirm_since nil)"
       end
+      if buffer.awaiting_zero and buffer.confirm_since == nil then
+        return "slot " .. slot .. " awaits a load's 0 s but no load awaits the engine (confirm_since nil)"
+      end
       if buffer.settled_empty and buffer.loaded then
         return "slot " .. slot .. " is loaded but settled empty (" .. tostring(buffer.settled_empty) .. ")"
       end
@@ -1131,6 +1151,7 @@ return function(S)
     cancel_start_reload(slot)
     local buffer = S.buffers[slot]
     buffer.take_unsaved = false  -- the new take's own scratch file is to come
+    buffer.awaiting_zero = false
     if not playable then
       buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     else
