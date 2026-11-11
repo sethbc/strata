@@ -31,6 +31,10 @@
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
 
+## Version 3.3.2 (2026-11-11)
+
+Page randomize (#557; design: `docs/superpowers/specs/2026-11-11-page-randomize-design.md`). ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release (a quick press under 0.5 s; held past it, the page's hold action), with one undo for the whole script on the same key. SEQ's ALT+K2 randomizes and ALT+K3 clears; VOICE's and LFO's reset to default is ALT+K2 held. No engine file changed. See CHANGELOG.md and `docs/status.md`.
+
 ## Version 3.3.1 (2026-11-11)
 
 A fix release. A clock-synced recording takes its length and wait from the tempo the clock will run at (internal clock: the `clock_tempo` param; Link, MIDI and crow: `clock.get_tempo()`) and starts `delay` after the moment Lua sent it, however busy the engine is (`recordBuffer`'s ninth argument, `sent`, Lua's wall clock modulo 1000 s: #565, #567); `buffers.data` is written once per burst of changes, 0.1 s after the first, with the newest state (#566); the freeze check's setup is retried and the local check's timeout is 1800 s (#569, #570). See CHANGELOG.md and `docs/status.md`.
