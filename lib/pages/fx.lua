@@ -135,7 +135,7 @@ return function(S)
     if n ~= 3 or not effect then return end
     local bypass = S.lib.voice_mix.BYPASS[effect]
     if bypass then
-      params:set(bypass.param_id, 1 - params:get(bypass.param_id))
+      set_binary_param(bypass.param_id, 1 - params:get(bypass.param_id))  -- echoes to a MIDI map (#538)
     else
       S.lib.params_setup.toggle_filter_mix()
     end

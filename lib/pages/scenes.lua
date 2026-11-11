@@ -155,7 +155,7 @@ return function(S)
       if cursor <= NUM_SCENES then
         enc_param_delta(n, "scene_transition_time", d)
       elseif SCENES_FIELDS[cursor - NUM_SCENES] == "scene_sequencer_enabled" then
-        params:set("scene_sequencer_enabled", d > 0 and 1 or 0)
+        set_binary_param("scene_sequencer_enabled", d > 0 and 1 or 0)  -- echoes to a MIDI map (#538)
       else
         enc_param_delta(n, SCENES_FIELDS[cursor - NUM_SCENES], d)
       end

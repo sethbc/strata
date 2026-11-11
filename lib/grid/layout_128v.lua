@@ -84,7 +84,7 @@ return function(S)
       local length = y - LAYOUT_128V.scene_length_first_row + 1
       if y == LAYOUT_128V.scene_sequencer_row then
         local enabled = params:get("scene_sequencer_enabled")
-        params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
+        set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
       elseif length >= 1 and length <= NUM_SCENES then
         params:set("scene_sequence_length", length)
       end

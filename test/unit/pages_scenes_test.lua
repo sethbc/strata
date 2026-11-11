@@ -350,4 +350,29 @@ test("recalling an empty scene says so on the header, from the page and from a g
   assert_equal(S.current_scene, 0, "and recalls nothing")
 end)
 
+-- The values a controller got on cc, in order, comma-joined
+local function cc_echoes(controller, cc)
+  local values = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == cc then table.insert(values, message[3]) end
+  end
+  return table.concat(values, ",")
+end
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does),
+-- so E3 on the sequencer field sets its binary param through set_binary_param
+-- (lib/ui/params.lua), and a controller mapped to it in PARAMS > MAP
+-- follows. The map is as lua/core/pmap.lua's pmap.new makes it, echo on
+test("E3 on SCENES' sequencer field echoes to a MIDI-mapped controller (#538)", function()
+  local context, S = started_on_scenes()
+  local controller = context.midi.plug(1)
+  norns.pmap.data.scene_sequencer_enabled = { dev = 1, ch = 1, cc = 43, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  S.lib.pages_scenes.move_cursor(10)   -- the sequencer on/off field
+  enc(3, 1)
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "E3 right turns the sequencer on")
+  enc(3, -1)
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "E3 left turns it off")
+  assert_equal(cc_echoes(controller, 43), "127,0", "the controller hears both")
+end)
+
 end

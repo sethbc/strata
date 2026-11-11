@@ -48,10 +48,11 @@ return function(S)
     return extras ~= nil and extras[M.FREEZE.key] == 1
   end
 
-  -- Freeze or unfreeze voice voice_idx (ignored for any other value)
+  -- Freeze or unfreeze voice voice_idx (ignored for any other value),
+  -- through set_binary_param: a controller mapped to the param follows (#538)
   function M.toggle(voice_idx)
     if not valid_voice(voice_idx) then return end
-    params:set(param_id(voice_idx, M.FREEZE.key), M.is_frozen(voice_idx) and 0 or 1)
+    set_binary_param(param_id(voice_idx, M.FREEZE.key), M.is_frozen(voice_idx) and 0 or 1)
   end
 
   -- VOICE's layout tests and page renders: every voice frozen, its cursor
@@ -109,9 +110,10 @@ return function(S)
 
   -- A source switch unfreezes: the frozen ring, input copy or scan belongs
   -- to the old source. (A scene recall sets the scene's freeze itself, after
-  -- the source, and runs no hooks)
+  -- the source, and runs no hooks). set_binary_param: a mapped controller
+  -- follows the unfreeze (#538)
   S.register_source_change(function(voice_idx)
-    if M.is_frozen(voice_idx) then params:set(param_id(voice_idx, M.FREEZE.key), 0) end
+    if M.is_frozen(voice_idx) then set_binary_param(param_id(voice_idx, M.FREEZE.key), 0) end
   end)
 
   return M

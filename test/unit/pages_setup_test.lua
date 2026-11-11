@@ -702,4 +702,30 @@ test("SETUP's data file problems follow buffers:, as the design places them (#30
   assert_true(joined:find("buffers: 0 restored|scenes unreadable, kept|as scenes.data.bak|buffers file not saved",
     1, true), joined)
 end)
+-- The values a controller got on cc, in order, comma-joined
+local function cc_echoes(controller, cc)
+  local values = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == cc then table.insert(values, message[3]) end
+  end
+  return table.concat(values, ",")
+end
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does),
+-- so E3 on the mutations row sets its binary param through set_binary_param
+-- (lib/ui/params.lua), and a controller mapped to it in PARAMS > MAP
+-- follows. The map is as lua/core/pmap.lua's pmap.new makes it, echo on
+test("E3 on SETUP's mutations row echoes to a MIDI-mapped controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  local controller = context.midi.plug(1)
+  norns.pmap.data.mutation_enabled = { dev = 1, ch = 1, cc = 44, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  show_page("SETUP")
+  enc(2, 2)   -- mutations
+  enc(3, 1)
+  assert_equal(params:get("mutation_enabled"), 1, "E3 right turns mutations on")
+  enc(3, -1)
+  assert_equal(params:get("mutation_enabled"), 0, "E3 left turns them off")
+  assert_equal(cc_echoes(controller, 44), "127,0", "the controller hears both")
+end)
+
 end

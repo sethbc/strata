@@ -54,7 +54,7 @@ Keys:
 - **Row 1**: scene recall (instant): press to load scene 1-8 at once.
 - **Row 2**: scene recall with transition: press to crossfade into scene 1-8.
 - **Row 3**: scene save: hold 0.5 s to capture the current state to scene 1-8 (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
-- **Row 5, column 1**: scene sequencer on/off.
+- **Row 5, column 1**: scene sequencer on/off, set through `set_binary_param` so a controller mapped to `scene_sequencer_enabled` follows (#538).
 - **Row 5, columns 3-10**: sequence length (1-8 scenes).
 - **Row 8** and **row 16**: as on page 1 (play/stop, tempo, the positions and page keys; lock, the freeze hold, copy and paste), #442.
 

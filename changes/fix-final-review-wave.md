@@ -3,3 +3,4 @@
 - SETUP: with E2 turned past the last field, E3 no longer changes the field scrolled out of view (the performance setting, say). It scrolls back to the field, and the hint row reads `E2:field E3:back`.
 - FX: with ALT held, the filter type's row no longer offers `E3:fine`, since the type steps one type at a time.
 - LFO: each row's destination no longer touches the `on`/`off` line of the row above. The rows sit 1 px further apart.
+- A MIDI controller mapped to a voice's freeze, the scene sequencer, mutations or the delay or reverb bypass (PARAMS > MAP, with echo on) now follows when a grid key, SETUP, SCENES, FX or a source switch changes it.
