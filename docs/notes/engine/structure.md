@@ -1,7 +1,7 @@
 ## Must not break
 
 - AGENTS.md's command table is the engine's interface: one row per `addCommand`, with the same signature and argument count (the docs test reads it). The engine's `numVoices`, `numBuffers`, `standardBufferSeconds`, `numModSlots` and `bufferStateStride` equal the Lua constants (`bufferSeconds` is a tier value: [performance.md](performance.md)).
-- Everything runs inside `context.xg`, in this order: `voiceGroup` (the input synth, voice synths, record synths), `processGroup` (grain synths, then mod synths), then filter, delay, reverb and master. Master runs last in `xg`, never after `og`.
+- Everything runs inside `context.xg`, in this order: `voiceGroup` (the input synth, the voice synths, then the ring writers), `processGroup` (the synth source's grain synths at its head, then each voice's mix group, holding its buffer and input grain synths and its `\strataVoiceMix` at the tail, just before that voice's mod synth), then the three master filters, the delay, the reverb, the master, and last the record area's tap group (`\strataTapPreMaster`, then every `\strataRecord`), after everything a recording can read. Nothing of the engine runs after `og`. Node Ordering below has the detail.
 - `free` frees every node, bus and buffer the engine made, and nothing that waits for a fade runs afterward.
 - Each engine check area (`test/engine_check/<area>.scd`) has a notes file of the same name here and a place in the runner's `areaOrder` (`test/engine_check.scd`), and each notes file here has an area of its name; the docs test checks all three. An on-demand area (`onDemandAreas`: the soak) has no notes file, is in no CI shard and is documented where it is run.
 - The engine check builds test sound and checks saved files with C primitives (`h.repeating`, `h.stereoOf`, `h.periodic`, `h.sameFrames`, ...), never a sclang function per sample, and never reads a long file into one array (sclang's garbage collector, `docs/notes/engine/files.md`).
@@ -71,19 +71,21 @@ This project uses two languages that work together:
 
 ## Audio Signal Flow
 
-```
-Voice Synth → Voice Bus → Ring Writer → Voice Ring → strataGrainRing → Main Bus → Filter → Filter Bus → Delay → Delay Bus → Reverb → Reverb Bus → Master (drift/limiter/saturation) → Output
-                  ↓
-              Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
+AGENTS.md's diagram:
 
-Buffer source:  Buffer pair (L/R) → strataGrainBuf → the voice's other path → strataVoiceMix (mirrors it to the Voice Bus → Mod Synth)
-Input source:   SoundIn → strataInput → Input Bus → Ring Writer → Input Ring → strataGrainRing → the voice's other path → strataVoiceMix (mirrors it to the Voice Bus → Mod Synth)
+```
+Voice Synth → Voice Bus → Ring Writer → Voice Ring → strataGrainRing → Synth Path ┐
+                                                                                   ├→ strataVoiceMix (voice filter, level on the other path, sends) → Main Bus (dry) + Delay Send + Reverb Send → Filter ×3 → Delay → Reverb → Master (drift/limiter/saturation) → Output
+Buffer source:  Buffer pair (L/R) → strataGrainBuf → Other Path ──────────────────┤   (the stage mirrors the other path to the Voice Bus → Mod Synth, and writes the voice tap)
+Input source:   SoundIn → strataInput → Input Bus → Ring Writer → Input Ring → strataGrainRing → Other Path ┘
+
+Voice Bus → Mod Synth → Mod Bus → Other Voice Synths (cross-modulation, 3 slots per voice)
 ```
 
 Each of the 7 voices follows this path (synth source; see Audio Sources in `docs/notes/engine/grains.md` for buffer and input sources):
 1. Voice synth (strataResonator/strataFM/strataFolder/strataSub/strataPulse/strataKarplus/strataRing) outputs to its own `granBuses[i]`
-2. The voice's ring writer (`strataRingWrite`) records `granBuses[i]` into the voice's ring, and the granular processor (`strataGrainRing`) reads that ring and writes the voice's synth path (see `docs/notes/engine/rings.md`; its stage, `strataVoiceMix`, filters and sends it, `docs/notes/engine/mix.md`). A buffer-sourced voice has no voice synth: `strataGrainBuf` reads its buffer pair; an input-sourced voice's `strataGrainRing` reads the input ring (written from `inputBus`). Both also write their output to `granBuses[i]` (the mirror)
-3. Modulation synth (`strataMod`) analyzes voice bus output (the voice synth, or the mirror) and generates control signal to `modBuses[i]`
+2. The voice's ring writer (`strataRingWrite`) records `granBuses[i]` into the voice's ring, and the granular processor (`strataGrainRing`) reads that ring and writes the voice's synth path (see `docs/notes/engine/rings.md`; its stage, `strataVoiceMix`, filters and sends it, `docs/notes/engine/mix.md`). A buffer-sourced voice has no voice synth: `strataGrainBuf` reads its buffer pair; an input-sourced voice's `strataGrainRing` reads the input ring (written from `inputBus`). Both write the voice's other path, and only that (a grain SynthDef has one `Out`); the stage writes the other path, filtered and after the level, to `granBuses[i]` (the mirror), so crossmod keeps working, and the voice's whole output to its tap (`docs/notes/engine/record.md`)
+3. Modulation synth (`strataMod`) analyzes voice bus output (the voice synth, or the stage's mirror) and generates control signal to `modBuses[i]`
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
 5. Each voice's stage (`strataVoiceMix`) writes its dry part to `mainBus` and its delay and reverb sends to the mix area's send buses (`voiceOutput`); three master filters (`strataFilter`) process `mainBus` (to `filterBus`) and the two sends; the delay (`strataDelay`) processes the filtered delay send and returns to `delayBus`
 6. Reverb (`strataReverb`, or `strataReverbFDN` on high) processes the filtered reverb send plus `delayBus` and returns to `reverbBus` (see `docs/notes/engine/effects.md`)
@@ -132,7 +134,8 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - 4 `envBuffers` (grain envelope shapes, 1024 frames each; see `envShape`)
 - 1 stereo `inputBus` (live input from `\strataInput`)
 - `numBuffers` mono control `recordFrameBuses` (frames recorded so far, for `stopRecord`)
-- `numBuffers` (8) slot pairs `buffersL`/`buffersR`, mono, 16 s each (≈ 49 MB total; see `docs/notes/engine/buffers.md`)
+- `numBuffers` (8) slot pairs `buffersL`/`buffersR`, mono, `bufferSeconds` each (the tier's: 16 s on standard, ≈ 49 MB in all; up to 300 s on high; see `docs/notes/engine/buffers.md` and `docs/notes/engine/performance.md`)
+- the rings area's: a stereo ring per voice (`ringSeconds`) and the input ring, with their write-phase buses (`docs/notes/engine/rings.md`); the record area's: per slot a head bus, per voice a stereo tap bus (`voiceTaps`, written by the stage), the tap sink and the pre-master bus (`docs/notes/engine/record.md`); the waveform area's peak buffers, one per slot (`docs/notes/engine/waveform.md`); the scale buffer (`docs/notes/engine/variation.md`); the freeze area's spectral buffers on high (`docs/notes/engine/freeze.md`)
 
 Buses, buffers, the input synth and groups are freed in `free` to prevent resource leaks (recordings in progress are canceled first so nothing is written on free).
 

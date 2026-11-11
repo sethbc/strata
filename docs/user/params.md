@@ -17,7 +17,7 @@ Everything is in the PARAMETERS menu. The menu shows the master settings, mutati
 - Delay feedback (0-0.95, default 0.4)
 - Delay mix (0 = dry, the default, to 1)
 - Reverb mix, size and damping
-- Tape drift amount (depth of the drift; 0 = none)
+- Tape drift amount (depth of the pitch drift; 0 = none, default 0.01 = ±0.2 %; it bends the pitch only, with no flutter in the level)
 - Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU and memory, and keep its mix (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
 
 ## LFOs

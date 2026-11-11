@@ -369,14 +369,17 @@ var checkStageValues = {
 
 // A NaN on the stage's node makes its filter bad: the stage is replaced in
 // place (the same group and key, a new node), plays again, and nothing bad
-// reaches the buses; a denormal never replaces it
+// reaches the buses (dry, the two sends, the mirror and the tap); a
+// denormal never replaces it; and a NaN or inf on either of its inputs is
+// zeroed before the banks, so it replaces nothing (#367)
 var checkBadStage = {
     var state = engine.areaState[\mix], source = 1, bad = 0;
-    var mixGroup = engine.voiceMixGroup(voice), group = Group.after(engine.processGroup), badBus = Bus.control(server, 4);
-    var peakBus = Bus.control(server, 1), probes, peakProbe, oldId, nodes, denormal, level;
+    var mixGroup = engine.voiceMixGroup(voice), group = Group.after(engine.processGroup), badBus = Bus.control(server, 5);
+    var peakBus = Bus.control(server, 1), pathBadBus = Bus.control(server, 2), probes, pathProbes, peakProbe, oldId, nodes, denormal, level;
+    var tap = engine.areaState[\record][\voiceTaps][voice], pathBad;
     command.(\setGrainSource, voice, source);
     command.(\voiceOn, voice, 220.0, 0.5, 0.0, 0.1, 20.0, 1.0); server.sync; 0.3.wait;
-    probes = [engine.mainBus, engine.mixBus(\delaySend), engine.mixBus(\reverbSend), engine.granBuses[voice]].collect({ arg bus, index;
+    probes = [engine.mainBus, engine.mixBus(\delaySend), engine.mixBus(\reverbSend), engine.granBuses[voice], tap].collect({ arg bus, index;
         Synth(\strataCheckBadValues, [\in, bus, \out, badBus.index + index], group) });
     peakProbe = Synth(\strataCheckPeak, [\in, engine.mainBus, \out, peakBus], group);
     server.sync; 0.1.wait;
@@ -401,8 +404,32 @@ var checkBadStage = {
             and: { ugens.count({ arg ugen; ugen.isKindOf(BinaryOpUGen) and: { ugen.operator == '<' } and: { ugen.inputs[1] == 2.5 } }) >= 4 },
             "mix: a denormal alone never replaces the stage (the reset's trigger takes codes 1 and 2 only)");
     }.value;
+    // 50 ms of inf and NaN on the voice's other path and on its synth path
+    // (a probe on each sees the burst arrive): without the input guards the
+    // banks would go bad and the stage be replaced again and again while
+    // the input stayed bad, its outputs still clean, so the node ID is what
+    // shows it. The same node, nothing bad on the dry bus, the sends, the
+    // mirror or the tap, and the voice plays afterward.
+    oldId = stageOf.(voice).nodeID;
+    pathProbes = [1, 0].collect({ arg pathSource, index;
+        Synth(\strataCheckBadValues, [\in, engine.voicePathBus(voice, pathSource), \out, pathBadBus.index + index], group) });
+    server.makeBundle(nil, { probes.do({ arg probe; probe.set(\t_reset, 1) }) });
+    server.sync;
+    server.makeBundle(nil, {
+        [1, 0].do({ arg pathSource;
+            Synth(\strataCheckBadSource, [\out, engine.voicePathBus(voice, pathSource)], engine.processGroup, \addToHead) });
+    });
+    server.sync; 0.3.wait;
+    level = h.measure(peakProbe, peakBus, 0.4)[0];
+    bad = h.readBus(badBus);
+    pathBad = h.readBus(pathBadBus);
+    check.((pathBad.size == 2) and: { pathBad.every({ arg each; each > 0 }) } and: { stageOf.(voice).nodeID == oldId }
+        and: { state[\replacing][voice].not }
+        and: { bad.every({ arg each; each == 0 }) } and: { level > 0.02 },
+        "mix: a NaN or inf on either path is zeroed at the stage's input: the same node, nothing bad on the dry bus, the sends, the mirror or the tap, and the voice plays (burst seen on the other and synth paths %, node % -> %, bad seen %, level after %)".format(
+            pathBad, oldId, stageOf.(voice).nodeID, bad, level));
     h.stopAllVoices;
-    probes.do(_.free); group.free; server.sync; badBus.free; peakBus.free;
+    (probes ++ pathProbes).do(_.free); group.free; server.sync; badBus.free; peakBus.free; pathBadBus.free;
 };
 
 // The figures and the bound

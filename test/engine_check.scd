@@ -80,21 +80,33 @@ var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 
 // Check-only copies of 3.2's \strataRecord and grain SynthDefs, built once
 // under their own names and exposed on h (h.def32). They are the text of
-// 3.2's defs and of the grainBody, readers, slotGrainPos, voiceFilter and
-// voiceOutput the defs call (with this. written e.), so the 3.3 packages'
-// changes to those methods never reach them and a later comparison against
-// 3.2's sound stays one. The stable helpers they call (openedGate, killFade,
-// panBalance, grainRate, grainDur, grainPan, multimodeFilter, scanRate,
-// ringScanOffset and the ring constants) are still the engine's own. The
-// voiceOutput copy reads this engine's fx mix bus and sends by its default
-// control values; every comparison sets them through the control names
-// (delaySendOut, reverbSendOut, fxMixIn) on both synths. Each def also bakes
-// in this engine's scaleBuffer bufnum at def time (grainRate's quantize), so
-// replaceEngine builds them again with the new engine.
+// 3.2's defs and of the grainBody, readers, slotGrainPos, voiceFilter (with
+// 3.2's multimodeFilter: RLPF, RHPF and BPF, so the mix area's per-type
+// comparisons hold each type against 3.2's filter, never against the
+// engine's own code, #365) and voiceOutput the defs call (with this.
+// written e.), so the 3.3 packages' changes to those methods never reach
+// them and a later comparison against 3.2's sound stays one. The stable
+// helpers they call (openedGate, killFade, panBalance, grainRate, grainDur,
+// grainPan, scanRate, ringScanOffset and the ring constants) are still the
+// engine's own. The voiceOutput copy reads this engine's fx mix bus and
+// sends by its default control values; every comparison sets them through
+// the control names (delaySendOut, reverbSendOut, fxMixIn) on both synths.
+// Each def also bakes in this engine's scaleBuffer bufnum at def time
+// (grainRate's quantize), so replaceEngine builds them again with the new
+// engine.
 var tail32;
 var addDefs32 = { arg e;
+    var multimodeFilter32 = { arg sig, cutoff, res, type, wet;
+        var rq = 1 - (res * 0.95);
+        var filtered = [
+            RLPF.ar(sig, cutoff, rq),
+            RHPF.ar(sig, cutoff, rq),
+            BPF.ar(sig, cutoff, rq)
+        ].collect({ arg each, index; each * BinaryOpUGen('==', type, index).lag(0.02) }).sum;
+        sig + ((filtered - sig) * wet)
+    };
     var voiceFilter32 = { arg sig, filterType, filterFreq, filterRes, filterMix;
-        e.multimodeFilter(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
+        multimodeFilter32.(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
             filterMix.lag(0.05).clip(0, 1))
     };
     var voiceOutput32 = { arg sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
