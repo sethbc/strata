@@ -410,11 +410,12 @@ test("128v: columns 1-7 are the voices' positions, row 1 the slot's start", func
   assert_near(params:get("v1_loop_start"), 0.25, 1e-9)
   assert_near(params:get("v1_loop_length"), 0.3125, 1e-9)
   context.grid.press(1, 1, 9, 0); context.grid.press(1, 1, 5, 0)
+  local cells = S.constants.GRID_PAGES.position_cells
   for voice_idx = 1, 7 do
     -- the grid voice (1, from the press) one level up (#444)
     local floor = voice_idx == S.grid_voice_select and 1 or 0
-    for cell = 1, 16 do
-      assert_equal(device:get_led(voice_idx, cell), math.min(15, S.lib.positions.grid_level(voice_idx, cell, 16) + floor),
+    for cell = 1, cells do
+      assert_equal(device:get_led(voice_idx, cell), math.min(15, S.lib.positions.grid_level(voice_idx, cell, cells) + floor),
         "LED " .. voice_idx .. "," .. cell)
     end
   end
@@ -602,15 +603,16 @@ test("128v positions page lights the grid voice's column one level up (#444)", f
   select_grid_voice(3); grid_redraw()
   local voice_3 = frame(device)
   local positions = S.lib.positions
-  for cell = 1, 16 do
-    assert_equal(device:get_led(3, cell), math.min(15, positions.grid_level(3, cell, 16) + 1), "voice 3 cell " .. cell)
-    assert_equal(device:get_led(4, cell), positions.grid_level(4, cell, 16), "voice 4 cell " .. cell)
+  local cells = S.constants.GRID_PAGES.position_cells
+  for cell = 1, cells do
+    assert_equal(device:get_led(3, cell), math.min(15, positions.grid_level(3, cell, cells) + 1), "voice 3 cell " .. cell)
+    assert_equal(device:get_led(4, cell), positions.grid_level(4, cell, cells), "voice 4 cell " .. cell)
     assert_equal(device:get_led(5, cell), 0, "voice 5 reads no buffer and is not the grid voice: dark")
   end
   select_grid_voice(4); grid_redraw()
   assert_true(frame(device) ~= voice_3, "the frame for voice 4 differs")
   select_grid_voice(5); grid_redraw()
-  for cell = 1, 16 do assert_equal(device:get_led(5, cell), 1, "a grid voice with no buffer lights its floor") end
+  for cell = 1, cells do assert_equal(device:get_led(5, cell), 1, "a grid voice with no buffer lights its floor") end
 end)
 
 end

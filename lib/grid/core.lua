@@ -597,7 +597,9 @@ return function(S)
     S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
   end
 
-  -- Per layout name: the key (`message`) of its redraw error last printed
+  -- Per port: the key (`message`) of its layout's redraw error last printed
+  -- (per port, so another grid of the same layout drawing well never clears
+  -- it and the error prints once)
   local redraw_errors = {}
 
   -- Each grid is cleared, drawn by its layout and refreshed. A layout's
@@ -612,13 +614,12 @@ return function(S)
     for port, grid_port in pairs(S.grids) do
       if grid_port.device then
         follow_size(port, grid_port)
-        local name = grid_layout(grid_port)
-        local layout = S.registry.grid_layouts[name]
+        local layout = S.registry.grid_layouts[grid_layout(grid_port)]
 
         grid_port:all(0)
 
         if layout then
-          S.lib.ui_frame.contained_call(redraw_errors, name, "grid redraw", layout.redraw, port, grid_port)
+          S.lib.ui_frame.contained_call(redraw_errors, port, "grid redraw", layout.redraw, port, grid_port)
         end
 
         grid_port:refresh()
@@ -632,14 +633,18 @@ return function(S)
   end)
 
   -- On exit cancel every pending hold (no scene save during cleanup), forget
-  -- the held keys, clear every vport's key handler and leave its grid dark,
-  -- and hand hot-plug back (no-ops; norns' grid.cleanup() restores its own
-  -- at a script change). norns' SLEEP runs only cleanup() before the system
-  -- shuts down, so a key or a grid plugged meanwhile reaches nothing (#468)
+  -- the held keys, clear every vport's key handler, put its grid back to
+  -- rotation 0 (norns' grid.cleanup() keeps a rotation, so the next script
+  -- would find a turned 128 as an 8x16; the port's setting stays in
+  -- grids.data) and leave it dark, and hand hot-plug back (no-ops; norns'
+  -- grid.cleanup() restores its own at a script change). norns' SLEEP runs
+  -- only cleanup() before the system shuts down, so a key or a grid plugged
+  -- meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
     for port = 1, S.MAX_GRID_PORTS do forget_port(port) end
     for _, grid_port in pairs(S.grids) do
       grid_port.key = nil
+      grid_port:rotation(0)
       grid_port:all(0)
       grid_port:refresh()
     end

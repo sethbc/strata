@@ -123,7 +123,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 150 | detach the MIDI handler, before the voices go off, and set `midi.add`/`midi.remove` to no-ops | `lib/midi_in.lua` |
 | 160 | `engine.voiceOff` for every running voice (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
-| 170 | clear every grid vport's key handler, leave its grid dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
+| 170 | clear every grid vport's key handler, put its grid back to rotation 0 and leave it dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
 | 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
 
 Adding a step:

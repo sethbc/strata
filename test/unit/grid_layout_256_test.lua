@@ -899,13 +899,14 @@ end)
 test("256: position LEDs follow grid_level for every voice", function()
   local context, S, device = page5_grid()
   grid_tap(context, 12, 8)
+  local cells = S.constants.GRID_PAGES.position_cells
   for voice_idx = 1, S.constants.NUM_VOICES do
-    for cell = 1, 16 do
-      assert_equal(device:get_led(cell, voice_idx), S.lib.positions.grid_level(voice_idx, cell, 16),
+    for cell = 1, cells do
+      assert_equal(device:get_led(cell, voice_idx), S.lib.positions.grid_level(voice_idx, cell, cells),
         "voice " .. voice_idx .. " cell " .. cell)
     end
   end
-  for cell = 1, 16 do assert_equal(device:get_led(cell, 3), 0, "voice 3 is not a buffer voice") end
+  for cell = 1, cells do assert_equal(device:get_led(cell, 3), 0, "voice 3 is not a buffer voice") end
   params:set("v1_buf_pos", 0.45)
   S.lib.playheads.reset(1)
   grid_redraw()
