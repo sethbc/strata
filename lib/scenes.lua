@@ -723,13 +723,14 @@ return function(S)
       while S.scene_sequencer_enabled do
         -- An error anywhere else in a pass (a param read, the wait, a
         -- redraw) stops the sequencer through its param, as the pattern
-        -- clock does, so the screen, the grids and the state agree (#329):
-        -- forget this clock's id first, so the stop never cancels it from
-        -- inside itself, then raise the error again for maiden
+        -- clock does, so the screen, the grids, a controller mapped to the
+        -- param (set_binary_param, #538) and the state agree (#329): forget
+        -- this clock's id first, so the stop never cancels it from inside
+        -- itself, then raise the error again for maiden
         local passed, pass_error = xpcall(pass, with_traceback)
         if not passed then
           S.scene_sequencer_clock = nil
-          if params.lookup["scene_sequencer_enabled"] then params:set("scene_sequencer_enabled", 0) end
+          if params.lookup["scene_sequencer_enabled"] then set_binary_param("scene_sequencer_enabled", 0) end
           if S.scene_sequencer_enabled then scene_sequencer_stop() end
           error(pass_error, 0)
         end

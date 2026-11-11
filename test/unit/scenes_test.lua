@@ -1882,6 +1882,34 @@ test("an error in the scene sequencer's advance stops it through its param (#329
   params:set("scene_sequencer_enabled", 0)
 end)
 
+-- #329 with #538: the error stop sets the binary scene_sequencer_enabled
+-- through set_binary_param, so a controller mapped to it in PARAMS > MAP
+-- (the map as lua/core/pmap.lua's pmap.new makes it, echo on) goes dark too
+test("the scene sequencer's error stop echoes the off to a mapped controller (#329)", function()
+  local context = load_strata(); finish_startup(context)
+  capture_scene(1); capture_scene(2)
+  params:set("scene_sequence_length", 2)
+  local controller = context.midi.plug(1)
+  norns.pmap.data["scene_sequencer_enabled"] = { dev = 1, ch = 1, cc = 23, in_lo = 0, in_hi = 127,
+    out_lo = 0, out_hi = 1, echo = true, value = 127 }
+  local S = local_value("S")
+  local real_grid_redraw, raised = grid_redraw, false
+  grid_redraw = function(...)
+    if not raised and S.scene_sequencer_position == 2 then raised = true; error("grid redraw failed") end
+    return real_grid_redraw(...)
+  end
+  run_scene_sequencer(context, 0, 4, 5)                           -- the advance at 4 s raises
+  grid_redraw = real_grid_redraw
+  assert_equal(#context.clock.take_errors(), 1, "the error is raised again")
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "the param shows the sequencer off")
+  local echoes = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == 23 then table.insert(echoes, message[3]) end
+  end
+  assert_equal(table.concat(echoes, ","), "0", "the mapped controller gets one CC: off")
+  assert_equal(norns.pmap.data["scene_sequencer_enabled"].value, 0, "its map keeps the value, as norns' does")
+end)
+
 -- #408: a fade to a scene that stops a running LFO fades its depth out,
 -- never toward the scene's depth (a setting the scene never plays), and
 -- leaves its period and offset; the end sets the scene's exact values with
