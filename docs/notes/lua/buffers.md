@@ -94,13 +94,13 @@ Saving (`save_buffers_to_disk()`):
 
 Loading (`load_buffers_from_disk()`, from its start step `START_ORDER.buffers_load`, after the scenes load):
 - resets `S.buffers_restored` and `S.buffer_autosave_blocked` first;
-- `load_buffer`s each non-empty path that `util.file_exists` at its start, clamped to what the file now leaves after a slot's length (version 1, 3.2's, has none: every start is 0; a start that is not a number is 0), and marks the slot `restoring` until it settles (with audio, or empty as `settled_empty = "restore"`, which a late report of audio still adopts and counts);
+- `load_buffer`s each non-empty path that `util.file_exists` at its start, clamped to what the file now leaves after a slot's length (version 1, 3.2's, has none: every start is 0; a start that is not a finite number, including the `inf` and `nan` the reader reads as numbers, is 0), and marks the slot `restoring` until it settles (with audio, or empty as `settled_empty = "restore"`, which a late report of audio still adopts and counts);
 - `S.buffers_restored` counts only the slots the poll then confirms holding audio.
 - A path that exists but that the engine cannot load (unreadable, unsupported, empty or damaged) is reported by `bufferLoadFailed`. The slot goes back to empty and the path is not saved again.
 - A path that does not exist (deleted, or on an unmounted drive) is not loaded. The slot stays empty, the console names it, and it is kept in `missing_path`.
 - SETUP shows `buffers: k restored`, or `buffers: k ok, m missing` (m = slots with a `missing_path`; "restored" would not fit beside the missing count).
 
 A bad file, handled as the scenes file is:
-- `tab.load` runs through `pcall`;
-- on an error, a non-table, a version other than 1 or 2 or no `paths` table, the file is moved to `buffers.data.bak` (shared helper `S.lib.scenes.move_aside_unloadable_file(data_file, label)`, defined in `lib/scenes.lua`);
+- it is read with `S.lib.data_files.read`, which parses `tab.save`'s layout and never runs the file as Lua (#464, `docs/notes/lua/data-files.md`);
+- when it is unreadable (not that layout: `error loading buffers file: <why>`), has a version other than 1 or 2 or has no `paths` table, the file is moved to `buffers.data.bak` (shared helper `S.lib.scenes.move_aside_unloadable_file(data_file, label)`, defined in `lib/scenes.lua`);
 - if the move fails, `S.buffer_autosave_blocked` makes `cleanup()` skip the save.

@@ -1387,6 +1387,16 @@ test("buffers.data saves version 2 with starts and loads version 1 with starts 0
   file:write(tabutil_text({ version = 2, paths = { path }, starts = { "x" } })); file:close()
   context = load_strata({ data_subdir = subdir })
   assert_equal(context.calls_named("loadBuffer")[1].args[3], 0)
+  -- inf and nan read as numbers (lib/data_files.lua, #464): a start that is not finite loads from 0
+  file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+  file:write(tabutil_text({ version = 2, paths = { path, path, path }, starts = { math.huge, 0 / 0, -math.huge } }))
+  file:close()
+  context = load_strata({ data_subdir = subdir, before_load = function(started)
+    started.audio.register(path, { channels = 2, frames = 48000 * 60, rate = 48000 })  -- the restore clamps
+  end })
+  loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 3)
+  for slot = 1, 3 do assert_equal(loads[slot].args[3], 0, "slot " .. slot .. " loads from 0") end
 end)
 
 test("status names what a slot holds, one answer for every reader", function()

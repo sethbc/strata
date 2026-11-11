@@ -716,20 +716,14 @@ return function(S)
   -- startup) are kept, a message is printed and the file is preserved; a bad
   -- file never stops init.
   local function read_scenes_file()
-    if not util.file_exists(scene_data_file) then
+    -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
+    local loaded, problem, detail = S.lib.data_files.read(scene_data_file)
+    if loaded == nil and problem == "missing" then
       print("no saved scenes file found")
       return
     end
-
-    -- tab.load runs the file as Lua without protection
-    local ok, loaded, load_error = pcall(tab.load, scene_data_file)
-    if not ok then
-      print("error: scenes file could not be read (" .. tostring(loaded) .. "), keeping current scenes")
-      preserve_unloadable_scene_file()
-      return
-    end
     if type(loaded) ~= "table" then
-      print("error loading scenes file: " .. tostring(load_error))
+      print("error loading scenes file: " .. tostring(detail))
       preserve_unloadable_scene_file()
       return
     end

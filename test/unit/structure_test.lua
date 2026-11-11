@@ -1,8 +1,8 @@
 -- test/unit/structure_test.lua
 -- The script's structure: includes, S, module homes, constants, the
 -- static checks that every global read is defined and none is defined in
--- two files, the free-locals probe, the cleanup order and the param-type
--- comparison check
+-- two files, the free-locals probe, the cleanup order, the param-type
+-- comparison check and that no data file is run as Lua
 -- Run alone: lua test/run.lua structure
 
 return function(h)
@@ -54,6 +54,46 @@ test("only strata.lua includes, once per module, by lib/ paths", function()
   assert_equal(table.concat(problems, "; "), "strata.lua:4 includes strata/lib/b, not a lib/ path; "
     .. "strata.lua:5 includes lib/a again; strata.lua:6 includes a path that is not a string literal; "
     .. "lib/a.lua:1 includes outside strata.lua", "each bad include is reported, comments and strings are not")
+end)
+
+-- The places the script's Lua files could run a data file as Lua (#464):
+-- every mention of tab.load (a call, or passed to pcall), and every call of
+-- loadfile, dofile, loadstring or load. A data file is parsed by
+-- lib/data_files.lua, never run
+local function chunk_loader_uses(sources)
+  local found = {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    local function report(start, what)
+      local line = select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
+      table.insert(found, source.path .. ":" .. line .. " " .. what)
+    end
+    for start in sanitized:gmatch("()%f[%w_]tab%s*%.%s*load%f[^%w_]") do report(start, "tab.load") end
+    for start, name in sanitized:gmatch("()%f[%w_]([%a_][%w_]*)%s*%(") do
+      local before = sanitized:sub(1, start - 1)
+      local loader = name == "loadfile" or name == "dofile" or name == "loadstring" or name == "load"
+      if loader and not before:match("[%.:]%s*$") and not before:match("function%s+$") then report(start, name) end
+    end
+  end
+  return found
+end
+
+test("no data file is run as Lua: strata.lua and lib/ never use tab.load or a chunk loader (#464)", function()
+  -- the scanner itself
+  local found = chunk_loader_uses({ { path = "lib/x.lua", text = table.concat({
+    "local a = tab.load(path)",
+    "local b = pcall(tab . load, path)",
+    "local c = loadfile(path) or dofile(path) or loadstring(text) or load(text)",
+    '-- tab.load(path) in a comment; "loadfile(x)" in a string',
+    "local d = params:load(1) or S.lib.data_files.read(path) or x.load(y) or reload(z) or load_buffer(1)",
+    "local function load(x) end",
+    "for index, load in ipairs(loads) do if load.slot then end end",
+  }, "\n") } })
+  assert_equal(table.concat(found, "; "), "lib/x.lua:1 tab.load; lib/x.lua:2 tab.load; lib/x.lua:3 loadfile; "
+    .. "lib/x.lua:3 dofile; lib/x.lua:3 loadstring; lib/x.lua:3 load",
+    "each use is found; comments, strings, methods, other tables' load, definitions and locals are not")
+  found = chunk_loader_uses(read_lua_sources())
+  assert_equal(#found, 0, table.concat(found, "; "))
 end)
 
 test("S is init's upvalue and holds the registries", function()
@@ -775,7 +815,7 @@ test("init runs every registered start step in today's order", function()
     wrap_function(midi, "connect", "midi connected")
     wrap_global("grid_redraw", "grid redrawn")
     wrap_global("request_redraw", "redraw requested")
-    wrap_function(tab, "load", function(path) return "file read " .. path:match("[^/]*$") end)
+    wrap_function(S.lib.data_files, "read", function(path) return "file read " .. path:match("[^/]*$") end)
     wrap_function(clock, "run", "clock started")
     -- "|" marks the start of each registered step
     assert_equal(type(S.register_start), "function", "S.register_start")

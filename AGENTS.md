@@ -43,6 +43,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
 | `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_layout_test.lua |
 | `lib/engine_sync.lua` | `engine_sync` | `docs/notes/lua/engine-sync.md` | engine_sync_test.lua |
+| `lib/data_files.lua` | `data_files` | `docs/notes/lua/data-files.md` | data_files_test.lua |
 | `lib/buffers.lua` | `buffers` | `docs/notes/lua/buffers.md` | buffers_test.lua |
 | `lib/record.lua` | `record` | `docs/notes/lua/record.md` | record_test.lua |
 | `lib/lfos.lua` | `lfos` | `docs/notes/lua/lfos.md` | lfos_test.lua |

@@ -626,20 +626,14 @@ return function(S)
   local function restore_buffers_from_file()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
-    if not util.file_exists(buffer_data_file()) then
+    -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
+    local loaded, problem, detail = S.lib.data_files.read(buffer_data_file())
+    if loaded == nil and problem == "missing" then
       print("no saved buffers file found")
       return
     end
-
-    -- tab.load runs the file as Lua without protection
-    local ok, loaded, load_error = pcall(tab.load, buffer_data_file())
-    if not ok then
-      print("error: buffers file could not be read (" .. tostring(loaded) .. ")")
-      preserve_unloadable_buffer_file()
-      return
-    end
     if type(loaded) ~= "table" then
-      print("error loading buffers file: " .. tostring(load_error))
+      print("error loading buffers file: " .. tostring(detail))
       preserve_unloadable_buffer_file()
       return
     end
@@ -655,6 +649,9 @@ return function(S)
     for slot = 1, NUM_BUFFERS do
       local path = loaded.paths[slot]
       local start = type(loaded.starts) == "table" and tonumber(loaded.starts[slot]) or 0
+      -- the reader reads inf and nan as numbers (tab.load dropped or refused
+      -- them): a start that is not finite is 0
+      if not (start > -math.huge and start < math.huge) then start = 0 end
       if is_sound_file_path(path) then
         -- the file may have been deleted or be on an unmounted drive, or a
         -- take was never written
