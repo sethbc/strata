@@ -51,7 +51,7 @@ test("a folder named with a quote, a dollar sign, a backtick or a command lists 
     -- made without a shell reading the name: mkdir gets it as one single-quoted word
     os.execute("mkdir -p -- '" .. folder:gsub("'", "'\\''") .. "'")
     for _, file in ipairs({ "a.wav", "b.wav" }) do io.open(folder .. file, "w"):close() end
-    local slot = (index - 1) % 8 + 1
+    local slot = (index - 1) % local_value("NUM_BUFFERS") + 1
     clear_buffer(slot)
     files.note_chosen(folder .. "x.wav")
     context.clear_engine_calls()
@@ -61,7 +61,7 @@ test("a folder named with a quote, a dollar sign, a backtick or a command lists 
   end
   assert_true(not util.file_exists(marker), "no folder name ran as a command")
   -- fill_empty lists the same way
-  for slot = 1, 8 do clear_buffer(slot) end
+  for slot = 1, local_value("NUM_BUFFERS") do clear_buffer(slot) end
   files.note_chosen(context.audio_dir .. 'pack "one"/x.wav')
   local_value("S").buffer_page.slot = 1
   assert_equal(files.fill_empty(), 2, "both files of the quoted folder fill slots")
