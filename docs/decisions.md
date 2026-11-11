@@ -23,6 +23,7 @@ The decisions taken during development, one section per release. Each was taken 
 ## 3.0.1 (minor findings)
 
 - **Arc ring speed:** every continuous ring on MAIN, FX and BUFFER sweeps its whole range in half a turn (512 of the arc's 1024 ticks). This replaces "tune on hardware"; retune `ARC_TICKS_PER_SWEEP` after #6.
+  - **Changed in #552 (2026-11-10, at the maintainer's request):** the speed was halved, to a full turn (1024 ticks), because half a turn made fine settings hard to reach.
 - **Engine-confirmed buffers:** a recording or load shows as loaded only once the engine reports its length. A 0 s report only counts 1 s after the change, and a late report with audio is still adopted. A finishing take shows `...` and ignores K3, with a 5 s fallback.
 - **Missing sample files:** if a remembered file is missing at startup, its path is kept, so a sample on an unmounted drive comes back later.
 - **Input crossmod:** input-sourced voices get amplitude crossmod (`modLevel`). Frequency crossmod is ignored for live input.
