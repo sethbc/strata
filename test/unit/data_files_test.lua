@@ -149,6 +149,60 @@ test("decode reads every layout tab.save writes as the value saved: escapes, inf
   decoded, problem = data_files.decode(text)
   assert_equal(type(decoded), "table", tostring(problem))
   assert_equal(difference(value, decoded, "value", {}, {}), nil)
+
+  -- older Lua's \n and \r escapes (hand-written: %q no longer writes them)
+  decoded, problem = data_files.decode('return {\n-- Table: {1}\n{\n   "a\\nb\\rc",\n},\n}')
+  assert_equal(type(decoded), "table", tostring(problem))
+  assert_equal(decoded[1], "a\nb\rc")
+end)
+
+-- The heap's growth while fn runs, in KB, garbage included (the collector
+-- is stopped meanwhile)
+local function heap_growth_kb(fn)
+  collectgarbage("collect")
+  collectgarbage("stop")
+  local before = collectgarbage("count")
+  local ok, problem = pcall(fn)
+  local grown = collectgarbage("count") - before
+  collectgarbage("restart")
+  assert_true(ok, tostring(problem))
+  return grown
+end
+
+test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a bounded heap", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local max_tables, max_bytes = data_files.DATA_FILES.max_tables, data_files.DATA_FILES.max_bytes
+  -- a scenes file of eight full scenes holds 546 tables (97157 bytes)
+  assert_true(max_tables >= 15 * 546, "room for fifteen times a full scenes file's tables: " .. max_tables)
+  local function tables_text(count, entry) return "return {\n" .. string.rep("{" .. entry .. "},\n", count) .. "}" end
+  local value, problem = data_files.decode(tables_text(max_tables, "1,"))
+  assert_equal(type(value), "table", tostring(problem)); assert_equal(value[1], 1)
+  value, problem = data_files.decode(tables_text(max_tables + 1, "1,"))
+  assert_equal(value, nil)
+  assert_true(tostring(problem):find("more than " .. max_tables .. " tables", 1, true) ~= nil, tostring(problem))
+  -- a reference past max_tables names a table the file cannot hold
+  value, problem = data_files.decode(tables_text(1, "{" .. (max_tables + 1) .. "},"))
+  assert_equal(value, nil)
+  assert_true(tostring(problem):find("more than " .. max_tables .. " tables", 1, true) ~= nil, tostring(problem))
+  -- 4 MB texts of empty tables, of tables of one entry and of tables of one
+  -- reference: the reader gives up at max_tables + 1, having built at most
+  -- max_tables tables (under 2 MB)
+  for _, entry in ipairs({ "", "1,", "{1}," }) do
+    local text = tables_text(math.floor(max_bytes / (#entry + 4)), entry)
+    local grown = heap_growth_kb(function()
+      value, problem = data_files.decode(text)
+    end)
+    assert_equal(value, nil, "{" .. entry .. "} repeated")
+    assert_true(grown < 2048, "{" .. entry .. "} repeated grows the heap by " .. math.floor(grown) .. " KB")
+  end
+  -- a 4 MB string of \0 escapes: the heap grows by at most three times the text
+  local text = 'return {\n{\n"' .. string.rep("\\0", math.floor((max_bytes - 16) / 2)) .. '",\n},\n}'
+  local grown = heap_growth_kb(function()
+    value, problem = data_files.decode(text)
+  end)
+  assert_equal(type(value), "table", tostring(problem)); assert_equal(#value[1], math.floor((max_bytes - 16) / 2))
+  assert_true(grown < 3 * #text / 1024, "\\0 escapes grow the heap by " .. math.floor(grown) .. " KB")
 end)
 
 test("read says a file is missing, too large or damaged; read_text gives a file's bytes", function()

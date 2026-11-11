@@ -238,7 +238,7 @@ In the PARAMS menu (strata_scenes section):
 
 Always validate scene data before using it, so a corrupted file cannot crash the script.
 
-`validate_scene(scene)` checks one slot; `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). A populated scene must contain everything `recall_scene_instant()` reads:
+`validate_scene(scene)` checks one slot; `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). Every "number" below is a finite number: NaN, `inf` and `-inf` are invalid values (the data files' reader reads `inf` and `nan` as numbers, and `tab.load` read `1e999` as `inf`, #464). A populated scene must contain everything `recall_scene_instant()` reads:
 
 ```lua
 -- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*,
