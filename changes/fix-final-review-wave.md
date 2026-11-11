@@ -4,3 +4,5 @@
 - FX: with ALT held, the filter type's row no longer offers `E3:fine`, since the type steps one type at a time.
 - LFO: each row's destination no longer touches the `on`/`off` line of the row above. The rows sit 1 px further apart.
 - A MIDI controller mapped to a voice's freeze, the scene sequencer, mutations or the delay or reverb bypass (PARAMS > MAP, with echo on) now follows when a grid key, SETUP, SCENES, FX or a source switch changes it.
+- A scenes file from 3.2 holding a fractional number (a crossmod source of `voice 0.05`, from the PARAMS menu turned with K3 held) loads, rounded, instead of all eight scenes being set aside as unreadable.
+- Scene saves no longer fail (`not on disk`, at exit too) once all nine copy names of an older scenes file (`scenes.data.v4` to `.v4.9`) are taken. The same goes for `buffers.data`.

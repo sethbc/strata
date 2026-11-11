@@ -372,7 +372,10 @@ return function(S)
   -- .part and renamed, so a copy is whole or absent): that name and
   -- "copied"; the name of a backup that already holds the same bytes and
   -- "found" (nothing is copied again); true when path has no file (nothing
-  -- to keep); or nil and why. path itself is never touched (#467)
+  -- to keep); true and "full" when every name is taken: copies of that
+  -- format are kept already, so the caller writes anyway rather than
+  -- refusing every save (the console says why); or nil and why. path
+  -- itself is never touched (#467)
   function M.keep_copy(path, suffix)
     if not util.file_exists(path) then return true end
     local text = read_text(path)
@@ -382,7 +385,11 @@ return function(S)
       if read_text(candidate) == text then return candidate, "found" end
     end
     local backup = free_backup_name(path, suffix)
-    if not backup then return nil, "every backup name is taken" end
+    if not backup then
+      print(string.format("%s: every %s copy name is taken (%d copies of that format are kept), so it is written"
+        .. " over without another copy", path, suffix, DATA_FILES.backups))
+      return true, "full"
+    end
     local done, problem = replace_file(backup, text)
     if not done then return nil, problem end
     return backup, "copied"
