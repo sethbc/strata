@@ -33,6 +33,9 @@
         bufferLoads = Array.fill(numBuffers, 0);
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
+        // Per slot: the bufferState value bufferChanged last sent, which the
+        // periodic poll repeats (announcedBufferState)
+        areaState[\buffers][\announced] = Array.fill(numBuffers, { arg index; this.bufferStateValue(index) });
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -69,10 +72,13 @@
         // slot: slot index * bufferStateStride + seconds. The periodic poll
         // cycles through the slots and then the slot length
         // (bufferLengthValue: slot index numBuffers); every change is also
-        // sent at once.
+        // sent at once. A slot's periodic value is the one bufferChanged
+        // last announced, never bufferFrames itself: an arming takes its
+        // new length before its peaks file is written, and announces it
+        // after (takeArmed)
         bufferStatePoll = this.addPoll(\bufferState, {
             var value = if (bufferStateCursor < numBuffers) {
-                this.bufferStateValue(bufferStateCursor)
+                this.announcedBufferState(bufferStateCursor)
             } { this.bufferLengthValue };
             bufferStateCursor = (bufferStateCursor + 1) % (numBuffers + 1);
             value
@@ -113,6 +119,11 @@
         ^(index * this.bufferStateStride) + seconds
     }
 
+    // What the periodic poll reports for a slot: the value bufferChanged
+    // last sent, so a length is never announced before the peaks file it
+    // describes is in place (docs/notes/engine/waveform.md)
+    announcedBufferState { arg index; ^areaState[\buffers][\announced][index] }
+
     // The slots' length (bufferSeconds) as a bufferState message for the
     // slot index after the last slot: numBuffers * bufferStateStride +
     // seconds. Lua caps its slot length to it (an old active file the
@@ -141,9 +152,10 @@
     // switch) only ever takes bufFrames 0: it fades out (hasAudio) before
     // the slot is zeroed or overwritten, never replays the new take in its
     // tail, and keeps its rate. voiceOn re-gates a releasing one with the
-    // slot as it is then (gateVoice).
+    // slot as it is then (gateVoice). The value sent is the slot's announced
+    // one from now on, which the periodic poll repeats.
     bufferChanged { arg index;
-        var live = numVoices.collect({ arg voice; synths[this.grainKey(voice)] });
+        var live = numVoices.collect({ arg voice; synths[this.grainKey(voice)] }), value;
         this.slotGrainSynths(index).do({ arg synth;
             if (live.includes(synth)) {
                 this.sendToSynth(synth.setMsg(*this.slotLengthPairs(index)));
@@ -151,7 +163,9 @@
                 if (bufferFrames[index] == 0) { this.sendToSynth(synth.setMsg(\bufFrames, 0)) };
             };
         });
-        bufferStatePoll.update(this.bufferStateValue(index));
+        value = this.bufferStateValue(index);
+        areaState[\buffers][\announced][index] = value;
+        bufferStatePoll.update(value);
     }
 
     // The strataGrainBuf synths reading a slot that have not freed: a
