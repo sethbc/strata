@@ -265,7 +265,7 @@ test("toggle_pattern_step ignores a voice or a step out of range (#414)", functi
   assert_equal(S.patterns[0], nil, "voice 0 never created")
   -- in range it toggles: an empty step turns on at the top level, a set one off
   toggle_pattern_step(1, PATTERN_LENGTH)
-  assert_equal(S.patterns[1][PATTERN_LENGTH], 15, "the last step on at the top level")
+  assert_equal(S.patterns[1][PATTERN_LENGTH], S.constants.MAX_STEP_LEVEL, "the last step on at the top level")
   toggle_pattern_step(1, 1)
   assert_equal(S.patterns[1][1], 0, "a set step off")
 end)

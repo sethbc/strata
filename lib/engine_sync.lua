@@ -239,18 +239,11 @@ return function(S)
     engine.setVoiceParam(engine_voice, "bend", S.midi_state.bend[voice_idx])
   end
 
-  -- Push the complete Lua-side state of a running voice to the engine: the
-  -- source first (the engine ignores it when unchanged), then the rest
-  -- (sync_voice_values_to_engine). A start sends the same in its own order
+  -- A running voice's whole state after its source (a source switch, which
+  -- sends the source itself, and a scene recall): synthesis, grain
+  -- (including the buffer params) and crossmod values, then the registered
+  -- voice params. A start sends the same messages in its own order
   -- (M.start_voice)
-  function sync_voice_to_engine(voice_idx)
-    M.send_grain_source(voice_idx)
-    sync_voice_values_to_engine(voice_idx)
-  end
-
-  -- Everything sync_voice_to_engine sends after the source, for a running
-  -- voice (a source switch, a scene recall): synthesis, grain (including the
-  -- buffer params) and crossmod values, then the registered voice params
   function sync_voice_values_to_engine(voice_idx)
     -- the engine now gets this voice's stored values (LFOs re-apply theirs
     -- on their next step)

@@ -194,8 +194,10 @@ local FINE_DIVISOR = 10
 -- own with S.register_cleanup(CLEANUP_ORDER.<step>, fn) (lib/state.lua).
 -- The files are saved before anything stops, with the stored values (the
 -- LFOs, stopped later, restore their destinations then), MIDI is detached
--- before the voices go off, and the controllers go dark last. Spaced by 10, so a new step can go
--- between two others
+-- before the voiceOff step, and the controllers go dark last. norns frees
+-- the engine before it calls cleanup() (#461), so no engine command a step
+-- sends arrives: the voices have already stopped with the engine. Spaced by
+-- 10, so a new step can go between two others
 local CLEANUP_ORDER = {
   tempo_handler = 10,       -- lib/params_setup.lua: the clock's tempo handler back
   menu_watch = 20,          -- lib/ui/menu_watch.lua: the norns menu's set_mode back
@@ -219,7 +221,7 @@ local CLEANUP_ORDER = {
   input_meter = 135,        -- lib/pages/buffer.lua: the BUFFER page's amp_in_l/amp_in_r polls
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
   midi_handler = 150,       -- lib/midi_in.lua
-  voices_off = 160,         -- lib/engine_sync.lua
+  voices_off = 160,         -- lib/engine_sync.lua: a voiceOff per running voice (reaches no handler on norns)
   grids_dark = 170,         -- lib/grid/core.lua
   arc_dark = 180,           -- lib/arc/core.lua
 }
