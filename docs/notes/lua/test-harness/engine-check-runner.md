@@ -21,12 +21,12 @@ Its own SynthDefs, to hear what a bus carries:
 
 Structure:
 - The check routine is at sclang's per-function selector limit: new checks go in top-level functions called from it.
-- Every server reply it waits for goes through `awaitReply` (5 s, then a FAIL), and the whole check fails after its deadline (`STRATA_ENGINE_CHECK_DEADLINE`, the timeout less 30 s: 1170 s by default, 540 s in CI), so a reply that never comes fails the check instead of hanging it (CI kills the job at 600 s and passes `ENGINE_CHECK_TIMEOUT=570`).
+- Every server reply it waits for goes through `awaitReply` (5 s, then a FAIL), and the whole check fails after its deadline (`STRATA_ENGINE_CHECK_DEADLINE`, the timeout less 30 s: 1770 s by default, 540 s in CI), so a reply that never comes fails the check instead of hanging it (CI kills the job at 600 s and passes `ENGINE_CHECK_TIMEOUT=570`).
 
 What fails it, besides a failed check: any output line with `ERROR` or `WARNING` at its start, `FAILURE` (the server's report of a failed command), `alloc failed`, `Too many grains` (a grain UGen past `maxGrains`) or `Strata invariant broken`.
 
 Timeouts and processes:
-- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1200 s; a full run of every area takes about 16 minutes on 3.14.1 and on 3.13 alike, about 930 s of areas at 3.3.0, CI shards set 570 s) with line-buffered output (`stdbuf`).
+- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1800 s; a full run of every area takes about 16 minutes on 3.14.1 and on 3.13 alike, about 930 s of areas at 3.3.0, CI shards set 570 s) with line-buffered output (`stdbuf`).
 - It stops sclang as soon as the output shows a compile error (a syntax error in `engine_check.scd`, `Library has not been compiled successfully`): sclang never exits by itself then, and would hold the machine and CI's job until killed.
 - `timeout` signals the whole process group, so the scsynth sclang booted goes too. Without a `timeout` command, the script's own watch loop enforces the limit.
 - It stops the scsynth too, even after a sclang crash (through the PID the check writes to its work dir, #152), without needing `pgrep` or `timeout`.

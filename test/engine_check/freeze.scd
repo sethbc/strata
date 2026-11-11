@@ -29,7 +29,7 @@ var probeGroup, quietBus, nowBus, clockBus, readOut, rectEnv, timecode, started;
 var timeReads, startTimecodeVoice, now, phaseMoves, grainOf, fadingRingReader, voiceRing, inputRing, copyRing;
 var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
 var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles;
-var old, readsCopy, restartGrain, startInput;
+var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
@@ -550,7 +550,18 @@ h.waitFor({ state[\copied][3] }, 2);
 command.(\setGrainParam, 3, \freeze, 0.0);
 old = grainOf.(3);
 command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
-0.05.wait;
+// the case needs the voiceOff inside the copy's wait: on a slow machine the
+// copy can land before it, so the unfreeze and refreeze are redone (up to
+// three tries, #569) when the copy is already in; the refreeze must follow
+// the unfreeze at once, as the readers it fades are the copy's, which leave
+// after freezeLeaveSeconds
+attempt = 1;
+while { (state[\faded][3].isEmpty or: { state[\copied][3] }) and: { attempt < 3 } } {
+    command.(\setGrainParam, 3, \freeze, 0.0);
+    command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
+    attempt = attempt + 1;
+};
+precondition = state[\faded][3].notEmpty and: { state[\copied][3].not };
 command.(\voiceOff, 3); server.sync;
 readings = [state[\faded][3].notEmpty, state[\copied][3].not];
 ok = h.waitFor({ state[\copied][3] }, 2);
@@ -562,8 +573,8 @@ readings = readings ++ [ok, live === old, getControl.(live, \bufL) == copyRing.(
 command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
 readings = readings ++ [getControl.(live, \bufL) == inputRing[0].bufnum, getControl.(live, \history) == 2];
 check.(readings.every({ arg value; value == true }),
-    "freeze: a grain synth re-gated onto a copy that landed while its voice was stopped is set back by the unfreeze (waiting, not copied, copied, same node, on the copy, history 0, a reader, back on the input ring, history 2: %)".format(
-        readings));
+    "freeze: a grain synth re-gated onto a copy that landed while its voice was stopped is set back by the unfreeze (waiting, not copied, copied, same node, on the copy, history 0, a reader, back on the input ring, history 2: %%)".format(
+        readings, if (precondition) { "" } { "; the copy had landed before the voiceOff in all 3 tries, so the case was not set up" }));
 engine.bufferFadeWait = savedFadeWait;
 command.(\setGrainParam, 3, \history, 0.0);
 // a frozen input voice switched to its synth: unfrozen, its writer reads the voice bus again
