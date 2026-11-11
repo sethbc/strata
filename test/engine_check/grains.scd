@@ -290,5 +290,50 @@ server.sync;
 probe.free; peakBus.free; triggeredBus.free;
 server.sync;
 checkSourceGrains.(1, 2);
+
+// A flood of retriggers (200 in 0.5 s, as a MIDI flood could send) on a
+// triggered-mode buffer voice of 0.5 s grains: a grain starts at most every
+// grainTriggerSeconds (4 ms), so no more than 125 sound at once, under
+// GrainBuf's maxGrains - 1 (past it GrainBuf drops grains and prints "Too
+// many grains", which fails the run). The slot holds 1 and the grains have
+// a rectangular envelope, so the right channel's level over one grain's
+// counts the grains sounding
+{
+    var voice = 3, slot = 5, path = scratchRoot +/+ "flood.wav", privateBus = Bus.audio(server, 2), bus = Bus.control(server, 2);
+    var rectEnv = Buffer.loadCollection(server, Array.fill(1024, 1.0)), group = Group.after(engine.processGroup);
+    var probe, one, many;
+    writeTestFile.(path, server.sampleRate, (2 * server.sampleRate).asInteger, [1.0, 1.0]);
+    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
+    command.(\setGrainSource, voice, slot + 1); server.sync;
+    [[\grainMode, 1], [\grainSize, 0.5], [\posSpread, 0], [\panSpread, 0], [\panJitter, 0], [\sizeJitter, 0], [\bufRate, 1]]
+        .do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    server.sync;
+    engine.synths[engine.grainKey(voice)].set(\out, privateBus.index, \envBuf, rectEnv.bufnum);
+    probe = Synth(\strataCheckChannelPeaks, [\in, privateBus, \out, bus], group);
+    server.sync; 0.6.wait;                 // past the grain synth's attack, no grain in flight
+    probe.set(\t_reset, 1); server.sync;
+    command.(\retrigger, voice, 1.0);
+    0.3.wait;
+    one = readBus.(bus)[1];
+    0.4.wait;                              // that grain has ended
+    probe.set(\t_reset, 1); server.sync;
+    // timestamped, so the server takes one every 2.5 ms (each in a block of
+    // its own) whatever sclang's timing
+    200.do({ arg index; server.makeBundle(0.2 + (index * 0.0025), { command.(\retrigger, voice, 1.0) }) });
+    (0.2 + 0.5 + 0.3).wait;
+    many = readBus.(bus)[1] / one.max(1e-9);
+    check.((one > 0.5) and: { many > 50 } and: { many <= 125.5 },
+        "a flood of 200 retriggers in 0.5 s never sounds more than 125 grains at once (at most %; one grain %)".format(
+            many.round(0.1), one.round(0.0001)));
+    [[\grainMode, 0], [\grainSize, 0.1], [\posSpread, 0.5], [\panSpread, 0.5], [\envShape, 0]]
+        .do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
+    command.(\setGrainSource, voice, 0);
+    server.sync;
+    probe.free; group.free; server.sync;
+    [privateBus, bus, rectEnv].do(_.free);
+    command.(\clearBuffer, slot);
+    File.delete(path);
+}.value;
 h.stopAllVoices;
 }
