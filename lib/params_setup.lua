@@ -114,6 +114,18 @@ return function(S)
   -- system params), in menu order, filled at init
   local pset = {number_params = {}}
 
+  -- A number param's value made whole in its action, before it is stored
+  -- or reaches the engine (#554): norns' params:read sets each PSET line
+  -- through the param's own set, actions included, before the read hook
+  -- rounds, so a saved fraction reached setModSource once (matron casts an
+  -- "i" argument). A fraction is written back silently, so the param shows
+  -- what is stored and the hook has nothing left to round
+  function pset.whole(param_id, x)
+    local whole = util.round(x)
+    if whole ~= x then params:set(param_id, whole, true) end
+    return whole
+  end
+
   -- Add one part of the PARAMS menu: init runs the records' add functions
   -- in the order they are registered here, which is the menu's order. Each
   -- number param a record adds (Strata's own and the LFO library's, never
@@ -670,6 +682,7 @@ return function(S)
     args.id = param_id
     args.action = function(x)
       local extras = S.voices[voice_idx].extras
+      if args.type == "number" then x = pset.whole(param_id, x) end  -- (the custom intervals, #554)
       x = filtered_value(voice_idx, key, param_id, x, extras[key])
       extras[key] = x
       note_param_edit(param_id)  -- an edit ends a randomize's undo
@@ -976,6 +989,7 @@ return function(S)
         default = slot_state.source,
         formatter = mod_source_text,
         action = function(x)
+          x = pset.whole(prefix .. "mod_source_" .. slot, x)  -- never a fraction to the engine (#554)
           S.voices[voice_idx].crossmod[slot_key].source = x
           if S.voices[voice_idx].active then
             engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
