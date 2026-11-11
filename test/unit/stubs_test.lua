@@ -484,9 +484,19 @@ test("an error the script catches and prints fails the test unless it claims it 
     failed_frame()
     local claimed = context.take_script_errors()
     assert_equal(#claimed, 1, "one printed error claimed")
-    assert_true(claimed[1]:find("strata: frame draw failed:", 1, true), "the line: " .. claimed[1])
+    assert_true(claimed[1]:find("strata: page draw failed:", 1, true), "the line: " .. claimed[1])
   end)
   assert_true(ok, "a test that claims the printed error passes: " .. tostring(message))
+  -- h.claim_script_errors claims them and checks their count, prefix and last text
+  ok, message = run_test(function()
+    failed_frame(); h.claim_script_errors(context, 1, "strata: page draw failed: ", "draw exploded")
+  end)
+  assert_true(ok, "the helper claims a matching line: " .. tostring(message))
+  for _, wrong in ipairs({ { 2, "strata: page draw failed: " }, { 1, "strata: frame failed: " },
+      { 1, "strata: page draw failed: ", "another error" } }) do
+    ok = run_test(function() failed_frame(); h.claim_script_errors(context, wrong[1], wrong[2], wrong[3]) end)
+    assert_true(not ok, "a claim that does not match fails: " .. wrong[1] .. " " .. wrong[2] .. " " .. tostring(wrong[3]))
+  end
   print("strata: a line that reports no failure"); print("buffer 1 saved to /x.wav")
   assert_equal(#context.take_script_errors(), 0, "other printed lines are no errors")
 end)
