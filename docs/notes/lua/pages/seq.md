@@ -28,8 +28,8 @@ Keys:
 - K2: `pattern_toggle()`. K3: `toggle_pattern_step(S.selected_voice, step)` (on at 15, or off).
 - ALT+E2: `S.lib.ui_keys.select_voice_by(d)` (MAIN's list and the MIDI bend follow). ALT+E3: `enc_param_delta(3, "tempo", d)`.
 - ALT+K2, on release: a quick press undoes the randomize held for this voice's pattern (within 5 s) or randomizes it, through `S.lib.mutation.randomize` with the spec `randomize_section` returns (`{page = SEQ, section = "pattern", voice, pattern = voice}`; never locked: lock covers params). The undo restores the old steps through `replace_pattern`, also while the pattern clock plays. The record animates while ALT+K2 is held (the hint turns to `K2:cancel` at 0.5 s). ALT+K3: `clear_pattern(S.selected_voice)`, which ends the undo.
-- Hints: `K2:play K3:step E3:level` (`K2:stop` while playing); ALT: `K2:rand K3:clr E3:bpm` (`K2:undo` while an undo is held, `K2:cancel` after 0.5 s held).
+- Hints: `K2:play K3:step E3:level` (`K2:stop` while playing); ALT: `K2:rand K3:clr E3:bpm` (`K2:undo` while an undo is held, `K2:cancel` after 0.5 s held). With K1 let go while ALT+K2 is down, `k2_hint(record)` alone, since the release still acts.
 
-`layout_states`: the cursor at steps 1 and 16 on voices 1 and 7, every row with levels while playing (`levels-playing`), and 300 BPM while playing (`tempo-300`).
+`layout_states`: the cursor at steps 1 and 16 on voices 1 and 7, every row with levels while playing (`levels-playing`), 300 BPM while playing (`tempo-300`), and ALT+K2 held `ALT_HOLD_SECONDS` (`ALT+K2 held past the hold time`: the widest ALT hint, `K2:cancel K3:clr E3:bpm`).
 
 Room for 3.4 (design §5): per-voice length, division, probability and step locks will appear here, as `field_list` rows under the patterns or on a second view.

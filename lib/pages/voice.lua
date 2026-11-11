@@ -229,12 +229,14 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page): with ALT, ALT+K2's
   -- (the shared handler's: rand, undo or locked; reset once held past the
-  -- hold time) and ALT+K3's (lock)
+  -- hold time) and ALT+K3's (lock). K1 let go while ALT+K2 is down: K2's
+  -- hint alone, since its release still acts
   local function voice_hints(alt_held)
+    local record = S.registry.pages[UI_PAGES.index.VOICE]
     if alt_held then
-      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.VOICE]) .. " K3:"
-        .. (S.frozen[S.selected_voice] and "unlock" or "lock")
+      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.frozen[S.selected_voice] and "unlock" or "lock")
     end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     return "K2:prev K3:next"
   end
 

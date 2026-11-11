@@ -713,10 +713,47 @@ test("a pattern spec restores the exact old steps (#557)", function()
   assert_equal(local_value("undo"), nil, "an edit of the held voice's pattern ends it")
 end)
 
+-- The first selectable row of a section in voice 1's VOICE rows
+local function first_row_of(section)
+  for index, row in ipairs(voice_page_rows(1)) do
+    if row.section == section and row.selectable ~= false then return index end
+  end
+end
+
+-- VOICE's walk: the first row of each section of voice 1 as a synth voice
+-- and as a buffer voice, with the spec section each must give (a buffer
+-- voice's synth section holds its own undo: "synth (buffer)")
+local function voice_walk_cases(S)
+  local buffer_source
+  for option, name in ipairs(S.constants.SOURCE_OPTIONS) do
+    if name == "buf 1" then buffer_source = option end
+  end
+  local cases = {}
+  for _, source in ipairs({ { name = "synth", option = S.constants.SOURCE_SYNTH }, { name = "buf 1", option = buffer_source } }) do
+    params:set("v1_source", source.option)
+    local seen = {}
+    for _, row in ipairs(voice_page_rows(1)) do
+      if row.selectable ~= false and not seen[row.section] then
+        seen[row.section] = true
+        local expected = row.section
+        if expected == "synth" and source.option ~= S.constants.SOURCE_SYNTH then expected = "synth (buffer)" end
+        cases[#cases + 1] = { name = "v1 " .. source.name .. ", " .. row.section .. "'s first row",
+          source = source.option, section = row.section, expected = expected }
+      end
+    end
+  end
+  return cases
+end
+
 -- Every page record with randomize_section: in each of its layout states,
--- every param its spec draws reports an edit to note_param_edit, so an edit
--- ends the undo and never comes back on it (AGENTS.md, Randomize undo). The
--- pages that randomize add the field; this test covers each one
+-- and on VOICE with the cursor on the first row of each section of a synth
+-- voice and of a buffer voice, every param its spec draws reports an edit
+-- to note_param_edit, so an edit ends the undo and never comes back on it
+-- (AGENTS.md, Randomize undo). The pages that randomize add the field; this
+-- test covers each one. Each case runs on a fresh load, and a layout state
+-- is taken from that load's own record: a state's setup acts on the script
+-- it was built in, so one from an earlier load would move that load's
+-- cursor and leave the fresh one's where it starts
 test("every drawn param of every page's randomize_section calls note_param_edit (#557)", function()
   load_strata()
   local S = local_value("S")
@@ -724,23 +761,40 @@ test("every drawn param of every page's randomize_section calls note_param_edit 
   for index, name in ipairs(S.constants.UI_PAGES) do
     local record = S.registry.pages[index]
     if record.randomize_section then
-      local states = { { name = "as loaded" } }
-      for _, state in ipairs(record.layout_states or {}) do states[#states + 1] = state end
-      pages[#pages + 1] = { index = index, name = name, states = states }
+      local cases = { { name = "as loaded" } }
+      for state_index, state in ipairs(record.layout_states or {}) do
+        cases[#cases + 1] = { name = state.name, state = state_index }
+      end
+      if name == "VOICE" then
+        for _, case in ipairs(voice_walk_cases(S)) do cases[#cases + 1] = case end
+      end
+      pages[#pages + 1] = { index = index, name = name, cases = cases }
     end
   end
   assert_true(#pages >= 1 and pages[1].name == "MAIN", "MAIN randomizes")
+  local voice_sections = {}
   for _, page in ipairs(pages) do
     -- per page: one whose sections draw params must have some checked; a
     -- pattern page (its spec a pattern, SEQ) draws none
     local checked, pattern_page = 0, false
-    for _, state in ipairs(page.states) do
+    for _, case in ipairs(page.cases) do
       local context = load_strata(); finish_startup(context)
       show_page(page.name)
-      if state.setup then state.setup(context) end
-      local spec = local_value("S").registry.pages[page.index].randomize_section()
+      local fresh = local_value("S")
+      local record = fresh.registry.pages[page.index]
+      local where = page.name .. ", " .. case.name
+      if case.state then
+        local state = record.layout_states[case.state]
+        assert_equal(state.name, case.name, where .. ": the fresh load's own state")
+        if state.setup then state.setup(context) end
+      elseif case.section then
+        params:set("v1_source", case.source)
+        fresh.lib.pages_voice.place_cursor(first_row_of(case.section))  -- VOICE's own cursor API
+      end
+      local spec = record.randomize_section()
       if spec and spec.pattern ~= nil then pattern_page = true end
-      local where = page.name .. ", " .. state.name
+      if case.expected then assert_equal(spec and spec.section, case.expected, where .. ": the cursor's section") end
+      if page.name == "VOICE" and spec then voice_sections[spec.section] = true end
       local real_note = note_param_edit
       local noted = {}
       note_param_edit = function(param_id) noted[param_id] = true; return real_note(param_id) end
@@ -756,6 +810,10 @@ test("every drawn param of every page's randomize_section calls note_param_edit 
     end
     assert_true(pattern_page or checked > 0,
       page.name .. ": a page that randomizes params draws some in one of its states (" .. checked .. " checked)")
+  end
+  for _, section in ipairs({ "synth", "synth (buffer)", "input", "grain", "crossmod", "mix", "variation",
+    "filter & sends", "bookmarks" }) do
+    assert_true(voice_sections[section], "VOICE's " .. section .. " section is checked")
   end
 end)
 

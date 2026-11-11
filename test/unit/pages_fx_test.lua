@@ -531,4 +531,19 @@ test("the FX hint is K2:rand or K2:undo, and fits", function()
   key(2, 0); key(1, 0)
 end)
 
+-- K1 let go before K2: the release still randomizes or cancels, so the
+-- hint row keeps K2's release hint, alone, until K2 comes up
+test("K2's release hint stays after K1 comes up first (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  select_fx_row("filter_freq")
+  local plain = shown(context)
+  key(1, 1); key(2, 1); key(1, 0)
+  assert_equal(shown(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
+  context.clock.run_for(0.5)
+  assert_equal(shown(context), "K2:cancel", "held past the hold time: letting go cancels")
+  key(2, 0)
+  assert_equal(shown(context), plain, "K2 up: the plain hints")
+end)
+
 end

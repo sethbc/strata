@@ -82,11 +82,12 @@ return function(S)
     screen.stroke()
   end
 
-  -- The hint row (redraw() draws it after the page)
+  -- The hint row (redraw() draws it after the page). K1 let go while
+  -- ALT+K2 is down: K2's hint alone, since its release still acts
   local function seq_hints(alt_held)
-    if alt_held then
-      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.SEQ]) .. " K3:clr E3:bpm"
-    end
+    local record = S.registry.pages[UI_PAGES.index.SEQ]
+    if alt_held then return S.lib.ui_alt.k2_hint(record) .. " K3:clr E3:bpm" end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     return "K2:" .. (S.pattern_playing and "stop" or "play") .. " K3:step E3:level"
   end
 
@@ -188,6 +189,11 @@ return function(S)
     {name = "tempo-300", setup = function()
       params:set("tempo", 300)
       pattern_toggle()
+    end},
+    -- ALT's widest hint: K2:cancel K3:clr E3:bpm
+    {name = "ALT+K2 held past the hold time", setup = function(context)
+      key(1, 1); key(2, 1)
+      context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
     end},
   }
 

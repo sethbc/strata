@@ -429,6 +429,22 @@ test("the hint is K2:rand, K2:undo, K2:locked (#557)", function()
   key(1, 0)
 end)
 
+-- K1 let go before K2: the release still randomizes or cancels, so the
+-- hint row keeps K2's release hint, alone, until K2 comes up
+test("K2's release hint stays after K1 comes up first (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("MAIN")
+  context.screen.clear(); redraw()
+  local plain = hint_text(context)
+  key(1, 1); key(2, 1); key(1, 0)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
+  context.clock.run_for(0.6); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:cancel", "held past the hold time: letting go cancels")
+  key(2, 0); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+end)
+
 test("MAIN acts on the voice selected at release; an E2 turn while ALT+K2 is held moves it (#557)", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")

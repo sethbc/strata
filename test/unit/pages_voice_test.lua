@@ -618,6 +618,22 @@ test("VOICE's ALT+K2 hint: rand, undo, and reset while held (#557)", function()
   key(1, 0)
 end)
 
+-- K1 let go before K2: the release still randomizes or resets, so the hint
+-- row keeps K2's release hint, alone, until K2 comes up
+test("K2's release hint stays after K1 comes up first (#557)", function()
+  local context, S = started_voice_page()
+  put_cursor(S, "v1_grain_size")
+  context.screen.clear(); redraw()
+  local plain = hint_text(context)
+  key(1, 1); key(2, 1); key(1, 0)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
+  context.clock.run_for(HELD_SECONDS); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:reset", "held past the hold time: letting go resets")
+  key(2, 0); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+end)
+
 test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
   for _, case in ipairs(loaded_section_cases()) do
     local what = case.section .. " (" .. case.source .. ")"

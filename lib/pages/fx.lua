@@ -107,13 +107,17 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page). With ALT held no K3
   -- shows (ALT+K3 does nothing on FX), and E3:fine only on a row that turns
-  -- finely: a control param (an option, the filter type, keeps whole steps)
+  -- finely: a control param (an option, the filter type, keeps whole steps).
+  -- K1 let go while ALT+K2 is down: K2's hint alone, since its release
+  -- still acts
   local function fx_hints(alt_held)
+    local record = S.registry.pages[UI_PAGES.index.FX]
     if alt_held then
       local param_id = cursor_row().param_id
       local fine = (param_id and params:lookup_param(param_id).controlspec) and " E3:fine" or ""
-      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.FX]) .. fine
+      return S.lib.ui_alt.k2_hint(record) .. fine
     end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     local effect = cursor_row().effect
     if not effect then return "E3:value" end
     return "K3:" .. effect .. " " .. (effect_on(effect) and "bypass" or "on")
@@ -204,6 +208,12 @@ return function(S)
       {name = "delay and reverb bypassed", setup = function()
         params:set("delay_bypass", 1); params:set("reverb_bypass", 1); params:set("delay_mix", 1)
         S.fx_row = row_of("delay_time")
+      end},
+      -- ALT's widest hint, on a row that turns finely: K2:cancel E3:fine
+      {name = "ALT+K2 held past the hold time", setup = function(context)
+        S.fx_row = row_of("filter_freq")
+        key(1, 1); key(2, 1)
+        context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
       end}
     }}
 
