@@ -90,7 +90,7 @@
     // slot length to the engine's, which bufferState reports:
     // bufferLengthValue). Posts what it runs and how to clear it
     unwrittenPerformance { arg model, memKB, sampleRate;
-        var path = this.activePerformancePath, text, old, decision;
+        var path = this.activePerformancePath, text, old, decision, mismatch = areaState[\performance][\mismatch] == true;
         if (File.exists(path).not) {
             postln("strata: cannot write " ++ path ++ "; running standard");
             ^this.standardPerformance("standard: performance_active.data could not be written")
@@ -104,10 +104,12 @@
         };
         // "high: setting" or "standard: setting", and any step-down after it
         decision[\reason] = decision[\reason].replace(": setting", ": the old performance_active.data"
-            ++ (if (old.isNil) { ", unreadable" } { "" }) ++ " (it could not be replaced)");
-        postln("strata: cannot replace " ++ path ++ "; running what the script will read from it ("
+            ++ (if (old.isNil) { ", unreadable" } { "" })
+            ++ (if (mismatch) { " (it did not read back as written)" } { " (it could not be replaced)" }));
+        postln("strata: " ++ (if (mismatch) { path ++ " did not read back as written" } { "cannot replace " ++ path })
+            ++ "; running what the script will read from it ("
             ++ (if (old.isNil) { "unreadable, so standard" } { old[\tier] ++ ", " ++ old[\bufferSeconds] ++ " s" })
-            ++ "). Remove the file by hand to use the setting");
+            ++ ")" ++ (if (mismatch) { "" } { ". Remove the file by hand to use the setting" }));
         if (old.notNil and: { decision[\bufferSeconds] < old[\bufferSeconds] }) {
             postln("strata: memory allows " ++ decision[\bufferSeconds] ++ " s slots, not the "
                 ++ old[\bufferSeconds] ++ " s the file names; the script takes the slots' length from bufferState");
@@ -286,6 +288,7 @@
     // left)
     writeActivePerformance { arg decision;
         var path = this.activePerformancePath, partPath, file, text = this.activePerformanceText(decision), written, readBack;
+        areaState[\performance][\mismatch] = false;
         if (File.exists(path)) { try { File.delete(path) } };
         if (File.exists(path)) {
             postln("strata: cannot remove the old " ++ path);
@@ -302,6 +305,9 @@
             file = File.open(partPath, "w");
             if (file.isOpen) { file.write(text); file.close; true } { false }
         } { false };
+        // a write that raised leaves the handle open: close it (close sets
+        // the pointer to nil, so a file already closed is not closed twice)
+        if (file.notNil and: { file.isOpen }) { try { file.close } };
         // (each read is a statement of its own: a try that raises inside a
         // larger expression can corrupt that expression in sclang)
         readBack = if (written) { try { File.readAllString(partPath) } { nil } };
@@ -310,6 +316,8 @@
         try { if (File.exists(partPath)) { File.delete(partPath) } };
         // true only when the file Lua will read holds the decision
         readBack = if (written and: { File.exists(path) }) { try { File.readAllString(path) } { nil } };
+        // (a file in place that is not the text: unwrittenPerformance says so)
+        areaState[\performance][\mismatch] = readBack.notNil and: { readBack != text };
         ^written and: { readBack == text }
     }
 }
