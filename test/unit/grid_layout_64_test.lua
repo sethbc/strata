@@ -19,18 +19,57 @@ local function switch_half(context, port)
   context.grid.press(port, 1, 8, 0)
 end
 
+-- #449: the distinct keys the layout is handed at press, per view (a half or the positions view), from
+-- now on (view(port) names it), and how many there are
+local function record_presses(layout_name, view)
+  local layout = local_value("S").registry.grid_layouts[layout_name]
+  local real_key, pressed = layout.key, {}
+  layout.key = function(port, x, y, z)
+    if z == 1 then
+      local shown = view(port)
+      pressed[shown] = pressed[shown] or {}
+      pressed[shown][x .. "," .. y] = true
+    end
+    return real_key(port, x, y, z)
+  end
+  return pressed
+end
+local function key_count(keys)
+  local count = 0
+  for _ in pairs(keys or {}) do count = count + 1 end
+  return count
+end
+
 test("every 64 grid key runs without error", function()
   local context = load_strata()
   local device = context.grid.plug(1, 8, 8)
-  for half = 1, 2 do
-    if shown_half(1) ~= half then switch_half(context, 1) end
+  local pressed = record_presses("64", function(port)
+    return grid_core().page(port) == 5 and "positions" or "half " .. shown_half(port)
+  end)
+  local S = local_value("S")
+  local jumps = 0
+  local real_jump = S.lib.positions.jump
+  S.lib.positions.jump = function(...) jumps = jumps + 1; return real_jump(...) end
+  -- steps 1-8, steps 9-16 and the positions view, each set before every key
+  -- (a key may move the view), with the grid voice (1) on buffer 1 holding 16 s
+  local views = { { page = 1, half = 1 }, { page = 1, half = 2 }, { page = 5, half = 1 } }
+  for _, view in ipairs(views) do
+    S.buffers[1].seconds = 16; S.buffers[1].loaded = true
+    params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+    select_grid_voice(1)
     for y = 1, 8 do
       for x = 1, 8 do
+        grid_core().set_page(1, view.page)
+        grid_core().port_state(1).half = view.half
         context.grid.press(1, x, y, 1)
         context.grid.press(1, x, y, 0)
         context.clock.advance()
       end
     end
+  end
+  assert_true(jumps > 0, "the positions view's keys reached the buffer voice")
+  for _, view in ipairs({ "half 1", "half 2", "positions" }) do
+    assert_equal(key_count(pressed[view]), 64, view .. ": all 64 keys pressed")
   end
   assert_true(device.refresh_count > 0, "64 grid was redrawn")
 end)

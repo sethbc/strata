@@ -3,12 +3,13 @@
 - The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
 - Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`.
 - The FX faders follow changes made anywhere through `fx_fader_changed()`, except during a smooth scene transition, which redraws the grid once per step. The layout record's `fx_faders_page = 4` is what `any_fx_faders()` reads, so FX changes redraw the grids only while a 256 shows page 4.
-- Rows 8 and 16 work and draw the same on pages 1, 2 and 4 (page 3, scenes, has only the page keys on row 8 and no row 16).
+- Rows 8 and 16 work and draw the same on every page, 1-5 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`; page 3 has them since #442).
+- Row 15's clear (columns 1-7) and randomize (columns 9-15) keys, pages 1 and 2, act only through `grid_core.on_hold` after `LAYOUT_256.pattern_hold_seconds` (`GRID_HOLD.scene_save_seconds`, 0.5 s, #443), never at press, so a release, the grid's removal or cleanup cancels them; the hold's action redraws the grids and asks for a screen redraw (SEQ shows the patterns). They light at 2, 15 while `hold_pending`.
 - The clipboard lives in `grid_core.port_state(port).clipboard` (`{voice = i, steps = {...}}` or nil), never in a module local or on `S`: each grid has its own, and unplugging the grid forgets it. `steps` is a copy of the levels at copy time; a paste copies them into `S.patterns[target]` level by level (`replace_pattern`) and never shares the table.
 - A paste onto the copied voice changes nothing (the pattern stays as edited since the copy, the clipboard stays). Column 16 is the only way to drop the clipboard.
 - A paste writes through `S.lib.sequencer.replace_pattern(target, clipboard.steps)`, which calls `grid_core.end_step_gestures(target)`: a step of the target voice held (on any grid) from before the paste never takes a level in the pasted pattern; the next key on that voice toggles its own step.
 - The tempo keys light from `grid_core.held(port, x, 8)` (15 held, 4 otherwise); `grid_key` redraws after every press and release, so the layout keeps no lit state of its own. Each tempo press calls `header_flash("tempo <bpm>")` with the tempo it lands on.
-- Scene page row 1: the sequencer position (`S.scene_sequencer_position`, the next scene it recalls) at 10 only while `S.scene_sequencer_enabled`; the current scene at 15 wins over it. "Current" is `S.lib.scenes.shows_current(i)`: the scene a fade goes to drops to its level without it after each even fade step, so it blinks until the fade lands (#254).
+- Scene page row 1: the slot the running sequencer recalls next (`S.lib.scenes.sequencer_next_slot()`, nil while it is off, #303) at 10, never `S.scene_sequencer_position` itself, which through a scene's hold is the scene playing; the current scene at 15 wins over it. "Current" is `S.lib.scenes.shows_current(i)`: the scene a fade goes to drops to its level without it (8, or 10 when it is also the next slot) after each even fade step, so it blinks until the fade lands (#254).
 - The layout's keys and levels are in the `LAYOUT_256` table at the top of the constructor (no new locals per value).
 
 ## Owns
@@ -18,9 +19,9 @@
 
 ## Pages
 
-Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10; rows 14-15 voice select/toggle and pattern clear/randomize; row 16 lock and copy/paste.
+Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10 (every page); rows 14-15 voice select/toggle and pattern clear/randomize (held 0.5 s); row 16 lock and copy/paste (every page).
 
-Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1, 2 and 4. Page 1's key is (13, 8).
+Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1-4. Page 1's key is (13, 8).
 
 ## Row 8: tempo keys
 
@@ -33,7 +34,11 @@ Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`
 - Columns 9-15 (voices 1-7), through the local `copy_paste_key(port, voice)`: with no clipboard, copy the voice's pattern (`clipboard = {voice = v, steps = <copy of S.patterns[v]>}`); with one, paste `clipboard.steps` onto the voice, unless it is the copied voice. The clipboard stays for more pastes.
 - Column 16: clear the clipboard.
 
-`grid_redraw_256_lock(port, grid_device)`: the copied voice's key 15, the other voice keys and column 16 at 4 while a pattern is copied; columns 9-16 at 2 with none. It works on pages 1, 2 and 4 (page 3 has no row 16).
+`grid_redraw_256_lock(port, grid_device)`: the copied voice's key 15, the other voice keys and column 16 at 4 while a pattern is copied; columns 9-16 at 2 with none. It works on every page.
+
+## Row 15: clear and randomize (pages 1 and 2)
+
+The local `pattern_key(port, x, y)`: a press arms `grid_core.on_hold(port, x, 15, LAYOUT_256.pattern_hold_seconds, ...)` (the scene save's 0.5 s, `GRID_HOLD.scene_save_seconds`); once it fires, columns 1-7 `clear_pattern(x)` and columns 9-15 `randomize_pattern(x - 8)` (both write through `S.lib.sequencer.replace_pattern`), then `grid_redraw()` and `request_redraw()`. A shorter press changes nothing; the release does nothing (the layout takes presses only). Columns 8 and 16 do nothing and stay dark. The redraw lights the fourteen keys at `LAYOUT_256.pattern_key_level` (2), `pattern_pending_level` (15) while `grid_core.hold_pending(port, x, 15)`.
 
 ## Parameter page (page 2)
 
@@ -49,12 +54,13 @@ Keys:
 - **Row 3**: scene save: hold 0.5 s to capture the current state to scene 1-8 (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
 - **Row 5, column 1**: scene sequencer on/off.
 - **Row 5, columns 3-10**: sequence length (1-8 scenes).
+- **Row 8** and **row 16**: as on page 1 (play/stop, tempo, the positions and page keys; lock, the freeze hold, copy and paste), #442.
 
 LEDs:
 - Populated scenes: 8 (row 1) or 6 (row 2).
 - Current scene: 15 (in row 1).
 - Empty scenes: 2.
-- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the sequencer position (the next scene it recalls) at 10 while it runs. The current scene's 15 wins when they are the same key.
+- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the slot it recalls next (`S.lib.scenes.sequencer_next_slot()`: the one after its position, wrapped by the sequence length as it is now; an empty slot too) at 10 while it runs. The current scene's 15 wins when they are the same key (a sequence of one slot).
 - Sequence length: 8 for included scenes, 2 for excluded.
 
 It follows changes made anywhere (issue #49):

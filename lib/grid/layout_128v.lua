@@ -188,10 +188,11 @@ return function(S)
   end
 
   local function grid_redraw_128v_scenes(port, grid_device)
-    local sequencer_position = S.scene_sequencer_enabled and S.scene_sequencer_position or nil
+    -- the scene the running sequencer recalls next at 10 (#303)
+    local next_slot = S.lib.scenes.sequencer_next_slot()
     for i = 1, NUM_SCENES do
       local recall_level = S.scenes[i].populated and 8 or 2
-      if i == sequencer_position then recall_level = LAYOUT_128V.scene_position_level end
+      if i == next_slot then recall_level = LAYOUT_128V.scene_position_level end
       if S.lib.scenes.shows_current(i) then recall_level = 15 end
       grid_device:led(LAYOUT_128V.scene_recall_column, i, recall_level)
       grid_device:led(LAYOUT_128V.scene_fade_column, i, S.scenes[i].populated and 6 or 2)
