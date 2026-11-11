@@ -129,10 +129,19 @@ test("parse_active_text reads the texts the engine's parseActivePerformance is c
     "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
     "tier standard\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
     "tier high please\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
+    -- digit strings that wrap a 32-bit integer to a valid value in the
+    -- engine before #500 (2^32 + 60, 2^32 + 128)
+    "tier high\nbuffer_seconds 4294967356\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 4294967424\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 4294967356\n",
   }) do
     assert_equal(parse(text), nil, "refused: " .. text:gsub("\n", "|"))
   end
   assert_equal(parse(nil), nil, "no text")
+  -- leading zeros spell the same number, in the engine too
+  valid = parse("tier high\nbuffer_seconds 0000000000060\nmax_grains 0128\nhistory_seconds 60\n")
+  assert_equal(valid and valid.buffer_seconds, 60, "leading zeros")
+  assert_equal(valid.max_grains, 128)
 end)
 
 -- The engine reports its slot length as bufferState's slot index
@@ -197,6 +206,9 @@ test("the setting file: missing or garbled values give auto and 60 s", function(
       "high", 120 },
     { "a later valid line", "performance high\nperformance standard\nbuffer_seconds 120\nbuffer_seconds 300\n",
       "standard", 300 },
+    -- the engine's texts for #500: 2^32 + 120 is no choice, leading zeros are
+    { "a length that wraps a 32-bit integer", "performance high\nbuffer_seconds 4294967416\n", "high", 60 },
+    { "a length with leading zeros", "performance high\nbuffer_seconds 00120\n", "high", 120 },
   }
   for _, case in ipairs(cases) do
     load_strata({ before_init = function(context)

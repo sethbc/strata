@@ -167,19 +167,24 @@ check.(SynthDescLib.global.at(\strataGrainRing).def.children.count({ arg ugen; u
     "rings: strataGrainRing runs two stereo GrainBufs (one per channel buffer)");
 
 // ---- The writers ----
-ringNames = [\voiceL, \voiceR, \inputL, \inputR, \phaseBuses, \writers, \readers, \changes];
+ringNames = [\voiceL, \voiceR, \copyL, \copyR, \inputL, \inputR, \phaseBuses, \copyPhaseBuses, \writers, \readers, \changes];
 check.(ringNames.every({ arg key; rings[key].notNil }), "rings: the rings area keeps %".format(ringNames));
-check.((rings[\voiceL] ++ rings[\voiceR]).every({ arg buffer;
+check.((rings[\voiceL] ++ rings[\voiceR] ++ rings[\copyL] ++ rings[\copyR]).every({ arg buffer;
         (buffer.numFrames == (sampleRate * engine.ringSeconds)) and: { buffer.numChannels == 1 } })
+    and: { [rings[\voiceL], rings[\voiceR], rings[\copyL], rings[\copyR]].every({ arg each; each.size == engine.numVoices }) }
+    and: { (rings[\voiceL] ++ rings[\voiceR] ++ rings[\copyL] ++ rings[\copyR]).collect(_.bufnum).asSet.size == (4 * engine.numVoices) }
     and: { [rings[\inputL], rings[\inputR]].every({ arg buffer;
         buffer.numFrames == (sampleRate * (engine.historySeconds + engine.ringGuardSeconds + 1)) }) }
-    and: { rings[\phaseBuses].size == (engine.numVoices + 1) },
-    "rings: % mono voice rings of % s, an input ring of % s and % phase buses".format(
-        engine.numVoices * 2, engine.ringSeconds, engine.historySeconds + engine.ringGuardSeconds + 1, engine.numVoices + 1));
+    and: { rings[\phaseBuses].size == (engine.numVoices + 1) } and: { rings[\copyPhaseBuses].size == engine.numVoices },
+    "rings: % mono voice rings and % mono copy rings of % s, an input ring of % s, % phase buses and % copy phase buses".format(
+        engine.numVoices * 2, engine.numVoices * 2, engine.ringSeconds, engine.historySeconds + engine.ringGuardSeconds + 1,
+        engine.numVoices + 1, engine.numVoices));
 check.((engine.ringBuffersFor(2, 0) == [rings[\voiceL][2], rings[\voiceR][2], rings[\phaseBuses][2]])
     and: { engine.ringBuffersFor(2, engine.inputSource) == [rings[\inputL], rings[\inputR], rings[\phaseBuses].last] }
     and: { engine.ringBuffersFor(2, 3).isNil },
     "rings: ringBuffersFor gives the voice's ring, the input ring, or nil for a slot");
+check.(engine.copyRingFor(2) == [rings[\copyL][2], rings[\copyR][2], rings[\copyPhaseBuses][2]],
+    "rings: copyRingFor gives the voice's copy ring (an input freeze's)");
 check.([engine.ringReadMargin, engine.ringSpreadSeconds, engine.ringMaxRate] == [0.005, 0.5, 4],
     "rings: ringReadMargin 0.005, ringSpreadSeconds 0.5, ringMaxRate 4");
 
@@ -491,6 +496,34 @@ command.(\voiceOff, 2);
                 (readings[0] * 1000).round(0.001), (readings[1] * 1000).round(0.001), readings[2], readings[3]));
 });
 
+// ... and with the two changes split: the reader pointed back at the input
+// ring in one block and its freeze 0 four blocks later (timestamped
+// bundles, so they land in different blocks). The grains between start
+// on the input ring at the frozen read point, grainMaxSeconds behind
+// either: why an unfreeze sends its re-point and freeze 0 in one bundle
+// (freeze.scd checks that the engine does)
+ringStarts = ringStart.(engine.ringBuffersFor(0, engine.inputSource), [\history, 2.0, \expect, engine.ringReadMargin + 2.0,
+    \expectB, engine.ringReadMargin + engine.grainMaxSeconds]);
+server.sync; 0.1.wait;
+ringStarts[\synth].set(\t_reset, 1);
+server.sync;
+20.do({
+    var voiceRing = engine.ringBuffersFor(0, 0), inputRing = engine.ringBuffersFor(0, engine.inputSource);
+    server.sendBundle(0.1, ringStarts[\synth].setMsg(\bufL, voiceRing[0].bufnum, \bufR, voiceRing[1].bufnum,
+        \phaseBus, voiceRing[2].index, \history, 0, \freeze, 1));
+    0.03.wait;
+    server.sendBundle(0.1, ringStarts[\synth].setMsg(\bufL, inputRing[0].bufnum, \bufR, inputRing[1].bufnum,
+        \phaseBus, inputRing[2].index, \history, 2.0));
+    server.sendBundle(0.1 + (4 * block / sampleRate), ringStarts[\synth].setMsg(\freeze, 0));
+    0.03.wait;
+});
+0.2.wait;
+readings = readBus.(ringStarts[\bus]);
+ringStarts[\synth].free; ringStarts[\bus].free;
+check.((readings[3] > 500) and: { readings[2] >= 20 },
+    "rings: a re-point and its freeze 0 split across blocks start grains at neither read point (% of % triggers more than three blocks off, at least one per split)".format(
+        readings[2], readings[3]));
+
 // Grain rates are clipped to +/- ringMaxRate (4): pitchShift 4 with an
 // interval of +24 (and on the input voice a bend of 2) asks a synth voice
 // (voice 1) for rate 16 and an input voice (voice 4) for 32. Both read at
@@ -533,9 +566,10 @@ h.freeEngine(other);
 server.sync; 0.2.wait;
 check.(h.synthNames(other.context.xg).includes(\strataRingWrite).not
     and: { other.ringWriterKeys.every({ arg key; other.synths[key].isNil }) }
-    and: { (otherRings[\voiceL] ++ otherRings[\voiceR] ++ [otherRings[\inputL], otherRings[\inputR]]).every({ arg buffer; buffer.bufnum.isNil }) }
-    and: { otherRings[\phaseBuses].every({ arg bus; bus.index.isNil }) },
-    "rings: free frees the writers and rings");
+    and: { (otherRings[\voiceL] ++ otherRings[\voiceR] ++ otherRings[\copyL] ++ otherRings[\copyR]
+        ++ [otherRings[\inputL], otherRings[\inputR]]).every({ arg buffer; buffer.bufnum.isNil }) }
+    and: { (otherRings[\phaseBuses] ++ otherRings[\copyPhaseBuses]).every({ arg bus; bus.index.isNil }) },
+    "rings: free frees the writers, the rings and the copy rings");
 
 probeGroup.free;
 [quietBus, nowBus, readOut, phaseBus].do(_.free);

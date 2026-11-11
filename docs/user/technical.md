@@ -8,8 +8,8 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Individual audio buses for each voice
 - Per-voice granular processors: two sample-aligned `GrainBuf`s (left and right) per voice. A synth- or input-sourced voice's grains read a ring buffer of its recent sound, a buffer-sourced voice's read the sample; both pan their grains the same way (the same fixed pan spread), and a buffer- or input-sourced voice's pan places it as it does a synth voice. A buffer grain never reads past the end of the sample, so short samples play at an even level. Grain pitch is the grain's playback rate, an exact transposition with no pitch-shifter stage
-- Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, however fast its source changes or scenes are recalled, so all seven voices fit in norns' 8 MB (about 6.9 MB at the worst moment)
-- Eight stereo buffers (each a pair of mono buffers: 16 s on the standard tier, about 49 MB in all, up to 300 s on the high tier) and a live stereo input bus
+- Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, however fast its source changes or scenes are recalled, so all seven voices fit in norns' 8 MB real-time pool with room to spare: about 3.3 MB in use at the worst moment, and the engine check requires at least 3 MB of the pool left free (3.5 MB on the high tier)
+- Eight stereo buffers (each a pair of mono buffers: 16 s on the standard tier, about 49 MB in all, up to 300 s on the high tier) and a live stereo input bus. Each voice also keeps the last 4 s of its own sound and, for a frozen input, a 4 s copy of the input of its own (about 22 MB for the seven), and the input keeps its history (16 s, 60 s on the high tier)
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output (buffer- and input-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
@@ -34,7 +34,7 @@ The **performance** field on the SETUP page picks the tier ([SETUP](pages/setup.
 
 On the high tier the **buffer length** field sets how long each buffer is. The buffers live in the norns' memory (eight stereo buffers of 300 s take about 922 MB), so the engine checks how much memory is free when it starts: if the chosen length would leave less than 1 GB free, it steps down to 120, 60 or 16 s, and SETUP shows it (`300 s -> 120 s (memory)`).
 
-Both fields are settings of the norns, not of a patch: no PSET or scene holds them. They are saved at once to `performance.data` in Strata's data folder (`~/dust/data/strata/`) and take effect the next time the script starts (restart the script, or norns, to apply them); until then SETUP shows `(next start)`. The status line `running: high, 60 s` or `running: standard` shows what runs now. The engine writes what it chose to `performance_active.data` beside it, which the script reads as it starts. If that file cannot be written, Strata runs standard.
+Both fields are settings of the norns, not of a patch: no PSET or scene holds them. They are saved at once to `performance.data` in Strata's data folder (`~/dust/data/strata/`) and take effect the next time the script starts (restart the script, or norns, to apply them); until then SETUP shows `(next start)`. The status line `running: high, 60 s` or `running: standard` shows what runs now. The engine writes what it chose to `performance_active.data` beside it, which the script reads as it starts. If that file cannot be written and no old one is left, Strata runs standard. An old file the engine cannot replace (the data folder or the file became read-only) is what the script reads, so the engine runs the tier that file names, high included, until the file is removed by hand: SETUP then shows `old active file kept`.
 
 ## Long buffers
 
@@ -47,12 +47,17 @@ On the high tier each buffer holds up to the buffer length (60 s by default, up 
 ## Audio Signal Flow
 
 ```
-Voice Synth → Voice Bus → Granular Processor → Main Bus → Filter → Delay → Reverb → Master (drift, limiter, saturation) → Output
-                  ↓
-              Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
+Synth source:   Voice Synth → Voice Bus → Voice Ring → Granular Processor ┐
+Buffer source:  Buffer (L/R) → Granular Processor ───────────────────────┼→ Voice Stage
+Input source:   Audio input → Input Bus → Input Ring → Granular Processor ┘
 
-Buffer source:  Buffer (L/R) → Buffer Granular Processor → Main Bus (and the Voice Bus, for the Mod Synth)
-Input source:   Audio input → Input Bus → Granular Processor → Main Bus (and the Voice Bus, for the Mod Synth)
+Voice Stage ─ dry ────────── Filter ─────────────────────┐
+            ─ delay send ─── Filter → Delay ─┬───────────┤
+            ─ reverb send ── Filter ─────────┴→ Reverb ──┴→ Master (drift, limiter, saturation) → Output
+
+(one Voice Stage per voice: the voice filter, its level, the delay and reverb sends, and the copy of a buffer or input voice's grains to its Voice Bus)
+
+Voice Bus → Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
 
 ## Development
