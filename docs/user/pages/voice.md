@@ -15,7 +15,7 @@ Below it, five rows at a time, the voice's parameters in six sections, each unde
 
 ### Bookmarks
 
-A voice reading a buffer has a seventh section, **bookmarks**: four rows, `bookmark 1` to `bookmark 4`, each a position in the buffer (0-1 of its length, default 0, 0.25, 0.5 and 0.75). E3 edits one like any row. The rows only hold the positions: the grid's bookmark keys (and, in a later release, pattern steps) recall them. See [Voices and Granular Processing](../voices-and-grains.md#bookmarks).
+A voice reading a buffer has a seventh section, **bookmarks**: four rows, `bookmark 1` to `bookmark 4`, each a position in the buffer (0-1 of its length, default 0, 0.25, 0.5 and 0.75). E3 edits one like any row. A row only sets its position (as a grid's store key does); a bookmark is recalled with BUFFER's `bm` field (E3, no grid needed: see [BUFFER](buffer.md)) or a grid's bookmark keys (and, in a later release, pattern steps). See [Voices and Granular Processing](../voices-and-grains.md#bookmarks).
 
 ### Freeze
 

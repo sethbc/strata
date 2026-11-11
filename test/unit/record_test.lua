@@ -311,6 +311,43 @@ test("a length in beats is capped at the slot length", function()
   assert_equal(recording_calls(context)[1].args[2], 16.0)
 end)
 
+-- #321: the len field showed the whole beats a slot holds ("26b max") while
+-- the take was a whole slot (26.67 beats at 100 BPM), so a loop recorded
+-- that way wrapped off the beat. One take_length() now feeds both
+test("a synced length that does not fit is the whole beats that do, as BUFFER shows", function()
+  local context = load_strata(); finish_startup(context); h.show_page("BUFFER")
+  local S = local_value("S")
+  params:set("record_sync", 2); params:set("record_beats", 64); params:set("record_loop", 2)
+  -- the whole beats a 16 s slot holds, and their seconds, by hand: 60 / bpm a beat
+  for _, case in ipairs({ { bpm = 100, beats = 26, seconds = 15.6 }, { bpm = 110, beats = 29, seconds = 29 * 60 / 110 },
+    { bpm = 30, beats = 8, seconds = 16 }, { bpm = 120, beats = 32, seconds = 16 } }) do
+    params:set("clock_tempo", case.bpm)
+    local length = S.lib.record.take_length()
+    assert_equal(length.beats, case.beats, case.bpm .. " BPM: the whole beats a 16 s slot holds")
+    assert_equal(length.capped, true, case.bpm .. " BPM: capped")
+    context.clear_engine_calls(); record_buffer(1)
+    local seconds = recording_calls(context)[1].args[2]
+    assert_near(seconds, case.seconds, 1e-6, case.bpm .. " BPM: the take is those beats long")
+    assert_true(seconds <= S.performance.buffer_seconds, case.bpm .. " BPM: never past the slot")
+    redraw()
+    assert_true(h.screen_shows(context, case.beats .. "b max"), case.bpm .. " BPM: the field names the same beats")
+    record_buffer(1)   -- stop, then the engine's canceled report ends it
+    context.polls.fire("recordState", ((S.buffers[1].records_sent * 4) + 3) * 8)
+  end
+  -- beats that fit are sent whole; under a beat the take is a slot long
+  params:set("clock_tempo", 100); params:set("record_beats", 16)
+  assert_near(S.lib.record.take_length().seconds, 9.6, 1e-6, "16 beats at 100 BPM")
+  assert_equal(S.lib.record.take_length().capped, false, "16 beats fit")
+  assert_equal(S.lib.record.take_length().beats, 16)
+  params:set("clock_tempo", 3); params:set("record_beats", 64)
+  assert_equal(S.lib.record.take_length().seconds, 16, "not one beat fits: a slot")
+  assert_equal(S.lib.record.take_length().beats, 0, "shown as <1b max")
+  -- sync off: the duration, no beats
+  params:set("record_sync", 1); params:set("record_duration", 4)
+  assert_equal(S.lib.record.take_length().seconds, 4)
+  assert_equal(S.lib.record.take_length().beats, nil)
+end)
+
 test("K3 while armed or recording sends stopRecord", function()
   local context = load_strata(); finish_startup(context)
   params:set("record_sync", 3)

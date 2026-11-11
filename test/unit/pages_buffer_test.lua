@@ -435,6 +435,150 @@ test("the input polls stop when BUFFER is left and in cleanup", function()
   show_page("MAIN"); cleanup()
 end)
 
+-- #434: a meter change asked for request_redraw, which also repaints the
+-- arc's rings, though no ring shows the meter
+test("input meter changes redraw the screen and never the arc (#434)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  show_page("BUFFER")
+  next_frame(context)
+  local counter = count_screen_draws()
+  local refreshes = arc_hardware.refresh_count
+  for index = 1, 10 do
+    context.polls.fire("amp_in_l", index % 2 == 0 and 1 or 0.01)   -- 8 segments, then 2
+    next_frame(context)
+  end
+  counter.restore()
+  assert_equal(counter.screen, 10, "each change draws the screen on the next frame")
+  assert_equal(arc_hardware.refresh_count, refreshes, "and leaves the arc alone")
+end)
+
+-- #438 (2): a poll value asks for a redraw only when the drawn level or
+-- held peak changes
+test("a repeated input meter value asks for no redraw (#438)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local pages = local_value("UI_PAGES")
+  context.polls.fire("amp_in_l", 0.5)
+  next_frame(context)
+  assert_equal(pages.screen_dirty, false, "the frame drew it")
+  context.polls.fire("amp_in_l", 0.5); context.polls.fire("amp_in_r", 0.1)
+  assert_equal(pages.screen_dirty, false, "the same level and peak: no redraw")
+  context.polls.fire("amp_in_l", 1)
+  assert_equal(pages.screen_dirty, true, "a new level asks for one")
+end)
+
+-- #438 (3): norns replaces its poll objects when it re-registers the polls,
+-- so each visit looks them up again
+test("each BUFFER visit looks the input polls up again: replaced poll objects move the meter (#438)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("BUFFER"); show_page("SCENES")
+  for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do
+    local entry = { name = name, callback = nil, time = 0.25, running = false }
+    function entry:start() self.running = true end
+    function entry:stop() self.running = false end
+    context.polls.polls[name] = entry   -- as norns re-registers its polls (an engine load)
+  end
+  show_page("BUFFER")
+  assert_true(context.polls.polls.amp_in_l.running and context.polls.polls.amp_in_r.running,
+    "the second visit starts the new poll objects")
+  context.polls.fire("amp_in_l", 1); next_frame(context)
+  assert_equal((meter_state(context)), 8, "and their values move the meter")
+end)
+
+-- #435: the page animated, and the meter asked for redraws, under the open
+-- file selector, so norns' file list was redrawn 15 times a second
+test("the open file selector is not redrawn every frame over an animating slot, nor by the meter (#435)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)
+  params:set("v1_source", 2)
+  if not local_value("voices")[1].active then toggle_voice(1) end
+  assert_true(record.animates(), "voice 1 moves on the cursor slot")
+  tap(2)
+  assert_true(local_value("BUFFER_PAGE").file_selector_open, "K2's release opens the selector")
+  next_frame(context)   -- the frame the key asked for
+  local before = context.fileselect.redraws
+  context.clock.run_for(1)
+  assert_equal(context.fileselect.redraws, before, "15 frames with no change draw the selector no more")
+  assert_true(not record.animates(), "the page does not animate under the selector")
+  context.polls.fire("amp_in_l", 1); context.polls.fire("amp_in_l", 0.01)
+  next_frame(context)
+  assert_equal(context.fileselect.redraws, before, "input meter values ask for no redraw under the selector")
+  context.fileselect.close()
+  assert_true(record.animates(), "closed: the page animates again")
+  next_frame(context)
+  assert_equal((meter_state(context)), 2, "and shows the meter as it is now")
+end)
+
+-- #432: the flash spelled the folder's absolute path, cut to the screen
+-- inside /home/we/dust/audio/, so the folder searched never showed
+test("the no files flash names the folder as the player knows it, its own name on screen (#432)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local files = local_value("S").lib.files
+  local function flashed(folder)
+    files.note_chosen(folder .. "x.wav"); files.random_into(1); redraw()
+    return hint_text(context)
+  end
+  local function fits(text) return select(2, text_span({ x = 0, text = text, align = "left" })) <= 128 end
+  -- on a norns the audio folder is /home/we/dust/audio/ (the folder below it
+  -- is not on this machine: it cannot be opened)
+  local audio = _path.audio
+  _path.audio = "/home/we/dust/audio/"
+  local ok, shown = pcall(flashed, "/home/we/dust/audio/field recordings/")
+  _path.audio = audio
+  assert_true(ok, tostring(shown))
+  assert_equal(shown, "cannot open field recordings/", "the folder below the audio folder")
+  assert_true(fits(shown), "whole on the hint row, under norns' font widths")
+  local folder = audio .. "field_recordings/"; util.make_dir(folder)
+  assert_equal(flashed(folder), "no files in field_recordings/", "an empty folder below the audio folder")
+  local nested = audio .. "drums/kicks/"; util.make_dir(nested)
+  assert_equal(flashed(nested), "no files in drums/kicks/", "a path below it that fits")
+  local deep = audio .. "a_long_folder_name/another_one/"; util.make_dir(deep)
+  shown = flashed(deep)
+  assert_true(not fits("no files in a_long_folder_name/another_one/"), "the path below would not fit")
+  assert_equal(shown, "no files in another_one/", "so the folder's own name")
+  assert_equal(flashed(audio), "no files in audio/", "the audio folder itself")
+  assert_equal(flashed("/nowhere/samples/"), "cannot open samples/", "a folder elsewhere: its own name")
+end)
+
+-- #551: norns' font draws printable ASCII only, so accented letters in a
+-- file name showed as gaps, and fit_text measured a text that was not drawn
+test("a file name with accented letters is drawn in printable ASCII, cut where it is measured (#551)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local page = local_value("BUFFER_PAGE")
+  local function name_on_row(y)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.x == page.name_x and entry.y == y then return entry.text end
+    end
+  end
+  context.clear_engine_calls()
+  load_buffer(1, "/tmp/ça été.wav"); context.polls.fire("bufferState", 12)
+  load_buffer(2, "/tmp/ñandú über très longue étude.wav"); context.polls.fire("bufferState", 1012)
+  redraw()
+  assert_equal(name_on_row(page.row_first_y), "ca ete", "accented letters drawn as plain ones")
+  assert_equal(S.buffers[1].name, "ça été.wav", "the slot keeps the real name")
+  assert_equal(context.calls_named("loadBuffer")[1].args[2], "/tmp/ça été.wav", "and loads the real path")
+  -- slot 2's row (not the cursor's): its name ends before the widest length
+  local drawn = name_on_row(page.row_first_y + page.row_spacing)
+  assert_true(drawn:find("^[ -~]+$") ~= nil, "only printable ASCII: " .. drawn)
+  local plain = "nandu uber tres longue etude"
+  assert_equal(plain:sub(1, #drawn), drawn, "the start of the plain name")
+  local room = page.value_right - screen.text_extents("16.0s") - page.column_gap - page.name_x
+  assert_true(screen.text_extents(drawn) <= room, "it fits its room")
+  assert_true(screen.text_extents(plain:sub(1, #drawn + 1)) > room, "cut where the drawn text no longer fits")
+  -- the flash of a random file names it the same way
+  local folder = _path.audio .. "pack/"; util.make_dir(folder)
+  io.open(folder .. "café.wav", "w"):close()
+  S.lib.files.note_chosen(folder .. "x.wav")
+  context.clear_engine_calls()
+  assert_true(S.lib.files.random_into(3), "a random file loads")
+  redraw()
+  assert_equal(hint_text(context), "buf 3: cafe.wav", "the flash drawn in printable ASCII")
+  assert_equal(context.calls_named("loadBuffer")[1].args[2], folder .. "café.wav", "the real path loads")
+  assert_screen_layout(context, "BUFFER with accented names")
+end)
+
 test("BUFFER hints", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   enc(2, 2)
@@ -832,7 +976,8 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
 end)
 
-test("BUFFER's layout states draw clear of each other", function()
+-- what the layout test (ui_layout_test.lua) draws: each state named here
+test("BUFFER lists its layout states", function()
   local context = load_strata(); finish_startup(context)
   local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]
   assert_true(type(record.layout_states) == "table" and #record.layout_states > 0, "BUFFER lists layout states")
@@ -844,7 +989,7 @@ test("BUFFER's layout states draw clear of each other", function()
     "load failed flash", "random file flash", "filled flash", "no files flash", "meter peak",
     "armed", "take recording", "take finishing", "dub recording", "loop recording", "len 16b max",
     "seven heads on one slot", "record head", "a long file's start", "a long file's start (high, 300 s)",
-    "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)" }) do
+    "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)", "long files checking (high, 300 s)" }) do
     assert_true(names[name], "a layout state " .. name)
   end
 end)
@@ -1147,10 +1292,10 @@ test("the bm field steps 1-4 and recalls the bookmark it lands on", function()
   params:set("v1_source", 2)   -- voice 1 on slot 1
   to_field(9)
   redraw()
-  assert_equal(field_named(context, "bm").value, "1 0.00", "nothing recalled: bookmark 1")
-  enc(3, 1)
+  assert_equal(field_named(context, "bm").value, "-", "nothing recalled: no bookmark (#431)")
+  enc(3, 2)
   redraw()
-  assert_equal(field_named(context, "bm").value, "2 0.25")
+  assert_equal(field_named(context, "bm").value, "2 0.25", "two detents from none: bookmark 2")
   assert_near(params:get("v1_buf_pos"), 0.25, 1e-6, "bookmark 2 recalled")
   assert_equal(local_value("S").lib.positions.last_recalled(1), 2)
   enc(3, 3); redraw()
@@ -1159,6 +1304,69 @@ test("the bm field steps 1-4 and recalls the bookmark it lands on", function()
   assert_equal(field_named(context, "bm").level, 15, "bright under the cursor")
   params:set("v1_source", 1); redraw()
   assert_equal(field_named(context, "bm").level, 4, "a synth voice: dim even under the cursor")
+end)
+
+-- The t_scanReset sends to voice 1 (a jump restarts its scan: a recall)
+local function scan_resets(context)
+  local count = 0
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "t_scanReset" then count = count + 1 end
+  end
+  return count
+end
+
+-- #431: the field showed 1 with nothing recalled, so a detent down did
+-- nothing and bookmark 1 could not be reached; a recalled bookmark could
+-- only be recalled again through a neighbor
+test("on a fresh buffer voice one detent either way recalls bookmark 1 (#431)", function()
+  for _, d in ipairs({ -1, 1 }) do
+    local context = load_strata(); finish_startup(context); show_page("BUFFER")
+    params:set("v1_source", 2); set_running(1, true)
+    params:set("v1_buf_pos", 0.6)
+    to_field(9)
+    context.clear_engine_calls()
+    enc(3, d)
+    assert_near(params:get("v1_buf_pos"), 0, 1e-6, "E3 " .. d .. ": the voice jumps to bookmark 1 (0)")
+    assert_equal(local_value("S").lib.positions.last_recalled(1), 1, "E3 " .. d .. ": bookmark 1 recalled")
+    assert_equal(scan_resets(context), 1, "E3 " .. d .. ": one jump, its scan restarted")
+    redraw()
+    assert_equal(field_named(context, "bm").value, "1 0.00", "E3 " .. d .. ": the field shows it")
+  end
+end)
+
+test("ALT+E3 on bm recalls the bookmark it shows again, and no other (#431)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("v1_source", 2); set_running(1, true)
+  to_field(9)
+  enc(3, 2)   -- bookmark 2
+  params:set("v1_buf_pos", 0.6)   -- the playhead moves on
+  context.clear_engine_calls()
+  with_alt(function() enc(3, 1) end)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-6, "back at bookmark 2")
+  assert_equal(local_value("S").lib.positions.last_recalled(1), 2, "still bookmark 2")
+  assert_equal(scan_resets(context), 1, "one jump: no neighbor recalled on the way")
+  params:set("v1_buf_pos", 0.9)
+  with_alt(function() enc(3, -1) end)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-6, "either way")
+  assert_equal(scan_resets(context), 2)
+end)
+
+-- #438 (1): the field recalls only when the shown bookmark changes
+test("E3 past bookmark 1 or 4 sends no further t_scanReset (#438)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  params:set("v1_source", 2); set_running(1, true)
+  to_field(9)
+  enc(3, 4)   -- bookmark 4
+  params:set("v1_buf_pos", 0.1)
+  context.clear_engine_calls()
+  enc(3, 1); enc(3, 3)
+  assert_equal(scan_resets(context), 0, "past 4: no recall")
+  assert_near(params:get("v1_buf_pos"), 0.1, 1e-6, "the voice stays where it is")
+  enc(3, -3)   -- bookmark 1
+  context.clear_engine_calls()
+  enc(3, -1); enc(3, -2)
+  assert_equal(scan_resets(context), 0, "past 1: no recall")
+  assert_equal(local_value("S").lib.positions.last_recalled(1), 1)
 end)
 
 test("the start field shows - for a file that fits and steps at the resolution it shows", function()
@@ -1440,6 +1648,7 @@ test("the selected voice's bookmarks tick at y 29-30, the last recalled at 15", 
     end
     return found
   end
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)   -- ticks need audio (#433)
   params:set("v1_source", 2); redraw()
   local found = ticks()
   for _, x in ipairs({ 60, 76, 92, 108 }) do assert_equal(found[x], 6, "a tick at x " .. x) end
@@ -1481,6 +1690,7 @@ end)
 
 test("each running voice on the slot draws its playhead, the selected one at 15", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)   -- heads need audio (#433)
   params:set("v1_source", 2); params:set("v3_source", 2)
   params:set("v1_buf_pos", 0.25); params:set("v3_buf_pos", 0.5)
   params:set("v1_grain_spread", 0.25)
@@ -1495,7 +1705,8 @@ test("each running voice on the slot draws its playhead, the selected one at 15"
   end
   assert_true(spread ~= nil and spread.level == 4, "voice 1's spread at y 28, level 4")
   set_running(1, false); set_running(3, false)
-  -- the slot recording playably: a dotted record head
+  -- the slot, emptied, recording playably: a dotted record head
+  clear_buffer(1)
   params:set("record_feedback", 50)
   context.set_time(200); record_buffer(1); context.set_time(202)   -- 2 s of 8
   redraw()
@@ -1507,9 +1718,31 @@ test("each running voice on the slot draws its playhead, the selected one at 15"
   assert_equal(table.concat(dots, " "), "11 13 15 17 19 21 23 25 27", "every other pixel at the record head")
 end)
 
+-- #438 (4): the selected voice's head is drawn last, so it is the one seen
+-- where two heads share a column
+test("where two heads share a column the selected voice's is drawn last (#438)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)
+  -- voice 1 (selected) and voice 3 at one place: drawn in voice order,
+  -- voice 3's line would come last and cover the selected one's
+  params:set("v1_source", 2); params:set("v3_source", 2)
+  params:set("v1_buf_pos", 0.25); params:set("v3_buf_pos", 0.25)
+  set_running(1, true); set_running(3, true)
+  redraw()
+  local last
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == 76 and line.x2 == 76 and math.min(line.y1, line.y2) == 11 and math.max(line.y1, line.y2) == 27 then
+      last = line
+    end
+  end
+  assert_true(last ~= nil, "a head at x 76")
+  assert_equal(last.level, 15, "the last line drawn at x 76 is the selected voice's (voice 1)")
+end)
+
 test("BUFFER animates while a voice reads the cursor slot or it records", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)   -- a slot with audio (#433)
   set_running(1, false)
   assert_true(record.animates ~= nil and not record.animates(), "nothing moves")
   params:set("v1_source", 2); set_running(1, true)
@@ -1519,6 +1752,48 @@ test("BUFFER animates while a voice reads the cursor slot or it records", functi
   params:set("v1_source", 1)
   params:set("record_feedback", 50); record_buffer(1)
   assert_true(record.animates(), "the slot records playably")
+end)
+
+-- #433: heads, spreads and ticks were drawn, and the page redrew every
+-- frame, over a slot with no audio, while the grid's row stayed dark
+test("an empty slot draws no head, spread or tick and does not animate; nor does a replace take (#433)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local record = S.registry.pages[local_value("UI_PAGES").index.BUFFER]
+  local function draws_in_a_second()
+    context.clock.run_for(0.2)
+    local counter = count_screen_draws()
+    context.clock.run_for(1)
+    counter.restore()
+    return counter.screen
+  end
+  local function spreads_and_ticks()
+    local count = 0
+    for _, line in ipairs(context.screen.lines) do if line.y1 == 28 and line.y2 == 28 then count = count + 1 end end
+    for _, rect in ipairs(context.screen.rects) do if rect.y == 29 and rect.h == 2 then count = count + 1 end end
+    return count
+  end
+  params:set("v1_source", 2); set_running(1, true)   -- voice 1 on slot 1, which holds nothing
+  params:set("v1_grain_spread", 0.25)
+  redraw()
+  assert_equal(next(head_lines(context)), nil, "no head over the flat line")
+  assert_equal(spreads_and_ticks(), 0, "no spread, no bookmark tick")
+  assert_true(not record.animates(), "nothing moves on an empty slot")
+  assert_equal(draws_in_a_second(), 0, "no frame draws it")
+  assert_equal(S.lib.positions.grid_level(1, 1, 16), 0, "as the grid's row for it is dark")
+  -- a replace take on the cursor slot plays nothing and has no head
+  record_buffer(1)
+  assert_equal(S.lib.playheads.record_head(1), nil, "a replace take has no record head")
+  assert_true(not record.animates(), "a replace take: nothing moves")
+  assert_equal(draws_in_a_second(), 0, "no frame draws it")
+  -- the slot reports audio: the head, its spread and the ticks show, and it moves
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 12)
+  redraw()
+  local heads = head_lines(context)
+  assert_true(next(heads) ~= nil, "a head once the slot holds audio")
+  assert_equal(spreads_and_ticks(), 5, "its spread and the four ticks")
+  assert_true(record.animates(), "and the page animates")
+  assert_equal(draws_in_a_second(), 15)
 end)
 
 test("slot rows show ARM, REC, DUB and LOOP", function()

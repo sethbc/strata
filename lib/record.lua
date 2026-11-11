@@ -87,6 +87,32 @@ return function(S)
     return (target - now) * beat_seconds
   end
 
+  -- The length the next recording would have, at the tempo now: {seconds,
+  -- beats, capped}. Sync off: record_duration (beats nil). Sync on:
+  -- record_beats beats; when they need more than a slot holds, the whole
+  -- beats that fit (capped true), so a loop recorded this way still wraps
+  -- on the beat, or the whole slot when not one beat fits (beats 0).
+  -- record_buffer sends its seconds and BUFFER's len field shows its beats:
+  -- the one place the cap is worked out (#321)
+  function M.take_length()
+    local slot_seconds = S.performance.buffer_seconds
+    if params:get("record_sync") == 1 then
+      -- at most what a slot holds on this tier (the param's range already
+      -- ends there; a value set before the range was known never passes it)
+      return {seconds = math.min(params:get("record_duration"), slot_seconds)}
+    end
+    local beat_seconds = clock.get_beat_sec()
+    local beats = params:get("record_beats")
+    local fit = math.floor(slot_seconds / beat_seconds + 1e-9)
+    -- fit beats can pass the slot by a rounding error when a slot is a
+    -- whole number of beats: the seconds never do
+    if beats <= fit then
+      return {seconds = math.min(beats * beat_seconds, slot_seconds), beats = beats, capped = false}
+    end
+    if fit < 1 then return {seconds = slot_seconds, beats = 0, capped = true} end
+    return {seconds = math.min(fit * beat_seconds, slot_seconds), beats = fit, capped = true}
+  end
+
   -- Start the take timer: `seconds` later the take finishes
   local function start_take_timer(slot, seconds)
     M.cancel_timer(slot)
@@ -135,11 +161,9 @@ return function(S)
       local threshold_index = params:get("record_threshold")
       if threshold_index > 1 then threshold = 10 ^ (THRESHOLD_DB[threshold_index - 1] / 20) end
       local delay = sync_delay()
-      local seconds = params:get("record_duration")
-      if params:get("record_sync") > 1 then seconds = params:get("record_beats") * clock.get_beat_sec() end
-      -- at most what a slot holds on this tier (the param's range already
-      -- ends there; a value set before the range was known never passes it)
-      seconds = math.min(seconds, S.performance.buffer_seconds)
+      -- what BUFFER's dur or len field shows (a capped synced take is the
+      -- whole beats that fit, #321)
+      local seconds = M.take_length().seconds
       -- (the rate of a file the engine confirmed: a slot that shows no audio
       -- is empty to the engine, whatever file was last named for it)
       local rate = buffer.loaded and buffer.sample_rate or nil

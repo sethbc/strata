@@ -79,9 +79,21 @@ return function(S)
   end
 
   -- The flash for a folder that gave no file: it cannot be opened, or it
-  -- holds no sound file
+  -- holds no sound file. The folder as the player knows it, never its
+  -- absolute path, whose fixed start alone (/home/we/dust/audio/) fills the
+  -- hint row (#432): its path below _path.audio ("tape/", "drums/kicks/"),
+  -- or its own name ("audio/" for _path.audio itself, "samples/" for a
+  -- folder elsewhere), also when the path below would not fit the hint row
   local function flash_no_files(folder, names)
-    buffer_page_flash((names and "no files in " or "cannot open ") .. tostring(folder))
+    local prefix = names and "no files in " or "cannot open "
+    folder = tostring(folder)
+    local shown = folder:match("([^/]+/?)$") or folder
+    local audio = _path.audio
+    if #folder > #audio and folder:sub(1, #audio) == audio
+      and S.lib.ui_header.hint_fits(prefix .. folder:sub(#audio + 1)) then
+      shown = folder:sub(#audio + 1)
+    end
+    buffer_page_flash(prefix .. shown)
   end
 
   -- Fill slot with a random sound file from its folder, other than the file
