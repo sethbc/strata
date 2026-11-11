@@ -196,7 +196,7 @@ return function(S)
     elseif LAYOUT_256.tempo_steps[x] then
       -- Tempo -10, -1, +1, +10; the header shows the tempo it lands on
       params:delta("tempo", LAYOUT_256.tempo_steps[x])
-      header_flash(string.format("tempo %d", util.round(params:get("tempo"))))
+      header_flash(string.format("tempo %d", util.round(clock.get_tempo())))  -- what the clock runs (#383)
     end
   end
 

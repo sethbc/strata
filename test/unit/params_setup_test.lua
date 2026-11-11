@@ -572,4 +572,19 @@ test("a tempo change from an external clock redraws SEQ and the arc (#383)", fun
   assert_true(not pages.screen_dirty, "an unchanged tempo requests no redraw")
 end)
 
+
+test("the 256 grid's tempo keys flash the tempo the clock runs, under an external source (#383)", function()
+  local context = load_strata(); finish_startup(context)
+  local flash = local_value("S").lib.ui_flash
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 13, 8, 1)  -- page 1
+  params:set("clock_source", 2)    -- midi: the clock's tempo is not ours to set
+  clock.tempo = 100
+  context.grid.press(1, 7, 8, 1)   -- +1 BPM
+  assert_equal(flash.text("header"), "tempo 100", "the flash shows the running tempo, not the param")
+  params:set("clock_source", 1)
+  context.grid.press(1, 7, 8, 1)
+  assert_equal(flash.text("header"), "tempo " .. math.floor(clock.get_tempo() + 0.5), "internal: the tempo it landed on")
+end)
+
 end
