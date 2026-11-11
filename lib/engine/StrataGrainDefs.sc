@@ -212,10 +212,9 @@
     }
 
     // What a ring grain reads (strataGrainRing): the ring pair, at the rate
-    // clipped to +/- ringMaxRate, starting a lookback D behind the write head
-    // (the frame position on phaseBus, which the writer reports at the start
-    // of each block; a grain triggered later in the block only reads further
-    // back). See docs/notes/engine/rings.md:
+    // clipped to +/- ringMaxRate, starting a lookback D and one block behind
+    // the write head (the frame position on phaseBus, which the writer
+    // reports at the start of each block). See docs/notes/engine/rings.md:
     //   continuous: D = margin + history + spread + max(r - 1, 0) x dur
     //   triggered:  dur' = min(dur, dur / (r - 1)), D = margin + history + max(r - 1, 0) x dur'
     // spread is a per-grain draw of 0 to posSpread x ringSpreadSeconds
@@ -231,8 +230,21 @@
             var spread = TRand.ar(0, posSpread * this.ringSpreadSeconds, trig) * (1 - mode);
             var lookback = this.ringReadMargin + history.clip(0, historySeconds) + spread + (ahead * length)
                 + this.ringScanOffset(bufScan, freeze);
-            var frames = BufFrames.kr(bufL);
-            var start = (In.kr(phaseBus, 1) - (lookback * SampleRate.ir)).wrap(0, frames);
+            var frames = BufFrames.kr(bufL), back = lookback * SampleRate.ir;
+            var head = In.kr(phaseBus, 1);
+            // The subtraction runs at audio rate, so it reads the block-rate
+            // head as a ramp from the last block's value to this one's: the
+            // head sample by sample, one block late, so every grain starts
+            // the same distance behind it wherever in a block its trigger
+            // falls (grains at one rate stay in phase; never latch the head
+            // for the block). In the block where the head has wrapped (it
+            // reads under a block) that ramp would run back through the
+            // whole ring, so there the head is read counted from half a ring
+            // back (shifted: it steps where the head crosses the half and
+            // runs on where it wraps); wrap brings the start into the ring.
+            var shifted = head - (frames * (head >= (frames * 0.5)));
+            var wrapBlock = head < context.server.options.blockSize;
+            var start = Select.ar(wrapBlock, [head - back, shifted - back]).wrap(0, frames);
             (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: start / frames, level: 1)
         }
     }
@@ -254,12 +266,17 @@
             var serverScale = BufRateScale.kr(bufnumL);
             var slotRate = rate * bufRate * (bufRateScale / serverScale);
             var validFrames = Gate.kr(bufFrames, bufFrames > 0);
-            var readRate = (slotRate * serverScale).abs.max(0.001);  // never 0: the duration divides by it
+            // the rate in slot frames per output frame, signed: what the
+            // loop's direction test and the head guard need (slotRate is
+            // GrainBuf's argument, divided by the server's BufRateScale,
+            // which outlives a clear and a recording)
+            var frameRate = slotRate * serverScale;
+            var readRate = frameRate.abs.max(0.001);  // never 0: the duration divides by it
             var grainDur = dur.min((validFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
             var grainFrames = grainDur * SampleRate.ir * readRate;
             var scanPhase = this.slotScanPhase(bufScan, freeze, scrubRate, scanHold, t_scanReset);
             var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
-            var start = this.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, slotRate, grainFrames, validFrames,
+            var start = this.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, frameRate, grainFrames, validFrames,
                 loopStart, loopLength, recHeadBus);
             (bufL: bufnumL, bufR: bufnumR, rate: slotRate, dur: grainDur,
                 pos: start * (validFrames / BufFrames.kr(bufnumL)),

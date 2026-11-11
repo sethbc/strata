@@ -218,6 +218,8 @@ SynthDef(\strataCheckRecSeam, { arg in, out;
     var x = In.ar(in, 2)[0];
     Out.kr(out, A2K.kr(Peak.ar((x * DelayN.ar(x, 0.01, 8 / SampleRate.ir)).neg.max(0))));
 }).add;
+// the server's own rate scale of a buffer (what GrainBuf multiplies by)
+SynthDef(\strataCheckRateScale, { arg buf, out; Out.kr(out, BufRateScale.kr(buf) ! 2) }).add;
 SynthDef(\strataCheckAlternating, { arg out, period;
     Out.ar(out, (((Sweep.ar(0, 1 / period) % 2) < 1) * -1 + ((Sweep.ar(0, 1 / period) % 2) >= 1)) * 0.5 ! 2);
 }).add;
@@ -781,6 +783,60 @@ test.("record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with
     check.(results.every({ arg each; each[2].every({ arg value; value < 1e-3 }) }),
         "record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with 0.5 s grains (% , largest sign-flip product per voice)".format(
             results.collect({ arg each; [each[0], each[1], each[2].maxItem.round(1e-5)] })));
+});
+test.("record: no grain reads across the head in a slot whose buffer keeps another file's rate", {
+    // The server keeps a buffer's sample rate from the last file read into
+    // it, through a replace take: the slot's audio is then at the server's
+    // rate and its BufRateScale is not. [file, its rate, the voices' rate]:
+    // 22.05 kHz at half speed, 96 kHz an octave up
+    var loopSeconds = 6.0, voices = 4, results = List.new;
+    var fastPath = h.tempDir +/+ "guard-96k.wav";
+    h.writeTestFile(fastPath, 96000, 48000, [0.25, 0.25]);
+    [[h.stereoPath, 22050, 0.5], [fastPath, 96000, 2]].do({ arg fileCase;
+        var rate = fileCase[2], delay = 0.3, source, probes, buses, group, scale, id = server.nextNodeID;
+        h.command(\loadBuffer, 2, fileCase[0], 0);
+        h.waitFor({ engine.bufferFrames[2] > 0 }, 3);
+        settle.(0.1);
+        // the old audio: a replace take of 0.5 over the file
+        source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
+        record.(2, loopSeconds, 1.0, 0, 0);
+        waitDone.(2, loopSeconds + 3);
+        source.free; settle.(0.1);
+        scale = measured.(\strataCheckRateScale, [\buf, engine.buffersL[2].bufnum], 0.05, engine.processGroup)[0];
+        group = Group.tail(context.xg);
+        buses = voices.collect({ Bus.control(server, 2) });
+        probes = voices.collect({ arg voice;
+            Synth(\strataCheckRecSeam, [\in, state[\voiceTaps][voice], \out, buses[voice]], group);
+        });
+        // as the check above: pass n writes (-1)^(n + 1) x 0.5, the voices
+        // start once the head runs
+        record.(2, loopSeconds, 1.0, 0, 0, 0, 1, delay);
+        server.sendBundle(delay, ['/s_new', \strataCheckAlternating, id, 2, inputSynth.nodeID,
+            \out, engine.inputBus.index, \period, loopSeconds]);
+        (delay + 0.1).wait; server.sync;
+        voices.do({ arg voice;
+            h.command(\setGrainSource, voice, 3);
+            h.command(\voiceOn, voice, 110.0, 0.5, 0.0, 0.5, 1.9, rate);
+            [[\reverseProb, 0], [\panJitter, 0], [\sizeJitter, 0], [\bufPos, voice / voices], [\posSpread, 1]].do({ arg pair;
+                h.command(\setGrainParam, voice, *pair) });
+        });
+        server.sync;
+        2.2.wait; server.sync;
+        results.add([fileCase[1], rate, engine.bufferSampleRates[2], scale, buses.collect({ arg bus; h.readBus(bus)[0] })]);
+        h.command(\stopRecord, 2);
+        waitDone.(2);
+        server.sendBundle(nil, ['/n_free', id]);
+        voices.do({ arg voice; h.command(\voiceOff, voice) });
+        group.free; server.sync; buses.do(_.free);
+        h.stopAllVoices;
+    });
+    File.delete(fastPath);
+    // (before the fix, 3.14.1: 0.025 after the 22.05 kHz file at half speed,
+    // 0.027 after the 96 kHz file an octave up; a 48 kHz file reads 0)
+    check.(results.every({ arg each; (each[2] == sampleRate) and: { (each[3] - 1).abs > 0.05 }
+            and: { each[4].every({ arg value; value < 1e-3 }) } }),
+        "record: no grain reads across the head in a slot whose buffer keeps another file's rate (% , [file rate, voices' rate, slot rate, server's BufRateScale, largest sign-flip product])".format(
+            results.collect({ arg each; [each[0], each[1], each[2], each[3].round(1e-4), each[4].maxItem.round(1e-5)] })));
 });
 test.("record: the guard's zone follows the grain's life in output frames, at rates 4 and 0.5", {
     var head = 5 * sampleRate, d = 12 * sampleRate, m = margin.value;

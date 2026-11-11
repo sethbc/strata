@@ -21,6 +21,7 @@ var rings = engine.areaState[\rings], sampleRate = server.sampleRate, block = se
 var probeGroup, quietBus, nowBus, readOut, rectEnv, timecode, sine, readings;
 var timeReads, pitchOf, startTimecodeVoice, grainSynth, ringNames, writers, nodes, ringOk;
 var rampBuffer, recordBuffer, wrapRead, other, otherRings, otherWriters, badBus, writer, phaseBus, scratchRing;
+var readsOf, ringStart, ringStarts, toneSynth, levelBus, levelProbe;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, longest grain, largest step between samples, seconds with no
@@ -58,6 +59,39 @@ SynthDef(\strataCheckTimecode, { arg out, out2, now;
 }).add;
 SynthDef(\strataCheckPitch, { arg in, out;
     Out.kr(out, Pitch.kr(In.ar(in, 2)[0], minFreq: 100, maxFreq: 2000, ampThreshold: 0.001, median: 7));
+}).add;
+// Where ringGrainReader starts a grain (spread and scan 0), read on the
+// timecode in its ring: a trigger every `period` samples (63: at least one
+// in every block, at each offset of a block in turn), and at each how far
+// back (s) the frame it starts at was written, less the lookback asked for
+// (expect, or expectB where that is nearer: a reader pointed between two
+// rings). [smallest, largest, triggers more than three blocks off, triggers]
+SynthDef(\strataCheckRingStart, { arg out, now, bufL, bufR, phaseBus, history = 0, rate = 1, dur = 0.1,
+    expect = 0.005, expectB = 0.005, period = 63, t_reset = 0, posSpread = 0, bufScan = 0, freeze = 0;
+    var trig = Impulse.ar(SampleRate.ir / period), reset = T2A.ar(t_reset), on = trig > 0;
+    var read = engine.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze)
+        .value(trig, K2A.ar(rate), K2A.ar(dur), 0);
+    var written = BufRd.ar(1, bufL, read[\pos] * BufFrames.kr(bufL), 1, 1);
+    var back = In.ar(now, 1) - written, blockSeconds = block / SampleRate.ir;
+    var fromA = back - expect, fromB = back - expectB;
+    var off = Select.ar((fromB - (0.5 * blockSeconds)).abs < (fromA - (0.5 * blockSeconds)).abs, [fromA, fromB]);
+    Out.kr(out, A2K.kr([
+        RunningMin.ar(Select.ar(on, [DC.ar(1e9), off]), reset),
+        RunningMax.ar(Select.ar(on, [DC.ar(-1e9), off]), reset),
+        PulseCount.ar(trig * (off.abs > (3 * blockSeconds)), reset),
+        PulseCount.ar(trig, reset)
+    ]));
+}).add;
+// A grain synth's left channel since t_reset: [the smallest reading of a
+// 2 ms envelope follower (from 50 ms after the reset), the integral of its
+// square, seconds]
+SynthDef(\strataCheckRingLevel, { arg in, out, t_reset = 0;
+    var sig = In.ar(in, 2)[0], reset = T2A.ar(t_reset), elapsed = Sweep.ar(reset, 1);
+    Out.kr(out, A2K.kr([
+        RunningMin.ar(Select.ar(elapsed > 0.05, [DC.ar(1e9), Amplitude.ar(sig, 0.002, 0.002)]), reset),
+        Integrator.ar(sig.squared * SampleDur.ir, 1 - reset),
+        elapsed
+    ]));
 }).add;
 // One grain from pos at rate through a rectangular envelope, recorded
 SynthDef(\strataCheckWrap, { arg bufnum, record, env, pos = 0.9, rate = 1, dur = 0.05;
@@ -324,6 +358,101 @@ command.(\setGrainParam, 3, \bufScan, 0.0);
 command.(\setGrainParam, 3, \history, 0.0);
 command.(\voiceOff, 3);
 command.(\setGrainSource, 3, 0);
+
+// ---- Across the head's wrap, and between two rings ----
+// Several voices' reads at once (timeReads for each, on buses of their own)
+readsOf = { arg voices, seconds;
+    var buses = voices.collect({ Bus.control(server, 7) }), outs = voices.collect({ Bus.audio(server, 2) }), probes, values;
+    voices.do({ arg voice, index; engine.synths[engine.grainKey(voice)].set(\out, outs[index].index) });
+    probes = voices.collect({ arg voice, index;
+        Synth(\strataCheckRingRead, [\in, outs[index], \now, nowBus, \out, buses[index]], probeGroup) });
+    server.sync; 0.05.wait;
+    probes.do({ arg probe; probe.set(\t_reset, 1) }); server.sync;
+    seconds.wait;
+    values = buses.collect({ arg bus; readBus.(bus) });
+    probes.do(_.free);
+    voices.do({ arg voice; engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index) });
+    server.sync;
+    (buses ++ outs).do(_.free);
+    check.(voices.every({ arg voice; getControl.(engine.synths[engine.grainKey(voice)], \out)
+        == engine.voicePathBus(voice, engine.grainSource[voice]).index }),
+        "rings: the grain synths' outs are restored to their own paths (voices %)".format(voices));
+    values
+};
+// ringGrainReader alone (\strataCheckRingStart) on voice 1's ring at rate 1
+// and at rate 4 with 0.5 s grains, and on the input ring, each for a lap of
+// the input ring (the voice ring wraps five times, the input ring once):
+// every grain starts the lookback and one block behind the head, the
+// distance a ramp of the block's head gives grains at one rate (a head
+// held for the block would start them up to a block apart)
+ringStart = { arg ring, settings;
+    var bus = Bus.control(server, 4);
+    var synth = Synth(\strataCheckRingStart, [\out, bus, \now, nowBus, \bufL, ring[0], \bufR, ring[1], \phaseBus, ring[2]]
+        ++ settings, probeGroup);
+    (synth: synth, bus: bus)
+};
+// ... and the real strataGrainRing, 4 ms grains at a density that is not a
+// whole number (so they fall in a wrap block now and then), on voice 1's
+// ring and on the input ring (voice 4) at the same time. (The voice synth
+// a voiceOn starts writes the voice's bus for a block before it is moved:
+// 2 s, and the ring holds 2 s of timecode behind the head again.)
+startTimecodeVoice.(0, 0, 0.004, 187.3, 1.0);
+startTimecodeVoice.(3, engine.inputSource, 0.004, 187.3, 1.0);
+2.0.wait;
+ringStarts = [
+    ringStart.(engine.ringBuffersFor(0, 0), [\rate, 1, \dur, 0.1, \expect, engine.ringReadMargin, \expectB, engine.ringReadMargin]),
+    ringStart.(engine.ringBuffersFor(0, 0), [\rate, 4, \dur, 0.5, \expect, engine.ringReadMargin + 1.5, \expectB, engine.ringReadMargin + 1.5]),
+    ringStart.(engine.ringBuffersFor(0, engine.inputSource), [\rate, 1, \dur, 0.1, \expect, engine.ringReadMargin,
+        \expectB, engine.ringReadMargin])
+];
+server.sync; 0.1.wait;
+ringStarts.do({ arg each; each[\synth].set(\t_reset, 1) });
+readings = readsOf.([0, 3], (rings[\inputL].numFrames / sampleRate) + 0.3);
+ringStarts = ringStarts.collect({ arg each; var values = readBus.(each[\bus]); each[\synth].free; each[\bus].free; values });
+[["voice 1's ring at rate 1", ringStarts[0]], ["voice 1's ring at rate 4, 0.5 s grains", ringStarts[1]],
+    ["the input ring", ringStarts[2]]].do({ arg pair;
+    var values = pair[1];
+    check.((values[3] > 1000) and: { values[2] == 0 } and: { values[0] >= ((block / sampleRate) - 0.00005) }
+        and: { values[1] <= ((block / sampleRate) + 0.00005) },
+        "rings: every grain starts the lookback and one block behind the head, across the head's wrap (%; % to % ms past the lookback, % of % triggers more than three blocks off)"
+            .format(pair[0], (values[0] * 1000).round(0.001), (values[1] * 1000).round(0.001), values[2], values[3]));
+});
+[["voice 1's ring", readings[0]], ["the input ring", readings[1]]].do({ arg pair;
+    var values = pair[1];
+    check.((values[0] < 0.01) and: { values[1] >= (engine.ringReadMargin - 0.0005) },
+        "rings: no grain reads further back than its lookback at a density that is not a whole number (%, 4 ms grains at 187.3 a second; lookback % to % s)"
+            .format(pair[0], values[1].round(0.0001), values[0].round(0.0001)));
+});
+command.(\voiceOff, 0);
+command.(\voiceOff, 3);
+command.(\setGrainSource, 3, 0);
+
+// grains at rate 1 with no spread give the ring's audio back: a 750 Hz sine
+// at 0.5 in voice 3's ring, Hann grains of 0.1 s at 20 a second (a Hann pair
+// at overlap 2 sums to 1, so grains that all start one distance back add
+// up to the sine; started up to a block apart they would comb it), over a
+// wrap of the ring: the left channel reads the sine through the pan
+// wander's Balance2 at the center (0.5 x 0.707, rms 0.25) and never dips
+toneSynth = Synth(\strataCheckSine, [\out, engine.granBuses[2], \freq, 750], engine.voiceGroup, \addToHead);
+command.(\setGrainSource, 2, 0);
+command.(\voiceOn, 2, 100.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+server.sync;
+engine.synths[engine.voiceKey(2)] !? { arg synth; synth.set(\out, quietBus.index) };
+[\posSpread, \panSpread].do({ arg control; command.(\setGrainParam, 2, control, 0.0) });
+engine.synths[engine.grainKey(2)].set(\envBuf, -1, \out, readOut.index);
+server.sync; 0.5.wait;
+levelBus = Bus.control(server, 3);
+levelProbe = Synth(\strataCheckRingLevel, [\in, readOut, \out, levelBus], probeGroup);
+server.sync; levelProbe.set(\t_reset, 1);
+(engine.ringSeconds + 0.5).wait;
+readings = readBus.(levelBus);
+levelProbe.free; levelBus.free; toneSynth.free;
+engine.synths[engine.grainKey(2)].set(\out, engine.voicePathBus(2, 0).index);
+readings = [readings[0], (readings[1] / readings[2].max(0.001)).sqrt];
+check.(((readings[1] / 0.25) - 1).abs < 0.02 and: { readings[0] > 0.19 },
+    "rings: grains at rate 1 with no spread give the ring's audio back (750 Hz at 0.5, 0.1 s Hann grains at 20 a second; left rms %, want 0.25; envelope never under %)"
+        .format(readings[1].round(0.0001), readings[0].round(0.0001)));
+command.(\voiceOff, 2);
 
 timecode.free; sine.free;
 h.stopAllVoices;

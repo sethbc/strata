@@ -128,6 +128,9 @@ var addDefs32 = { arg e;
         var frame = loopFirst + ((bufPos + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
         frame / validFrames.max(1)
     };
+    // 3.2's ring reader except in the block where the head wraps (#307):
+    // there 3.2 started a grain up to a ring back, and only the engine's
+    // grain would then be in the right place
     var ringGrainReader32 = { arg bufL, bufR, phaseBus, posSpread, history, bufScan, freeze;
         { arg trig, rate, dur, mode;
             var ringRate = rate.clip2(e.ringMaxRate);
@@ -136,8 +139,11 @@ var addDefs32 = { arg e;
             var spread = TRand.ar(0, posSpread * e.ringSpreadSeconds, trig) * (1 - mode);
             var lookback = e.ringReadMargin + history.clip(0, e.historySeconds) + spread + (ahead * length)
                 + e.ringScanOffset(bufScan, freeze);
-            var frames = BufFrames.kr(bufL);
-            var start = (In.kr(phaseBus, 1) - (lookback * SampleRate.ir)).wrap(0, frames);
+            var frames = BufFrames.kr(bufL), back = lookback * SampleRate.ir;
+            var head = In.kr(phaseBus, 1);
+            var shifted = head - (frames * (head >= (frames * 0.5)));
+            var wrapBlock = head < e.context.server.options.blockSize;
+            var start = Select.ar(wrapBlock, [head - back, shifted - back]).wrap(0, frames);
             (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: start / frames, level: 1)
         }
     };

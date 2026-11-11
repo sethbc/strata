@@ -30,16 +30,25 @@
     // 1 give 3.1's starts (the position scaled to the forward starts).
     // durFrames is at most validFrames - grainEndMargin (slotGrainReader caps
     // the duration), so both ranges hold at least one start.
+    // rate is the read rate in slot frames per output frame (signed), what
+    // the direction test and the head guard need. The legal range depends
+    // on the grain's own direction and frames, which the variation area
+    // draws per grain at audio rate, so the loop's first and last start are
+    // clipped to it at audio rate: the bounds of the trigger's own sample,
+    // where GrainBuf latches the grain.
     // recHead (the slot's head bus, StrataRecord.sc): the record area's
-    // guard (slotHeadGuard, neutral until the record package) sees the frame
-    // and its lowest and highest legal starts.
+    // guard (slotHeadGuard) sees the frame and its lowest and highest legal
+    // starts, and has the last word on where the grain starts.
     slotGrainPos { arg trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength, recHead;
         var reverse = rate < 0;
         var lowest = durFrames * reverse;
         var highest = (validFrames - grainEndMargin - (durFrames * (1 - reverse))).max(lowest);
         var first = loopStart.clip(0, 1);
-        var loopFirst = (first * validFrames).clip(lowest, highest);
-        var loopLast = ((first + loopLength.clip(0, 1)).min(1) * validFrames).clip(loopFirst, highest);
+        // max and min, never clip: on a control-rate receiver clip is a
+        // Clip.kr, which reads the audio-rate bounds once per block (the
+        // grain before's)
+        var loopFirst = (first * validFrames).max(lowest).min(highest);
+        var loopLast = ((first + loopLength.clip(0, 1)).min(1) * validFrames).max(loopFirst).min(highest);
         var frame = loopFirst + ((bufPos + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
         ^this.slotHeadGuard(frame, lowest, highest, rate, durFrames, recHead) / validFrames.max(1)
     }

@@ -52,6 +52,29 @@ SynthDef(\strataCheckLoopStarts, { arg out, t_reset = 0, validFrames = 48000, du
     ]));
 }).add;
 
+// slotGrainPos for grains that differ from the grain before: a ToggleFF on
+// the trigger picks [rate, durFrames] for one grain and [rateB, durFramesB]
+// for the next (what the variation area's per-grain draws do), over the
+// whole region. Over the triggers since t_reset: [lowest frame read,
+// highest frame read, triggers]
+SynthDef(\strataCheckLoopAlternating, { arg out, t_reset = 0, validFrames = 48000, rate = 1, durFrames = 4800,
+    rateB = 1, durFramesB = 4800, bufPos = 0.3, bufScan = 1.3, posSpread = 1, loopStart = 0, loopLength = 1, density = 40;
+    var trig = Impulse.ar(density), reset = T2A.ar(t_reset), on = trig > 0;
+    var second = ToggleFF.ar(trig);
+    var grainRate = Select.ar(second, [K2A.ar(rate), K2A.ar(rateB)]);
+    var grainFrames = Select.ar(second, [K2A.ar(durFrames), K2A.ar(durFramesB)]);
+    var scanPhase = Phasor.ar(reset, bufScan * SampleDur.ir, 0, 1);
+    var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
+    var start = engine.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, grainRate, grainFrames, validFrames,
+        loopStart, loopLength, engine.areaState[\record][\idleHead].index) * validFrames;
+    var reverse = grainRate < 0;
+    Out.kr(out, A2K.kr([
+        RunningMin.ar(Select.ar(on, [DC.ar(1e9), start - (grainFrames * reverse)]), reset),
+        RunningMax.ar(Select.ar(on, [DC.ar(-1e9), start + (grainFrames * (1 - reverse))]), reset),
+        PulseCount.ar(trig, reset)
+    ]));
+}).add;
+
 // Reverse grains from a slot: slotGrainReader (and so slotGrainPos) at rate
 // -1, the real buffer reader's start, duration and rate. Stereo, to a
 // private bus.
@@ -155,6 +178,30 @@ near = { arg value, target, frames = 2; (value - target).abs <= frames };
         "loops: loopStart 0 and loopLength 1 give 3.1's positions (grain % s; largest difference %)"
             .format(grainSeconds.round(0.001), readings[4]));
 });
+// a grain whose direction or length differs from the grain before's starts
+// inside its own range: its bounds are those of its own trigger's sample
+// (a control-rate Clip would read them once per block, the grain before's)
+[[1, 9600, -1, 9600], [1, 2400, 1, 19200], [0.5, 4800, 2, 19200]].do({ arg grainCase;
+    var bus = Bus.control(server, 3), synth, readings;
+    synth = Synth(\strataCheckLoopAlternating, [\out, bus, \validFrames, sampleRate, \rate, grainCase[0],
+        \durFrames, grainCase[1], \rateB, grainCase[2], \durFramesB, grainCase[3]], engine.processGroup, \addAfter);
+    server.sync;
+    synth.set(\t_reset, 1);
+    1.0.wait;
+    readings = readBus.(bus);
+    synth.free; server.sync; bus.free;
+    check.((readings[2] > 30) and: { readings[0] >= -0.01 } and: { readings[1] <= (sampleRate - margin + 0.01) },
+        "loops: a grain whose direction or length differs from the grain before's starts inside its own range (rate %, % frames then rate %, % frames; reads % to % of %)"
+            .format(grainCase[0], grainCase[1], grainCase[2], grainCase[3], readings[0], readings[1], sampleRate));
+});
+// ... so no control-rate Clip in a grain SynthDef reads an audio-rate bound
+h.grainDefs.do({ arg name;
+    var late = SynthDescLib.global.at(name).def.children.select({ arg ugen;
+        ugen.isKindOf(Clip) and: { ugen.rate != \audio } and: { ugen.inputs.any({ arg input; input.rate == \audio }) }
+    });
+    check.(late.isEmpty, "loops: no control-rate Clip in % reads an audio-rate bound (got % with input rates %)".format(
+        name, late.size, late.collect({ arg ugen; ugen.inputs.collect(_.rate) })));
+});
 check.([\loopStart, \loopLength].every({ arg name; h.controlFeedsAUGen(\strataGrainBuf, name) }),
     "loops: loopStart and loopLength reach a UGen in strataGrainBuf");
 check.([[\loopStart, 0], [\loopLength, 1]].every({ arg pair;
@@ -241,7 +288,23 @@ engine.synths[grainKey].set(\out, privateBus.index);
 server.sync;
 peak = playSlot.([\loopStart, 0.8, \loopLength, 0.1]);
 check.(peak > 0.05, "loops: the reverseProb 1 grains play (peak %)".format(peak));
-[[\reverseProb, 0], [\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0], [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
+// grains with per-grain draws (the variation area's: reverse at 50%, size
+// jitter, pitch jitter), each unlike the grain before, with the real def:
+// a 1 s region with 1 past it is silent, and the same grains over a slot
+// of 1s are heard
+loadSlot.(1);
+[[\reverseProb, 0.5], [\sizeJitter, 1.0], [\pitchJitter, 12.0]].do({ arg draw;
+    peak = playSlot.([\reverseProb, 0, \sizeJitter, 0, \pitchJitter, 0, \loopStart, 0, \loopLength, 1, \bufRate, 1,
+        \bufPos, 0.7, \bufScan, 0.9, \posSpread, 1] ++ draw);
+    check.(quietFor.(peak), "loops: grains with per-grain draws never read past the valid region (strataGrainBuf, % %, 0.2 s grains; peak %)"
+        .format(draw[0], draw[1], peak));
+});
+[engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(0, buffer.numFrames, 1) });
+server.sync;
+peak = playSlot.([]);
+check.(peak > 0.05, "loops: the grains with per-grain draws play (peak %)".format(peak));
+[[\reverseProb, 0], [\sizeJitter, 0], [\pitchJitter, 0], [\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0],
+    [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
     command.(\setGrainParam, voice, *pair)
 });
 engine.synths[grainKey].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
