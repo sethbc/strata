@@ -946,6 +946,32 @@ test("S.lib.scenes.sequencer_next_slot is the slot the running scene sequencer r
   assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "nil once the sequencer stops")
 end)
 
+-- #303: the sequencer's first recall waits for the next scheduler tick
+-- (scene_sequencer_start), and the slot it recalls next until then is its
+-- position, not the one after it
+test("until the scene sequencer recalls its position, sequencer_next_slot is that position (#303)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for scene = 1, 3 do capture_scene(scene) end
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  assert_equal(S.current_scene, 0, "started: nothing recalled yet")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "slot 1 is the one it recalls next")
+  context.clock.run_for(0.01, 0.001)
+  assert_equal(S.current_scene, 1, "the first recall")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 2, "then slot 2")
+  context.clock.run_for(4.5, 0.001)
+  assert_equal(S.current_scene, 2, "scene 2 playing")
+  scene_sequencer_start()                                         -- a restart begins at slot 1
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "restarted: slot 1 is recalled next")
+  context.clock.run_for(0.01, 0.001)
+  assert_equal(S.current_scene, 1)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 2, "then slot 2 again")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "nil once stopped")
+end)
+
 test("restarting the scene sequencer leaves one sequencer clock running", function()
   local context = load_strata(); finish_startup(context)
   capture_sequencer_scenes()
