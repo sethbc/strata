@@ -442,6 +442,40 @@ test("the dot's swing follows the depth; at depth 0 it sits on the middle line (
   assert_near(dot_y(), top + 5, 0.51, "depth 0: on the middle line, whatever the last raw value")
 end)
 
+-- The right-hand column: each row's destination over its on|off and depth,
+-- and the strip's ">" marker. 5 px glyphs need baselines TEXT_HEIGHT (6) px
+-- apart to keep a blank pixel row between them, so a destination never
+-- touches the on|off text of the row above (#422's 1 px move up did, with
+-- 12 px rows: baselines 23 and 28); assert_screen_layout keeps a descender
+-- 7 px clear of the text below it
+test("LFO rows keep a blank pixel row between each destination and the row above", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  local S = local_value("S")
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do   -- an ascender and a descender
+    if destination.label == "density" then params:set("strata_lfo2_dest", index) end
+  end
+  assert_equal(S.LFO_DESTINATIONS[params:get("strata_lfo2_dest")].label, "density", "LFO 2 on density")
+  for selected = 1, 3 do
+    S.selected_lfo = selected
+    context.screen.clear(); redraw()
+    local column = {}
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.align == "right" and entry.x == 127 and entry.y > 8 and entry.y < HINT_ROW_Y then
+        table.insert(column, entry)
+      end
+    end
+    table.sort(column, function(a, b) return a.y < b.y end)
+    for index = 2, #column do
+      local upper, lower = column[index - 1], column[index]
+      assert_true(lower.y - upper.y >= TEXT_HEIGHT, string.format("LFO %d selected: '%s' at y %d is %d px under '%s'",
+        selected, lower.text, lower.y, lower.y - upper.y, upper.text))
+    end
+    assert_true(column[#column].y <= HINT_ROW_Y - TEXT_HEIGHT, "the last row clears the hint row")
+    assert_screen_layout(context, "LFO " .. selected .. " selected, density on LFO 2")
+  end
+end)
+
 test("LFO ALT+K3 reaches the screen and arc on the next frame (#11)", function()
   local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)

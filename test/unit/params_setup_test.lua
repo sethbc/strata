@@ -584,7 +584,7 @@ test("the 256 grid's tempo keys flash the tempo the clock runs, under an externa
   assert_equal(flash.text("header"), "tempo 100", "the flash shows the running tempo, not the param")
   params:set("clock_source", 1)
   context.grid.press(1, 7, 8, 1)
-  assert_equal(flash.text("header"), "tempo " .. math.floor(clock.get_tempo() + 0.5), "internal: the tempo it landed on")
+  assert_equal(flash.text("header"), "tempo 122", "internal: the tempo it landed on (the clock reports it once it ticks)")
 end)
 
 -- The res setVoiceParam(4, "res", value) values sent to the Pulse voice

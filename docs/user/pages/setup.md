@@ -2,7 +2,7 @@
 
 The MIDI input, mutations, saving and loading scenes, each grid's rotation, the performance setting, and the connected devices. Back to [Screen Controls](../controls.md).
 
-A list of fields, with the status lines below it. The list scrolls (a thin bar at the right edge shows where you are). Turn E2 past the last field and the view scrolls on over the status lines (`running:`, `grid:`, `arc:`, `buffers:` and any data file that had a problem), so each can be read; E2 back brings the fields up again.
+A list of fields, with the status lines below it. The list scrolls (a thin bar at the right edge shows where you are). Turn E2 past the last field and the view scrolls on over the status lines (`running:`, `grid:`, `arc:`, `buffers:` and any data file that had a problem), so each can be read; E2 back brings the fields up again. While the view is scrolled that far the field may be out of sight, so E3 changes nothing: it brings the field back into view (the hint row reads `E2:field E3:back`), and the next E3 changes it.
 
 Fields:
 - **midi** - the port Strata listens to (1-16) and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`)
@@ -21,7 +21,7 @@ When a data file has a problem, lines at the end of the list say so, after the s
 Status lines: what runs now (`running: high, 60 s` or `running: standard`; a dim line under it says `active file not written` or `old active file kept` if the engine could not save which tier it runs, so the running tier may not be what the setting asked for), how many grids are connected (and their sizes, while one is), whether an arc is connected, and how many buffers were restored when the script started (`buffers: 3 restored`; `buffers: 2 ok, 1 missing` when remembered files were not found).
 
 - **E2** - Move to the next or previous field; past the last field, scroll over the status lines
-- **E3** - Change the field's value
+- **E3** - Change the field's value; while E2 has scrolled past the last field, scroll back to it instead
 - **K3** - Run save scenes or load scenes (the same as PARAMETERS > save scenes to disk and load scenes from disk; load scenes may ask for a second K3, above); nothing on other fields. With K1 held (ALT) no K3 is offered: ALT+K3 does nothing here
 
 The arc's rings are off on this page. MIDI is described in [MIDI Input](../midi.md).

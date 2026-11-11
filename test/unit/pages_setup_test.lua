@@ -184,6 +184,59 @@ test("SETUP hints", function()
   key(1, 0)
 end)
 
+-- E2 past the last field scrolls the view off it (#319): E3 there must not
+-- edit a field the player cannot see, so it scrolls back instead
+local function every_param_value()
+  local values = {}
+  for _, param in ipairs(params.params) do
+    if param.id then values[param.id] = params:get(param.id) end
+  end
+  return values
+end
+
+local function scrolled_off_the_last_field(context)
+  local S = local_value("S")
+  S.scene_file.problem = "unreadable"   -- one unreadable scenes file: two more rows below
+  show_page("SETUP")
+  enc(2, 60); redraw()
+  assert_equal(S.setup_cursor, 13, "the cursor is on performance, the last field")
+  assert_true(not text_entry(context, "performance"), "the performance row has scrolled out of view")
+  return S
+end
+
+test("SETUP's E3 edits nothing while the view is scrolled past the cursor's field", function()
+  local context = load_strata(); finish_startup(context)
+  local S = scrolled_off_the_last_field(context)
+  local before, buffer_seconds = every_param_value(), S.lib.performance.setting().buffer_seconds
+  enc(3, 1)
+  assert_equal(S.lib.performance.setting().performance, "auto", "the performance setting is unchanged")
+  assert_equal(S.lib.performance.setting().buffer_seconds, buffer_seconds, "and so is the buffer length")
+  for id, value in pairs(every_param_value()) do assert_equal(value, before[id], "param " .. id .. " is unchanged") end
+end)
+
+test("SETUP's E3 while scrolled brings the cursor's field back; the next E3 edits it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = scrolled_off_the_last_field(context)
+  enc(3, -1); redraw()
+  assert_true(text_entry(context, "performance") ~= nil, "the performance row is back in view")
+  assert_equal(S.setup_cursor, 13, "the cursor stays on performance")
+  enc(3, 1)
+  assert_equal(S.lib.performance.setting().performance, "standard", "with the field in view E3 edits it")
+end)
+
+test("SETUP's hint names no E3 value while the view is scrolled past the cursor's field", function()
+  local context = load_strata(); finish_startup(context)
+  scrolled_off_the_last_field(context)
+  assert_true(not hint_text(context):find("E3:value", 1, true), "no E3:value: " .. tostring(hint_text(context)))
+  assert_equal(hint_text(context), "E2:field E3:back", "E3 scrolls back to the field")
+  assert_screen_layout(context, "SETUP scrolled past the last field")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "E2:field", "ALT: no fine turn either")
+  key(1, 0)
+  enc(3, 1); redraw()
+  assert_equal(hint_text(context), "E2:field E3:value", "back on the field: E3 edits it again")
+end)
+
 test("SETUP saves once per K3 press; the release does nothing", function()
   local context = load_strata(); finish_startup(context)
   show_page("SETUP"); enc(2, 6)

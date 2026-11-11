@@ -7,7 +7,8 @@
 - Turning an LFO on or off from the page (ALT+K3, E3 on the on/off field, ALT+K2 on it, the arc button) goes through `set_lfo_running`, a plain `params:set("lfo_<n>", ...)`. The offset survives because `lib/lfos.lua`'s wrapper of the state action restores it (#103), not because of anything on the page.
 - `lfo_dest_group_starts()` is derived from `S.LFO_DESTINATIONS`, never hardcoded: none, the first global, each `v<i> main` (found by its label), then each registered destination's `v1 <label>` after `S.lib.lfos.BUILT_IN_DESTINATIONS` (found by its label), so each registration's seven voices are a group (#511). Groups only add jump targets: a registered destination never moves an index or a voice group's start.
 - The strip measures with `screen.text_extents`, so it fits whatever the real font draws; the layout tests use the stub's widths (`stubs.text_width`, norns' font advances), never less than the ink width matron's `text_extents` returns, so the device shows at least as many fields as the renders.
-- Rows and strip stay between y 10 and 56 (above the hint row's glyphs) for every selected LFO: `LFO_PAGE.row_first_y` 12, `row_spacing` 12, `strip_height` 8. The rows test in `test/unit/pages_lfo_test.lua` checks it.
+- Rows and strip stay between y 10 and 56 (above the hint row's glyphs) for every selected LFO: `LFO_PAGE.row_first_y` 11, `row_spacing` 13, `strip_height` 8. The rows test in `test/unit/pages_lfo_test.lua` checks it.
+- Rows are 13 px apart so the right-hand column keeps a blank pixel row between its strings: a destination (baseline top + 4) sits 6 px under the row above's `on|off` text, and 7 px over its own, which its descender clears (#422). At 12 px no destination position gives both: #422's top + 4 touched the row above, top + 5 put a descender on the line below. A test checks the 6 px for every selected LFO. A descender may still touch the line under it (the `y` of `density` over `on 25%`; a strip value with one, `up` or `dly fdbk`, over the hint row when LFO 3 is selected), as `assert_screen_layout`'s 7 px rule allows: the page has no room for 14 px rows.
 
 ## Owns
 
@@ -18,11 +19,11 @@
 ## The page
 
 Rows (`draw_lfo_row`):
-- One row per LFO. `row_top(n)` = `LFO_PAGE.row_first_y` (12) + (n - 1) × `row_spacing` (12), plus `strip_height` (8) for the rows under the selected LFO.
+- One row per LFO. `row_top(n)` = `LFO_PAGE.row_first_y` (11) + (n - 1) × `row_spacing` (13), plus `strip_height` (8) for the rows under the selected LFO.
 - `L<n>` at x 0 (baseline top + 7; level 15 for `S.selected_lfo`, 4 otherwise).
 - One cycle of the shape as a 64-px polyline from x `wave_x` (12) to 75: value 1 at the row top and 0 at top + `wave_height` (10), level 6 running / 2 off, from `lfo_shape_value(shape, phase)` (a mirror of the library's shape math; random is drawn as two held steps).
 - While the LFO runs and has sent a value, a 3×3 dot at x = 12 + `lfo_phase_estimate(n)` × 63, y = bottom - (0.5 + (`S.lfo_last_raw[n]` - 0.5) × depth / 100) × 10 (the middle line at depth 0).
-- Right-aligned at x 127: the destination label (baseline top + 4: one pixel higher so a descender, the `y` of `density`, clears the line below, #422) and `on|off <depth>%` (top + 11).
+- Right-aligned at x 127: the destination label (baseline top + 4, so a descender, the `y` of `density`, clears the line below, #422; with 13 px rows it is 6 px under the row above's `on|off`) and `on|off <depth>%` (top + 11).
 
 The strip (`draw_strip`), at baseline `strip_y()` = `row_top(S.selected_lfo)` + `strip_baseline` (18):
 - `LFO_FIELDS` in order: `dest` (`strata_lfo<n>_dest`, its label), `shape` (`lfo_shape_<n>`), `mode` (`lfo_mode_<n>`), `rate` (`lfo_free_<n>` as `%.1fs`, or `lfo_clocked_<n>`'s option string in clocked mode: the field's param follows the mode), `depth` (`lfo_depth_<n>`, `%.0f%%`), `offset` (`lfo_offset_<n>`, signed `+20%`), `on/off` (`lfo_<n>`). Each has a label (the hint), `param(n)` and `value(n)`.

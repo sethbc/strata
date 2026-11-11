@@ -630,6 +630,35 @@ test("tempo keys light while held and flash the new tempo in the header", functi
   tap(context, 1, 8)
 end)
 
+-- The internal clock reports a new tempo only once it has ticked (matron's
+-- clock thread publishes it from the tick after next), so the flash shows
+-- the tempo param the key set; under MIDI or crow the param sets nothing,
+-- and the flash shows what the clock runs (#383)
+test("256 tempo keys: the flash shows the tempo the key set on the internal clock", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 16, 16)
+  local S = S_table()
+  assert_equal(clock.get_tempo(), 120, "120 BPM to start")
+  tap(context, 7, 8)
+  assert_equal(clock.get_tempo(), 120, "the clock has not ticked yet")
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 121", "the tempo the key set")
+  params:set("clock_source", 3)   -- link: the param sets the session tempo
+  tap(context, 7, 8)
+  assert_equal(S.lib.ui_flash.text("header"), "tempo 122", "link: the tempo the key set")
+end)
+
+test("256 tempo keys: under MIDI or crow the flash shows the clock's tempo", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 16, 16)
+  local S = S_table()
+  for _, source in ipairs({ 2, 4 }) do   -- midi, crow
+    params:set("clock_source", source)
+    clock.tempo = 97                    -- the external source's tempo
+    tap(context, 7, 8)
+    assert_equal(S.lib.ui_flash.text("header"), "tempo 97", params:string("clock_source") .. ": the clock's tempo")
+  end
+end)
+
 -- #452: the scene keys show the core's levels (grid_core_test.lua holds
 -- the rule: the next slot, the current scene, the blink)
 test("256 page 3: the scene keys show the core's levels (#452)", function()

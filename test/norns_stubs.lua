@@ -32,8 +32,10 @@
 --     sync beat (counted from the coroutine's previous sync beat when it
 --     synced last, with the offset argument and FLT_EPSILON) on a beat
 --     timeline that runs at the clock tempo and keeps its beat when the
---     tempo changes. A resumed coroutine gets the clock time (sleep) or beat
---     (sync); one that cancels itself and then waits errors when it wakes,
+--     tempo changes (clock.get_tempo() reports a change on the internal
+--     clock only once the clock has ticked, as matron's). A resumed
+--     coroutine gets the clock time (sleep) or beat (sync); one that
+--     cancels itself and then waits errors when it wakes,
 --     as on norns. Each coroutine holds one of matron's 100 event slots
 --     (the lowest free one when it first waits, until it is canceled or
 --     ends; all 100 in use is an error, where matron would never wake the
@@ -1588,16 +1590,35 @@ local function make_clock(util)
   -- source starts or stops, and a test calls them as norns does
   clock.transport = { start = nil, stop = nil }
 
+  -- What clock.get_tempo() reports while the internal clock has not yet
+  -- published a tempo set on it: matron's clock thread reads the tempo
+  -- before each tick's sleep and publishes it after the sleep
+  -- (clock_internal.cc, clock_update_source_reference), so a change shows
+  -- from the tick after next: at the latest one tick (1/24 beat) at the old
+  -- tempo plus one at the new after the change. Until then the old tempo
+  -- (`reported`) reads; a second change before then keeps it and starts the
+  -- wait again. nil when nothing waits: clock.tempo reads (a test sets it
+  -- itself for an external source's tempo)
+  local unpublished = nil
+  local INTERNAL_TICKS_PER_BEAT = 24
+
   -- the internal clock source (the clock_tempo param's action sets its tempo)
   clock.internal = {}
   function clock.internal.set_tempo(bpm)
+    local reported = clock.get_tempo()
+    local wait = 60 / (INTERNAL_TICKS_PER_BEAT * clock.tempo) + 60 / (INTERNAL_TICKS_PER_BEAT * bpm)
     beat_reference.beat, beat_reference.time = beats_at(util.time()), util.time()
     clock.tempo = bpm
+    unpublished = { reported = reported, until_time = util.time() + wait }
   end
 
   -- matron pushes clock_get_tempo and clock_get_beats with lua_pushnumber
   -- (weaver.cc): floats, also for a whole tempo or beat
-  function clock.get_tempo() return clock.tempo + 0.0 end
+  function clock.get_tempo()
+    if unpublished and util.time() < unpublished.until_time then return unpublished.reported + 0.0 end
+    unpublished = nil
+    return clock.tempo + 0.0
+  end
   function clock.get_beat_sec() return 60.0 / clock.get_tempo() end
   function clock.get_beats() return beats_at(util.time()) + 0.0 end
 
