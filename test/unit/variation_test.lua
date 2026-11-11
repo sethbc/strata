@@ -228,6 +228,97 @@ test("a set after a turn snaps the set value, not the turn's leftover", function
   assert_near(params:get("v1_freq"), freq_of(74), 1e-6, "a 5-detent turn keeps the shadow")
 end)
 
+-- #318: only a turn moves the shadow. A set near the stored value (a scene
+-- fade step, a mapped CC, a script's set) used to be taken for a turn, and
+-- the stored tone then moved against the direction of travel
+test("a scene fade of a quantized freq moves one way, tone by tone", function()
+  for _, case in ipairs({ { scale = nil, from = 60, to = 62 }, { scale = "Major", from = 60, to = 72 },
+    { scale = "Major", from = 72, to = 60 } }) do
+    local name = (case.scale or "chromatic") .. " " .. case.from .. " to " .. case.to .. ": "
+    local context = load_strata(); finish_startup(context)
+    assert_true(local_value("S").voices[1].active, "voice 1 runs, so the engine hears the fade")
+    if case.scale then params:set("scale", option_index("scale", case.scale)) end
+    params:set("v1_quantize", 1)
+    params:set("v1_freq", freq_of(case.to))
+    capture_scene(1)
+    params:set("v1_freq", freq_of(case.from))
+    context.clear_engine_calls()
+    recall_scene(1, 20)  -- 20 steps of 1 s; the first runs at once
+    local direction = case.to > case.from and 1 or -1
+    local previous = case.from
+    for step = 1, 20 do
+      local note = math.floor(note_of(params:get("v1_freq")) + 0.5)
+      assert_true((note - previous) * direction >= 0,
+        name .. "step " .. step .. " never moves against the fade (" .. previous .. " -> " .. note .. ")")
+      if case.scale then assert_true(in_c_major(note), name .. "step " .. step .. " is a scale tone") end
+      previous = note
+      wake(context, "scene_transition_clock")
+    end
+    assert_equal(local_value("scene_transition_active"), false, name .. "the fade landed")
+    assert_near(params:get("v1_freq"), freq_of(case.to), 1e-6, name .. "the fade lands on the scene's tone")
+    local sent, heard = case.from, 0
+    for _, call in ipairs(context.calls_named("setVoiceParam")) do
+      if call.args[1] == 0 and call.args[2] == "freq" then
+        local note = math.floor(note_of(call.args[3]) + 0.5)
+        assert_true((note - sent) * direction >= 0, name .. "the engine never hears a step back (" .. sent .. " -> " .. note .. ")")
+        sent, heard = note, heard + 1
+      end
+    end
+    assert_true(heard > 0, name .. "the engine heard the fade")
+    assert_equal(sent, case.to, name .. "and ends on the scene's tone")
+  end
+end)
+
+test("a mapped CC's sweep and a set near the stored freq snap their own value", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  -- norns' PARAMS > MAP sets a control with params:set_raw, 1/127 of the range per CC step
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  local raw, previous = params:get_raw("v1_freq"), 69
+  local spec = params:lookup_param("v1_freq").controlspec
+  for step = 1, 32 do
+    params:set_raw("v1_freq", raw + step / 127)
+    local note = math.floor(note_of(params:get("v1_freq")) + 0.5)
+    assert_true(note >= previous, "CC step " .. step .. " never moves down (" .. previous .. " -> " .. note .. ")")
+    assert_equal(note, nearest_c_major(note_of(spec:map(raw + step / 127))),
+      "CC step " .. step .. " is the tone nearest its own value")
+    previous = note
+  end
+  -- a set within a turn's reach of the stored value, after a turn left an offset
+  for _, case in ipairs({ { set = 67.9, tone = 67, name = "G4" }, { set = 70.3, tone = 71, name = "B4" } }) do
+    params:set("v1_freq", 300); params:set("v1_freq", 440)
+    for _ = 1, 3 do arc_sweep_param("v1_freq", 1) end  -- 0.47 st of travel: still A4
+    assert_near(params:get("v1_freq"), 440, 1e-6, "three arc ticks stay on A4")
+    params:set("v1_freq", freq_of(case.set))
+    assert_near(params:get("v1_freq"), freq_of(case.tone), 1e-6,
+      "note " .. case.set .. " set after the turn is " .. case.name .. ", the tone nearest it")
+  end
+  assert_equal(local_value("S").turning_param, nil, "no turn is left marked")
+end)
+
+test("the PARAMS menu's own delta turns a quantized freq by scale tones", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 300); params:set("v1_freq", freq_of(60))  -- C4: the next tone is two semitones up
+  -- norns' menu turns E3 with the param's own delta (core/menu/params.lua's delta_value)
+  local param = params:lookup_param("v1_freq")
+  local previous = 60
+  for _ = 1, 12 do
+    param:delta(1)
+    local note = math.floor(note_of(params:get("v1_freq")) + 0.5)
+    assert_true(in_c_major(note) and note >= previous, "a detent never leaves the scale or steps back")
+    assert_true(c_major_step(note) - c_major_step(previous) <= 1, "nor skips a tone")
+    previous = note
+  end
+  assert_true(previous >= 67, "twelve detents (9.6 semitones of travel) climb past G4 (" .. previous .. ")")
+  params:set("v1_freq", 300); params:set("v1_freq", freq_of(60))
+  for _ = 1, 3 do params:delta("v1_freq", 1) end
+  assert_true(params:get("v1_freq") > freq_of(61), "params:delta is the same turn")
+  assert_equal(local_value("S").turning_param, nil, "no turn is left marked")
+end)
+
 test("quantize snaps freq on all seven synth voices but never index, fold or the other main params", function()
   local context = load_strata()
   finish_startup(context)
@@ -567,6 +658,67 @@ test("a scale or root change re-snaps a quantized freq, and a PSET saved after i
   params:set("scale", option_index("scale", "Major"))
   S.scene_transition_active = false
   assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "nor during a scene transition")
+end)
+
+-- #412: what the review's mutations of lib/variation.lua survived
+test("a scene saved with quantize off recalls its pitch between tones exactly while the voice quantizes (#412)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_freq", 450)                                -- between A4 and B4, quantize off
+  capture_scene(1)
+  params:set("v1_quantize", 1)
+  assert_near(params:get("v1_freq"), 440, 1e-6, "quantize on snaps the freq to A4")
+  recall_scene(1, 0)
+  assert_near(params:get("v1_freq"), 450, 1e-6, "the recall sets 450 Hz as saved, before the scene's quantize")
+  assert_equal(params:get("v1_quantize"), 0, "and the scene's quantize")
+end)
+
+test("a MIDI note two semitones from a voice left mid-turn plays that note (#412)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  enc_param_delta(3, "v1_freq", 1)                          -- 0.8 st of travel: still A4
+  assert_near(params:get("v1_freq"), 440, 1e-6, "one detent stays on A4")
+  context.midi.send(1, { type = "note_on", note = 71, vel = 100, ch = 1 })
+  assert_near(params:get("v1_freq"), freq_of(71), 1e-6, "B4 plays B4, not the turn's leftover plus two semitones")
+end)
+
+test("a freq stored behind the filter's back between two turns restarts the shadow (#412)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  enc_param_delta(3, "v1_freq", 1)                          -- the shadow at 69.8: A4
+  -- a path that skips the filter changed the stored freq (the stored value
+  -- is then not what the filter last returned)
+  local_value("S").voices[1].params.freq = freq_of(64)
+  enc_param_delta(3, "v1_freq", 1)                          -- from the param's A4: 69.8 again
+  assert_near(params:get("v1_freq"), 440, 1e-6, "the turn starts again from its own value: A4, not E5")
+end)
+
+test("a quantized freq turned past the top of its range comes back down at once (#412)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", freq_of(95))                        -- B6, the top tone below 2000 Hz
+  assert_near(params:get("v1_freq"), freq_of(95), 1e-6, "B6")
+  for _ = 1, 20 do enc_param_delta(3, "v1_freq", 1) end      -- pushing past the top
+  assert_near(params:get("v1_freq"), freq_of(95), 1e-6, "the top tone holds")
+  enc_param_delta(3, "v1_freq", -1)
+  enc_param_delta(3, "v1_freq", -1)                         -- 1.6 st down from the top
+  assert_near(params:get("v1_freq"), freq_of(93), 1e-6, "two detents down reach A6: the shadow stopped at the top")
+end)
+
+test("an interval set change on a stopped voice sends nothing (#412)", function()
+  local context = load_strata(); finish_startup(context)
+  assert_true(not local_value("S").voices[3].active, "voice 3 is stopped")
+  context.clear_engine_calls()
+  params:set("v3_intervals", local_value("S").lib.variation.VARIATION.set_index.fifths)
+  assert_equal(#sent_grain(context, 2, "intervalCount"), 0, "no intervalCount for a stopped voice")
+  assert_equal(#sent_grain(context, 2, "interval1"), 0, "nor any interval")
+  toggle_voice(3)
+  assert_equal(table.concat(sent_intervals(context, 2), ","), "-12,-5,0,7,12", "its start sends the set")
 end)
 
 end

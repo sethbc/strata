@@ -333,4 +333,34 @@ test("randomize, mutation and the fader pages leave loops alone", function()
   end
 end)
 
+-- #531: scenes set the registered fields in sorted key order, so a loop's
+-- length comes before its start. The length's filter stands down while a
+-- scene sets them (clamped to the old start's room, a recall from (0.5, 0.5)
+-- to (0, 1) would end at (0, 0.5)), and the start, set after it, has the
+-- last word: its action cuts a length the new start leaves no room for
+test("a recall sets the loop length before the start, whose action has the last word (#531)", function()
+  local context = load_strata(); finish_startup(context)   -- voice 2 runs
+  local S = local_value("S")
+  params:set("v2_source", 4)
+  params:set("v2_loop_start", 0); params:set("v2_loop_length", 1)
+  capture_scene(1)
+  -- a pair with no room for its length, put in memory (a loaded scene's pair
+  -- is cut on load, normalize_scene)
+  S.scenes[1].data.voices[2].extras.loop_start = 0.8
+  S.scenes[1].data.voices[2].extras.loop_length = 0.5
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  local start, length = loop_of(2)
+  assert_near(start, 0.8, 1e-9, "the scene's start")
+  assert_near(length, 0.2, 1e-9, "the start, set after the length, cut it to fit")
+  local heard = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 1 and (call.args[2] == "loopStart" or call.args[2] == "loopLength") then
+      table.insert(heard, call.args[2] .. " " .. string.format("%.1f", call.args[3]))
+    end
+  end
+  assert_equal(table.concat(heard, ", "), "loopLength 0.5, loopStart 0.8, loopLength 0.2",
+    "the engine hears the length, then the start, then the cut")
+end)
+
 end

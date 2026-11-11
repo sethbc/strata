@@ -24,6 +24,30 @@ return function(S)
   -- util.time() when it reached 0} (nil: no hold)
   local detent_holds = {}
 
+  -- The id of the param a turn is setting right now (nil otherwise): an
+  -- encoder detent or arc tick (delta_with_detent), the PARAMS menu's own
+  -- delta (lib/params_setup.lua) or a mutation step (lib/mutation.lua) moves
+  -- a param from its stored value, and a param filter (the quantized freq's,
+  -- lib/variation.lua) is told so (its fourth argument). Every other set is
+  -- a value in its own right (#318)
+  S.turning_param = nil
+
+  -- Run fn as a turn of param_id. The mark never outlives an error in a
+  -- param action: the mark before it comes back, then the error is raised
+  -- again, with its traceback
+  function M.as_turn(param_id, fn)
+    local outer = S.turning_param
+    S.turning_param = param_id
+    local turned, turn_error = xpcall(fn, with_traceback)
+    S.turning_param = outer
+    if not turned then error(turn_error, 0) end
+  end
+
+  -- No turn is marked between events
+  S.register_invariant("param turn", function()
+    if S.turning_param ~= nil then return "turning_param is still " .. tostring(S.turning_param) end
+  end)
+
   -- Whether a move from old to new reaches or passes 0 (old is not 0)
   local function reaches_zero(old, new)
     return (old < 0 and new >= 0) or (old > 0 and new <= 0)
@@ -56,12 +80,16 @@ return function(S)
       units = math.abs(d) * DETENT.arc_ticks
     end
 
+    -- a turn, marked as one (S.turning_param); the hold's own set to 0
+    -- below is a set
     local function apply()
-      if raw_delta then
-        params:set_raw(param_id, params:get_raw(param_id) + raw_delta)
-      else
-        params:delta(param_id, d)
-      end
+      M.as_turn(param_id, function()
+        if raw_delta then
+          params:set_raw(param_id, params:get_raw(param_id) + raw_delta)
+        else
+          params:delta(param_id, d)
+        end
+      end)
     end
 
     -- a wrapping range has no center to stop at

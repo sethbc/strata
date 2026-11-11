@@ -429,4 +429,107 @@ test("an error inside a mutation tick is printed once and the next tick mutates 
   h.claim_script_errors(context, 3, "strata: mutation failed: ", "another mutation boom")  -- the three it caused (#473)
 end)
 
+-- #318: a mutation step moves a param from its stored value, so it is a
+-- turn: a quantized freq walks by scale tones even when each step is less
+-- than half a scale step (as a set, each would snap back to its tone)
+test("mutation steps walk a quantized freq by scale tones (#318)", function()
+  local context = load_strata(); finish_startup(context)   -- voices 1 and 2 run
+  local variation = local_value("S").lib.variation
+  params:set("scale", 2)                                    -- musicutil's first scale (Major)
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 300); params:set("v1_freq", 440)
+  params:set("mutation_probability", 1); params:set("mutation_amount", 0.01)  -- steps under 0.8 st
+  math.randomseed(5)
+  local tones = {}
+  for _ = 1, 200 do
+    gentle_mutate()
+    local note = 69 + 12 * math.log(params:get("v1_freq") / 440) / math.log(2)
+    local whole = math.floor(note + 0.5)
+    assert_near(note, whole, 1e-6, "every mutated freq is a whole note")
+    assert_equal(variation.snap_note(whole), whole, "and a tone of the scale (" .. whole .. ")")
+    tones[whole] = true
+  end
+  local count = 0
+  for _ in pairs(tones) do count = count + 1 end
+  assert_true(count > 2, "the walk reaches more than two tones (" .. count .. ")")
+  assert_equal(local_value("S").turning_param, nil, "no turn is left marked")
+end)
+
+-- #410: what the review's mutations of lib/mutation.lua survived
+test("mutations never move amp or pan, nor any value of a stopped voice (#410)", function()
+  local context = load_strata(); finish_startup(context)   -- voices 1 and 2 run
+  local voices = local_value("voices")
+  assert_true(voices[1].active and voices[2].active and not voices[3].active, "voices 1 and 2 run, 3 is stopped")
+  params:set("v4_source", 2)                                -- a stopped buffer voice too
+  local stopped = {}
+  for _, voice_idx in ipairs({ 3, 4 }) do stopped[voice_idx] = deep_copy(voices[voice_idx]) end
+  local levels = {}
+  for voice_idx = 1, 2 do levels[voice_idx] = { amp = voices[voice_idx].params.amp, pan = voices[voice_idx].params.pan } end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(9)
+  local moved = false
+  for _ = 1, 50 do
+    local before = voices[1].params.freq
+    gentle_mutate()
+    if voices[1].params.freq ~= before then moved = true end
+  end
+  assert_true(moved, "the running voices mutate")
+  for voice_idx = 1, 2 do
+    assert_equal(voices[voice_idx].params.amp, levels[voice_idx].amp, "voice " .. voice_idx .. "'s amp never mutates")
+    assert_equal(voices[voice_idx].params.pan, levels[voice_idx].pan, "voice " .. voice_idx .. "'s pan never mutates")
+  end
+  for voice_idx, before in pairs(stopped) do
+    for _, part in ipairs({ "params", "grain" }) do
+      for key, value in pairs(before[part]) do
+        assert_equal(voices[voice_idx][part][key], value, "stopped voice " .. voice_idx .. "'s " .. part .. "." .. key)
+      end
+    end
+  end
+end)
+
+test("the drift leaves a stopped voice's grain pitch and buffer position (#410)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  params:set("v3_source", 2)                                -- buffer 1, stopped
+  params:set("v3_grain_pitch", 1.5); params:set("v3_buf_pos", 0.5)
+  params:set("v1_source", 2)                                -- a running buffer voice drifts both
+  params:set("v1_grain_pitch", 1.5); params:set("v1_buf_pos", 0.5)
+  math.randomseed(4)
+  for _ = 1, 50 do drift_update() end
+  assert_equal(voices[3].grain.pitch, 1.5, "a stopped voice's grain pitch does not drift")
+  assert_equal(voices[3].grain.buf_pos, 0.5, "nor its buffer position")
+  assert_true(voices[1].grain.pitch ~= 1.5 and voices[1].grain.buf_pos ~= 0.5, "a running voice's do")
+end)
+
+test("a drift tick brings a param set elsewhere to the 256's fader page (#410)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
+  press(14, 8)                                              -- grid page 2 (the faders)
+  press(2, 14)                                              -- voice 2 (fm): row 11 is its index fader
+  assert_true(device:get_led(16, 11) ~= 15, "index is not at its top")
+  params:set("v2_index", 10)                                -- E3, MIDI or PARAMS: no grid redraw of its own
+  assert_true(device:get_led(16, 11) ~= 15, "the set alone leaves the fader as it was")
+  drift_update()
+  assert_equal(device:get_led(16, 11), 15, "the next drift tick shows it")
+end)
+
+test("the undo's expiry clock forgets its id before it clears the undo, so it never cancels itself (#410)", function()
+  local context = load_strata(); finish_startup(context)
+  randomize_voice(1)
+  local expiry_id = local_value("undo_clock")
+  local expiry = context.clock.threads[expiry_id]
+  assert_true(expiry ~= nil, "an expiry clock runs")
+  local real_cancel, self_canceled = clock.cancel, false
+  clock.cancel = function(coro_id, ...)
+    if coro_id == expiry_id and coroutine.running() == expiry then self_canceled = true end
+    return real_cancel(coro_id, ...)
+  end
+  context.clock.run_for(5.1)
+  clock.cancel = real_cancel
+  assert_true(not undo_available(1), "the undo expired")
+  assert_true(not self_canceled, "the expiry clock never canceled itself")
+  assert_equal(local_value("undo_clock"), nil, "its id is forgotten")
+end)
+
 end

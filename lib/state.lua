@@ -33,7 +33,7 @@ return function()
     voice_params = {},  -- per-voice param records (register_voice_params), in registration order
     scene_fields = {},  -- global scene fields {id, default, discrete} (register_scene_field)
     source_change = {}, -- fn(voice_idx, source), run by each v<i>_source action before its sync, never in a scene recall
-    param_filters = {}, -- per voice param key: fn(voice_idx, value, previous) -> value
+    param_filters = {}, -- per voice param key: fn(voice_idx, value, previous, turned) -> value
     lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, after the built-in ones
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
     grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
@@ -260,9 +260,10 @@ return function()
     table.insert(M.registry.invariants, {name = name, fn = fn})
   end
 
-  -- fn(voice_idx, value, previous) -> value, applied by the action of every
-  -- v<i>_<key> voice param (param_order or registered) before it stores the
-  -- value; previous is the value stored before. One filter per key
+  -- fn(voice_idx, value, previous, turned) -> value, applied by the action of
+  -- every v<i>_<key> voice param (param_order or registered) before it
+  -- stores the value; previous is the value stored before, turned whether
+  -- the set is a turn of the param (S.turning_param, #318). One filter per key
   function M.register_param_filter(key, fn)
     local kind = "register_param_filter"
     require_arg(type(key) == "string" and key ~= "", kind, "a key is a param id suffix")

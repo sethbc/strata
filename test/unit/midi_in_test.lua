@@ -529,6 +529,46 @@ test("MIDI device param, hot-plug and the SETUP page", function()
 end)
 
 
+-- #534: norns' PARAMS menu turns a param by d / 20 while K3 is held (its
+-- delta_value calls the param's own delta), and norns' number param adds
+-- that unrounded. Every number param Strata adds (its own and the LFO
+-- library's, never norns' system params) steps whole numbers, as norns'
+-- option param does, and midi_device then never raises
+test("PARAMS' fine turn steps every one of Strata's number params whole; midi_device never raises (#534)", function()
+  local system_count
+  local context = load_strata({ before_init = function() system_count = #params.params end })
+  finish_startup(context)
+  local numbers = 0
+  for index = system_count + 1, #params.params do
+    local param = params.params[index]
+    if param.t == params.tNUMBER then
+      numbers = numbers + 1
+      for _, d in ipairs({ 1 / 20, 1 / 20, -1 / 20, 3 / 20, -1 / 20, -1 / 20, -1 / 20 }) do
+        local before = param:get()
+        local turned, turn_error = pcall(param.delta, param, d)
+        assert_true(turned, param.id .. ": a delta of " .. d .. " raises nothing (" .. tostring(turn_error) .. ")")
+        local value = param:get()
+        assert_equal(value, math.floor(value), param.id .. " stays whole after a delta of " .. d)
+        local expected = util.clamp(before + (d > 0 and 1 or -1), param.min, param.max)
+        assert_equal(value, expected, param.id .. ": a delta of " .. d .. " is one step")
+      end
+    end
+  end
+  -- tempo, the sequence length, midi_device, record_beats, 21 mod sources,
+  -- 35 custom intervals and the LFOs' depth, phase and offset
+  assert_true(numbers >= 4 + 21 + 35 + 9, numbers .. " number params turned")
+  assert_equal(params:get("clock_tempo"), params:get("tempo"), "norns' clock_tempo follows tempo")
+  local system_delta = params:lookup_param("link_quantum")
+  system_delta:delta(1 / 20)
+  assert_equal(params:get("link_quantum"), 4 + 1 / 20, "norns' own number params are left as norns makes them")
+  -- a fraction from elsewhere (a PSET written by an earlier Strata) attaches the nearest port
+  local played = pcall(params.set, params, "midi_device", 2.4)
+  assert_true(played, "a fractional midi_device raises nothing")
+  context.clear_engine_calls()
+  context.midi.send(2, { type = "note_on", note = 60, vel = 100, ch = 1 })
+  assert_equal(#context.calls_named("retrigger"), 1, "port 2 plays")
+end)
+
 test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer rate", function()
   local context = load_strata(); finish_startup(context)
   local function option_index(param_id, name)

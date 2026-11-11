@@ -38,14 +38,14 @@ Grouped in tables:
 ## Params
 
 Group `strata_midi`, 3 params:
-- `midi_device`: number 1..`#midi.vports` (norns' 16 ports), default 1. Action `attach_midi(x)` then `reset_midi_input()`.
+- `midi_device`: number 1..`#midi.vports` (norns' 16 ports), default 1, stepping whole numbers under PARAMS' K3-held fine turn (#534, `docs/notes/lua/params.md`). Action `attach_midi(x)` then `reset_midi_input()`.
 - `midi_channel_mode`: option {`per voice`, `omni to selected`}, default 1. Action `reset_midi_input(true)` (bends only).
 - `midi_note_off`: option {`ignore`, `voice off`}, default 1.
 
 ## Device lifecycle
 
 - `midi_init()` (from its start step, `START_ORDER.midi`, after the grids) calls `attach_midi(params:get("midi_device"))`.
-- `attach_midi` clears the old vport's `event` and sets `S.midi_device = midi.connect(port); S.midi_device.event = midi_event`.
+- `attach_midi` rounds its port to a vport index (1..`#midi.vports`), so a fraction (a PSET written before the param stepped whole numbers, #534) still names a port, clears the old vport's `event` and sets `S.midi_device = midi.connect(port); S.midi_device.event = midi_event`. The unplug handler compares the device's port with the same rounded index.
 - The handler lives on the vport only: norns fires both `device.event` and `vports[port].event`, as for grids and arc.
 - `midi.add(device)` (assigned by the start step) re-attaches, requests a redraw (SETUP) and prints.
 - `midi.remove(device)` resets the input if the device was on the selected port, requests a redraw and prints.

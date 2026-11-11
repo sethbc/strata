@@ -36,14 +36,16 @@ Perfect for creating structured ambient compositions with multiple movements or 
 - Press row 1 buttons for instant scene changes (good for rhythmic switching)
 - Press row 2 buttons for smooth crossfades (good for ambient transitions). Saving into the scene a crossfade is heading for stores the sound as it is at that moment; the crossfade still ends on the scene as it was recalled
 - A crossfade's scene shows as current (on the screen's `S1`-`S8`, the SCENES page and the grid) from its start, and blinks until the crossfade lands: it changes with each of the crossfade's 20 steps (every 0.1 s for a 2 s crossfade), then stays lit. A blinking scene is still on its way, so a save during it stores a half-faded sound. If the crossfade does not land (the sequencer cancels it, scenes are loaded from disk, or an error stops it), the scene before it is current again, since the crossfade's own scene was never fully applied. A recall that interrupts a crossfade makes its own scene current; if that recall fails too, the last scene that landed is current
+- A crossfade to a scene that has an LFO off, while that LFO runs, fades the LFO out (its depth to 0, its free period and offset held), then switches it off with the scene's settings; an LFO the scene keeps on fades its depth, free period and offset toward the scene's
 - Adjust transition time in PARAMETERS to control crossfade duration
 
 **Automatic Scene Sequencing**:
 - Set scene sequence length (how many scenes to cycle through). Shortened while a scene past the new end plays, the sequence wraps to scene 1
+- Empty slots in the sequence are skipped at once: the next scene that holds one follows the last scene's duration, with no wait for the empty slot. A sequence with no scene in it waits on each slot for the scene duration
 - Set scene duration (how long each scene plays)
 - Set transition time (crossfade duration between scenes)
 - Each scene plays for the scene duration or the transition time, whichever is longer, and the sequencer then waits for the transition to end, so the settings that switch at the end of a transition (voices on/off, sources, patterns, locks, grain envelope and mode, ...) always arrive. The wait is bounded: a transition that stops making progress (its next step or its end more than 1 s overdue) is canceled, with a console message, and the sequencer moves on. A slow but healthy transition is never cut short. Recalling a scene by hand still interrupts a running transition
-- Press row 5, column 1 to start/stop the sequencer
+- Press row 5, column 1 to start/stop the sequencer. If something goes wrong in the sequencer itself (an error, shown in maiden), it switches itself off, so the screen and grid show it stopped; switching it on again starts it from the start of the sequence
 - Loading a PSET saved with the sequencer on, while the sequencer is off, starts it once the whole PSET has loaded, from scene 1, with the PSET's transition time, duration and length. A sequencer that is already running keeps its place
 - Loading scenes from disk stops a running transition where it is. The current scene (`S1`-`S8`) stays marked only if the file holds the same scene in its slot; otherwise no scene is marked, since what plays is no longer that slot
 - Watch `S1`-`S8` indicator on screen (bright = sequencer active)

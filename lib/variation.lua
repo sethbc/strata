@@ -31,8 +31,6 @@ return function(S)
     reference_octave = 60,             -- buffer and input voices: scaleNote is root + 60
     semitones = 12,
     a4_note = 69, a4_freq = 440,
-    tone_epsilon = 1e-9,               -- a freq this close to a whole note is that note
-    relative_detents = 5,              -- the largest encoder delta (acceleration): a bigger change is a jump
   }
   local V = M.VARIATION
 
@@ -169,40 +167,29 @@ return function(S)
     return note_to_freq(tone)
   end
 
-  -- The largest change (semitones) one turn makes: relative_detents
-  -- encoder detents of the freq param's quantum; a bigger change is a jump
-  -- (a set, a MIDI note, a fader), after which the shadow starts again
-  local function largest_turn(voice_idx)
-    local param_id = "v" .. voice_idx .. "_freq"
-    local low, high = param_range(param_id)
-    local spec = params:lookup_param(param_id).controlspec
-    return V.relative_detents * spec.quantum * (freq_to_note(high) - freq_to_note(low)) + V.tone_epsilon
-  end
-
   -- The freq filter's state per voice: shadow[i], the unsnapped note the
   -- turns have reached, and returned[i], the freq the filter last returned
   -- (nil: no turn under way)
   local shadow, returned = {}, {}
 
-  -- A quantized voice's freq as it is turned: each change moves the
-  -- unsnapped shadow note by the change of the incoming value from the
-  -- stored one, and the freq is the scale tone nearest the shadow, so a
-  -- detent or arc tick of a fraction of a semitone still adds up to about
-  -- one scale tone per semitone of travel. The shadow starts again from the
-  -- incoming value when the stored value is not what the filter last
-  -- returned (something else set it), when the change is bigger than any
-  -- turn makes (a set), or when the value is already a tone (a MIDI
-  -- note). A scene recall's values stand as saved. Every change sends
-  -- scaleNote (the value settled)
-  local function freq_filter(voice_idx, value, previous)
+  -- A quantized voice's freq. A turn (turned: an encoder detent, an arc
+  -- tick, the PARAMS menu's own delta or a mutation step, marked in
+  -- S.turning_param, #318) moves the unsnapped shadow note by the change of
+  -- the incoming value from the stored one, and the freq is the scale tone
+  -- nearest the shadow, so a detent or arc tick of a fraction of a semitone
+  -- still adds up to about one scale tone per semitone of travel. Every
+  -- other set (a scene fade step, a mapped CC, a fader, a MIDI note, a
+  -- script's set) is a value in its own right, however near the stored
+  -- one: the shadow starts again from it, so a fade or a CC sweep moves one
+  -- way only. The shadow also starts again when the stored value is not
+  -- what the filter last returned (something else set it). A scene recall's
+  -- values stand as saved. Every change sends scaleNote (the value settled)
+  local function freq_filter(voice_idx, value, previous, turned)
     local result = value
     if M.quantizes(voice_idx) and not S.scene_recall_in_progress then
       local low, high = param_range("v" .. voice_idx .. "_freq")
       local note = freq_to_note(value)
-      local whole = math.floor(note + 0.5)
-      local on_tone = math.abs(note - whole) < V.tone_epsilon and is_tone(whole, M.scale_mask())
-      local turned = previous ~= nil and math.abs(note - freq_to_note(previous)) <= largest_turn(voice_idx)
-      if shadow[voice_idx] ~= nil and previous == returned[voice_idx] and turned and not on_tone then
+      if turned and shadow[voice_idx] ~= nil and previous ~= nil and previous == returned[voice_idx] then
         shadow[voice_idx] = shadow[voice_idx] + note - freq_to_note(previous)
       else
         shadow[voice_idx] = note

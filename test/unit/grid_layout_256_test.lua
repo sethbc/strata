@@ -631,7 +631,7 @@ test("tempo keys light while held and flash the new tempo in the header", functi
 end)
 
 -- #303: row 1's levels for scenes 1-5, read while the sequencer runs through
--- the clock: scenes 1-3 saved, slot 4 empty (the sequencer waits on it)
+-- the clock: scenes 1-3 saved, slot 4 empty (the sequencer skips it, #513)
 test("the scene page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
@@ -652,19 +652,19 @@ test("the scene page lights the scene the running sequencer recalls next at 10, 
   context.clock.run_for(4, 0.001)
   assert_equal(row_1(), "8 15 10 2 2", "5 s: scene 2 playing, scene 3 next")
   context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "8 8 15 10 2", "9 s: the empty slot 4 is next and lights at 10 too")
+  assert_equal(row_1(), "10 8 15 2 2", "9 s: scene 3 playing, scene 1 next (past empty slot 4)")
   context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "10 8 15 2 2", "13 s: waiting on slot 4, scene 1 next (wrapped)")
+  assert_equal(row_1(), "15 10 8 2 2", "13 s: scene 1 again, scene 2 next")
   context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "15 10 8 2 2", "17 s: scene 1 again, scene 2 next")
+  assert_equal(row_1(), "8 15 10 2 2", "17 s: scene 2, scene 3 next")
   params:set("scene_sequencer_enabled", 0)
-  assert_equal(row_1(), "15 8 8 2 2", "a stopped sequencer lights no next scene")
+  assert_equal(row_1(), "8 15 8 2 2", "a stopped sequencer lights no next scene")
   assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
 end)
 
 -- #303: the sequencer's first recall waits for the next scheduler tick; until
--- then the slot it recalls first is the one lit at 10, and when that slot is
--- empty the light moves on as soon as the sequencer reaches it
+-- then the slot it recalls first is the one lit at 10: the first that holds a
+-- scene, since an empty slot is skipped (#513)
 test("from the sequencer's start the scene page lights the slot it recalls first (#303)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
@@ -691,9 +691,9 @@ test("from the sequencer's start the scene page lights the slot it recalls first
   params:set("scene_sequence_length", 3)
   params:set("scene_transition_time", 0); params:set("scene_duration", 4)
   params:set("scene_sequencer_enabled", 1)
-  assert_equal(row_1(), "10 8 8 2", "before it reaches empty slot 1: slot 1 at 10")
+  assert_equal(row_1(), "2 10 8 2", "slot 1 is empty: scene 2, recalled first, at 10 (#513)")
   context.clock.run_for(1, 0.001)
-  assert_equal(row_1(), "2 10 8 2", "waiting on empty slot 1: scene 2 next")
+  assert_equal(row_1(), "2 15 10 2", "scene 2 playing, scene 3 next")
   params:set("scene_sequencer_enabled", 0)
 end)
 
