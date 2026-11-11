@@ -60,7 +60,7 @@
     }
 
     allocPerformance {
-        var state = areaState[\performance], decision, model, memKB, sampleRate;
+        var state = areaState[\performance], decision, model, memKB, sampleRate, written;
         instanceTag = UniqueID.next;
         writeGenerations = Dictionary.new;
         // the folder deleteStaleParts cleans (stalePartDirs), as this start used it
@@ -69,9 +69,10 @@
         memKB = this.readMemAvailableKB;
         sampleRate = context.server.sampleRate ? 48000;
         decision = this.performanceDecision(this.readPerformanceSetting, model, memKB, sampleRate);
-        if (this.writeActivePerformance(decision).not) {
-            decision = this.unwrittenPerformance(model, memKB, sampleRate);
-        };
+        // (whatever the write raises, alloc goes on: the tier is then what
+        // Lua will read, as for any write that failed)
+        written = try { this.writeActivePerformance(decision) } { false };
+        if (written != true) { decision = this.unwrittenPerformance(model, memKB, sampleRate) };
         state[\decision] = decision;
         tier = decision[\tier];
         bufferSeconds = decision[\bufferSeconds];
@@ -281,9 +282,10 @@
     // it runs what the old file says, unwrittenPerformance). The text goes to
     // path.<instanceTag>-<generation>.part, renamed into place with mv -f;
     // the final path is never opened for writing. Returns false when the
-    // file could not be written (no .part is left)
+    // file could not be written, a flush that failed included (no .part is
+    // left)
     writeActivePerformance { arg decision;
-        var path = this.activePerformancePath, partPath, file, written = false;
+        var path = this.activePerformancePath, partPath, file, text = this.activePerformanceText(decision), written, readBack;
         if (File.exists(path)) { try { File.delete(path) } };
         if (File.exists(path)) {
             postln("strata: cannot remove the old " ++ path);
@@ -292,13 +294,22 @@
         try { File.mkdir(path.dirname) };
         writeCount = writeCount + 1;
         partPath = path ++ "." ++ instanceTag ++ "-" ++ writeCount ++ ".part";
-        file = try { File.open(partPath, "w") } { nil };
-        if (file.notNil and: { file.isOpen }) {
-            written = try { file.write(this.activePerformanceText(decision)); true } { false };
-            file.close;
-        };
+        // The open, the write and the close are one guarded step: a file
+        // this small reaches the disk only when close flushes it, and close
+        // raises when that fails (a full card, a quota, an I/O error). Then
+        // the .part must read back as the text before it is renamed.
+        written = try {
+            file = File.open(partPath, "w");
+            if (file.isOpen) { file.write(text); file.close; true } { false }
+        } { false };
+        // (each read is a statement of its own: a try that raises inside a
+        // larger expression can corrupt that expression in sclang)
+        readBack = if (written) { try { File.readAllString(partPath) } { nil } };
+        written = written and: { readBack == text };
         written = written and: { ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).systemCmd == 0 };
-        if (File.exists(partPath)) { try { File.delete(partPath) } };
-        ^written and: { File.exists(path) }
+        try { if (File.exists(partPath)) { File.delete(partPath) } };
+        // true only when the file Lua will read holds the decision
+        readBack = if (written and: { File.exists(path) }) { try { File.readAllString(path) } { nil } };
+        ^written and: { readBack == text }
     }
 }
