@@ -19,7 +19,7 @@ The record `freeze` (count 2, `S.register_voice_params`):
 | `v<i>_freeze` | binary, toggle | 0 | `freeze` (0/1) | discrete `{0, 1}`, default 0 |
 | `v<i>_freeze_mode` | option `hold`, `spectral` (high) / `hold` (standard) | 1 | `freezeMode` (option − 1) | discrete `{1, 2}`, default 1 |
 
-- The senders reach the engine only while the voice runs; `sync_voice_to_engine` sends both after the source (registration order: after history). A frozen stopped voice is frozen on the engine by that sync when it starts; one unfrozen while stopped is unfrozen by it.
+- The senders reach the engine only while the voice runs; the voice sync sends both after the source (registration order: after history), and a start sends them before its `voiceOn` (#325). A frozen stopped voice is frozen on the engine by its start; one unfrozen while stopped is unfrozen before its grain synth exists.
 - `v<i>_freeze`'s action redraws the grid (the layouts' freeze keys; the param actions already request the screen's redraw for MAIN's `[F]`).
 - The `source_change` hooks run before the source action's sync (`lib/params_setup.lua`), so a switch of a frozen voice sends `freeze` 0 (the hook's, then the sync's) and never the old 1: the engine, which unfroze on its own switch, never freezes the new source for a moment.
 - **MIDI**: no code of its own; norns' PARAMS > MAP maps a CC to `v<i>_freeze` like any param.

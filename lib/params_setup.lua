@@ -16,6 +16,7 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_SCENES = S.constants.NUM_SCENES
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
+  local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
   local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
   local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
@@ -519,7 +520,7 @@ return function(S)
   end
 
   -- A voice param's engine call runs only while the voice is running
-  -- (sync_voice_to_engine sends everything when it starts)
+  -- (a start sends everything: S.lib.engine_sync.start_voice)
   local function add_voice_sender(voice_idx, param_id, send)
     S.engine_senders[param_id] = function(value)
       if S.voices[voice_idx].active then send(value) end
@@ -854,149 +855,59 @@ return function(S)
       end
     }
 
-    -- Cross-modulation params (3 slots)
+    -- Cross-modulation params: per slot (1..NUM_MOD_SLOTS) its source, amp
+    -- mod and freq mod, in that order (the ids, names and menu order saved
+    -- PSETs hold), each writing voice.crossmod["slot" .. slot] (#392)
     params:add_separator("voice " .. voice_idx .. " cross-modulation")
+    local function mod_source_text(param)
+      if param:get() == 0 then return "none" end
+      return "voice " .. param:get()
+    end
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_key = "slot" .. slot
+      local slot_state = v.crossmod[slot_key]
+      local amp_id, freq_id = prefix .. "mod_amp_amt_" .. slot, prefix .. "mod_freq_amt_" .. slot
 
-    -- Slot 1
-    params:add{
-      type = "number",
-      id = prefix .. "mod_source_1",
-      name = "mod source 1",
-      min = 0,
-      max = NUM_VOICES,
-      default = v.crossmod.slot1.source,
-      formatter = function(param)
-        if param:get() == 0 then
-          return "none"
-        else
-          return "voice " .. param:get()
+      params:add{
+        type = "number",
+        id = prefix .. "mod_source_" .. slot,
+        name = "mod source " .. slot,
+        min = 0,
+        max = NUM_VOICES,
+        default = slot_state.source,
+        formatter = mod_source_text,
+        action = function(x)
+          S.voices[voice_idx].crossmod[slot_key].source = x
+          if S.voices[voice_idx].active then
+            engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
+          end
         end
-      end,
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot1.source = x
-        if S.voices[voice_idx].active then
-          engine.setModSource(voice_idx - 1, 1, S.lib.engine_sync.engine_mod_source(x))
+      }
+
+      params:add{
+        type = "control",
+        id = amp_id,
+        name = "amp mod " .. slot,
+        controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.amp_amt),
+        action = function(x)
+          S.voices[voice_idx].crossmod[slot_key].amp_amt = x
+          send_param_to_engine(amp_id, x)
         end
-      end
-    }
+      }
+      add_sender(amp_id, function(value) engine.setModAmpAmt(engine_voice, slot, value) end)
 
-    params:add{
-      type = "control",
-      id = prefix .. "mod_amp_amt_1",
-      name = "amp mod 1",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.amp_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot1.amp_amt = x
-        send_param_to_engine(prefix .. "mod_amp_amt_1", x)
-      end
-    }
-    add_sender(prefix .. "mod_amp_amt_1", function(value) engine.setModAmpAmt(engine_voice, 1, value) end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "mod_freq_amt_1",
-      name = "freq mod 1",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot1.freq_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot1.freq_amt = x
-        send_param_to_engine(prefix .. "mod_freq_amt_1", x)
-      end
-    }
-    add_sender(prefix .. "mod_freq_amt_1", function(value) engine.setModFreqAmt(engine_voice, 1, value) end)
-
-    -- Slot 2
-    params:add{
-      type = "number",
-      id = prefix .. "mod_source_2",
-      name = "mod source 2",
-      min = 0,
-      max = NUM_VOICES,
-      default = v.crossmod.slot2.source,
-      formatter = function(param)
-        if param:get() == 0 then
-          return "none"
-        else
-          return "voice " .. param:get()
+      params:add{
+        type = "control",
+        id = freq_id,
+        name = "freq mod " .. slot,
+        controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.freq_amt),
+        action = function(x)
+          S.voices[voice_idx].crossmod[slot_key].freq_amt = x
+          send_param_to_engine(freq_id, x)
         end
-      end,
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot2.source = x
-        if S.voices[voice_idx].active then
-          engine.setModSource(voice_idx - 1, 2, S.lib.engine_sync.engine_mod_source(x))
-        end
-      end
-    }
-
-    params:add{
-      type = "control",
-      id = prefix .. "mod_amp_amt_2",
-      name = "amp mod 2",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.amp_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot2.amp_amt = x
-        send_param_to_engine(prefix .. "mod_amp_amt_2", x)
-      end
-    }
-    add_sender(prefix .. "mod_amp_amt_2", function(value) engine.setModAmpAmt(engine_voice, 2, value) end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "mod_freq_amt_2",
-      name = "freq mod 2",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot2.freq_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot2.freq_amt = x
-        send_param_to_engine(prefix .. "mod_freq_amt_2", x)
-      end
-    }
-    add_sender(prefix .. "mod_freq_amt_2", function(value) engine.setModFreqAmt(engine_voice, 2, value) end)
-
-    -- Slot 3
-    params:add{
-      type = "number",
-      id = prefix .. "mod_source_3",
-      name = "mod source 3",
-      min = 0,
-      max = NUM_VOICES,
-      default = v.crossmod.slot3.source,
-      formatter = function(param)
-        if param:get() == 0 then
-          return "none"
-        else
-          return "voice " .. param:get()
-        end
-      end,
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot3.source = x
-        if S.voices[voice_idx].active then
-          engine.setModSource(voice_idx - 1, 3, S.lib.engine_sync.engine_mod_source(x))
-        end
-      end
-    }
-
-    params:add{
-      type = "control",
-      id = prefix .. "mod_amp_amt_3",
-      name = "amp mod 3",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.amp_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot3.amp_amt = x
-        send_param_to_engine(prefix .. "mod_amp_amt_3", x)
-      end
-    }
-    add_sender(prefix .. "mod_amp_amt_3", function(value) engine.setModAmpAmt(engine_voice, 3, value) end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "mod_freq_amt_3",
-      name = "freq mod 3",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.crossmod.slot3.freq_amt),
-      action = function(x)
-        S.voices[voice_idx].crossmod.slot3.freq_amt = x
-        send_param_to_engine(prefix .. "mod_freq_amt_3", x)
-      end
-    }
-    add_sender(prefix .. "mod_freq_amt_3", function(value) engine.setModFreqAmt(engine_voice, 3, value) end)
+      }
+      add_sender(freq_id, function(value) engine.setModFreqAmt(engine_voice, slot, value) end)
+    end
 
     -- Global mod speed (shared across all slots)
     params:add{

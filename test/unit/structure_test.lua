@@ -730,7 +730,9 @@ end)
 -- buffer path), the start-up clock (voice 1 starts and syncs at once) and the
 -- frame clock
 local function start_steps()
-  local voice_sync = { "engine.voiceOn", "engine.setGrainSource", "engine.setVoiceParam", "engine.setGrainParam" }
+  -- a start: the source and the grain values (the registered voice params'
+  -- grain keys and syncs with them), voiceOn, then the voice-level values (#325)
+  local voice_sync = { "engine.setGrainSource", "engine.setGrainParam", "engine.voiceOn", "engine.setVoiceParam" }
   for _ = 1, local_value("NUM_MOD_SLOTS") do
     for _, command in ipairs({ "engine.setModSource", "engine.setModAmpAmt", "engine.setModFreqAmt" }) do
       table.insert(voice_sync, command)
@@ -738,8 +740,6 @@ local function start_steps()
   end
   table.insert(voice_sync, "engine.setModSpeed")
   table.insert(voice_sync, "engine.setVoiceParam")
-  -- the registered voice params' grain keys (lib/history.lua's history)
-  if #local_value("S").registry.voice_params > 0 then table.insert(voice_sync, "engine.setGrainParam") end
   for _, effect in ipairs({ "voice list built", "redraw requested", "grid redrawn" }) do
     table.insert(voice_sync, effect)
   end
@@ -766,6 +766,7 @@ local function start_steps()
     { "frame clock", { "clock started" } },
     { "waveform loop", { "clock started" } },
     { "playheads", { "clock started" } },
+    { "pattern transport", {} },
   }
 end
 

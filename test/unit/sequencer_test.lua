@@ -112,7 +112,7 @@ test("every grid redraw while a step plays shows that step, a started voice's to
   local S = local_value("S")
   local voices = local_value("voices")
   assert_true(not voices[3].active, "voice 3 is stopped")
-  S.patterns[3][1] = 15; S.patterns[3][2] = 15  -- step 1 starts voice 3 (toggle_voice redraws the grid)
+  S.patterns[3][1] = 15; S.patterns[3][2] = 15  -- step 1 starts voice 3, step 2 accents it
   local seen = {}
   local original_redraw = grid_redraw
   grid_redraw = function()
@@ -122,8 +122,9 @@ test("every grid redraw while a step plays shows that step, a started voice's to
   pattern_toggle(); wake(context, "pattern_clock")
   grid_redraw = original_redraw
   pattern_toggle()
-  assert_true(#seen >= 3, "the step redraws and the voice start's redraw (" .. #seen .. ")")
-  assert_equal(seen[1], 1, "the first redraw, while step 1 starts voice 3, shows step 1")
+  -- one redraw per step, the voice it starts included (#527)
+  assert_equal(#seen, 2, "one redraw per step")
+  assert_equal(seen[1], 1, "step 1's redraw, after it starts voice 3, shows step 1")
   assert_equal(seen[#seen], 2, "the last shows step 2")
   for _, step in ipairs(seen) do
     assert_true(step == 1 or step == 2, "never the last step or the next one (" .. tostring(step) .. ")")
@@ -133,17 +134,19 @@ end)
 test("an error in a step stops the pattern clock and shows it stopped (#243)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  S.patterns[1][2] = 15  -- step 2 fails, on the clock's first wake-up
+  S.patterns[1][2] = 15  -- step 2 fails starting voice 1, on the clock's first wake-up
   if S.voices[1].active then toggle_voice(1) end
-  local real_toggle_voice, raised = toggle_voice, false
-  toggle_voice = function(voice_idx)
+  local engine_sync = S.lib.engine_sync
+  local real_start_voice, raised = engine_sync.start_voice, false
+  engine_sync.start_voice = function(voice_idx)
     if not raised then raised = true; error("step failed") end
-    return real_toggle_voice(voice_idx)
+    return real_start_voice(voice_idx)
   end
   pattern_clock_start()
   wake(context, "pattern_clock")
   local errors = context.clock.take_errors()
-  toggle_voice = real_toggle_voice
+  engine_sync.start_voice = real_start_voice
+  assert_true(raised, "step 2 started voice 1")
   assert_equal(#errors, 1, "one clock error")
   assert_true(errors[1]:find("step failed", 1, true), "the step's error")
   assert_true(errors[1]:find("stack traceback:", 1, true), "with its traceback")
@@ -160,18 +163,20 @@ test("a step's error asks the screen to redraw the stopped pattern", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local UI_PAGES = local_value("UI_PAGES")
-  S.patterns[1][2] = 15  -- step 2 fails, on the clock's first wake-up
+  S.patterns[1][2] = 15  -- step 2 fails starting voice 1, on the clock's first wake-up
   if S.voices[1].active then toggle_voice(1) end
-  local real_toggle_voice, raised = toggle_voice, false
-  toggle_voice = function(voice_idx)
+  local engine_sync = S.lib.engine_sync
+  local real_start_voice, raised = engine_sync.start_voice, false
+  engine_sync.start_voice = function(voice_idx)
     if not raised then raised = true; error("step failed") end
-    return real_toggle_voice(voice_idx)
+    return real_start_voice(voice_idx)
   end
   pattern_clock_start()
   UI_PAGES.screen_dirty = false
   wake(context, "pattern_clock")
   local errors = context.clock.take_errors()
-  toggle_voice = real_toggle_voice
+  engine_sync.start_voice = real_start_voice
+  assert_true(raised, "step 2 started voice 1")
   assert_equal(#errors, 1, "one clock error")
   assert_equal(S.pattern_playing, false, "stopped")
   assert_true(UI_PAGES.screen_dirty, "the stop asks for a redraw")
@@ -180,17 +185,18 @@ end)
 test("an error in the first step leaves no clock recorded (#243)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  S.patterns[1][1] = 15
+  S.patterns[1][1] = 15  -- step 1 fails starting voice 1
   if S.voices[1].active then toggle_voice(1) end
-  local real_toggle_voice, raised = toggle_voice, false
-  toggle_voice = function(voice_idx)
+  local engine_sync = S.lib.engine_sync
+  local real_start_voice, raised = engine_sync.start_voice, false
+  engine_sync.start_voice = function(voice_idx)
     if not raised then raised = true; error("first step failed") end
-    return real_toggle_voice(voice_idx)
+    return real_start_voice(voice_idx)
   end
   -- the stub raises a first step's error to the caller, as norns' clock.run does
   local started, start_error = pcall(pattern_clock_start)
   local errors = context.clock.take_errors()
-  toggle_voice = real_toggle_voice
+  engine_sync.start_voice = real_start_voice
   assert_true(raised, "the first step ran")
   assert_true((not started and tostring(start_error):find("first step failed", 1, true)) or #errors == 1, "the error reached the caller or the scheduler")
   assert_equal(S.pattern_clock, nil, "no clock id recorded")
@@ -229,6 +235,194 @@ test("replace_pattern copies sixteen whole levels in range and ignores a bad voi
   end
   assert_equal(S.patterns[0], nil, "voice 0 never created")
   assert_equal(S.patterns[8], nil, "voice 8 never created")
+end)
+
+-- Each bounds line of toggle_pattern_step catches its own case: without the
+-- voice check, voice 8 raises on a nil pattern; without the step check, step
+-- 17 (or 0) grows the pattern (#414)
+test("toggle_pattern_step ignores a voice or a step out of range (#414)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local NUM_VOICES, PATTERN_LENGTH = S.constants.NUM_VOICES, S.constants.PATTERN_LENGTH
+  S.patterns[1][1] = 6
+  local before = {}
+  for voice_idx = 1, NUM_VOICES do
+    before[voice_idx] = {}
+    for step = 1, PATTERN_LENGTH do before[voice_idx][step] = S.patterns[voice_idx][step] end
+  end
+  for _, place in ipairs({ { 0, 1 }, { NUM_VOICES + 1, 1 }, { 1, 0 }, { 1, PATTERN_LENGTH + 1 } }) do
+    local ok, problem = pcall(toggle_pattern_step, place[1], place[2])
+    assert_true(ok, "voice " .. place[1] .. " step " .. place[2] .. " raises nothing: " .. tostring(problem))
+  end
+  for voice_idx = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
+      assert_equal(S.patterns[voice_idx][step], before[voice_idx][step], "voice " .. voice_idx .. " step " .. step .. " unchanged")
+    end
+  end
+  assert_equal(S.patterns[1][PATTERN_LENGTH + 1], nil, "step 17 never created")
+  assert_equal(S.patterns[1][0], nil, "step 0 never created")
+  assert_equal(S.patterns[NUM_VOICES + 1], nil, "voice 8 never created")
+  assert_equal(S.patterns[0], nil, "voice 0 never created")
+  -- in range it toggles: an empty step turns on at the top level, a set one off
+  toggle_pattern_step(1, PATTERN_LENGTH)
+  assert_equal(S.patterns[1][PATTERN_LENGTH], 15, "the last step on at the top level")
+  toggle_pattern_step(1, 1)
+  assert_equal(S.patterns[1][1], 0, "a set step off")
+end)
+
+-- lib/constants.lua's text with MAX_STEP_LEVEL set to level
+local function constants_with_max_step_level(level)
+  local file = assert(io.open(h.repo_root .. "/lib/constants.lua"))
+  local source = file:read("*a")
+  file:close()
+  local patched, count = source:gsub("local MAX_STEP_LEVEL = 15", "local MAX_STEP_LEVEL = " .. level)
+  assert(count == 1, "lib/constants.lua sets MAX_STEP_LEVEL once")
+  return patched
+end
+
+-- A toggled step and a random one follow MAX_STEP_LEVEL: with a top level
+-- of 10, a toggled step is 10 and a random one 5 to 10 (half the range,
+-- rounded up, to the top), never the 15 and 8 to 15 written out (#418)
+test("a toggled step is at MAX_STEP_LEVEL and a random one from half of it up (#418)", function()
+  local context = load_strata({ module_sources = { ["lib/constants"] = constants_with_max_step_level(10) } })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.constants.MAX_STEP_LEVEL, 10, "the patched top level")
+  toggle_pattern_step(2, 3)
+  assert_equal(S.patterns[2][3], 10, "a toggled step is at the top level")
+  math.randomseed(7)
+  local drawn = {}
+  for _ = 1, 20 do
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      randomize_pattern(voice_idx)
+      for step = 1, S.constants.PATTERN_LENGTH do
+        local level = S.patterns[voice_idx][step]
+        assert_true(level == 0 or (level >= 5 and level <= 10), "a random level is 0 or 5 to 10, got " .. level)
+        drawn[level] = true
+      end
+    end
+  end
+  for level = 5, 10 do assert_true(drawn[level], "level " .. level .. " is drawn") end
+  assert_true(drawn[0], "and empty steps")
+end)
+
+-- The grid's repaint a pattern step asks for, once for the whole step
+local function count_grid_redraws(action)
+  local count, real_grid_redraw = 0, grid_redraw
+  grid_redraw = function(...) count = count + 1; return real_grid_redraw(...) end
+  local ok, problem = pcall(action)
+  grid_redraw = real_grid_redraw
+  if not ok then error(problem, 0) end
+  return count
+end
+
+-- A step that starts several voices repaints every grid once, after it
+-- starts them all, not once per voice and again for the step (#527)
+test("a step that starts three voices repaints the grid once and shows them running (#527)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local UI_PAGES = local_value("UI_PAGES")
+  for voice_idx = 3, 5 do
+    assert_true(not S.voices[voice_idx].active, "voice " .. voice_idx .. " is stopped")
+    S.patterns[voice_idx][1] = 15
+  end
+  S.patterns[1][1] = 9  -- and a running voice it accents
+  UI_PAGES.screen_dirty = false
+  context.clear_engine_calls()
+  assert_equal(count_grid_redraws(pattern_clock_start), 1, "one repaint for step 1, which plays at once")
+  for voice_idx = 3, 5 do
+    assert_true(S.voices[voice_idx].active, "voice " .. voice_idx .. " started")
+    assert_equal(S.voice_list.entries[voice_idx]:sub(1, 2), voice_idx .. "+", "MAIN's list shows voice " .. voice_idx .. " running")
+  end
+  assert_equal(#context.calls_named("voiceOn"), 3, "three starts")
+  assert_equal(#context.calls_named("retrigger"), 1, "one accent")
+  assert_true(UI_PAGES.screen_dirty, "the screen redraws the started voices")
+  -- a step that starts none repaints once too
+  assert_equal(count_grid_redraws(function() wake(context, "pattern_clock") end), 1, "one repaint for step 2")
+  pattern_clock_stop()
+end)
+
+-- A step that fails starting its second voice: the first one it started
+-- shows running, the failed one stopped in the engine and on the screen
+test("a step whose second start fails shows the first voice running and the second stopped (#527, #382)", function()
+  local context = load_strata({ before_init = function()
+    local_value("S").register_grain_restart(function(voice_idx)
+      if voice_idx == 4 then error("start failed") end
+    end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  S.patterns[3][1] = 15; S.patterns[4][1] = 15
+  context.clear_engine_calls()
+  local started, start_error = pcall(pattern_clock_start)
+  local errors = context.clock.take_errors()
+  assert_true((not started and tostring(start_error):find("start failed", 1, true)) or #errors == 1,
+    "the error reached the caller or the scheduler")
+  assert_equal(S.pattern_playing, false, "the pattern stopped")
+  assert_true(S.voices[3].active, "voice 3 runs")
+  assert_equal(S.voice_list.entries[3]:sub(1, 2), "3+", "MAIN's list shows voice 3 running")
+  assert_true(not S.voices[4].active, "voice 4 is stopped")
+  assert_equal(S.voice_list.entries[4]:sub(1, 2), "4-", "MAIN's list shows voice 4 stopped")
+  local engine_running = false
+  for _, call in ipairs(context.engine_calls) do
+    if call.args[1] == 3 and call.name == "voiceOn" then engine_running = true end
+    if call.args[1] == 3 and call.name == "voiceOff" then engine_running = false end
+  end
+  assert_equal(engine_running, false, "the engine's voice 4 is stopped too")
+end)
+
+-- norns calls clock.transport.start and stop when the clock source starts
+-- or stops (a MIDI start or stop, a Link start or stop with start/stop sync,
+-- PARAMETERS > CLOCK > reset): the patterns follow (#530)
+test("the pattern clock follows the clock's transport start and stop (#530)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local UI_PAGES = local_value("UI_PAGES")
+  assert_equal(type(clock.transport.start), "function", "a transport start handler")
+  assert_equal(type(clock.transport.stop), "function", "a transport stop handler")
+  UI_PAGES.screen_dirty = false
+  clock.transport.start()
+  assert_equal(S.pattern_playing, true, "a transport start plays the patterns")
+  assert_equal(S.lib.sequencer.sounding_step(), 1, "from step 1, at the start")
+  assert_true(UI_PAGES.screen_dirty, "the header's play mark and SEQ are redrawn")
+  for _ = 1, 3 do wake(context, "pattern_clock") end
+  assert_equal(S.lib.sequencer.sounding_step(), 4, "step 4 plays")
+  local playing_clock = S.pattern_clock
+  clock.transport.start()
+  assert_equal(S.lib.sequencer.sounding_step(), 1, "a start while playing starts over from step 1")
+  assert_true(context.clock.threads[playing_clock] == nil, "the clock that played is canceled")
+  UI_PAGES.screen_dirty = false
+  clock.transport.stop()
+  assert_equal(S.pattern_playing, false, "a transport stop stops the patterns")
+  assert_equal(S.pattern_clock, nil, "and their clock")
+  assert_true(UI_PAGES.screen_dirty, "shown stopped")
+  clock.transport.stop()
+  assert_equal(S.pattern_playing, false, "a stop while stopped changes nothing")
+end)
+
+test("the transport handlers call the ones found at init and give them back at cleanup (#530)", function()
+  local calls = {}
+  local function previous_start() table.insert(calls, "start") end
+  local function previous_stop() table.insert(calls, "stop") end
+  local context = load_strata({ before_init = function()
+    clock.transport.start, clock.transport.stop = previous_start, previous_stop
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(clock.transport.start ~= previous_start, "the script's start handler is installed")
+  clock.transport.start()
+  assert_equal(S.pattern_playing, true, "the patterns play")
+  clock.transport.stop()
+  assert_equal(S.pattern_playing, false, "and stop")
+  assert_equal(table.concat(calls, " "), "start stop", "the handlers found at init still run")
+  cleanup()
+  assert_equal(clock.transport.start, previous_start, "cleanup gives the start handler back")
+  assert_equal(clock.transport.stop, previous_stop, "and the stop handler")
+  -- with none found, cleanup leaves none
+  context = load_strata(); finish_startup(context)
+  cleanup()
+  assert_equal(clock.transport.start, nil, "no start handler left")
+  assert_equal(clock.transport.stop, nil, "no stop handler left")
 end)
 
 end

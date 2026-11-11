@@ -49,7 +49,7 @@ Menu order:
 { name = "freeze", count = 2, add = function(voice_idx) ... end,
   add_first = nil,             -- optional fn(voice_idx): params a PSET must read before the built-in ones
   grain_keys = { freeze = "freeze", freeze_mode = { name = "freezeMode", value = function(x) return x - 1 end } },
-  sync = nil,                  -- optional fn(voice_idx): the voice sync's sends after grain_keys
+  sync = nil,                  -- optional fn(voice_idx): the voice sync's sends after grain_keys (setGrainParam only)
   scene_defaults = { freeze = 0, freeze_mode = 1 },   -- each the param's default
   discrete = { freeze = {0, 1}, freeze_mode = {1, 2} }, -- whole range; the other scene keys crossfade
   voice_rows = { section = "mix", rows = {"freeze", "freeze_mode"}, when = nil, before = nil },
@@ -64,7 +64,7 @@ Menu order:
   2. stores the value in `S.voices[i].extras[key]` (`add_voice_params` makes `extras` fresh at each init);
   3. calls `note_param_edit` and `send_param_to_engine`;
   4. runs the param's own action.
-- A key in `grain_keys` gets an `S.engine_senders` entry: `setGrainParam` with the engine name (and `value(x)`, if given), only while the voice runs. `sync_voice_values_to_engine` sends every record's grain keys (by key name) and then its `sync` (`docs/notes/lua/engine-sync.md`).
+- A key in `grain_keys` gets an `S.engine_senders` entry: `setGrainParam` with the engine name (and `value(x)`, if given), only while the voice runs. `sync_voice_values_to_engine` sends every record's grain keys (by key name) and then its `sync` (`docs/notes/lua/engine-sync.md`). A start sends them before `engine.voiceOn`, with the other grain values, so a record's `sync` sends grain params only (`setGrainParam`): `voiceOn` resets the voice-level controls, and a test fails on anything else before it (#325). The variation record's (the intervals and `scaleNote`) and the bookmarks record's (`scrubRate` 0 and `scanHold` 0) do.
 
 **Param filters** (`S.register_param_filter(key, fn)`, one per key). `fn(voice_idx, value, previous) -> value` runs in the action of every `v<i>_<key>` voice param, the synthesis params (`param_order`) as well as registered ones, before the value is stored. `previous` is the value stored before. 3.2's quantized `freq` uses it.
 

@@ -164,7 +164,7 @@ local START_ORDER = {
   menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
   drift_metro = 40,      -- lib/mutation.lua: created and started
   mutation_metro = 50,   -- lib/mutation.lua: created; its param starts it
-  buffer_polls = 60,     -- lib/buffers.lua: bufferState and bufferLoadFailed
+  buffer_polls = 60,     -- lib/buffers.lua: bufferState, bufferLoadFailed and bufferSaveResult
   record_poll = 65,      -- lib/record.lua: the recordState poll
   arc = 70,              -- lib/arc/core.lua
   grids = 80,            -- lib/grid/core.lua
@@ -175,6 +175,7 @@ local START_ORDER = {
   frame_clock = 130,     -- lib/ui/frame.lua
   waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
   playheads = 150,       -- lib/playheads.lua: the playhead clock
+  pattern_transport = 160,  -- lib/sequencer.lua: the clock's transport start and stop handlers
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)

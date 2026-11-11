@@ -20,6 +20,9 @@ Tempo:
 - A tempo change keeps the current beat (the beat timeline keeps its beat), and a waiting sync wakes at the new tempo.
 - `clock.get_tempo()` returns the clock's tempo.
 
+Transport:
+- `clock.transport` is a table whose `start` and `stop` are nil until a script sets them, as norns' (`lua/core/clock.lua`). Nothing in the stub calls them: a test calls `clock.transport.start()` or `stop()` itself, as norns' `_norns.clock.start` and `stop` do when the clock source starts or stops.
+
 What a resumed coroutine gets:
 - the clock time (sleep) or beat (sync) as the return value, the one its tick posted it with;
 - matron samples `clock_time` and `clock_beat` once per tick, so `clock.advance()` samples them at the step's start and every event of the step gets them (an overdue one too, and a tempo change by an earlier resume in the step cannot move them);

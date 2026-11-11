@@ -38,7 +38,7 @@ Each `S.voices[i]` holds:
 
 The engine mirrors this table:
 - param actions forward changes while a voice is active (through `send_param_to_engine`, see `docs/notes/lua/engine-sync.md`);
-- `sync_voice_to_engine` pushes everything when a voice starts.
+- a start (`S.lib.engine_sync.start_voice`, from `toggle_voice` or a pattern step) pushes everything: the source and the grain values before `engine.voiceOn`, the voice-level values after it (`docs/notes/lua/engine-sync.md`).
 
 ## Start-up
 
@@ -69,6 +69,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
 | 140 | start the peaks read loop (`S.lib.waveforms.read_clock`, one tick per frame) | `lib/waveforms.lua` |
 | 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
+| 160 | follow the clock's transport: install `clock.transport.start` and `stop`, keeping the handlers found (#530) | `lib/sequencer.lua` |
 
 Adding a step:
 - A new resource gets its start in the module that owns it, at a free order at its place in this sequence (the orders are spaced by 10), next to its cleanup step.
@@ -93,6 +94,7 @@ end)
 - Each module registers its steps as it loads: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` (`lib/state.lua`).
 - Two steps at one order are refused, so the sort always gives one sequence.
 - A step that fails stops the ones after it.
+- norns frees the engine before it calls `cleanup()` (`Script.clear` in `lua/core/script.lua` calls `_norns.free_engine()` first, and the engine's `deinit` frees its command responders before anything else, #461). So no engine command a step sends arrives: the voices stop at once with the engine, never through a release, and step 160's `voiceOff`s, the scrub glide's `scrubRate 0` (step 124) and the LFOs' restored values (step 120) reach no handler. The steps stay for the Lua state they put back; nothing in cleanup may count on the engine. The stub's engine is never freed, so the unit tests accept these calls.
 
 The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 
@@ -107,7 +109,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 70 | stop the drift metro | `lib/mutation.lua` |
 | 80 | stop the mutation metro and set `mutation_enabled` to 0, so param and state agree | `lib/mutation.lua` |
 | 85 | cancel the randomize undo's expiry clock | `lib/mutation.lua` |
-| 90 | stop the pattern clock | `lib/sequencer.lua` |
+| 90 | stop the pattern clock and give the clock back the transport handlers found at init, if the script's are still installed | `lib/sequencer.lua` |
 | 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
@@ -120,7 +122,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 135 | stop the BUFFER page's `amp_in_l` and `amp_in_r` input meter polls (`stop_input_meter`) | `lib/pages/buffer.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 150 | detach the MIDI handler, before the voices go off | `lib/midi_in.lua` |
-| 160 | `engine.voiceOff` for every running voice | `lib/engine_sync.lua` |
+| 160 | `engine.voiceOff` for every running voice (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
 | 170 | leave every connected grid dark | `lib/grid/core.lua` |
 | 180 | leave the arc dark | `lib/arc/core.lua` |
 
