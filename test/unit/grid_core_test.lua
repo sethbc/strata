@@ -544,9 +544,6 @@ test("a layout whose redraw fails spares the other grids and the caller, and pri
   local layout = S.registry.grid_layouts["128h"]
   local real_redraw = layout.redraw
   layout.redraw = function() error("broken redraw") end
-  local lines = {}
-  local real_print = print
-  print = function(text) lines[#lines + 1] = tostring(text) end
   local ok, err = pcall(function()
     local wide_before, full_before = wide.refresh_count, full.refresh_count
     assert_true(pcall(grid_redraw), "grid_redraw returns")
@@ -562,16 +559,12 @@ test("a layout whose redraw fails spares the other grids and the caller, and pri
     full_before = full.refresh_count
     context.grid.press(2, 1, 16, 1); context.grid.press(2, 1, 16, 0)
     assert_equal(full.refresh_count - full_before, 2, "a key on the 256 repaints it")
-    local failed = 0
-    for _, line in ipairs(lines) do
-      if line:find("strata: grid redraw failed: ", 1, true) == 1 then failed = failed + 1 end
-    end
-    assert_equal(failed, 1, "the same error prints once")
   end)
-  print = real_print
   layout.redraw = real_redraw
   pattern_clock_stop()
   if not ok then error(err, 0) end
+  -- the same error printed once over every redraw (#473 claims it)
+  h.claim_script_errors(context, 1, "strata: grid redraw failed: ", "broken redraw")
 end)
 
 -- Review of #441: the errors are kept per port, so a second grid of the
@@ -587,21 +580,14 @@ test("one of two 16x8 grids failing its redraw prints its error once", function(
     if port == 1 then error("broken on port 1") end
     return real_redraw(port, grid_device)
   end
-  local lines = {}
-  local real_print = print
-  print = function(text) lines[#lines + 1] = tostring(text) end
   local ok, err = pcall(function()
     for _ = 1, 5 do grid_redraw() end
     assert_equal(second:get_led(5, 8), 15, "port 2 is drawn (its page key)")
-    local failed = 0
-    for _, line in ipairs(lines) do
-      if line:find("strata: grid redraw failed: ", 1, true) == 1 then failed = failed + 1 end
-    end
-    assert_equal(failed, 1, "five redraws print port 1's error once")
   end)
-  print = real_print
   layout.redraw = real_redraw
   if not ok then error(err, 0) end
+  -- five redraws print port 1's error once (#473 claims it)
+  h.claim_script_errors(context, 1, "strata: grid redraw failed: ", "broken on port 1")
 end)
 
 -- #446: the sequencer's edits ask for no screen redraw; SEQ follows a grid
