@@ -145,6 +145,23 @@ var failingAlloc = {
     (engine: built, raised: raised, lines: lines, group: group)
 };
 
+// The polls the engine's areas register: every `this.addPoll(\name` in its
+// sources (lib/Engine_Strata.sc and lib/engine/Strata*.sc) outside a //
+// comment, as the Lua stub reads them, so a new poll needs no change here
+var declaredPolls = {
+    var classFile = Engine_Strata.filenameSymbol.asString, marker = "this.addPoll(\\", names = Set.new;
+    ([classFile] ++ (PathName(classFile).pathOnly +/+ "engine/Strata*.sc").pathMatch).do({ arg path;
+        var text = File.readAllString(path);
+        (text.findAll(marker) ? []).do({ arg at;
+            var lineStart = (text.copyRange(0, at).findBackwards("\n") ? -1) + 1;
+            var start = at + marker.size, end = start;
+            while { (end < text.size) and: { text[end].isAlphaNum or: { text[end] == $_ } } } { end = end + 1 };
+            if (text.copyRange(lineStart, at).find("//").isNil) { names.add(text.copyRange(start, end - 1).asSymbol) };
+        });
+    });
+    names
+};
+
 // The rollback also undoes what norns' deinit would (Crone calls it only on
 // an engine whose alloc returned): the commands' OSC defs are freed, and
 // the polls another engine holds under the same names (h.engine's, here:
@@ -164,8 +181,9 @@ var checkAllocRolledBack = {
         lines.collect({ arg line; line.copyRange(line.find("the ") ? 0, (line.find(" raised") ? line.size) - 1) })));
     check.(built.commands.notEmpty and: { defsLeft.isEmpty },
         "structure: alloc that raises frees its commands' OSC defs (#499; % commands, % left)".format(built.commands.size, defsLeft.size));
-    check.((names.size == 4) and: { names.every({ arg name, index; CronePollRegistry.getPollFromName(name) === held[index] }) },
-        "structure: alloc that raises leaves the polls another engine holds under its names (%)".format(names));
+    check.((names.asSet == declaredPolls.value) and: { names.notEmpty }
+        and: { names.every({ arg name, index; CronePollRegistry.getPollFromName(name) === held[index] }) },
+        "structure: alloc that raises leaves the polls another engine holds under its names (% of the engine's %)".format(names, declaredPolls.value.asArray));
     h.freeEngine(built);  // (the commands back to h.engine)
     server.sync;
     failed[\group].free;
@@ -207,7 +225,8 @@ var checkRollbackPolls = {
     check.(left.isEmpty, "structure: alloc that raises leaves no poll of its own in norns' poll registry (#499; left: %)".format(left));
     check.((slotOne !? { (slotOne - 0.5).abs < 0.01 }) == true,
         "structure: the engine built after a failed one reports its own slots through bufferState (#499; slot 1 reads %)".format(slotOne));
-    check.(restored and: { names.size == 4 }, "structure: h.engine's polls are back at their indices (%)".format(names));
+    check.(restored and: { names.notEmpty } and: { names.asSet == declaredPolls.value },
+        "structure: h.engine's polls are back at their indices (% of the engine's %)".format(names, declaredPolls.value.asArray));
 };
 
 // SynthDefs
