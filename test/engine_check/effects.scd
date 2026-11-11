@@ -1,12 +1,16 @@
 // test/engine_check/effects.scd
 // The mix and the effects chain: the master limiter before the saturator,
 // the bus routing (three master filters, the delay and reverb returns, the
-// master sum), the defaults the Lua params assume, setFilter on all three
-// filters, setDelay, the filter type crossfades (master and voice), the NaN
-// guards, plain sends to the effects chain's synths, the sends against
-// check-only copies of 3.0's chain, the explicit bypass (it frees and
-// re-creates a node, a mix of 0 never does), and the high tier's FDN reverb
-// against FreeVerb2.
+// master sum), the defaults a fresh engine starts with (the Lua params'),
+// setFilter on all three filters, setDelay, the filter types (each passes
+// and stops what its name says), their crossfades (master and voice), a
+// cutoff step up that throws no spike and the filter as 3.0's wherever the
+// cutoff does not rise fast, the NaN guards, plain sends to the effects
+// chain's synths, the sends against check-only copies of 3.0's chain, the
+// master's drift shifter leaving a steady tone steady, the explicit bypass
+// (it frees and re-creates a node, a mix of 0 never does; a lifted delay's
+// first echo starts without a step), and the high tier's FDN reverb against
+// FreeVerb2.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -16,10 +20,12 @@ var getControl = { arg synth, control; h.getControl(synth, control) };
 var readBus = { arg bus; h.readBus(bus) };
 var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
 var mixBus = { arg name; engine.mixBus(name) };
+var db = { arg ratio; ratio.max(1e-9).ampdb.round(0.1) };
 var masterUGens, readStep;
 var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRouting, checkChain30, checkDrySends;
 var checkBypassFrees, checkBypassMemory, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
+var checkFreshDefaults, checkFilterTypes, checkCutoffStep, checkFilterAsBefore, checkMasterSteady, checkLiftStartsSmoothly;
 var sentBy, setsControl, broadcasts;
 var floodCount = 640;
 
@@ -141,13 +147,41 @@ SynthDef(\strataCheckDecayTimes, { arg inA, inB, out, blocks = 1;
     }).flat);
     Line.kr(0, 0, blocks * ControlDur.ir, doneAction: 2);
 }).add;
+// A 25 Hz sine at 0.4 on out, and on freqOut a cutoff of 20 Hz for its
+// first 2 s, then 20 kHz (timed on the server, from the synth's start)
+SynthDef(\strataCheckCutoffStepSource, { arg out, freqOut;
+    Out.ar(out, SinOsc.ar(25, 0, 0.4) ! 2);
+    Out.kr(freqOut, Select.kr(Sweep.kr(0, 1) > 2, [DC.kr(20), DC.kr(20000)]));
+}).add;
+// The peak of a bus's left channel from 1 to 1.9 s after the synth's start
+// (before the step) and from 2 s on (after it)
+SynthDef(\strataCheckStepPeaks, { arg in, out;
+    var time = Sweep.kr(0, 1), level = In.ar(in, 2)[0].abs;
+    Out.kr(out, A2K.kr([RunningMax.ar(level * (time > 1) * (time <= 1.9)), RunningMax.ar(level * (time > 2))]));
+}).add;
+SynthDef(\strataCheckPinkNoise, { arg out; Out.ar(out, PinkNoise.ar(0.5 ! 2)) }).add;
+// The master's output (in) against the master without its shifter: the
+// limiter, the saturation and amp 0.7 on the filtered dry bus (clean) two
+// samples late, as the shifter at ratio 1 delays it. Since t_reset: the
+// running minimum and maximum of each one's level (a 0.5 ms / 20 ms
+// follower) and the largest difference between them.
+SynthDef(\strataCheckMasterLevel, { arg in, clean, out, t_reset = 0;
+    var follow = { arg sig; Amplitude.ar(sig, 0.0005, 0.02) };
+    var output = In.ar(in, 2)[0];
+    var plain = ((Limiter.ar(Delay2.ar(In.ar(clean, 2)[0]), 0.95) * 2).tanh * 0.5) * 0.7;
+    var master = follow.(output), reference = follow.(plain), reset = T2A.ar(t_reset);
+    Out.kr(out, A2K.kr([RunningMin.ar(master, reset), RunningMax.ar(master, reset),
+        RunningMin.ar(reference, reset), RunningMax.ar(reference, reset), Peak.ar((output - plain).abs, reset)]));
+}).add;
 server.sync;
 
 // The largest sample step a filter of def (fully wet, a 1 kHz sine at its
 // cutoff, where lowpass and highpass are in antiphase) takes while its type
-// changes, against the largest in any type's steady state. Each [defName,
-// message] pair runs in its own group on its own buses, all at once (the
-// same type changes at the same times), so the defs share one timeline.
+// changes, against the largest in any type's steady state, and every type's
+// steady step above 0.01 (a type that played silence would pass the
+// comparison as 0 <= 0, #365). Each [defName, message] pair runs in its own
+// group on its own buses, all at once (the same type changes at the same
+// times), so the defs share one timeline.
 checkFilterCrossfade = { arg pairs;
     var runs = pairs.collect({ arg pair;
         var group = Group.tail(server), filterIn = Bus.audio(server, 2), filterOut = Bus.audio(server, 2);
@@ -172,11 +206,140 @@ checkFilterCrossfade = { arg pairs;
     [1, 2, 0, 2, 1, 0].do({ arg type; setType.(type); 0.13.wait });
     runs.do({ arg run;
         var switchStep = readStep.(run[\stepBus]), steadySteps = run[\steady].asArray;
-        check.(switchStep <= (steadySteps.maxItem * 1.1),
-            "% (largest step % while switching, % at most in steady state %)".format(
+        check.((steadySteps.size == 3) and: { steadySteps.minItem > 0.01 } and: { switchStep <= (steadySteps.maxItem * 1.1) },
+            "% (largest step % while switching, % at most in steady state %, each type's above 0.01)".format(
                 run[\message], switchStep.round(0.0001), steadySteps.maxItem.round(0.0001), steadySteps.round(0.0001)));
     });
     runs.do({ arg run; run[\group].free; run[\buses].do(_.free) });
+};
+
+// Each filter type passes and stops what its name says (#365): 100 Hz,
+// 1 kHz and 10 kHz sines at 0.5, a tone below, at and above the cutoff
+// (1 kHz, res 0.5, fully wet), through \strataFilter and the voice filter.
+// The lowpass passes the low tone and stops the high one, the highpass the
+// reverse, the bandpass passes only the middle one ("passes": a peak above
+// 0.7 of the tone's; "stops": under 0.2). The other filter checks compare a
+// filter with itself or with copies of the same design; this one fails if
+// two types are swapped or one is silent. All 18 chains run at once.
+checkFilterTypes = {
+    var tones = [100, 1000, 10000], defs = [\strataFilter, \strataCheckVoiceFilter], types = [0, 1, 2];
+    // per type, on [low, middle, high]: true passes, false stops, nil either
+    var expected = [[true, nil, false], [false, nil, true], [false, true, false]];
+    var group = Group.tail(server), toneBuses = tones.collect({ Bus.audio(server, 2) });
+    var cases = defs.collect({ arg def; types.collect({ arg type; tones.collect({ arg freq, tone; [def, type, tone] }) }) }).flatten(2);
+    var outBuses = cases.collect({ Bus.audio(server, 2) }), peakBus = Bus.control(server, cases.size * 2), probes, gains;
+    server.makeBundle(nil, {
+        tones.do({ arg freq, tone; Synth(\strataCheckSine, [\out, toneBuses[tone], \freq, freq], group, \addToTail) });
+        probes = cases.collect({ arg each, index;
+            Synth(each[0], [\in, toneBuses[each[2]], \out, outBuses[index], \freq, 1000, \res, 0.5, \filterType, each[1], \mix, 1],
+                group, \addToTail);
+            Synth(\strataCheckChannelPeaks, [\in, outBuses[index], \out, peakBus.index + (index * 2)], group, \addToTail)
+        });
+    });
+    server.sync; 0.5.wait;
+    server.makeBundle(nil, { probes.do({ arg probe; probe.set(\t_reset, 1) }) });
+    0.3.wait;
+    gains = readBus.(peakBus).clump(2).collect({ arg pair; (pair[0] / 0.5).round(0.001) });
+    defs.do({ arg def, which;
+        var byType = if (gains.size == cases.size) { gains.copyRange(which * 9, (which * 9) + 8).clump(3) } { [] };
+        check.((byType.size == 3) and: { types.every({ arg type; tones.every({ arg freq, tone;
+                var want = expected[type][tone], gain = byType[type][tone];
+                want.isNil or: { if (want) { gain > 0.7 } { gain < 0.2 } }
+            }) }) },
+            "effects: each filter type passes and stops what its name says (%: gains on 100 Hz, 1 kHz and 10 kHz at a 1 kHz cutoff: lowpass %, highpass %, bandpass %)".format(
+                def, byType[0], byType[1], byType[2]));
+    });
+    group.free; server.sync;
+    (toneBuses ++ outBuses ++ [peakBus]).do(_.free);
+};
+
+// A cutoff stepped up from 20 Hz to 20 kHz in one control change throws no
+// spike (#305). A 25 Hz sine at 0.4 (a tone just above the parked cutoff:
+// the worst case found) runs through \strataFilter and the voice filter,
+// fully wet, both cutoffs mapped to a control bus that a check synth holds
+// at 20 Hz for 2 s and then at 20 kHz. Everything starts in one bundle and
+// times itself on the server (Sweep), so the figures are the same every
+// run. The peak after the step stays under 3 for the highpass and the
+// bandpass at res 1 (the resonance's own reach there is 20 x 0.4 = 8) and
+// under 1.5 for the lowpass at res 1 and the highpass at res 0.5; the peak
+// before it is above 0.01 on both filters, so silence never passes.
+checkCutoffStep = {
+    // [type, res, ceiling]
+    var cases = [[1, 1.0, 3], [2, 1.0, 3], [0, 1.0, 1.5], [1, 0.5, 1.5]], defs = [\strataFilter, \strataCheckVoiceFilter];
+    var peakBus = Bus.control(server, cases.size * 4), freqBus = Bus.control(server, 1), group = Group.tail(server);
+    var inBus = Bus.audio(server, 2), outBuses = cases.collect({ defs.collect({ Bus.audio(server, 2) }) }), peaks;
+    freqBus.set(20); server.sync;
+    server.makeBundle(nil, {
+        Synth(\strataCheckCutoffStepSource, [\out, inBus, \freqOut, freqBus], group, \addToTail);
+        cases.do({ arg each, index;
+            defs.do({ arg def, which;
+                var filter = Synth(def, [\in, inBus, \out, outBuses[index][which], \freq, 20, \res, each[1],
+                    \filterType, each[0], \mix, 1], group, \addToTail);
+                filter.map(\freq, freqBus);
+                Synth(\strataCheckStepPeaks, [\in, outBuses[index][which], \out, peakBus.index + (index * 4) + (which * 2)],
+                    group, \addToTail);
+            });
+        });
+    });
+    server.sync; 4.5.wait;
+    peaks = readBus.(peakBus);
+    group.free; server.sync;
+    cases.do({ arg each, index;
+        var four = peaks.copyRange(index * 4, (index * 4) + 3);
+        check.((four.size == 4) and: { four[0] > 0.01 } and: { four[2] > 0.01 } and: { four[1] < each[2] } and: { four[3] < each[2] },
+            "effects: a cutoff stepped 20 Hz -> 20 kHz throws no spike (type %, res %, a 25 Hz sine at 0.4: \\strataFilter peaks % after the step, % before; the voice filter % after, % before; ceiling %)".format(
+                each[0], each[1], four[1] !? { arg value; value.round(0.001) }, four[0] !? { arg value; value.round(0.001) },
+                four[3] !? { arg value; value.round(0.001) }, four[2] !? { arg value; value.round(0.001) }, each[2]));
+    });
+    ([peakBus, freqBus, inBus] ++ outBuses.flat).do(_.free);
+};
+
+// A cutoff that falls, holds or rises slowly plays as 3.0's filter did
+// (#305): \strataFilter against the area's verbatim copy of 3.0's filter
+// (\strataCheck30Filter) on one pink noise bus. The lowpass and the
+// bandpass are exact (difference 0) in steady state, through a 20 kHz -> 20
+// Hz step and through a 1000 -> 1414 Hz step; the highpass is within 1e-6
+// in steady state at 20 Hz, 1 kHz and 20 kHz, each read after 3 s (a
+// highpass moved down rings at its new cutoff, 0.11 s per e-fold at 20 Hz
+// and res 0.9).
+checkFilterAsBefore = {
+    var inBus = Bus.audio(server, 2), engineBus = Bus.audio(server, 2), copyBus = Bus.audio(server, 2);
+    var diffBus = Bus.control(server, 2), group = Group.tail(server), filter, copy, probe, set, differ, results;
+    server.makeBundle(nil, {
+        Synth(\strataCheckPinkNoise, [\out, inBus], group, \addToTail);
+        filter = Synth(\strataFilter, [\in, inBus, \out, engineBus, \freq, 1000, \res, 0.5, \filterType, 0, \mix, 1], group, \addToTail);
+        copy = Synth(\strataCheck30Filter, [\in, inBus, \out, copyBus, \freq, 1000, \res, 0.5, \filterType, 0, \mix, 1], group, \addToTail);
+        probe = Synth(\strataCheckBusDiff, [\a, engineBus, \b, copyBus, \out, diffBus], group, \addToTail);
+    });
+    // both filters' controls in one bundle; the largest difference (and the
+    // engine filter's level) over the given seconds from now
+    set = { arg ... controls; server.makeBundle(nil, { filter.set(*controls); copy.set(*controls) }) };
+    differ = { arg seconds = 0.6; probe.set(\t_reset, 1); seconds.wait; readBus.(diffBus) };
+    server.sync; 0.3.wait;
+    results = [0, 2].collect({ arg type;
+        var steady, fall, rise;
+        set.(\filterType, type, \freq, 20000, \res, 0.9); 0.5.wait;
+        steady = differ.value;
+        server.makeBundle(nil, { probe.set(\t_reset, 1); filter.set(\freq, 20); copy.set(\freq, 20) }); 0.8.wait;
+        fall = readBus.(diffBus);
+        set.(\freq, 1000); 0.8.wait;
+        server.makeBundle(nil, { probe.set(\t_reset, 1); filter.set(\freq, 1414); copy.set(\freq, 1414) }); 0.6.wait;
+        rise = readBus.(diffBus);
+        [steady, fall, rise]
+    });
+    check.(results.flatten(1).every({ arg pair; (pair.size == 2) and: { pair[0] == 0 } and: { pair[1] > 0.01 } }),
+        "effects: a cutoff that falls, holds or rises slowly plays the lowpass and the bandpass exactly as 3.0's (differences [steady, 20 kHz -> 20 Hz, 1000 -> 1414 Hz], lowpass then bandpass: %; levels %)".format(
+            results.collect({ arg each; each.collect(_[0]) }),
+            results.collect({ arg each; each.collect({ arg pair; pair[1] !? { arg value; value.round(0.001) } }) })));
+    results = [20, 1000, 20000].collect({ arg freq;
+        set.(\filterType, 1, \freq, freq, \res, 0.9); 3.0.wait;
+        differ.value
+    });
+    check.(results.every({ arg pair; (pair.size == 2) and: { pair[0] < 1e-6 } and: { pair[1] > 0.01 } }),
+        "effects: the highpass in steady state is 3.0's within 1e-6 (at 20 Hz, 1 kHz and 20 kHz: differences %, levels %)".format(
+            results.collect(_[0]), results.collect({ arg pair; pair[1] !? { arg value; value.round(0.001) } })));
+    group.free; server.sync;
+    [inBus, engineBus, copyBus, diffBus].do(_.free);
 };
 // the largest step since the probe on bus was last reset
 readStep = { arg bus;
@@ -184,6 +347,43 @@ readStep = { arg bus;
     bus.get({ arg result; value = result; condition.test = true; condition.signal });
     awaitReply.(condition);
     value
+};
+
+// A fresh engine starts at the Lua params' defaults, read before any
+// command reaches it (#364): the script never bangs its params, so this is
+// what plays until a param moves. (The Lua test "the FX SynthDefs' defaults
+// equal the Lua param defaults" pins the SynthDefs' defaults to the
+// params'; this pins what the nodes start with.) Each master filter at
+// 5000 Hz, res 0.5, lowpass, mix 0; the delay at 0.375 s, feedback 0.4, mix
+// 0; the reverb at mix 0.3, size 0.8, damp 0.5; the drift at 0.01; fxMix
+// broadcasting 0 and 0.3; neither effect bypassed (the bypass params' 0);
+// the scale chromatic from C (what the scale and root params' defaults
+// send: setScale(0, 4095)).
+checkFreshDefaults = {
+    var fresh = h.startEngine(()), values;
+    var read = { arg key, controls; controls.collect({ arg control; fresh.synths[key] !? { arg synth; getControl.(synth, control) } }) };
+    var near = { arg got, wanted; (got.size == wanted.size) and: { [got, wanted].flop.every({ arg pair;
+        pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) } };
+    server.sync;
+    values = (
+        filters: [\filter, \filterDelay, \filterReverb].collect({ arg key; read.(key, [\freq, \res, \filterType, \mix]) }),
+        delay: read.(\delay, [\time, \feedback, \mix]), reverb: read.(\reverb, [\mix, \size, \damp]),
+        drift: read.(\master, [\drift]), fxMix: readBus.(fresh.mixBus(\fxMix)),
+        bypassed: [\delay, \reverb].collect({ arg key; fresh.areaState[\effects][\bypassed][key] }),
+        scale: fresh.scaleRootAndMask
+    );
+    h.freeEngine(fresh);
+    server.sync;
+    check.(values[\filters].every({ arg each; near.(each, [5000, 0.5, 0, 0]) }),
+        "effects: a fresh engine's three master filters start at 5000 Hz, res 0.5, lowpass and mix 0, the Lua defaults (got %)".format(
+            values[\filters]));
+    check.(near.(values[\delay], [0.375, 0.4, 0]) and: { near.(values[\reverb], [0.3, 0.8, 0.5]) } and: { near.(values[\drift], [0.01]) }
+        and: { near.(values[\fxMix], [0, 0.3]) },
+        "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4 and dry, its reverb at mix 0.3, size 0.8, damp 0.5, its drift at 0.01 and fxMix at 0 and 0.3, the Lua defaults (delay %, reverb %, drift %, fxMix %)".format(
+            values[\delay], values[\reverb], values[\drift], values[\fxMix]));
+    check.((values[\bypassed] == [false, false]) and: { values[\scale] == [0, 4095] },
+        "effects: a fresh engine has neither effect bypassed and plays the chromatic scale from C, the Lua defaults (bypassed %, scale %)".format(
+            values[\bypassed], values[\scale]));
 };
 
 checkRouting = {
@@ -368,6 +568,47 @@ checkDrySends = {
     group.free; [rawBus, dryBus, delayBus, reverbBus, peakBus].do(_.free);
 };
 
+// The master leaves a steady tone steady (#306). Its drift shifter has no
+// time dispersion and a window of at most 0.02 s (read from the graph: the
+// comb a long window makes depends on where the drift's random walk sits,
+// so a level reading could miss it). A 1 kHz sine at 0.5 on the dry bus,
+// the filter, delay and reverb mixes at 0: at drift 0 the output is the
+// master without its shifter (its limiter, saturation and amp on the input
+// two samples late) within 1e-5, and at drift 0, 0.01 and 0.1 the output's
+// level moves at most 1 dB more than that reference's.
+checkMasterSteady = {
+    var shifter = SynthDescLib.global.at(\strataMaster).def.children.detect({ arg ugen; ugen.isKindOf(PitchShift) });
+    var bus = Bus.control(server, 5), tone, probe, values, swings;
+    check.(shifter.notNil and: { shifter.inputs[4] == 0 } and: { shifter.inputs[1].isNumber } and: { shifter.inputs[1] <= 0.02 },
+        "effects: the master's shifter has no time dispersion and a window of at most 0.02 s (window %, time dispersion %)".format(
+            shifter !? { shifter.inputs[1] }, shifter !? { shifter.inputs[4] }));
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setReverb, 0.0, 0.8, 0.5);
+    server.sync;
+    tone = Synth(\strataCheckSine, [\out, engine.mainBus, \freq, 1000], engine.processGroup, \addToTail);
+    probe = Synth(\strataCheckMasterLevel, [\in, context.out_b, \clean, engine.filterBus, \out, bus], context.xg, \addAfter);
+    swings = [0.0, 0.01, 0.1].collect({ arg drift;
+        command.(\setMasterDrift, drift);
+        server.sync; 0.5.wait;
+        probe.set(\t_reset, 1); 3.0.wait;
+        values = readBus.(bus);
+        if (drift == 0) {
+            check.((values.size == 5) and: { values[3] > 0.2 } and: { values[4] < 1e-5 },
+                "effects: at drift 0 the master is its limiter and saturation alone (largest difference %, level %)".format(
+                    values[4], values[3] !? { arg value; value.round(0.0001) }));
+        };
+        if (values.size == 5) { [db.(values[1] / values[0].max(1e-9)), db.(values[3] / values[2].max(1e-9))] } { [inf, 0] }
+    });
+    check.(swings.every({ arg pair; pair[0] < (pair[1] + 1) }),
+        "effects: a steady 1 kHz sine leaves the master steady at drift 0, 0.01 and 0.1 (its level moves % dB; without the shifter % dB)".format(
+            swings.collect(_[0]), swings.collect(_[1])));
+    tone.free; probe.free; server.sync; bus.free;
+    command.(\setMasterDrift, 0.01);
+    command.(\setReverb, 0.3, 0.8, 0.5);
+    server.sync;
+};
+
 // A command's messages, captured (makeBundle(false) sends nothing) and
 // then sent as they are, so a check can read what the command sent inside
 // a wait as short as the bypass fade (one bundle; the free comes later)
@@ -425,6 +666,49 @@ checkBypassFrees = {
     server.sync; 0.1.wait;
     check.((engine.synths[\delay] === lifted) and: { engine.synths[\reverb].notNil } and: { delayNodes.value == 1 },
         "effects: setBypass ignores any other effect or value");
+};
+
+// Lifting the delay's bypass while audio plays starts the first echo
+// without a step (#308): with a 100 Hz sine on the delay send (time 0.05 s,
+// feedback 0.4, mix 0.5; the filter, drift and reverb out of the way), the
+// largest sample step on the delay's return and at the output after a lift
+// (eight lifts, each at a different point of the sine's cycle, each after
+// the bypass freed the node) stays within twice the steady state's.
+checkLiftStartsSmoothly = {
+    var stepBus = Bus.control(server, 1), outStepBus = Bus.control(server, 1), tone, stepProbe, outStepProbe;
+    var resetBoth, readBoth, steady, lifted;
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setMasterDrift, 0.0);
+    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setDelay, 0.05, 0.4, 0.5);
+    server.sync;
+    tone = Synth(\strataCheckSine, [\out, mixBus.(\delaySend), \freq, 100], engine.processGroup, \addToTail);
+    stepProbe = Synth(\strataCheckStep, [\in, engine.delayBus, \out, stepBus], engine.synths[\master], \addBefore);
+    outStepProbe = Synth(\strataCheckStep, [\in, context.out_b, \out, outStepBus], context.xg, \addAfter);
+    resetBoth = { stepProbe.set(\t_reset, 1); outStepProbe.set(\t_reset, 1) };
+    readBoth = { [readBus.(stepBus)[0], readBus.(outStepBus)[0]] };
+    server.sync; 1.0.wait;
+    server.makeBundle(nil, { resetBoth.value }); 0.5.wait;
+    steady = readBoth.value;
+    lifted = 8.collect({ arg index;
+        command.(\setBypass, 0, 1);
+        (0.2 + (index * 0.0013)).wait; server.sync;
+        server.makeBundle(nil, { resetBoth.value; command.(\setBypass, 0, 0) });
+        0.4.wait;
+        readBoth.value
+    });
+    check.(steady.every(_.notNil) and: { steady[0] > 0.001 } and: { lifted.every({ arg pair;
+            pair.every(_.notNil) and: { pair[0] <= (steady[0] * 2) } and: { pair[1] <= (steady[1] * 2) } }) },
+        "effects: a lifted delay's first echo starts without a step (largest step on the return %, at the output %, after eight lifts; % and % in steady state)".format(
+            lifted.collect(_[0]).select(_.notNil).maxItem !? { arg value; value.round(0.00001) },
+            lifted.collect(_[1]).select(_.notNil).maxItem !? { arg value; value.round(0.00001) },
+            steady[0] !? { arg value; value.round(0.00001) }, steady[1] !? { arg value; value.round(0.00001) }));
+    tone.free; stepProbe.free; outStepProbe.free; server.sync;
+    stepBus.free; outStepBus.free;
+    command.(\setMasterDrift, 0.01);
+    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setDelay, 0.375, 0.4, 0.0);
+    server.sync;
 };
 
 // Freeing the delay gives its DelayC lines (1 MB) back to the pool
@@ -646,7 +930,9 @@ check.(h.grainDefs.every({ arg name;
     and: { SynthDescLib.global.at(\strataVoiceMix).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 5 },
     "effects: each grain def writes one path; the stage writes the dry bus, the two sends, the mirror and the tap");
 
-// The 3.0 comparison and the dry voice first, with no voice running
+// The defaults a fresh engine starts with, then the 3.0 comparison and the
+// dry voice, with no voice running
+checkFreshDefaults.value;
 probeKB = smallProbeKB.value;
 checkChain30.("defaults", [5000.0, 0.5, 0, 0.0, 0.375, 0.4, 0.0, 0.3, 0.8, 0.5], nil);
 checkChain30.("filter on, delay mix swept by an LFO", [1200.0, 0.4, 0, 0.6, 0.21, 0.5, 0.5, 0.45, 0.7, 0.3],
@@ -656,17 +942,13 @@ checkDrySends.value;
 h.startAllVoices;
 checkRouting.value;
 
-// Effects defaults match the Lua param defaults (Lua never bangs its params)
+// Back to the defaults after checkChain30 and checkDrySends (the defaults
+// themselves are checkFreshDefaults'): the mixes reach fxMix
 command.(\setFilter, 5000.0, 0.5, 0, 0.0);
 command.(\setDelay, 0.375, 0.4, 0.0);
 command.(\setReverb, 0.3, 0.8, 0.5);
 server.sync;
-check.([\filter, \filterDelay, \filterReverb].every({ arg key;
-    (getControl.(engine.synths[key], \freq) == 5000.0) and: { getControl.(engine.synths[key], \mix) == 0.0 } }),
-    "filter freq default 5000, each filter starts bypassed");
-check.(getControl.(engine.synths[\delay], \time) == 0.375, "delay time default 0.375");
-check.(getControl.(engine.synths[\delay], \mix) == 0.0, "delay starts dry");
-check.(readBus.(mixBus.(\fxMix)).round(0.0001) == [0.0, 0.3], "fxMix broadcasts the delay and reverb mixes (0 and 0.3)");
+check.(readBus.(mixBus.(\fxMix)).round(0.0001) == [0.0, 0.3], "effects: setDelay and setReverb broadcast their mixes on fxMix (0 and 0.3)");
 
 command.(\setFilter, 800.0, 0.2, 1, 1.0);
 server.sync;
@@ -682,13 +964,18 @@ check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feed
 check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
 check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
 
+checkFilterTypes.value;
 checkFilterCrossfade.([[\strataFilter, "filter type changes crossfade"],
     [\strataCheckVoiceFilter, "effects: the voice filter crossfades types in 20 ms"]]);
+checkCutoffStep.value;
+checkFilterAsBefore.value;
 checkEffectsGuard.value;
 checkEffectSendsReported.value;
 h.stopAllVoices;
 
+checkMasterSteady.value;
 checkBypassFrees.value;
+checkLiftStartsSmoothly.value;
 checkBypassMemory.value;
 checkBypassToggling.value;
 checkMixThroughZero.value;

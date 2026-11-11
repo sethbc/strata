@@ -478,6 +478,53 @@ test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
   end
 end)
 
+-- The same rule for the scale and the two bypasses (#460): setScale and
+-- setBypass go out only when their params change, so the engine's start
+-- state (allocScaleBuffer's root and mask, the effects area's bypassed
+-- table, both read from the engine source) must be what the params'
+-- defaults send.
+test("the scale and bypass params' defaults equal the engine's start state (#460)", function()
+  local context = load_strata()
+  local source = stubs.strip_sc_comments(engine_sources())
+  local function method_body(name)
+    local start = assert(source:find("\n%s*" .. name .. "%s*{"), "engine source: no method " .. name)
+    return source:sub(start, (source:find("\n    }", start, true)))
+  end
+  -- the engine's start: root, mask (a number or this.chromaticMask), bypassed per effect
+  local alloc = method_body("allocScaleBuffer")
+  local start_root = tonumber(alloc:match("state%[\\root%]%s*=%s*(%d+)%s*;"))
+  local mask_text = alloc:match("state%[\\mask%]%s*=%s*([^;]-)%s*;")
+  local start_mask = tonumber(mask_text)
+  if mask_text == "this.chromaticMask" then start_mask = tonumber(source:match("chromaticMask%s*{%s*%^%s*(%d+)%s*}")) end
+  assert_true(start_root ~= nil and start_mask ~= nil, "allocScaleBuffer sets a root and a mask the test can read")
+  local bypass_keys = {}
+  for key in (source:match("bypassKeys%s*{%s*%^%s*%[(.-)%]%s*}") or ""):gmatch("\\([%w_]+)") do table.insert(bypass_keys, key) end
+  local bypassed = source:match("state%[\\bypassed%]%s*=%s*IdentityDictionary%[(.-)%]%s*;") or ""
+  assert_equal(#bypass_keys, 2, "the engine's bypassKeys name two effects")
+  -- the Lua defaults: the scale and root actions send setScale; each bypass param's sender, setBypass
+  context.clear_engine_calls()
+  params:lookup_param("scale"):bang()
+  params:lookup_param("root"):bang()
+  local scale_calls = context.calls_named("setScale")
+  assert_true(#scale_calls > 0, "the scale and root params send engine.setScale")
+  assert_equal(scale_calls[#scale_calls].args[1], start_root, "setScale's root (Lua default) vs allocScaleBuffer's")
+  assert_equal(scale_calls[#scale_calls].args[2], start_mask, "setScale's mask (Lua default) vs allocScaleBuffer's")
+  local voice_mix = local_value("lib").voice_mix
+  for _, effect in ipairs(voice_mix.BYPASS_ORDER) do
+    local bypass = voice_mix.BYPASS[effect]
+    context.clear_engine_calls()
+    send_param_to_engine(bypass.param_id, params:get(bypass.param_id))
+    local calls = context.calls_named("setBypass")
+    assert_equal(#calls, 1, bypass.param_id .. " sends engine.setBypass")
+    local key = bypass_keys[calls[1].args[1] + 1]
+    assert_true(key ~= nil, bypass.param_id .. "'s effect number is one of the engine's bypassKeys")
+    local engine_start = bypassed:match("\\" .. key .. "%s*%->%s*(%a+)")
+    assert_true(engine_start == "true" or engine_start == "false", "the engine's bypassed table starts \\" .. key)
+    assert_equal(calls[1].args[2], engine_start == "true" and 1 or 0,
+      bypass.param_id .. "'s default vs the engine's bypassed \\" .. key)
+  end
+end)
+
 -- A Lua FX param whose range is wider than the limit the engine clips its
 -- control to fails here (the range check only sees the values sent)
 -- The FX params whose controlspec range leaves the limit the engine clips

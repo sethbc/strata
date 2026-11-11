@@ -226,10 +226,10 @@
     }
 
     // A signal's stereo output through the voice's own filter: the
-    // master filter's design (multimodeFilter: RLPF, RHPF and BPF weighted by
-    // a lagged type match, so a type change crossfades over 20 ms), with the
-    // cutoff and mix lagged 0.05 s as the master's. filterMix 0 (the
-    // default) passes sig unchanged.
+    // master filter's design (multimodeFilter: the three types weighted by
+    // a lagged type match, so a type change crossfades over 20 ms; the
+    // cutoff rises at most cutoffRiseRate), with the cutoff and mix lagged
+    // 0.05 s as the master's. filterMix 0 (the default) passes sig unchanged.
     // filterType is only rounded (Lua sends 0-2; any other value leaves the
     // filter out), one UGen less in every stage than the master's clip.
     voiceFilter { arg sig, filterType, filterFreq, filterRes, filterMix;
