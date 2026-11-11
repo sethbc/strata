@@ -574,6 +574,38 @@ test("randomize, mutation and the faders leave variation alone", function()
   assert_equal(params:get("scale"), 1); assert_equal(params:get("root"), 1)
 end)
 
+-- #557: a press of ALT+K2 on VOICE's variation section draws these keys
+-- (the record's randomize), each uniform over its range; the interval set,
+-- the custom intervals and quantize are kept (they set the pitch content)
+test("variation's randomize draws reverse, the jitters and interval prob, uniform in their ranges (#557)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local record
+  for _, each in ipairs(local_value("S").registry.voice_params) do
+    if each.name == "variation" then record = each end
+  end
+  local ranges = { reverse = { 0, 50 }, pitch_jitter = { 0, 6 }, pan_jitter = { 0, 0.5 }, size_jitter = { 0, 0.5 },
+    interval_prob = { 0, 100 } }
+  local keys = {}
+  for key in pairs(record.randomize) do keys[#keys + 1] = key end
+  table.sort(keys)
+  assert_equal(table.concat(keys, ","), "interval_prob,pan_jitter,pitch_jitter,reverse,size_jitter",
+    "the drawn keys: never intervals, the custom intervals or quantize")
+  math.randomseed(21)
+  for key, range in pairs(ranges) do
+    local low, high, below_middle = math.huge, -math.huge, 0
+    for _ = 1, 400 do
+      local value = record.randomize[key](2)
+      low, high = math.min(low, value), math.max(high, value)
+      if value < (range[1] + range[2]) / 2 then below_middle = below_middle + 1 end
+    end
+    local span = range[2] - range[1]
+    assert_true(low >= range[1] and high <= range[2], key .. " draws " .. low .. "-" .. high .. " within its range")
+    assert_true(low < range[1] + span * 0.05 and high > range[2] - span * 0.05, key .. " spans its range")
+    assert_true(below_middle > 160 and below_middle < 240, key .. " is uniform (" .. below_middle .. " of 400 below the middle)")
+  end
+end)
+
 
 -- norns reads a PSET in file order, which is the params' order: a voice's
 -- quantize must come before its freq, or the filter of the quantize still

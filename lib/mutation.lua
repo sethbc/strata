@@ -131,8 +131,10 @@ return function(S)
 
   -- Randomize what a spec names, holding its undo (it replaces any earlier
   -- one). draws: each {id, draw} in order, draw() called just before its set
-  -- (so a later draw may read an earlier one's new value), the old value
-  -- held first; every set reaches the engine through the param's action.
+  -- (so a later draw may read an earlier one's new value), every old value
+  -- held before the first set (an action may change a later id: a loop
+  -- start's cuts its length); every set reaches the engine through the
+  -- param's action.
   -- pattern = <voice>: that voice's pattern, through randomize_pattern (lock
   -- covers params, not patterns). Returns false, changing nothing, for a
   -- draws spec of a locked voice or with no draws
@@ -142,15 +144,15 @@ return function(S)
     if spec.voice ~= nil and S.frozen[spec.voice] then return false end
     if #spec.draws == 0 then return false end
     local values, ids = {}, {}
+    for _, entry in ipairs(spec.draws) do
+      if values[entry.id] == nil then
+        values[entry.id] = params:get(entry.id)
+        ids[#ids + 1] = entry.id
+      end
+    end
     clear_undo()
     write_as_undo(function()
-      for _, entry in ipairs(spec.draws) do
-        if values[entry.id] == nil then
-          values[entry.id] = params:get(entry.id)
-          ids[#ids + 1] = entry.id
-        end
-        set_randomized_param(entry.id, entry.draw())
-      end
+      for _, entry in ipairs(spec.draws) do set_randomized_param(entry.id, entry.draw()) end
     end)
     hold_undo(spec, values, ids, nil)
     request_redraw()

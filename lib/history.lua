@@ -4,8 +4,9 @@
 -- (S.performance.history_seconds: 16 s standard, 60 s high). A registered
 -- voice param (S.register_voice_params): the engine's history grain param,
 -- a scene field that crossfades, a VOICE row in an input voice's own
--- section and an LFO destination. Randomize, mutation and the fader pages
--- never touch it. See docs/notes/lua/history.md.
+-- section and an LFO destination. MAIN's randomize, mutation and the fader
+-- pages never touch it; VOICE's ALT+K2 on its section draws it (the
+-- record's randomize, #557). See docs/notes/lua/history.md.
 
 return function(S)
   local M = {}
@@ -65,6 +66,13 @@ return function(S)
     },
     layout_states = layout_states,
     fader = false,
+    -- VOICE's ALT+K2 on the input section (#557): uniform from 0 to the
+    -- param's top, the tier's history when the params were added
+    randomize = {
+      [M.HISTORY.key] = function(voice_idx)
+        return math.random() * params:lookup_param("v" .. voice_idx .. "_" .. M.HISTORY.key).controlspec.maxval
+      end,
+    },
   }
   S.register_voice_params(record)
   S.register_lfo_destination(M.HISTORY.lfo_label, M.HISTORY.key)

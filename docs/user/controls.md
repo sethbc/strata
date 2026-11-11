@@ -7,7 +7,7 @@ The screen pages, and what the encoders and keys do on every page. Back to the [
 The screen has eight pages, in this order (each page's own controls are on its page):
 
 1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter. ALT+K2 randomizes the voice when you let go of K2 (again within 5 s to undo), ALT+K3 locks it
-2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 resets the row to its default, ALT+K3 locks the voice
+2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo; held half a second, it resets the row to its default), ALT+K3 locks the voice
 3. [SEQ](pages/seq.md) - the pattern sequencer: all seven patterns, transport and tempo. ALT+E2 picks the voice row, ALT+E3 sets the tempo, ALT+K2 clears the voice's pattern, ALT+K3 randomizes it
 4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb. No ALT actions of its own
 5. [LFO](pages/lfo.md) - the three LFOs. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 resets the setting, ALT+K3 turns the LFO on or off

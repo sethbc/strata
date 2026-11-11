@@ -5,8 +5,9 @@
 -- quantize; the global scale and root (discrete scene fields, sent with
 -- engine.setScale); scaleNote, the voice's reference note for grain
 -- quantize; and the freq param filter that keeps a quantized voice's freq
--- on the scale as it is turned. Randomize, mutation and the fader pages
--- never touch any of it. See docs/notes/lua/variation.md.
+-- on the scale as it is turned. MAIN's randomize, mutation and the fader
+-- pages never touch any of it; VOICE's ALT+K2 on its section draws some
+-- (the record's randomize, #557). See docs/notes/lua/variation.md.
 
 return function(S)
   local M = {}
@@ -324,6 +325,17 @@ return function(S)
     },
     layout_states = layout_states,
     fader = false,
+    -- VOICE's ALT+K2 on this section (#557): each draw uniform over a usable
+    -- part of its range. The interval set, the custom intervals and
+    -- quantize are kept: they set the pitch content, and the set adds or
+    -- removes rows under the cursor
+    randomize = {
+      reverse = function() return math.random() * V.percent / 2 end,
+      pitch_jitter = function() return math.random() * V.pitch_jitter_max / 2 end,
+      pan_jitter = function() return math.random() * 0.5 end,
+      size_jitter = function() return math.random() * 0.5 end,
+      interval_prob = function() return math.random() * V.percent end,
+    },
   }
   S.register_voice_params(record)
 

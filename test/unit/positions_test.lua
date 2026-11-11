@@ -696,6 +696,40 @@ test("randomize, mutation and the faders leave bookmarks and friction alone", fu
   assert_equal(params:get("scrub_friction"), 30)
 end)
 
+-- #557: a press of ALT+K2 on VOICE's bookmarks section draws the four
+-- bookmarks in order (the record's randomize), each set before the next is
+-- drawn: four uniform 0-1 positions in ascending order, so bookmark n
+-- averages n / 5 (the n-th lowest of four uniform draws)
+test("the bookmarks' randomize draws four uniform positions in ascending order (#557)", function()
+  local _, S = buffer_voices()
+  local record
+  for _, each in ipairs(S.registry.voice_params) do
+    if each.name == "bookmarks" then record = each end
+  end
+  local keys = {}
+  for key in pairs(record.randomize) do keys[#keys + 1] = key end
+  table.sort(keys)
+  assert_equal(table.concat(keys, ","), "bookmark_1,bookmark_2,bookmark_3,bookmark_4", "the drawn keys")
+  math.randomseed(29)
+  local sums, trials = { 0, 0, 0, 0 }, 400
+  local lowest, highest = math.huge, -math.huge
+  for _ = 1, trials do
+    local previous = 0
+    for n = 1, 4 do
+      local value = record.randomize["bookmark_" .. n](2)
+      assert_true(value >= previous and value <= 1, "bookmark " .. n .. " " .. value .. " at or above the one before, at most 1")
+      params:set("v2_bookmark_" .. n, value)
+      sums[n] = sums[n] + value
+      previous = value
+      lowest, highest = math.min(lowest, value), math.max(highest, value)
+    end
+  end
+  for n = 1, 4 do
+    assert_near(sums[n] / trials, n / 5, 0.03, "bookmark " .. n .. " averages " .. n .. "/5")
+  end
+  assert_true(lowest < 0.01 and highest > 0.99, "the four span 0-1")
+end)
+
 test("the bookmark rows show on VOICE for a buffer voice only", function()
   local _, S = buffer_voices()
   local function outline(voice_idx)
