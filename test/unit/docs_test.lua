@@ -599,6 +599,26 @@ test("fx_commands reads every setSynth in a command body (#51)", function()
     "a second FX synth set by the same command")
 end)
 
+-- A command's limits and names come from its own function, the addCommand
+-- call's ( ... ), never from the methods after the last command of a file (#487)
+test("the stub reads a command's limits from its own function only (#487)", function()
+  local source = engine_sources()
+  local bypass = assert(source:find("addCommand%(\\setBypass"), "setBypass is in the engine")
+  local file_end = source:find("\n// file: ", bypass, true) or #source + 1
+  local close = source:sub(1, file_end - 1):match(".*()}")
+  local patched = source:sub(1, close - 1) .. "\n    strataProbeDepth { arg msg; var depth = msg[2].clip(0, 0.5); ^depth }\n"
+    .. source:sub(close)
+  assert_equal(engine_spec.argument_limits.setBypass, nil, "setBypass clips nothing itself")
+  assert_equal(stubs.engine_spec_from_source(patched).argument_limits.setBypass, nil,
+    "a method after the file's last command limits nothing")
+  local fragment = 'this.addCommand(\\setGrainParam, "isf", { arg msg; var param = msg[2].asSymbol;'
+    .. ' if (param == \\inside) { }; });\n'
+    .. 'strataProbeHelper { arg param; if (param == \\outside) { }; }\n'
+  local spec = stubs.engine_spec_from_source(fragment)
+  assert_true(spec.grain_params.inside, "a name the command handles is a grain param")
+  assert_equal(spec.grain_params.outside, nil, "a name in a later method is not")
+end)
+
 test("the engine stub rejects out-of-range engine arguments (#24)", function()
   load_strata()
   -- voices are 0..numVoices-1
@@ -643,6 +663,25 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
   assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", 5)
   assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", -1)
   engine.setGrainParam(0, "grainMode", 1); engine.setGrainParam(0, "envShape", 4)
+end)
+
+-- A NaN fails every `<` and `>` of a range check, and an infinity passes
+-- wherever the engine clips nothing: the type check refuses both (#477)
+test("the engine stub rejects a NaN or infinite argument (#477)", function()
+  load_strata()
+  local nan, inf = 0 / 0, math.huge
+  assert_engine_rejects("finite", "setFilter", nan, 0.5, 0, 1)
+  assert_engine_rejects("finite", "setDelay", nan, nan, nan)
+  assert_engine_rejects("finite", "recordBuffer", 0, nan, 1, 0, 0, 0, 0, 0)
+  assert_engine_rejects("finite", "voiceOn", 0, nan, 0.3, 0, 0.1, 20, 1)
+  assert_engine_rejects("finite", "setVoiceParam", 0, "freq", inf)
+  assert_engine_rejects("finite", "setGrainParam", 0, "bufPos", nan)
+  assert_engine_rejects("finite", "retrigger", 0, nan)
+  assert_engine_rejects("finite", "setMasterDrift", -inf)
+  assert_engine_rejects("finite", "loadBuffer", 0, "/tmp/x.wav", inf)
+  assert_engine_rejects("integer", "voiceOff", inf)
+  assert_engine_rejects("integer", "setScale", 0, nan)
+  engine.setFilter(5000, 0.5, 0, 1); engine.setMasterDrift(0.2)
 end)
 
 -- Continuous limits come from where the engine enforces them: a control its
@@ -782,6 +821,20 @@ test("the docs path check resolves links from the doc's folder", function()
   assert_equal(table.concat(missing, " "), "README.md", "a root-relative link in docs/user is reported")
   missing = doc_paths_missing("[top](README.md)", "docs/notes/engine/structure.md")
   assert_equal(#missing, 1, "a notes file may not link the root that way")
+  -- a link with an #anchor: its file is checked, and the anchor against the
+  -- file's headings (GitHub's anchors) (#489)
+  local checked
+  missing, checked = doc_paths_missing("[gone](no-such-page.md#section)", "docs/user/arc.md")
+  assert_equal(table.concat(missing, " "), "no-such-page.md#section", "an anchored link to a missing file")
+  assert_equal(checked, 1, "is checked")
+  missing = doc_paths_missing("[ok](effects.md#bypass), [ok](effects.md#each-voices-filter-and-sends) and "
+    .. "[bad](effects.md#no-such-heading)", "docs/user/params.md")
+  assert_equal(table.concat(missing, " "), "effects.md#no-such-heading", "an anchor the file has no heading for")
+  -- backticked changes/ paths and the repo's root files
+  missing, checked = doc_paths_missing("`changes/README.md`, `changes/no-such-fragment.md`, `README.md`, "
+    .. "`CLAUDE.md`, `strata.lua` and `voice.md`", "docs/notes/lua/x.md")
+  assert_equal(table.concat(missing, " "), "changes/no-such-fragment.md CLAUDE.md", "the missing ones are reported")
+  assert_equal(checked, 5, "a page's bare name (voice.md) is no root file")
 end)
 
 test("the docs path check covers lib/ paths", function()

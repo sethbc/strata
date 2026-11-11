@@ -136,6 +136,9 @@ local function load_strata(options)
   if options.before_load then options.before_load(context) end
   local chunk = options.source and assert(load(options.source, "@" .. LUA_PATH)) or assert(loadfile(LUA_PATH))
   chunk()
+  -- lua/core/script.lua's Script.load: the script's redraw and refresh, for
+  -- the menu's set_mode(false) to put back (#521)
+  norns.script.redraw, norns.script.refresh = rawget(_G, "redraw"), rawget(_G, "refresh")
   if options.before_init then options.before_init(context) end
   init()
   context.check_param_groups()
@@ -194,7 +197,10 @@ end
 -- Run one test function: ok, or false and the error. Errors the scheduler
 -- reported while resuming a clock (norns prints them and keeps running)
 -- fail the test unless it claimed them (clock.take_errors); when the test
--- failed anyway, they are added to its error. A test that passed, reported
+-- failed anyway, they are added to its error. So do the errors the script
+-- caught itself and printed (a frame draw, a playhead tick, a menu-close
+-- hook: stubs.take_script_errors), unless the test claimed them
+-- (context.take_script_errors, #473). A test that passed, reported
 -- no clock error and called load_strata itself then has the script's
 -- invariants checked (check_invariants), unless it allowed broken ones
 -- (allow_broken_invariants); a check that raises fails the test with
@@ -204,11 +210,17 @@ local function run_test(func)
   local outer_loaded, outer_allowed = invariant_check.loaded, invariant_check.allowed
   invariant_check.loaded, invariant_check.allowed = false, nil
   local ok, err = xpcall(func, debug.traceback)
-  local clock_errors = stubs.take_clock_errors()
-  if #clock_errors > 0 then
-    local report = "clock errors reported while the scheduler resumed a coroutine:\n" .. table.concat(clock_errors, "\n")
-    err = ok and report or (tostring(err) .. "\n" .. report)
-    ok = false
+  local unclaimed = {
+    { errors = stubs.take_clock_errors(), what = "clock errors reported while the scheduler resumed a coroutine" },
+    { errors = stubs.take_script_errors(),
+      what = "errors the script caught and printed (context.take_script_errors() claims them)" },
+  }
+  for _, kind in ipairs(unclaimed) do
+    if #kind.errors > 0 then
+      local report = kind.what .. ":\n" .. table.concat(kind.errors, "\n")
+      err = ok and report or (tostring(err) .. "\n" .. report)
+      ok = false
+    end
   end
   if ok and invariant_check.loaded and not invariant_check.allowed then
     local checked, broken = pcall(check_invariants)
@@ -225,7 +237,11 @@ end
 -- Find a script value by name: a field of S (one it holds, or one ever
 -- assigned, even to nil: S.__declared), then of S.constants, then a script
 -- local, found by searching the upvalues of global functions. Returns the
--- value and a setter that writes where the name was found.
+-- value and a setter that writes where the name was found (every upvalue of
+-- that name). A script local must have one value among all the upvalues of
+-- its name: two different ones (two modules' own `local M`) raise an error
+-- naming the functions, since which one pairs(_G) meets first changes from
+-- run to run (#482).
 local function find_upvalue(name)
   local S = shared_state()
   if type(S) == "table" then
@@ -237,20 +253,33 @@ local function find_upvalue(name)
       end
     end
   end
-  for _, value in pairs(_G) do
+  local found = {}
+  for global_name, value in pairs(_G) do
     if type(value) == "function" then
       local index = 1
       while true do
         local upvalue_name, upvalue_value = debug.getupvalue(value, index)
         if not upvalue_name then break end
         if upvalue_name == name then
-          return upvalue_value, function(new_value) debug.setupvalue(value, index, new_value) end
+          table.insert(found, { holder = value, index = index, value = upvalue_value, global = tostring(global_name) })
+          break
         end
         index = index + 1
       end
     end
   end
-  error("script local '" .. name .. "' not found")
+  if #found == 0 then error("script local '" .. name .. "' not found") end
+  for _, entry in ipairs(found) do
+    if entry.value ~= found[1].value then
+      local holders = {}
+      for _, other in ipairs(found) do table.insert(holders, other.global .. " (" .. tostring(other.value) .. ")") end
+      table.sort(holders)
+      error("script local '" .. name .. "' has different values in the upvalues of " .. table.concat(holders, ", "), 2)
+    end
+  end
+  return found[1].value, function(new_value)
+    for _, entry in ipairs(found) do debug.setupvalue(entry.holder, entry.index, new_value) end
+  end
 end
 
 local function local_value(name) return (find_upvalue(name)) end
@@ -390,31 +419,62 @@ local function patched_script(pattern, replacement)
   return {}, 0
 end
 
+-- The anchors GitHub gives a Markdown text's headings (outside code
+-- fences): the heading lowercased, every character but letters, digits,
+-- spaces, - and _ removed, each space a -; a repeated one gets -1, -2, ...
+local function heading_anchors(text)
+  local anchors, seen, fenced = {}, {}, false
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^%s*```") or line:match("^%s*~~~") then
+      fenced = not fenced
+    elseif not fenced then
+      local heading = line:match("^#+%s+(.-)%s*$")
+      if heading then
+        local anchor = heading:lower():gsub("[^%w _%-]", ""):gsub(" ", "-")
+        anchors[seen[anchor] and (anchor .. "-" .. seen[anchor]) or anchor] = true
+        seen[anchor] = (seen[anchor] or 0) + 1
+      end
+    end
+  end
+  return anchors
+end
+
 -- The repo paths a maintained doc's text names that do not exist, and the
--- number of paths it names: `docs/...`, `test/...`, `.github/...` and
--- `lib/...` in backticks, and relative Markdown link targets to a file,
--- such as [CHANGELOG.md](CHANGELOG.md) (not code such as
--- `PAGE_KEY[ui_page](n)`). A norns library is named by its path in the
--- norns repo (`lua/lib/lfo.lua`), which is not checked. Link targets are
--- relative to the doc named by doc_name (a path from the repo root)
+-- number of paths it names: `docs/...`, `test/...`, `.github/...`, `lib/...`
+-- and `changes/...` in backticks, the repo's root files in backticks (an
+-- all-capitals .md name such as `README.md`, and `strata.lua`; a bare
+-- lowercase name such as `voice.md` is a page's, not checked), and
+-- relative Markdown link targets to a file, such as
+-- [CHANGELOG.md](CHANGELOG.md) (not code such as `PAGE_KEY[ui_page](n)`).
+-- A link with an #anchor names its file and the anchor must be one of the
+-- file's headings (heading_anchors), reported as "file#anchor" when it is
+-- not (#489). A norns library is named by its path in the norns repo
+-- (`lua/lib/lfo.lua`), which is not checked. Link targets are relative to
+-- the doc named by doc_name (a path from the repo root)
 local function doc_paths_missing(text, doc_name)
   local doc_dir = doc_name and doc_name:match("^(.*)/[^/]*$") or ""
   local paths = {}
   for path in text:gmatch("`([%w%._/%-]+)`") do
-    if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") or path:match("^lib/") then
-      table.insert(paths, path)
+    if path:match("^docs/") or path:match("^test/") or path:match("^%.github/") or path:match("^lib/")
+        or path:match("^changes/") or path:match("^%u[%u%d_%-]*%.md$") or path == "strata.lua" then
+      table.insert(paths, { path = path })
     end
   end
-  local links = {}
-  for target in text:gmatch("%]%(([%w%._/%-]+%.%a+)%)") do
-    table.insert(paths, target)
-    links[target] = true
+  for target, anchor in text:gmatch("%]%(([%w%._/%-]+%.%a+)#?([%w_%-]*)%)") do
+    table.insert(paths, { path = target, link = true, anchor = anchor ~= "" and anchor or nil })
   end
   local missing = {}
-  for _, path in ipairs(paths) do
-    local base = (links[path] and doc_dir and doc_dir ~= "") and (doc_dir .. "/") or ""
-    local handle = io.open(repo_root .. "/" .. base .. path, "r")
-    if handle then handle:close() else table.insert(missing, path) end
+  for _, entry in ipairs(paths) do
+    local base = (entry.link and doc_dir ~= "") and (doc_dir .. "/") or ""
+    local handle = io.open(repo_root .. "/" .. base .. entry.path, "r")
+    local named = entry.path .. (entry.anchor and ("#" .. entry.anchor) or "")
+    if not handle then
+      table.insert(missing, named)
+    else
+      local target_text = entry.anchor and handle:read("*a")
+      handle:close()
+      if entry.anchor and not heading_anchors(target_text or "")[entry.anchor] then table.insert(missing, named) end
+    end
   end
   return missing, #paths
 end
@@ -698,12 +758,21 @@ end
 
 -- Load each unit file unit_files(dir, filter) lists, in order. A unit file
 -- returns function(h), which registers its tests with h.test. Returns the
--- names loaded
+-- names loaded. A file that returns no function, or whose function
+-- registers no test, is an error naming it (#484): a test file emptied or
+-- all behind a condition never passes as 0 tests
 local function load_unit_files(dir, filter, helpers)
   local names = unit_files(dir, filter)
   for _, name in ipairs(names) do
     local chunk = assert(loadfile(dir .. "/" .. name))
-    chunk()(helpers)
+    local register = chunk()
+    if type(register) ~= "function" then error(name .. " returns no function(h)", 0) end
+    local registered = 0
+    register(setmetatable({ test = function(...)
+      registered = registered + 1
+      return helpers.test(...)
+    end }, { __index = helpers }))
+    if registered == 0 then error(name .. " registered no test", 0) end
   end
   return names
 end

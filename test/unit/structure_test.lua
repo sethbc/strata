@@ -1318,17 +1318,35 @@ local GUARDED_RECURSIVE_DELETES = {
   ["test/run_engine_check.sh"] = '[ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;',
 }
 
+-- An rm whose flags (any of them, before the first operand or "--") hold r,
+-- R or --recursive, find's -delete, git clean, rsync's --delete, Python's
+-- rmtree and sclang's deleteAll (#488)
+local function recursive_rm(line)
+  for flags in line:gmatch("%f[%w]rm(%s+[^\n]*)") do
+    for flag in flags:gmatch("%s+(%S+)") do
+      if flag == "--" or flag:sub(1, 1) ~= "-" then break end
+      if flag:match("^%-%-recursive") or (flag:match("^%-%a") and flag:match("^%-%a*[rR]")) then return true end
+    end
+  end
+  return false
+end
+
 local function recursive_delete(line)
-  return line:match("%f[%w]rm%s+%-%-?[%a]*[rR]") ~= nil or line:match("%f[%w]rm%s+%-%-recursive") ~= nil
+  return recursive_rm(line) or line:match("%f[%w]find%s.-%s%-delete%f[^%w]") ~= nil
+    or line:match("%f[%w]git%s+clean%f[^%w]") ~= nil or line:match("%f[%w]rsync%s.-%-%-delete") ~= nil
     or line:match("rmtree") ~= nil or line:match("deleteAll") ~= nil
 end
 
 test("recursive deletes happen only at the guarded sites", function()
   for _, line in ipairs({ "rm -rf /x", "rm -r dir", "rm -fr dir", 'os.execute("rm -Rf " .. d)', "rm --recursive d",
-      "shutil.rmtree(p)", "File.deleteAll(p)" }) do
+      "shutil.rmtree(p)", "File.deleteAll(p)",
+      -- any flags before the recursive one, and deletes that are not rm (#488)
+      "rm -f -r dir", 'rm -v -rf "$dir"', "rm -i -R x", "sudo rm -f --recursive d", 'find "$dir" -delete',
+      "git clean -fdx", "rsync -a --delete a/ b/" }) do
     assert_true(recursive_delete(line), "caught: " .. line)
   end
-  for _, line in ipairs({ "rm file.txt", "os.remove(path)", "File.delete(path)", "-- a firm -r flag", "perform -r" }) do
+  for _, line in ipairs({ "rm file.txt", "os.remove(path)", "File.delete(path)", "-- a firm -r flag", "perform -r",
+      "rm -f file.txt", "rm -- -r", "apt-get clean", "find . -name x" }) do
     assert_true(not recursive_delete(line), "allowed: " .. line)
   end
   local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
@@ -1337,7 +1355,7 @@ test("recursive deletes happen only at the guarded sites", function()
     -- this file is skipped: its samples above are what the scan looks for
     if path ~= "test/unit/structure_test.lua" and (path:match("%.lua$") or path:match("%.sc$")
         or path:match("%.scd$") or path:match("%.sh$") or path:match("%.py$") or path:match("%.yml$")
-        or path:match("%.in$")) then
+        or path:match("%.in$") or path:match("Dockerfile$")) then
       local file = io.open(repo_root .. "/" .. path, "r")
       if file then
         local number = 0

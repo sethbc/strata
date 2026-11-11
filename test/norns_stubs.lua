@@ -56,9 +56,12 @@
 --   * util.time() is the clock's time; context.set_time(seconds) also moves it
 --   * clock_tempo starts at 120 BPM, not norns' factory 90 (core/state.lua):
 --     the tests assume 120, and on norns it is the user's saved tempo anyway
---   * the screen records texts, lines and rects (for layout checks);
---     screen.fill()/stroke() mark the lines and rects drawn since the last
---     fill or stroke filled = true/false
+--   * the screen records texts, lines and rects (for layout checks) and
+--     checks their arguments as matron does; screen.fill()/stroke() mark the
+--     lines and rects drawn since the last fill or stroke filled = true/false,
+--     at the level in force then; text widths are norns.ttf's advances
+--   * _menu.set_mode follows lua/core/menu.lua: the menu swaps redraw and
+--     refresh for norns.none, play mode puts norns.script's back and redraws
 --   * grid/arc device events fire both device.key and vports[port].key; the
 --     arc device keeps matron's LED levels (led/all with rel, segment as
 --     lua/core/arc.lua, through led)
@@ -280,19 +283,6 @@ local function engine_number(source, name)
   return tonumber(value)
 end
 
--- The source of one addCommand's function, up to the next addCommand or
--- the end of its file
-local function engine_command_body(source, name)
-  local start = assert(source:find("addCommand%(%s*\\" .. name .. "%f[^%w]"), "engine source: no addCommand \\" .. name)
-  local finish = math.min(source:find("addCommand%(", start + 1) or #source, source:find("\n// file: ", start, true) or #source)
-  return source:sub(start, finish)
-end
-
-local function engine_special_params(source, name, into)
-  for param in engine_command_body(source, name):gmatch("param%s*==%s*\\([%w_]+)") do into[param] = true end
-  return into
-end
-
 -- The text of the { ... } block whose "{" is at open_index, or the ( ... )
 -- or [ ... ] block when that is the character there (strings, quoted
 -- symbols and $x characters skipped; comments are already stripped, and
@@ -321,6 +311,19 @@ local function engine_block(source, open_index)
     cursor = cursor + 1
   end
   error(string.format("engine source: unbalanced %s from %s", open, engine_location(source, open_index)), 0)
+end
+
+-- The source of one addCommand call, "addCommand( ... )": its name,
+-- signature and function, up to the call's closing parenthesis, never the
+-- methods after the last command of a file (#487)
+local function engine_command_body(source, name)
+  local start = assert(source:find("addCommand%(%s*\\" .. name .. "%f[^%w]"), "engine source: no addCommand \\" .. name)
+  return "addCommand" .. engine_block(source, start + #"addCommand")
+end
+
+local function engine_special_params(source, name, into)
+  for param in engine_command_body(source, name):gmatch("param%s*==%s*\\([%w_]+)") do into[param] = true end
+  return into
 end
 
 -- The keys of an Event literal's text "( key: value, ... )": the names
@@ -697,8 +700,15 @@ local function make_util()
     if file ~= nil then io.close(file) return true end
     return false
   end
+  -- lib/util.lua runs "mkdir -p " .. path unquoted: a path with a space,
+  -- quote or other shell character would make other folders (or run
+  -- something), so the stub refuses it (#481)
   function util.make_dir(path)
-    os.execute("mkdir -p '" .. path .. "'")
+    if type(path) ~= "string" or path:find("[^%w%._/%-+,:@=]") then
+      error("util.make_dir: norns runs mkdir -p unquoted, and the shell would split or expand "
+        .. tostring(path), 2)
+    end
+    os.execute("mkdir -p " .. path)
   end
   -- norns runs `ls -pL --group-directories-first`; BSD ls lacks the last flag
   function util.scandir(directory)
@@ -793,9 +803,21 @@ local function make_controlspec(util)
     return spec
   end
 
+  -- core/controlspec.lua: a wrapping spec first wraps the value into its
+  -- range by whole ranges (#478; norns loops forever on an infinite value or
+  -- an empty range, the stub raises), then every spec rounds to the step and
+  -- clamps
   function ControlSpec:unmap(value)
-    local clamped = util.clamp(util.round(value, self.step), math.min(self.minval, self.maxval),
-      math.max(self.minval, self.maxval))
+    local cliplo, cliphi = math.min(self.minval, self.maxval), math.max(self.minval, self.maxval)
+    if self.wrap then
+      local absrange = cliphi - cliplo
+      if (value > cliphi or value < cliplo) and not (absrange > 0 and math.abs(value) ~= math.huge) then
+        error("stub controlspec: a wrapping spec cannot wrap " .. tostring(value) .. " (norns would never return)", 2)
+      end
+      while value > cliphi do value = value - absrange end
+      while value < cliplo do value = value + absrange end
+    end
+    local clamped = util.clamp(util.round(value, self.step), cliplo, cliphi)
     if self.warp_name == "exp" then
       return util.explin(self.minval, self.maxval, 0, 1, clamped)
     elseif self.warp_name == "db" then
@@ -1002,10 +1024,12 @@ local function make_params(util, controlspec)
     end
   end
 
-  -- separators and groups may reuse their own kind's id; any other collision is an error
+  -- separators and groups may reuse their own kind's id; any other collision
+  -- is an error. lookup[id] is the param's index in params, as
+  -- core/paramset.lua keeps it (#478)
   local function register(param)
     check_group_size(param)
-    local existing = paramset.lookup[param.id]
+    local existing = paramset.params[paramset.lookup[param.id] or 0]
     if existing then
       if param.t == tSEPARATOR or param.t == tGROUP then
         if existing.t ~= param.t then
@@ -1016,7 +1040,7 @@ local function make_params(util, controlspec)
       end
     end
     table.insert(paramset.params, param)
-    paramset.lookup[param.id] = param
+    paramset.lookup[param.id] = #paramset.params
     if param.t == tGROUP then
       paramset.last_group, paramset.open_group = param, param.n
     elseif paramset.open_group >= 1 then
@@ -1024,15 +1048,17 @@ local function make_params(util, controlspec)
     else
       paramset.last_group = nil
     end
-    return param
   end
 
+  -- core/paramset.lua's add and its add_* helpers return nothing: a script
+  -- reaches a param through params:lookup_param(id) (#478)
   function ParamSet:add(args)
     assert(args.id, "params:add requires an id")
     if args.type == "group" then
-      return self:add_group(args.id, args.name, args.n)
+      self:add_group(args.id, args.name, args.n)
+      return
     end
-    return register(new_param(args))
+    register(new_param(args))
   end
 
   -- params/separator.lua: the name defaults to the id, the id to the name
@@ -1049,36 +1075,37 @@ local function make_params(util, controlspec)
   end
 
   function ParamSet:add_number(id, name, min, max, default, formatter, wrap)
-    return self:add { type = "number", id = id, name = name, min = min, max = max, default = default,
+    self:add { type = "number", id = id, name = name, min = min, max = max, default = default,
       formatter = formatter, wrap = wrap }
   end
 
   function ParamSet:add_option(id, name, options, default)
-    return self:add { type = "option", id = id, name = name, options = options, default = default }
+    self:add { type = "option", id = id, name = name, options = options, default = default }
   end
 
   function ParamSet:add_control(id, name, spec, formatter)
-    return self:add { type = "control", id = id, name = name, controlspec = spec, formatter = formatter }
+    self:add { type = "control", id = id, name = name, controlspec = spec, formatter = formatter }
   end
 
   function ParamSet:add_file(id, name, path)
-    return self:add { type = "file", id = id, name = name, path = path }
+    self:add { type = "file", id = id, name = name, path = path }
   end
 
   function ParamSet:add_text(id, name, text)
-    return self:add { type = "text", id = id, name = name, text = text }
+    self:add { type = "text", id = id, name = name, text = text }
   end
 
   function ParamSet:add_trigger(id, name)
-    return self:add { type = "trigger", id = id, name = name }
+    self:add { type = "trigger", id = id, name = name }
   end
 
   function ParamSet:add_binary(id, name, behavior, default)
-    return self:add { type = "binary", id = id, name = name, behavior = behavior, default = default }
+    self:add { type = "binary", id = id, name = name, behavior = behavior, default = default }
   end
 
+  -- core/paramset.lua: an id through lookup, or an index into params
   function ParamSet:lookup_param(id)
-    local param = self.lookup[id] or (type(id) == "number" and self.params[id])
+    local param = (type(id) == "string" and self.lookup[id] and self.params[self.lookup[id]]) or self.params[id]
     if not param then error("invalid paramset index: " .. tostring(id)) end
     return param
   end
@@ -1125,9 +1152,11 @@ local function make_params(util, controlspec)
     local param = self:lookup_param(id)
     local changed = false
     if param.t == tCONTROL then
+      -- params/control.lua: set(v) is set_raw(controlspec:unmap(round(v, step))),
+      -- so a wrapping spec wraps (#478) and set_raw fires the action
       require_number(id, value)
-      local raw = util.clamp(param.controlspec:unmap(value), 0, 1)
-      if param.raw ~= raw then param.raw = raw; changed = true end
+      self:set_raw(id, param.controlspec:unmap(util.round(value, param.controlspec.step)), silent)
+      return
     elseif param.t == tNUMBER then
       require_number(id, value)
       if param.wrap then
@@ -1278,7 +1307,7 @@ local function make_params(util, controlspec)
       else
         local id, value = line:match('(".-")%s*:%s*(.*)')
         if id and value then
-          local param = self.lookup[unquote(id)]
+          local param = self.params[self.lookup[unquote(id)] or 0]
           if param and not already_set[param] then
             if param.t ~= tTEXT and tonumber(value) ~= nil then
               if not (param.t == tBINARY and param.behavior == "trigger") then
@@ -1337,6 +1366,28 @@ function stubs.take_clock_errors()
   return errors
 end
 
+-- Errors the script catches itself and prints as one line before carrying
+-- on: the frame clock's parts, the playhead tick and the menu watch print
+-- "strata: <what> failed: <error>", the scene sequencer "scene sequencer:
+-- scene <n> failed: <error>". A quiet install's print records every such
+-- line here (as well as in context.printed); the harness fails a test that
+-- leaves one unclaimed, as it does a clock error, and
+-- context.take_script_errors() claims them (#473)
+local SCRIPT_ERROR_PATTERNS = { "^strata: [^\n]- failed: ", "^scene sequencer: scene %d+ failed: " }
+stubs.script_errors = {}
+
+function stubs.take_script_errors()
+  local errors = stubs.script_errors
+  stubs.script_errors = {}
+  return errors
+end
+
+local function note_script_error(line)
+  for _, pattern in ipairs(SCRIPT_ERROR_PATTERNS) do
+    if line:find(pattern) then table.insert(stubs.script_errors, line); return end
+  end
+end
+
 -- luaL_checknumber's conversion and message
 local function check_number(value, position, function_name)
   local number = (type(value) == "number" or type(value) == "string") and tonumber(value) or nil
@@ -1344,6 +1395,25 @@ local function check_number(value, position, function_name)
     error(string.format("bad argument #%d to '%s' (number expected, got %s)", position, function_name, type(value)), 0)
   end
   return number
+end
+
+-- luaL_checkinteger's (Lua 5.3, matron's): a number or numeral string with
+-- an integer value converts; another number raises "number has no integer
+-- representation" (7.5, an infinity, NaN), anything else "number expected"
+local function check_integer(value, position, function_name)
+  local number = check_number(value, position, function_name)
+  if number ~= math.floor(number) or number >= 2 ^ 63 or number < -2 ^ 63 then
+    error(string.format("bad argument #%d to '%s' (number has no integer representation)", position, function_name), 0)
+  end
+  return number
+end
+
+-- luaL_checkstring's: a string, or a number Lua turns into one
+local function check_string(value, position, function_name)
+  if type(value) ~= "string" and type(value) ~= "number" then
+    error(string.format("bad argument #%d to '%s' (string expected, got %s)", position, function_name, type(value)), 0)
+  end
+  return tostring(value)
 end
 
 local function make_clock(util)
@@ -1641,10 +1711,24 @@ end
 -- metro
 ---------------------------------------------------------------------------
 
+-- core/metro.lua: Metro.num_script_metros (31-35 are norns' own)
+local SCRIPT_METROS = 30
+
+-- core/metro.lua's Metro.init(event, time, count), or init{event, time,
+-- count}: time 1 and count -1 (forever) unless given; one of the 30 script
+-- metros, or nil after printing "metro.init: nothing available" when all
+-- are taken (#481). metro.all lists them in the order made. Nothing runs on
+-- its own: a test calls a timer's event
 local function make_metro()
   local metro = { all = {} }
-  function metro.init()
-    local timer = { time = 1, running = false, event = nil }
+  function metro.init(arg, arg_time, arg_count)
+    local event, time, count = arg, arg_time or 1, arg_count or -1
+    if type(arg) == "table" then event, time, count = arg.event, arg.time or 1, arg.count or -1 end
+    if #metro.all >= SCRIPT_METROS then
+      print("metro.init: nothing available")
+      return nil
+    end
+    local timer = { time = time, count = count, running = false, event = event }
     function timer:start() self.running = true end
     function timer:stop() self.running = false end
     table.insert(metro.all, timer)
@@ -1657,23 +1741,37 @@ end
 -- grid / arc (vports + devices, mirroring lua/core/grid.lua and arc.lua)
 ---------------------------------------------------------------------------
 
+-- Grid:led -> _grid_set_led and Grid:all -> _grid_all_led (weaver.cc) read
+-- x, y and the level with luaL_checkinteger; rel adds to the level, clamped
+-- to 0..15 (dev_monome_grid_set_led, dev_monome_all_led), an absolute level
+-- is stored as it is. matron does not check bounds; the stub fails on an
+-- LED outside the grid or an absolute level outside 0..15, as the arc stub
+-- does (#476)
 local function make_led_device(cols, rows)
   local device = { cols = cols, rows = rows, leds = {}, refresh_count = 0, port = nil }
-  function device:all(level)
+  local function relative(current, level) return math.min(15, math.max(0, current + level)) end
+  function device:all(level, rel)
+    level = check_integer(level, 2, "grid_all_led")
+    if not rel and (level < 0 or level > 15) then error("grid all level out of range: " .. tostring(level), 2) end
     for x = 1, self.cols do
-      self.leds[x] = {}
-      for y = 1, self.rows do self.leds[x][y] = level end
+      self.leds[x] = self.leds[x] or {}
+      for y = 1, self.rows do self.leds[x][y] = rel and relative(self.leds[x][y] or 0, level) or level end
     end
   end
-  function device:led(x, y, level)
+  function device:led(x, y, level, rel)
+    x, y = check_integer(x, 2, "grid_set_led"), check_integer(y, 3, "grid_set_led")
+    level = check_integer(level, 4, "grid_set_led")
     if x < 1 or x > self.cols or y < 1 or y > self.rows then
-      error(string.format("grid led out of bounds: %d,%d on %dx%d", x, y, self.cols, self.rows))
-    end
-    if type(level) ~= "number" or level < 0 or level > 15 then
-      error("grid led level out of range: " .. tostring(level))
+      error(string.format("grid led out of bounds: %d,%d on %dx%d", x, y, self.cols, self.rows), 2)
     end
     self.leds[x] = self.leds[x] or {}
-    self.leds[x][y] = level
+    if rel then
+      self.leds[x][y] = relative(self.leds[x][y] or 0, level)
+    elseif level < 0 or level > 15 then
+      error("grid led level out of range: " .. tostring(level), 2)
+    else
+      self.leds[x][y] = level
+    end
   end
   function device:refresh() self.refresh_count = self.refresh_count + 1 end
   function device:get_led(x, y) return (self.leds[x] and self.leds[x][y]) or 0 end
@@ -1959,20 +2057,29 @@ end
 -- screen / UI
 ---------------------------------------------------------------------------
 
--- Approximate advance of norns' default font (04B_03 at size 8): capitals
--- about 6 px, brackets/colon/period about 4 px, everything else 5 px. The
--- stub's screen.text_extents and the layout tests both use it. It counts
--- UTF-8 characters, not bytes, so a multi-byte glyph such as "●" is one.
+-- The advance of each printable ASCII glyph (codes 32-126) in norns' screen
+-- font, norns.ttf (04B_03) at 8 px, the font face and size matron starts
+-- with, measured with Pillow from ~/src/norns/resources/norns.ttf (#479)
+local GLYPH_ADVANCES = {
+  4, 2, 4, 6, 5, 6, 6, 2, 3, 3, 4, 4, 3, 4, 2, 6,  -- 32-47:  !"#$%&'()*+,-./
+  5, 3, 5, 5, 5, 5, 5, 5, 5, 5, 2, 2, 4, 4, 4, 5,  -- 48-63: 0-9 :;<=>?
+  6, 5, 5, 4, 5, 4, 4, 5, 5, 4, 5, 5, 4, 6, 5, 5,  -- 64-79: @A-O
+  5, 5, 5, 5, 4, 5, 5, 6, 5, 5, 4, 3, 6, 3, 4, 5,  -- 80-95: P-Z [\]^_
+  3, 5, 5, 4, 5, 5, 4, 5, 5, 2, 3, 5, 2, 6, 5, 5,  -- 96-111: `a-o
+  5, 5, 4, 5, 4, 5, 5, 6, 4, 5, 5, 4, 2, 4, 5,     -- 112-126: p-z {|}~
+}
+-- any other character: the widest printable ASCII advance, so a layout test
+-- never passes a string norns draws wider ("●" is 6 px in norns.ttf)
+local OTHER_GLYPH_ADVANCE = 6
+
+-- The width norns' font draws `text` in: the sum of its glyphs' advances
+-- (GLYPH_ADVANCES; the font has no kerning). The stub's
+-- screen.text_extents and the layout tests both use it. It counts UTF-8
+-- characters, not bytes, so a multi-byte glyph such as "●" is one.
 function stubs.text_width(text)
   local width = 0
   for char in text:gmatch("[^\128-\191][\128-\191]*") do
-    if char:match("%u") then
-      width = width + 6
-    elseif char:match("[%[%]%.:]") then
-      width = width + 4
-    else
-      width = width + 5
-    end
+    width = width + (#char == 1 and GLYPH_ADVANCES[char:byte() - 31] or OTHER_GLYPH_ADVANCE)
   end
   return width
 end
@@ -1986,34 +2093,49 @@ local function make_screen()
     screen.texts = {}; screen.lines = {}; screen.rects = {}
     path_first_line, path_first_rect = 1, 1
   end
-  function screen.level(level) screen.current_level = level end
-  function screen.move(x, y) screen.cursor_x = x; screen.cursor_y = y end
+  -- matron's checks (weaver.cc): _screen_level takes luaL_checkinteger,
+  -- the text calls luaL_checkstring, move, line and rect luaL_checknumber,
+  -- so a value they refuse raises here as it does in a draw on norns (#475)
+  function screen.level(level) screen.current_level = check_integer(level, 1, "screen_level") end
+  function screen.move(x, y)
+    screen.cursor_x, screen.cursor_y = check_number(x, 1, "screen_move"), check_number(y, 2, "screen_move")
+  end
   -- each drawn string is recorded with its position, alignment and level
-  local function record_text(str, align)
-    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = tostring(str),
+  local function record_text(str, align, function_name)
+    table.insert(screen.texts, { x = screen.cursor_x, y = screen.cursor_y, text = check_string(str, 1, function_name),
       align = align, level = screen.current_level })
   end
-  function screen.text(str) record_text(str, "left") end
-  function screen.text_right(str) record_text(str, "right") end
-  function screen.text_center(str) record_text(str, "center") end
+  function screen.text(str) record_text(str, "left", "screen_text") end
+  function screen.text_right(str) record_text(str, "right", "screen_text_right") end
+  function screen.text_center(str) record_text(str, "center", "screen_text_center") end
   -- lua/core/screen.lua: text_extents(str) returns width, height
-  function screen.text_extents(str) return stubs.text_width(tostring(str)), 8 end
+  function screen.text_extents(str) return stubs.text_width(check_string(str, 1, "screen_text_extents")), 8 end
   -- lines and rectangles are recorded too (from/to points, x/y/w/h), so
   -- tests can check that drawings stay in their area. screen.fill() marks
   -- the ones drawn since the last fill or stroke `filled = true`,
   -- screen.stroke() `filled = false` (a filled cell or an outline); nil
   -- until then
   function screen.line(x, y)
+    x, y = check_number(x, 1, "screen_line"), check_number(y, 2, "screen_line")
     table.insert(screen.lines, { x1 = screen.cursor_x, y1 = screen.cursor_y, x2 = x, y2 = y,
       level = screen.current_level })
     screen.cursor_x = x; screen.cursor_y = y
   end
   function screen.rect(x, y, w, h)
+    x, y = check_number(x, 1, "screen_rect"), check_number(y, 2, "screen_rect")
+    w, h = check_number(w, 3, "screen_rect"), check_number(h, 4, "screen_rect")
     table.insert(screen.rects, { x = x, y = y, w = w, h = h, level = screen.current_level })
   end
+  -- the path is painted now, at the level in force now: the one set
+  -- between building it and painting it wins (cairo's source color at
+  -- cairo_stroke or cairo_fill, #474)
   local function end_path(filled)
-    for index = path_first_line, #screen.lines do screen.lines[index].filled = filled end
-    for index = path_first_rect, #screen.rects do screen.rects[index].filled = filled end
+    for index = path_first_line, #screen.lines do
+      screen.lines[index].filled, screen.lines[index].level = filled, screen.current_level
+    end
+    for index = path_first_rect, #screen.rects do
+      screen.rects[index].filled, screen.rects[index].level = filled, screen.current_level
+    end
     path_first_line, path_first_rect = #screen.lines + 1, #screen.rects + 1
   end
   function screen.stroke() end_path(false) end
@@ -2342,10 +2464,12 @@ end
 local function make_fileselect()
   local fileselect = { last = nil, redraws = 0 }
   local entered = false  -- tests reset `last`; the real module keeps its list
+  -- from play mode fs.enter and fs.exit call norns.menu.init(), which is
+  -- set_mode(false): it draws the script's screen through norns.script's
+  -- redraw (#521)
   local function menu_init_redraw()
     if norns.menu.status() then return end
     norns.menu.init()
-    if type(redraw) == "function" then redraw() end
   end
   function fileselect.redraw()
     -- the real one draws fs.list, which fs.enter sets up
@@ -2353,6 +2477,9 @@ local function make_fileselect()
     fileselect.redraws = fileselect.redraws + 1
   end
   function fileselect.enter(folder, callback, filter)
+    -- fs.enter indexes the folder (fs.folder:sub(-1, -1)): anything but a
+    -- string raises there (#481)
+    if type(folder) ~= "string" then error("attempt to index a " .. type(folder) .. " value (field 'folder')", 2) end
     entered = true
     fileselect.last = { folder = folder, callback = callback, filter = filter }
     fileselect.callback = callback
@@ -2433,7 +2560,7 @@ function stubs.install(options)
   }
 
   local argument_checks = engine_argument_checks(assert(options.engine_spec, "stubs.install needs engine_spec"),
-    function(param_id) return context.params.lookup[param_id] end,
+    function(param_id) return context.params.params[context.params.lookup[param_id] or 0] end,
     function() return stubs.active_buffer_seconds(options.engine_spec, options.data_dir) end)
   for command_name in pairs(context.signatures) do
     assert(argument_checks[command_name], "the engine stub has no argument check for engine." .. command_name)
@@ -2456,10 +2583,15 @@ function stubs.install(options)
         for index = 1, #signature do
           local type_code = signature:sub(index, index)
           local value = args[index]
-          if type_code == "i" and not is_integer(value) then
+          -- a NaN fails every range comparison and an infinity passes an
+          -- open one, so neither is a value (#477)
+          local finite = type(value) == "number" and value == value and math.abs(value) ~= math.huge
+          if type_code == "i" and not (finite and is_integer(value)) then
             error(string.format("engine.%s arg %d must be an integer, got %s", command_name, index, tostring(value)), 2)
           elseif type_code == "f" and type(value) ~= "number" then
             error(string.format("engine.%s arg %d must be a number, got %s", command_name, index, tostring(value)), 2)
+          elseif type_code == "f" and not finite then
+            error(string.format("engine.%s arg %d must be a finite number, got %s", command_name, index, tostring(value)), 2)
           elseif type_code == "s" and type(value) ~= "string" then
             error(string.format("engine.%s arg %d must be a string, got %s", command_name, index, tostring(value)), 2)
           end
@@ -2497,8 +2629,9 @@ function stubs.install(options)
   -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
   -- in play mode _menu.key and norns.encoders.callback route the hardware
   -- keys and encoders to the script (set_mode(false) copies them from the
-  -- globals key and enc)
-  context.menu = { rebuilds = 0, mode = false, key = nil }
+  -- globals key and enc). page_key and enc are the menu's own handlers while
+  -- it is open (its page's key, _menu.enc); they do nothing in the stub
+  context.menu = { rebuilds = 0, mode = false, key = nil, alt = false, page_key = function() end, enc = function() end }
   -- lua/core/audio.lua's file_info(path) -> channels, frames, sample rate
   -- (matron's snd_file_inspect: 0, 0, 0 for a file libsndfile cannot open).
   -- A test lists the files it knows: context.audio.files[path] = {channels,
@@ -2549,15 +2682,28 @@ function stubs.install(options)
   }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
-  -- lua/core/menu.lua: _menu.set_mode(true) opens the menu (K1, a script
-  -- error), set_mode(false) returns to the script. The real one also swaps
-  -- the key/enc/redraw handlers; the stub tracks the mode and, as play mode
-  -- starts, records the routed handlers (_menu.key, norns.encoders.callback)
+  -- lua/core/menu.lua's _menu.set_mode (#521): true opens the menu (K1, a
+  -- script error): redraw and refresh become norns.none, the encoders and
+  -- keys go to the menu (_menu.enc, its page's key). false returns to the
+  -- script: the screen is cleared, redraw and refresh are norns.script's
+  -- (what Script.load stored, never a later replacement of the globals),
+  -- _menu.key and the encoders take the globals key and enc, and redraw()
+  -- draws the script's screen. The screen save and restore, the menu's
+  -- pages and the encoder settings are not modeled
   function context.menu.set_mode(mode)
-    context.menu.mode = mode
     if mode == false then
+      context.menu.mode = false
+      context.screen.clear()
+      context.screen.update()
+      _G.redraw, _G.refresh = norns.script.redraw, norns.script.refresh
       context.menu.key = rawget(_G, "key")
       norns.encoders.callback = rawget(_G, "enc")
+      _G.redraw()
+    elseif mode == true then
+      context.menu.mode, context.menu.alt = true, false
+      _G.redraw, _G.refresh = norns.none, norns.none
+      norns.encoders.callback = context.menu.enc
+      context.menu.key = context.menu.page_key
     end
   end
 
@@ -2580,7 +2726,15 @@ function stubs.install(options)
   _G._menu = context.menu
   -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
   -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it
-  _G.norns = { state = {}, platform = 0,
+  -- lua/core/norns.lua: norns.none does nothing, norns.blank clears the
+  -- screen; lua/core/script.lua: Script.clear puts norns.none in refresh,
+  -- and Script.load stores the script's redraw and refresh in norns.script
+  -- for the menu's set_mode(false) (load_strata does, after the script's
+  -- chunk runs; before any load they are norns.blank and norns.none)
+  local none = function() end
+  local blank = function() context.screen.clear(); context.screen.update() end
+  _G.refresh = none
+  _G.norns = { state = {}, platform = 0, none = none, blank = blank, script = { redraw = blank, refresh = none },
     -- lua/core/pmap.lua: pmap.data[param id] = {dev, ch, cc, in_lo, in_hi,
     -- out_lo, out_hi, echo, value}, empty until a test maps a param
     pmap = { data = {}, rev = {} }, enc = context.encoders.api, encoders = { callback = nil },
@@ -2603,9 +2757,13 @@ function stubs.install(options)
     _G.print = function(...)
       local parts = {}
       for index = 1, select("#", ...) do parts[index] = tostring((select(index, ...))) end
-      table.insert(context.printed, table.concat(parts, "\t"))
+      local line = table.concat(parts, "\t")
+      table.insert(context.printed, line)
+      note_script_error(line)
     end
   end
+  -- claims the errors the script caught and printed (SCRIPT_ERROR_PATTERNS)
+  context.take_script_errors = stubs.take_script_errors
 
   function context.clear_engine_calls() context.engine_calls = {} end
   function context.calls_named(name)

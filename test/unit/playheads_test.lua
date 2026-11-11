@@ -239,6 +239,7 @@ test("a failing tick is reported and the clock keeps ticking", function()
   assert_true(calls >= 3, "the first call raised and later ones came, got " .. calls)
   assert_true(S.lib.playheads.clock_id() ~= nil, "the clock is still running")
   assert_equal(#context.clock.take_errors(), 0, "the scheduler reported no clock error")
+  assert_equal(#context.take_script_errors(), 1, "the tick printed its error once (#473)")
 end)
 
 test("a tick that keeps failing prints its error once, and again after a good tick", function()

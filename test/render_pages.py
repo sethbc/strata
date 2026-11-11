@@ -7,8 +7,9 @@ dumps:
     python3 test/render_pages.py <dir> [--font <path to a .ttf>] [--scale 4]
 
 Each <page>-<state>.json in <dir> becomes <page>-<state>.png beside it: the
-128x64 screen, black, with each text, rect and line at its level (0-15 as
-grays), scaled 4x without smoothing. Texts are drawn at their baseline in
+128x64 screen, black, with each text at its level and each rect and line
+at the level it was stroked or filled with (0-15 as grays; a path never
+stroked or filled is not drawn, as on norns), scaled 4x without smoothing. Texts are drawn at their baseline in
 the font given with --font at 8 px (norns' screen font, 04B_03, is
 ~/src/norns/resources/norns.ttf in a norns checkout); without --font, that
 file when it exists, else Pillow's built-in font. Needs Pillow
@@ -45,14 +46,20 @@ def draw_state(state, font):
     draw = ImageDraw.Draw(image)
     draw.fontmode = "1"  # no antialiasing, like the OLED's pixels
     # norns' cairo: a filled rect covers x .. x + w - 1; an outline is the
-    # same box's edge
+    # same box's edge. A path is painted only by screen.stroke() or
+    # screen.fill(), at the level in force then (the stub records that level,
+    # #474), so a path never stroked or filled ("filled" null) is not drawn
     for rect in state.get("rects", []):
+        if rect.get("filled") is None:
+            continue
         box = [rect["x"], rect["y"], rect["x"] + rect["w"] - 1, rect["y"] + rect["h"] - 1]
-        if rect.get("filled"):
+        if rect["filled"]:
             draw.rectangle(box, fill=gray(rect["level"]))
         else:
             draw.rectangle(box, outline=gray(rect["level"]))
     for line in state.get("lines", []):
+        if line.get("filled") is None:
+            continue
         draw.line([line["x1"], line["y1"], line["x2"], line["y2"]], fill=gray(line["level"]))
     anchors = {"left": "ls", "right": "rs", "center": "ms"}
     truetype = isinstance(font, ImageFont.FreeTypeFont)
