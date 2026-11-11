@@ -7,6 +7,7 @@
 - `S.buffer_record_clocks[slot]` holds both the recording timer and the finishing fallback, and every path that ends a recording (`settle_buffer_slot`, `load_buffer`, `clear_buffer`, the check's fallback in `lib/buffers.lua`, cleanup) cancels it through `S.lib.record.cancel_timer(slot)`.
 - `S.lib.record.state(slot)` is nil when the slot is not recording, and still nil when `record_buffer` calls `S.lib.buffers.recording_started` (before it sets `recording`), so the call passes the take's kind: `recording_started(slot, playable)` (#244).
 - A playable recording's "ended" report makes the slot `take <n>` on the scratch path with `start` 0 and no `sample_rate` or `file_seconds`; its "canceled" report leaves the file's three as they were (`docs/notes/lua/buffers.md`, States).
+- Every poll decoder floors its slot (`math.floor(value % NUM_BUFFERS) + 1` in `record_state_changed`, `buffer_load_failed` and `buffer_save_result`; `math.floor(value / BUFFER_STATE_STRIDE)` in `buffer_state_changed`). matron hands every poll value to Lua as a float (`lua_pushnumber`), so on Lua 5.3 an unfloored slot is `3.0`: the take becomes `take 3.0` on `scratch/buf3.0.wav` and `set_buffer_file_param` raises on `buf3.0_file` (#300). LuaJIT has one number type and hides it; the stubs deliver floats (`poll.fire`), and the `buffer slots` invariant (`lib/buffers.lua`) checks that a take is named for its own slot on a whole-numbered scratch path.
 
 ## Owns
 

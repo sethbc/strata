@@ -210,6 +210,54 @@ local function record_state_value(number, state, slot) return ((number * 4) + st
 local function S_record_state(slot) return local_value("S").lib.record.state(slot) end
 local function recording_calls(context) return context.calls_named("recordBuffer") end
 
+-- matron hands every poll value to Lua as a float (lua_pushnumber), and on
+-- Lua 5.3 a float slot builds "take 3.0" and "buf3.0_file" (#300). The
+-- reports are floats here whatever the stub does
+test("recordState reports arrive as floats: an ended dub is take <n> on its scratch path", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2004.0)
+  params:set("record_feedback", 50)
+  record_buffer(3)
+  context.polls.fire("recordState", record_state_value(1, 1, 3) + 0.0)
+  context.polls.fire("recordState", record_state_value(1, 2, 3) + 0.0)
+  assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
+  assert_equal(params:get("buf3_file"), _path.audio, "the file param is back at its folder")
+  assert_true(not buffers[3].recording, "the handler ran to its end")
+  -- an armed replace take that only the fallback settles carries the slot
+  -- into its timers
+  params:set("record_feedback", 0); params:set("record_threshold", 4)
+  record_buffer(2)
+  context.polls.fire("recordState", record_state_value(1, 0, 2) + 0.0)
+  context.polls.fire("recordState", record_state_value(1, 1, 2) + 0.0)
+  assert_equal(S_record_state(2).phase, "recording")
+  buffers[2].seconds = 4  -- what the engine captured, with no bufferState report
+  context.clock.run_for(params:get("record_duration") + local_value("BUFFER_SETTLE").fallback_seconds + 1)
+  assert_true(not buffers[2].recording, "the fallback settled it")
+  assert_equal(buffers[2].name, "take 2"); assert_equal(buffers[2].path, scratch_take_path(2))
+end)
+
+-- The buffer slots invariant (lib/buffers.lua): a take is named for its own
+-- slot, and a scratch take's path is buf<whole number>.wav (#300)
+test("the buffer slots invariant: a take is named for its own slot, a scratch path names a whole slot", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  load_buffer(1, "/tmp/take 1.wav"); context.polls.fire("bufferState", 4)
+  assert_equal(buffers[1].name, "take 1.wav"); assert_equal(broken(), "", "a file named take ... is not a take")
+  load_buffer(2, scratch_take_path(1)); context.polls.fire("bufferState", 1004)
+  assert_equal(broken(), "", "another slot's scratch take, loaded as a file, is a whole-numbered path")
+  buffers[3].name = "take 4"
+  assert_equal(broken(), "buffer slots: slot 3 is named take 4")
+  buffers[3].name = "take 3.0"
+  assert_equal(broken(), "buffer slots: slot 3 is named take 3.0")
+  local scratch_dir = scratch_take_path(3):match("^(.*/)")
+  buffers[3].name, buffers[3].path = "take 3", scratch_dir .. "buf3.0.wav"
+  assert_equal(broken(), "buffer slots: slot 3 has the scratch path " .. scratch_dir .. "buf3.0.wav")
+  buffers[3].name, buffers[3].path = "take 3", scratch_take_path(3)
+  assert_equal(broken(), "", "a take in its own slot on its own path holds")
+end)
+
 test("record params default to 3.2's take and are not scene fields", function()
   local context = load_strata(); finish_startup(context)
   local ids = {"record_source", "record_feedback", "record_loop", "record_threshold", "record_sync", "record_beats"}
