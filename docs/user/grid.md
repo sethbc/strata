@@ -35,11 +35,11 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 
 ## Positions
 
-Every layout has a positions page (the 8×8 a position view): for each voice reading a buffer, its buffer cut into 16 cells from the start of the buffer to its end, and a strip of bookmark keys. Only voices reading a buffer respond.
+Every layout has a positions page (the 8×8 a position view), where a voice's buffer is cut into 16 cells from its start to its end: the 16×16, 16×8 and 8×16 show every voice, one row or column each, the 8×8 only the grid's selected voice. Each layout also has a bookmark strip: the 16×16 one per voice, on its positions page; the 8×16 and 8×8 one for the grid's selected voice, on theirs; the 16×8 one for its grid voice, on its sources page. Only voices reading a buffer respond.
 
 - **A press** jumps the voice to its cell's start. Inside the voice's loop it moves within the loop; outside it, the loop goes back to the whole buffer first, as recalling a bookmark outside the loop does. Either way a running voice's scan restarts from there, and an arc glide ends
 - **Two keys** set a loop: hold one cell and press another of the same voice, and the loop runs from the start of the earlier cell to the end of the later one, in either order (two neighbors make a loop two cells long); the voice then jumps to the loop's start
-- **The strip**: the four bookmark keys recall bookmarks 1-4 (a jump to the bookmark, as above); store, held, makes the next bookmark key store the voice's playhead instead; hold stops the voice's scan while it is down; whole puts the loop back to the whole buffer without a jump
+- **The strip**: the four bookmark keys recall bookmarks 1-4 (a jump to the bookmark, as above); while store is held, every bookmark key pressed stores the voice's playhead instead of recalling it; hold stops the voice's scan while it is down; whole puts the loop back to the whole buffer without a jump
 
 What the cells show, brightest first:
 - the playhead, where the voice's grains start, at 15 (a stopped voice shows where it will start)

@@ -1427,23 +1427,113 @@ test("params.md names every Strata group in menu order and every param of a voic
 
   local section = doc_section(text, "## Per-Voice Sections")
   assert_true(section ~= nil, "params.md has its Per-Voice Sections")
-  section = section:lower()
-  local names, inside, missing = {}, false, {}
-  for _, param in ipairs(params.params) do
-    if param.t == params.tSEPARATOR and param.name == "voice 1 granular" then
-      inside = true
-    elseif inside and param.t == params.tSEPARATOR and param.name:find("^voice 2") then
-      break
-    elseif inside and param.t ~= params.tSEPARATOR then
-      local family = menu_family(param.name)
-      if not names[family] then
-        names[family] = true
-        if not section:find(family:lower(), 1, true) then table.insert(missing, family) end
+  -- the table: | name | range | default | notes |, by menu family
+  local rows = {}
+  for line in (section .. "\n"):gmatch("([^\n]*)\n") do
+    local name, range, default = line:match("^| ([^|]-) | ([^|]-) | ([^|]-) |")
+    if name and name ~= "parameter" and not name:find("^%-+$") then
+      rows[menu_family(name)] = {range = range, default = default, used = false}
+    end
+  end
+  -- a range "a-b unit" or "a to b unit" (a unit stops at a space or "(")
+  local function numeric_range(cell)
+    local low, high, unit = cell:match("^(%-?[%d%.]+) to (%-?[%d%.]+) ?([^%s(]*)")
+    if not low then low, high, unit = cell:match("^(%-?[%d%.]+)%-([%d%.]+) ?([^%s(]*)") end
+    return tonumber(low), tonumber(high), unit
+  end
+  local function near(a, b) return a ~= nil and b ~= nil and math.abs(a - b) < 1e-9 end
+  local S = local_value("S")
+  local problems, checked = {}, 0
+  for voice_idx, voice in ipairs(S.voices) do
+    local synth_ids, members, order, inside = {}, {}, {}, false
+    for _, key in ipairs(voice.param_order) do synth_ids["v" .. voice_idx .. "_" .. key] = true end
+    -- the voice's params from its heading to the next voice's, but its
+    -- synthesis params, grouped by family in menu order
+    for _, param in ipairs(params.params) do
+      if param.t == params.tSEPARATOR and param.name:find("^voice %d+: ") then
+        if inside then break end
+        inside = param.name:find("^voice " .. voice_idx .. ": ") ~= nil
+      elseif inside and param.t ~= params.tSEPARATOR and not synth_ids[param.id] then
+        local family = menu_family(param.name)
+        if not members[family] then members[family] = {}; table.insert(order, family) end
+        table.insert(members[family], param)
+      end
+    end
+    for _, family in ipairs(order) do
+      local row = rows[family]
+      local where = "voice " .. voice_idx .. " " .. family
+      if not row then
+        table.insert(problems, where .. ": no row")
+      else
+        row.used = true
+        local listed = row.default:gsub("^by voice: ", "")
+        local defaults = {}
+        for value in (listed .. ","):gmatch("%s*([^,]-)%s*,") do table.insert(defaults, value) end
+        if row.default:find("^by voice: ") then defaults = {defaults[voice_idx]} end
+        for k, param in ipairs(members[family]) do
+          checked = checked + 1
+          local stated = (#defaults == #members[family] and defaults[k]) or (#defaults == 1 and defaults[1]) or nil
+          local name = where .. (#members[family] > 1 and (" " .. k) or "")
+          if param.t == params.tCONTROL then
+            local spec, scale = param.controlspec, 1
+            local low, high, unit = numeric_range(row.range)
+            -- a 0-1 control its formatter shows in percent (the sends, #338)
+            -- is given in percent, as the screen shows it
+            if param.formatter and params:string(param.id):find("%%%s*$") and unit ~= "%" then
+              table.insert(problems, name .. ": shown as " .. params:string(param.id) .. ", given as '" .. row.range .. "'")
+            end
+            if unit == "%" and (spec.units or "") ~= "%" and param.formatter then scale, unit = 100, spec.units or "" end
+            if not (near(low, spec.minval * scale) and near(high, spec.maxval * scale)) then
+              table.insert(problems, name .. ": range '" .. row.range .. "', the param's " .. spec.minval .. "-" .. spec.maxval)
+            elseif unit ~= (spec.units or "") then
+              table.insert(problems, name .. ": unit '" .. tostring(unit) .. "', the param's '" .. tostring(spec.units) .. "'")
+            end
+            if not near(tonumber(stated), spec.default * scale) then
+              table.insert(problems, name .. ": default '" .. tostring(stated) .. "', the param's " .. spec.default)
+            end
+          elseif param.t == params.tNUMBER then
+            local low, high = numeric_range(row.range)
+            if low then
+              if not (near(low, param.min) and near(high, param.max)) then
+                table.insert(problems, name .. ": range '" .. row.range .. "', the param's " .. param.min .. "-" .. param.max)
+              end
+            else
+              -- a range given in the param's own words (none ... voice 7)
+              for _, value in ipairs({param.min, param.max}) do
+                params:set(param.id, value)
+                if not row.range:find(params:string(param.id), 1, true) then
+                  table.insert(problems, name .. ": range '" .. row.range .. "' lacks " .. params:string(param.id))
+                end
+              end
+              params:set(param.id, param.default)
+            end
+            if not (near(tonumber(stated), param.default) or stated == params:string(param.id)) then
+              table.insert(problems, name .. ": default '" .. tostring(stated) .. "', the param's " .. param.default)
+            end
+          elseif param.t == params.tOPTION then
+            for _, option in ipairs(param.options) do
+              if not row.range:find(menu_family(option), 1, true) then
+                table.insert(problems, name .. ": range '" .. row.range .. "' lacks " .. option)
+              end
+            end
+            if stated ~= param.options[param.default] then
+              table.insert(problems, name .. ": default '" .. tostring(stated) .. "', the param's " .. param.options[param.default])
+            end
+          elseif param.t == params.tBINARY then
+            if row.range ~= "off/on" or stated ~= (param.default == 1 and "on" or "off") then
+              table.insert(problems, name .. ": '" .. row.range .. "', '" .. tostring(stated) .. "' for a binary param")
+            end
+          end
+        end
       end
     end
   end
-  assert_true(names["history"] and names["bookmark"] and names["mod speed"], "the walk reached the extras")
-  assert_true(#missing == 0, "params.md's Per-Voice Sections do not name: " .. table.concat(missing, ", "))
+  for family, row in pairs(rows) do
+    if not row.used then table.insert(problems, family .. ": a row for no param") end
+  end
+  table.sort(problems)
+  assert_true(#problems == 0, "params.md's Per-Voice Sections:\n" .. table.concat(problems, "\n"))
+  assert_true(checked >= 7 * 40, "every voice's params were checked, " .. checked)
 end)
 
 -- Each voice's synthesis params, as the VOICE page, MAIN and PARAMETERS
@@ -1505,44 +1595,198 @@ test("voices-and-grains.md has a row for every synthesis param, with its range, 
   assert_true(#problems == 0, table.concat(problems, "\n"))
 end)
 
--- A fling at 0% friction slows by e every SCRUB.max_glide_seconds and ends
--- below SCRUB.stop_rate, after the ring has been still for
--- SCRUB.release_seconds: params.md gives that length for a fling of one loop
--- a second, never the time constant alone (#342)
-test("params.md's scrub friction gives the glide's length the SCRUB constants make (#342)", function()
+-- How long a glide lasts in the code: voice 1 on a 16 s buffer, the ring
+-- turned for 0.3 s at `speed` loop lengths a second, then let go; the
+-- seconds from the last turn until the glide's rate is 0, in playhead steps
+local function measured_glide(friction, speed)
+  local context = load_strata()
+  h.finish_startup(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("scrub_friction", friction)
+  local position = 0.2
+  params:set("v1_buf_pos", position)
+  for _ = 1, 30 do
+    context.clock.run_for(0.01)
+    position = position + speed * 0.01
+    params:set("v1_buf_pos", position)
+    S.lib.positions.scrub_turned(1)
+  end
+  local step, elapsed, started = 1 / S.constants.PLAYHEADS.update_hz, 0, false
+  while elapsed < 120 do
+    context.clock.run_for(step)
+    elapsed = elapsed + step
+    local rate = S.lib.positions.scrub_rate(1)
+    if rate ~= 0 then started = true end
+    if started and rate == 0 then return elapsed end
+  end
+  fail("the glide at " .. friction .. "% and " .. speed .. " never ended")
+end
+
+-- params.md's glide lengths are the code's, measured: a fling of a
+-- twentieth, one and two loop lengths a second at 0%, the same range at 50%
+-- and 75%, and at 90% to a tenth of a second; and the decay's time constant
+-- (SCRUB.max_glide_seconds) is the "every 4 s" it states (#342)
+test("params.md's scrub friction gives the glide lengths the code measures (#342)", function()
+  local function whole(seconds) return math.floor(seconds + 0.5) end
+  local function tenth(seconds) return string.format("%.1f", math.floor(seconds * 10 + 0.5) / 10) end
+  local slow, one, two = measured_glide(0, 0.05), measured_glide(0, 1), measured_glide(0, 2)
+  local expected = {
+    string.format("stops after %d to %d s (%d s for a flick of a twentieth of the loop a second, "
+      .. "%d s for one loop a second, %d s for two)", whole(slow), whole(two), whole(slow), whole(one), whole(two)),
+    string.format("halves those times (%d to %d s)", whole(measured_glide(50, 0.05)), whole(measured_glide(50, 2))),
+    string.format("quarters them (%d to %d s)", whole(measured_glide(75, 0.05)), whole(measured_glide(75, 2))),
+    string.format("at 90%% a glide stops after %s to %s s", tenth(measured_glide(90, 0.05)), tenth(measured_glide(90, 2))),
+  }
   load_strata()
   local SCRUB = local_value("S").constants.SCRUB
-  local seconds = math.floor(SCRUB.max_glide_seconds * math.log(1 / SCRUB.stop_rate) + SCRUB.release_seconds + 0.5)
+  table.insert(expected, "loses about two thirds of its speed every " .. SCRUB.max_glide_seconds .. " s")
   local friction = read_repo_file("docs/user/params.md"):match("\n%- Scrub friction[^\n]*")
   assert_true(friction ~= nil, "params.md describes the scrub friction")
-  assert_true(friction:find(seconds .. " s for one loop a second", 1, true),
-    "the glide of one loop a second at 0% lasts " .. seconds .. " s")
-  assert_true(friction:find("every " .. SCRUB.max_glide_seconds .. " s", 1, true), "and loses two thirds every "
-    .. SCRUB.max_glide_seconds .. " s")
+  for _, text in ipairs(expected) do
+    assert_true(friction:find(text, 1, true), "params.md's scrub friction says: " .. text)
+  end
 end)
 
 -- The record keys and triggers record with the record settings (3.3's
 -- record_buffer), never "the input for the record duration"; each grid
--- layout gives the two-key loop's edges in either order and links grid.md's
--- Positions, where a press, the LEDs and the strip are described (#337,
--- #353, #356, #358, #362)
+-- layout (every registered one has its page, docs/user/grid/<key>.md) gives
+-- the two-key loop's edges in either order and links grid.md's Positions,
+-- where a press, the LEDs and the strip are described, and a page that has
+-- record keys says they record with the record settings (#337, #353, #356,
+-- #358, #362)
 test("the record keys use the record settings; the grid pages link Positions (#337, #353, #356, #358, #362)", function()
+  load_strata()
   local trigger = read_repo_file("docs/user/params.md"):match("\n  %- Record:[^\n]*")
   assert_true(trigger ~= nil, "params.md describes a buffer's Record trigger")
   assert_true(trigger:find("record settings", 1, true) and not trigger:find("live input", 1, true),
     "the Record trigger records with the record settings")
   assert_true(doc_section(read_repo_file("docs/user/grid.md"), "## Positions") ~= nil, "grid.md has a Positions section")
-  for _, size in ipairs({"256", "128h", "128v", "64"}) do
-    local path = "docs/user/grid/" .. size .. ".md"
+  local layouts, pages = {}, {}
+  for key in pairs(local_value("S").registry.grid_layouts) do table.insert(layouts, key) end
+  table.sort(layouts)
+  for _, path in ipairs(markdown_files("docs/user/grid")) do pages[path:match("([^/]+)%.md$")] = true end
+  assert_true(#layouts >= 4, "the layouts are registered, saw " .. #layouts)
+  for _, key in ipairs(layouts) do
+    assert_true(pages[key], "docs/user/grid/" .. key .. ".md documents the registered layout " .. key)
+    pages[key] = nil
+  end
+  assert_true(next(pages) == nil, "every page in docs/user/grid/ is a registered layout's: " .. tostring(next(pages)))
+  local with_record_keys = 0
+  for _, key in ipairs(layouts) do
+    local path = "docs/user/grid/" .. key .. ".md"
     local text = read_repo_file(path)
     assert_true(text:find("](../grid.md#positions)", 1, true), path .. " links grid.md's Positions")
     assert_true(text:find("from the start of the earlier", 1, true) and text:find("in either order", 1, true),
       path .. " gives the loop's edges in either order")
-    assert_true(not text:find("record the input", 1, true) and not text:find("Record the input", 1, true),
-      path .. " never says the record keys record the input")
-    if size ~= "64" then
+    assert_true(not text:lower():find("record the input", 1, true), path .. " never says the record keys record the input")
+    if text:find("Record into buffer", 1, true) then
+      with_record_keys = with_record_keys + 1
       assert_true(text:find("with the record settings", 1, true), path .. "'s record keys use the record settings")
     end
+  end
+  assert_true(with_record_keys >= 3, "the layouts with record keys were read, " .. with_record_keys)
+end)
+
+-- Three claims pages state from the code: effects.md's sends as the params
+-- show them (in percent, #338); technical.md's signal flow and architecture
+-- with each voice's stage and the master filter on its three buses (#347);
+-- the BUFFER page's PARAMETERS home of each field's param, found by turning
+-- the field with E3, and the loop save's fallback, as sources-and-buffers.md
+-- gives it (#348)
+test("effects.md's sends, technical.md's voice stage and BUFFER's field homes match the code (#338, #347, #348)", function()
+  local context = load_strata()
+  h.finish_startup(context)
+  local S = local_value("S")
+
+  local sends = read_repo_file("docs/user/effects.md"):match("\n%- %*%*delay send, reverb send%*%*[^\n]*")
+  assert_true(sends ~= nil, "effects.md describes the voice sends")
+  local default_text = params:string("v1_delay_send"):gsub(" ", "")
+  params:set("v1_delay_send", 0)
+  local low_text = params:string("v1_delay_send"):gsub(" ", ""):gsub("%%", "")
+  params:set("v1_delay_send", 1)
+  local high_text = params:string("v1_delay_send"):gsub(" ", "")
+  local stated = low_text .. "-" .. high_text .. ", default " .. default_text
+  assert_true(sends:find(stated, 1, true), "effects.md gives the sends as they show: " .. stated)
+
+  local technical = read_repo_file("docs/user/technical.md")
+  local flow = doc_section(technical, "## Audio Signal Flow")
+  assert_true(flow ~= nil, "technical.md has its signal flow")
+  local _, filters = flow:gsub("Filter", "")
+  assert_true(flow:find("Voice Stage", 1, true) and flow:find("delay send", 1, true) and flow:find("reverb send", 1, true)
+    and filters >= 3, "the flow runs each voice's stage, its two sends and three filters")
+  local architecture = doc_section(technical, "## Architecture") or ""
+  assert_true(architecture:find("mix stage per voice", 1, true) and architecture:find("Voice Stage", 1, true),
+    "the architecture lists the voice's mix stage, named as the flow names it")
+
+  -- each param's home: its group, or the separator its section starts with
+  local home, group, remaining, section = {}, nil, 0, nil
+  for _, param in ipairs(params.params) do
+    if param.t == params.tGROUP then
+      group, remaining = param.name, param.n
+    elseif remaining > 0 then
+      home[param.id], remaining = group, remaining - 1
+    elseif param.t == params.tSEPARATOR then
+      section = param.name
+    elseif param.id then
+      home[param.id] = section
+    end
+  end
+  local sentence = read_repo_file("docs/user/pages/buffer.md"):match("\nThe fields are also in PARAMETERS:[^\n]*")
+  assert_true(sentence ~= nil, "buffer.md says where the fields are in PARAMETERS")
+  -- the doc's homes: each field named in backticks belongs to the next
+  -- **group** the sentence names
+  local doc_home, pending = {}, {}
+  for token in sentence:gmatch("[`*]+[^`*]+[`*]+") do
+    local field, bold = token:match("^`([^`]+)`$"), token:match("^%*%*([^*]+)%*%*$")
+    if field then table.insert(pending, field) end
+    if bold then
+      for _, name in ipairs(pending) do doc_home[name] = bold end
+      pending = {}
+    end
+  end
+  local page = S.registry.pages[S.constants.UI_PAGES.index.BUFFER]
+  local checked = {}
+  local function turn_field(state, field)
+    state.setup()
+    for _, d in ipairs({1, -1}) do
+      local before = {}
+      for _, param in ipairs(params.params) do
+        if param.id and param.t ~= params.tSEPARATOR and param.t ~= params.tGROUP then before[param.id] = params:get(param.id) end
+      end
+      page.enc(3, d)
+      local changed = {}
+      for id, value in pairs(before) do
+        if params:get(id) ~= value then table.insert(changed, id) end
+      end
+      if #changed == 1 then
+        local where = home[changed[1]] or "?"
+        if where:find("^voice %d+ granular$") then
+          assert_true(sentence:find("granular section", 1, true), "buffer.md puts the voice's " .. changed[1]
+            .. " in its granular section")
+        else
+          assert_equal(doc_home[field], where, "buffer.md's group for `" .. field .. "` (" .. changed[1] .. ")")
+        end
+        table.insert(checked, field)
+        return
+      end
+    end
+  end
+  for _, state in ipairs(page.layout_states) do
+    local field = state.name:match("^field (%S+)$")
+    if field then
+      params:set("record_sync", 1)
+      turn_field(state, field)
+      if field == "dur" then
+        params:set("record_sync", 2)  -- with sync on the field is len, the record beats
+        turn_field({setup = state.setup}, "len")
+      end
+    end
+  end
+  assert_true(#checked >= 9, "the fields that edit one param were turned: " .. table.concat(checked, " "))
+  for _, path in ipairs({"docs/user/pages/buffer.md", "docs/user/sources-and-buffers.md"}) do
+    assert_true(read_repo_file(path):find("lowest-numbered", 1, true), path .. " gives the loop save's fallback voice")
   end
 end)
 

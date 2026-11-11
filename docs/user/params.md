@@ -77,28 +77,45 @@ Scenes capture each voice's source and buffer position, rate and scan, but **not
 - Scale (off, or any of norns' scales; default off) and root (C-B, default C), shared by every voice that quantizes ([voices and grains](voices-and-grains.md#scales))
 
 ## Per-Voice Sections
-Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`, the voice's own parameters), then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. The synthesis parameters, voice by voice, are listed in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). Each voice includes:
-- Quantize (off/on, default off), first, right after the voice's heading and above its freq, so a PSET sets it before the freq
-- Synthesis parameters (varies by voice type). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a scene or PSET saved then still sounds the same, and shows the mirrored number (0.3 shows as 0.8)
-- Source (synth, buf 1-8, input; default synth)
-- Bookmarks 1-4 (buffer voices; 0-1, default 0, 0.25, 0.5 and 0.75): saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs, never randomized or mutated ([voices and grains](voices-and-grains.md#bookmarks))
-- Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0): what a buffer-sourced voice reads ([Audio Sources and Buffers](sources-and-buffers.md))
-- Grain size (0.01-0.5 s, default 0.1)
-- Grain density (1-100 grains a second, default 20)
-- Grain pitch (0.25-4, the transposition ratio, default 1)
-- Position spread (0-1, default 0.5)
-- Grain envelope (hann, sine, perc, linen, trap; default hann)
-- Grain mode (continuous or triggered; default continuous)
-- Cross-modulation, three slots ([Cross-Modulation](modulation.md#cross-modulation)):
-  - Mod source 1-3 (none or voice 1-7; default none): the voice that modulates this one in each slot
-  - Amp mod 1-3 (-2 to 2, default 0): how far that voice moves this one's level
-  - Freq mod 1-3 (-2 to 2, default 0): how far that voice moves this one's pitch
-  - Mod speed (0.1-50 Hz, default 10): the rate of the slow random wobble in this voice's own modulation signal, the one it sends to the voices it modulates
-- The voice's extras, last, in this order:
-  - History (input-sourced voices; 0-16 s, 0-60 s on the high tier, default 0): how far back in the live input the grains play ([Granular Processing](voices-and-grains.md#granular-processing))
-  - Freeze (off/on, default off) and freeze mode (hold, and on the high tier spectral; default hold): hold what the voice's grains play ([Freeze](pages/voice.md#freeze))
-  - Loop start (0-1, default 0) and loop length (0.001-1, default 1): the part of the buffer a buffer-sourced voice plays ([Audio Sources and Buffers](sources-and-buffers.md))
-  - Reverse (0-100%, default 0), pitch jitter (0-12 st, default 0), pan jitter (0-1, default 0), size jitter (0-1, default 0), intervals (off, octaves, fifths, chord, custom; default off), interval prob (0-100%, default 100%) and custom 1-5 (-24 to 24 st; default -12, 0, 7, 12 and 19): how each grain differs from the last ([Grain variation](voices-and-grains.md#grain-variation))
-  - Voice filter type (lowpass, highpass, bandpass), filter freq (20-20000 Hz, default 5000), filter res (0-1, default 0.5) and filter mix (0 = off, the default, to 1), and delay send and reverb send (0-100%, default 100%; see [Each voice's filter and sends](effects.md#each-voices-filter-and-sends))
-  - Bookmark 1-4 (above)
-- None of the extras is randomized, mutated or on the grid's fader pages
+Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`), with quantize, the voice's synthesis parameters, its amp and (all but the Sub) its pan; then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. The synthesis parameters are listed voice by voice in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a scene or PSET saved then still sounds the same, and shows the mirrored number (0.3 shows as 0.8).
+
+The rest of each voice's parameters, in menu order. A default "by voice" gives voices 1-7's in turn; a numbered parameter's defaults are its numbers' in turn.
+
+| parameter | range | default | |
+|---|---|---|---|
+| quantize | off/on | off | First, right after the voice's heading and above its freq, so a PSET sets it before the freq ([Grain variation](voices-and-grains.md#grain-variation)) |
+| source | synth, buf 1-8, input | synth | What the voice's grains read ([Audio Sources and Buffers](sources-and-buffers.md)) |
+| buffer position | 0-1 | 0 | Where a buffer-sourced voice's grains read, in its loop |
+| buffer rate | 0.25-4 | 1 | How fast a buffer-sourced voice's grains read the buffer |
+| buffer scan | -2 to 2 | 0 | How fast the position moves through the loop, in loop lengths a second (backward below 0) |
+| grain size | 0.01-0.5 s | by voice: 0.1, 0.15, 0.08, 0.2, 0.12, 0.08, 0.1 | |
+| grain density | 1-100 /s | by voice: 20, 15, 25, 10, 18, 22, 20 | Grains a second |
+| grain pitch | 0.25-4 x | 1 | The transposition ratio |
+| position spread | 0-1 | by voice: 0.5, 0.3, 0.4, 0.2, 0.35, 0.25, 0.4 | |
+| grain envelope | hann, sine, perc, linen, trap | hann | |
+| grain mode | continuous, triggered | continuous | |
+| mod source 1-3 | none, voice 1 to voice 7 | none | The voice that modulates this one, in each of the three slots ([Cross-Modulation](modulation.md#cross-modulation)) |
+| amp mod 1-3 | -2 to 2 | 0 | How far that voice moves this one's level |
+| freq mod 1-3 | -2 to 2 | 0 | How far that voice moves this one's pitch |
+| mod speed | 0.1-50 Hz | 10 | The rate of the slow random wobble in this voice's own modulation signal, the one it sends to the voices it modulates |
+| history | 0-16 s (0-60 s on the high tier) | 0 | Input-sourced voices: how far back in the live input the grains play ([Granular Processing](voices-and-grains.md#granular-processing)) |
+| freeze | off/on | off | Hold what the voice's grains play ([Freeze](pages/voice.md#freeze)) |
+| freeze mode | hold (and spectral on the high tier) | hold | |
+| loop start | 0-1 | 0 | The part of the buffer a buffer-sourced voice plays ([Audio Sources and Buffers](sources-and-buffers.md)) |
+| loop length | 0.001-1 | 1 | |
+| reverse | 0-100% | 0 | How each grain differs from the last, the reverse to custom rows ([Grain variation](voices-and-grains.md#grain-variation)) |
+| pitch jitter | 0-12 st | 0 | |
+| pan jitter | 0-1 | 0 | |
+| size jitter | 0-1 | 0 | |
+| intervals | off, octaves, fifths, chord, custom | off | |
+| interval prob | 0-100% | 100 | |
+| custom 1-5 | -24 to 24 st | -12, 0, 7, 12, 19 | |
+| filter type | lowpass, highpass, bandpass | lowpass | The voice's own filter ([Each voice's filter and sends](effects.md#each-voices-filter-and-sends)) |
+| filter freq | 20-20000 Hz | 5000 | |
+| filter res | 0-1 | 0.5 | |
+| filter mix | 0-1 | 0 | 0 leaves the filter out |
+| delay send | 0-100% | 100 | |
+| reverb send | 0-100% | 100 | |
+| bookmark 1-4 | 0-1 | 0, 0.25, 0.5, 0.75 | Buffer voices: saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs ([voices and grains](voices-and-grains.md#bookmarks)) |
+
+None of the extras (history to bookmark 4) is randomized, mutated or on the grid's fader pages.
