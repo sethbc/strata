@@ -291,7 +291,7 @@ test("a SEQ pattern edit requests one redraw, enc's or key's own", function()
   assert_equal(count(function() key(3, 1) end), 1, "ALT+K3")
   key(3, 0)
   assert_equal(count(function() key(2, 1) end), 1, "ALT+K2's press")
-  key(2, 0)
+  assert_true(count(function() key(2, 0) end) >= 1, "ALT+K2's release, where the randomize happens, requests a redraw")
   key(1, 0)
   grid_redraw = real_grid
   request_redraw = real
@@ -342,16 +342,17 @@ test("a quick ALT+K2 within 5 s restores the exact old steps (#557)", function()
   key(1, 0)
 end)
 
-test("a step edit ends the pattern undo (#557)", function()
+test("a step edit, ALT+K3 and the other edits end the pattern undo (#557)", function()
   local context, S = started_on_seq()
   S.selected_voice = 2; S.cursors.seq_step = 4
   local mutation = S.lib.mutation
   local function undoable() return mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 2) == true end
   local function randomized() key(1, 1); tap(2); key(1, 0); assert_true(undoable(), "an undo is held") end
-  randomized(); enc(3, 1); io.stderr:write("AFTER ", tostring(S.undo), " ", S.patterns[2][4], "\n"); assert_true(not undoable(), "E3 ends it")
+  randomized(); enc(3, 1); assert_true(not undoable(), "E3 ends it")
   randomized(); key(1, 0); tap(3); assert_true(not undoable(), "K3 (a toggle) ends it")
   randomized(); toggle_pattern_step(2, 5); assert_true(not undoable(), "toggle_pattern_step ends it")
   randomized(); clear_pattern(2); assert_true(not undoable(), "clear_pattern ends it")
+  randomized(); key(1, 1); tap(3); key(1, 0); assert_true(not undoable(), "ALT+K3 (clear) ends it")
   randomized(); S.lib.sequencer.replace_pattern(2, {1}); assert_true(not undoable(), "replace_pattern ends it")
   randomized(); S.lib.sequencer.replace_pattern(5, {1}); assert_true(undoable(), "another voice's edit does not")
 end)
@@ -366,6 +367,7 @@ test("undo while the pattern clock plays restores the old steps (#557)", functio
   context.clock.run_for(0.3)
   key(1, 1); tap(2)
   context.clock.run_for(0.3)
+  assert_true(S.pattern_sounding_step ~= nil, "a step played between the randomize and the undo")
   tap(2)
   assert_true(same_steps(steps_of(S, 1), old), "the exact old steps are back")
   key(1, 0)
