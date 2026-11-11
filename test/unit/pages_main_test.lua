@@ -417,12 +417,41 @@ test("the hint is K2:rand, K2:undo, K2:locked (#557)", function()
   for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "locked: " .. id .. " unchanged") end
   tap(3); redraw()
   assert_equal(hint_text(context), "K2:rand K3:lock", "unlocked")
-  -- MAIN has no hold action: a press held past 0.5 s does nothing on release
-  key(2, 1); context.clock.run_for(0.6); redraw()
-  assert_equal(hint_text(context), "K2:rand K3:lock", "held: MAIN has no hold hint")
+  -- MAIN has no hold action: a press held past 0.5 s cancels, and the hint
+  -- says so from the hold time on, drawn by the frame clock (MAIN animates
+  -- while ALT+K2 is held)
+  key(2, 1); context.clock.run_for(0.6)
+  assert_equal(hint_text(context), "K2:cancel K3:lock", "held: letting go cancels")
   key(2, 0)
   for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "held: " .. id .. " unchanged") end
   assert_true(not undo_available(1), "held: no undo")
+  redraw(); assert_equal(hint_text(context), "K2:rand K3:lock", "released: the quick hint is back")
+  key(1, 0)
+end)
+
+test("MAIN acts on the voice selected at release; an E2 turn while ALT+K2 is held moves it (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("MAIN")
+  local function voice_values(voice_idx)
+    local values = {}
+    for id, value in pairs(all_param_values()) do
+      if id:find("^v" .. voice_idx .. "_") then values[id] = value end
+    end
+    return values
+  end
+  key(1, 1); tap(2)                                    -- voice 1 randomized: its undo is held
+  redraw(); assert_equal(hint_text(context), "K2:undo K3:lock", "voice 1 offers its undo")
+  local voice_1, voice_2 = voice_values(1), voice_values(2)
+  key(2, 1)
+  enc(2, 1)                                            -- E2 while ALT+K2 is held
+  assert_equal(local_value("selected_voice"), 2, "E2 selected voice 2")
+  redraw(); assert_equal(hint_text(context), "K2:rand K3:lock", "the hint follows the voice")
+  key(2, 0)
+  for id, value in pairs(voice_values(1)) do assert_equal(value, voice_1[id], "voice 1 is not undone: " .. id) end
+  local changed = 0
+  for id, value in pairs(voice_values(2)) do if value ~= voice_2[id] then changed = changed + 1 end end
+  assert_true(changed > 0, "the release randomized voice 2, selected at the release")
+  assert_true(undo_available(2) and not undo_available(1), "the undo is voice 2's")
   key(1, 0)
 end)
 

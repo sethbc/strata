@@ -262,6 +262,23 @@ test("an ALT+K2 held 0.5 s runs alt_hold and does not randomize (#557)", functio
   key(1, 0)
 end)
 
+test("an ALT+K2 held 0.5 s on a page with no alt_hold shows K2:cancel and does nothing (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local record = randomizing_fx_record({})
+  record.alt_hold = nil
+  local mix = params:get("reverb_mix")
+  key(1, 1); key(2, 1)
+  context.clock.run_for(0.49)
+  redraw(); assert_equal(hint_text(context), "K2:rand", "before the hold time: the quick press's hint")
+  context.clock.run_for(0.01)
+  redraw(); assert_equal(hint_text(context), "K2:cancel", "from the hold time: letting go cancels")
+  key(2, 0)
+  assert_equal(params:get("reverb_mix"), mix, "the release randomizes nothing")
+  assert_equal(local_value("undo"), nil, "nor holds an undo")
+  redraw(); assert_equal(hint_text(context), "K2:rand", "the hint is back")
+  key(1, 0)
+end)
+
 test("K1 up before K2 still acts on K2's release (#557)", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")

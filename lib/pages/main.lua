@@ -232,11 +232,18 @@ return function(S)
     request_redraw()
   end
 
-  -- ALT+K2 released: a quick press undoes the voice's randomize or
-  -- randomizes it (nothing for a locked voice); MAIN has no hold action, so
-  -- a press held ALT_HOLD_SECONDS does nothing
+  -- ALT+K2 released: a quick press undoes the randomize of the voice
+  -- selected now (an E2 turn while K2 is down moves it) or randomizes it
+  -- (nothing for a locked voice); MAIN has no hold action, so a press held
+  -- ALT_HOLD_SECONDS cancels (the hint says K2:cancel)
   local function main_alt_key_release(n)
     if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.MAIN]) end
+  end
+
+  -- The frame clock redraws MAIN while ALT+K2 is down, so its hint turns to
+  -- K2:cancel at the hold time
+  local function main_animates()
+    return S.lib.ui_alt.k2_held()
   end
 
   -- The layout tests' and page renders' extra states: every voice running,
@@ -267,11 +274,18 @@ return function(S)
   -- are lib/arc/main.lua's
   S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
     enc = main_enc, key = main_key, alt_key = main_alt_key, alt_key_release = main_alt_key_release,
-    randomize_section = main_randomize_section, arc_button = start_stop_selected_voice,
+    randomize_section = main_randomize_section, animates = main_animates,
+    arc_button = start_stop_selected_voice,
     layout_states = {
       layout_state("all locked, running, triggered, frozen, field 3", 1),
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),
       layout_state("resonator, input source", 1, S.constants.SOURCE_INPUT),
+      -- the widest ALT+K2 hint: K2:cancel K3:unlock
+      {name = "ALT+K2 held past the hold time, voice locked", setup = function(context)
+        toggle_lock(S.selected_voice)
+        key(1, 1); key(2, 1)
+        context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+      end},
     }}
 
   return M
