@@ -8,5 +8,5 @@
 - A long file's check on the high tier stops as soon as a clear, a recording or a later load supersedes it, instead of decoding the rest of the file (#375).
 
 ### Changed
-- While a buffer records without emptying, its waveform file is rewritten only when the waveform has changed, so a loop left recording silence (or one whose waveform has stopped changing) no longer writes the card twice a second (#523).
+- While a buffer records without emptying, its waveform file is rewritten only when the waveform has changed, and at most every 2 s, so a loop recording never writes the card twice a second (a loop left recording silence, or one whose waveform has stopped changing, writes nothing until it ends). The cost: during an overdub or loop recording the waveform updates every 2 s instead of every 0.5 s; it is complete again when the recording ends (#523).
 - The user docs name the waveform files `buf1.peaks` to `buf8.peaks` in `~/dust/data/strata/` (#351); the developer notes for buffers and the waveform follow 3.3's recording (#377), and the peaks mover's poll steps are named constants (#381).

@@ -13,6 +13,8 @@
             // interrupted by a crash or power cut left
             allocState: {
                 areaState[\files][\saves] = Array.fill(numBuffers, 0);
+                // the chunks fileDecodes has read since alloc (the check counts them)
+                areaState[\files][\decodeChunks] = 0;
                 areaState[\files][\renames] = Dictionary.new;
                 this.deleteStaleParts
             },
@@ -105,6 +107,8 @@
             wanted = loadCheckFrames.min(binEnd - done);
             chunk = this.freshReadArray(wanted * channels);
             file.readData(chunk);  // shrinks chunk to the samples decoded
+            // counted for the check: a superseded check stops at its next chunk (#375)
+            areaState[\files][\decodeChunks] = (areaState[\files][\decodeChunks] ? 0) + 1;
             decoded = chunk.size div: channels;
             if (decoded > 0) { peaks[bin] = peaks[bin].max(chunk.peak.min(1.0)) };
             done = done + decoded;

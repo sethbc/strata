@@ -35,7 +35,7 @@ end
 -- Synced recording: bars of beats_per_bar beats, started lead_seconds early
 local RECORD_SYNC = {beats_per_bar = 4, lead_seconds = 0.25}
 local FILES = {restart_seconds = 0.3}       -- lib/files.lua
-local WAVEFORMS = {refresh_seconds = 0.5}   -- lib/waveforms.lua
+local WAVEFORMS = {refresh_seconds = 2}   -- lib/waveforms.lua (the engine's peakWriteSeconds, #523)
 local PLAYHEADS = {update_hz = 15}          -- lib/playheads.lua
 -- The arc scrub's friction glide (lib/positions.lua): ring 1 idle for
 -- release_seconds starts a glide at the speed over the last window_seconds,

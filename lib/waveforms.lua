@@ -5,7 +5,8 @@
 -- module reads them. Never in a draw or a poll callback: a report only marks
 -- the slot stale, and one clock loop reads at most one marked slot per frame
 -- tick (and re-marks a slot that records playably every
--- WAVEFORMS.refresh_seconds). A file is used only if it is this slot's, in
+-- WAVEFORMS.refresh_seconds, 2 s: the engine rewrites its file at most that
+-- often). A file is used only if it is this slot's, in
 -- version 1, holds WAVEFORM_POINTS values in 0-1 and its length (frames /
 -- rate) is within LENGTH_TOLERANCE of the seconds the slot reports. A
 -- slot whose length changes forgets its old points at once (changed), so
@@ -132,8 +133,10 @@ return function(S)
     return bins
   end
 
-  -- A slot that records playably is marked every refresh_seconds (the engine
-  -- rewrites its peaks that often)
+  -- A slot that records playably is marked every refresh_seconds: the
+  -- engine rewrites its peaks file at most that often (peakWriteSeconds),
+  -- and only when the overview changed (#523), so a reread may find the
+  -- same values, which redraw nothing
   local function mark_playable_recordings()
     local now = util.time()
     for slot = 1, NUM_BUFFERS do

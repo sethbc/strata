@@ -32,8 +32,13 @@
     // How much before a synced take its slot is prepared (faded, emptied),
     // beside the fade itself: covers zeroing a 300 s slot on a Pi 4
     recordPrepMargin { ^0.15 }
-    // How often a playable recording's peaks file is rewritten
+    // How often a playable recording's overview is read, to rewrite its
+    // peaks file when it changed
     peakRefreshSeconds { ^0.5 }
+    // The least time between two of those writes (s): a loop recording a
+    // live source changes its overview every pass, and the card is written
+    // at most this often (#523); Lua rereads as often (WAVEFORMS)
+    peakWriteSeconds { ^2 }
 
     allocRecordState {
         var state = areaState[\record], server = context.server;
@@ -56,7 +61,7 @@
         state[\preMasterBus] = Bus.audio(server, 2);
         // Per slot: the recording in progress or waiting to start (an Event, or nil)
         state[\takes] = Array.newClear(numBuffers);
-        state[\peakWrites] = (reports: 0, refreshes: 0, unchanged: 0);
+        state[\peakWrites] = (reports: 0, refreshes: 0, unchanged: 0, held: 0);
     }
 
     addRecordDefs {
@@ -498,22 +503,31 @@
         };
     }
 
-    // A playable recording's peaks file, every peakRefreshSeconds while it
-    // records: no length report (bufferChanged), so a loop recording's
-    // waveform refreshes without a bufferState change. A refresh whose
-    // overview is what the slot's file already holds (peaksUnchanged: a
-    // loop of silence, or one whose bins have saturated) writes nothing, so
-    // a loop left recording spares the card (#523); the take's end always
-    // writes (endTake)
+    // A playable recording's peaks file, refreshed while it records: no
+    // length report (bufferChanged), so a loop recording's waveform
+    // refreshes without a bufferState change. Every peakRefreshSeconds the
+    // overview is read; one that is what the slot's file already holds
+    // (peaksUnchanged: a loop of silence, or one whose bins have saturated)
+    // writes nothing, and a changed one is written at most every
+    // peakWriteSeconds (counted from the arming, in the refresh's logical
+    // time, so the steps are exact): a live loop changes every pass, and
+    // the card is written every 2 s, not twice a second (#523). The take's
+    // end always writes (endTake)
     refreshRecordPeaks { arg index, take;
-        var state = areaState[\record];
+        var state = areaState[\record], counters = state[\peakWrites];
+        take[\peaksWrittenAt] = thisThread.seconds;
         SystemClock.sched(this.peakRefreshSeconds, {
+            var now = thisThread.seconds;
             if (state[\takes][index] === take) {
                 this.readSlotPeaks(index, this.waveformPoints, {
                     if (state[\takes][index] === take) {
-                        if (this.peaksUnchanged(index, bufferFrames[index])) {
-                            state[\peakWrites][\unchanged] = state[\peakWrites][\unchanged] + 1;
-                        } { this.writeRecordPeaks(index, bufferFrames[index], nil) };
+                        case
+                        { this.peaksUnchanged(index, bufferFrames[index]) } { counters[\unchanged] = counters[\unchanged] + 1 }
+                        { (now - take[\peaksWrittenAt]) < (this.peakWriteSeconds - 1e-6) } { counters[\held] = counters[\held] + 1 }
+                        {
+                            take[\peaksWrittenAt] = now;
+                            this.writeRecordPeaks(index, bufferFrames[index], nil)
+                        };
                     };
                 });
                 this.peakRefreshSeconds
