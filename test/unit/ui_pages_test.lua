@@ -194,4 +194,57 @@ test("strata.lua includes every page file, then every arc file", function()
     end
   end
 end)
+
+-- #419: with ALT held, no page's hint names a key whose ALT press does nothing.
+-- Covers all eight pages: a page with no alt_key (FX, SETUP) names no K2 or K3;
+-- every other page that names K3 changes some state when ALT+K3 is pressed at
+-- that cursor (BUFFER's ALT keys act on release, so only the first part applies)
+test("with ALT held no page's hint names a key that does nothing (#419)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local names = local_value("UI_PAGES")
+  local covered = {}
+  local function snapshot()
+    local parts, ids = {}, {}
+    for id in pairs(params.lookup) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do parts[#parts + 1] = id .. "=" .. tostring(params:get(id)) end
+    for slot = 1, S.constants.NUM_SCENES do parts[#parts + 1] = "scene" .. slot .. tostring(S.scenes[slot].populated) end
+    for voice = 1, S.constants.NUM_VOICES do
+      parts[#parts + 1] = "lock" .. voice .. tostring(S.frozen[voice] or false)
+      parts[#parts + 1] = "on" .. voice .. tostring(S.voices[voice].active)
+      for cell = 1, S.constants.PATTERN_LENGTH do
+        parts[#parts + 1] = tostring(S.patterns[voice][cell])
+      end
+    end
+    parts[#parts + 1] = "armed" .. tostring(S.scenes_page.armed_slot)
+    parts[#parts + 1] = "flash" .. tostring(S.lib.ui_flash.text("header")) .. tostring(S.lib.ui_flash.text("hints"))
+    return table.concat(parts, ";")
+  end
+  for page_index, name in ipairs(names) do
+    show_page(name)
+    key(1, 1)
+    local record = S.registry.pages[page_index]
+    for position = 1, 14 do
+      local hint = record.hints(true) or ""
+      for _, key_name in ipairs({"K2", "K3"}) do
+        if hint:find(key_name .. ":", 1, true) then
+          assert_true(record.alt_key ~= nil, name .. " names " .. key_name .. " with ALT held ('" .. hint
+            .. "') but has no ALT key action")
+          if key_name == "K3" and name ~= "BUFFER" then
+            local before = snapshot()
+            key(3, 1); key(3, 0)
+            assert_true(snapshot() ~= before, name .. " position " .. position .. ": ALT+K3 does nothing but the hint '"
+              .. hint .. "' names it")
+            covered[name] = true
+          end
+        end
+      end
+      enc(2, 1)
+    end
+    key(1, 0)
+  end
+  assert_true(covered.MAIN and covered.VOICE and covered.SEQ and covered.LFO and covered.SCENES,
+    "the behavior check reached MAIN, VOICE, SEQ, LFO and SCENES")
+end)
 end
