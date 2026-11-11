@@ -7,6 +7,8 @@
 return function(S)
   local M = {}
 
+  local ARC_BUFFER_LEVELS = {buffer = 15, other = 4, fixed = 12}
+
   -- Rings 1-4 plain and with ALT. voice_key: the param id suffix after
   -- "v<i>_"; param_id: a global param. always_level: the ring's level
   -- whatever the voice's source. Each sweeps its range in
@@ -21,9 +23,8 @@ return function(S)
     {voice_key = "buf_pos", scrub = true},
     {voice_key = "buf_rate"},
     {param_id = "scrub_friction"},
-    {param_id = "record_feedback", always_level = 12}
+    {param_id = "record_feedback", always_level = ARC_BUFFER_LEVELS.fixed}
   }
-  local ARC_BUFFER_LEVELS = {buffer = 15, other = 4}
 
   local function ring_param(ring)
     return ring.param_id or ("v" .. S.selected_voice .. "_" .. ring.voice_key)

@@ -1,9 +1,9 @@
 ## Must not break
 
 - Handlers live on the vport only (`arc.connect(port)`), never on the raw device passed to `arc.add`.
-- Strata follows one arc: on the vport of the device (`device.port`, port 1 if unassigned; at init the first vport holding a device). While one is connected, `arc.add` of another arc is ignored and `arc.remove` disconnects only the connected one.
+- Strata follows one arc: on the vport of the device (`device.port`; at init the first vport holding a device). A device with no port (norns found no vport for it) is on no vport at all: `arc.add` and `arc.remove` return at once for it, so it is never followed and never taken for port 1's (#437). While one is connected, `arc.add` of another arc is ignored and `arc.remove` disconnects only the connected one.
 - `S.arc_connected` is exactly whether the followed vport holds a device (the `"arc connection"` invariant). An arc moved in SYSTEM > DEVICES gets no `arc.add` or `arc.remove` (norns calls `update_devices()` only), so `S.lib.arc_core.reconcile()` runs as the norns menu closes (#256).
-- Every ring is filled through `arc_ring_fill` from `param_fraction`, or through `arc_ring_fill_bipolar` (which reads `param_fraction` itself) for a range through 0, never from a hardcoded range and never with a bare `segment` (a full turn would light nothing). `arc_ring_fill_param` picks between them.
+- Every ring is filled through `arc_ring_fill` from `param_fraction`, or through `arc_ring_fill_bipolar` (which reads `param_fraction` itself) for a range through 0, never from a hardcoded range and never with a bare `segment` (a full turn would light nothing). `arc_ring_fill_param` picks between them. A ring that shows a whole-step position (SEQ's step, level and voice rings, SCENES' cursor ring) is filled through `arc_ring_fill_position`, which lights LED 1 at the first position, so it never looks like a ring that is off (#510); a swept ring at its minimum still lights nothing.
 - Every continuous ring sweeps its param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`; a ring never has a scale of its own (the exceptions are listed in `docs/notes/lua/arc-pages.md`).
 - Whole-step rings carry their spare ticks through `arc_whole_steps(key, delta, ticks_per_step)` under a key of their own (`S.arc_ticks[key]`), never in a table of their own, so a page change (`set_ui_page`, which calls `forget_arc_ticks()`) forgets them all.
 - The button goes through the shown page record's `arc_button()` on every page that has one (`arc_key` finds the record by index, `S.registry.pages[S.ui_page]`, never by the title string). `arc_button` is a page field, set by `lib/pages/<page>.lua`.
@@ -16,18 +16,19 @@
 - `lib/arc/core.lua` (`S.lib.arc_core`), what every page shares:
   - `S.arc_device`, `S.arc_connected`, and `reconcile()` on `S.lib.arc_core` (a menu-close hook);
   - `S.arc_ticks` (carried ticks per key);
-  - `arc_sweep_param`, `arc_ring_fill`, `arc_ring_fill_bipolar`, `arc_ring_fill_param`, `arc_whole_steps`, `forget_arc_ticks`, `attach_arc`, `first_arc_port`, `arc_init`, `arc.add`/`arc.remove`, `forget_arc_lfo_period_ticks`;
+  - `arc_sweep_param`, `arc_ring_fill`, `arc_ring_fill_position`, `arc_ring_fill_bipolar`, `arc_ring_fill_param`, `arc_whole_steps`, `forget_arc_ticks`, `attach_arc`, `first_arc_port`, `arc_init`, `arc.add`/`arc.remove`, `forget_arc_lfo_period_ticks`;
   - the norns entry points `arc_delta`, `arc_key` and `arc_redraw`;
   - all global but `attach_arc` and `page_ring_handler`, locals of the constructor (`arc.add`/`arc.remove` are fields of norns' `arc` table);
   - cleanup step 180: the arc left dark;
   - the invariant `"arc connection"`: `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)`.
-- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
+- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, a portless device, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
 
 ## Device lifecycle
 
 - `arc_init()` (start step `START_ORDER.arc`): attaches the first arc vport holding a device (`first_arc_port()`), else `UI_PAGES.ARC_PORT`, and sets up its callbacks through `attach_arc()`.
-- `arc.add(device)`: norns' callback when an arc connects. It attaches the vport for `device.port` (`UI_PAGES.ARC_PORT` if unassigned), only while no arc is connected.
+- `arc.add(device)`: norns' callback when an arc connects. It attaches the vport for `device.port`, only while no arc is connected; a device with no port is ignored.
 - `arc.remove(device)`: norns' callback when an arc disconnects.
+  - A device with no port is ignored.
   - It acts only when the removed device is on the connected vport (`S.arc_device == arc.connect(port)`), so another arc neither replaces nor disconnects it.
   - Removing the followed arc attaches `first_arc_port(port)`, the first other vport holding a device, if any. norns clears the removed vport only after `arc.remove` returns, so its port is skipped (issue #49).
   - It disconnects only when there is no other arc.
@@ -57,7 +58,7 @@ The invariant `"arc connection"` holds outside the norns menu: `S.arc_connected`
 The arc follows the screen page (`S.ui_page`):
 - `arc_delta(n, delta)` calls the current page record's `arc_delta(ring, delta)` (`S.registry.pages[S.ui_page]`), then requests a redraw.
 - `arc_redraw` runs `S.lib.ui_cursors.clamp_all()`, clears the rings, calls the record's `arc_redraw(S.arc_device)` and refreshes.
-- While ALT is held (`S.alt_held`), both use the record's `arc_alt_delta`/`arc_alt_redraw` instead, when it has them; a page without ALT rings keeps its plain ones under ALT (`page_ring_handler`). K1 requests a redraw, so the rings switch at once. MAIN is the page with ALT rings (`lib/arc/main.lua`, `docs/notes/lua/arc-pages.md`).
+- While ALT is held (`S.alt_held`), both use the record's `arc_alt_delta`/`arc_alt_redraw` instead, when it has them; a page without ALT rings keeps its plain ones under ALT (`page_ring_handler`). K1 requests a redraw, so the rings switch at once. MAIN and BUFFER have ALT rings (`lib/arc/main.lua`, `lib/arc/buffer.lua`, `docs/notes/lua/arc-pages.md`); BUFFER's also hold the voice's scan from the first ring 1 turn and let go through an ALT-release hook (`S.register_alt_release`), so a page adding ALT rings that hold something follows BUFFER, not MAIN.
 - A record without ring handlers ignores turns and leaves the rings off (and `arc_delta` still requests a redraw).
 - A page change (`set_ui_page` in `lib/ui/keys.lua`) forgets every carried tick (`forget_arc_ticks()`), so ticks turned on one page never step a param on another.
 - `enc` calls `request_redraw()`, which marks the arc dirty too, so changing page redraws the rings.
@@ -88,7 +89,7 @@ The arc follows the screen page (`S.ui_page`):
   - the zero point is the param's own 0, not the ring's middle (on -3 to 1, 0 sits three quarters round);
   - like `arc_ring_fill`, a fill stops `ARC_FULL_TURN_MARGIN` short of a whole turn, so it never lights nothing;
   - at exactly 0 only LED 1 lights, at `ARC_BIPOLAR_ZERO_LEVEL` (3, a local of `lib/arc/core.lua`), so the ring never looks dead.
-- `arc_ring_fill_param(arc_port, ring, param_id, level)` draws a param's ring: bipolar when `param_spans_zero(id)` (`lib/ui/params.lua`: a control or number param with min < 0 < max), else `arc_ring_fill` from `param_fraction`. No page uses it yet; the Wave 2 ring packages switch their rings to it.
+- `arc_ring_fill_param(arc_port, ring, param_id, level)` draws a param's ring: bipolar when `param_spans_zero(id)` (`lib/ui/params.lua`: a control or number param with min < 0 < max), else `arc_ring_fill` from `param_fraction`. MAIN, VOICE, SEQ (tempo), BUFFER and SCENES draw their param rings through it.
 - The test stub ports the real `Arc:segment` line for line (each LED set through `led()`, with `rel` adding to the level already there) and stores the per-LED levels it computed in `device.segments[ring].leds`.
   - The device also keeps matron's LED buffer (`device:get_led(ring, x)`: `led` and `all` absolute or relative). A relative set is clamped to 0-15 as `dev_monome_arc_set_led` does; an absolute one is stored as is on matron, and the stub rejects an absolute level outside 0-15.
   - Tests assert LED counts, not angles.

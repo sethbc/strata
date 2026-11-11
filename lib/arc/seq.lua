@@ -61,14 +61,14 @@ return function(S)
   end
 
   -- The cursor and level rings show their position (exactly these
-  -- fractions); the tempo ring its param
+  -- fractions, the first position lighting LED 1); the tempo ring its param
   local function arc_seq_redraw(arc_port)
     local pattern = S.patterns[S.selected_voice]
     local level = pattern and pattern[cursor_step()] or 0
-    arc_ring_fill(arc_port, 1, (cursor_step() - 1) / (PATTERN_LENGTH - 1), ARC_SEQ.levels[1])
-    arc_ring_fill(arc_port, 2, level / MAX_STEP_LEVEL, ARC_SEQ.levels[2])
+    arc_ring_fill_position(arc_port, 1, (cursor_step() - 1) / (PATTERN_LENGTH - 1), ARC_SEQ.levels[1])
+    arc_ring_fill_position(arc_port, 2, level / MAX_STEP_LEVEL, ARC_SEQ.levels[2])
     arc_ring_fill_param(arc_port, 3, "tempo", ARC_SEQ.levels[3])
-    arc_ring_fill(arc_port, 4, (S.selected_voice - 1) / (NUM_VOICES - 1), ARC_SEQ.levels[4])
+    arc_ring_fill_position(arc_port, 4, (S.selected_voice - 1) / (NUM_VOICES - 1), ARC_SEQ.levels[4])
   end
 
   -- SEQ's record gains its rings: arc_delta and arc_redraw in

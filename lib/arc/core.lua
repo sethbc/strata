@@ -50,6 +50,17 @@ return function(S)
     arc_port:segment(ring, 0, math.min(clamped * turn, turn - UI_PAGES.ARC_FULL_TURN_MARGIN), level)
   end
 
+  -- Fill a ring that shows a whole-step position (a cursor, a level, a row)
+  -- from 0 to fraction like arc_ring_fill, but the first position (fraction
+  -- 0) lights LED 1 so it never looks like a ring that is off
+  function arc_ring_fill_position(arc_port, ring, fraction, level)
+    if fraction <= 0 then
+      arc_port:led(ring, 1, level)
+    else
+      arc_ring_fill(arc_port, ring, fraction, level)
+    end
+  end
+
   -- Fill ring n from 12 o'clock toward the param's value, measured from the
   -- param's own 0 (param_value_fraction(id, 0), not the ring's middle):
   -- clockwise for a value above 0, counter-clockwise below it. Like
@@ -141,8 +152,9 @@ return function(S)
   end
 
   function arc.add(device)
-    local port = device.port or UI_PAGES.ARC_PORT
-    if port < 1 or port > UI_PAGES.ARC_PORTS then return end
+    local port = device.port
+    -- an arc norns gave no vport is on no vport at all: never followed
+    if port == nil or port < 1 or port > UI_PAGES.ARC_PORTS then return end
     if S.arc_connected and S.arc_device ~= arc.connect(port) then return end  -- already following another arc
     attach_arc(port)
     request_redraw()  -- its rings, and SETUP shows the arc state
@@ -150,8 +162,8 @@ return function(S)
   end
 
   function arc.remove(device)
-    local port = device.port or UI_PAGES.ARC_PORT
-    if port < 1 or port > UI_PAGES.ARC_PORTS then return end
+    local port = device.port
+    if port == nil or port < 1 or port > UI_PAGES.ARC_PORTS then return end  -- never the followed arc
     if S.arc_device ~= arc.connect(port) then return end  -- not the arc Strata follows
     -- norns clears the removed vport only after arc.remove returns: skip it
     local next_port = first_arc_port(port)

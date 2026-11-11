@@ -2,7 +2,7 @@
 
 - Each `lib/arc/<page>.lua` sets only the arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`) on `S.registry.pages[UI_PAGES.index.<PAGE>]`, never another field of the record (the page file owns those, `arc_button` included; tests check both). Avoid page field names (`key`, `name`, `enter`, ...) as keys in a ring file's own tables: the ownership tests read every `<field> =` in the file. A second test watches the includes as the script loads: each page file sets no arc field, and each arc file sets only arc fields, only on its own page's record (which exists before it loads), and removes none (`test/unit/ui_pages_test.lua`).
 - Every ring is drawn through `arc_ring_fill` or `arc_ring_fill_bipolar`. A ring showing a param draws from `param_fraction(id)` (`arc_ring_fill_param` picks the bipolar fill for a range through 0), so a changed param range moves the ring (a test swaps the controlspec to check). A ring showing a cursor or a step level draws exactly these fractions:
-  - SEQ ring 1: `(S.cursors.seq_step - 1) / (PATTERN_LENGTH - 1)`;
+  - SEQ ring 1: `(S.cursors.seq_step - 1) / (PATTERN_LENGTH - 1)` (these position rings and SCENES ring 1 draw through `arc_ring_fill_position`: the first position, fraction 0, lights LED 1 at the ring's level instead of nothing, #510);
   - SEQ ring 2: `S.patterns[S.selected_voice][step] / MAX_STEP_LEVEL`;
   - SEQ ring 4: `(S.selected_voice - 1) / (NUM_VOICES - 1)`;
   - SCENES ring 1: `(S.cursors.scene - 1) / (NUM_SCENES + #SCENES_FIELDS - 1)`.
@@ -67,7 +67,7 @@ BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` 
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
 - Ring 1: the scene cursor over E2's stops (slots 1..`NUM_SCENES`, then `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
 - Ring 2: `scene_transition_time` through `arc_sweep_param`.
-- Rings 3-4 dark (3.4's morph will take ring 3). Both lit rings at 12.
+- Rings 3-4 dark (3.4's morph will take ring 3). Both lit rings at 12; ring 1 at slot 1 lights LED 1.
 
 SETUP: no rings.
 
@@ -77,5 +77,6 @@ SETUP: no rings.
   - ring 1 (density): 15 always;
   - ring 2 (the main param): 15 active, 4 stopped;
   - rings 3-4 and every ALT ring: 12 active, 3 stopped.
+- Each level table is a named constant of its file (`ARC_MAIN_LEVELS`, `ARC_VOICE`, `ARC_SEQ.levels`, `ARC_SCENES.level`, `ARC_FX_LEVEL`, `ARC_LFO.levels`, `ARC_BUFFER_LEVELS`), and `test/unit/arc_pages_test.lua` (`ring brightness: ...`) pins every state below through `device.segments[ring].level` (#439), plus the menu-close redraw of `reconcile()`.
 - VOICE: the cursor row's ring 15, the others 12. SEQ: rings 1-2 at 15, 3-4 at 12. SCENES at 12.
 - FX rings at 12. BUFFER rings at 15 (buffer source) or 4, ALT ring 4 at 12. LFO depth rings at 15 (running) or 4, ring 4 at 12.

@@ -2,16 +2,16 @@
 
 Using a monome arc for hands-on control with LED feedback. Back to the [README](../../README.md).
 
-Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). If a second arc is plugged in while one is connected, it is ignored; unplugging the connected arc moves Strata to the other one.
+Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). An arc moved to another port there is followed once you close the menu. If a second arc is plugged in while one is connected, it is ignored; unplugging the connected arc moves Strata to the other one.
 
 ## Arc Encoders
 
-The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in half a turn (512 of the arc's 1024 ticks per revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the half-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per rate), the VOICE page's choice and number rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
+The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in half a turn (512 of the arc's 1024 ticks per revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the half-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per rate), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
 
 On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
-- **Ring 2** - Selected voice's main parameter (follows E3 mapping: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
+- **Ring 2** - Selected voice's main parameter (always the first of the three fields E3 can edit on MAIN, whichever field the cursor is on: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
 - **Ring 3** - Grain size for selected voice (grain pitch for an input-sourced voice, whose ring 2 already is grain size)
 - **Ring 4** - Grain density for selected voice
 
@@ -22,7 +22,7 @@ With **K1 held** (ALT), MAIN's rings change to the selected voice's:
 - **Ring 3** - Level
 - **Ring 4** - Pan (dark and does nothing for Sub, which has no pan)
 
-On the **VOICE** page, the four rings edit four rows of the voice's list: the group of four the cursor is in (rows 1-4, 5-8, ... counting only the parameters, not the section names), ring 1 the group's first row. Moving the cursor into the next group moves the rings with it. Continuous parameters sweep as above; choices and numbers (grain envelope and mode, the mod sources, the source) step one value per 20 ticks. A ring past the last row of the list is dark and does nothing. The ring of the row under the cursor is the brightest.
+On the **VOICE** page, the four rings edit four rows of the voice's list: the group of four the cursor is in (rows 1-4, 5-8, ... counting only the parameters, not the section names), ring 1 the group's first row. Moving the cursor into the next group moves the rings with it. Continuous parameters sweep as above; choices and numbers (grain envelope and mode, the mod sources, the source) step one value per 20 ticks. An on/off row (freeze, quantize) turns on after 20 ticks up and off after 20 ticks down. Its ring is dark while off and a full ring while on. A ring past the last row of the list is dark and does nothing. The ring of the row under the cursor is the brightest.
 
 On the **SEQ** page:
 
@@ -31,7 +31,7 @@ On the **SEQ** page:
 - **Ring 3** - Tempo (10 ticks per BPM)
 - **Ring 4** - Voice row, the selected voice (20 ticks per voice)
 
-Rings 1, 2 and 4 show their position: the step across the 16 steps, the level up to 15, the voice across the 7 voices.
+Rings 1, 2 and 4 show their position: the step across the 16 steps, the level up to 15, the voice across the 7 voices. At the first position (step 1, level 0, voice 1) one LED stays lit, so the ring never looks off. The same holds for the SCENES cursor ring at slot 1.
 
 On the **FX** page:
 
@@ -54,7 +54,7 @@ On the **BUFFER** page:
 
 With **ALT** (K1) held:
 
-- **Ring 1** - Buffer position, and the voice's own scan stops while ALT is held
+- **Ring 1** - Buffer position; from its first turn the voice's own scan stops, until you let go of ALT
 - **Ring 2** - Buffer rate
 - **Ring 3** - Scrub friction
 - **Ring 4** - Record feedback

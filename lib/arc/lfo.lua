@@ -15,7 +15,8 @@ return function(S)
   local ARC_LFO = {
     ticks_per_percent = 10,
     ticks_per_rate = 20,
-    period_ring = 4
+    period_ring = 4,
+    levels = {running = 15, stopped = 4, period = 12}
   }
 
   -- The arc_whole_steps key of ring n's carried ticks
@@ -49,9 +50,9 @@ return function(S)
   -- Depth rings are bright while their LFO runs
   local function arc_lfo_redraw(arc_port)
     for n = 1, NUM_LFOS do
-      arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), S.lib.pages_lfo.lfo_running(n) and 15 or 4)
+      arc_ring_fill(arc_port, n, param_fraction("lfo_depth_" .. n), S.lib.pages_lfo.lfo_running(n) and ARC_LFO.levels.running or ARC_LFO.levels.stopped)
     end
-    arc_ring_fill(arc_port, ARC_LFO.period_ring, param_fraction(lfo_period_param_id(S.selected_lfo)), 12)
+    arc_ring_fill(arc_port, ARC_LFO.period_ring, param_fraction(lfo_period_param_id(S.selected_lfo)), ARC_LFO.levels.period)
   end
 
   -- LFO's record (lib/pages/lfo.lua) gains its rings: arc_delta and
