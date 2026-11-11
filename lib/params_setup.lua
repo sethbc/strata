@@ -67,7 +67,10 @@ return function(S)
 
   function follow_clock_tempo(bpm)
     local min_tempo, max_tempo = param_range("tempo")
-    params:set("tempo", util.clamp(util.round(bpm), min_tempo, max_tempo), true)
+    local tempo = util.clamp(util.round(bpm), min_tempo, max_tempo)
+    local changed = params:get("tempo") ~= tempo
+    params:set("tempo", tempo, true)
+    if changed then request_redraw() end  -- SEQ's header and arc ring 3 show it (#383)
     if previous_tempo_change_handler then previous_tempo_change_handler(bpm) end
   end
 

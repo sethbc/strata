@@ -7,7 +7,7 @@ The screen pages, and what the encoders and keys do on every page. Back to the [
 The screen has eight pages, in this order (each page's own controls are on its page):
 
 1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter. ALT+K2 randomizes the voice (again within 5 s to undo), ALT+K3 locks it
-2. [VOICE](pages/voice.md) - every parameter of the selected voice, in four sections. ALT+K2 resets the row to its default, ALT+K3 locks the voice
+2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 resets the row to its default, ALT+K3 locks the voice
 3. [SEQ](pages/seq.md) - the pattern sequencer: all seven patterns, transport and tempo. ALT+E2 picks the voice row, ALT+E3 sets the tempo, ALT+K2 clears the voice's pattern, ALT+K3 randomizes it
 4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb. No ALT actions of its own
 5. [LFO](pages/lfo.md) - the three LFOs. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 resets the setting, ALT+K3 turns the LFO on or off
@@ -25,7 +25,7 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
 
 ## The Header and the Hint Row
 
-Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S8` scene indicator (brighter while the scene sequencer runs). The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
+Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S8` scene indicator (brighter while the scene sequencer runs). The scene shows once one has been recalled, not when one is saved. SEQ shows the tempo (`120 bpm`) at all times in place of `[M]` and `REC`/`ARM`. The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
 
 The bottom row shows the page's key hints. A short message (a saved buffer, a failed load, ...) can take it for 1.5 s, on the page that raised it.
 
@@ -35,7 +35,7 @@ The bottom row shows the page's key hints. A short message (a saved buffer, a fa
 
 Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a quarter of a second (a shorter press opens the norns menu), so ALT is always a hold.
 
-- While K1 is held the hint row shows the page's ALT keys
+- While K1 is held the hint row shows the page's ALT keys, and only keys that act: FX shows `E3:fine`, SETUP names no K3, and SCENES offers `K3:save` on a slot and no K3 on a field
 - **ALT+K2** and **ALT+K3** take the page's ALT actions instead of K2's and K3's. Where a page has no ALT action for a key (FX, SETUP, and ALT+K2 on SCENES) they do nothing: they never run the plain K2 or K3 action
 - A key pressed with K1 held stays an ALT press until it is released, even if K1 comes up first (on BUFFER such a K2 never opens the file browser)
 - On BUFFER, while K2, ALT+K2 or ALT+K3 is held, the hint row says what letting go will do, and changes after half a second

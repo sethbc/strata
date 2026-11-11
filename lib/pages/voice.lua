@@ -120,12 +120,15 @@ return function(S)
     screen.move(LAYOUT.value_right, LAYOUT.section_y)
     screen.text_right(section_text)
     local voice = S.voices[S.selected_voice]
-    local voice_text = S.selected_voice .. (voice.active and "+" or "-") .. " "
-      .. MAIN_PARAMS[voice.name].list_name .. (S.frozen[S.selected_voice] and " [L]" or "")
+    -- the name is cut to leave room for the lock tag, never the tag (#421)
+    local lock_tag = S.frozen[S.selected_voice] and " [L]" or ""
+    local prefix = S.selected_voice .. (voice.active and "+" or "-") .. " "
     local room = LAYOUT.value_right - screen.text_extents(section_text) - LAYOUT.line_gap
+    local name_room = room - screen.text_extents(prefix .. lock_tag)
+    local voice_text = (prefix .. fit_text(MAIN_PARAMS[voice.name].list_name, name_room)):gsub("%s+$", "") .. lock_tag
     screen.level(10)
     screen.move(0, LAYOUT.section_y)
-    screen.text(fit_text(voice_text, room))
+    screen.text(voice_text)
   end
 
   local function draw_row(row, y, selected, marked)
@@ -264,12 +267,25 @@ return function(S)
     context.arc.plug(1)
     M.place_cursor(M.row_of("v1_grain_density"))  -- its ring group starts above the view
   end})
+  local function option_index(options, name)
+    for option, option_name in ipairs(options) do
+      if option_name == name then return option end
+    end
+  end
   table.insert(layout_states, {name = "locked voice", setup = function()
-    S.selected_voice = 7
-    toggle_lock(7)
-    params:set("v7_grain_mode", 2)
-    params:set("v7_mod_source_1", 5)
-    M.place_cursor(M.row_of("v7_mod_source_1"))
+    local last = NUM_VOICES
+    S.selected_voice = last
+    toggle_lock(last)
+    params:set("v" .. last .. "_grain_mode", option_index(S.constants.GRAIN_MODE_OPTIONS, "triggered"))
+    params:set("v" .. last .. "_mod_source_1", math.max(last - 2, 1))  -- another voice, by name
+    M.place_cursor(M.row_of("v" .. last .. "_mod_source_1"))
+  end})
+  -- a locked voice with the longest section label (#421): the lock tag must
+  -- survive the cut of the voice text
+  table.insert(layout_states, {name = "locked voice, filter & sends", setup = function()
+    S.selected_voice = 1
+    toggle_lock(1)
+    M.place_cursor(M.row_of("v1_filter_mix"))
   end})
 
   -- The page's record, at VOICE's place in UI_PAGES: enc, key and redraw in

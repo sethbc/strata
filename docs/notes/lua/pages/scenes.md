@@ -1,5 +1,6 @@
 ## Must not break
 
+- The hints name only keys that act (#419, #420): an empty slot reads `empty  ALT+K3:save` (its recall does nothing but flash `S<n> empty` on the header, from `recall_scene`, so a grid key shows it too), ALT on a slot `K3:save`, any field (ALT or not) `E2:move E3:edit`.
 - The page file sets every record field but the arc fields; SCENES' rings are `lib/arc/scenes.lua`'s (`docs/notes/lua/arc-pages.md`).
 - The overwrite prompt is the page's own state, never a flash (#255): the page never starts or ends a `"hints"` flash. The confirmation is `S.scenes_page = {armed_slot, armed_until}`, and it is armed while `armed_slot` is the cursor's slot and `util.time() < armed_until` (2 s after the arming press). While armed, `hints` returns the prompt with or without ALT, so a flash scoped to another page (BUFFER's load reports) cannot hide it. The prompt names the keys that answer it: `K3 again: overwrite S<n>` with ALT held, `ALT+K3: overwrite S<n>` with ALT up (a plain K3 then recalls the slot, as always).
 - A second ALT+K3 saves only while armed and no flash covers the hint row (`S.lib.ui_flash.text("hints") == nil`). Under a covering flash (a hints flash showing on SCENES: one with no page, or one scoped to SCENES) the press only arms again: never save without the prompt on screen.

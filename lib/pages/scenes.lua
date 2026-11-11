@@ -114,10 +114,14 @@ return function(S)
     end
   end
 
+  -- A slot's hint names only the keys that act: an empty slot's recall does
+  -- nothing, and ALT+K3 on a field returns at once
   local function scenes_hints(alt_held)
     if armed() then return overwrite_prompt(S.scenes_page.armed_slot, alt_held) end
+    local cursor = S.cursors.scene
+    if cursor > NUM_SCENES then return "E2:move E3:edit" end
     if alt_held then return "K3:save" end
-    if S.cursors.scene > NUM_SCENES then return "E2:move E3:edit" end
+    if not S.scenes[cursor].populated then return "empty  ALT+K3:save" end
     return "K2:fade K3:recall"
   end
 
@@ -205,16 +209,16 @@ return function(S)
         S.cursors.scene = cursor
       end))
     end
-    local function arm_slot_8()
+    local function arm_last_slot()
       populate_all()
-      S.cursors.scene = 8
-      S.scenes_page.armed_slot = 8
+      S.cursors.scene = NUM_SCENES
+      S.scenes_page.armed_slot = NUM_SCENES
       S.scenes_page.armed_until = util.time() + SCENES_PAGE.arm_seconds
     end
-    table.insert(states, state("armed", arm_slot_8))
+    table.insert(states, state("armed", arm_last_slot))
     -- the renders draw each state with ALT up: this one holds it
     table.insert(states, state("armed with ALT", function()
-      arm_slot_8()
+      arm_last_slot()
       key(1, 1)
     end))
     return states

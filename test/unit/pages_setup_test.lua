@@ -55,7 +55,7 @@ test("SETUP shows the MIDI device and status lines", function()
     "the name is cut")
   local _, right = h.text_span(midi_line)
   assert_true(right <= 124, "the row ends by x 124")
-  enc(2, 20); redraw()  -- the status lines are below the fields
+  enc(2, 60); redraw()  -- the status lines are below the fields
   assert_true(screen_shows(context, "grid: 0 connected"), "no grid")
   assert_true(not text_entry(context, "16x8"), "no sizes line without a grid")
   context.grid.plug(1, 16, 8)
@@ -69,7 +69,7 @@ test("SETUP shows the MIDI device and status lines", function()
   local S = local_value("S")
   S.buffers[2].missing_path = "/gone/b.wav"
   S.buffers_restored = 1
-  redraw()
+  enc(2, 60); redraw()  -- the rows grew: scroll on to the end
   assert_true(screen_shows(context, "buffers: 1 ok, 1 missing"), "buffers missing")
   assert_screen_layout(context, "SETUP status lines")
 end)
@@ -145,17 +145,21 @@ test("SETUP scrolls with a marker and reaches both ends", function()
   local context = load_strata(); finish_startup(context)
   context.grid.plug(1, 16, 16)
   show_page("SETUP")
-  enc(2, 20)
+  enc(2, 12)
   redraw()
   assert_equal(local_value("S").setup_cursor, 13, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "grid 4 rotation"), "the field above it, grid 4 rotation, is drawn")
+  assert_true(not screen_shows(context, "buffers: 0 restored"), "the last status line is below the view")
+  enc(2, 20)  -- E2 on the last field scrolls over the status rows (#319)
+  redraw()
+  assert_equal(local_value("S").setup_cursor, 13, "the cursor stays on performance")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
   for _, line in ipairs(context.screen.lines) do
     if line.x1 == 127 and line.x2 == 127 then marker_bottom = math.max(line.y1, line.y2) end
   end
-  assert_equal(marker_bottom, 55, "the marker's bottom is at the list's bottom")
+  assert_equal(marker_bottom, 54, "the marker's bottom is at the list's bottom")
   assert_screen_layout(context, "SETUP scrolled to the end")
   enc(2, -20)
   redraw()
@@ -169,9 +173,15 @@ test("SETUP hints", function()
   assert_true(hint_text(context):find("E3:value", 1, true), "E3:value")
   assert_true(not hint_text(context):find("K3", 1, true), "no K3 on a value field")
   enc(2, 6); redraw()
-  assert_true(hint_text(context):find("K3:save", 1, true), "K3:save on save scenes")
+  assert_equal(hint_text(context), "E2:field K3:save", "an action row: no E3:value, which does nothing there (#420)")
   enc(2, 1); redraw()
-  assert_true(hint_text(context):find("K3:load", 1, true), "K3:load on load scenes")
+  assert_equal(hint_text(context), "E2:field K3:load", "K3:load on load scenes")
+  -- with ALT held no K3 is offered: ALT+K3 does nothing on SETUP (#419)
+  key(1, 1); redraw()
+  assert_true(not hint_text(context):find("K3", 1, true), "ALT on an action row names no K3: " .. tostring(hint_text(context)))
+  enc(2, -20); enc(2, 3); redraw()
+  assert_equal(hint_text(context), "E2:field E3:fine", "ALT on a value field offers the fine turn")
+  key(1, 0)
 end)
 
 test("SETUP saves once per K3 press; the release does nothing", function()
@@ -251,7 +261,7 @@ local function load_setup(active, setting_text)
     if setting_text then write_file(context.data_dir .. "strata/performance.data", setting_text) end
   end })
   finish_startup(context)
-  show_page("SETUP"); enc(2, 20); redraw()
+  show_page("SETUP"); enc(2, 60); redraw()
   return context
 end
 
@@ -499,8 +509,8 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   write_text(dir .. "buffers.data", "return {")
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
   assert_true(status_texts():find("scenes unreadable, kept|as scenes.data.bak.2|buffers unreadable, kept|"
-    .. "as buffers.data.bak|", 1, true) ~= nil, status_texts())
-  show_page("SETUP"); enc(2, 20); redraw()
+    .. "as buffers.data.bak", 1, true) ~= nil, status_texts())
+  show_page("SETUP"); enc(2, 60); redraw()
   for _, text in ipairs({ "scenes unreadable, kept", "as scenes.data.bak.2", "buffers unreadable, kept",
       "as buffers.data.bak" }) do
     assert_true(screen_shows(context, text), "drawn at the end of the list: " .. text)
@@ -514,7 +524,7 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   write_text(dir .. "scenes.data", "return {")
   context = load_strata({ data_subdir = subdir }); finish_startup(context)
   local S = local_value("S")
-  assert_true(status_texts():find("scenes file unreadable|not saved over|", 1, true) ~= nil, status_texts())
+  assert_true(status_texts():find("scenes file unreadable|not saved over", 1, true) ~= nil, status_texts())
   S.lib.scenes.save(3)
   assert_equal(S.lib.ui_flash.text("header"), "S3 not on disk", "the autosave is blocked")
   -- a write that failed
@@ -526,8 +536,8 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   os.execute("mkdir -p '" .. dir .. "buffers.data.part/inside'")
   S.lib.scenes.save(1)
   load_buffer(1, "/tmp/one.wav")
-  assert_true(status_texts():find("scenes file not saved|buffers file not saved|", 1, true) ~= nil, status_texts())
-  show_page("SETUP"); enc(2, 20); redraw()
+  assert_true(status_texts():find("scenes file not saved|buffers file not saved", 1, true) ~= nil, status_texts())
+  show_page("SETUP"); enc(2, 60); redraw()
   assert_true(screen_shows(context, "scenes file not saved") and screen_shows(context, "buffers file not saved"))
   -- the next writes that work clear both
   os.remove(dir .. "scenes.data.part/inside"); os.remove(dir .. "scenes.data.part")
@@ -587,4 +597,56 @@ test("a grid rotation that cannot be saved keeps its value and says so", functio
   assert_equal(value_beside(context, "grid 1 rotation"), "0", "the old value shows")
 end)
 
+-- #319: every row of the list is drawn at some E2 position, whatever notes,
+-- grids and problems stack up below the last field
+local function assert_every_row_reachable(context, where)
+  local S = local_value("S")
+  local rows = S.lib.pages_setup.setup_rows()
+  local drawn = {}
+  show_page("SETUP")
+  enc(2, -100)
+  for _ = 1, #rows + 8 do
+    redraw()
+    for _, entry in ipairs(context.screen.texts) do drawn[entry.text] = true end
+    enc(2, 1)
+  end
+  for _, row in ipairs(rows) do
+    if row.selectable == false then
+      assert_true(drawn[row.text], "'" .. row.text .. "' is drawn at some E2 position (" .. where .. ")")
+    end
+  end
+end
+
+test("every status row of SETUP can be scrolled into view, with notes, grids and problems (#319)", function()
+  local context = load_strata(); finish_startup(context)
+  assert_every_row_reachable(context, "plain")
+  -- a grid and one note row: the buffers row was cut off
+  context.grid.plug(1, 16, 16)
+  norns.platform = 2
+  local S = local_value("S")
+  S.performance_setting = {performance = "high", buffer_seconds = 300}
+  assert_every_row_reachable(context, "grid, may xrun and next start")
+  -- the most rows: two grids, an arc, the step-down, a running note, four problem rows
+  context.grid.plug(2, 16, 8); context.arc.plug(1)
+  S.performance = {tier = "high", buffer_seconds = 120, max_grains = 128, history_seconds = 60,
+    reason = "high: setting; the active file could not be written"}
+  S.performance_start_setting = {performance = "high", buffer_seconds = 300}
+  S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
+  S.buffer_file.problem, S.buffer_file.backup = "unreadable", "/x/buffers.data.bak"
+  assert_every_row_reachable(context, "everything")
+  redraw()
+  assert_screen_layout(context, "SETUP scrolled over every row")
+end)
+
+test("SETUP's data file problems follow buffers:, as the design places them (#301)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
+  S.buffer_file.problem = "not saved"
+  local texts = {}
+  for _, row in ipairs(S.lib.pages_setup.setup_rows()) do texts[#texts + 1] = row.text or row.label end
+  local joined = table.concat(texts, "|")
+  assert_true(joined:find("buffers: 0 restored|scenes unreadable, kept|as scenes.data.bak|buffers file not saved",
+    1, true), joined)
+end)
 end

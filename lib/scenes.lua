@@ -442,6 +442,7 @@ return function(S)
     if scene_num < 1 or scene_num > NUM_SCENES then return end
     if not S.scenes[scene_num].populated then
       print("scene " .. scene_num .. " is empty")
+      header_flash("S" .. scene_num .. " empty")  -- the grid's recall key shows nothing else (#420)
       return
     end
 

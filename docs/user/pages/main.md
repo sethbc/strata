@@ -3,8 +3,8 @@
 The voice list and the selected voice's details. Back to [Screen Controls](../controls.md).
 
 ```
-MAIN ·•······           ▶ REC  S3
-1+ reso     RESONATOR    synth
+MAIN •·······           ▶ REC  S3
+1+ reso     RESONAT      synth
 2+ fm       ON
 3- fold    >freq       100 Hz
 4+ sub      size       0.10 s

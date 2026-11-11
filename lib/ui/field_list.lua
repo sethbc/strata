@@ -62,10 +62,42 @@ return function(S)
     return math.max(position, 1), count
   end
 
-  -- First row in view: one row above the cursor, never past the last page
-  function M.first_visible(rows, cursor, visible)
+  -- First row in view: one row above the cursor, never past the last page.
+  -- tail (default 0) scrolls the view that many rows further down, still
+  -- never past the last page: the rows below the last selectable row are
+  -- reached that way (M.move_scroll)
+  function M.first_visible(rows, cursor, visible, tail)
     local last_start = math.max(#rows - visible + 1, 1)
-    return math.max(math.min(cursor - 1, last_start), 1)
+    local first = math.max(math.min(cursor - 1, last_start), 1)
+    return math.min(first + math.max(tail or 0, 0), math.max(last_start, first))
+  end
+
+  -- How far tail can go: the rows of the last page still below the view
+  function M.tail_room(rows, cursor, visible)
+    return M.first_visible(rows, cursor, visible, math.huge) - M.first_visible(rows, cursor, visible)
+  end
+
+  -- E2 on a list whose last rows cannot hold the cursor: move d stops, and
+  -- once the cursor is on the last selectable row, scroll the view over the
+  -- rows below it (and back up before the cursor moves up). Returns the new
+  -- cursor and tail
+  function M.move_scroll(rows, cursor, tail, d, visible)
+    cursor = M.clamp(rows, cursor)
+    tail = math.min(math.max(tail or 0, 0), M.tail_room(rows, cursor, visible))
+    local step = d < 0 and -1 or 1
+    for _ = 1, math.abs(d) do
+      if step < 0 and tail > 0 then
+        tail = tail - 1
+      else
+        local moved = M.move(rows, cursor, step)
+        if moved ~= cursor then
+          cursor, tail = moved, 0
+        elseif step > 0 then
+          tail = math.min(tail + 1, M.tail_room(rows, cursor, visible))
+        end
+      end
+    end
+    return cursor, tail
   end
 
   -- A 1 px vertical line at x 127 between top and bottom: its top at top
@@ -92,10 +124,10 @@ return function(S)
 
   -- Call draw_row(row, y, selected) for each visible row, then draw the
   -- scroll marker. spec = {visible, first_y, spacing, value_right = 124,
-  -- marker_top?, marker_bottom?}; draw_row aligns its value at
+  -- marker_top?, marker_bottom?, tail?}; draw_row aligns its value at
   -- spec.value_right (passed as a fourth argument).
   function M.draw(rows, cursor, spec, draw_row)
-    local first = M.first_visible(rows, cursor, spec.visible)
+    local first = M.first_visible(rows, cursor, spec.visible, spec.tail)
     local value_right = spec.value_right or DEFAULT_VALUE_RIGHT
     local shown = math.min(spec.visible, #rows - first + 1)
     for offset = 0, shown - 1 do

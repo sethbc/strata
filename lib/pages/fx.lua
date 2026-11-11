@@ -107,6 +107,7 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page)
   local function fx_hints(alt_held)
+    if alt_held then return "E3:fine" end  -- ALT+K3 does nothing on FX
     local effect = cursor_row().effect
     if not effect then return "E3:value" end
     return "K3:" .. effect .. " " .. (effect_on(effect) and "bypass" or "on")

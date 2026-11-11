@@ -17,9 +17,9 @@ return function(S)
   local field_list = S.lib.ui_field_list
 
   local SETUP_PAGE = {
-    visible = 7,          -- rows at y 18-54, 6 px apart, clear of the hint row
+    visible = 6,          -- rows at y 18-53, 7 px apart (a descender clears the next row, #422), clear of the hint row
     first_y = 18,
-    spacing = 6,
+    spacing = 7,
     value_right = 124,    -- the scroll marker owns x 127
     note_indent = 8,      -- a field's dim note row ("(next start)", ...) starts here
     xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
@@ -78,6 +78,9 @@ return function(S)
   local BUFFER_FIELD = {label = "buffer length", kind = "performance", key = "buffer_seconds"}
 
   S.setup_cursor = 1      -- a row index into setup_rows(), always a field
+  -- rows the view is scrolled past the cursor's own: E2 on the last field
+  -- scrolls on over the status rows below it (#319)
+  local setup_view = {tail = 0}
 
   -- The connected grids' count and sizes, in port order
   local function connected_grids()
@@ -130,10 +133,9 @@ return function(S)
 
   -- A row (and its dim note row) per data file with a problem (#463): one
   -- that could not be read, kept under its backup's name or still in place
-  -- (not saved over), or one whose last write failed. They follow the last
-  -- field's notes, before the status lines: the view, which keeps one row
-  -- above the cursor, shows them with the cursor on the last field, and no
-  -- row ever appears above a field (the cursor is a row index)
+  -- (not saved over), or one whose last write failed. They end the list,
+  -- after the status lines (no row ever appears above a field: the cursor
+  -- is a row index); E2 scrolls the view down to them from the last field
   local function add_data_file_rows(rows)
     local texts = SETUP_PAGE.file_texts
     for _, entry in ipairs({{"scenes", S.scene_file}, {"buffers", S.buffer_file}}) do
@@ -158,7 +160,7 @@ return function(S)
     end
   end
 
-  -- The fields, then the data files' problems and the status lines (no
+  -- The fields, then the status lines and the data files' problems (no
   -- cursor stops). The sizes line exists only while a grid is connected.
   -- Restored buffers are confirmed by the engine; missing files are
   -- remembered paths not found on start
@@ -167,7 +169,6 @@ return function(S)
     for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
     add_rotation_rows(rows)
     add_performance_rows(rows)
-    add_data_file_rows(rows)
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
       and string.format("running: high, %d s", S.performance.buffer_seconds) or "running: standard"})
     local running_note = S.lib.performance.running_note()
@@ -185,6 +186,7 @@ return function(S)
     table.insert(rows, {selectable = false, text = buffers_missing > 0
       and ("buffers: " .. S.buffers_restored .. " ok, " .. buffers_missing .. " missing")
       or ("buffers: " .. S.buffers_restored .. " restored")})
+    add_data_file_rows(rows)
     return rows
   end
   local setup_rows = M.setup_rows
@@ -226,15 +228,21 @@ return function(S)
     local rows = setup_rows()
     S.setup_cursor = field_list.clamp(rows, S.setup_cursor)
     field_list.draw(rows, S.setup_cursor, {visible = SETUP_PAGE.visible, first_y = SETUP_PAGE.first_y,
-      spacing = SETUP_PAGE.spacing, value_right = SETUP_PAGE.value_right}, draw_row)
+      spacing = SETUP_PAGE.spacing, value_right = SETUP_PAGE.value_right, tail = setup_view.tail}, draw_row)
   end
 
-  -- The hint row (redraw() draws it after the page)
+  -- The hint row (redraw() draws it after the page). An action row offers
+  -- no E3 (it does nothing there). With ALT held no K3 shows (ALT+K3 does
+  -- nothing here), and E3 is offered only where it turns finely: the
+  -- mutation rate, probability and amount
   local function setup_hints(alt_held)
     local field = setup_rows()[S.setup_cursor]
-    local hints = "E2:field E3:value"
-    if field and field.hint then hints = hints .. " K3:" .. field.hint end
-    return hints
+    local kind = field and field.kind
+    if alt_held then
+      return field and field.format and "E2:field E3:fine" or "E2:field"
+    end
+    if kind == "action" then return "E2:field K3:" .. field.hint end
+    return "E2:field E3:value"
   end
 
   -- K3 runs the save/load field under the cursor; elsewhere it does nothing
@@ -282,7 +290,8 @@ return function(S)
   -- E2 moves over the fields, E3 edits the one under the cursor
   function setup_enc(n, d)
     if n == 2 then
-      S.setup_cursor = field_list.move(setup_rows(), S.setup_cursor, d)
+      S.setup_cursor, setup_view.tail = field_list.move_scroll(setup_rows(), S.setup_cursor,
+        setup_view.tail, d, SETUP_PAGE.visible)
     elseif n == 3 then
       local field = setup_rows()[S.setup_cursor]
       if field and field.kind == "rotation" then
@@ -319,7 +328,7 @@ return function(S)
       {name = "data files unreadable", setup = function()
         S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak.2"
         S.buffer_file.problem, S.buffer_file.backup = "unreadable", "/x/buffers.data.bak.9"
-        enc(2, 20)
+        enc(2, 60)
       end},
       {name = "data files not saved", setup = function()
         S.scene_file.problem, S.buffer_file.problem = "not saved", "unreadable"; enc(2, 20)
@@ -336,7 +345,7 @@ return function(S)
         S.performance_start_setting = {performance = "high", buffer_seconds = 300}
         S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
         S.buffer_file.problem = "not saved"
-        enc(2, 20)
+        enc(2, 60)
       end},
       {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
         context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 8)

@@ -14,12 +14,12 @@ Voices can modulate each other for evolving, interdependent textures:
 
 Strata includes an optional mutation system for creating organic, evolving textures:
 - **Probabilistic Evolution** - Each parameter has a chance to mutate at regular intervals
-- **Adjustable Behavior** - Control mutation rate, probability, and amount via PARAMETERS menu
+- **Adjustable Behavior** - Control mutation rate, probability, and amount on SETUP (the `mutations`, `mutation rate`, `mutation prob` and `mutation amt` fields), or in the PARAMETERS menu
 - **Smart Mutations** - Uses gaussian-like distribution for natural-sounding changes
 - **Selective Application** - Only affects running, unlocked voices: a stopped voice keeps every value until it starts, and so does a locked one
 - **Preserved Stability** - Amplitude and pan are never mutated to maintain voice balance, nor are the voice's source, its grain envelope and mode, its cross-modulation routing and amounts, or its freeze, variation, loop and voice mix settings
 - **On the scale** - A voice that quantizes to the scale mutates its pitch from tone to tone of the scale
-- **Visual Feedback** - `[M]` indicator appears on screen when mutations are enabled
+- **Visual Feedback** - `[M]` indicator appears in the header when mutations are enabled (on SEQ the tempo takes its place)
 
 The mutation system works alongside the per-voice drift (which also moves only running, unlocked voices) and the global LFOs, creating multiple layers of organic movement. Combine with the lock feature to let some voices evolve while others remain stable.
 
