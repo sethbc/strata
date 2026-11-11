@@ -22,10 +22,14 @@
     ringMaxRate { ^4 }
 
     // The rings area (order 70): writers at the tail of voiceGroup, after
-    // the voice, input and record synths, so a voice writer records only its
-    // voice synth (mirroring grain synths write the voice bus later, in
-    // processGroup). The writers never end on their own: their keys are
-    // effectKeys (plain messages).
+    // the input synth and the voice synths (the record synths run in the
+    // tap group, after the master), so a voice writer records only its
+    // voice synth: the voice's stage writes its mirror to the voice bus
+    // later, at the tail of its mix group in processGroup (after the
+    // synth-source grain synths at the head and the voice's buffer and
+    // input grain synths at its group's head, before its mod synth). The
+    // writers never end on their own: their keys are effectKeys (plain
+    // messages).
     strataAreaRings {
         ^(
             order: 70,
