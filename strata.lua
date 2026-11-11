@@ -44,6 +44,7 @@ local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 S.lib.voices = include("lib/voices")(S)
 S.lib.ui_frame = include("lib/ui/frame")(S)
 S.lib.engine_sync = include("lib/engine_sync")(S)
+S.lib.data_files = include("lib/data_files")(S)
 S.lib.buffers = include("lib/buffers")(S)
 S.lib.record = include("lib/record")(S)
 S.lib.lfos = include("lib/lfos")(S)
