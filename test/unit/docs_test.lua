@@ -1329,4 +1329,221 @@ test("state-and-voices.md lists every registered invariant (#470)", function()
   assert_true(#missing == 0, "no row in the invariants table for: " .. table.concat(missing, ", "))
 end)
 
+-- The text of a Markdown section: from the line `heading` to the next
+-- heading of the same or a higher level (nil when the heading is missing)
+local function doc_section(text, heading)
+  local level = #heading:match("^(#+)")
+  local lines, inside = {}, false
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    local hashes = line:match("^(#+) ")
+    if inside and hashes and #hashes <= level then break end
+    if line == heading then inside = true end
+    if inside then table.insert(lines, line) end
+  end
+  return inside and table.concat(lines, "\n") or nil
+end
+
+-- A menu name without its trailing number: "LFO 1" and "LFO 1-3" are
+-- "LFO", "custom 5" is "custom"
+local function menu_family(name)
+  return (name:gsub(" %d+%-%d+$", ""):gsub(" %d+$", ""))
+end
+
+-- maiden installs a script with `;install <url>` in its REPL (whose matron
+-- tab takes Lua, never shell commands); its project manager has no catalog
+-- tab or URL field, and lists only the catalogs (decisions, #302)
+test("README's install routes are maiden's ;install and git clone into ~/dust/code, then SYSTEM > RESTART (#302)", function()
+  local install = doc_section(read_repo_file("README.md"), "## Installation")
+  assert_true(install ~= nil, "README.md has an Installation section")
+  local url = install:match("`;install (https://github%.com/[%w%-_]+/[%w%-_]+)`")
+  assert_true(url ~= nil, "the section names `;install <the repository's URL>`")
+  assert_true(install:find("git clone " .. url .. ".git", 1, true), "and a git clone of the same repository")
+  assert_true(install:find("~/dust/code", 1, true), "into ~/dust/code")
+  assert_true(install:find("SYSTEM > RESTART", 1, true), "then SYSTEM > RESTART, which recompiles the engine")
+  local lowered = install:lower()
+  for _, gone in ipairs({'"catalog"', "circular icon", "command line (bottom panel)", "`;restart`"}) do
+    assert_true(not lowered:find(gone, 1, true), "the section no longer names " .. gone)
+  end
+end)
+
+-- norns shows the script's header when the script is selected. The
+-- fragments in changes/ become CHANGELOG.md's next entry at the release, so
+-- until then the header and README already carry the release in progress;
+-- once CHANGELOG.md's newest entry reaches it, the newest entry is the one
+-- they name (#391, #350)
+local RELEASE_IN_PROGRESS = "3.3.0"
+test("strata.lua's header and README name the release, AGENTS.md CHANGELOG.md's newest (#391, #350)", function()
+  local function parts(version)
+    local major, minor, patch = version:match("^(%d+)%.(%d+)%.(%d+)$")
+    return {tonumber(major), tonumber(minor), tonumber(patch)}
+  end
+  local function newer(a, b)
+    local x, y = parts(a), parts(b)
+    for i = 1, 3 do
+      if x[i] ~= y[i] then return x[i] > y[i] end
+    end
+    return false
+  end
+  local released = read_repo_file("CHANGELOG.md"):match("\n## Version (%d+%.%d+%.%d+)")
+  assert_true(released ~= nil, "CHANGELOG.md has a '## Version x.y.z' entry")
+  local expected = newer(RELEASE_IN_PROGRESS, released) and RELEASE_IN_PROGRESS or released
+  local header = read_repo_file("strata.lua"):match("^%-%- strata%.lua\n%-%- [^\n]*\n%-%- v(%d+%.%d+%.%d+)\n")
+  assert_equal(header, expected, "strata.lua's third header line, the version norns shows")
+  assert_equal(read_repo_file("README.md"):match("This is version (%d+%.%d+%.%d+)%."), expected, "README's version")
+  assert_equal(read_repo_file("AGENTS.md"):match("The current release is (%d+%.%d+%.%d+)"), released,
+    "AGENTS.md's current release is CHANGELOG.md's newest entry")
+end)
+
+-- The reference names every group Strata adds, in the menu's order, and
+-- every param of a voice's granular, cross-modulation and extras parts by
+-- its menu name (a numbered name once: "custom 1-5"). The voice's own
+-- synthesis params are voices-and-grains.md's (#343)
+test("params.md names every Strata group in menu order and every param of a voice's last three parts (#343)", function()
+  local context = load_strata()
+  h.finish_startup(context)
+  local text = read_repo_file("docs/user/params.md")
+  local order_line = text:match("\n([^\n]*[Tt]he menu shows[^\n]*)")
+  assert_true(order_line ~= nil, "params.md has the menu-order sentence")
+  local bold = {}
+  for name in order_line:gmatch("%*%*(.-)%*%*") do table.insert(bold, menu_family(name)) end
+  local groups, seen, first = {}, {}, nil
+  for index, param in ipairs(params.params) do
+    if param.id == "strata" then first = index end
+    if first and param.t == params.tGROUP and not seen[menu_family(param.name)] then
+      seen[menu_family(param.name)] = true
+      table.insert(groups, menu_family(param.name))
+    end
+  end
+  assert_true(#groups >= 7, "Strata adds its groups, saw " .. #groups)
+  local at = 0
+  for _, group in ipairs(groups) do
+    local found
+    for index = at + 1, #bold do
+      if bold[index] == group then found = index; break end
+    end
+    assert_true(found ~= nil, "the menu-order sentence names **" .. group .. "** after the groups before it")
+    at = found
+  end
+
+  local section = doc_section(text, "## Per-Voice Sections")
+  assert_true(section ~= nil, "params.md has its Per-Voice Sections")
+  section = section:lower()
+  local names, inside, missing = {}, false, {}
+  for _, param in ipairs(params.params) do
+    if param.t == params.tSEPARATOR and param.name == "voice 1 granular" then
+      inside = true
+    elseif inside and param.t == params.tSEPARATOR and param.name:find("^voice 2") then
+      break
+    elseif inside and param.t ~= params.tSEPARATOR then
+      local family = menu_family(param.name)
+      if not names[family] then
+        names[family] = true
+        if not section:find(family:lower(), 1, true) then table.insert(missing, family) end
+      end
+    end
+  end
+  assert_true(names["history"] and names["bookmark"] and names["mod speed"], "the walk reached the extras")
+  assert_true(#missing == 0, "params.md's Per-Voice Sections do not name: " .. table.concat(missing, ", "))
+end)
+
+-- Each voice's synthesis params, as the VOICE page, MAIN and PARAMETERS
+-- show them: a table per voice under its bold name, a row per param of its
+-- param_order (amp and pan are described once, above the tables), with the
+-- param's range, unit and default, and MAIN's param marked (main) (#395)
+test("voices-and-grains.md has a row for every synthesis param, with its range, unit and default (#395)", function()
+  local context = load_strata()
+  h.finish_startup(context)
+  local S = local_value("S")
+  local section = doc_section(read_repo_file("docs/user/voices-and-grains.md"), "## Synthesis Parameters")
+  assert_true(section ~= nil, "voices-and-grains.md has a Synthesis Parameters section")
+  local problems, rows_checked = {}, 0
+  for voice_idx, voice in ipairs(S.voices) do
+    local rows, inside = {}, false
+    for line in (section .. "\n"):gmatch("([^\n]*)\n") do
+      local bold_name = line:match("^%*%*(.-)%*%*$")
+      if bold_name then
+        inside = bold_name:lower() == voice.name
+      elseif inside and line:sub(1, 1) == "|" then
+        local key, rest, range, default = line:match("^| `([%w_]+)`([^|]*)| ([^|]+) | ([^|]+) |")
+        if key then rows[key] = {main = rest:find("(main)", 1, true) ~= nil, range = range, default = default} end
+      end
+    end
+    local expected_keys = {}
+    for _, key in ipairs(voice.param_order) do
+      if key ~= "amp" and key ~= "pan" then
+        expected_keys[key] = true
+        local row = rows[key]
+        local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
+        local where = voice.name .. " " .. key
+        if not row then
+          table.insert(problems, where .. ": no row")
+        else
+          rows_checked = rows_checked + 1
+          local spec = param.controlspec
+          local low, high, unit = row.range:match("^([%d%.]+)%-([%d%.]+) ?(%S*)%s*$")
+          if not (low and math.abs(tonumber(low) - spec.minval) < 1e-9 and math.abs(tonumber(high) - spec.maxval) < 1e-9) then
+            table.insert(problems, where .. ": range '" .. row.range .. "' is not " .. spec.minval .. "-" .. spec.maxval)
+          elseif unit ~= (spec.units or "") then
+            table.insert(problems, where .. ": unit '" .. unit .. "' is not '" .. tostring(spec.units) .. "'")
+          end
+          local default = tonumber(row.default:match("^%s*(.-)%s*$"))
+          if not default or math.abs(default - spec.default) > 1e-9 then
+            table.insert(problems, where .. ": default '" .. row.default .. "' is not " .. spec.default)
+          end
+          if row.main ~= (S.constants.MAIN_PARAMS[voice.name].key == key) then
+            table.insert(problems, where .. ": (main) belongs on MAIN's param, " .. S.constants.MAIN_PARAMS[voice.name].key)
+          end
+        end
+      end
+    end
+    for key in pairs(rows) do
+      if not expected_keys[key] then table.insert(problems, voice.name .. " " .. key .. ": a row for no param") end
+    end
+  end
+  assert_true(rows_checked >= 20, "the tables were read, " .. rows_checked .. " rows")
+  table.sort(problems)
+  assert_true(#problems == 0, table.concat(problems, "\n"))
+end)
+
+-- A fling at 0% friction slows by e every SCRUB.max_glide_seconds and ends
+-- below SCRUB.stop_rate, after the ring has been still for
+-- SCRUB.release_seconds: params.md gives that length for a fling of one loop
+-- a second, never the time constant alone (#342)
+test("params.md's scrub friction gives the glide's length the SCRUB constants make (#342)", function()
+  load_strata()
+  local SCRUB = local_value("S").constants.SCRUB
+  local seconds = math.floor(SCRUB.max_glide_seconds * math.log(1 / SCRUB.stop_rate) + SCRUB.release_seconds + 0.5)
+  local friction = read_repo_file("docs/user/params.md"):match("\n%- Scrub friction[^\n]*")
+  assert_true(friction ~= nil, "params.md describes the scrub friction")
+  assert_true(friction:find(seconds .. " s for one loop a second", 1, true),
+    "the glide of one loop a second at 0% lasts " .. seconds .. " s")
+  assert_true(friction:find("every " .. SCRUB.max_glide_seconds .. " s", 1, true), "and loses two thirds every "
+    .. SCRUB.max_glide_seconds .. " s")
+end)
+
+-- The record keys and triggers record with the record settings (3.3's
+-- record_buffer), never "the input for the record duration"; each grid
+-- layout gives the two-key loop's edges in either order and links grid.md's
+-- Positions, where a press, the LEDs and the strip are described (#337,
+-- #353, #356, #358, #362)
+test("the record keys use the record settings; the grid pages link Positions (#337, #353, #356, #358, #362)", function()
+  local trigger = read_repo_file("docs/user/params.md"):match("\n  %- Record:[^\n]*")
+  assert_true(trigger ~= nil, "params.md describes a buffer's Record trigger")
+  assert_true(trigger:find("record settings", 1, true) and not trigger:find("live input", 1, true),
+    "the Record trigger records with the record settings")
+  assert_true(doc_section(read_repo_file("docs/user/grid.md"), "## Positions") ~= nil, "grid.md has a Positions section")
+  for _, size in ipairs({"256", "128h", "128v", "64"}) do
+    local path = "docs/user/grid/" .. size .. ".md"
+    local text = read_repo_file(path)
+    assert_true(text:find("](../grid.md#positions)", 1, true), path .. " links grid.md's Positions")
+    assert_true(text:find("from the start of the earlier", 1, true) and text:find("in either order", 1, true),
+      path .. " gives the loop's edges in either order")
+    assert_true(not text:find("record the input", 1, true) and not text:find("Record the input", 1, true),
+      path .. " never says the record keys record the input")
+    if size ~= "64" then
+      assert_true(text:find("with the record settings", 1, true), path .. "'s record keys use the record settings")
+    end
+  end
+end)
+
 end

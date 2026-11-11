@@ -13,7 +13,8 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
 - Each voice generates a modulation signal from its output (buffer- and input-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
-- Master effects chain: multimode filter, stereo delay, reverb
+- One mix stage per voice, after its grains: the voice's own filter, the level of a buffer- or input-sourced voice (a synth voice's level is set in its synth), and its delay and reverb sends. It writes the voice's dry sound to the main bus and its sends to a delay send bus and a reverb send bus beside it ([Each voice's filter and sends](effects.md#each-voices-filter-and-sends))
+- Master effects chain: the multimode filter (on the main bus and on each send bus, with the same settings), stereo delay (fed by the delay send), reverb (fed by the reverb send and the delay)
 - A limiter, then soft saturation, on master output
 - The LFOs and MIDI run in the Lua script and reach the engine as parameter changes
 

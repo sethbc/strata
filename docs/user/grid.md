@@ -29,9 +29,30 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Hold to save a scene** - a scene save key (row 3 of the scene page on the 16×16 and 16×8, column 3 on the 8×16) saves only once held for half a second. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene. A save flashes `saved S<n>` in the header
 - **Holding the scan** - the strip's hold key (on the positions page, or the 16×8's sources page) stops a buffer voice's own scan while you hold it. The scan stays held until everything holding it lets go: another grid's hold key, or the arc's ring 1 turned with ALT on the BUFFER page. The key lights while the voice's scan is held, whoever holds it, and, like the rest of the strip, stays dark for a voice that does not read a buffer. Starting or restarting a voice ends its hold, even with the key still down (the key goes dim); press it again to hold
 - **Hold to clear or randomize a pattern** (16×16 only) - row 15's keys act only once held for half a second, as a scene save does; the key lights up while you hold it
-- **Setting a loop** - on a positions page (or the 8×8's position view), hold one position key and press another of the same voice: the loop runs from the earlier key's start to the later key's end (either order)
+- **Setting a loop** - on a positions page (or the 8×8's position view), hold one position key and press another of the same voice: the loop runs from the earlier key's start to the later key's end (either order; see [Positions](#positions))
 - **Storing a bookmark** - on a positions page's strip, hold the store key and press bookmark 1-4: the bookmark takes the voice's playhead position
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved, cleared or randomized, and a grid's scan hold lets go
+
+## Positions
+
+Every layout has a positions page (the 8×8 a position view): for each voice reading a buffer, its buffer cut into 16 cells from the start of the buffer to its end, and a strip of bookmark keys. Only voices reading a buffer respond.
+
+- **A press** jumps the voice to its cell's start. Inside the voice's loop it moves within the loop; outside it, the loop goes back to the whole buffer first, as recalling a bookmark outside the loop does. Either way a running voice's scan restarts from there, and an arc glide ends
+- **Two keys** set a loop: hold one cell and press another of the same voice, and the loop runs from the start of the earlier cell to the end of the later one, in either order (two neighbors make a loop two cells long); the voice then jumps to the loop's start
+- **The strip**: the four bookmark keys recall bookmarks 1-4 (a jump to the bookmark, as above); store, held, makes the next bookmark key store the voice's playhead instead; hold stops the voice's scan while it is down; whole puts the loop back to the whole buffer without a jump
+
+What the cells show, brightest first:
+- the playhead, where the voice's grains start, at 15 (a stopped voice shows where it will start)
+- the record head, at 13, while the buffer records without emptying (an overdub or a loop recording)
+- a held cell, at 11
+- the cells inside the loop at 4 to 8 and those outside it at 1 to 3, brighter where the buffer's audio is louder, so the row draws the waveform
+- a voice that reads no buffer, or whose buffer is empty, has a dark row
+
+What the strip shows (all of it dark for a voice that reads no buffer):
+- a bookmark key at 6, the bookmark last recalled at 10 (until the voice changes its source), and 15 while you store it
+- the store key at 15 while it is held, 4 otherwise
+- the hold key at 15 while the voice's scan is held (by any grid or the arc), 4 otherwise
+- the whole key at 15 while the loop is the whole buffer, 4 otherwise
 
 ## Pattern Sequencer Features
 

@@ -12,6 +12,71 @@ The seven synthesis voices, each voice's granular processor and the per-voice pe
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 
+## Synthesis Parameters
+
+Each voice's own parameters, by the names the VOICE page's synth section, MAIN and PARAMETERS (the voice's first part) show; the grid's fader pages run through them in this order. MAIN's E3 and arc ring 2 adjust the one marked *main*. Most of the sounds also move on their own: slow random wobbles keep each voice drifting while nothing is turned, so a setting is the center of a movement more than a fixed value. Every voice also has **amp**, its level (0-1; 0.25 to 0.4 to start, by voice), and all but the Sub have **pan** (-1 left to 1 right, 0 center); the VOICE page shows them in its mix section. While a voice's source is a buffer or the input, its synthesis parameters do nothing; amp and pan still do.
+
+**Resonator**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` (main) | 20-2000 Hz | 100 | The pitch: four resonances, at 1, 1.5, 2.3 and 3.7 times it, rung by noise |
+| `rq` | 0.01-1 | 0.1 | The width of the lowpass after the resonances, whose cutoff wanders between 1 and 4 times the pitch: lower is narrower, ringing at the cutoff; 1 is a gentle slope |
+| `noise` | 0-1 | 0.5 | How loud the pink noise that rings the resonances is (a low rumble of their own still rings them at 0) |
+| `mod1` | 0.01-1 Hz | 0.1 | The rate of one of two slow random swells of the level (each between half and full); higher swells faster |
+| `mod2` | 0.01-1 Hz | 0.15 | The rate of the other swell |
+
+**FM**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 80 | The carrier's pitch |
+| `ratio` | 0.5-8 | 1.5 | The modulator's frequency as a multiple of the carrier's: whole numbers sound harmonic, others bell-like or clangorous. It wanders 0.1 either way |
+| `index` (main) | 0-10 | 2 | The modulation depth: 0 is a plain sine, higher is brighter and harsher. It wanders between half and one and a half times the setting |
+| `modFreq` | 0.01-1 Hz | 0.05 | The rate of the slow random swell of the level (between 0.3 and full, left and right apart), which itself wanders between half and twice the setting. It is not the modulator's frequency (that is the ratio) |
+
+**Folder**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 60 | The pitch of the sine (one each side, a little apart) |
+| `fold` (main) | 0.1-5 | 1 | How hard the sine drives the wavefolder: wherever the drive passes 1 the wave folds back on itself and gains harmonics, so low settings stay close to a sine. It wanders between half and one and a half times the setting; a lowpass between 1 and 3 kHz follows |
+| `mod` | 0.01-2 | 0.2 | How fast the fold amount wanders (new random values a second) |
+
+**Sub**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 40 | The pitch of a sine, with a quieter one an octave below |
+| `drift` (main) | 0.001-0.1 | 0.02 | The depth of a slow random pitch drift, as a fraction of the pitch: 0.02 is 2% either way, about a third of a semitone |
+
+**Pulse**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 120 | The pitch (one pulse each side, a little apart) |
+| `width` (main) | 0.05-0.95 | 0.5 | The pulse width: 0.5 is a square wave, toward either end thinner and more nasal. It wanders 0.2 either way, and amplitude cross-modulation moves it too |
+| `cutoff` | 100-8000 Hz | 2000 | The resonant lowpass's cutoff; it wanders between half and twice the setting, within 100-8000 Hz |
+| `res` | 0.1-1 | 0.8 | The filter's resonance: higher is a sharper peak that rings at the cutoff, 0.1 flat (before 3.3 it ran the other way; see Pulse above) |
+
+**Karplus**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 200 | The string's pitch |
+| `decay` (main) | 0.5-10 s | 4 | How long a pluck rings, until it is 60 dB down |
+| `damping` | 0.1-0.9 | 0.5 | How fast the string's highs die away: higher is darker and duller, lower brighter |
+| `excite` | 0.1-2 Hz | 0.3 | How often the string plucks itself, in plucks a second; pattern steps and MIDI notes pluck it too |
+
+**Ring**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 300 | The carrier's pitch (one each side, a little apart) |
+| `ratio` (main) | 0.5-8 | 1.618 | The second oscillator's frequency as a multiple of the carrier's: the ring tone is their sum and difference, metallic away from whole numbers. It wanders 0.1 either way |
+| `mod` | 0.01-2 | 0.2 | How fast the ratio wanders (new random values a second) |
+| `brightness` | 0-1 | 0.5 | How much of the plain carrier is mixed in under the ring tone |
+
 ## Granular Processing
 
 Each voice has its own granular processor (reading the voice's synth, a buffer or the input; see [Audio Sources and Buffers](sources-and-buffers.md)) with independent control over:
