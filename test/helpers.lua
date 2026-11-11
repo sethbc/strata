@@ -298,6 +298,58 @@ local function tabutil_text(value)
   return text
 end
 
+-- A file's bytes (binary mode), or nil when it cannot be opened
+local function file_text(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local text = file:read("*a"); file:close()
+  return text
+end
+
+-- Write `text` to path as it is (binary mode), replacing what it held
+local function write_text(path, text)
+  local file = assert(io.open(path, "wb")); file:write(text); file:close()
+end
+
+-- Wrap io.open to watch the data files' writes (#301): every name opened
+-- for writing is recorded, and with `fail` ({at = "write" | "flush" |
+-- "close", after = bytes}) a file whose name holds `part` (a plain find)
+-- fails as a full card does: at "write", file:write returns nil and "No
+-- space left on device" once `after` bytes are written (those bytes stay);
+-- at "flush" or "close", that call returns nil and the message after the
+-- bytes went out. Returns a function that puts io.open back, and the names
+local function watch_writes(part, fail)
+  local real_open, opened = io.open, {}
+  io.open = function(name, mode)
+    local file, problem = real_open(name, mode)
+    if not file or not tostring(mode):find("w") then return file, problem end
+    table.insert(opened, name)
+    if fail == nil or not name:find(part, 1, true) then return file, problem end
+    local written, proxy = 0, {}
+    function proxy:write(text)
+      if fail.at == "write" and written + #text > fail.after then
+        file:write(text:sub(1, fail.after - written)); written = fail.after
+        return nil, "No space left on device", 28
+      end
+      written = written + #text
+      file:write(text)
+      return self
+    end
+    function proxy:flush()
+      if fail.at == "flush" then file:flush(); return nil, "No space left on device", 28 end
+      return file:flush()
+    end
+    function proxy:close()
+      if fail.at == "close" then file:close(); return nil, "No space left on device", 28 end
+      return file:close()
+    end
+    function proxy:seek(...) return file:seek(...) end
+    function proxy:read(...) return file:read(...) end
+    return proxy
+  end
+  return function() io.open = real_open end, opened
+end
+
 -- The maintained docs (paths from the repo root): AGENTS.md, README.md,
 -- docs/status.md, every .md file under docs/notes (recursively) and
 -- docs/user. Their engine.<name>( mentions must name commands the engine
@@ -692,6 +744,9 @@ return {
   wake_buffer_clock = wake_buffer_clock,
   deep_copy = deep_copy,
   tabutil_text = tabutil_text,
+  file_text = file_text,
+  write_text = write_text,
+  watch_writes = watch_writes,
   maintained_docs = maintained_docs,
   read_lua_sources = read_lua_sources,
   patched_script = patched_script,

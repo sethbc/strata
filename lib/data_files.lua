@@ -369,23 +369,23 @@ return function(S)
   end
 
   -- Keep a copy of path under its first free backup name (written to a
-  -- .part and renamed, so a copy is whole or absent): that name; the name
-  -- of a backup that already holds the same bytes (nothing is copied
-  -- again); true when path has no file (nothing to keep); or nil and why.
-  -- path itself is never touched (#467)
+  -- .part and renamed, so a copy is whole or absent): that name and
+  -- "copied"; the name of a backup that already holds the same bytes and
+  -- "found" (nothing is copied again); true when path has no file (nothing
+  -- to keep); or nil and why. path itself is never touched (#467)
   function M.keep_copy(path, suffix)
     if not util.file_exists(path) then return true end
     local text = read_text(path)
     if not text then return nil, "cannot be read" end
     for number = 1, DATA_FILES.backups do
       local candidate = backup_name(path, suffix, number)
-      if read_text(candidate) == text then return candidate end
+      if read_text(candidate) == text then return candidate, "found" end
     end
     local backup = free_backup_name(path, suffix)
     if not backup then return nil, "every backup name is taken" end
     local done, problem = replace_file(backup, text)
     if not done then return nil, problem end
-    return backup
+    return backup, "copied"
   end
 
   return M

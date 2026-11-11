@@ -1555,44 +1555,7 @@ end)
 
 -- scenes.data on disk (#301)
 
-local function file_text(path)
-  local file = io.open(path, "rb")
-  if not file then return nil end
-  local text = file:read("*a"); file:close()
-  return text
-end
-
-local function write_text(path, text)
-  local file = assert(io.open(path, "wb")); file:write(text); file:close()
-end
-
--- Wrap io.open: every name opened for writing is recorded, and a write to
--- a file whose name holds `part` fails past `limit` bytes as a full card
--- does (file:write returns nil and "No space left on device"); `limit` nil
--- fails nothing. Returns a function that puts io.open back, and the names
-local function watch_writes(part, limit)
-  local real_open, opened = io.open, {}
-  io.open = function(name, mode)
-    local file, problem = real_open(name, mode)
-    if not file or not tostring(mode):find("w") then return file, problem end
-    table.insert(opened, name)
-    if limit == nil or not name:find(part, 1, true) then return file, problem end
-    local written, proxy = 0, {}
-    function proxy:write(text)
-      if written + #text > limit then
-        file:write(text:sub(1, limit - written)); written = limit
-        return nil, "No space left on device", 28
-      end
-      written = written + #text
-      file:write(text)
-      return self
-    end
-    function proxy:flush() return file:flush() end
-    function proxy:close() return file:close() end
-    return proxy
-  end
-  return function() io.open = real_open end, opened
-end
+local file_text, write_text, watch_writes = h.file_text, h.write_text, h.watch_writes
 
 local function printed_count(context, text)
   local count = 0
@@ -1640,7 +1603,7 @@ test("a scenes write that fails keeps the old file and says so; the next save th
   local good = file_text(path)
   assert_true(good ~= nil and S.lib.data_files.decode(good).scenes[1].populated, "scene 1 is on disk")
   -- the card fills: every write to scenes.data (or a file beside it) stops at 2000 bytes
-  local restore = watch_writes("scenes.data", 2000)
+  local restore = watch_writes("scenes.data", { at = "write", after = 2000 })
   params:set("v1_freq", 333)
   S.lib.scenes.save(2)
   assert_equal(S.lib.ui_flash.text("header"), "S2 not on disk", "the header says the scene is in memory only")
@@ -1658,7 +1621,7 @@ test("a scenes write that fails keeps the old file and says so; the next save th
   context = load_strata({ data_subdir = "scene_write_fails" })
   S = local_value("S")
   S.lib.scenes.save(3)
-  restore = watch_writes("scenes.data", 2000)
+  restore = watch_writes("scenes.data", { at = "write", after = 2000 })
   S.lib.scenes.save(4)
   restore()
   assert_equal(S.scene_file.problem, "not saved")
@@ -1675,7 +1638,7 @@ test("a load asks for a second request only while a scene saved in this session 
   local S = local_value("S")
   S.lib.scenes.save(1)
   assert_equal(S.lib.scenes.request_load(), "loaded", "the file holds every saved scene: the load runs at once")
-  local restore = watch_writes("scenes.data", 0)
+  local restore = watch_writes("scenes.data", { at = "write", after = 0 })
   S.lib.scenes.save(2)
   restore()
   assert_equal(S.lib.scenes.request_load(), "confirm", "a scene not on disk: the first request only asks")
@@ -1686,7 +1649,7 @@ test("a load asks for a second request only while a scene saved in this session 
   assert_equal(S.scene_file.unsaved, false, "memory holds the file's scenes")
   assert_equal(S.lib.scenes.request_load(), "loaded", "and the next request loads at once")
   -- the request lapses after 2 s
-  restore = watch_writes("scenes.data", 0)
+  restore = watch_writes("scenes.data", { at = "write", after = 0 })
   S.lib.scenes.save(2)
   restore()
   assert_equal(S.lib.scenes.request_load(), "confirm")
@@ -1739,10 +1702,17 @@ test("an older format's scenes.data is kept as scenes.data.v<n> when it is first
   -- a version 3 file is a version 4 one under the older number (4 changed no field)
   context.tab.save({ version = 3, scenes = scenes }, dir .. "scenes.data")
   local original = file_text(dir .. "scenes.data")
-  load_strata({ data_subdir = "scene_old" })
+  context = load_strata({ data_subdir = "scene_old" })
   assert_true(local_value("scenes")[1].populated)
   assert_true(not util.file_exists(dir .. "scenes.data.v3"), "nothing is copied until the file is replaced")
+  -- a save whose write fails after the copy, then one that works: one copy, said once
+  os.execute("mkdir -p '" .. dir .. "scenes.data.part/inside'")
+  local_value("S").lib.scenes.save(2)
+  assert_equal(file_text(dir .. "scenes.data"), original, "the failed write left the older file")
+  os.remove(dir .. "scenes.data.part/inside"); os.remove(dir .. "scenes.data.part")
   cleanup()
+  assert_equal(printed_count(context, "kept as " .. dir .. "scenes.data.v3"), 1,
+    "the copy is named once, when it is made")
   assert_equal(file_text(dir .. "scenes.data.v3"), original, "the older file's bytes are kept")
   assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 4, "the file is this format now")
   load_strata({ data_subdir = "scene_old" }); local_value("S").lib.scenes.save(2); cleanup()

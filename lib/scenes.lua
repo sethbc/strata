@@ -724,7 +724,7 @@ return function(S)
     local saved, detail = true, nil
     if state.version then
       saved, detail = data_files.keep_copy(scene_data_file, ".v" .. state.version)
-      if type(saved) == "string" then print("scenes file of format " .. state.version .. " kept as " .. saved) end
+      if detail == "copied" then print("scenes file of format " .. state.version .. " kept as " .. saved) end
     end
     if saved then
       saved, detail = data_files.write(scene_data_file, {version = SCENE_DATA_VERSION, scenes = S.scenes})
