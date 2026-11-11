@@ -2055,4 +2055,113 @@ test("an unreadable buffers.data is named on the hint row at start and kept unde
   assert_equal(S.lib.ui_flash.text("hints"), nil, "for 4 s")
 end)
 
+-- takeWriteFailed (#312): the engine could not write a recording's scratch
+-- take. value = record number * 8 + slot index (engine index), as a float
+local function take_write_failed_value(slot, number) return number * 8.0 + (slot - 1) end
+local function take_state_value(number, state, slot) return ((number * 4) + state) * 8.0 + (slot - 1) end
+
+test("a scratch take that cannot be written forgets its path and flashes (#312)", function()
+  local subdir = "take-not-written-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local buffers = local_value("buffers")
+  -- slot 3's first recording, a take, settled on its scratch path
+  record_buffer(3); wake_buffer_clock(context, 3)
+  context.polls.fire("bufferState", 2004.0)
+  assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
+  local printed = #context.printed
+  context.polls.fire("takeWriteFailed", take_write_failed_value(3, 1)); next_frame(context)
+  assert_equal(buffers[3].path, nil, "no file holds the take")
+  assert_equal(buffers[3].name, "take 3", "it is still take 3"); assert_true(buffers[3].loaded, "and still plays")
+  assert_equal(buffer_hint(context), "buf 3 take not saved", "the BUFFER page says so")
+  assert_screen_layout(context, "BUFFER page take not saved flash")
+  assert_true(printed_since(context, printed):find(scratch_take_path(3), 1, true), "the console names the file")
+  save_buffers_to_disk()
+  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/buffers.data").paths[3], "",
+    "buffers.data names no file for the slot")
+  -- record 0 (no recordBuffer has it), another record's number, bad values
+  -- and a slot that holds a loaded file change nothing
+  load_buffer(5, "/tmp/drone.wav"); context.polls.fire("bufferState", 4004.0)
+  buffers[5].records_sent = 1
+  context.clock.run_for(2); next_frame(context)
+  printed = #context.printed
+  for _, value in ipairs({ take_write_failed_value(5, 0), take_write_failed_value(5, 1), take_write_failed_value(5, 2),
+    take_write_failed_value(3, 2), 0 / 0, math.huge, -1, 41.5 }) do
+    local ok, message = pcall(context.polls.fire, "takeWriteFailed", value)
+    assert_true(ok, "report " .. tostring(value) .. " raises no error: " .. tostring(message))
+  end
+  next_frame(context)
+  assert_equal(buffers[5].path, "/tmp/drone.wav", "a loaded file keeps its path")
+  assert_equal(buffer_hint(context), buffer_record_hints(), "and nothing flashes")
+  assert_equal(printed_since(context, printed), "", "or prints")
+end)
+
+test("a failure reported before the take settles, or for an older take, is placed right (#312)", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  -- a take armed by level: its length report has not arrived when "ended"
+  -- and the failure do, so the slot is still finishing
+  params:set("record_threshold", 3); params:set("record_duration", 4)
+  record_buffer(2)
+  context.polls.fire("recordState", take_state_value(1, 0, 2))
+  context.polls.fire("recordState", take_state_value(1, 1, 2))
+  context.polls.fire("recordState", take_state_value(1, 2, 2))
+  assert_true(buffers[2].finishing, "the take waits for its length")
+  context.polls.fire("takeWriteFailed", take_write_failed_value(2, 1))
+  context.polls.fire("bufferState", 1004.0)
+  assert_equal(buffers[2].name, "take 2"); assert_true(buffers[2].loaded)
+  assert_equal(buffers[2].path, nil, "it settles with no file")
+  -- a newer take of the slot settles on its scratch path, whatever an older
+  -- take's late failure says
+  params:set("record_threshold", 1)
+  record_buffer(2)
+  context.polls.fire("takeWriteFailed", take_write_failed_value(2, 1))
+  wake_buffer_clock(context, 2)
+  context.polls.fire("bufferState", 1004.0)
+  assert_equal(buffers[2].name, "take 2"); assert_equal(buffers[2].path, scratch_take_path(2), "the new take has its file")
+  context.polls.fire("takeWriteFailed", take_write_failed_value(2, 1))
+  assert_equal(buffers[2].path, scratch_take_path(2), "a late report for record 1 leaves record 2's file")
+end)
+
+test("the takeWriteFailed poll starts at init and stops at cleanup (#312)", function()
+  local context = load_strata(); finish_startup(context)
+  local entry = context.polls.polls.takeWriteFailed
+  assert_true(entry ~= nil, "the engine registers takeWriteFailed")
+  assert_true(entry.running, "it is started"); assert_true(entry.callback ~= nil, "its callback set")
+  cleanup()
+  assert_true(not entry.running, "cleanup stops it")
+end)
+
+-- #522: a saved file's name has the time to the second, so a second save
+-- in the same second (or after the clock went back) takes a counter
+test("two saves of a slot in one second write two files (#522)", function()
+  local context = load_strata(); finish_startup(context)
+  local real_date = os.date
+  os.date = function(format, ...) if format == "%Y%m%d-%H%M%S" then return "20261110-120000" end return real_date(format, ...) end
+  local ok, problem = pcall(function()
+    context.polls.fire("bufferState", 1004.0)   -- buffer 2 holds 4 s
+    local dir = _path.audio .. "strata/"
+    assert_true(save_buffer(2)); assert_true(save_buffer(2))
+    local saves = context.calls_named("saveBuffer")
+    assert_equal(saves[1].args[2], dir .. "20261110-120000-buf2.wav")
+    assert_equal(saves[2].args[2], dir .. "20261110-120000-buf2-2.wav", "the second save in that second")
+    -- a file already there (the clock set back) is never written over, nor a save still in flight
+    io.open(dir .. "20261110-120000-buf2-3.wav", "w"):close()
+    assert_true(save_buffer(2))
+    assert_equal(context.calls_named("saveBuffer")[3].args[2], dir .. "20261110-120000-buf2-4.wav")
+    -- the loop region's file too
+    assert_true(save_buffer_loop(2)); assert_true(save_buffer_loop(2))
+    saves = context.calls_named("saveBuffer")
+    assert_equal(saves[4].args[2], dir .. "20261110-120000-buf2-loop.wav")
+    assert_equal(saves[5].args[2], dir .. "20261110-120000-buf2-loop-2.wav")
+    -- another slot's names are its own
+    context.polls.fire("bufferState", 2004.0)
+    assert_true(save_buffer(3))
+    assert_equal(context.calls_named("saveBuffer")[6].args[2], dir .. "20261110-120000-buf3.wav")
+    os.remove(dir .. "20261110-120000-buf2-3.wav")
+  end)
+  os.date = real_date
+  assert_true(ok, tostring(problem))
+end)
+
 end

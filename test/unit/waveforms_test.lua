@@ -229,6 +229,99 @@ test("a playable recording's peaks are reread every 0.5 s", function()
   S.lib.record.state = original_state
 end)
 
+-- #401: a new length means new audio, so the old overview goes at once,
+-- not when the loop reaches the slot's new file
+test("a slot whose length changes forgets its old peaks at once (#401)", function()
+  local context = load_strata(); finish_startup(context)
+  local waveforms = local_value("S").lib.waveforms
+  write_peaks(1, ramp(64, 0.9)); report(context, 1, 12); tick(context, 2)
+  assert_true(math.abs(waveforms.peaks(1)[64] - 0.9) < 1e-3, "a.wav's overview")
+  -- b.wav loads over it: the engine reports 0 s, then b's length once b's file is in place
+  report(context, 1, 0)
+  write_peaks(1, ramp(64, 0.2), { frames = 240000, generation = 2 })
+  report(context, 1, 5)
+  assert_equal(waveforms.peaks(1), nil, "no overview before the new file is read")
+  tick(context, 1)
+  assert_true(math.abs(waveforms.peaks(1)[64] - 0.2) < 1e-3, "then b.wav's")
+  -- a length that changes with no 0 s between (a dub arming over shorter audio)
+  write_peaks(1, ramp(64, 0.4), { frames = 480000, generation = 3 })
+  report(context, 1, 10)
+  assert_equal(waveforms.peaks(1), nil, "the old length's overview goes too")
+  tick(context, 1)
+  assert_true(math.abs(waveforms.peaks(1)[64] - 0.4) < 1e-3)
+end)
+
+test("a playable recording's rereads keep its overview between reads (#401)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  write_peaks(3, ramp(64)); report(context, 3, 12); tick(context, 2)
+  local original_state = S.lib.record.state
+  S.lib.record.state = function(slot)
+    if slot == 3 then return { kind = "playable", phase = "recording" } end
+    return original_state(slot)
+  end
+  local gaps = 0
+  for _ = 1, 30 do
+    tick(context, 1)
+    if S.lib.waveforms.peaks(3) == nil then gaps = gaps + 1 end
+  end
+  S.lib.record.state = original_state
+  assert_equal(gaps, 0, "a dub's waveform never blinks")
+end)
+
+-- #330: one error in a tick (a read, or the grid redraw it calls) never ends
+-- the loop for the rest of the session
+test("a tick that raises is reported once and the loop goes on reading (#330)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local waveforms = S.lib.waveforms
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  local real_grid_redraw, real_print = grid_redraw, print
+  local raised, lines = 0, {}
+  grid_redraw = function(...)
+    if raised < 2 then raised = raised + 1; error("grid boom") end
+    return real_grid_redraw(...)
+  end
+  print = function(text) lines[#lines + 1] = tostring(text) end
+  local ok, problem = pcall(function()
+    write_peaks(1, ramp(64)); report(context, 1, 12); tick(context, 2)
+    write_peaks(2, ramp(64)); report(context, 2, 12); tick(context, 2)
+  end)
+  grid_redraw, print = real_grid_redraw, real_print
+  assert_true(ok, tostring(problem))
+  assert_equal(raised, 2, "both reads redrew the page-5 grid, and it raised")
+  assert_equal(#context.clock.take_errors(), 0, "the scheduler saw no clock error")
+  assert_true(waveforms.read_clock ~= nil, "the loop's clock is still there")
+  local failed = 0
+  for _, line in ipairs(lines) do
+    if line:find("strata: peaks read failed: ", 1, true) == 1 then failed = failed + 1 end
+  end
+  assert_equal(failed, 1, "the same error twice prints once")
+  write_peaks(3, ramp(64, 0.5)); report(context, 3, 12); tick(context, 2)
+  assert_true(waveforms.peaks(3) ~= nil and math.abs(waveforms.peaks(3)[64] - 0.5) < 1e-3, "a slot marked later is still read")
+end)
+
+-- #381: the mover's poll steps are named once, beside peaksMoverTimeout,
+-- and used by name in both files (StrataWaveform.sc and StrataFiles.sc)
+test("the peaks mover's poll steps are named, never written as numbers (#381)", function()
+  local stubs = h.stubs
+  local function source(name)
+    local file = assert(io.open(h.repo_root .. "/lib/engine/" .. name, "r"))
+    local text = file:read("*a"); file:close()
+    return stubs.strip_sc_comments(text)
+  end
+  local waveform, files = source("StrataWaveform.sc"), source("StrataFiles.sc")
+  assert_equal(waveform:match("peaksMoverPollStep%s*{%s*%^%s*([%d.]+)%s*}"), "0.002", "the 2 ms step")
+  assert_equal(waveform:match("peaksMoverSlowPollStep%s*{%s*%^%s*([%d.]+)%s*}"), "0.05", "the 50 ms step")
+  for name, text in pairs({ ["StrataWaveform.sc"] = waveform, ["StrataFiles.sc"] = files }) do
+    local bare = text:gsub("peaksMover%a*PollStep%s*{%s*%^%s*[%d.]+%s*}", "")
+    for literal in bare:gmatch("%f[%w.]0%.0%d*%f[^%w.]") do
+      assert_true(literal ~= "0.002" and literal ~= "0.05", name .. " writes the step " .. literal .. " as a number")
+    end
+  end
+end)
+
 test("cleanup stops the read loop", function()
   local context = load_strata(); finish_startup(context)
   cleanup()

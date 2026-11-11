@@ -70,6 +70,28 @@ var peaksFileFrames = { arg path;
     };
     frames
 };
+// A peaks file's 64 values (Floats), or nil when there is no file
+var peaksFileValues = { arg path;
+    var values;
+    if (File.exists(path)) {
+        File.readAllString(path).split($\n).do({ arg line;
+            var words = line.split($ );
+            if (words[0] == "peaks") { values = words.drop(1).collect(_.asFloat) };
+        });
+    };
+    values
+};
+// A slot's peak buffer, its 64 bins as the server holds them now
+var peakBufferValues = { arg slot;
+    var condition = Condition(false), result;
+    engine.slotPeakBuffer(slot).getn(0, engine.waveformPoints, { arg array; result = array; condition.test = true; condition.signal });
+    h.awaitReply(condition);
+    result
+};
+// The refresh counters: writes with an action (a length to report), the
+// refreshes that wrote and those that found the overview unchanged
+var peakCounters = { state[\peakWrites] ?? { (reports: 0, refreshes: 0, unchanged: 0) } };
+var noiseSource = { Synth(\strataCheckNoiseSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore) };
 // wait (at most limit s) until the slot has reported state since start: a
 // take's end comes after its peaks file is written, which is asynchronous
 var waitReported = { arg slot, start, state, limit = 3;
@@ -179,6 +201,8 @@ SynthDef(\strataCheckRecSteps, { arg buf, count, out;
     Out.kr(out, A2K.kr(Peak.ar((x - Delay1.ar(x)).abs * (phase > 0.5))));
 }).add;
 SynthDef(\strataCheckLevelSource, { arg out, level = 0.5; Out.ar(out, K2A.ar(level) ! 2) }).add;
+// noise whose peak bins differ in every pass (a loop's overview that keeps changing)
+SynthDef(\strataCheckNoiseSource, { arg out, level = 0.5; Out.ar(out, WhiteNoise.ar(level ! 2)) }).add;
 // value = seconds since the synth started: its first sample is 0
 SynthDef(\strataCheckTimecode, { arg out; Out.ar(out, Sweep.ar(0, 1) ! 2) }).add;
 SynthDef(\strataCheckMarked, { arg out;
@@ -234,6 +258,7 @@ check.((state[\headBuses].size == 8)
     "record: eight head buses read -1 and 0 and seven stereo voice taps exist");
 
 engine.recordStatePoll.start;
+engine.takeWriteFailedPoll.start;
 check.(h.formatOf(\recordBuffer) == "ifffifif", "record: recordBuffer takes eight arguments (format ifffifif)");
 tone = Synth(\strataCheckTone, [\out, engine.inputBus], inputSynth, \addBefore);
 server.sync;
@@ -730,6 +755,67 @@ test.("record: a playable recording into a 44.1 kHz slot becomes a replace take 
         "record: a playable recording into a 44.1 kHz slot becomes a replace take and leaves the slot at the server rate (during %, rate %, frames %)".format(
             during, engine.bufferSampleRates[4], engine.bufferFrames[4]));
 });
+// #313: a playable recording longer than the slot's audio puts the old
+// overview where that audio lies in the new length (the first V / D of the
+// bins, zeros after) before its record synth runs, writes the peaks file
+// of the new length before it reports that length, and gives the old
+// overview back if it never arms. A 1 s file of 0.25, a 4 s loop of
+// silence at feedback 1: bins 0-15 hold the old audio, 16-63 nothing
+test.("record: a recording longer than the slot's audio puts the old overview in its part of the new length", {
+    var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, d = (4 * sampleRate).round.asInteger;
+    var buffer, stored, fileFrames, fileValues, bins = [0, 15, 16, 40, 63], expected = [0.25, 0.25, 0, 0, 0];
+    var near = { arg values; values.notNil and: { (bins.collect({ arg bin; values[bin] }) - expected).abs.maxItem < 0.001 } };
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == v });
+    record.(4, 4.0, 1.0, 1.0, 0, 0, 1);
+    0.7.wait; server.sync;
+    h.command(\stopRecord, 4);
+    waitDone.(4);
+    settle.(0.1);
+    buffer = peakBufferValues.(4);
+    stored = engine.areaState[\waveform][\peaks][4];
+    fileFrames = peaksFileFrames.(engine.peaksPath(4).standardizePath);
+    fileValues = peaksFileValues.(engine.peaksPath(4).standardizePath);
+    check.(near.(buffer) and: { near.(stored) } and: { near.(fileValues) } and: { fileFrames == d } and: { engine.bufferFrames[4] == d },
+        "record: a recording longer than the slot's audio puts the old overview in its part of the new length (buffer %, sclang %, file % of % frames)".format(
+            buffer !? { bins.collect({ arg bin; buffer[bin] }) }, stored !? { bins.collect({ arg bin; stored[bin] }) },
+            fileValues !? { bins.collect({ arg bin; fileValues[bin] }) }, fileFrames));
+});
+test.("record: the peaks file of the new length is in place when it is reported", {
+    var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, d = (4 * sampleRate).round.asInteger;
+    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index, watcher, atReport, peaksPath = engine.peaksPath(4).standardizePath;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == v });
+    0.1.wait; server.sync;
+    watcher = OSCFunc({ arg msg;
+        if ((msg[1] == lengthIndex) and: { (msg[2] - 4004.0).abs < 0.005 } and: { atReport.isNil }) { atReport = peaksFileFrames.(peaksPath) };
+    }, '/poll/value');
+    record.(4, 4.0, 1.0, 1.0, 0, 0, 1);
+    h.waitFor({ atReport.notNil }, 2);
+    watcher.free;
+    h.command(\stopRecord, 4);
+    waitDone.(4);
+    check.(atReport == d, "record: the peaks file of the new length is in place when it is reported (frames % at the report of 4 s)".format(atReport));
+});
+test.("record: a recording that never arms gives the overview back", {
+    var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, armed, after, stored;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == v });
+    0.1.wait; server.sync;
+    record.(4, 4.0, 1.0, 1.0, 0, 0.9, 1);
+    settle.(0.2);
+    armed = peakBufferValues.(4);
+    h.command(\stopRecord, 4);
+    waitDone.(4);
+    settle.(0.1);
+    after = peakBufferValues.(4);
+    stored = engine.areaState[\waveform][\peaks][4];
+    check.(armed.notNil and: { armed[40] == 0 } and: { (armed[0] - 0.25).abs < 0.001 } and: { engine.bufferFrames[4] == v }
+        and: { after.notNil } and: { [16, 40, 63].every({ arg bin; ((after[bin] - 0.25).abs < 0.001) and: { (stored[bin] - 0.25).abs < 0.001 } }) },
+        "record: a recording that never arms gives the overview back (armed: bins 0 and 40 %, after: buffer %, sclang %, % frames)".format(
+            armed !? { [armed[0], armed[40]] }, after !? { [16, 40, 63].collect({ arg bin; after[bin] }) },
+            [16, 40, 63].collect({ arg bin; stored[bin] }), engine.bufferFrames[4]));
+});
 
 // ---- the head guard ----------------------------------------------------------
 test.("record: no grain reads across the head at rates -4, -1, 0.5, 1 and 4 with 0.5 s grains", {
@@ -1174,24 +1260,88 @@ test.("record: a take's peaks file is in place when its length is reported, then
         "record: a take's peaks file is in place when its length is reported, then it reports ended, then its scratch take lands (order %, peaks file frames % of %, scratch take at ended %)".format(
             order.asArray, peaksFrames, frames, scratchAtEnded));
 });
+// #312: a scratch take the engine cannot write (a full card, a folder it
+// cannot make) is reported on takeWriteFailed with its record number
+// (record number * numBuffers + slot index), once its write has ended; a
+// take that is written reports nothing
+test.("record: a scratch take that cannot be written is reported with its record number", {
+    var slot = 2, frames = (0.2 * sampleRate).round.asInteger, saved = engine.scratchDir, start, number, first, second, takePath, written;
+    var failures = { h.pollValues(\takeWriteFailed) };
+    protect {
+        // below a plain file: the folder cannot be made
+        engine.scratchDir = h.textPath +/+ "scratch/";
+        takePath = engine.scratchPath(slot).standardizePath;
+        start = failures.value.size;
+        record.(slot, 0.2);
+        number = state[\recordCounts][slot];
+        waitDone.(slot, 2);
+        h.waitFor({ failures.value.size > start }, 3);
+        first = failures.value.drop(start);
+        written = File.exists(takePath);
+        // with the folder back the next take is written and reports nothing
+        engine.scratchDir = saved;
+        start = failures.value.size;
+        record.(slot, 0.2);
+        waitDone.(slot, 2);
+        h.waitFor({ File.exists(engine.scratchPath(slot).standardizePath) }, 3);
+        0.3.wait; server.sync;
+        second = failures.value.drop(start);
+    } { engine.scratchDir = saved };
+    check.((first == [((number * engine.numBuffers) + slot).asFloat]) and: { written.not } and: { engine.bufferFrames[slot] == frames }
+        and: { second.isEmpty } and: { File.exists(engine.scratchPath(slot).standardizePath) },
+        "record: a scratch take that cannot be written is reported with its record number (reports % for record %, file written %, % frames; then %)".format(
+            first, number, written, engine.bufferFrames[slot], second));
+});
 test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds without a bufferState report", {
-    var loopSeconds = 0.25, before, framesBefore, refreshes, reportsAfter, slot = 2;
-    var counters = { state[\peakWrites] ?? { (reports: 0, refreshes: 0) } };
-    // counted from the command: the refreshes come peakRefreshSeconds
-    // apart from arming, so the read 1.7 s after it sees 3, or 4 if sclang
-    // was held past the fourth (#379)
-    before = counters.value.copy;
+    var loopSeconds = 0.25, before, framesBefore, refreshes, reportsAfter, slot = 2, source;
+    // counted from 0.1 s after the command (after the arming's write of the
+    // new length): the refreshes come peakRefreshSeconds apart from
+    // arming, so the read 1.7 s after it sees 3, or 4 if sclang was held
+    // past the fourth (#379). Noise: every refresh finds a new overview
+    source = noiseSource.value;
+    server.sync;
     record.(slot, loopSeconds, 1.0, 0, 0, 0, 1);
     settle.(0.1);
+    before = peakCounters.value.copy;
     framesBefore = engine.bufferFrames[slot];
     1.6.wait; server.sync;
-    refreshes = counters.value[\refreshes] - before[\refreshes];
-    reportsAfter = counters.value[\reports] - before[\reports];
+    refreshes = peakCounters.value[\refreshes] - before[\refreshes];
+    reportsAfter = peakCounters.value[\reports] - before[\reports];
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
+    source.free; server.sync;
     check.([3, 4].includes(refreshes) and: { reportsAfter == 0 } and: { engine.bufferFrames[slot] == framesBefore },
         "record: a loop recording's peaks file refreshes every peakRefreshSeconds without a bufferState report (% refreshes, % reports, frames %)".format(
             refreshes, reportsAfter, engine.bufferFrames[slot]));
+});
+// #523: a refresh writes the card only when the overview it would write
+// differs from the slot's file (a loop left recording silence, or one
+// whose bins have saturated, writes nothing), and the take's end always
+// writes. A loop of silence for 1.6 s: 3 or 4 refreshes, none written; the
+// same with noise: every one written
+test.("record: a loop recording's refresh writes its peaks file only when the overview changed", {
+    var slot = 3, before, silentWrites, silentSkips, noisyWrites, noisySkips, endWrites, source, peaksPath = engine.peaksPath(3).standardizePath, modified;
+    record.(slot, 0.25, 1.0, 0, 0, 0, 1);
+    settle.(0.1);
+    before = peakCounters.value.copy;
+    1.6.wait; server.sync;
+    silentWrites = peakCounters.value[\refreshes] - before[\refreshes];
+    silentSkips = peakCounters.value[\unchanged] - before[\unchanged];
+    source = noiseSource.value;
+    server.sync;
+    before = peakCounters.value.copy;
+    1.6.wait; server.sync;
+    noisyWrites = peakCounters.value[\refreshes] - before[\refreshes];
+    noisySkips = peakCounters.value[\unchanged] - before[\unchanged];
+    before = peakCounters.value.copy;
+    h.command(\stopRecord, slot);
+    waitDone.(slot, 2);
+    endWrites = peakCounters.value[\reports] - before[\reports];
+    source.free; server.sync;
+    check.((silentWrites == 0) and: { [3, 4].includes(silentSkips) } and: { [3, 4].includes(noisyWrites) } and: { noisySkips == 0 }
+        and: { endWrites == 1 } and: { File.exists(peaksPath) },
+        "record: a loop recording's refresh writes its peaks file only when the overview changed (silence: % written, % unchanged; noise: % written, % unchanged; the end: % written)".format(
+            silentWrites, silentSkips, noisyWrites, noisySkips, endWrites));
 });
 
 // #210: a refresh used to rename its .part through a subprocess of its own,
@@ -1208,6 +1358,9 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
     var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2, minimumRefreshGaps = 5;
     var counters = state[\peakWrites], before, refreshes, lastCount;
     var latenesses = List.new(10), ping, sent, refreshGaps = List.new(16), longestGap = 0, last, ticker, lateGaps, latePings;
+    // noise: every refresh writes (one that finds its overview unchanged writes nothing, #523)
+    var source = noiseSource.value;
+    server.sync;
     record.(slot, 0.25, 1.0, 0, 0, 0, 1);
     settle.(0.1);
     before = counters[\refreshes];
@@ -1235,6 +1388,7 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
     ping.free;
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
+    source.free; server.sync;
     refreshes = counters[\refreshes] - before;
     lateGaps = refreshGaps.count({ arg gap; gap >= refreshGapLimit });
     latePings = latenesses.count({ arg value; value >= refreshHoldLimit });
@@ -1245,6 +1399,7 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
 
 guardBus.free;
 engine.recordStatePoll.stop;
+engine.takeWriteFailedPoll.stop;
 h.stopAllVoices;
 engine.numBuffers.do({ arg slot; h.command(\clearBuffer, slot) });
 server.sync;

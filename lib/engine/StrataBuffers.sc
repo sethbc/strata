@@ -104,8 +104,13 @@
         inputBus.free;
     }
 
+    // A slot that holds frames reports at least 0.01 s (a single cycle of
+    // 128 frames would round to 0.00, which Lua takes as empty, #456); an
+    // empty one 0
     bufferStateValue { arg index;
-        ^(index * this.bufferStateStride) + (bufferFrames[index] / bufferSampleRates[index]).round(0.01)
+        var seconds = (bufferFrames[index] / bufferSampleRates[index]).round(0.01);
+        if (bufferFrames[index] > 0) { seconds = seconds.max(0.01) };
+        ^(index * this.bufferStateStride) + seconds
     }
 
     // The slots' length (bufferSeconds) as a bufferState message for the
@@ -169,7 +174,8 @@
     // in the slot at once, but takes effect (applyLoad) only after the
     // check, and is dropped silently, reporting nothing, if a record, clear
     // or stop, or a later load that took effect, arrived meanwhile
-    // (loadsSuperseded). bufferLoads counts at the command either way, so
+    // (loadsSuperseded; the check stops at its next chunk and closes the
+    // file, #375). bufferLoads counts at the command either way, so
     // bufferLoadFailed's numbering is the same.
     // start: seconds into the file at its own rate, clipped to the file. The
     // check and the read both begin at that frame, and at most bufferSeconds
@@ -207,8 +213,9 @@
         // a long file: whatever the check finds, the recording is over (Lua's load_buffer ends it)
         canceled = this.slotRecording(index);
         if (canceled) { this.cancelSlotRecording(index, load - 1) };
+        // (stops at the first chunk after something supersedes the load, #375)
         fork({
-            decodes = this.fileDecodes(file, frames, true, peaks);
+            decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
             file.close;
             if (load > this.loadsSuperseded(index)) {
                 if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks) } {
