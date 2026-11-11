@@ -165,8 +165,7 @@ test("a record's add_first params come before the voice's synthesis params, coun
 end)
 
 test("the register functions check their argument and refuse duplicates", function()
-  load_strata()
-  local S = local_value("S")
+  load_with(function(S)
   local function refused(fn, ...) return not pcall(fn, ...) end
   -- voice params
   S.register_voice_params(probe_record())
@@ -185,8 +184,7 @@ test("the register functions check their argument and refuse duplicates", functi
     "rows name their section")
   assert_true(refused(S.register_voice_params, "probe"), "a record is a table")
   -- scene fields
-  S.register_scene_field({ id = "probe_level", default = 0.5 })
-  assert_true(refused(S.register_scene_field, { id = "probe_level", default = 1 }), "a second probe_level")
+  assert_true(refused(S.register_scene_field, { id = "scale", default = 1 }), "a second scale")
   assert_true(refused(S.register_scene_field, { id = "probe_other" }), "a default is a number")
   assert_true(refused(S.register_scene_field, { id = 5, default = 1 }), "an id is a string")
   -- source change hooks and param filters
@@ -201,9 +199,53 @@ test("the register functions check their argument and refuse duplicates", functi
   assert_true(refused(S.register_lfo_destination, "probe", "probe_switch"), "a second label probe")
   assert_true(refused(S.register_lfo_destination, "p2", nil), "a suffix is a string")
   -- fx params
-  S.register_fx_params({ name = "probe fx", count = 1, add = function() end })
+  S.register_fx_params({ name = "probe fx", count = 1, add = function()
+    params:add{ type = "control", id = "probe_fx", name = "probe fx", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) }
+  end })
   assert_true(refused(S.register_fx_params, { name = "probe fx", count = 1, add = function() end }), "a second probe fx")
   assert_true(refused(S.register_fx_params, { name = "p2", count = 1.5, add = function() end }), "a whole count")
+  end)
+end)
+
+test("a registry read at init refuses a registration after init, naming itself", function()
+  load_strata()
+  local S = local_value("S")
+  local function problem_of(fn, ...)
+    local ok, err = pcall(fn, ...)
+    assert_true(not ok, "refused")
+    return tostring(err)
+  end
+  local function names(text, registry)
+    assert_true(text:find(registry, 1, true) ~= nil, "names " .. registry .. ": " .. text)
+  end
+  local voice_params, scene_fields = #S.registry.voice_params, #S.registry.scene_fields
+  names(problem_of(S.register_voice_params, probe_record({ name = "late" })), "voice_params")
+  names(problem_of(S.register_scene_field, { id = "late_field", default = 0 }), "scene_fields")
+  names(problem_of(S.register_lfo_destination, "late", "late"), "lfo_destinations")
+  names(problem_of(S.register_fx_params, { name = "late", count = 1, add = function() end }), "fx_params")
+  names(problem_of(S.register_start, 999, function() end), "start")
+  names(problem_of(S.register_menu_close, function() end), "menu_close")
+  assert_equal(#S.registry.voice_params, voice_params, "no voice param record added")
+  assert_equal(#S.registry.scene_fields, scene_fields, "no scene field added")
+  assert_true(#S.registry.start == 0 or S.registry.start[#S.registry.start].order ~= 999, "no start step added")
+end)
+
+test("a record with a field outside the documented set is refused, naming the field", function()
+  load_with(function(S)
+    local function problem_of(fn, record)
+      local ok, err = pcall(fn, record)
+      assert_true(not ok, "refused")
+      return tostring(err)
+    end
+    local function names(text, field)
+      assert_true(text:find(field, 1, true) ~= nil, "names " .. field .. ": " .. text)
+    end
+    names(problem_of(S.register_voice_params, probe_record({ name = "typo1", scene_default = { probe = 0 } })), "scene_default")
+    names(problem_of(S.register_voice_params, probe_record({ name = "typo2", grain_key = { probe = "posSpread" } })), "grain_key")
+    names(problem_of(S.register_voice_params, probe_record({ name = "typo3", voice_row = {} })), "voice_row")
+    names(problem_of(S.register_fx_params, { name = "typo4", count = 1, add = function() end, ad = 1 }), "ad")
+    names(problem_of(S.register_scene_field, { id = "typo5", default = 0, discret = true }), "discret")
+  end)
 end)
 
 test("a source change runs the hooks, but not during a scene recall", function()
@@ -753,6 +795,7 @@ test("a record's scene_ranges reject an extra outside its range", function()
 end)
 
 test("the 3.3 constants", function()
+  load_strata()
   local constants = local_value("S").constants
   assert_equal(constants.NUM_BOOKMARKS, 4)
   local sources = constants.RECORD_SOURCES

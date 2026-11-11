@@ -352,4 +352,111 @@ test("buffer group params: exact group, triggers and defaults", function()
   end
 end)
 
+
+-- #315: each voice param's range, warp and step, held in one table
+local VOICE_PARAM_SPECS = {
+  freq = {20, 2000, "exp", 0}, amp = {0, 1, "lin", 0.01}, pan = {-1, 1, "lin", 0.01},
+  rq = {0.01, 1, "lin", 0.01}, noise = {0, 1, "lin", 0.01}, mod1 = {0.01, 1, "lin", 0.01},
+  mod2 = {0.01, 1, "lin", 0.01}, ratio = {0.5, 8, "lin", 0.001}, index = {0, 10, "lin", 0.1},
+  modFreq = {0.01, 1, "lin", 0.01}, fold = {0.1, 5, "lin", 0.1}, mod = {0.01, 2, "lin", 0.01},
+  drift = {0.001, 0.1, "lin", 0.001}, width = {0.05, 0.95, "lin", 0.01}, cutoff = {100, 8000, "exp", 10},
+  res = {0.1, 1, "lin", 0.01}, decay = {0.5, 10, "lin", 0.1}, damping = {0.1, 0.9, "lin", 0.01},
+  excite = {0.1, 2, "lin", 0.01}, brightness = {0, 1, "lin", 0.01},
+}
+
+test("every voice param has its own spec: range, warp and step", function()
+  load_strata()
+  local voices = local_value("voices")
+  for voice_idx = 1, 7 do
+    for _, key in ipairs(voices[voice_idx].param_order) do
+      local want = VOICE_PARAM_SPECS[key]
+      assert_true(want ~= nil, "the table holds " .. key)
+      local spec = params:lookup_param("v" .. voice_idx .. "_" .. key).controlspec
+      assert_near(spec.minval, want[1], 1e-9, key .. " minimum")
+      assert_near(spec.maxval, want[2], 1e-9, key .. " maximum")
+      assert_near(spec.step, want[4], 1e-9, key .. " step")
+      local midpoint = spec:map(0.5)
+      local linear_midpoint = (want[1] + want[2]) / 2
+      assert_equal(math.abs(midpoint - linear_midpoint) > 0.02 * (want[2] - want[1]), want[3] == "exp", key .. " warp " .. want[3])
+    end
+  end
+end)
+
+test("a voice's params follow param_order between its heading and its granular separator", function()
+  load_strata()
+  local voices = local_value("voices")
+  for voice_idx = 1, 7 do
+    local prefix = "v" .. voice_idx .. "_"
+    local first, last
+    for index, param in ipairs(params.params) do
+      if param.t == params.tSEPARATOR and param.name == "voice " .. voice_idx .. ": " .. voices[voice_idx].name then
+        first = index
+      end
+      if param.t == params.tSEPARATOR and param.name == "voice " .. voice_idx .. " granular" then last = index end
+    end
+    assert_true(first and last and first < last, "voice " .. voice_idx .. " has its two separators")
+    local positions = {}
+    for _, key in ipairs(voices[voice_idx].param_order) do
+      for index = first, last do
+        if params.params[index].id == prefix .. key then positions[#positions + 1] = index end
+      end
+    end
+    assert_equal(#positions, #voices[voice_idx].param_order, "voice " .. voice_idx .. " lists every key between them")
+    for index = 2, #positions do
+      assert_true(positions[index] > positions[index - 1], "voice " .. voice_idx .. " follows param_order")
+    end
+  end
+end)
+
+test("get_param_spec refuses a name it has no spec for", function()
+  load_strata()
+  assert_true(not pcall(get_param_spec, "nonexistent"), "an unknown name is an error")
+  assert_true(pcall(get_param_spec, "rq"), "a known name is fine")
+end)
+
+test("get_param_spec makes at most one controlspec per call (#389)", function()
+  load_strata()
+  local made, calls, real_new = 0, 0, controlspec.new
+  controlspec.new = function(...) made = made + 1; return real_new(...) end
+  local ok, err = pcall(function()
+    for key in pairs(VOICE_PARAM_SPECS) do get_param_spec(key); calls = calls + 1 end
+  end)
+  controlspec.new = real_new
+  assert_true(ok, tostring(err))
+  assert_true(made <= calls, "at most one spec per call: " .. made .. " for " .. calls)
+  -- the returned spec is the caller's own: changing its default changes no later call's
+  local first = get_param_spec("amp")
+  first.default = 0.77
+  assert_near(get_param_spec("amp").default, 0.3, 1e-9, "a changed default stays with that copy")
+end)
+
+test("PARAMS separators show names, not ids (#388)", function()
+  load_strata()
+  assert_equal(params:lookup_param("strata_mutations").name, "mutations")
+  assert_equal(params:lookup_param("strata_scenes").name, "scenes")
+end)
+
+test("drift and ratio show every step; grain size, decay and the rates carry units (#386, #387)", function()
+  load_strata()
+  params:set("v4_drift", 0.021)
+  assert_equal(params:string("v4_drift"), "0.021", "the Sub's drift shows three decimals")
+  params:set("v4_drift", 0.022)
+  assert_equal(params:string("v4_drift"), "0.022")
+  params:set("drift_amount", 0.012)
+  assert_equal(params:string("drift_amount"), "0.012", "tape drift shows three decimals")
+  params:set("v1_grain_size", 0.1)
+  assert_equal(params:string("v1_grain_size"):sub(-2), " s", "grain size is in seconds: " .. params:string("v1_grain_size"))
+  assert_equal(params:string("v6_decay"):sub(-2), " s", "decay is in seconds")
+  assert_equal(params:string("v1_mod_speed"):sub(-3), " Hz", "mod speed is in hertz")
+  assert_equal(params:string("v6_excite"):sub(-3), " Hz", "excite is in hertz")
+  assert_equal(params:string("v1_mod1"):sub(-3), " Hz", "mod1 is in hertz")
+  assert_equal(params:string("v1_mod2"):sub(-3), " Hz", "mod2 is in hertz")
+  assert_equal(params:string("v2_modFreq"):sub(-3), " Hz", "modFreq is in hertz")
+end)
+
+test("the tempo handler's previous handler is no global (#394)", function()
+  load_strata({ before_init = function() clock.tempo_change_handler = function() end end })
+  assert_true(rawget(_G, "previous_tempo_change_handler") == nil, "kept local to the module")
+end)
+
 end

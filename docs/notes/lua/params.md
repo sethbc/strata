@@ -9,6 +9,7 @@
 - The tempo handler is installed once (never chaining to itself) and given back only while the script's is still installed.
 - The script never bangs its params, so Lua defaults are what the engine plays, and the filter and delay SynthDef defaults must equal the Lua param defaults (a test checks).
 - The registries (`S.registry.voice_params`, `fx_params`, `param_filters`, `source_change`) are read at init, inside a params record's `add`, never at include time, so a module that registers can be included before or after this one.
+- Six registries are closed once init begins to read them (`S.close_registries()`, run by the first params record, `performance`): `voice_params`, `scene_fields`, `lfo_destinations`, `fx_params`, `start` and `menu_close`. A register function raises after that, naming the registry (#384), so a late record is never silently ignored. Register at include time. A record with a field outside the documented set is refused too, naming the field (#385).
 - A registered record's `add` (with its `add_first`, if any) adds exactly `count` params (an error names the record otherwise), and every key its `grain_keys`, `scene_defaults` and `voice_rows.rows` name is one of the params it added with `add_voice_extra`.
 - Registered voice params are never on the 256 fader pages (`fader` is never true) and never touched by randomize or mutations: they live in `S.voices[i].extras`, which neither reads.
 - The fx group's size is its 11 params plus every registered fx record's `count`, and the registered fx params follow tape drift.
@@ -17,8 +18,8 @@
 ## Owns
 
 `lib/params_setup.lua` (`S.lib.params_setup`):
-- the PARAMS menu: one `S.registry.params` record `{name, add}` per part (master, mutations, scenes, fx, lfos, buffers, midi, voices), added with its local `register_params(name, add)`;
-- `add_voice_params`, `get_param_spec`, `redraw_on_param_changes`;
+- the PARAMS menu: one `S.registry.params` record `{name, add}` per part (performance, master, mutations, scenes, fx, lfos, buffers, record, positions, midi, scale, voices), added with its local `register_params(name, add)`;
+- `add_voice_params`, `get_param_spec` (a copy of an entry of one table built once; a name with no entry is an error, #315, and every spec carries its display units, `s`, `Hz`, `/s` or `x`, and the params whose step is finer than 0.01 a three-decimal formatter: display only, never a value, #386, #387), `redraw_on_param_changes`;
 - `S.fx_last_mix` (`{filter}`: `filter_mix`'s action stores the mix when it rises and `toggle_filter_mix` (FX's K3 on a filter row) stores the mix at the press, which K3 restores from 0; the delay and reverb keep their mix through their bypass params) and `fx_fader_changed` (the grid's FX faders);
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
 - the readers of the voice-param, fx-param, param-filter and source-change registries (below), and `S.lib.params_setup.add_voice_extra`;
@@ -34,8 +35,8 @@ Every adjustable value is a norns param:
 4. Grouped with `params:add_separator()`, or `params:add_group(id, name, n)` for a collapsible section (`strata_fx`, `strata_lfos`, `strata_buffers`, `strata_midi`; the LFO library adds `lfo_group_<n>` itself).
 
 Menu order:
-- `strata` (master density, tempo), `strata_mutations`, `strata_scenes`;
-- the fx, lfo destinations, LFO 1-3, buffers and midi groups;
+- `strata` (master density, tempo), `strata_mutations` (named `mutations`), `strata_scenes` (named `scenes`);
+- the fx, lfo destinations, LFO 1-3 and buffers groups, then the `strata_record` and `strata_positions` groups, the `midi` group and the `scale` section;
 - then each voice's synthesis (after any registered record's `add_first` params), granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
 
 ## Registries
@@ -78,7 +79,7 @@ Menu order:
 - The script's `tempo` param is initialized from `clock_tempo`, with its range, read with `param_range("clock_tempo")`: 1-300, so a scene captured at any clock tempo recalls it exactly.
 - Its action sets `clock_tempo`. Grid tempo buttons adjust `tempo`. The pattern clock only syncs (`docs/notes/lua/sequencer.md`), so external clock sources still work.
 - `install_tempo_change_handler()` (from `init`, in the master params record) installs the global `follow_clock_tempo` as `clock.tempo_change_handler`.
-  - It keeps the previous handler in `previous_tempo_change_handler` and calls it after its own work.
+  - It keeps the previous handler in `previous_tempo_change_handler`, a local of the module (#394), and calls it after its own work.
   - Installing again is a no-op, so the handler never chains to itself.
 - `restore_tempo_change_handler()` (from `cleanup()`, step 10) puts the previous handler back only while the script's is still installed, so a handler installed after it stays.
 - A tempo set elsewhere (PARAMETERS > CLOCK, an external source) is thus mirrored into `tempo` silently, clamped to the param's range (an external source's tempo reaches the handler unclamped).

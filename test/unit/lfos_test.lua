@@ -491,4 +491,72 @@ test("setting a running LFO's state on again restarts its phase and the dot, as 
   assert_near(lfo_phase_estimate(1), fresh, 1e-9, "and the dot restarted with it")
 end)
 
+-- #316: every control param with a sender reaches the engine only through
+-- send_param_to_engine, so an LFO's offset is on what it sends
+test("every control param with a sender sends its LFO-offset value; one without a sender never calls the engine", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 1, 7 do
+    if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  local function signature(calls)
+    local parts = {}
+    for _, call in ipairs(calls) do
+      local args = {}
+      for index, value in ipairs(call.args) do
+        args[index] = type(value) == "number" and string.format("%.9g", value) or tostring(value)
+      end
+      parts[#parts + 1] = call.name .. "(" .. table.concat(args, ",") .. ")"
+    end
+    return parts
+  end
+  -- every call the sender makes is among the calls the edit made (an action may add its own other calls)
+  local function contains_all(got, expected)
+    local present = {}
+    for _, text in ipairs(got) do present[text] = true end
+    for _, text in ipairs(expected) do
+      if not present[text] then return false, text end
+    end
+    return true
+  end
+  -- a value of the param other than its current one
+  local function other_value(param)
+    local spec = param.controlspec
+    local value = spec:map(0.35)
+    if math.abs(value - params:get(param.id)) < 1e-9 then value = spec:map(0.65) end
+    return value
+  end
+  local checked, unsent = 0, 0
+  for _, param in ipairs(params.params) do
+    if param.t == params.tCONTROL and param.id:sub(1, 5) ~= "lfo_" and param.id:sub(1, 6) ~= "strata" then
+      local sender = S.engine_senders[param.id]
+      local value = other_value(param)
+      if sender then
+        S.lfo_last_dest[1], S.lfo_scaled[1] = param.id, 0.2
+        context.clear_engine_calls()
+        params:set(param.id, value)
+        local got = signature(context.engine_calls)
+        local minval, maxval = param_range(param.id)
+        local stored = params:get(param.id)
+        S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+        context.clear_engine_calls()
+        sender(math.max(minval, math.min(maxval, stored + 0.2 * 0.5 * (maxval - minval))))
+        local expected = signature(context.engine_calls)
+        local found, missing = contains_all(got, expected)
+        assert_true(#expected > 0 and found, param.id .. " sends the LFO-offset value, never the plain one: " .. tostring(missing)
+          .. " is not among " .. table.concat(got, ";"))
+        checked = checked + 1
+      else
+        context.clear_engine_calls()
+        params:set(param.id, value)
+        assert_equal(#context.engine_calls, 0, param.id .. " has no sender and makes no engine call")
+        unsent = unsent + 1
+      end
+    end
+  end
+  assert_true(checked > 200, "many control params have senders: " .. checked)
+  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+  assert_true(unsent >= 0)
+end)
+
 end

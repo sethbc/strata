@@ -1107,4 +1107,19 @@ test("state-and-voices.md names every registry", function()
   assert_true(#missing == 0, "not named in backticks: " .. table.concat(missing, ", "))
 end)
 
+
+test("state-and-voices.md lists every registered invariant (#470)", function()
+  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
+  local missing, count = {}, 0
+  for _, source in ipairs(read_lua_sources()) do
+    for name in source.text:gmatch("S%.register_invariant%(\"([^\"]+)\"") do
+      count = count + 1
+      if not notes:find("| `" .. name .. "` |", 1, true) then table.insert(missing, name) end
+    end
+  end
+  table.sort(missing)
+  assert_true(count >= 12, "the code registers its invariants, saw " .. count)
+  assert_true(#missing == 0, "no row in the invariants table for: " .. table.concat(missing, ", "))
+end)
+
 end

@@ -253,7 +253,6 @@ return function(S)
   end
 
   S.selected_voice = 1
-  S.master_density = 1.0
   S.frozen = {}
   for i = 1, NUM_VOICES do
     S.frozen[i] = false

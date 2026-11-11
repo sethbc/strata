@@ -22,7 +22,7 @@ local function stub_state_source(extra_registry)
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
     .. " register_grain_restart = function() end, register_alt_release = function() end,"
-    .. " register_menu_close = function() end,"
+    .. " register_menu_close = function() end, close_registries = function() end,"
     .. " register_invariant = function() end } end"
 end
 

@@ -20,7 +20,8 @@ test("there are eight pages in the 3.1 order", function()
   local C = local_value("S").constants
   assert_equal(table.concat(C.UI_PAGES, " "), "MAIN VOICE SEQ FX LFO BUFFER SCENES SETUP")
   assert_equal(C.NUM_UI_PAGES, 8)
-  assert_equal(C.UI_PAGES.MAIN_PAGE, 1, "MAIN stays page 1")
+  assert_equal(C.UI_PAGES.index.MAIN, 1, "MAIN stays page 1")
+  assert_equal(C.UI_PAGES.MAIN_PAGE, nil, "the unused MAIN_PAGE constant is gone (#393)")
   for index, name in ipairs(C.UI_PAGES) do
     assert_equal(C.UI_PAGES.index[name], index, "UI_PAGES.index." .. name)
   end

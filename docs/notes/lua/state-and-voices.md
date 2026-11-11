@@ -21,7 +21,7 @@
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
 - `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_PARAM_IDS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
 - `lib/voices.lua`: `S.lib.voices`, which has no fields.
-  - `S.voices`, `S.frozen`, `S.master_density`, `S.selected_voice`.
+  - `S.voices`, `S.frozen`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
   - The global source tests `voice_uses_synth`, `voice_uses_buffer`, `voice_source_label`, `voice_buffer_slot`.
 
 ## Voice state
@@ -33,6 +33,7 @@ Each `S.voices[i]` holds:
 - `param_order`: the `params` keys in order (PARAMS menu order and grid fader order; amp/pan last).
 - `params`: the synthesis params (per voice type). Their values are also the param defaults.
 - `grain`: size, density, pitch, spread, env (grain envelope option index), mode (grain mode option index), buf_pos, buf_rate, buf_scan.
+- `extras`: the values of every registered per-voice param (`add_voice_extra`, keyed by the param's key: freeze, variation, loops, history, the voice mix). Built fresh at init by `add_voice_params`; the voice sync, scenes (`capture_scene`, `validate_scene`) and VOICE read it, and randomize and mutations never do.
 - `crossmod`: `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`.
 
 The engine mirrors this table:
@@ -174,8 +175,13 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
 
   | Name | Module | Holds |
   |------|--------|-------|
-  | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, and `S.scene_transition_clock` is nil whenever the flag is false |
+  | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, `S.SCENE_TRANSITION.target` and `.step` are set exactly while the flag is true, and `S.scene_transition_clock` is nil whenever the flag is false |
+  | `scene sequencer` | `lib/scenes.lua` | `S.scene_sequencer_recall_due` is true only while the sequencer is on |
   | `pattern clock` | `lib/sequencer.lua` | `S.pattern_playing == (S.pattern_clock ~= nil)` |
+  | `midi notes` | `lib/midi_in.lua` | a note is held on a voice (`S.midi_state.held`) exactly while some channel's note on maps it there (`note_voice`), and every `started` entry is a voice index set to true |
+  | `scan holds` | `lib/positions.lua` | a voice's scan is held exactly while it has a holder |
+  | `strip store` | `lib/positions.lua` | a port holds store one way only: its one store key (`store_down`) on a layout that selects a grid voice, a key per voice (`store`) on the others |
+  | `scenes prompt` | `lib/pages/scenes.lua` | `S.scenes_page.armed_slot` is nil or a whole scene number in 1..`NUM_SCENES` |
   | `grid keys` | `lib/grid/core.lua` | every consumed key and every key with a pending hold (`on_hold`) is a held key (`S.grid_held`), and a port has an attached device recorded (`attached_devices[port]`) exactly while it is attached (`S.grids[port]`) |
   | `arc connection` | `lib/arc/core.lua` | `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)` |
   | `key presses` | `lib/ui/keys.lua` | every `S.key_press_alt[n]` has an `S.key_press_page[n]` |

@@ -1,6 +1,6 @@
 ## Must not break
 
-- Every control param that reaches the engine has an action of the form `function(x) <store x>; send_param_to_engine(id, x) end`, and its engine call lives in `S.engine_senders[id]`. Never call `engine.*` from a control param's action.
+- Every control param that reaches the engine has an action of the form `function(x) <store x>; send_param_to_engine(id, x) end`, and its engine call lives in `S.engine_senders[id]`. Never call `engine.*` from a control param's action. `test/unit/lfos_test.lua` (every control param with a sender sends its LFO-offset value) puts an offset on each in turn and checks that setting the param sends the sender's call with the offset value, and that a control param without a sender makes no engine call (#316).
 - One path from a value to the engine: `send_engine_value` records `S.engine_param_values[id]` and runs the sender. The LFOs send through it too.
 - Voice senders run only while the voice is active (`add_voice_sender`, in `lib/params_setup.lua`, gates the call on `S.voices[voice_idx].active`). The `v<i>_source` action is the one exception: it also reaches stopped voices.
 - A command that carries several params builds the others from `engine_param_value(id)` (what the engine has), so an LFO on one param never undoes an LFO on another.
