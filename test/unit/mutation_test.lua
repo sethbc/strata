@@ -389,11 +389,12 @@ test("an error inside a mutation tick is printed once and the next tick mutates 
   local context = load_strata(); finish_startup(context)   -- voice 1 (synth source) running
   local S = local_value("S")
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
-  local real_spec = get_param_spec
+  -- the tick draws math.random for every param it considers, whatever it caches
+  local real_random = math.random
   local failure = "mutation boom"
-  get_param_spec = function(...)
+  math.random = function(...)
     if failure then error(failure) end
-    return real_spec(...)
+    return real_random(...)
   end
   local function reports()
     local count, traced = 0, false
@@ -423,7 +424,7 @@ test("an error inside a mutation tick is printed once and the next tick mutates 
     S.mutation_metro.event()
     assert_equal(reports(), 3, "a different message prints at once")
   end)
-  get_param_spec = real_spec
+  math.random = real_random
   if not ok then error(problem, 0) end
 end)
 
