@@ -324,6 +324,33 @@ test("the peaks mover's poll steps are named, never written as numbers (#381)", 
   end
 end)
 
+-- #523: Lua rereads a recording slot's peaks file as often as the engine
+-- may write it (WAVEFORMS.refresh_seconds, lib/constants.lua, against the
+-- engine's peakWriteSeconds in StrataRecord.sc)
+local function engine_write_seconds(source)
+  return tonumber(h.stubs.strip_sc_comments(source):match("peakWriteSeconds%s*{%s*%^%s*([%d.]+)%s*}"))
+end
+local function interval_problem(source, refresh_seconds)
+  local engine_seconds = engine_write_seconds(source)
+  if engine_seconds == nil then return "the engine has no peakWriteSeconds" end
+  if engine_seconds ~= refresh_seconds then
+    return "the engine writes every " .. engine_seconds .. " s, Lua rereads every " .. tostring(refresh_seconds) .. " s"
+  end
+  return nil
+end
+
+test("the waveform reread interval equals the engine's peaks write interval (#523)", function()
+  load_strata()
+  local refresh_seconds = local_value("WAVEFORMS").refresh_seconds
+  local source = h.engine_sources()
+  assert_equal(interval_problem(source, refresh_seconds), nil, "WAVEFORMS.refresh_seconds = peakWriteSeconds")
+  assert_equal(engine_write_seconds(source), 2, "the engine's peakWriteSeconds")
+  -- either side changed alone is caught; a commented-out value is not read
+  assert_true(interval_problem(source, refresh_seconds / 4) ~= nil, "caught: Lua's interval changed")
+  assert_true(interval_problem("    peakWriteSeconds { ^3 }\n", refresh_seconds) ~= nil, "caught: the engine's changed")
+  assert_true(interval_problem("    // peakWriteSeconds { ^2 }\n", refresh_seconds) ~= nil, "caught: only a comment holds it")
+end)
+
 test("cleanup stops the read loop", function()
   local context = load_strata(); finish_startup(context)
   cleanup()
