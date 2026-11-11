@@ -232,9 +232,9 @@ end
 
 -- Redraw: the header, the page record's body (draw), then the hint row:
 -- the "hints" flash while one shows (lib/ui/flash.lua), else the record's
--- hints(alt_held). A body that fails still finishes the frame (#424): its
--- error prints once (contained_call, key "page"), and the screen shows the
--- header of the page the keys act on and "draw error" on the hint row
+-- hints(alt_held). A body or hints that fail still finish the frame (#424):
+-- the error prints once (contained_call, key "page"), and the screen shows
+-- the header of the page the keys act on and "draw error" on the hint row
 function redraw()
   if not S.started then return end
   -- the open file selector owns the screen: norns' own redraw() calls (as
@@ -247,8 +247,13 @@ function redraw()
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
-  if S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, "page", "page draw", record.draw) then
-    draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held))
+  local hints
+  local drawn = S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, "page", "page draw", function()
+    record.draw()
+    hints = S.lib.ui_flash.text("hints") or record.hints(S.alt_held)
+  end)
+  if drawn then
+    draw_hints(hints)
   else
     screen.clear()  -- no half-drawn body
     draw_header()

@@ -29,6 +29,8 @@ Every page shows at the top the page name, eight small dots for the pages (the c
 
 The bottom row shows the page's key hints. A short message (a saved buffer, a failed load, ...) can take it for 1.5 s, on the page that raised it.
 
+`draw error` on the hint row, under the page's name, means the page failed to draw: a bug in Strata. The keys and encoders still act on the page named in the header, and maiden's console shows the error with its traceback (please report it). The page draws normally again once it stops failing.
+
 ## ALT (K1 held)
 
 Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a quarter of a second (a shorter press opens the norns menu), so ALT is always a hold.
