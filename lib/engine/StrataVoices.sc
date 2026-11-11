@@ -44,6 +44,13 @@
         cuttingSynths = Array.fill(numVoices, { IdentitySet.new });
         grainSlots = IdentityDictionary.new;
         modSpeeds = Array.newClear(numVoices);
+        // Every voice, grain and mod synth whose start the server has not
+        // confirmed yet (/n_go) -> when it was started (watchVoiceSynth, #497)
+        areaState[\voices][\unconfirmed] = IdentityDictionary.new;
+        // The names setVoiceParam and setGrainParam refuse (#458)
+        areaState[\voices][\refusedVoiceParams] = (this.engineOwnedControls ++ this.modSlotControls).as(IdentitySet);
+        areaState[\voices][\refusedGrainParams] = (this.engineOwnedControls ++ this.modSlotControls
+            ++ this.voiceLevelGrainControls).as(IdentitySet);
 
         // Every node a voice or area keeps running, by key (voiceKey,
         // grainKey, modKey and effectKeys)
@@ -52,13 +59,15 @@
 
     startVoiceGroups {
         // Node order inside the engine group (context.xg):
-        // voiceGroup (input, voices, recorders) -> processGroup (the synth
-        // source's grain synths at the head; each voice's mix group, the
-        // voice's buffer and input grain synths at its head and its
-        // strataVoiceMix at its tail, just before that voice's mod synth,
-        // so the mirror reaches strataMod in the same block; mod synths
-        // added at the tail: see startPlacedGrainSynth and startModSynth)
-        // -> filter -> delay -> reverb -> master.
+        // voiceGroup (the input synth, voice synths, then the ring writers
+        // at its tail) -> processGroup (the synth source's grain synths at
+        // the head; each voice's mix group, the voice's buffer and input
+        // grain synths at its head and its strataVoiceMix at its tail, just
+        // before that voice's mod synth, so the mirror reaches strataMod in
+        // the same block; mod synths added at the tail: see
+        // startPlacedGrainSynth and startModSynth) -> filter x3 (dry, delay
+        // send, reverb send) -> delay -> reverb -> master -> the record
+        // area's tap group (strataTapPreMaster, then the record synths), last.
         // Keeping everything inside xg leaves norns' output group (og) and
         // its output metering after the engine.
         voiceGroup = Group.head(context.xg);
@@ -121,17 +130,21 @@
             if (this.validVoice(voice)) { this.releaseVoice(voice) };
         });
 
+        // A control the engine sets itself is refused (#458)
         this.addCommand(\setVoiceParam, "isf", { arg msg;
-            this.setVoiceControl(msg[1], msg[2].asSymbol, msg[3]);
+            var param = msg[2].asSymbol;
+            if (areaState[\voices][\refusedVoiceParams].includes(param).not) { this.setVoiceControl(msg[1], param, msg[3]) };
         });
 
         // A param an area handles (grainParamHandlers: the grains area's
         // envShape) goes to its handler, which returns true when it has
         // dealt with it; other params pass straight through. Every value is
         // kept so a replacement grain synth (source switch) starts with it.
+        // A control the engine sets itself, or a voice-level one, is refused
+        // (#458).
         this.addCommand(\setGrainParam, "isf", { arg msg;
             var voice = msg[1], param = msg[2].asSymbol, value = msg[3], handler;
-            if (this.validVoice(voice)) {
+            if (this.validVoice(voice) and: { areaState[\voices][\refusedGrainParams].includes(param).not }) {
                 handler = grainParamHandlers[param];
                 if (handler.isNil or: { handler.value(voice, value) != true }) {
                     grainControls[voice][param] = value;
@@ -223,17 +236,53 @@
     // that has the control (pan, bend and the frequency crossmod) while the
     // voice is not on its synth source, and, whatever the source, to the
     // stage when that has the control (amp and the amplitude crossmod) while
-    // the voice runs (a stopped voice's reach the stage at its next voiceOn)
+    // the voice runs (a stopped voice's reach the stage at its next voiceOn).
+    // A synth whose SynthDef lacks the control is sent nothing (#501).
     setVoiceControl { arg voice, control, value;
         var pairs;
         if (this.validVoice(voice)) {
             voiceControls[voice][control] = value;
             this.setSynth(this.voiceKey(voice), control, value);
             if (grainSource[voice] != 0) {
-                this.setSynth(this.grainKey(voice), *this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]));
+                pairs = this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]);
+                if (pairs.notEmpty) { this.setSynth(this.grainKey(voice), *pairs) };
             };
             pairs = this.controlPairs(\strataVoiceMix, Dictionary[control -> value]);
             if (pairs.notEmpty and: { this.voiceRunning(voice) }) { this.setSynth(this.voiceMixKey(voice), *pairs) };
         };
     }
+
+    // The controls the engine sets itself, never a setVoiceParam or
+    // setGrainParam name (#458): kept under such a name, a value stayed in
+    // voiceControls or grainControls for good and reached every synth the
+    // engine started for the voice (kill 1 cut each one 50 ms in). The
+    // lifecycle's (out, gate, kill), retrigger's (t_trig, velocity), the slot
+    // a buffer grain synth reads (bufnumL/R, bufFrames, bufRateScale,
+    // recHeadBus), the ring a ring grain synth reads (bufL/R, phaseBus,
+    // ringLevel), the source's rate switch (rateLevel) and the envelope's
+    // buffer (envBuf, from envShape); with them the crossmod commands'
+    // (modSlotControls). The Lua engine stub reads these lists and rejects
+    // the same names.
+    engineOwnedControls {
+        ^#[\out, \gate, \kill, \t_trig, \velocity, \bufnumL, \bufnumR, \bufFrames, \bufRateScale, \recHeadBus,
+            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf]
+    }
+
+    // The crossmod commands' controls, one of each per slot: modBus1,
+    // modAmpAmt1, modFreqAmt1, ... up to numModSlots
+    modSlotControlNames { ^#[\modBus, \modAmpAmt, \modFreqAmt] }
+    modSlotControls {
+        ^(1..numModSlots).collect({ arg slot;
+            this.modSlotControlNames.collect({ arg name; (name ++ slot).asSymbol })
+        }).flatten
+    }
+
+    // The voice-level controls a buffer or input voice's grain synth takes
+    // from setVoiceParam (setVoiceControl): setGrainParam refuses them too,
+    // since a kept one would win over the voice's own (grainControlPairs)
+    voiceLevelGrainControls { ^#[\pan, \bend] }
+
+    // Every voice, grain and mod synth not yet confirmed by its /n_go ->
+    // when it was started (watchVoiceSynth, startFailed)
+    unconfirmedStarts { ^areaState[\voices][\unconfirmed] }
 }

@@ -130,7 +130,10 @@
             index = index * LFNoise1.kr(0.12).range(0.5, 1.5);
 
             mod = SinOsc.ar(modFreqVal * ratio) * modFreqVal * index;
-            carrier = SinOsc.ar(modFreqVal + mod);
+            // at a ratio near 1 or 0.5 an FM sideband lands at 0 Hz and, as the
+            // ratio wanders, moves a few Hz either way: taken out here, before
+            // the voice bus (subsonicBlock, #309)
+            carrier = this.subsonicBlock(SinOsc.ar(modFreqVal + mod));
 
             sig = carrier * LFNoise1.kr([modFreq, modFreq * 1.1]).range(0.3, 1);
             sig = Pan2.ar(sig, pan);
@@ -363,7 +366,8 @@
             modulator = SinOsc.ar(modFreq * ratio);
 
             // Ring modulation
-            ring = car * modulator;
+            // at a ratio near 1 the difference tone is at 0 Hz (subsonicBlock, #309)
+            ring = this.subsonicBlock(car * modulator);
 
             // Add some of the original carrier for warmth
             sig = ring + (car * brightness * 0.3);

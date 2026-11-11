@@ -54,6 +54,104 @@ var freeDuringPendingFades = { arg engine, stereoPath;
             waiting, fails));
 };
 
+// A group's own children, in order: one [node ID, def name] per child (the
+// def name nil for a group), from one /g_queryTree
+var childrenOf = { arg group;
+    var condition = Condition(false), reply, children = List.new, index = 2, parse;
+    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
+        '/g_queryTree.reply', server.addr).oneShot;
+    server.sendMsg('/g_queryTree', group.nodeID, 0);
+    if (h.awaitReply(condition).not) { reply = [nil, 0, group.nodeID, 0] };
+    // depth 0 is the group itself; a child is listed once its own children are read
+    parse = { arg depth;
+        var nodeID = reply[index], numChildren = reply[index + 1], def;
+        index = index + 2;
+        if (numChildren == -1) { def = reply[index].asSymbol; index = index + 1 } { numChildren.do({ parse.(depth + 1) }) };
+        if (depth == 1) { children.add([nodeID, def]) };
+    };
+    parse.(0);
+    children.asArray
+};
+
+// What an engine still holds after free: [nodes in its context's engine
+// group, buses not freed, buffers not freed] (nil state, never made, counts
+// as freed)
+var engineLeft = { arg target;
+    var rings = target.areaState[\rings], record = target.areaState[\record];
+    var buses = [target.inputBus, target.silentBus, target.mainBus, target.filterBus, target.delayBus, target.reverbBus]
+        ++ target.granBuses ++ target.modBuses ++ target.recordFrameBuses ++ (rings[\phaseBuses] ? [])
+        ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]];
+    var buffers = target.envBuffers ++ target.buffersL ++ target.buffersR
+        ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]];
+    [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
+        buffers.count({ arg buffer; buffer.notNil and: { buffer.bufnum.notNil } })]
+};
+
+// free runs every area's stop and free though one raises (#499): a
+// check-only area between the rings (70) and the scale (80), whose stop and
+// free raise, is put into a second engine's areas. free reports each (one
+// invariant line, captured here), runs on, and leaves no node, bus or
+// buffer. Before the fix the first raise ended free: every stop below it
+// and every free were skipped.
+var checkFreeContained = {
+    var target = h.startEngine, lines = List.new, raised, areas, left;
+    target.postInvariantWarning = { arg line; lines.add(line) };
+    areas = target.instVarAt(\areas);
+    target.instVarPut(\areas, areas.select({ arg area; area[\order] < 75 })
+        ++ [(name: \checkRaises, order: 75,
+            stop: { Error("check: this area's stop raises").throw }, free: { Error("check: this area's free raises").throw })]
+        ++ areas.select({ arg area; area[\order] > 75 }));
+    try { h.freeEngine(target) } { arg error; raised = error };
+    h.freeEngine(target);  // (the commands back to h.engine, should free have raised)
+    server.sync;
+    left = engineLeft.(target);
+    check.(raised.isNil and: { left == [0, 0, 0] },
+        "structure: free frees every node, bus and buffer though an area's stop and free raise (#499; raised: %, left nodes, buses, buffers: %)".format(
+            raised !? _.errorString, left));
+    // (the message never quotes the lines: run_engine_check.sh would fail on them)
+    check.((lines.size == 2) and: { lines.every({ arg line; line.find("checkRaises").notNil }) }
+        and: { lines.any({ arg line; line.find("'s stop raised").notNil }) } and: { lines.any({ arg line; line.find("'s free raised").notNil }) },
+        "structure: free reports each area phase that raised, by name (% lines)".format(lines.size));
+};
+
+// alloc that raises frees what it built, then raises again (#499). The
+// engine's context reads as norns' does, but its output bus raises when the
+// effects area's start asks for it (the master's out): every area's
+// allocState has run by then (the slots and rings allocated) and the
+// voices', buffers' and effects' nodes partly started. Engine_Strata.new
+// runs alloc in a fork of its own, where nothing could catch the error, so
+// the engine is made with newCopyArgs, given the state CroneEngine's init
+// gives, and the check calls alloc itself. The performance area's files go
+// below the check's temp dir, as buildEngine's.
+var checkAllocRolledBack = {
+    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised, left;
+    var settings = [Engine_Strata.settingsDir, Engine_Strata.modelPath];
+    built.instVarPut(\context, (server: server, xg: group, out_b: { Error("check: no output bus").throw }));
+    built.instVarPut(\commands, List.new);
+    built.instVarPut(\commandNames, Dictionary.new);
+    built.instVarPut(\pollNames, Set.new);
+    built.postInvariantWarning = { arg line; lines.add(line) };
+    Engine_Strata.settingsDir = h.tempDir +/+ "settings-rollback/";
+    Engine_Strata.modelPath = h.tempDir +/+ "no-board-model";
+    try { built.alloc } { arg error; raised = error };
+    Engine_Strata.settingsDir = settings[0];
+    Engine_Strata.modelPath = settings[1];
+    server.sync;
+    left = engineLeft.(built);
+    check.((raised !? { raised.errorString.find("check: no output bus").notNil }) == true,
+        "structure: alloc raises the error that stopped it again (#499; got %)".format(raised !? _.errorString));
+    check.(left == [0, 0, 0],
+        "structure: alloc that raises leaves no node, bus or buffer of what it built (#499; left nodes, buses, buffers: %)".format(left));
+    // every area that had begun stops and frees what it partly made without
+    // raising (an area phase that raised would be reported in a line; the
+    // message names the phases without quoting the lines)
+    check.(lines.isEmpty, "structure: alloc's rollback raises in no area's stop or free (% reported: %)".format(lines.size,
+        lines.collect({ arg line; line.copyRange(line.find("the ") ? 0, (line.find(" raised") ? line.size) - 1) })));
+    h.freeEngine(built);  // (the commands back to h.engine)
+    server.sync;
+    group.free;
+};
+
 // SynthDefs
 allDefs.do({ arg name;
     check.(SynthDescLib.global.at(name).notNil, "SynthDef % built".format(name));
@@ -94,7 +192,7 @@ check.(true, "commands on a never-started voice do not throw (M6)");
 
 // Node ordering inside context.xg (M5)
 h.startAllVoices;
-// (the record area's tap group, after the master, is the record area's check)
+// (the record area's tap group, after the master, is checked below with xg's own nodes)
 names = synthNames.(context.xg).reject({ arg name; [\strataTapPreMaster, \strataRecord].includes(name) });
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
@@ -130,7 +228,19 @@ if (engine.respondsTo(\voiceMixKey).not) {
 };
 check.(names.copyRange(names.size - 4, names.size - 1).asArray == chainDefs,
     "xg ends filter -> delay -> reverb -> master (got %)".format(names.copyRange(names.size - 4, names.size - 1)));
-check.(names.last == \strataMaster, "master runs last inside xg (M5)");
+// xg's own nodes, in order (#525: the flat list above leaves out the tap
+// group): the voice and process groups, the effects chain, the master, then
+// the record area's tap group, last, with strataTapPreMaster at its head
+{
+    var tapGroup = engine.areaState[\record][\tapGroup], children = childrenOf.(context.xg);
+    var expected = [engine.voiceGroup.nodeID, engine.processGroup.nodeID]
+        ++ engine.effectChainKeys.collect({ arg key; engine.synths[key].nodeID }) ++ [tapGroup.nodeID];
+    var tapHead = childrenOf.(tapGroup).first;
+    check.((children.collect(_[0]) == expected) and: { children.last[1].isNil }
+        and: { tapHead.notNil } and: { tapHead[1] == \strataTapPreMaster },
+        "structure: xg runs voiceGroup, processGroup, filter x3, delay, reverb, master, then the tap group, last, strataTapPreMaster at its head (#525; got %)".format(
+            children.collect({ arg child; child[1] ? \group })));
+}.value;
 check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 h.stopAllVoices;
 
@@ -210,4 +320,10 @@ check.((other.areaState[\record][\headBuses] ++ other.areaState[\record][\voiceT
         ++ [other.areaState[\record][\tapSink], other.areaState[\record][\idleHead]]).every({ arg bus; bus.index.isNil })
     and: { other.areaState[\waveform][\peakBuffers].every({ arg buffer; buffer.bufnum.isNil }) },
     "structure: free frees the head buses, the voice taps and the peak buffers");
+// (engineLeft counts a running engine's nodes, buses and buffers, and none of a freed one's)
+check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] },
+    "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine), engineLeft.(other)));
+
+checkFreeContained.value;
+checkAllocRolledBack.value;
 }

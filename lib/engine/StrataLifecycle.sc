@@ -126,12 +126,16 @@
     // switch or mismatched start can cut them and the voice holds at most
     // its live synths, one fading and one cutting set (#46). New grain
     // synths are placed by startPlacedGrainSynth; the mix group is already
-    // before a re-gated mod synth.
+    // before a re-gated mod synth. A synth whose start the server never
+    // confirmed is forgotten first (forgetFailedStarts), so it is started
+    // again, never re-gated.
     gateVoice { arg voice;
         var releasing = releasingSynths[voice];
         var voiceKey = this.voiceKey(voice), grainKey = this.grainKey(voice), modKey = this.modKey(voice);
         var stillReleasing = { arg key; var synth = releasing[key]; synth.notNil and: { synth.isPlaying } };
         var superseded = List.new, scanRestart = [];
+
+        this.forgetFailedStarts(voice);
 
         if ((grainSource[voice] != 0) and: { stillReleasing.(voiceKey) }) {
             this.sendToSynth(releasing[voiceKey].releaseMsg(grainRelease));
@@ -182,9 +186,20 @@
     // is using frees only if its release ended just as voiceOn re-gated it
     // (the gate arrived too late); it is started again so the voice is
     // never left without it. free empties synths first, so nothing restarts
-    // when the engine is freed.
+    // when the engine is freed. Until the server's /n_go confirms that it
+    // runs, the synth is kept in unconfirmedStarts with its start time: one
+    // whose /s_new failed never sends /n_go or /n_end (startFailed, #497).
     watchVoiceSynth { arg voice, key, synth;
+        var unconfirmed = this.unconfirmedStarts, confirm;
         synth.register(true);  // playing from now on, so gateVoice can re-gate it at once
+        // (isPlaying only once NodeWatcher watches it: only then can a /n_go come)
+        if (synth.isPlaying) {
+            unconfirmed[synth] = Main.elapsedTime;
+            confirm = { arg node, what;
+                if ((what == \n_go) or: { what == \n_end }) { unconfirmed.removeAt(node); node.removeDependant(confirm) };
+            };
+            synth.addDependant(confirm);
+        };
         synth.onFree({
             if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
             fadingSynths[voice].remove(synth);
@@ -203,6 +218,46 @@
             };
         });
         ^synth
+    }
+
+    // Seconds a new synth has for the server's /n_go (a reply within a
+    // control block or two) before it counts as never started
+    startConfirmWait { ^0.5 }
+
+    // A synth the voice started whose /n_go has not come within
+    // startConfirmWait: its /s_new failed on the server (no room in the
+    // real-time pool, a missing def), so it never ran and never will
+    startFailed { arg synth;
+        var since = this.unconfirmedStarts[synth];
+        ^since.notNil and: { (Main.elapsedTime - since) > this.startConfirmWait }
+    }
+
+    // The voice's synths that never started (startFailed), wherever the
+    // engine keeps them (live, releasing, fading or cutting), are forgotten
+    // as their /n_end would have them forgotten (#497): no /n_end ever comes
+    // for them, so the engine would re-gate them at every voiceOn and the
+    // voice would stay without them. A live one leaves synths first, so its
+    // onFree does not start it again: the start that follows (gateVoice)
+    // builds what the voice is missing.
+    forgetFailedStarts { arg voice;
+        var keys = [this.voiceKey(voice), this.grainKey(voice), this.modKey(voice)];
+        var failed = (keys.collect({ arg key; synths[key] }) ++ releasingSynths[voice].values.asArray
+            ++ fadingSynths[voice].asArray ++ cuttingSynths[voice].asArray).select({ arg synth;
+            synth.notNil and: { this.startFailed(synth) }
+        }).as(IdentitySet);
+        keys.do({ arg key; if (synths[key].notNil and: { failed.includes(synths[key]) }) { synths.removeAt(key) } });
+        failed.do({ arg synth; this.endFailedStart(synth) });
+    }
+
+    // What NodeWatcher does at a synth's /n_end, for one that never started:
+    // it is no longer watched and its onFree runs. In case it did start after
+    // all (a /n_go held up past startConfirmWait), it is freed, quietly.
+    endFailedStart { arg synth;
+        this.sendToSynth(synth.freeMsg);
+        NodeWatcher.unregister(synth);
+        synth.isPlaying = false;
+        synth.isRunning = false;
+        synth.changed(\n_end);
     }
 
     // Swap a running voice's grain synth for one matching its source: the

@@ -4,7 +4,8 @@
 // re-gating within and after the release, a same-block note, re-gating
 // buffer- and input-sourced voices, superseded synths at start, fast stop /
 // start cycles, the invariant warnings, quiet sends to synths that have just
-// freed, and restarts of synths that end unexpectedly.
+// freed, starts the server never made, the reports a re-gating voiceOn keeps
+// on, and restarts of synths that end unexpectedly.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -219,11 +220,11 @@ var checkQuietNodeSends = { arg voice, before;
             freeBehind.(voiceTrio.(voice)); command.(\voiceOff, voice) }],
         ["gateVoice (voiceOn) re-gating the releasing synths", { start.value; server.sync; command.(\voiceOff, voice) }, {
             freeBehind.(releasing.(keys)); start.value }],
-        ["replaceGrainSynth (a switch) releasing the live synths and moving the new grain synth before the freed mod synth", {}, {
+        ["replaceGrainSynth (a switch) releasing the live synths", {}, {
             freeBehind.(voiceTrio.(voice)); command.(\setGrainSource, voice, 9) }],
         ["cutSynth (the next switch) cutting the fading synths", { command.(\setGrainSource, voice, 0) }, {
             freeBehind.(engine.fadingSynths[voice].asArray); command.(\setGrainSource, voice, 9) }],
-        ["gateVoice (voiceOn for another source) releasing the voice synth and moving the mod synth", {
+        ["gateVoice (voiceOn for another source) releasing the voice synth and re-gating the mod synth", {
             command.(\setGrainSource, voice, 0); server.sync; command.(\voiceOff, voice); command.(\setGrainSource, voice, 9) }, {
             freeBehind.(releasing.([keys[0], keys[2]])); start.value }],
         ["stopRecording (stopRecord) freeing a record synth whose take has just ended", {
@@ -244,6 +245,71 @@ var checkQuietNodeSends = { arg voice, before;
     command.(\setGrainSource, voice, 0); start.value;
     2.5.wait; server.sync;
     check.(synthNames.(context.xg).size == before, "after the races the voice is back on its synth with one trio");
+};
+
+// A start the server never made (#497): a synth whose /s_new fails (no
+// room in the real-time pool, a def missing) sends no /n_go and no /n_end,
+// so the engine, which takes a new synth as playing, would keep it and
+// re-gate it at every voiceOn, the voice silent for good. The failure is
+// made here by holding back the grain synth's /s_new from a voiceOn's
+// bundle (for sclang the same as a failed one, with no FAILURE line).
+// Past startConfirmWait (0.5 s) the next voiceOn starts a grain synth: after
+// a stop, and on a running voice. The voice (Karplus: 2 s release) runs on
+// its synth source and ends with one trio.
+var checkFailedStarts = { arg voice, before;
+    var grainKey = engine.grainKey(voice), unstarted, nodes;
+    var grainNodes = { synthNodes.(engine.processGroup).select({ arg node;
+        grainDefs.includes(node.def) and: { node.controls[\out].asInteger == engine.voicePathBus(voice, 0).index } }) };
+    // a fresh start whose grain synth never reaches the server
+    var startWithoutGrain = {
+        var bundle;
+        command.(\voiceOff, voice); 2.5.wait; server.sync;
+        bundle = server.makeBundle(false, { command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0) });
+        unstarted = engine.synths[grainKey];
+        server.sendBundle(nil, *bundle.reject({ arg msg; (msg[0] == 9) and: { msg[2] == unstarted.nodeID } }));
+        server.sync;
+        grainNodes.value.isEmpty and: { engine.synths[grainKey] === unstarted } and: { unstarted.isPlaying }
+    };
+    var started = {
+        nodes = grainNodes.value;
+        (nodes.size == 1) and: { engine.synths[grainKey].notNil } and: { engine.synths[grainKey] !== unstarted }
+            and: { engine.synths[grainKey].nodeID == nodes[0][\id] } and: { engine.releasingSynths[voice][grainKey].isNil }
+            and: { engine.ringReaders[unstarted].isNil }
+    };
+    check.(startWithoutGrain.value, "lifecycle: a grain synth whose /s_new never ran is tracked as playing, with no node (the failure the check makes)");
+    command.(\voiceOff, voice); 1.0.wait;
+    command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+    check.(started.value, "lifecycle: after a stop, a voice whose grain synth never started gets one at its next start (#497; % grain nodes)".format(nodes.size));
+    check.(startWithoutGrain.value, "lifecycle: ... and again, on a voice left running");
+    1.0.wait;
+    command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
+    check.(started.value, "lifecycle: a running voice whose grain synth never started gets one at its next voiceOn (#497; % grain nodes)".format(nodes.size));
+    check.(synthNames.(context.xg).size == before, "lifecycle: the voice is back to one trio");
+};
+
+// A voiceOn that re-gates a releasing synth (sendToSynth: a bundle quiet
+// for its own messages) still has the server report the starts that follow
+// in the same bundle (#498): /error -1 turns reports off until the end of
+// the bundle it is in, and makeBundle flattens every sendToSynth into
+// voiceOn's, so sendToSynth closes with /error -2. Every /s_new of the
+// voiceOn comes where the bundle's -1s and -2s balance. The voice (a voice
+// release longer than the grain's 2 s) runs on its synth source: 2.5 s into
+// its release only its voice synth is left, which voiceOn re-gates before
+// it starts the grain and mod synths.
+var checkRegateReportsStarts = { arg voice;
+    var bundle, level = 0, starts = 0, quiet = List.new;
+    command.(\voiceOff, voice); 2.5.wait; server.sync;
+    bundle = server.makeBundle(false, { command.(\voiceOn, voice, 220.0, 0.25, 0.1, 0.2, 12.0, 1.5) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    bundle.do({ arg msg;
+        if ((msg[0] == '/error') and: { msg[1] == -1 }) { level = level + 1 };
+        if ((msg[0] == '/error') and: { msg[1] == -2 }) { level = level - 1 };
+        if (msg[0] == 9) { starts = starts + 1; if (level > 0) { quiet.add(msg[1]) } };
+    });
+    check.((starts == 2) and: { quiet.isEmpty } and: { level == 0 },
+        "lifecycle: a voiceOn that re-gates a releasing voice synth leaves the server's reports on for its grain and mod synths' starts (#498; % starts, quiet: %)".format(
+            starts, quiet));
 };
 
 // The engine's cut (cutSynth) triggers a freeing fade on the kill
@@ -477,8 +543,8 @@ check.((synthNames.(context.xg).size == before) and: { after.every({ arg synth, 
 // note-off in one bundle): the trio created in that block still
 // releases and frees, instead of waiting forever on an envelope that
 // never started
-// (inside makeBundle, sendToSynth's bundle is flattened into the
-// outer one: its /error -1 then silences the rest of that bundle)
+// (inside makeBundle, sendToSynth's messages are flattened into the
+// outer bundle: its /error -1 and -2 keep reports off around them only, #498)
 command.(\voiceOff, 5); 2.5.wait; server.sync;
 server.makeBundle(0.1, {
     command.(\voiceOn, 5, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0);
@@ -553,6 +619,8 @@ checkSupersededAtStart.(3, before);
 checkStopStartCycles.(3);
 checkInvariantWarnings.(3, before);
 checkQuietNodeSends.(3, before);
+checkFailedStarts.(5, before);
+checkRegateReportsStarts.(2);
 
 // A re-gated synth whose release ends just as the gate arrives frees
 // anyway; the engine starts that synth again
@@ -562,6 +630,17 @@ server.sendMsg(\n_free, oldTrio[1].nodeID);  // ends without sclang having freed
 after = voiceTrio.(2);
 check.(after[1].notNil and: { after[1] !== oldTrio[1] } and: { after[1].isPlaying }
     and: { synthNames.(context.xg).size == before }, "a running voice's synth that ends unexpectedly is started again");
+// ... its voice synth too (synth source only), from the voice's current
+// values (voiceControls: freq from voiceOn, fold set since) (#505)
+command.(\setVoiceParam, 2, \fold, 0.7); server.sync;
+oldTrio = voiceTrio.(2);
+server.sendMsg(\n_free, oldTrio[0].nodeID);  // ends without sclang having freed it
+0.2.wait; server.sync;
+after = voiceTrio.(2);
+check.(after[0].notNil and: { after[0] !== oldTrio[0] } and: { after[0].isPlaying }
+    and: { getControl.(after[0], \fold).equalWithPrecision(0.7) } and: { getControl.(after[0], \freq) == 220.0 }
+    and: { synthNames.(context.xg).size == before },
+    "lifecycle: a running voice's voice synth that ends unexpectedly is started again with the voice's values (#505)");
 checkModSpeedRestart.(2);
 
 // ringReaders holds every strataGrainRing (live, releasing, fading or

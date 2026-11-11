@@ -257,9 +257,17 @@ end
 --                             voice uses now (the engine keeps the value for a
 --                             source switch), plus the names an area handles
 --                             itself (the keys of its grainParamHandlers: (...))
---                             and any `param == \name` in setGrainParam
+--                             and any `param == \name` in setGrainParam, less
+--                             engine_controls and voice_level_grain_controls
 --   voice_params[i]           setVoiceParam names: the voice's SynthDef's
---                             controls (bend is one), plus any `param == \name`
+--                             controls (bend is one), plus any `param == \name`,
+--                             less engine_controls
+--   engine_controls[name]     the controls the engine sets itself, which both
+--                             commands refuse (#458): the symbols of
+--                             engineOwnedControls { ... }, and each of
+--                             modSlotControlNames { ... } with 1..mod_slots
+--   voice_level_grain_controls[name]  voiceLevelGrainControls { ... }:
+--                             setGrainParam refuses them too
 --   enumerations[name]        {low, high}: whole-number controls the engine
 --                             rounds (name.round.clip(low, high)), and envShape
 --                             (0 = Hann, 1..envBuffers.size, envBufnumFor)
@@ -343,6 +351,17 @@ local function event_keys(block)
   return keys
 end
 
+-- The symbols (\name) in the body of the engine method `name { ... }`, in
+-- order: an empty list when the source defines no such method
+local function engine_method_symbols(source, name)
+  local position = source:match("%f[%w_]" .. name .. "%s*(){")
+  local symbols = {}
+  if position then
+    for symbol in engine_block(source, position):gmatch("\\([%a_][%w_]*)") do table.insert(symbols, symbol) end
+  end
+  return symbols
+end
+
 -- `.clip(low, high)` with two literal numbers
 local CLIP_LIMITS = "%.clip%(%s*(%-?%d+%.?%d*)%s*,%s*(%-?%d+%.?%d*)%s*%)"
 
@@ -390,6 +409,8 @@ function stubs.engine_spec_from_source(source)
     voice_synthdefs = {},
     grain_params = {},
     voice_params = {},
+    engine_controls = {},
+    voice_level_grain_controls = {},
     enumerations = {},
   }
   local input_offset = tonumber(source:match("inputSource%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}"))
@@ -473,6 +494,20 @@ function stubs.engine_spec_from_source(source)
   for index, name in ipairs(spec.voice_synthdefs) do
     spec.voice_params[index] = shallow_copy(spec.synthdef_controls[name])
     if commands.setVoiceParam then engine_special_params(source, "setVoiceParam", spec.voice_params[index]) end
+  end
+  -- the controls the engine sets itself are a name of neither command, nor
+  -- the voice-level ones of setGrainParam (#458), as the engine refuses them
+  for _, name in ipairs(engine_method_symbols(source, "engineOwnedControls")) do spec.engine_controls[name] = true end
+  for _, prefix in ipairs(engine_method_symbols(source, "modSlotControlNames")) do
+    for slot = 1, spec.mod_slots do spec.engine_controls[prefix .. slot] = true end
+  end
+  for name in pairs(spec.engine_controls) do
+    spec.grain_params[name] = nil
+    for _, params in ipairs(spec.voice_params) do params[name] = nil end
+  end
+  for _, name in ipairs(engine_method_symbols(source, "voiceLevelGrainControls")) do
+    spec.grain_params[name] = nil
+    spec.voice_level_grain_controls[name] = true
   end
 
   for name, low, high in source:gmatch("([%a_][%w_]*)%.round%.clip%(%s*(%-?%d+)%s*,%s*(%-?%d+)%s*%)") do
@@ -576,6 +611,12 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   local function slot(args) return range("slot", args[1], 0, spec.num_buffers - 1) end
   local function voice_and_mod_slot(args) return voice(args) or range("mod slot", args[2], 1, spec.mod_slots) end
   local function named_param(args, accepted, what)
+    if spec.engine_controls[args[2]] then
+      return string.format("param \"%s\" is a control the engine sets itself, which it refuses (#458)", args[2])
+    end
+    if not accepted[args[2]] and spec.voice_level_grain_controls[args[2]] and what == "the grain SynthDefs" then
+      return string.format("param \"%s\" is a voice-level control: send it with setVoiceParam (#458)", args[2])
+    end
     if not accepted[args[2]] then return string.format("param \"%s\" is not a control of %s", args[2], what) end
     return enumerated(args[2], args[3])
   end

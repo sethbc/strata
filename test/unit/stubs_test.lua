@@ -942,6 +942,38 @@ test("the stub reads a constant given as a method", function()
   assert_true(engine_spec.grain_params.bufPos and engine_spec.grain_params.posSpread, "both grainDefs' controls are grain params")
 end)
 
+-- The controls the engine sets itself are no setVoiceParam or setGrainParam
+-- name (#458): kept under one, a value stays in the engine's voiceControls
+-- or grainControls for good (kill 1 cut every grain synth the engine
+-- started for the voice 50 ms in). setGrainParam also refuses the
+-- voice-level pan and bend, which come through setVoiceParam.
+test("the engine stub rejects the controls the engine sets itself (#458)", function()
+  load_strata()
+  local function refused(command, ...)
+    local name = select(2, ...)
+    local ok, message = pcall(engine[command], ...)
+    return not ok and tostring(message):find('"' .. name .. '"', 1, true) ~= nil
+  end
+  for _, name in ipairs({ "kill", "gate", "out", "bufnumL", "bufnumR", "bufFrames", "bufRateScale", "envBuf", "bufL", "bufR",
+      "phaseBus", "ringLevel", "rateLevel", "t_trig", "pan", "bend", "modBus1", "modBus3", "modFreqAmt1", "modFreqAmt3" }) do
+    assert_true(refused("setGrainParam", 0, name, 1), "setGrainParam refuses " .. name)
+  end
+  for _, name in ipairs({ "kill", "gate", "out", "t_trig", "velocity", "modBus1", "modBus3", "modAmpAmt1", "modAmpAmt3",
+      "modFreqAmt1", "modFreqAmt3" }) do
+    assert_true(refused("setVoiceParam", 0, name, 1), "setVoiceParam refuses " .. name)
+  end
+  -- what Lua sends is still taken: FM's modFreq is no crossmod amount
+  engine.setGrainParam(0, "grainSize", 0.1); engine.setGrainParam(0, "envShape", 0); engine.setGrainParam(0, "history", 0)
+  engine.setVoiceParam(0, "pan", 0); engine.setVoiceParam(0, "bend", 1); engine.setVoiceParam(1, "modFreq", 0.5)
+  -- the stub reads the engine's own list: a control taken off it is a name again
+  local source = h.engine_sources()
+  local patched, count = source:gsub("(engineOwnedControls%s*{%s*%^%s*#%[)%s*\\out,%s*\\gate,%s*\\kill,", "%1 \\out, \\gate,")
+  assert_equal(count, 1, "the patch applies")
+  local spec = stubs.engine_spec_from_source(patched)
+  assert_true(spec.grain_params.kill and spec.voice_params[1].kill, "kill is a name once the engine no longer owns it")
+  assert_true(not spec.grain_params.gate and not spec.voice_params[1].gate, "gate is still the engine's")
+end)
+
 test("audio.file_info reads a test sound file and a registered table", function()
   local context = load_strata()
   local path = context.audio_dir .. "probe.wav"
