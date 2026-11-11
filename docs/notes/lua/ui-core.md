@@ -17,7 +17,7 @@ The UI core's notes, one file per part:
 ## Owns
 
 - `lib/ui/frame.lua` (`S.lib.ui_frame`): `S.ui_page`; `request_redraw`, `draw_frame`, `draw_frame_part`, `draw_error_report` and the frame clock (`start_frame_clock`, `stop_frame_clock`; cleanup step 60). The runtime fields (`screen_dirty`, `arc_dirty`, `frame_clock`, `draw_errors`) are on the shared `S.constants.UI_PAGES` table.
-- `lib/ui/params.lua` (`S.lib.ui_params`): `param_range`, `param_spans_zero`, `param_default`, `param_value_fraction`, `param_fraction`.
+- `lib/ui/params.lua` (`S.lib.ui_params`): `set_binary_param`, `param_range`, `param_spans_zero`, `param_default`, `param_value_fraction`, `param_fraction`.
 - `lib/ui/header.lua` (`S.lib.ui_header`): `draw_header`, `draw_hints`. Its positions are `S.constants.HEADER` (`lib/constants.lua`).
 - `lib/ui/flash.lua` (`S.lib.ui_flash`): the flashes, `S.lib.ui_flash.start`, `.text`, `.cancel_all`, `.slots`, and `header_flash` (global); cleanup step 140.
 - `lib/ui/text.lua` (`S.lib.ui_text`): `S.lib.ui_text.fit_text`.

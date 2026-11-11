@@ -2535,7 +2535,10 @@ function stubs.install(options)
   _G._menu = context.menu
   -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
   -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it
-  _G.norns = { state = {}, platform = 0, enc = context.encoders.api, encoders = { callback = nil },
+  _G.norns = { state = {}, platform = 0,
+    -- lua/core/pmap.lua: pmap.data[param id] = {dev, ch, cc, in_lo, in_hi,
+    -- out_lo, out_hi, echo, value}, empty until a test maps a param
+    pmap = { data = {}, rev = {} }, enc = context.encoders.api, encoders = { callback = nil },
     -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
     -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
     menu = { status = function() return context.menu.mode end,
