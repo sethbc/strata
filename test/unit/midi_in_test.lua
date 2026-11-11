@@ -398,6 +398,25 @@ test("a device plugged in or out before init raises nothing, and init then attac
   assert_near(params:get("v1_freq"), 440, 0.01, "the device plays")
 end)
 
+test("ignore mode: a panic CC stops a voice a released key started, never one started elsewhere (#529)", function()
+  for _, cc in ipairs({ 123, 120 }) do
+    local context = load_strata(); finish_startup(context)
+    local voices = local_value("voices")
+    assert_equal(params:get("midi_note_off"), 1, "ignore mode")
+    assert_true(not voices[3].active)
+    context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+    assert_true(voices[3].active, "the key starts voice 3")
+    context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 3 })
+    assert_true(voices[3].active, "the release leaves it sounding")
+    toggle_voice(4)   -- started from the norns
+    assert_true(voices[4].active)
+    context.midi.send(1, { type = "cc", cc = cc, val = 0, ch = 1 })
+    assert_true(not voices[3].active, "cc " .. cc .. " stops the voice the key started")
+    assert_true(voices[4].active, "a voice started from the norns stays")
+    assert_true(voices[1].active and voices[2].active, "the voices running at the start stay")
+  end
+end)
+
 test("all notes off and all sound off release every held note and stop its voice (#529)", function()
   for _, cc in ipairs({ 123, 120 }) do
     local context = load_strata(); finish_startup(context)
