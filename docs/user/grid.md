@@ -28,7 +28,10 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Setting a step's level** - hold a step key and press another key of the same voice: the held step's level becomes that key's share of 15 along the voice's steps (column 16 = 15, column 8 = 8, column 1 = 1; on the 8×8, column 8 = 15 and column 4 = 8; on the 8×16, down the voice's column). The second key does not toggle its own step. Press more keys while still holding to try other levels; with two steps held, the one pressed last gets the level. Clearing, randomizing or pasting the voice's pattern, recalling a scene or switching the 8×8's half ends the level setting: the next key turns its own step on or off
 - **Hold to save a scene** - a scene save key (row 3 of the scene page on the 16×16 and 16×8, column 3 on the 8×16) saves only once held for half a second. The key lights up while you hold it; letting go sooner saves nothing, so a stray press never overwrites a scene. A save flashes `saved S<n>` in the header
 - **Holding the scan** - a positions page's hold key stops a buffer voice's own scan while you hold it. The scan stays held until everything holding it lets go: another grid's hold key, or the arc's ring 1 turned with ALT on the BUFFER page. The key lights while the voice's scan is held, whoever holds it, and stays dim for a voice that does not read a buffer. Starting or restarting a voice ends its hold, even with the key still down (the key goes dim); press it again to hold
-- Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved, and a grid's scan hold lets go
+- **Hold to clear or randomize a pattern** (16×16 only) - row 15's keys act only once held for half a second, as a scene save does; the key lights up while you hold it
+- **Setting a loop** - on a positions page (or the 8×8's position view), hold one position key and press another of the same voice: the loop runs from the earlier key's start to the later key's end (either order)
+- **Storing a bookmark** - on a positions page's strip, hold the store key and press bookmark 1-4: the bookmark takes the voice's playhead position
+- Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved, cleared or randomized, and a grid's scan hold lets go
 
 ## Pattern Sequencer Features
 
@@ -36,8 +39,8 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Per-voice patterns** - each voice has independent pattern
 - **Real-time recording** - toggle steps while playing
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty): the same step the SEQ page shows, until the next one plays
-- **Tempo control** - 1-300 BPM, the range of norns' clock tempo (adjustable via grid or PARAMS)
-- **Pattern operations** - clear, randomize per voice
+- **Tempo control** - 1-300 BPM, the range of norns' clock tempo: on the 16×16's row 8, columns 5-8, on the [SEQ page](pages/seq.md) (ALT+E3) or in PARAMETERS. The 16×8, 8×16 and 8×8 have no tempo keys
+- **Pattern operations** - clear or randomize a voice's pattern: on the 16×16's row 15 (hold the key half a second) or on the SEQ page (ALT+K2 clears, ALT+K3 randomizes the selected voice's). The 16×8, 8×16 and 8×8 have no keys for them
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
 - **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15. Set a step's level with the two-key gesture above
 

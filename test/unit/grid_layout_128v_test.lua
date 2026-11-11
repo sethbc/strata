@@ -296,20 +296,31 @@ test("128v scenes page", function()
   for length = 1, 8 do
     assert_equal(device:get_led(4, 8 + length), length <= 3 and 8 or 2, "length LED " .. length)
   end
-  -- the sequencer position at 10 while it runs, the current scene beats it
-  local S = local_value("S")
-  S.scene_sequencer_enabled = true
-  S.scene_sequencer_position = 2; S.current_scene = 1
-  grid_redraw()
-  assert_equal(device:get_led(1, 2), 10, "the sequencer position at 10")
-  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
-  S.scene_sequencer_position = 1
-  grid_redraw()
-  assert_equal(device:get_led(1, 1), 15, "the current scene beats the position")
-  S.scene_sequencer_enabled = false
-  S.scene_sequencer_position = 2
-  grid_redraw()
-  assert_equal(device:get_led(1, 2), 2, "no position while the sequencer is off")
+end)
+
+-- #303: column 1's levels for scenes 1-4 while the sequencer runs through the
+-- clock (scenes 1-3, length 3)
+test("128v: the scenes page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  show_grid_page(context, 1, 3)
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  local function column_1()
+    local levels = {}
+    for y = 1, 4 do levels[y] = device:get_led(1, y) end
+    return table.concat(levels, " ")
+  end
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(column_1(), "15 10 8 2", "1 s: scene 1 playing, scene 2 next at 10")
+  context.clock.run_for(4, 0.001)
+  assert_equal(column_1(), "8 15 10 2", "5 s: scene 2 playing, scene 3 next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(column_1(), "10 8 15 2", "9 s: scene 3 playing, scene 1 next (wrapped)")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(column_1(), "8 8 15 2", "a stopped sequencer lights no next scene")
 end)
 
 -- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
@@ -338,7 +349,7 @@ test("128v removing the grid mid-save saves nothing", function()
   assert_equal(grid_core().page(1), 1, "a grid plugged back starts on page 1")
 end)
 
-test("128h page 4 column 12 and 128v row 14 toggle freeze", function()
+test("128v row 14 toggles freeze", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")

@@ -970,6 +970,18 @@ return function(S)
     return step == nil or step % 2 == 1
   end
 
+  -- The slot the running scene sequencer recalls next, else nil (#303): the
+  -- one after its position, wrapped to 1 past the sequence length as it is
+  -- now, as its advance does. Through a scene's hold the position is the
+  -- scene playing (or the empty slot it waits on), so this is the next one.
+  -- The grids' scene pages light it at 10
+  function M.sequencer_next_slot()
+    if not S.scene_sequencer_enabled then return nil end
+    local next_slot = S.scene_sequencer_position + 1
+    if next_slot > params:get("scene_sequence_length") then next_slot = 1 end
+    return next_slot
+  end
+
   M.scene_data_dir = scene_data_dir
   M.move_aside_unloadable_file = move_aside_unloadable_file
   return M

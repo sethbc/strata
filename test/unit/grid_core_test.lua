@@ -458,14 +458,14 @@ end)
 
 -- #242: every whole-pattern change ends the voice's held step gesture, as
 -- the 256's paste does (#114). On a 256 page 1, row 15 column v clears voice
--- v and column 8 + v randomizes it
+-- v and column 8 + v randomizes it, once held 0.5 s (#443)
 test("clear, randomize and a scene recall end a held step gesture, as a paste does", function()
   -- clear
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 1, 1)  -- voice 1 step 3 held: on at 15
-  tap(context, 1, 1, 15)          -- clear voice 1
+  context.grid.press(1, 1, 15, 1); context.clock.run_for(0.51); context.grid.press(1, 1, 15, 0)  -- clear voice 1
   context.grid.press(1, 9, 1, 1)
   assert_equal(patterns[1][3], 0, "clear: the held step takes no level in the cleared pattern")
   assert_equal(patterns[1][9], 15, "clear: the next step key toggles its own step")
@@ -474,7 +474,7 @@ test("clear, randomize and a scene recall end a held step gesture, as a paste do
   patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 1, 1)
-  tap(context, 1, 9, 15)          -- randomize voice 1
+  context.grid.press(1, 9, 15, 1); context.clock.run_for(0.51); context.grid.press(1, 9, 15, 0)  -- randomize voice 1
   local step_3, step_9 = patterns[1][3], patterns[1][9]
   context.grid.press(1, 9, 1, 1)
   assert_equal(patterns[1][3], step_3, "randomize: the held step keeps the level randomize gave it")

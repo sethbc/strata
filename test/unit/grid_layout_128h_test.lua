@@ -20,19 +20,52 @@ local function pattern_sum(patterns)
   return sum
 end
 
+-- #449: the distinct keys the layout is handed at press, per grid page, from
+-- now on (view(port) names it), and how many there are
+local function record_presses(layout_name, view)
+  local layout = local_value("S").registry.grid_layouts[layout_name]
+  local real_key, pressed = layout.key, {}
+  layout.key = function(port, x, y, z)
+    if z == 1 then
+      local shown = view(port)
+      pressed[shown] = pressed[shown] or {}
+      pressed[shown][x .. "," .. y] = true
+    end
+    return real_key(port, x, y, z)
+  end
+  return pressed
+end
+local function key_count(keys)
+  local count = 0
+  for _ in pairs(keys or {}) do count = count + 1 end
+  return count
+end
+
 test("every 128h grid key on every page runs without error", function()
   local context = load_strata()
+  local S = local_value("S")
   local device = context.grid.plug(1, 16, 8)
-  for page_column = 5, 8 do
+  local pressed = record_presses("128h", function(port) return grid_core().page(port) end)
+  local jumps = 0
+  local real_jump = S.lib.positions.jump
+  S.lib.positions.jump = function(...) jumps = jumps + 1; return real_jump(...) end
+  -- all five pages, each key pressed on its page (set before every key: row
+  -- 8's page keys move it), with voice 1 on buffer 1 holding 16 s
+  for page = 1, 5 do
+    S.buffers[1].seconds = 16; S.buffers[1].loaded = true
+    params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
     for y = 1, 8 do
       for x = 1, 16 do
-        tap(context, 1, page_column, 8)
+        grid_core().set_page(1, page)
+        assert_equal(grid_core().page(1), page, "the sweep is on page " .. page)
         context.grid.press(1, x, y, 1)
         context.grid.press(1, x, y, 0)
         context.clock.advance()
       end
     end
   end
+  for page = 1, 5 do assert_equal(key_count(pressed[page]), 128, "page " .. page .. ": all 128 keys pressed") end
+  assert_true(jumps > 0, "page 5's position keys reached the buffer voice")
   assert_true(device.refresh_count > 0, "128h grid was redrawn")
 end)
 
@@ -266,26 +299,29 @@ test("128h scene saves need a hold", function()
   context.grid.press(1, 4, 3, 0)
 end)
 
-test("128h: the scene page lights the sequencer's position at 10, the current scene at 15", function()
+-- #303: row 1's levels for scenes 1-4 while the sequencer runs through the
+-- clock (scenes 1-3, length 3)
+test("128h: the scene page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
   local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
   local device = context.grid.plug(1, 16, 8)
   tap(context, 1, 7, 8)  -- page 3
   capture_scene(1); capture_scene(2); capture_scene(3)
-  S.current_scene = 1
-  S.scene_sequencer_enabled = true
-  S.scene_sequencer_position = 2
-  grid_redraw()
-  assert_equal(device:get_led(2, 1), 10, "the sequencer position at 10")
-  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
-  assert_equal(device:get_led(3, 1), 8, "another populated scene at 8")
-  S.scene_sequencer_position = 1
-  grid_redraw()
-  assert_equal(device:get_led(1, 1), 15, "the current scene wins over the position")
-  S.scene_sequencer_enabled = false
-  S.scene_sequencer_position = 2
-  grid_redraw()
-  assert_equal(device:get_led(2, 1), 8, "a stopped sequencer shows no position")
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  local function row_1()
+    local levels = {}
+    for x = 1, 4 do levels[x] = device:get_led(x, 1) end
+    return table.concat(levels, " ")
+  end
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(row_1(), "15 10 8 2", "1 s: scene 1 playing, scene 2 next at 10")
+  context.clock.run_for(4, 0.001)
+  assert_equal(row_1(), "8 15 10 2", "5 s: scene 2 playing, scene 3 next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(row_1(), "10 8 15 2", "9 s: scene 3 playing, scene 1 next (wrapped)")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(row_1(), "8 8 15 2", "a stopped sequencer lights no next scene")
 end)
 
 -- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
@@ -314,7 +350,7 @@ test("two 128h grids keep their own pages", function()
   assert_equal(patterns[2][3], 15, "and toggles no step")
 end)
 
-test("128h page 4 column 12 and 128v row 14 toggle freeze", function()
+test("128h page 4 column 12 toggles freeze", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")

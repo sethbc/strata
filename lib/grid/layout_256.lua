@@ -2,10 +2,12 @@
 -- The 16x16 grid: its five pages (1 patterns, 2 parameters, 3 scenes,
 -- 4 buffers / FX, 5 positions), keys and LEDs. Registers
 -- S.registry.grid_layouts["256"].
--- Row 16 columns 9-15 copy and paste patterns through a clipboard kept per
--- port (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze): page
--- 4's column 12 on each voice's source row, and row 16 columns 1-7 while
--- column 8 of row 16 is held. The functions stay global.
+-- Rows 8 and 16 work on every page. Row 15 (pages 1 and 2) clears or
+-- randomizes a pattern once held. Row 16 columns 9-15 copy and paste
+-- patterns through a clipboard kept per port
+-- (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze): page 4's
+-- column 12 on each voice's source row, and row 16 columns 1-7 while column
+-- 8 of row 16 is held. The functions stay global.
 
 return function(S)
   local M = {}
@@ -19,7 +21,8 @@ return function(S)
 
   -- Keys and levels: row 8's tempo keys (column -> tempo change), row 16's
   -- copy/paste keys (columns 9-15 voices 1-7, column 16 clears the
-  -- clipboard) and the scene page's sequencer position
+  -- clipboard) and the scene page's next scene (the one the running
+  -- sequencer recalls next)
   local LAYOUT_256 = {
     tempo_steps = {[5] = -10, [6] = -1, [7] = 1, [8] = 10},
     tempo_held_level = 15,
@@ -29,7 +32,7 @@ return function(S)
     copied_level = 15,      -- the copied voice's key
     paste_level = 4,        -- the other voices' keys and column 16 while a pattern is copied
     empty_level = 2,        -- columns 9-16 with nothing copied
-    sequencer_position_level = 10,
+    sequencer_next_level = 10,
     freeze_column = 12,     -- page 4: voice v's freeze key on its source row (8 + v)
     freeze_hold_column = 8, -- row 16: held, columns 1-7 freeze instead of lock
     frozen_level = 15,
@@ -41,7 +44,42 @@ return function(S)
     positions_key_level = 4,
     strip_first_row = 9,    -- page 5: voice v's bookmark strip is on row 8 + v
     strip_key_columns = {[1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = "store", [7] = "hold", [8] = "whole"},
+    -- row 15 (pages 1 and 2): columns 1-7 clear voices 1-7's patterns,
+    -- 9-15 randomize them, once held the scene save's half second (#443)
+    pattern_row = 15,
+    randomize_first_column = 9,
+    pattern_hold_seconds = S.constants.GRID_HOLD.scene_save_seconds,
+    pattern_key_level = 2,
+    pattern_pending_level = 15,  -- while the hold is pending
   }
+
+  -- Row 15's key at column x: once held LAYOUT_256.pattern_hold_seconds
+  -- (through on_hold: a release, the grid's removal or cleanup cancels it),
+  -- clear voice x's pattern (columns 1-7) or randomize voice x - 8's (9-15),
+  -- then redraw the grids and the screen (SEQ shows the patterns). A press
+  -- alone changes nothing
+  local function pattern_key(port, x, y)
+    local operation
+    local randomize_voice = x - LAYOUT_256.randomize_first_column + 1
+    if x >= 1 and x <= NUM_VOICES then
+      operation = function() clear_pattern(x) end
+    elseif randomize_voice >= 1 and randomize_voice <= NUM_VOICES then
+      operation = function() randomize_pattern(randomize_voice) end
+    else
+      return
+    end
+    grid_core.on_hold(port, x, y, LAYOUT_256.pattern_hold_seconds, function()
+      operation()
+      grid_redraw()
+      request_redraw()
+    end)
+  end
+
+  -- Row 15's key LED at column x: 15 while its hold is pending, 2 otherwise
+  local function pattern_key_level(port, x)
+    local pending = grid_core.hold_pending(port, x, LAYOUT_256.pattern_row)
+    return pending and LAYOUT_256.pattern_pending_level or LAYOUT_256.pattern_key_level
+  end
 
   -- 16x16 grid layout
   function grid_key_256(port, x, y, z)
@@ -70,7 +108,8 @@ return function(S)
     end
 
     if page == 3 then
-      -- Scene page
+      -- Scene page: the scene keys on rows 1-5; rows 8 and 16 work as on
+      -- page 1 (#442)
       if y == 1 and x <= NUM_SCENES then
         -- Row 1: Scene recall (instant)
         recall_scene(x, 0)
@@ -90,6 +129,10 @@ return function(S)
           -- Set sequence length
           params:set("scene_sequence_length", x - 2)
         end
+      elseif y == 8 then
+        grid_key_256_transport(x)
+      elseif y == 16 then
+        grid_key_256_lock(port, x)
       end
     elseif page == 4 then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
@@ -138,15 +181,9 @@ return function(S)
       elseif x >= 9 and x <= 8 + NUM_VOICES then
         toggle_voice(x - 8)
       end
-    elseif y == 15 then
-      -- Row 15: Pattern operations
-      if x <= NUM_VOICES then
-        -- Clear pattern for voice
-        clear_pattern(x)
-      elseif x >= 9 and x <= 8 + NUM_VOICES then
-        -- Randomize pattern for voice
-        randomize_pattern(x - 8)
-      end
+    elseif y == LAYOUT_256.pattern_row then
+      -- Row 15: Pattern operations (clear, randomize), once held
+      pattern_key(port, x, y)
     elseif y == 16 then
       grid_key_256_lock(port, x)
     end
@@ -209,7 +246,7 @@ return function(S)
     local page = grid_core.page(port)
     if page == LAYOUT_256.positions_page then
       -- Page 5: each voice's 16 positions (rows 1-7), its strip on row
-      -- 8 + v, rows 8 and 16 as on pages 1, 2 and 4
+      -- 8 + v, rows 8 and 16 as on pages 1-4
       for voice_idx = 1, NUM_VOICES do
         for cell = 1, 16 do
           grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, 16))
@@ -222,14 +259,13 @@ return function(S)
       grid_redraw_256_transport(port, grid_device)
       grid_redraw_256_lock(port, grid_device)
     elseif page == 3 then
-      -- Scene page
-      -- Row 1: Scene recall (instant). The sequencer's position (the next
-      -- scene it recalls) at 10 while it runs, the current scene at 15
+      -- Scene page (rows 8 and 16 as on page 1)
+      -- Row 1: Scene recall (instant). The scene the running sequencer
+      -- recalls next at 10 (#303), the current scene at 15
+      local next_slot = S.lib.scenes.sequencer_next_slot()
       for i = 1, NUM_SCENES do
         local brightness = S.scenes[i].populated and 8 or 2
-        if S.scene_sequencer_enabled and S.scene_sequencer_position == i then
-          brightness = LAYOUT_256.sequencer_position_level
-        end
+        if i == next_slot then brightness = LAYOUT_256.sequencer_next_level end
         if S.lib.scenes.shows_current(i) then brightness = 15 end
         grid_device:led(i, 1, brightness)
       end
@@ -254,7 +290,8 @@ return function(S)
         grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
       end
 
-      grid_redraw_256_page_row(port, grid_device)
+      grid_redraw_256_transport(port, grid_device)
+      grid_redraw_256_lock(port, grid_device)
     elseif page == 4 then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
       -- sources on rows 9-15, rows 8 and 16 as on page 1
@@ -286,6 +323,13 @@ return function(S)
       for i = 1, NUM_VOICES do
         grid_device:led(i, 14, i == S.grid_voice_select and 15 or 4)
         grid_device:led(i + 8, 14, S.voices[i].active and 12 or 2)
+      end
+
+      -- Row 15: the clear and randomize keys (15 while a hold is pending)
+      for i = 1, NUM_VOICES do
+        local randomize_x = LAYOUT_256.randomize_first_column + i - 1
+        grid_device:led(i, LAYOUT_256.pattern_row, pattern_key_level(port, i))
+        grid_device:led(randomize_x, LAYOUT_256.pattern_row, pattern_key_level(port, randomize_x))
       end
 
       grid_redraw_256_lock(port, grid_device)

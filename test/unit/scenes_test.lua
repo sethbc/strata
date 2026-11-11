@@ -885,6 +885,36 @@ test("shortening the sequence while the sequencer waits wraps to scene 1", funct
   assert_equal(recalls[#recalls].scene, 1, "and wrapped again")
 end)
 
+-- #303: the grids' scene pages light this slot at 10 while the sequencer runs
+test("S.lib.scenes.sequencer_next_slot is the slot the running scene sequencer recalls next (#303)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for scene = 1, 3 do capture_scene(scene) end                    -- slot 4 stays empty
+  params:set("scene_sequence_length", 4)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "nil while the sequencer is off")
+  local recalls = run_scene_sequencer(context, 0, 4, 1)          -- scene 1 at 0 s, held 4 s
+  -- at 1, 5, 9, 13 and 17 s: the slot it holds (slot 4 empty: it waits on it) and the next
+  local expected = { { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 }, { 1, 2 } }
+  for index, slots in ipairs(expected) do
+    if index > 1 then context.clock.run_for(4, 0.001) end
+    local at = (index * 4 - 3) .. " s: "
+    assert_equal(S.scene_sequencer_position, slots[1], at .. "the sequencer is on slot " .. slots[1])
+    assert_equal(S.lib.scenes.sequencer_next_slot(), slots[2], at .. "it recalls slot " .. slots[2] .. " next")
+  end
+  assert_equal(#recalls, 4, "scenes 1, 2, 3 and 1 recalled; empty slot 4 waited on")
+  assert_equal(recalls[4].scene, 1, "after slot 4 the sequencer wrapped to scene 1")
+  context.clock.run_for(4, 0.001)                                 -- 21 s: scene 2, slot 3 next
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 3)
+  params:set("scene_sequence_length", 2)                          -- shortened during the hold
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "the length as it is now: slot 1 next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 1, "and the sequencer recalls scene 1 next")
+  params:set("scene_sequence_length", 1)                          -- one scene: it recalls itself
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "a sequence of one slot recalls it again")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "nil once the sequencer stops")
+end)
+
 test("restarting the scene sequencer leaves one sequencer clock running", function()
   local context = load_strata(); finish_startup(context)
   capture_sequencer_scenes()
