@@ -1287,6 +1287,19 @@ test("the len field shows beats with sync on and 16b max when capped", function(
     "sync off: the duration")
 end)
 
+-- #567: the field shows what K3 records, at the tempo the clock runs from
+-- now on, also before the internal clock has ticked
+test("the len field shows the new tempo's beats before the clock has ticked (#567)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  to_field(3)
+  params:set("record_sync", 2); params:set("record_beats", 16)
+  redraw()
+  assert_equal(field_named(context, "len").value, "16b", "16 beats at 120 BPM fit the slot")
+  params:set("clock_tempo", 30); redraw()
+  assert_equal(clock.get_tempo(), 120, "the clock still reports 120")
+  assert_equal(field_named(context, "len").value, "8b max", "16 beats at 30 BPM are 32 s: 8 beats fit")
+end)
+
 test("the bm field steps 1-4 and recalls the bookmark it lands on", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)   -- voice 1 on slot 1

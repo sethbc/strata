@@ -263,7 +263,7 @@ check.((state[\headBuses].size == 8)
 
 engine.recordStatePoll.start;
 engine.takeWriteFailedPoll.start;
-check.(h.formatOf(\recordBuffer) == "ifffifif", "record: recordBuffer takes eight arguments (format ifffifif)");
+check.(h.formatOf(\recordBuffer) == "ifffififf", "record: recordBuffer takes nine arguments (format ifffififf)");
 tone = Synth(\strataCheckTone, [\out, engine.inputBus], inputSynth, \addBefore);
 server.sync;
 h.command(\loadBuffer, 0, h.stereoPath, 0);
@@ -271,11 +271,11 @@ h.waitFor({ engine.bufferFrames[0] > 0 });
 record.(0, seconds);
 frames = (seconds * server.sampleRate).round.asInteger;
 check.((engine.bufferFrames[0] == 0) and: { engine.recordSynths[0].notNil },
-    "record: recordBuffer takes eight arguments and records the input as a replace take (the slot reads empty)");
+    "record: recordBuffer takes nine arguments and records the input as a replace take (the slot reads empty)");
 h.waitFor({ engine.bufferFrames[0] == frames }, (seconds + 1));
 check.((engine.bufferFrames[0] == frames) and: { engine.recordSynths[0].isNil }
     and: { h.bufferSample(engine.buffersL[0], 500).abs > 0.001 },
-    "record: recordBuffer takes eight arguments and records the input as a replace take (frames %, a sample %)".format(
+    "record: recordBuffer takes nine arguments and records the input as a replace take (frames %, a sample %)".format(
         engine.bufferFrames[0], h.bufferSample(engine.buffersL[0], 500)));
 tone.free; server.sync;
 check.(CronePollRegistry.getPollFromName(\recordState).notNil, "record: the recordState poll exists");
@@ -492,18 +492,19 @@ test.("record: delay starts the take within one block of its timestamp, also aft
     check.(error <= (blockSize + 1),
         "record: delay starts the take within one block of its timestamp, also after a replace take's fade and zeroing (off by % frames)".format(error.round(1)));
 });
-// #376: matron's command reaches sclang by OSC, and sclang may be busy when
-// it arrives (a file's check, a chunk of a write): the delay runs from the
-// message's arrival, not from when sclang gets to it. h.command calls the
+// #376, #565: matron's command reaches sclang by OSC, and sclang may be busy
+// when it arrives (a file's check, a chunk of a write): the command carries
+// Lua's wall clock at the send (sent, modulo 1000 s), and the delay runs
+// from the send, not from when sclang gets to it. h.command calls the
 // command's function directly, so here the command goes by OSC, as matron
 // sends it, and the check holds sclang for 100 ms before it can be read.
-test.("record: a synced take's delay runs from the command's arrival, not from when sclang reads it", {
+test.("record: a synced take's delay runs from the command's send, not from when sclang reads it", {
     var delay = 0.4, hold = 0.1, frame = 2000, value, error, id = server.nextNodeID, until, path = writeLevelFile.("arrival.wav", 1, 0.3);
     h.command(\loadBuffer, 4, path, 0);
     h.waitFor({ engine.bufferFrames[4] > 0 });
     // the timecode starts `delay` after the message is sent (now, in real
     // time: the check routine's logical time is when it last woke)
-    NetAddr.localAddr.sendMsg('/command/recordBuffer', 4, 0.3, 1.0, 0.0, 0, 0.0, 0, delay);
+    NetAddr.localAddr.sendMsg('/command/recordBuffer', 4, 0.3, 1.0, 0.0, 0, 0.0, 0, delay, Date.getDate.rawSeconds % 1000);
     server.sendBundle(delay + (Main.elapsedTime - thisThread.seconds),
         ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
     until = Main.elapsedTime + hold;
@@ -516,8 +517,130 @@ test.("record: a synced take's delay runs from the command's arrival, not from w
     error = (value - (frame / sampleRate)).abs * sampleRate;
     // (10 ms: well inside the 100 ms sclang was held)
     check.(engine.bufferFrames[4] == (0.3 * sampleRate).round.asInteger and: { error <= (0.01 * sampleRate) },
-        "record: a synced take's delay runs from the command's arrival, not from when sclang reads it (off by % frames, % frames kept)".format(
+        "record: a synced take's delay runs from the command's send, not from when sclang reads it (off by % frames, % frames kept)".format(
             error.round(1), engine.bufferFrames[4]));
+});
+// Review focus 1: with sclang free the wait is about 0, so the take starts
+// delay after the send, as before #565. One block, plus 2 frames for sent's
+// float32 rounding (up to 31 us at 1000 s)
+test.("record: an idle engine's synced take starts delay after its send", {
+    var delay = 0.5, frame = 2000, value, error, id = server.nextNodeID;
+    reset.(4);
+    NetAddr.localAddr.sendMsg('/command/recordBuffer', 4, 0.3, 1.0, 0.0, 0, 0.0, 0, delay, Date.getDate.rawSeconds % 1000);
+    server.sendBundle(delay + (Main.elapsedTime - thisThread.seconds),
+        ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
+    0.05.wait;
+    waitDone.(4, delay + 1);
+    server.sendBundle(nil, ['/n_free', id]);
+    server.sync;
+    value = h.bufferSample(engine.buffersL[4], frame);
+    error = (value - (frame / sampleRate)).abs * sampleRate;
+    check.(engine.bufferFrames[4] == (0.3 * sampleRate).round.asInteger and: { error <= (blockSize + 2) },
+        "record: an idle engine's synced take starts delay after its send (off by % frames, % frames kept)".format(
+            error.round(1), engine.bufferFrames[4]));
+});
+// #565: of the messages that arrive while sclang is held, sclang stamps only
+// the first with its arrival and reads the later ones when the hold ends.
+// The check thread cannot send while it holds sclang, so a sender outside
+// it does: a python3 script the check writes to its folder, which sends two
+// synced takes during a 0.5 s hold, each with its own wall clock as sent,
+// then writes their send times (the wall clock in full). Both takes start
+// delay after their own send, measured on the server: each records a
+// timecode started just after the hold
+test.("record: a synced take queued behind a busy sclang starts delay after its send (#565)", {
+    var delay = 0.8, hold = 0.5, frame = 2000, slots = #[4, 5], timecode = server.nextNodeID;
+    var script = h.tempDir +/+ "send-565.py", ready = h.tempDir +/+ "send-565.ready", sentPath = h.tempDir +/+ "send-565.sent";
+    var sender = [
+        "import os, socket, struct, sys, time",
+        "port, ready, out, specs = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]",
+        "def pad(data):",
+        "    return data + bytes(4 - len(data) % 4)",
+        "sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
+        "open(ready, 'w').close()",
+        "start, sent = time.time(), []",
+        "for at in range(0, len(specs), 3):",
+        "    wait, slot, delay = float(specs[at]), int(specs[at + 1]), float(specs[at + 2])",
+        "    time.sleep(max(0.0, start + wait - time.time()))",
+        "    now = time.time()",
+        "    args = struct.pack('>ifffififf', slot, 0.3, 1.0, 0.0, 0, 0.0, 0, delay, now % 1000)",
+        "    sock.sendto(pad(b'/command/recordBuffer') + pad(b',ifffififf') + args, ('127.0.0.1', port))",
+        "    sent.append(repr(now))",
+        "with open(out + '.part', 'w') as file:",
+        "    file.write(chr(10).join(sent) + chr(10))",
+        "os.rename(out + '.part', out)"
+    ].join("\n") ++ "\n";
+    var offset, holdFrom, holdUntil, limit, sends = [], starts, errors, timecodeAt, kept;
+    slots.do({ arg slot; reset.(slot) });
+    [ready, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
+    File.use(script, "w", { arg file; file.write(sender) });
+    ("python3" + script.shellQuote + NetAddr.langPort + ready.shellQuote + sentPath.shellQuote
+        + "0.1" + slots[0] + delay + "0.25" + slots[1] + delay).unixCmd(nil, false);
+    limit = Main.elapsedTime + 10;
+    while { File.exists(ready).not and: { Main.elapsedTime < limit } } { 0.002.wait };
+    // the wall clock less the elapsed time, read together: turns the
+    // sender's send times into sclang's
+    offset = Date.getDate.rawSeconds - Main.elapsedTime;
+    holdFrom = Main.elapsedTime;
+    holdUntil = holdFrom + hold;
+    while { Main.elapsedTime < holdUntil } { };
+    timecodeAt = Main.elapsedTime + 0.05;
+    server.sendBundle(timecodeAt - thisThread.seconds,
+        ['/s_new', \strataCheckTimecode, timecode, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
+    // sclang reads the queued commands once the check yields
+    0.1.wait;
+    h.waitFor({ File.exists(sentPath) }, 5);
+    if (File.exists(sentPath)) {
+        sends = File.readAllString(sentPath).split($\n).reject(_.isEmpty).collect({ arg line; line.asFloat - offset });
+    };
+    slots.do({ arg slot; waitDone.(slot, delay + 2) });
+    server.sendBundle(nil, ['/n_free', timecode]);
+    server.sync;
+    kept = slots.collect({ arg slot; engine.bufferFrames[slot] });
+    starts = slots.collect({ arg slot; timecodeAt + h.bufferSample(engine.buffersL[slot], frame) - (frame / sampleRate) });
+    errors = if (sends.size == 2) { [starts, sends].flop.collect({ arg pair; ((pair[0] - (pair[1] + delay)) * 1000).round(0.01) }) } { [] };
+    check.((sends.size == 2) and: { sends.every({ arg at; (at > holdFrom) and: { at < (holdUntil - 0.05) } }) }
+        and: { kept.every({ arg frames; frames == (0.3 * sampleRate).round.asInteger }) }
+        and: { errors.every({ arg milliseconds; milliseconds.abs <= 10 }) },
+        "record: a synced take queued behind a busy sclang starts delay after its send (#565) (sent % s into the hold, started % ms off, % frames kept)".format(
+            sends.collect({ arg at; (at - holdFrom).round(0.001) }), errors, kept));
+    [script, ready, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
+});
+// Review focus 2: sent is modulo 1000 s, so the wait wraps there; a sent up
+// to 1 ms ahead of sclang's clock (float32 rounding) is just sent, and with
+// no sent (negative) or a wait over 10 s, which a working system never
+// produces, the wait is unknown (nil)
+test.("record: a send time wraps at 1000 s: sent 999.99 read at 0.01 waited 0.02 s", {
+    var cases = [
+        [999.99, 0.01, 0.02], [999.99, 1794412000.01, 0.02], [500, 500.25, 0.25], [12.5, 12.5, 0],
+        [100.0005, 100, 0], [100, 109.5, 9.5], [100, 115, nil], [-1, 500, nil]
+    ];
+    var results = cases.collect({ arg each; engine.recordSendWait(each[0], each[1]) });
+    check.([cases, results].flop.every({ arg pair;
+            var wanted = pair[0][2], got = pair[1];
+            if (wanted.isNil) { got.isNil } { got.notNil and: { (got - wanted).abs < 1e-6 } }
+        }),
+        "record: a send time wraps at 1000 s: sent 999.99 read at 0.01 waited 0.02 s (waits %)".format(results));
+});
+// A send time over 10 s old is posted and its delay runs from when sclang
+// handles the command, as does one with no send time (negative, or none:
+// h.command's eight arguments)
+test.("record: a send time over 10 s old is posted and the delay runs from sclang's handling", {
+    var delay = 0.5, take, line, lineAfter, fromNow, unknown;
+    state[\lastSendLine] = nil;
+    // (slot index 4 is buffer 5)
+    h.command(\recordBuffer, 4, 0.3, 1.0, 0, 0, 0, 0, delay, (Date.getDate.rawSeconds - 15) % 1000);
+    take = state[\takes][4];
+    line = state[\lastSendLine];
+    fromNow = take !? { (take[\startAt] - (thisThread.seconds + delay)).abs };
+    h.command(\recordBuffer, 5, 0.3, 1.0, 0, 0, 0, 0, delay, -1);
+    lineAfter = state[\lastSendLine];
+    unknown = state[\takes][5] !? { arg each; (each[\startAt] - (thisThread.seconds + delay)).abs };
+    check.(fromNow.notNil and: { fromNow < 1e-6 } and: { unknown.notNil } and: { unknown < 1e-6 }
+        and: { line.notNil } and: { line.contains("buffer 5 ") } and: { lineAfter == line },
+        "record: a send time over 10 s old is posted and the delay runs from sclang's handling (line %, then %, off by % and %)".format(
+            line, lineAfter, fromNow, unknown));
+    [4, 5].do({ arg slot; h.command(\stopRecord, slot) });
+    server.sync;
 });
 test.("record: a synced replace take keeps its slot playing until bufferFadeWait + recordPrepMargin before the take", {
     // (#379: each read half a second or more from the preparation, which

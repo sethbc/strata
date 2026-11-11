@@ -350,11 +350,11 @@ end)
 test("the engine stub checks the 3.3 arguments", function()
   load_strata()
   local rejected = {
-    {"recordBuffer", {0, 4, 1, 1.5, 0, 0, 0, 0}, "feedback past 1"},
-    {"recordBuffer", {0, 4, 1, 0, 10, 0, 0, 0}, "source past 9"},
-    {"recordBuffer", {0, 4, 1, 0, 0, -0.1, 0, 0}, "threshold below 0"},
-    {"recordBuffer", {0, 4, 1, 0, 0, 0, 2, 0}, "loop past 1"},
-    {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, -1}, "delay below 0"},
+    {"recordBuffer", {0, 4, 1, 1.5, 0, 0, 0, 0, 0}, "feedback past 1"},
+    {"recordBuffer", {0, 4, 1, 0, 10, 0, 0, 0, 0}, "source past 9"},
+    {"recordBuffer", {0, 4, 1, 0, 0, -0.1, 0, 0, 0}, "threshold below 0"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 2, 0, 0}, "loop past 1"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, -1, 0}, "delay below 0"},
     {"loadBuffer", {0, "/x.wav", -1}, "a start below 0"},
     {"saveBuffer", {0, "/x.wav", 0, 1.5}, "a length past 1"},
     {"saveBuffer", {0, "/x.wav", -0.1, 1}, "a start below 0"},
@@ -365,7 +365,7 @@ test("the engine stub checks the 3.3 arguments", function()
   for _, case in ipairs(rejected) do
     assert_true(not pcall(engine[case[1]], (table.unpack or unpack)(case[2])), "engine." .. case[1] .. " rejects " .. case[3])
   end
-  assert_true(pcall(engine.recordBuffer, 7, 16, 1, 1, 9, 0.5, 1, 2), "every recordBuffer argument at its limit")
+  assert_true(pcall(engine.recordBuffer, 7, 16, 1, 1, 9, 0.5, 1, 2, 999.9), "every recordBuffer argument at its limit")
   assert_true(pcall(engine.loadBuffer, 7, "/x.wav", 12.5), "a start inside the file")
   assert_true(pcall(engine.saveBuffer, 7, "/x.wav", 0.25, 0.5), "a region of the slot")
 end)
@@ -637,7 +637,7 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
   end
   assert_engine_rejects("slot", "loadBuffer", 8, "/tmp/x.wav", 0)
   assert_engine_rejects("slot", "saveBuffer", 8, "/tmp/x.wav", 0, 1)
-  assert_engine_rejects("slot", "recordBuffer", 8, 4, 1, 0, 0, 0, 0, 0)
+  assert_engine_rejects("slot", "recordBuffer", 8, 4, 1, 0, 0, 0, 0, 0, 0)
   engine.clearBuffer(0); engine.clearBuffer(7)
   -- sources are 0 (synth), 1..numBuffers, numBuffers + 1 (input)
   assert_engine_rejects("source", "setGrainSource", 0, 10)
@@ -672,7 +672,7 @@ test("the engine stub rejects a NaN or infinite argument (#477)", function()
   local nan, inf = 0 / 0, math.huge
   assert_engine_rejects("finite", "setFilter", nan, 0.5, 0, 1)
   assert_engine_rejects("finite", "setDelay", nan, nan, nan)
-  assert_engine_rejects("finite", "recordBuffer", 0, nan, 1, 0, 0, 0, 0, 0)
+  assert_engine_rejects("finite", "recordBuffer", 0, nan, 1, 0, 0, 0, 0, 0, 0)
   assert_engine_rejects("finite", "voiceOn", 0, nan, 0.3, 0, 0.1, 20, 1)
   assert_engine_rejects("finite", "setVoiceParam", 0, "freq", inf)
   assert_engine_rejects("finite", "setGrainParam", 0, "bufPos", nan)

@@ -32,6 +32,12 @@
     // How much before a synced take its slot is prepared (faded, emptied),
     // beside the fade itself: covers zeroing a 300 s slot on a Pi 4
     recordPrepMargin { ^0.15 }
+    // The longest a recordBuffer can have waited for sclang (s) before its
+    // send time counts as unknown: a working system never comes near it
+    recordSendWaitLimit { ^10 }
+    // How far ahead of sclang's wall clock a send time can read and count
+    // as just sent (s): a float32 rounds sent by up to 31 us at 1000 s
+    recordSendLead { ^0.001 }
     // How often a playable recording's overview is read, to rewrite its
     // peaks file when it changed
     peakRefreshSeconds { ^0.5 }
@@ -133,30 +139,15 @@
     }
 
     addRecordCommands {
-        var responder;
-        // msg: slot index, seconds, level, feedback, source, threshold, loop,
-        // delay; time: the message's OSC time (nil when called without one)
-        var recordCommand = { arg msg, time;
-            this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], time);
-        };
-        this.addCommand(\recordBuffer, "ifffifif", recordCommand);
-        // A synced take's delay runs from the command's arrival (#376), but
-        // CroneEngine's command function gets the message only, and sclang
-        // runs it when it gets to it (after a file's check, a chunk of a
-        // write). The command's own OSCdef (the one CroneEngine frees at
-        // deinit) calls the command function with the message's OSC time
-        // instead; without that OSCdef the delay runs from when sclang
-        // handles the command, as it did before, and says so. The OSC time
-        // is the arrival only while sclang is free: of the messages that
-        // arrive while it is held (a long at-once check), only the first
-        // keeps its arrival time, the later ones are stamped when sclang
-        // reads them (#565).
-        responder = this.commands.detect({ arg command; command.name == \recordBuffer }) !? { arg command; command.oscdef };
-        if (responder.isKindOf(OSCdef)) {
-            OSCdef(responder.key, recordCommand, responder.path);
-        } {
-            postln("strata: recordBuffer's OSCdef not found; a synced take's delay runs from when sclang handles the command");
-        };
+        // slot index, seconds, level, feedback, source, threshold, loop,
+        // delay, sent. sclang runs a command when it gets to it (after a
+        // file's check, a chunk of a write), so sent, Lua's wall clock modulo
+        // 1000 s at the send, says how long it waited: a synced take's delay
+        // runs from the send (#376, #565). A command without sent (h.command's
+        // eight arguments, nil) counts from when sclang handles it
+        this.addCommand(\recordBuffer, "ifffififf", { arg msg;
+            this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], msg[9]);
+        });
 
         // End a recording now, with its fade, keeping what was captured;
         // cancels one that has not started
@@ -338,6 +329,41 @@
         this.bufferChanged(index);
     }
 
+    // How long a recordBuffer waited before sclang handled it (s): sclang's
+    // wall clock (seconds, whole or modulo 1000) less sent, Lua's wall clock
+    // modulo 1000 s at the send, wrapped into [0, 1000), so a send at 999.99
+    // read at 0.01 waited 0.02 s. matron and sclang read one system clock.
+    // A sent up to recordSendLead ahead counts as just sent (0). nil when
+    // unknown: no sent (nil or negative), or a wait over recordSendWaitLimit
+    recordSendWait { arg sent, wallNow;
+        var wait;
+        if (sent.isNil or: { sent < 0 }) { ^nil };
+        wait = ((wallNow % 1000) - sent) % 1000;
+        if (wait > (1000 - this.recordSendLead)) { ^0 };
+        if (wait > this.recordSendWaitLimit) { ^nil };
+        ^wait
+    }
+
+    // When a recordBuffer was sent, in sclang's time (the elapsed time a
+    // timestamped bundle and SystemClock count in): the elapsed time and
+    // the wall clock read together, less the wait (recordSendWait), never
+    // after now (the logical time sclang handles the command at, tens of us
+    // before them), so a take with no delay never waits for a timestamp.
+    // With the wait unknown, now; a send time over recordSendWaitLimit old
+    // is posted too (and kept in areaState[\record][\lastSendLine], which
+    // the check reads)
+    recordSendStart { arg index, sent, now;
+        var wall = Date.getDate.rawSeconds, elapsed = Main.elapsedTime, wait = this.recordSendWait(sent, wall), line;
+        if (wait.notNil) { ^(elapsed - wait).min(now) };
+        if (sent.notNil and: { sent >= 0 }) {
+            line = "strata: buffer % recording sent % s before sclang read it (over % s): its delay runs from now".format(
+                index + 1, (((wall % 1000) - sent) % 1000).round(0.001), this.recordSendWaitLimit);
+            areaState[\record][\lastSendLine] = line;
+            postln(line);
+        };
+        ^now
+    }
+
     // Start a recording into a slot, replacing whatever was recording in it
     // (design 3.3, section 1.2). A replace take (feedback 0 and no loop, or a
     // slot holding audio at another sample rate: the slot would play the old
@@ -347,18 +373,22 @@
     // is zeroed first, one that holds audio is left alone and at the
     // recording's start its valid length becomes the longer of its own and
     // the record length. A delay (seconds, Lua's clock sync) starts the
-    // record synth by a timestamped bundle that long after the command
-    // arrived (arrived: the command message's OSC time, #376; the logical
-    // time when not given); a synced replace take prepares its slot only
+    // record synth by a timestamped bundle that long after the command was
+    // sent (sent: Lua's wall clock modulo 1000 s, recordSendWait, #565;
+    // negative or nil: from when sclang handles the command, its logical
+    // time); a synced replace take prepares its slot only
     // just before it (bufferFadeWait + recordPrepMargin before), so the
     // slot keeps playing until then. threshold > 0 arms the take until the
     // source's level starts it.
     // Every delayed step (the preparation, the start) runs only if nothing
     // changed the slot meanwhile (slotChanges): a later load, clear or
     // recording always wins.
-    recordSlot { arg index, seconds, level, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0, arrived;
+    recordSlot { arg index, seconds, level, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0, sent;
         var state, server = context.server, frames, change, take, playable, prepareAt, now = thisThread.seconds, startAt;
         if (this.validBuffer(index).not) { ^this };
+        // delay after the send, never more than delay after now (read first,
+        // before the work below)
+        startAt = this.recordSendStart(index, sent, now) + delay.max(0);
         state = areaState[\record];
         // counted first: matches Lua's records_sent, whatever happens to this command
         state[\recordCounts][index] = state[\recordCounts][index] + 1;
@@ -375,8 +405,6 @@
         // the slot still reads 0 frames, until its peaks file is in place)
         playable = ((feedback > 0) or: { loop > 0 })
             and: { (bufferFrames[index] == 0) or: { bufferSampleRates[index] == server.sampleRate } };
-        // delay after the command arrived, never after now
-        startAt = (arrived ? now).min(now) + delay.max(0);
         take = (
             number: state[\recordCounts][index], kind: if (playable) { \playable } { \replace },
             frames: frames, level: level, feedback: if (playable) { feedback.clip(0, 1) } { 0 },

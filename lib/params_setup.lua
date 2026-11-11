@@ -97,6 +97,26 @@ return function(S)
     restore_tempo_change_handler()
   end)
 
+  -- The tempo (BPM) the clock runs at from now on, for what is worked out
+  -- from it right after a change: a synced take's length and delay,
+  -- BUFFER's len field, the 256's tempo flash (#567). On the internal clock
+  -- and Link, clock_tempo's action sets the clock at once, while
+  -- clock.get_tempo() reads the old tempo until the internal clock has
+  -- ticked twice (matron publishes a tempo from its tick after next). Under
+  -- MIDI or crow only norns' external tempo poll updates the param, so the
+  -- clock's own tempo is the one to read. (lib/lfos.lua keeps
+  -- clock.get_beat_sec(): it mirrors norns' LFO library.)
+  function M.clock_tempo_now()
+    local source = params:string("clock_source")
+    if source == "internal" or source == "link" then return params:get("clock_tempo") end
+    return clock.get_tempo()
+  end
+
+  -- A beat's length (s) at that tempo
+  function M.beat_seconds_now()
+    return 60 / M.clock_tempo_now()
+  end
+
   -- norns' number param adds a delta unrounded, and its PARAMS menu turns
   -- a param by d / 20 while K3 is held (core/menu/params.lua's
   -- delta_value), so a number param could come to hold a fraction (#534).

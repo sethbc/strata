@@ -199,6 +199,33 @@ test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48
   assert_equal(params:get("tempo"), clock_max, "the param clamps to the clock's maximum")
 end)
 
+-- #567: the tempo the clock runs at from now on. On the internal clock and
+-- Link the clock_tempo param sets it at once, while clock.get_tempo() reads
+-- the old tempo until the internal clock has ticked twice; under MIDI or
+-- crow only norns' external tempo poll updates the param, so the clock's
+-- own tempo is the one to read
+test("clock_tempo_now: the param on the internal clock and Link, the clock's under MIDI or crow (#567)", function()
+  local context = load_strata(); finish_startup(context)
+  local params_setup = local_value("S").lib.params_setup
+  for _, source in ipairs({2, 4}) do   -- midi, crow
+    params:set("clock_source", source)
+    clock.tempo = 90                    -- the external source's tempo; the param stays 120
+    local name = params:string("clock_source")
+    assert_equal(params_setup.clock_tempo_now(), 90, name .. ": the clock's tempo")
+    assert_near(params_setup.beat_seconds_now(), 60 / 90, 1e-9, name .. ": the clock's beat")
+  end
+  params:set("clock_source", 1)   -- internal
+  clock.tempo = 120
+  params:set("clock_tempo", 60)
+  assert_equal(clock.get_tempo(), 120, "the internal clock still reports 120")
+  assert_equal(params_setup.clock_tempo_now(), 60, "internal: the param")
+  assert_equal(params_setup.beat_seconds_now(), 1.0, "internal: a beat of 1 s at 60 BPM")
+  params:set("clock_source", 3)   -- link
+  params:set("clock_tempo", 75)
+  assert_equal(params_setup.clock_tempo_now(), 75, "link: the param")
+  assert_near(params_setup.beat_seconds_now(), 0.8, 1e-9, "link: 0.8 s a beat at 75 BPM")
+end)
+
 test("the tempo handler is installed once and cleanup restores only its own (#48)", function()
   local previous_calls, previous_bpm = 0, nil
   local function previous_handler(bpm) previous_calls = previous_calls + 1; previous_bpm = bpm end
