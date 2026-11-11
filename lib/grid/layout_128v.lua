@@ -40,7 +40,7 @@ return function(S)
     scene_sequencer_column = 4,
     scene_sequencer_row = 1,
     scene_length_first_row = 9,    -- rows 9-16: lengths 1-8
-    scene_position_level = 10,
+    scene_next_level = 10,         -- the scene the running sequencer recalls next
     -- sources page: rows 1-10 the source options, row 12 record, row 13
     -- clear, row 14 each voice's freeze key (S.lib.freeze)
     record_row = 12,
@@ -192,7 +192,7 @@ return function(S)
     local next_slot = S.lib.scenes.sequencer_next_slot()
     for i = 1, NUM_SCENES do
       local recall_level = S.scenes[i].populated and 8 or 2
-      if i == next_slot then recall_level = LAYOUT_128V.scene_position_level end
+      if i == next_slot then recall_level = LAYOUT_128V.scene_next_level end
       if S.lib.scenes.shows_current(i) then recall_level = 15 end
       grid_device:led(LAYOUT_128V.scene_recall_column, i, recall_level)
       grid_device:led(LAYOUT_128V.scene_fade_column, i, S.scenes[i].populated and 6 or 2)

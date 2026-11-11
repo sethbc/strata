@@ -57,8 +57,10 @@ return function(S)
   -- (through on_hold: a release, the grid's removal or cleanup cancels it),
   -- clear voice x's pattern (columns 1-7) or randomize voice x - 8's (9-15),
   -- then redraw the grids and the screen (SEQ shows the patterns). A press
-  -- alone changes nothing
+  -- alone changes nothing; a key off row 15 or columns 1-7 and 9-15 does
+  -- nothing
   local function pattern_key(port, x, y)
+    if y ~= LAYOUT_256.pattern_row then return end
     local operation
     local randomize_voice = x - LAYOUT_256.randomize_first_column + 1
     if x >= 1 and x <= NUM_VOICES then

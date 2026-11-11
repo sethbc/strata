@@ -662,6 +662,41 @@ test("the scene page lights the scene the running sequencer recalls next at 10, 
   assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
 end)
 
+-- #303: the sequencer's first recall waits for the next scheduler tick; until
+-- then the slot it recalls first is the one lit at 10, and when that slot is
+-- empty the light moves on as soon as the sequencer reaches it
+test("from the sequencer's start the scene page lights the slot it recalls first (#303)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  tap(context, 15, 8)  -- page 3
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  local function row_1()
+    local levels = {}
+    for x = 1, 4 do levels[x] = device:get_led(x, 1) end
+    return table.concat(levels, " ")
+  end
+  params:set("scene_sequencer_enabled", 1)
+  assert_equal(S_table().current_scene, 0, "started: nothing recalled yet")
+  assert_equal(row_1(), "10 8 8 2", "before the first recall: scene 1, recalled first, at 10")
+  context.clock.run_for(1, 0.001)
+  assert_equal(row_1(), "15 10 8 2", "scene 1 playing, scene 2 next")
+  params:set("scene_sequencer_enabled", 0)
+  -- slot 1 empty: lit at 10 until the sequencer reaches it, then slot 2
+  context = load_strata(); finish_startup(context)
+  device = context.grid.plug(1, 16, 16)
+  tap(context, 15, 8)
+  capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  assert_equal(row_1(), "10 8 8 2", "before it reaches empty slot 1: slot 1 at 10")
+  context.clock.run_for(1, 0.001)
+  assert_equal(row_1(), "2 10 8 2", "waiting on empty slot 1: scene 2 next")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
 -- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
 test("the scene page blinks the recall key of the scene a fade goes to", function()
   local context = load_strata(); finish_startup(context)
