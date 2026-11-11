@@ -365,6 +365,7 @@ test("a replace take's timer starts at its recording report", function()
   params:set("record_sync", 3); params:set("record_duration", 4)
   local pending = context.clock.pending_count()
   record_buffer(1)
+  context.clock.run_for(0.11)   -- buffers.data's coalesced write (#566) has run
   assert_equal(context.clock.pending_count(), pending, "no take timer while armed")
   assert_equal(S_record_state(1).started_at, nil)
   context.set_time(3)
@@ -493,6 +494,7 @@ test("a take whose ended report beats its timer settles at once", function()
   context.polls.fire("bufferState", 4); context.polls.fire("recordState", record_state_value(1, 2, 1))
   assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "take 1")
   assert_equal(buffers[1].path, scratch_take_path(1)); assert_true(not buffers[1].recording)
+  context.clock.run_for(0.11)   -- buffers.data's coalesced write (#566) has run
   assert_equal(context.clock.pending_count(), pending, "no timer or fallback left")
   -- the timer between the length and "ended": "ended" settles it too
   record_buffer(2)
@@ -502,6 +504,7 @@ test("a take whose ended report beats its timer settles at once", function()
   assert_equal(S.lib.buffers.status(2), "finishing")
   context.polls.fire("recordState", record_state_value(1, 2, 2))
   assert_equal(S.lib.buffers.status(2), "loaded"); assert_equal(buffers[2].name, "take 2")
+  context.clock.run_for(0.11)   -- buffers.data's coalesced write (#566) has run
   assert_equal(context.clock.pending_count(), pending, "no fallback left")
 end)
 

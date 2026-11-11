@@ -108,6 +108,7 @@ return function(S)
   -- for a take, a clear or a file it cannot read (set_start
   -- clamps the start to what the file leaves after the seconds a slot holds
   -- of it, slot_file_seconds)
+  local BUFFER_DATA_SAVE = {delay = 0.1}   -- s from a change to the write of buffers.data (#566)
   local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4,
     check_notice_seconds = 30}
   S.buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
@@ -914,8 +915,18 @@ return function(S)
   -- tried again at the next change and at exit
   remember = function()
     if not S.buffers_loaded or S.buffer_autosave_blocked then return end
+    if S.buffer_file.save_clock then return end
     if S.lib.data_files.encode(remembered_buffers()) == S.buffer_file.text then return end
-    save_buffers_to_disk()
+    -- #566: one write BUFFER_DATA_SAVE.delay s after the first change of a
+    -- burst, carrying the newest state; never inside a poll callback
+    S.buffer_file.save_clock = clock.run(function()
+      clock.sleep(BUFFER_DATA_SAVE.delay)
+      S.buffer_file.save_clock = nil
+      if S.buffers_loaded and not S.buffer_autosave_blocked
+        and S.lib.data_files.encode(remembered_buffers()) ~= S.buffer_file.text then
+        save_buffers_to_disk()
+      end
+    end)
   end
 
   local function preserve_unloadable_buffer_file()
@@ -1037,6 +1048,7 @@ return function(S)
   -- and could not be moved aside), and later stop the polls and the
   -- recording timers (the engine finishes or frees any recording itself)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_paths_save, function()
+    if S.buffer_file.save_clock then clock.cancel(S.buffer_file.save_clock); S.buffer_file.save_clock = nil end
     if not S.buffers_loaded then
       print("buffer paths not auto-saved: they were not loaded from " .. buffer_data_file() .. " in this session")
     elseif S.buffer_autosave_blocked then

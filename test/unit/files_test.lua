@@ -245,4 +245,24 @@ test("fill_empty fills a slot whose remembered file is missing", function()
   assert_equal(loads[1].args[2], folder .. "a.wav")
 end)
 
+test("filling eight free slots writes buffers.data once (#566)", function()
+  local context = load_strata(); finish_startup(context)
+  local S, files = local_value("S"), local_value("S").lib.files
+  context.clock.run_for(1)
+  local names = {}
+  for n = 1, 8 do names[n] = "f" .. n .. ".wav" end
+  local folder = make_folder(context, "fillonce", names)
+  files.note_chosen(folder .. "x.wav")
+  local count, real_write = 0, S.lib.data_files.write
+  S.lib.data_files.write = function(path, value)
+    if path:match("buffers%.data$") then count = count + 1 end
+    return real_write(path, value)
+  end
+  assert_equal(files.fill_empty(), 8)
+  for slot = 1, 8 do context.polls.fire("bufferState", (slot - 1) * 1000 + 1) end
+  context.clock.run_for(0.5)
+  S.lib.data_files.write = real_write
+  assert_equal(count, 1, "one write for eight loads")
+end)
+
 end

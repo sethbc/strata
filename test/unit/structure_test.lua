@@ -618,6 +618,7 @@ test("cleanup runs every registered step in today's order", function()
   record_buffer(1)
   context.audio.register("/tmp/long.wav", { channels = 2, frames = 48000 * 60, rate = 48000 })
   load_buffer(2, "/tmp/long.wav"); S.lib.buffers.set_start(2, 5)  -- a start reload waits
+  context.clock.run_for(0.11)         -- buffers.data's coalesced write (#566) has run
   buffer_page_flash("flash")
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
   header_flash("flash")

@@ -100,6 +100,7 @@ test("a file the engine cannot read, loaded during a recording, leaves a cancele
   local pending = context.clock.pending_count()
   record_buffer(3)
   load_buffer(3, "/tmp/missing.wav")   -- the engine cancels the recording, then cannot read the file
+  context.clock.run_for(0.11)           -- buffers.data's coalesced write (#566) has run
   assert_true(not buffers[3].recording and not buffers[3].finishing, "the load ends the recording state")
   assert_equal(context.clock.pending_count(), pending, "no recording timer or fallback is left to finish a take")
   -- the canceled recording left the slot empty: the engine reports 0 s
@@ -1954,6 +1955,7 @@ test("a buffer's file is remembered when it loads, not only at exit; reports tha
   local path = context.data_dir .. "strata/buffers.data"
   assert_true(not util.file_exists(path), "no buffers file yet")
   load_buffer(2, "/tmp/drone.wav")
+  context.clock.run_for(0.11)   -- the write follows the change by 0.1 s (#566)
   local remembered = S.lib.data_files.read(path)
   assert_true(remembered ~= nil, "buffers.data is written at the load")
   assert_equal(remembered.version, 2); assert_equal(remembered.paths[2], "/tmp/drone.wav")
@@ -1966,11 +1968,14 @@ test("a buffer's file is remembered when it loads, not only at exit; reports tha
   -- a take that ends has its scratch path at once
   record_buffer(5); wake_buffer_clock(context, 5)
   context.polls.fire("bufferState", 4004)
+  context.clock.run_for(0.11)
   assert_equal(S.lib.data_files.read(path).paths[5], scratch_take_path(5), "the take is remembered when it settles")
   -- a clear is remembered too, and survives a session with no clean exit
   clear_buffer(2)
+  context.clock.run_for(0.11)
   assert_equal(S.lib.data_files.read(path).paths[2], "", "a clear is remembered at once")
   load_buffer(3, "/tmp/pad.wav")
+  context.clock.run_for(0.11)
   context = load_strata({ data_subdir = subdir })
   assert_equal(#context.calls_named("loadBuffer"), 0, "neither file exists here, so nothing reloads")
   assert_equal(local_value("S").buffers[3].missing_path, "/tmp/pad.wav", "the load before the crash is remembered")
@@ -1988,11 +1993,13 @@ test("a buffers write that fails keeps the old file and says so; the next change
   local S = local_value("S")
   local path = context.data_dir .. "strata/buffers.data"
   load_buffer(1, "/tmp/one.wav")
+  context.clock.run_for(0.11)
   local good = file_text(path)
   assert_true(good ~= nil, "the first load is on disk")
   -- the card fills: every write to buffers.data (or a file beside it) stops at 40 bytes
   local restore = watch_writes("buffers.data", { at = "write", after = 40 })
   load_buffer(2, "/tmp/two.wav")
+  context.clock.run_for(0.11)
   assert_equal(file_text(path), good, "the file is byte for byte the last good one")
   assert_equal(S.buffer_file.problem, "not saved")
   local said = { saved = 0, failed = 0 }
@@ -2008,9 +2015,11 @@ test("a buffers write that fails keeps the old file and says so; the next change
   S = local_value("S")
   restore = watch_writes("buffers.data", { at = "write", after = 40 })
   load_buffer(4, "/tmp/four.wav")
+  context.clock.run_for(0.11)
   restore()
   assert_equal(S.buffer_file.problem, "not saved")
   load_buffer(5, "/tmp/five.wav")
+  context.clock.run_for(0.11)
   assert_equal(S.buffer_file.problem, nil, "a write that works clears the problem")
   local saved = S.lib.data_files.read(path)
   assert_equal(saved.paths[4], "/tmp/four.wav", "the change the failed write missed went with the next")
@@ -2026,6 +2035,7 @@ test("a version 1 buffers.data is kept as buffers.data.v1 when it is first repla
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
   assert_true(not util.file_exists(dir .. "buffers.data.v1"), "nothing is copied until the file is replaced")
   load_buffer(1, "/tmp/drone.wav")
+  context.clock.run_for(0.11)
   assert_equal(file_text(dir .. "buffers.data.v1"), original, "the older file's bytes are kept")
   local S = local_value("S")
   assert_equal(S.lib.data_files.read(dir .. "buffers.data").version, 2, "the file is this format now")
@@ -2077,7 +2087,7 @@ test("a scratch take that cannot be written forgets its path and flashes (#312)"
   assert_screen_layout(context, "BUFFER page take not saved flash")
   assert_true(printed_since(context, printed):find(scratch_take_path(3), 1, true), "the console names the file")
   save_buffers_to_disk()
-  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/buffers.data").paths[3], "",
+  assert_equal(context.tab.load(context.data_dir .. "strata/buffers.data").paths[3], "",
     "buffers.data names no file for the slot")
   -- record 0 (no recordBuffer has it), another record's number, bad values
   -- and a slot that holds a loaded file change nothing
@@ -2162,6 +2172,70 @@ test("two saves of a slot in one second write two files (#522)", function()
   end)
   os.date = real_date
   assert_true(ok, tostring(problem))
+end)
+
+-- #566: buffers.data is written 0.1 s after its last change, never inside
+-- a poll callback; cleanup saves what is pending and leaves no clock
+local function count_data_writes(S)
+  local writes = {n = 0}
+  local real_write = S.lib.data_files.write
+  S.lib.data_files.write = function(path, value)
+    if path:match("buffers%.data$") then writes.n = writes.n + 1 end
+    return real_write(path, value)
+  end
+  writes.restore = function() S.lib.data_files.write = real_write end
+  return writes
+end
+
+test("a poll report that changes the remembered paths writes buffers.data only after 0.1 s (#566)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local writes = count_data_writes(S)
+  context.clock.run_for(1)
+  load_buffer(1, "/tmp/late.wav")
+  context.polls.fire("bufferState", 4)
+  assert_equal(writes.n, 0, "no write inside the poll callback")
+  context.clock.run_for(0.09)
+  assert_equal(writes.n, 0, "none before 0.1 s")
+  context.clock.run_for(0.02)
+  assert_equal(writes.n, 1, "one write after 0.1 s")
+  context.clock.run_for(1)
+  assert_equal(writes.n, 1, "nothing more later")
+  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/buffers.data").paths[1], "/tmp/late.wav")
+  writes.restore()
+end)
+
+test("two changes inside 0.1 s write once, with the newest state (#566)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.clock.run_for(1)
+  local writes = count_data_writes(S)
+  load_buffer(1, "/tmp/first.wav"); context.polls.fire("bufferState", 4)
+  context.clock.run_for(0.05)
+  load_buffer(2, "/tmp/second.wav"); context.polls.fire("bufferState", 1004)
+  assert_equal(writes.n, 0, "nothing written yet")
+  context.clock.run_for(0.2)
+  assert_equal(writes.n, 1, "one write")
+  local saved = S.lib.data_files.read(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.paths[1], "/tmp/first.wav"); assert_equal(saved.paths[2], "/tmp/second.wav")
+  assert_true(S.buffer_file.save_clock == nil, "no clock pending")
+  writes.restore()
+end)
+
+test("cleanup with a pending write saves once and leaves no clock (#566)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.clock.run_for(1)
+  local writes = count_data_writes(S)
+  load_buffer(1, "/tmp/exit.wav"); context.polls.fire("bufferState", 4)
+  assert_equal(writes.n, 0, "pending")
+  cleanup()
+  assert_equal(writes.n, 1, "cleanup's save wrote it")
+  assert_true(S.buffer_file.save_clock == nil, "no clock left")
+  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/buffers.data").paths[1], "/tmp/exit.wav")
+  context.clock.run_for(1)
+  assert_equal(writes.n, 1, "no write after cleanup")
+  writes.restore()
 end)
 
 end
