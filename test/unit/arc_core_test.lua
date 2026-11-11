@@ -271,7 +271,8 @@ test("the arc keeps drawing while the norns menu is open (#49)", function()
   local arc_hardware = context.arc.plug(1)
   next_frame(context)
   _menu.set_mode(true)
-  -- norns' set_mode(true) swaps the global redraw for norns.none (the stub only tracks the mode)
+  -- set_mode(true) has put norns.none in the global redraw, as norns does: a
+  -- stand-in that draws nothing counts the frame's calls of it
   local script_redraw = redraw
   local screen_draws = 0
   redraw = function() screen_draws = screen_draws + 1 end

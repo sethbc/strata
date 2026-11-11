@@ -873,6 +873,8 @@ test("stub arc segment, led and all follow lua/core/arc.lua and matron's LED buf
   assert_true(not pcall(vport.led, vport, 1, 65, 1), "LED 65 does not exist")
   assert_true(not pcall(vport.led, vport, 1, 1, 16), "level 16 is out of range")
   assert_true(not pcall(vport.led, vport, 1, 1, 1.5), "levels are integers (luaL_checkinteger)")
+  assert_true(not pcall(vport.led, vport, 1, 1, math.huge, true), "an infinite level has no integer representation")
+  vport:led(1, 2, "7"); assert_equal(device:get_led(1, 2), 7, "a numeral string converts, as luaL_checkinteger does")
 end)
 
 -- matron's _grid_set_led and _grid_all_led read x, y and the level with

@@ -175,8 +175,8 @@ test("while the norns menu is open the playing SEQ page never draws itself", fun
   assert_true(S.pattern_playing, "playing")
   assert_equal(page_draws, 1, "the frame draws SEQ")
   _menu.set_mode(true)
-  -- norns' set_mode(true) swaps the global redraw for norns.none (the stub
-  -- only tracks the mode): a stand-in that draws nothing counts the calls
+  -- set_mode(true) has put norns.none in the global redraw, as norns does: a
+  -- stand-in that draws nothing counts the calls
   local script_redraw = redraw
   local swapped_calls = 0
   redraw = function() swapped_calls = swapped_calls + 1 end
@@ -187,10 +187,9 @@ test("while the norns menu is open the playing SEQ page never draws itself", fun
   assert_equal(page_draws, 0, "the page never draws while the menu is open")
   assert_equal(arc_hardware.refresh_count, arc_refreshes, "and the arc gets no extra frames")
   assert_true(S.pattern_playing, "the patterns keep playing")
-  -- the menu closes: norns puts the script's redraw back and calls it
+  -- the menu closes: set_mode(false) puts the script's redraw back and calls it
   redraw = script_redraw
   _menu.set_mode(false)
-  redraw()
   page_draws = 0
   for _ = 1, 2 do h.next_frame(context) end
   assert_equal(page_draws, 2, "back from the menu SEQ draws every frame again")

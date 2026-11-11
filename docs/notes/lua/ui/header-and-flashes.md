@@ -14,7 +14,7 @@
 - A record with `header_status()` returning a string: the text at x 79 (`status_x`, level 10, cut with `fit_text` to end by x 114) and the play mark at x 73 (`status_play_x`, while patterns play; three clear pixels before the text) replace `[M]`, the play mark and `REC`. Returning nil keeps the indicators. The dots stay.
 - Scene indicator `S1`-`S8` (`S.current_scene`) right-aligned at x 127 (`scene_right`): level 10 while the scene sequencer runs, 6 when static, and 2 while `S.lib.scenes.shows_current(S.current_scene)` is false (the scene a fade goes to, after its even steps: it blinks, #254, `docs/notes/lua/scenes.md`).
 - No `dens:`: master density left the header.
-- The design's x 80/94/100 put `REC` over a right-aligned `S8` under the layout test's width estimate; 76/90/96 keep the same order and spacing and fit.
+- The design put these at x 80/94/100; they moved to 76/90/96 (same order and spacing) when the layout test's old width estimate (6 px capitals) put `REC` over a right-aligned `S8`. By norns' font advances (#479) `REC` (13 px) and `ARM` (16 px) from x 96 end by 112, 5 px clear of `S8` (117-127).
 - Nothing calls for a redraw on its own here: the indicators' state changes already ask for one (param actions, `grid_key`/`key` around `pattern_toggle`, `buffer_display_changed`).
 
 Flashes (`lib/ui/flash.lua`, `S.lib.ui_flash`):

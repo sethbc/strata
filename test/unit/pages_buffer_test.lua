@@ -577,13 +577,12 @@ test("a file selector that fails to open leaves the BUFFER page drawing (#49)", 
   local stub_enter, stub_redraw = context.fileselect.enter, context.fileselect.redraw
   local script_key, script_enc = key, enc
   -- fails after it has routed its own handlers to play mode, as fs.enter
-  -- would if its redraw raised: globals swapped, then norns.menu.init()
-  -- (whose redraw() draws the selector, #521)
+  -- does if its redraw raises: globals swapped, then norns.menu.init(),
+  -- whose redraw() draws the selector and raises (#521)
   context.fileselect.enter = function()
     key, enc = function() end, function() end
     context.fileselect.redraw = function() error("no audio folder") end
     norns.menu.init()
-    error("no audio folder")
   end
   key(2, 1)
   local released, release_error = pcall(key, 2, 0)
@@ -714,7 +713,11 @@ test("the superseded-selector release acts only as the menu closes, and never br
   assert_true(closed, "set_mode(false) does not raise")
   assert_equal(norns.menu.status(), false, "the menu closed")
   assert_true(table.concat(context.printed, "\n"):find("release failed", 1, true), "the error is printed")
-  context.take_script_errors()  -- the printed errors this test raises (#473)
+  -- the release's own line, then each menu-close hook's (they redraw too) (#473)
+  local claimed = context.take_script_errors()
+  assert_true(#claimed > 0 and claimed[1]:find("strata: file selector release failed: ", 1, true) == 1,
+    "the release's failure is printed first: " .. tostring(claimed[1]))
+  for _, line in ipairs(claimed) do assert_true(line:find("release failed", 1, true), "each with the error: " .. line) end
 end)
 
 test("BUFFER page draws its fields, the meter and the slot rows", function()
@@ -1206,21 +1209,8 @@ test("the start field shows - for a file that fits and steps at the resolution i
   set_start(1, 9.996); assert_equal(shown(), "10.0s", "9.996 rounds to 10.0 s")
 end)
 
--- A width estimate at least as wide as norns' screen font (norns.ttf at 8
--- px): the stub's per character, or the font's advance where that is wider
--- ("m" is 6 px in the font, 5 in the stub)
-local DEVICE_WIDTHS = { m = 6 }
-local function device_safe_width(stub_extents, text)
-  local width = 0
-  for char in tostring(text):gmatch("[^\128-\191][\128-\191]*") do
-    width = width + math.max(stub_extents(char), DEVICE_WIDTHS[char] or 0)
-  end
-  return width
-end
-
+-- The stub measures with norns' font advances (#479), so "m" is its 6 px here
 test("every start value keeps the start label whole", function()
-  local stub_extents = screen.text_extents
-  screen.text_extents = function(text) return device_safe_width(stub_extents, text), 8 end
   local ok, problem = pcall(function()
     for _, case in ipairs({ { tier = 16, file = 3600 }, { tier = 300, file = 3600 }, { tier = 300, file = 600 },
       { tier = 300, file = 6 * 3600 } }) do
@@ -1264,7 +1254,6 @@ test("every start value keeps the start label whole", function()
       end
     end
   end)
-  screen.text_extents = stub_extents
   assert_true(ok, tostring(problem))
 end)
 

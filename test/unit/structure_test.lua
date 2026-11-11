@@ -1318,14 +1318,15 @@ local GUARDED_RECURSIVE_DELETES = {
   ["test/run_engine_check.sh"] = '[ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;',
 }
 
--- An rm whose flags (any of them, before the first operand or "--") hold r,
--- R or --recursive, find's -delete, git clean, rsync's --delete, Python's
--- rmtree and sclang's deleteAll (#488)
+-- An rm with r, R or --recursive in any of its options, before or after its
+-- operands (GNU rm reads both), up to "--" or the end of the command (;, &
+-- or |); find's -delete, git clean, rsync's --delete, Python's rmtree and
+-- sclang's deleteAll (#488)
 local function recursive_rm(line)
-  for flags in line:gmatch("%f[%w]rm(%s+[^\n]*)") do
-    for flag in flags:gmatch("%s+(%S+)") do
-      if flag == "--" or flag:sub(1, 1) ~= "-" then break end
-      if flag:match("^%-%-recursive") or (flag:match("^%-%a") and flag:match("^%-%a*[rR]")) then return true end
+  for command in line:gmatch("%f[%w]rm(%s+[^;&|\n]*)") do
+    for word in command:gmatch("%s+(%S+)") do
+      if word == "--" then break end
+      if word:match("^%-%-recursive") or (word:match("^%-%a") and word:match("^%-%a*[rR]")) then return true end
     end
   end
   return false
@@ -1342,11 +1343,14 @@ test("recursive deletes happen only at the guarded sites", function()
       "shutil.rmtree(p)", "File.deleteAll(p)",
       -- any flags before the recursive one, and deletes that are not rm (#488)
       "rm -f -r dir", 'rm -v -rf "$dir"', "rm -i -R x", "sudo rm -f --recursive d", 'find "$dir" -delete',
-      "git clean -fdx", "rsync -a --delete a/ b/" }) do
+      "git clean -fdx", "rsync -a --delete a/ b/",
+      -- GNU rm reads options after its operands too
+      'rm "$dir" -rf', 'rm -f "$x" -R', 'os.execute("rm " .. path .. " -r")' }) do
     assert_true(recursive_delete(line), "caught: " .. line)
   end
   for _, line in ipairs({ "rm file.txt", "os.remove(path)", "File.delete(path)", "-- a firm -r flag", "perform -r",
-      "rm -f file.txt", "rm -- -r", "apt-get clean", "find . -name x" }) do
+      "rm -f file.txt", "rm -- -r", "apt-get clean", "find . -name x", 'rm "$x" -- -r', 'rm -f "$x"; ls -R',
+      'rm "$x" && ls -R', 'rm "$x" | grep -r y' }) do
     assert_true(not recursive_delete(line), "allowed: " .. line)
   end
   local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files")):read("*a")
