@@ -227,6 +227,201 @@ test("LFO steps run at 48 ppqn and skip sends below 1/1000 of the range; restore
   assert_equal(#context.calls_named("setFilter"), 20, "large steps all sent")
 end)
 
+-- The threshold is measured on the destination's warp: on an exponential
+-- range (v1_freq, 20-2000 Hz) a slow LFO sends steps even in octaves, not
+-- even in hertz (#406)
+test("a slow LFO on an exponential destination sends steps of at most 11 cents (#406)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("v1_freq", 60); params:set("strata_lfo1_dest", 13)   -- v1 main: the Resonator's freq
+  params:set("lfo_free_1", 8); params:set("lfo_depth_1", 1); params:set("lfo_1", 2)
+  context.clear_engine_calls()
+  -- one 8 s cycle at 120 BPM (768 steps of 48 a beat) from the floor:
+  -- 60 Hz +/- 0.01 x 0.5 x 1980 Hz, so 50.1 to 69.9 Hz
+  for step = 1, 768 do
+    context.lfo.tick(lfo, (math.sin(2 * math.pi * (0.75 + step / 768)) + 1) / 2)
+  end
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "freq" then table.insert(sent, call.args[3]) end
+  end
+  -- 1/1000 of the range's log2(100) = 6.64 octaves is 7.97 cents, and one
+  -- step moves at most 2.37 cents (9.9 Hz x 2 pi / 768, at 58.4 Hz), so a
+  -- send moves 7.97 to 10.34 cents (with a linear threshold: 2 Hz, 68 cents)
+  assert_true(#sent >= 100, "the glide is sent in small steps (" .. #sent .. " sends)")
+  local largest = 0
+  for index = 2, #sent do
+    local cents = math.abs(1200 * math.log(sent[index] / sent[index - 1]) / math.log(2))
+    assert_true(cents >= 7.97, "send " .. index .. " moves at least 1/1000 of the octaves (" .. cents .. ")")
+    largest = math.max(largest, cents)
+  end
+  assert_true(largest <= 10.4, "the largest step is " .. largest .. " cents")
+end)
+
+-- norns' Lua 5.3 math.random raises on an empty interval, inside the
+-- lattice, when a random LFO's min is above its max: Strata keeps min at or
+-- below max, whichever of the two is set (#528)
+test("the stub's random step raises when min is above max, as the library does (#528)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("lfo_shape_1", 4); params:set("lfo_1", 2)   -- random
+  lfo:set("min", 0.5); lfo:set("max", 0.2)                 -- past Strata's params
+  local stepped, step_error = pcall(context.lfo.tick, lfo, 1.0)
+  assert_true(not stepped, "the step raises")
+  assert_true(tostring(step_error):find("interval is empty", 1, true), tostring(step_error))
+end)
+
+test("lfo min never rises above lfo max, so a random LFO keeps stepping (#528)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("strata_lfo1_dest", 4); params:set("lfo_shape_1", 4); params:set("lfo_1", 2)   -- random
+  params:set("lfo_min_1", 0.5)
+  assert_near(params:get("lfo_max_1"), 1, 1e-9, "a min below max leaves max alone")
+  params:set("lfo_max_1", 0.2)
+  assert_near(params:get("lfo_min_1"), 0.2, 1e-9, "max set below min takes min down with it")
+  assert_near(lfo:get("min"), 0.2, 1e-9); assert_near(lfo:get("max"), 0.2, 1e-9, "and so does the library")
+  params:set("lfo_min_1", 0.8)
+  assert_near(params:get("lfo_max_1"), 0.8, 1e-9, "min set above max takes max up with it")
+  assert_near(lfo:get("min"), 0.8, 1e-9); assert_near(lfo:get("max"), 0.8, 1e-9)
+  params:set("lfo_max_1", 0.9); params:set("lfo_min_1", -0.4)
+  for _, raw in ipairs({1.0, 0.0, 1.0}) do context.lfo.tick(lfo, raw) end   -- each half cycle draws a value
+  assert_near(lfo:get("min"), -0.4, 1e-9); assert_near(lfo:get("max"), 0.9, 1e-9, "a valid pair stays as set")
+  -- the bound set moves the other, never itself, so a pair loaded one value
+  -- at a time (a PSET) lands as stored, in either order
+  params:set("lfo_min_1", 0.6); params:set("lfo_max_1", 0.7)
+  params:set("lfo_min_1", 0.8); params:set("lfo_max_1", 0.9)
+  assert_near(params:get("lfo_min_1"), 0.8, 1e-9); assert_near(params:get("lfo_max_1"), 0.9, 1e-9, "min first")
+  params:set("lfo_max_1", -0.3); params:set("lfo_min_1", -0.5)
+  assert_near(params:get("lfo_min_1"), -0.5, 1e-9); assert_near(params:get("lfo_max_1"), -0.3, 1e-9, "max first")
+end)
+
+-- norns' lattice runs every LFO: an error raised in one LFO's action would
+-- stop them all for the session (#517)
+test("an error inside an LFO step is printed once and the LFO keeps stepping (#517)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfo = local_value("lfos")[1]
+  params:set("filter_freq", 1000); params:set("strata_lfo1_dest", 4)   -- filt freq
+  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  local real_send = S.lib.engine_sync.send_engine_value
+  local failure = "lfo step boom"
+  S.lib.engine_sync.send_engine_value = function(...)
+    if failure then error(failure) end
+    return real_send(...)
+  end
+  local function reports()
+    local count, traced = 0, false
+    for _, line in ipairs(context.printed) do
+      if line:find("strata: LFO 1 step failed: ", 1, true) == 1 then
+        count = count + 1
+        traced = traced or line:find("stack traceback", 1, true) ~= nil
+      end
+    end
+    return count, traced
+  end
+  context.printed = {}
+  local ok, problem = pcall(function()
+    for step = 1, 5 do context.lfo.tick(lfo, step % 2) end   -- each step moves far enough to send
+    local count, traced = reports()
+    assert_equal(count, 1, "the same error on every step prints once")
+    assert_true(traced, "with its traceback")
+    failure = nil
+    context.clear_engine_calls(); context.lfo.tick(lfo, 1.0)
+    assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.5 * 0.5 * 19980, 1e-6, "the next good step sends")
+    failure = "lfo step boom"
+    context.lfo.tick(lfo, 0.0)
+    assert_equal(reports(), 2, "the error after a good step prints again")
+    failure = "another lfo boom"
+    context.lfo.tick(lfo, 0.0)   -- (the failed step sent nothing: the engine still has raw 1.0's value)
+    assert_equal(reports(), 3, "a different message prints at once")
+  end)
+  S.lib.engine_sync.send_engine_value = real_send
+  if not ok then error(problem, 0) end
+end)
+
+-- The dot's estimate against the library's phase. The stub has no lattice:
+-- run_lfo moves the time and adds what the lattice would to phase_counter
+-- (1/ppqn per step, ppqn steps a beat: one per beat)
+local function run_lfo(context, lfo, seconds)
+  context.set_time(util.time() + seconds)
+  lfo.phase_counter = lfo.phase_counter + seconds / clock.get_beat_sec()
+end
+
+test("a clocked LFO's dot runs at its period in beats, through a clocked rate change (#415)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  assert_near(clock.get_beat_sec(), 0.5, 1e-12, "120 BPM")
+  context.set_time(100)
+  params:set("lfo_mode_1", 1)   -- clocked at rate "4": a 16-beat period, 8 s
+  assert_near(lfo:get("period"), 16, 1e-12)
+  params:set("lfo_1", 2)        -- reset to the floor
+  assert_near(lfo_phase_estimate(1), 0.75, 1e-9, "the floor")
+  run_lfo(context, lfo, 1)      -- 2 beats of 16
+  assert_near(lfo_phase_estimate(1), 0.875, 1e-9, "1 s is an eighth of the 8 s cycle")
+  params:set("lfo_clocked_1", 12)   -- rate "3": a 12-beat period, 6 s
+  assert_near(lfo_phase_estimate(1), 0.875, 1e-9, "a rate change keeps the dot's place")
+  run_lfo(context, lfo, 1)
+  assert_near(lfo_phase_estimate(1), 0.875 + 1 / 6 - 1, 1e-9, "then it runs at the new period")
+  -- the library's change_period keeps its phase within 1/ppqn of a step
+  assert_near(lfo_phase_estimate(1), (lfo.phase_counter / lfo:get("period")) % 1, 0.002, "where the library is")
+end)
+
+-- the library's lfo_mode action sets the mode, then the period, which its
+-- change_period scales in the new mode's unit: the phase jumps, and the dot
+-- jumps with it (#409)
+test("a mode switch at 120 BPM moves the dot to the library's phase, both ways (#409)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  context.set_time(100)
+  params:set("lfo_1", 2)        -- free, 4 s: the floor, phase_counter 6 beats
+  run_lfo(context, lfo, 0.5)    -- phase_counter 7: 7 x 0.5 / 4
+  assert_near(lfo_phase_estimate(1), 0.875, 1e-9, "free: the dot and the library agree")
+  params:set("lfo_mode_1", 1)   -- clocked: ((7 + 1/48) / 4 x 16 - 1/48) / 16
+  assert_near(lfo_phase_estimate(1), 0.75390625, 1e-9, "to clocked: the dot is where the library is")
+  run_lfo(context, lfo, 1)      -- 2 of 16 beats
+  assert_near(lfo_phase_estimate(1), 0.87890625, 1e-9, "and runs with it")
+  params:set("lfo_mode_1", 2)   -- free: ((30.0625 + 1/48) x 0.5 / 16 x 4 / 0.5 - 1/48) x 0.5 / 4
+  assert_near(lfo_phase_estimate(1), 0.9375, 1e-9, "back to free: the library's phase again")
+  run_lfo(context, lfo, 1)
+  assert_near(lfo_phase_estimate(1), 0.1875, 1e-9, "a quarter of the 4 s cycle on")
+end)
+
+-- LFO:reset_phase's targets: floor 3/4, ceiling 1/4, mid: falling 1/2 of a
+-- cycle; mid: rising sets phase_counter to (beat length / period) itself,
+-- so a free LFO restarts at (beat length / period)^2 of its cycle and a
+-- clocked one at 0
+test("each reset target starts the dot where the library restarts (#415)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  context.set_time(100)
+  params:set("lfo_1", 2)   -- free, 4 s, at 120 BPM
+  local free_phases = {0.75, 0.25, 1 / 64, 0.5}   -- floor, ceiling, mid: rising, mid: falling
+  for target, phase in ipairs(free_phases) do
+    run_lfo(context, lfo, 0.3)
+    params:set("lfo_reset_target_1", target); params:set("lfo_reset_1", 1)
+    assert_near(lfo_phase_estimate(1), phase, 1e-9, "free: " .. params:string("lfo_reset_target_1"))
+  end
+  params:set("lfo_mode_1", 1)   -- clocked, 16 beats
+  local clocked_phases = {0.75, 0.25, 0, 0.5}
+  for target, phase in ipairs(clocked_phases) do
+    run_lfo(context, lfo, 0.3)
+    params:set("lfo_reset_target_1", target); params:set("lfo_reset_1", 1)
+    assert_near(lfo_phase_estimate(1), phase, 1e-9, "clocked: " .. params:string("lfo_reset_target_1"))
+  end
+end)
+
+test("turning an LFO off forgets its last raw value (#415)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  params:set("strata_lfo1_dest", 4); params:set("lfo_1", 2)
+  context.lfo.tick(lfo, 0.25)
+  assert_near(local_value("lfo_last_raw")[1], 0.25, 1e-9, "a step keeps its raw value")
+  params:set("lfo_1", 1)
+  assert_equal(local_value("lfo_last_raw")[1], nil, "off forgets it")
+  params:set("lfo_1", 2)
+  assert_equal(local_value("lfo_last_raw")[1], nil, "so on again has no dot until its first step")
+end)
+
 test("cleanup stops the LFOs and restores their destinations", function()
   local context = load_strata(); finish_startup(context)
   params:set("filter_freq", 800); params:set("strata_lfo1_dest", 4)

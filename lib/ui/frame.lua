@@ -60,8 +60,8 @@ return function(S)
   -- while its menu is open (redraw is norns.none then; norns redraws as the
   -- menu closes), and the file list while the file selector is open (redraw()
   -- never draws the page then). A page whose record has animates()
-  -- returning true draws every frame (LFO's dots move, SEQ's column moves
-  -- while the patterns play). They mark the screen only: the arc shows nothing that moves with them.
+  -- returning true draws every frame (LFO's dots move while an LFO runs,
+  -- SEQ's column while the patterns play). They mark the screen only: the arc shows nothing that moves with them.
   -- Each flag clears before its draw, so a failed draw is not retried.
   function draw_frame()
     local record = S.registry.pages[S.ui_page]

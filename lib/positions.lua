@@ -209,23 +209,43 @@ return function(S)
     return (last.position - first.position) / (last.time - first.time)
   end
 
-  local function glide(voice_idx)
-    clock.sleep(SCRUB.release_seconds)
+  -- The glide's two steps: it starts at the ring's speed (unless that is
+  -- below SCRUB.stop_rate), then decays with the friction, one step per
+  -- playhead update, until the rate is 0
+  local function start_glide(voice_idx)
     local speed = ring_speed(voice_idx)
     turns[voice_idx] = nil
-    if math.abs(speed) < SCRUB.stop_rate then
-      glide_clock[voice_idx] = nil
-      return
+    if math.abs(speed) >= SCRUB.stop_rate then set_scrub_rate(voice_idx, speed) end
+  end
+
+  local function decay_glide(voice_idx)
+    local tau = SCRUB.max_glide_seconds * (1 - params:get("scrub_friction") / 100)
+    local rate = tau > 0 and glide_rate[voice_idx] * math.exp(-1 / PLAYHEADS.update_hz / tau) or 0
+    if math.abs(rate) < SCRUB.stop_rate then rate = 0 end
+    set_scrub_rate(voice_idx, rate)
+  end
+
+  -- A glide step under xpcall (#517): an error is printed with its
+  -- traceback, once per distinct message per voice (a good step forgets
+  -- it), as the frame clock does (draw_error_report, lib/ui/frame.lua), and
+  -- never ends the glide's clock: the glide runs on while its rate is not 0
+  local glide_errors = {}  -- per voice: the error message its glide last printed
+  local function contained_glide_step(step, voice_idx)
+    local stepped, report = xpcall(step, draw_error_report, voice_idx)
+    if stepped then
+      glide_errors[voice_idx] = nil
+    elseif report.message ~= glide_errors[voice_idx] then
+      glide_errors[voice_idx] = report.message
+      print("strata: scrub glide failed: " .. report.traceback)
     end
-    set_scrub_rate(voice_idx, speed)
-    local dt = 1 / PLAYHEADS.update_hz
-    while true do
-      clock.sleep(dt)
-      local tau = SCRUB.max_glide_seconds * (1 - params:get("scrub_friction") / 100)
-      local rate = tau > 0 and glide_rate[voice_idx] * math.exp(-dt / tau) or 0
-      if math.abs(rate) < SCRUB.stop_rate then rate = 0 end
-      set_scrub_rate(voice_idx, rate)
-      if rate == 0 then break end
+  end
+
+  local function glide(voice_idx)
+    clock.sleep(SCRUB.release_seconds)
+    contained_glide_step(start_glide, voice_idx)
+    while glide_rate[voice_idx] ~= 0 do
+      clock.sleep(1 / PLAYHEADS.update_hz)
+      contained_glide_step(decay_glide, voice_idx)
     end
     glide_clock[voice_idx] = nil
   end

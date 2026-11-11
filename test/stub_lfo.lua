@@ -8,8 +8,10 @@
 -- phase_counter only moves through those two.
 -- The test helper lfo_context.tick(instance, raw) runs the value part of the
 -- library's process_lfo with `raw` (0..1) as the shape output, so the action
--- receives exactly what the library would send for that point of the cycle.
--- Uses the params/controlspec/util/clock globals installed by norns_stubs.
+-- receives exactly what the library would send for that point of the cycle
+-- (a random step with min above max raises, as the library's does on
+-- norns). Uses the params/controlspec/util/clock globals installed by
+-- norns_stubs.
 
 local lfo_rates = {1/16,1/8,1/4,5/16,1/3,3/8,1/2,3/4,1,1.5,2,3,4,6,8,16,32,64,128,256,512,1024}
 local lfo_rates_as_strings = {"1/16","1/8","1/4","5/16","1/3","3/8","1/2","3/4","1","1.5","2","3","4","6","8",
@@ -386,8 +388,12 @@ return function(lfo_context)
       local previous = instance.rand_value
       instance.rand_value = value >= instance.mid and max or min
       if previous ~= instance.rand_value then
+        -- norns' Lua 5.3 math.random raises on an empty interval (min above
+        -- max); LuaJIT's does not, so the stub raises its error on both
+        local low, high = math.floor(min * 100), math.floor(max * 100)
+        if low > high then error("bad argument #2 to 'random' (interval is empty)") end
         local random_value = util.linlin(min, max, instance.scaled_min, instance.scaled_max,
-          math.random(math.floor(min * 100), math.floor(max * 100)) / 100)
+          math.random(low, high) / 100)
         random_value = util.clamp(random_value, min, max)
         instance.scaled = random_value + offset
         instance.raw = util.linlin(instance.scaled_min, instance.scaled_max, 0, 1, random_value)

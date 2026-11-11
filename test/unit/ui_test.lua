@@ -312,7 +312,7 @@ test("the frame clock redraws a page while its animates() is true", function()
   counter.restore()
 end)
 
-test("LFO always animates and SEQ only while the patterns play", function()
+test("LFO animates while an LFO runs and SEQ while the patterns play", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local pages = S.constants.UI_PAGES.index
@@ -324,7 +324,10 @@ test("LFO always animates and SEQ only while the patterns play", function()
     counter.restore()
     return counter.screen
   end
-  assert_equal(draws_in_a_second(pages.LFO), 15, "LFO draws every frame")
+  assert_equal(draws_in_a_second(pages.LFO), 0, "LFO with none running draws nothing (#423)")
+  params:set("lfo_1", 2)
+  assert_equal(draws_in_a_second(pages.LFO), 15, "LFO draws every frame while an LFO runs")
+  params:set("lfo_1", 1)
   S.pattern_playing = false
   assert_equal(draws_in_a_second(pages.SEQ), 0, "SEQ stopped draws nothing")
   S.pattern_playing = true

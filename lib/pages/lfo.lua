@@ -93,9 +93,10 @@ return function(S)
   M.strip_y = strip_y
 
   -- The destination groups' first indices into S.LFO_DESTINATIONS: none (1),
-  -- the globals (2), each voice's "v<i> main" (found by label), then the
-  -- registered destinations after the built-in ones (lib/lfos.lua's
-  -- S.lib.lfos.BUILT_IN_DESTINATIONS), as one more group
+  -- the globals (2), each voice's "v<i> main" (found by label), then, after
+  -- the built-in ones (lib/lfos.lua's S.lib.lfos.BUILT_IN_DESTINATIONS),
+  -- each registered destination's "v1 <label>" (found by label): lib/lfos.lua
+  -- lists each registration's v1-v7 together, so each is a group (#511)
   function lfo_dest_group_starts()
     local destinations = S.LFO_DESTINATIONS
     local starts = {1, 2}
@@ -107,8 +108,9 @@ return function(S)
     for voice = 1, NUM_VOICES do
       if voice_starts[voice] then table.insert(starts, voice_starts[voice]) end
     end
-    local built_in = S.lib.lfos.BUILT_IN_DESTINATIONS
-    if #destinations > built_in then table.insert(starts, built_in + 1) end
+    for index = S.lib.lfos.BUILT_IN_DESTINATIONS + 1, #destinations do
+      if destinations[index].label:match("^v1 ") then table.insert(starts, index) end
+    end
     return starts
   end
 
@@ -186,7 +188,10 @@ return function(S)
 
     if running and S.lfo_last_raw[n] then
       local x = util.round(LFO_PAGE.wave_x + lfo_phase_estimate(n) * (LFO_PAGE.wave_width - 1))
-      local y = util.round(bottom - S.lfo_last_raw[n] * LFO_PAGE.wave_height)
+      -- the swing around the middle line follows the depth: the whole wave
+      -- at 100 %, the line itself at 0 % (which moves nothing, #520)
+      local swing = (S.lfo_last_raw[n] - 0.5) * params:get("lfo_depth_" .. n) / 100
+      local y = util.round(bottom - (0.5 + swing) * LFO_PAGE.wave_height)
       screen.level(15)
       screen.rect(x - 1, y - 1, 3, 3)
       screen.fill()
@@ -283,8 +288,9 @@ return function(S)
     end
   end
 
-  -- ALT+E3 on the destination jumps a group per detent (none, global, then
-  -- v1 ... v7); anything else goes on to lfo_enc
+  -- ALT+E3 on the destination jumps a group per detent (none, global,
+  -- v1 ... v7, then each registered destination); anything else goes on to
+  -- lfo_enc
   local function lfo_alt_enc(n, d)
     if n ~= 3 or S.lfo_field ~= DEST_FIELD then return false end
     local dest_id = LFO_FIELDS[DEST_FIELD].param(S.selected_lfo)
@@ -355,12 +361,22 @@ return function(S)
     params:set("lfo_free_1", 0.1)
   end))
 
+  -- Only a running LFO's dot moves, so the page draws every frame only
+  -- while one runs (#423); every other change asks for a redraw (the param
+  -- actions, enc, key, the rings), turning the last LFO off included
+  local function any_lfo_running()
+    for n = 1, NUM_LFOS do
+      if lfo_running(n) then return true end
+    end
+    return false
+  end
+
   -- The page's record, at LFO's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/lfo.lua's
   S.registry.pages[UI_PAGES.index.LFO] = {name = "LFO", draw = redraw_lfo, hints = lfo_hints,
     enc = lfo_enc, alt_enc = lfo_alt_enc, key = lfo_key, alt_key = lfo_alt_key,
-    animates = function() return true end, arc_button = toggle_selected_lfo, layout_states = layout_states}
+    animates = any_lfo_running, arc_button = toggle_selected_lfo, layout_states = layout_states}
 
   return M
 end
