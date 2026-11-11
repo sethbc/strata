@@ -198,6 +198,37 @@ test("a scenes file that fails to load survives cleanup (fix round 1)", function
   file:close()
 end)
 
+-- The reader reads inf, -inf and nan as numbers (lib/data_files.lua, #464),
+-- and tab.load read 1e999 as inf: validation refuses any of them as it
+-- refuses any invalid value, so the file is kept as scenes.data.bak
+test("a scenes.data value that is not a finite number is refused as an invalid value (#464)", function()
+  local context = load_strata({ data_subdir = "nonfinite_source" })
+  capture_scene(1)
+  local scenes = deep_copy(local_value("scenes"))
+  local cases = {
+    { name = "a finite value", value = 200, loads = true },
+    { name = "inf", value = math.huge }, { name = "-inf", value = -math.huge }, { name = "nan", value = 0 / 0 },
+    { name = "1e999", value = 54321.25, text = "1e999" },
+  }
+  for index, case in ipairs(cases) do
+    scenes[1].data.voices[1].params.freq = case.value
+    local subdir = "nonfinite_" .. index
+    local dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. dir .. "'")
+    local text = tabutil_text({ version = 4, scenes = scenes })
+    if case.text then text = text:gsub("54321%.25", case.text) end
+    local file = assert(io.open(dir .. "scenes.data", "w")); file:write(text); file:close()
+    load_strata({ data_subdir = subdir })
+    local populated = local_value("scenes")[1].populated
+    if case.loads then
+      assert_true(populated, case.name .. " loads (the file is otherwise valid)")
+    else
+      assert_true(not populated, case.name .. ": the scene is refused")
+      assert_true(util.file_exists(dir .. "scenes.data.bak"), case.name .. ": the file is kept as scenes.data.bak")
+    end
+  end
+end)
+
 -- #72: a start that failed before init loaded scenes.data must not let
 -- cleanup overwrite it with the empty in-memory scenes
 test("cleanup leaves scenes.data alone when init never loaded it (#72)", function()
