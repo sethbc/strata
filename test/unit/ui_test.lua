@@ -170,6 +170,7 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
   redraw = real_redraw
   assert_equal(screen_draws, 1, "the next request draws the screen again")
   assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the arc")
+  context.take_script_errors()  -- the printed errors this test raises (#473)
 end)
 
 -- The one helper every contained clock step uses (frame, playheads, LFOs,
@@ -503,6 +504,7 @@ test("a draw that keeps failing prints its error once, until the error changes (
   for _ = 1, 15 do request_redraw(); next_frame(context) end
   assert_equal(failures_printed("frame draw failed"), 2, "a table error without one prints once too")
   redraw, arc_redraw = real_redraw, real_arc_redraw
+  context.take_script_errors()  -- the printed errors this test raises (#473)
 end)
 
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()

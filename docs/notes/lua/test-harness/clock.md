@@ -1,6 +1,6 @@
 ## Must not break
 
-- A clock error the stub records must be claimed (`context.clock.take_errors()`), or the test that left it fails: an error never passes silently.
+- A clock error the stub records must be claimed (`context.clock.take_errors()`), or the test that left it fails: an error never passes silently. So must an error the script catches itself and prints (`context.take_script_errors()`, below, #473).
 
 ## Time and the clock
 
@@ -49,4 +49,5 @@ Errors in clocks:
 - An error raised while the scheduler resumes a coroutine is not raised. norns prints it through `l_report` and keeps every other clock running; the coroutine stays dead in `clock.threads`, as norns never cancels it.
 - The stub records it, and `context.clock.take_errors()` claims the recorded errors.
 - The harness fails any test that leaves one unclaimed, so an error cannot pass silently (`run_test` in `test/helpers.lua`; a test that fails anyway gets them added to its own error).
+- The script contains some errors itself and carries on: the frame clock's parts (`draw_frame_part`), the playhead tick and the menu watch print `strata: <what> failed: <error>`, the scene sequencer `scene sequencer: scene <n> failed: <error>`. A quiet install's `print` records each such line (`SCRIPT_ERROR_PATTERNS` in `test/norns_stubs.lua`) beside `context.printed`, and `run_test` treats them as it treats clock errors: a test that leaves one fails, or gets it added to its own error. A test that raises one on purpose claims it with `context.take_script_errors()`, which returns the lines (#473).
 - A coroutine that cancels itself and then sleeps errors when it wakes (norns resumes the coroutine it no longer has).

@@ -6,7 +6,7 @@
 ## Layout tests
 
 `assert_screen_layout(context, where)` (`test/helpers.lua`) checks one drawn screen:
-- no two strings on a row overlap, and nothing leaves 128×64 (estimating 6 px per capital, 4 per bracket/colon/period, 5 otherwise);
+- no two strings on a row overlap, and nothing leaves 128×64 (measuring with norns' font advances, `stubs.text_width`: `docs/notes/lua/test-harness/stubs.md`);
 - the page title at 0,8, then the eight page dots (2×2 rects at x 40, 44, ..., 68, the first at least 4 px after the title), or, while a header flash shows (`S.lib.ui_flash.text("header")`), its text at 40,8 and no dots;
 - no header rect (a dot, the play mark: rects above y 9) lies under a header string;
 - a hint row is drawn at y=62;

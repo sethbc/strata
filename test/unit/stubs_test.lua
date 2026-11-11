@@ -32,6 +32,33 @@ test("each load gets its own data directory, even after the same random seed (#5
   assert_true(first.data_dir ~= second.data_dir, "two loads share " .. first.data_dir)
 end)
 
+-- A name that is no field of S or S.constants is looked for among the
+-- global functions' upvalues; two of them holding different locals of that
+-- name would make the answer depend on pairs(_G)'s order, which changes
+-- from run to run (#482)
+test("find_upvalue raises for a name whose upvalues hold different values (#482)", function()
+  load_strata()
+  local ok, message = pcall(local_value, "M")
+  assert_true(not ok, "every module has its own local M")
+  assert_true(tostring(message):find("script local 'M' has different values", 1, true), "the error says why: "
+    .. tostring(message))
+  assert_equal(local_value("S"), h.shared_state(), "a name every function shares is found")
+  -- two functions, two locals of one name: one value is found, and the
+  -- setter writes both; two values are an error naming both functions
+  local shared = {}
+  local function holder(value) local probe_local = value; return function() return probe_local end end
+  rawset(_G, "probe_holder_one", holder(shared)); rawset(_G, "probe_holder_two", holder(shared))
+  local value, set = h.find_upvalue("probe_local")
+  assert_equal(value, shared, "one value")
+  set(5)
+  assert_equal(probe_holder_one(), 5, "the setter writes the first"); assert_equal(probe_holder_two(), 5, "and the second")
+  rawset(_G, "probe_holder_two", holder({}))
+  ok, message = pcall(h.find_upvalue, "probe_local")
+  rawset(_G, "probe_holder_one", nil); rawset(_G, "probe_holder_two", nil)
+  assert_true(not ok and tostring(message):find("probe_holder_one", 1, true)
+    and tostring(message):find("probe_holder_two", 1, true), "both functions are named: " .. tostring(message))
+end)
+
 test("include stub loads lib modules and honors overrides", function()
   local function install(module_sources)
     return stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
@@ -57,9 +84,75 @@ test("include stub loads lib modules and honors overrides", function()
   assert_equal(local_value("S").marker, 2, "load_strata's module_sources reach include")
 end)
 
+-- norns paints a path at stroke() or fill() with the level in force then,
+-- not the one set when screen.line or screen.rect built it (#474)
+test("the screen stub records a path at the level it is painted with (#474)", function()
+  local context = load_strata(); finish_startup(context)
+  screen.clear()
+  screen.level(4); screen.rect(0, 0, 4, 4); screen.move(0, 10); screen.line(10, 10)
+  screen.level(2); screen.stroke()
+  screen.level(9); screen.rect(5, 0, 4, 4); screen.fill()
+  local rects, lines = context.screen.rects, context.screen.lines
+  assert_equal(rects[1].level, 2, "the rect is stroked at 2")
+  assert_equal(lines[1].level, 2, "and the line with it")
+  assert_equal(rects[2].level, 9, "the next path is filled at 9")
+  -- SCENES draws an empty slot's box as rect, level(2), stroke
+  h.show_page("SCENES")
+  local boxes = 0
+  for _, rect in ipairs(context.screen.rects) do
+    if rect.w == 5 and rect.h == 5 and rect.filled == false then
+      boxes = boxes + 1
+      assert_equal(rect.level, 2, "an empty slot's box at x " .. rect.x .. ", y " .. rect.y)
+    end
+  end
+  assert_equal(boxes, 8, "eight empty slots")
+end)
+
+-- matron reads screen.level's value with luaL_checkinteger, the texts'
+-- with luaL_checkstring and move, line and rect's with luaL_checknumber
+-- (weaver.cc), so a bad value raises in the draw on a norns (#475)
+test("the screen stub refuses the arguments matron refuses (#475)", function()
+  local context = load_strata()
+  local function refused(name, expected, ...)
+    local ok, message = pcall(screen[name], ...)
+    assert_true(not ok and tostring(message):find(expected, 1, true),
+      "screen." .. name .. " raises '" .. expected .. "': " .. tostring(message))
+  end
+  refused("level", "number has no integer representation", 7.5)
+  refused("level", "number expected, got nil", nil)
+  refused("level", "number expected, got string", "bright")
+  refused("text", "string expected, got nil", nil)
+  refused("text", "string expected, got table", {})
+  refused("text_right", "string expected, got boolean", false)
+  refused("text_center", "string expected, got nil", nil)
+  refused("text_extents", "string expected, got nil", nil)
+  refused("move", "number expected, got nil", nil, 3)
+  refused("line", "number expected, got string", 1, "x")
+  refused("rect", "number expected, got nil", 1, 2)
+  -- what Lua converts passes, as on norns: a whole float, numeral strings, a number as text
+  screen.clear()
+  screen.level(7.0); screen.level("6"); screen.move("3", 4.5); screen.text(12)
+  assert_equal(context.screen.texts[1].text, "12", "a number is drawn as its string")
+  assert_equal(context.screen.texts[1].level, 6, "at the level the string gave")
+  assert_equal(context.screen.texts[1].x, 3, "at the x the string gave")
+end)
+
 test("stub text_width counts UTF-8 characters, not bytes", function()
-  assert_equal(text_width("\226\151\143"), text_width("o"), "a three-byte glyph is one character")
-  assert_equal(text_width("\226\151\139 ab"), 4 * text_width("o"), "glyph, space and two letters")
+  assert_equal(text_width("\226\151\143"), 6, "a three-byte glyph is one character, 6 px")
+  assert_equal(text_width("\226\151\139 ab"), 6 + 4 + 5 + 5, "glyph, space and two letters")
+end)
+
+-- The widths are norns.ttf's advances at 8 px (04B_03, measured with
+-- Pillow): m, w, %, /, #, &, @ and \ are 6 px, most capitals 5 (#479)
+test("stub text widths are norns' font advances (#479)", function()
+  local context = load_strata()
+  local expected = { m = 6, ["%"] = 6, ["/"] = 6, ["#"] = 6, ["&"] = 6, ["@"] = 6, ["\\"] = 6, w = 6,
+    mod = 16, ["40%"] = 16, ["mm/ww%"] = 36, MAIN = 20, ["[L]"] = 10, ["0.5 s"] = 21, ["!i.:"] = 8 }
+  for text, width in pairs(expected) do
+    assert_equal(text_width(text), width, "'" .. text .. "'")
+  end
+  assert_equal(screen.text_extents("40%"), 16, "screen.text_extents measures the same")
+  assert_equal(context.screen.text_extents("MAIN"), 20, "and for the capitals")
 end)
 
 test("stub params support option, group, trigger, binary, file and set_action", function()
@@ -135,6 +228,27 @@ test("stub params: each group is followed by exactly n params (#25)", function()
   params:add_separator("stub_after"); params:add_number("stub_c", "c")
   params:add_group("stub_last", "last", 1); params:add_number("stub_d", "d")
   context.check_param_groups()
+end)
+
+-- lua/core/paramset.lua keeps each param's index in lookup and its add and
+-- add_* return nothing; params/control.lua's set goes through set_raw, and
+-- controlspec.lua's unmap wraps a wrapping spec into its range (#478)
+test("stub params: lookup holds indices, add returns nothing, a wrapping control wraps on set (#478)", function()
+  load_strata()
+  local index = params.lookup.filter_freq
+  assert_equal(type(index), "number", "lookup holds the param's index")
+  assert_equal(params.params[index].id, "filter_freq", "the index of the param")
+  assert_equal(params:lookup_param(index).id, "filter_freq", "lookup_param takes the index")
+  assert_equal(params:lookup_param("filter_freq").id, "filter_freq", "or the id")
+  assert_true(not pcall(params.lookup_param, params, "no_such_param"), "an unknown id is an error")
+  params:add_separator("probe_section", "probe")
+  assert_equal(params:add_number("probe_number", "probe", 0, 10, 5), nil, "add_number returns nothing")
+  assert_equal(params:add { type = "trigger", id = "probe_trigger" }, nil, "add returns nothing")
+  -- a 0-10 control that wraps, at 9
+  params:add_control("probe_wrap", "probe wrap", controlspec.new(0, 10, "lin", 0, 9, "", 0.02, true))
+  params:set("probe_wrap", 12); assert_near(params:get("probe_wrap"), 2, 1e-9, "set wraps 12 to 2")
+  params:set("probe_wrap", -3); assert_near(params:get("probe_wrap"), 7, 1e-9, "and -3 to 7")
+  params:set_raw("probe_wrap", 1.25); assert_near(params:get_raw("probe_wrap"), 0.25, 1e-9, "set_raw wraps too")
 end)
 
 test("stub params:write and params:read follow lua/core/paramset.lua", function()
@@ -344,6 +458,39 @@ test("the runner adds the clock errors to a failing test's own error (#51)", fun
   assert_equal(#context.clock.take_errors(), 0, "the runner claimed them")
 end)
 
+-- The frame clock's parts, the playhead tick and the menu-close hooks catch
+-- an error, print one "strata: ... failed" line and carry on. The harness
+-- treats that line as it treats a clock error (#473)
+test("an error the script catches and prints fails the test unless it claims it (#473)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local page = S.registry.pages[S.ui_page]
+  local real_draw = page.draw
+  -- one failed frame draw, then a good one (the frame clock prints a part's
+  -- error once until that part draws again)
+  local function failed_frame()
+    page.draw = function() error("draw exploded") end
+    request_redraw(); h.next_frame(context)
+    page.draw = real_draw
+    request_redraw(); h.next_frame(context)
+  end
+  local ok, message = run_test(failed_frame)
+  assert_true(not ok, "a passing test whose frame draw failed fails")
+  assert_true(tostring(message):find("draw exploded", 1, true), "with the printed error: " .. tostring(message))
+  ok, message = run_test(function() failed_frame(); error("the test failed") end)
+  assert_true(not ok and tostring(message):find("the test failed", 1, true), "a failing test keeps its own error")
+  assert_true(tostring(message):find("draw exploded", 1, true), "and gets the printed error: " .. tostring(message))
+  ok, message = run_test(function()
+    failed_frame()
+    local claimed = context.take_script_errors()
+    assert_equal(#claimed, 1, "one printed error claimed")
+    assert_true(claimed[1]:find("strata: frame draw failed:", 1, true), "the line: " .. claimed[1])
+  end)
+  assert_true(ok, "a test that claims the printed error passes: " .. tostring(message))
+  print("strata: a line that reports no failure"); print("buffer 1 saved to /x.wav")
+  assert_equal(#context.take_script_errors(), 0, "other printed lines are no errors")
+end)
+
 test("a broken invariant is reported by name, a held one is not", function()
   load_strata()
   assert_equal(#h.check_invariants(), 0, "every invariant holds after a load")
@@ -526,7 +673,7 @@ test("stub params hold norns' system params, so a script id colliding with one f
       end
       assert_equal(params.lookup.clock_midi_out, nil, "no clock_midi_out param, as on norns")
     else
-      local param = params.lookup[param_id]
+      local param = params.lookup[param_id] and params:lookup_param(param_id)
       assert_true(param ~= nil, "system param " .. param_id .. " registered")
       if expected_types[param_id] then assert_equal(param.t, expected_types[param_id], param_id .. " type") end
     end
@@ -728,6 +875,28 @@ test("stub arc segment, led and all follow lua/core/arc.lua and matron's LED buf
   assert_true(not pcall(vport.led, vport, 1, 1, 1.5), "levels are integers (luaL_checkinteger)")
 end)
 
+-- matron's _grid_set_led and _grid_all_led read x, y and the level with
+-- luaL_checkinteger; rel adds to the level, clamped to 0..15
+-- (dev_monome_grid_set_led, dev_monome_all_led) (#476)
+test("stub grid led and all take integers and rel as matron does (#476)", function()
+  local context = load_strata()
+  local device = context.grid.plug(1, 16, 8)
+  local vport = grid.connect(1)
+  for _, case in ipairs({ { "led", 1, 1, 7.5 }, { "led", 1.5, 1, 7 }, { "all", nil }, { "all", "x" }, { "all", 99 },
+      { "all", 16 }, { "all", 2.5 } }) do
+    local method = case[1]
+    assert_true(not pcall(vport[method], vport, case[2], case[3], case[4]),
+      "refused: " .. method .. "(" .. tostring(case[2]) .. ", " .. tostring(case[3]) .. ", " .. tostring(case[4]) .. ")")
+  end
+  vport:led(1, 1, 8); vport:led(1, 1, 20, true)
+  assert_equal(device:get_led(1, 1), 15, "a relative led adds, clamped to 15")
+  vport:led(1, 1, -20, true); assert_equal(device:get_led(1, 1), 0, "and at 0")
+  vport:all(3); vport:all(5, true)
+  assert_equal(device:get_led(16, 8), 8, "a relative all adds to every LED")
+  vport:all(-12, true); assert_equal(device:get_led(2, 2), 0, "clamped at 0")
+  vport:led(2, 3, 7.0); assert_equal(device:get_led(2, 3), 7, "a whole float is an integer")
+end)
+
 -- SYSTEM > DEVICES (lua/core/menu/devices.lua) renames the vports and calls
 -- update_devices() only (lua/core/grid.lua, arc.lua): no add, no remove
 test("reassign moves a device between vports and calls no add or remove", function()
@@ -837,6 +1006,58 @@ test("stub fileselect, musicutil, polls and audio path", function()
   assert_equal(number_type(values[2]), "float", "a whole poll value arrives as a float")
 end)
 
+-- lua/core/menu.lua's set_mode: menu mode puts norns.none in redraw and
+-- refresh and routes the encoders to the menu; play mode puts back the
+-- redraw and refresh Script.load stored (norns.script), routes _menu.key and
+-- the encoders to the globals key and enc, and calls redraw (#521)
+test("stub _menu.set_mode swaps the handlers and redraws as norns' does (#521)", function()
+  local context = load_strata(); finish_startup(context)
+  local script_redraw, script_key, script_enc = redraw, key, enc
+  assert_equal(norns.script.redraw, script_redraw, "the script's redraw is stored as it loads")
+  _menu.set_mode(true)
+  assert_equal(redraw, norns.none, "the open menu blocks the script's redraw")
+  assert_equal(refresh, norns.none, "and its refresh")
+  assert_true(norns.encoders.callback ~= script_enc, "the menu has the encoders")
+  assert_true(_menu.key ~= script_key, "and the keys")
+  local draws = 0
+  norns.script.redraw = function() draws = draws + 1; script_redraw() end
+  context.screen.texts = { { text = "menu", x = 0, y = 8 } }
+  _menu.set_mode(false)
+  assert_equal(draws, 1, "closing the menu draws the script's screen once")
+  assert_equal(redraw, norns.script.redraw, "and gives back the stored redraw")
+  assert_equal(_menu.key, script_key, "the keys go to the script"); assert_equal(norns.encoders.callback, script_enc, "and the encoders")
+  assert_true(not h.screen_shows(context, "menu"), "the menu's screen is cleared")
+  assert_true(h.screen_shows(context, "MAIN"), "and the page drawn")
+  norns.script.redraw, redraw = script_redraw, script_redraw
+end)
+
+-- lib/util.lua's make_dir runs "mkdir -p " .. path unquoted, lib/fileselect.lua's
+-- enter indexes its folder (fs.folder:sub), and core/metro.lua's init takes
+-- (event, time, count) or a table, with 30 script metros (#481)
+test("stub util.make_dir, fileselect.enter and metro.init follow norns (#481)", function()
+  local context = load_strata()
+  local ok, message = pcall(util.make_dir, context.data_dir .. "a b")
+  assert_true(not ok and tostring(message):find("unquoted", 1, true), "a path the shell would split is refused: "
+    .. tostring(message))
+  assert_true(not pcall(util.make_dir, context.data_dir .. "it's"), "and one with a quote")
+  util.make_dir(context.data_dir .. "plain/dir")
+  assert_true(util.file_exists(context.data_dir .. "plain/dir"), "a plain path is made, parents and all")
+  local fileselect = require("fileselect")
+  assert_true(not pcall(fileselect.enter, nil, function() end), "a nil folder raises, as fs.folder:sub does")
+  assert_true(not pcall(fileselect.enter, 3, function() end), "and a number")
+  local function tick() end
+  local timer = metro.init(tick, 0.25, 3)
+  assert_equal(timer.event, tick, "the event"); assert_equal(timer.time, 0.25, "the time"); assert_equal(timer.count, 3, "the count")
+  timer = metro.init { event = tick, time = 0.5 }
+  assert_equal(timer.event, tick, "a table's event"); assert_equal(timer.time, 0.5, "its time")
+  assert_equal(timer.count, -1, "count -1 (forever) by default")
+  timer = metro.init()
+  assert_equal(timer.time, 1, "time 1 by default"); assert_equal(timer.event, nil, "and no event")
+  while #context.metro.all < 30 do assert_true(metro.init() ~= nil, "a free script metro") end
+  assert_equal(metro.init(), nil, "the 31st script metro is not available")
+  assert_equal(context.printed[#context.printed], "metro.init: nothing available", "norns says so")
+end)
+
 -- norns' util.time() is seconds + microseconds / 1000000, and matron pushes
 -- clock_get_tempo and clock_get_beats with lua_pushnumber: floats on Lua
 -- 5.3, also when the stub's time, tempo or beat is a whole number (#300)
@@ -875,12 +1096,64 @@ test("the runner finds unit files and filters them", function()
   assert_equal(tests, "beta one", "and only their tests")
   assert_equal(load_from("a."), "", "the filter is plain text, not a pattern")
   assert_equal(load_from("gamma"), "", "a filter matching no file loads none")
+  -- a unit file that registers no test, or returns no function, stops the load (#484)
+  write("empty_test.lua", 'return function(h) end\n')
+  write("nothing_test.lua", 'local x = 1\n')
+  local ok, message = pcall(load_from, "empty")
+  assert_true(not ok and tostring(message):find("empty_test.lua registered no test", 1, true),
+    "a unit file with no test is an error: " .. tostring(message))
+  ok, message = pcall(load_from, "nothing")
+  assert_true(not ok and tostring(message):find("nothing_test.lua returns no function(h)", 1, true),
+    "a unit file returning nothing is an error: " .. tostring(message))
   h.remove_tree(dir)
   -- the suite's own unit files
   local unit_dir = repo_root .. "/test/unit"
   assert_equal(table.concat(unit_files(unit_dir, "lfos"), " "), "lfos_test.lua", "the lfos filter")
   local all = table.concat(unit_files(unit_dir), " ")
   assert_true(all:find("stubs_test.lua", 1, true) and all:find("structure_test.lua", 1, true), "every unit file: " .. all)
+end)
+
+-- test/run.lua under this run's interpreter (arg's lowest index), with
+-- `prelude` run first: its output, exit status and the temporary folder
+-- helpers.lua made (os.tmpname, reported by the prelude)
+local function run_runner(prelude, filter)
+  local lowest = 0
+  while arg[lowest - 1] do lowest = lowest - 1 end
+  local report_tmpname = 'local tmpname = os.tmpname; os.tmpname = function() local name = tmpname();'
+    .. ' io.stderr:write("tmpname " .. name .. "\\n"); return name end; '
+  local command = "cd " .. h.shell_quote(repo_root) .. " && " .. h.shell_quote(arg[lowest]) .. " -e "
+    .. h.shell_quote(report_tmpname .. prelude) .. " test/run.lua " .. h.shell_quote(filter) .. " 2>&1; echo \"exit $?\""
+  local pipe = assert(io.popen(command))
+  local output = pipe:read("*a")
+  pipe:close()
+  return output, tonumber(output:match("exit (%d+)%s*$")), output:match("tmpname (%S+)")
+end
+
+-- helpers.lua makes the suite's temporary folder as it loads; the runner
+-- removes it on every way out (#483), and a run that registers no test
+-- fails (#484)
+test("the runner removes its temporary folder on every way out and fails a run with no test (#483, #484)", function()
+  local function exists(path)
+    local file = io.open(path, "r"); if file then file:close() end
+    return file ~= nil
+  end
+  -- planted: require("helpers") returns the harness with load_unit_files replaced
+  local function planting(load_unit_files)
+    return 'local real_require = require; require = function(name) local module = real_require(name);'
+      .. ' if name == "helpers" then module.load_unit_files = ' .. load_unit_files .. ' end; return module end'
+  end
+  local cases = {
+    { prelude = "", filter = "no_unit_file_has_this_name", says = "no unit file" },
+    { prelude = planting('function() error("planted load failure") end'), filter = "docs", says = "planted load failure" },
+    { prelude = planting('function() return { "planted_test.lua" } end'), filter = "docs", says = "registered no test" },
+  }
+  for _, case in ipairs(cases) do
+    local output, status, folder = run_runner(case.prelude, case.filter)
+    assert_equal(status, 1, "the run fails (" .. case.says .. "): " .. output)
+    assert_true(output:find(case.says, 1, true), "the run says why (" .. case.says .. "): " .. output)
+    assert_true(folder and folder:match("^/"), "the run made its folder: " .. output)
+    assert_true(not exists(folder), "the run left no folder behind (" .. case.says .. "): " .. tostring(folder))
+  end
 end)
 
 -- The suite deletes its temporary folders only through h.remove_tree (#134)

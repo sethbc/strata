@@ -335,9 +335,9 @@ test("slots sit 7 px apart, three at a time, with a scroll marker", function()
   enc(2, 2); redraw()
   slots, rows = shown_slots()
   assert_equal(table.concat(slots, " "), "2 3 4", "one row above the cursor stays in view")
-  -- under the layout test's width estimate the name keeps its minimum width, so
-  -- the voices shorten to "v2+" (the full list shows with a narrower font, below)
-  assert_equal(slot_row_text(context, rows[3]), "3 x v2+ 2.5s", "the cursor row shows its voices, shortened")
+  -- by norns' font widths both voices fit beside the name (#479; every voice
+  -- on one slot is cut to fit, below)
+  assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows its voices")
   for _, entry in ipairs(texts_on_row(context, rows[3])) do
     if entry.x >= page.slot_x then assert_equal(entry.level, 15, "the cursor row is bright") end
   end
@@ -522,9 +522,10 @@ end)
 test("Strata's page never draws over the open file selector; redraws draw the selector (issue #10)", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
-  local draws = 0  -- Strata's page draws (the stub's fileselect.redraw draws nothing)
-  local update = screen.update
-  screen.update = function() draws = draws + 1; return update() end
+  local draws = 0  -- BUFFER's page draws (norns' set_mode(false) calls screen.update itself, #521)
+  local page_record = local_value("S").registry.pages[local_value("S").ui_page]
+  local page_draw = page_record.draw
+  page_record.draw = function(...) draws = draws + 1; return page_draw(...) end
   local selector = context.fileselect
   -- opening it on K2's release: fs.enter's redraw() (from norns.menu.init)
   -- and the frame after key() draw the selector, not the page
@@ -536,7 +537,7 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   -- the norns menu opened and closed over it (K1 twice): set_mode(false)
   -- clears the screen and calls redraw(), which must show the selector again
   selector.redraws = 0
-  _menu.set_mode(true); _menu.set_mode(false); redraw()
+  _menu.set_mode(true); _menu.set_mode(false)
   assert_equal(selector.redraws, 1, "norns' redraw() as the menu closes draws the selector")
   assert_equal(draws, 0, "and not Strata's page")
   -- Strata's own redraws (a buffer report, page turns, a load) while it is
@@ -567,24 +568,26 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   assert_equal(draws, 1, "a chosen file redraws once")
   assert_equal(#context.calls_named("loadBuffer"), 1, "and loads")
   redraw(); assert_equal(draws, 2, "the script draws again after a choice")
-  screen.update = update
+  page_record.draw = page_draw
 end)
 
 test("a file selector that fails to open leaves the BUFFER page drawing (#49)", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   params:set("v1_source", 2)
-  local stub_enter = context.fileselect.enter
+  local stub_enter, stub_redraw = context.fileselect.enter, context.fileselect.redraw
   local script_key, script_enc = key, enc
   -- fails after it has routed its own handlers to play mode, as fs.enter
   -- would if its redraw raised: globals swapped, then norns.menu.init()
+  -- (whose redraw() draws the selector, #521)
   context.fileselect.enter = function()
     key, enc = function() end, function() end
+    context.fileselect.redraw = function() error("no audio folder") end
     norns.menu.init()
     error("no audio folder")
   end
   key(2, 1)
   local released, release_error = pcall(key, 2, 0)
-  context.fileselect.enter = stub_enter
+  context.fileselect.enter, context.fileselect.redraw = stub_enter, stub_redraw
   assert_true(not released, "K2's release raises the selector's error")
   assert_true(tostring(release_error):find("no audio folder", 1, true), "the same error: " .. tostring(release_error))
   assert_equal(_menu.key, script_key, "play mode routes the keys to Strata again")
@@ -711,6 +714,7 @@ test("the superseded-selector release acts only as the menu closes, and never br
   assert_true(closed, "set_mode(false) does not raise")
   assert_equal(norns.menu.status(), false, "the menu closed")
   assert_true(table.concat(context.printed, "\n"):find("release failed", 1, true), "the error is printed")
+  context.take_script_errors()  -- the printed errors this test raises (#473)
 end)
 
 test("BUFFER page draws its fields, the meter and the slot rows", function()

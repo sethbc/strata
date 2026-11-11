@@ -857,6 +857,7 @@ test("an error in a sequenced recall is reported and the scene sequencer keeps g
   assert_true(ran, "the sequencer runs on: " .. tostring(run_error))
   assert_equal(local_value("current_scene"), 2, "it recalled scene 2 after scene 1's duration")
   assert_near(params:get("v1_freq"), 400, 1.0, "and scene 2's transition ended")
+  context.take_script_errors()  -- the printed failure this test raises (#473)
 end)
 
 test("a failing instant sequenced recall is reported and the scene sequencer holds the scene, then goes on (#50)", function()
@@ -889,6 +890,7 @@ test("a failing instant sequenced recall is reported and the scene sequencer hol
   assert_near(recalls[2].time, 4, 0.01, "after holding the failed scene for its duration")
   assert_equal(local_value("current_scene"), 2, "scene 2 recalled")
   assert_near(params:get("v1_freq"), 400, 1.0, "and applied at once")
+  context.take_script_errors()  -- the printed failure this test raises (#473)
 end)
 
 test("a manual recall still interrupts a transition the scene sequencer started", function()
