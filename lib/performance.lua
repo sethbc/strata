@@ -69,6 +69,10 @@ return function(S)
     return fields
   end
 
+  -- A run of decimal digits as a number (leading zeros allowed), or nil.
+  -- The engine's wholeNumber (StrataPerformance.sc) reads every digit
+  -- string as this does: a string that sclang's asInteger wraps at 32 bits
+  -- is no number there, as its value here is none of the choices (#500)
   local function whole_number(text)
     if type(text) ~= "string" or not text:match("^%d+$") then return nil end
     return tonumber(text)

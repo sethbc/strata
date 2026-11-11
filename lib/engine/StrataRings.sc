@@ -1,7 +1,8 @@
 // StrataRings.sc
 // The rings area: each voice's ring and the input ring the ring grain
-// synths read, their persistent writers and phase buses, and the ring
-// readers. See docs/notes/engine/rings.md.
+// synths read, their persistent writers and phase buses, each voice's copy
+// ring (an input freeze's copy: the freeze area's), and the ring readers.
+// See docs/notes/engine/rings.md.
 
 + Engine_Strata {
     // Seconds each voice's ring holds
@@ -65,17 +66,32 @@
         ^nil
     }
 
+    // [left buffer, right buffer, phase bus] of a voice's copy ring: what an
+    // input freeze holds (the freeze area writes it), read only by the
+    // voice's input grain synths. The voice's own ring only ever holds its
+    // voice bus, so a synth-source grain synth never reads input audio
+    copyRingFor { arg voice;
+        var rings = areaState[\rings];
+        ^[rings[\copyL][voice], rings[\copyR][voice], rings[\copyPhaseBuses][voice]]
+    }
+
     allocRings {
         var server = context.server, rings = areaState[\rings];
         var voiceFrames = server.sampleRate * this.ringSeconds;
         var inputFrames = server.sampleRate * (historySeconds + this.ringGuardSeconds + 1);
         rings[\voiceL] = Array.fill(numVoices, { Buffer.alloc(server, voiceFrames, 1) });
         rings[\voiceR] = Array.fill(numVoices, { Buffer.alloc(server, voiceFrames, 1) });
+        // each voice's copy ring, as long as its own (an input freeze's 4 s)
+        rings[\copyL] = Array.fill(numVoices, { Buffer.alloc(server, voiceFrames, 1) });
+        rings[\copyR] = Array.fill(numVoices, { Buffer.alloc(server, voiceFrames, 1) });
         rings[\inputL] = Buffer.alloc(server, inputFrames, 1);
         rings[\inputR] = Buffer.alloc(server, inputFrames, 1);
         // the last is the input's; zeroed, since a writer starts from its bus
         rings[\phaseBuses] = Array.fill(numVoices + 1, { Bus.control(server, 1) });
         rings[\phaseBuses].do({ arg bus; bus.set(0) });
+        // the copy rings' (a spectral input freeze's writer moves one)
+        rings[\copyPhaseBuses] = Array.fill(numVoices, { Bus.control(server, 1) });
+        rings[\copyPhaseBuses].do({ arg bus; bus.set(0) });
         rings[\readers] = IdentityDictionary.new;
         rings[\changes] = Array.fill(numVoices, 0);
         rings[\writers] = [];
@@ -124,11 +140,14 @@
         areaState[\rings][\writers] = [];
     }
 
-    // The rings and phase buses (every area's nodes are gone by now)
+    // The rings, the copy rings and their phase buses (every area's nodes
+    // are gone by now)
     freeRings {
         var rings = areaState[\rings];
-        (rings[\voiceL] ++ rings[\voiceR] ++ [rings[\inputL], rings[\inputR]]).do({ arg buffer; buffer.free });
-        rings[\phaseBuses].do({ arg bus; bus.free });
-        rings[\readers].clear;
+        // (each key may be missing after an alloc that failed part way)
+        ([\voiceL, \voiceR, \copyL, \copyR].collect({ arg key; rings[key] ? [] }).flatten
+            ++ [rings[\inputL], rings[\inputR]]).do({ arg buffer; buffer !? { buffer.free } });
+        ((rings[\phaseBuses] ? []) ++ (rings[\copyPhaseBuses] ? [])).do({ arg bus; bus.free });
+        rings[\readers] !? { arg readers; readers.clear };
     }
 }

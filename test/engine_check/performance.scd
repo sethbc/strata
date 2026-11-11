@@ -89,9 +89,16 @@ check.(decide.(\high, models[\pi4], 2100000, 120)[\bufferSeconds] == 120
     "performance: the setting's length is the most it gets");
 check.(decide.(\high, models[\pi4], 1800000, 300)[\reason].contains("300 s -> 120 s (memory)"),
     "performance: a step-down is in the reason");
-// The memory each length needs: slots, every voice's ring and the input ring
-check.(engine.highMemoryBytes(60, 48000) == ((8 * 2 * 60 * 48000 * 4) + (7 * 2 * 4 * 48000 * 4)
-    + (2 * (60 + 4 + 1) * 48000 * 4)), "performance: the high tier's memory per length");
+// The memory each length needs: slots, every voice's ring and copy ring
+// (2 x 2 mono buffers of 4 s) and the input ring
+check.(engine.highMemoryBytes(60, 48000) == ((8 * 2 * 60 * 48000 * 4) + (7 * 2 * 2 * 4 * 48000 * 4)
+    + (2 * (60 + 4 + 1) * 48000 * 4)), "performance: the high tier's memory per length (got %)".format(engine.highMemoryBytes(60, 48000)));
+// ... its voices' term is what the rings area allocates: every voice ring
+// and copy ring (scaled to 48 kHz)
+check.(((engine.areaState[\rings][\voiceL] ++ engine.areaState[\rings][\voiceR] ++ engine.areaState[\rings][\copyL]
+        ++ engine.areaState[\rings][\copyR]).collect(_.numFrames).sum * 4 * 48000 / server.sampleRate)
+    == (engine.highMemoryBytes(16, 48000) - (8 * 2 * 16 * 48000 * 4) - (2 * (60 + 4 + 1) * 48000 * 4)),
+    "performance: highMemoryBytes counts every voice ring and copy ring the rings area allocates");
 
 // The files it reads
 check.(settingFrom.("missing", nil) == setting.(\auto, 60), "performance: a missing settings file means auto and 60 s");
@@ -108,6 +115,13 @@ check.(result.isEmpty, "performance: a garbled settings file means auto and 60 s
 check.(settingFrom.("valid", "performance high\r\nbuffer_seconds 120\r\n") == setting.(\high, 120)
     and: { settingFrom.("one bad", "performance standard\nbuffer_seconds 61\n") == setting.(\standard, 60) },
     "performance: each key is read on its own (CRLF too)");
+// a digit string that wraps a 32-bit integer to a choice is no choice
+// (#500: 4294967416 is 2^32 + 120); leading zeros spell the choice, as Lua
+// reads them
+result = [settingFrom.("wrapped", "performance high\nbuffer_seconds 4294967416\n"),
+    settingFrom.("zeros", "performance high\nbuffer_seconds 00120\n")];
+check.((result[0] == setting.(\high, 60)) and: { result[1] == setting.(\high, 120) },
+    "performance: a length that wraps a 32-bit integer is refused, one with leading zeros read (got %)".format(result));
 writeText.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4" ++ 0.asAscii);
 writeText.(root +/+ "model-padded", " Raspberry Pi Compute Module 4 Rev 1.0\n" ++ 0.asAscii ++ 0.asAscii);
 check.(withClassvars.([[\modelPath, root +/+ "model"]], { engine.readBoardModel }) == models[\pi4]
@@ -230,6 +244,10 @@ check.(engine.parseActivePerformance("  tier standard \nbuffer_seconds 16\nmax_g
     "performance: and a valid standard file without a reason");
 check.(engine.parseActivePerformance("tier high\nbuffer_seconds 300\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n")
     [\bufferSeconds] == 60, "performance: the last line of a key wins, as in Lua");
+// leading zeros spell the same number, as Lua's tonumber reads them
+check.(engine.parseActivePerformance("tier high\nbuffer_seconds 0000000000060\nmax_grains 0128\nhistory_seconds 60\n")
+    == (tier: \high, bufferSeconds: 60, maxGrains: 128, historySeconds: 60, reason: ""),
+    "performance: a number with leading zeros reads as Lua reads it");
 result = [
     nil, "", "tier high\n", "tier turbo\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
     "tier high\nbuffer_seconds 61\nmax_grains 128\nhistory_seconds 60\n",
@@ -238,7 +256,12 @@ result = [
     "tier high\nbuffer_seconds 60\nmax_grains 64\nhistory_seconds 60\n",
     "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
     "tier standard\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 16\n",
-    "tier high please\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n"
+    "tier high please\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 60\n",
+    // digit strings that wrap a 32-bit integer to a valid value (#500):
+    // 4294967356 is 2^32 + 60, 4294967424 is 2^32 + 128
+    "tier high\nbuffer_seconds 4294967356\nmax_grains 128\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 4294967424\nhistory_seconds 60\n",
+    "tier high\nbuffer_seconds 60\nmax_grains 128\nhistory_seconds 4294967356\n"
 ].reject({ arg text; engine.parseActivePerformance(text).isNil });
 check.(result.isEmpty, "performance: parseActivePerformance refuses what Lua refuses (accepted %)".format(result));
 // An old file in a settings folder the engine cannot write to: [tier,

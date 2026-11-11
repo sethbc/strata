@@ -183,7 +183,7 @@ var checkRecordSizes = {
     guardKB = sizeOf.({ arg index; Synth(\strataCheckGuardSize, [\recHead, engine.areaState[\record][\idleHead].index], group) });
     plainKB = sizeOf.({ arg index; Synth(\strataCheckGuardPlain, [\recHead, engine.areaState[\record][\idleHead].index], group) });
     check.((recordKB > 0) and: { recordKB <= 24 },
-        "memory: a record synth takes about 15 KB (% KB of the pool, by allocation probes)".format(recordKB.round(0.1)));
+        "memory: a record synth takes at most 24 KB (% KB of the pool, by allocation probes)".format(recordKB.round(0.1)));
     check.(((guardKB - plainKB) > 0) and: { (guardKB - plainKB) <= 8 },
         "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it)".format(
             (guardKB - plainKB).round(0.1), guardKB.round(0.1), plainKB.round(0.1)));
@@ -224,7 +224,10 @@ var checkGuardResumes = {
 // voice's source sent before its stop or start (the order Lua used before
 // #46, the worst one): B builds an input grain synth and releases it, A's
 // voiceOn hands it to fadingSynths, and the voice still holds no more than
-// its live synths, one fading and one cutting set. Each time, on norns'
+// its live synths, one fading and one cutting set. Synth -> buffer ->
+// synth (#502): the second switch cuts the first one's fading set, a ring
+// grain synth and a voice synth per voice, beside the new voice synth
+// (two voice synths per voice for the cut). Each time, on norns'
 // 8192 KB pool (memSize, set before boot), probeCount 256 KB probes (twelve
 // on standard: 3 MB, 3.5's second note per voice plus 1 MB; fourteen on
 // high: 3.5 MB; see docs/notes/engine/memory.md) are sent right after the
@@ -310,13 +313,16 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     };
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
-    // function of (all allocated, free KB) instead of the floor's own check
-    var probeHeadroom = { arg label, scenario = "worst case", count, report;
+    // function of (all allocated, free KB) instead of the floor's own check;
+    // cutBound: the cutting set's size this scenario makes (numVoices, one
+    // grain synth per voice, unless given)
+    var probeHeadroom = { arg label, scenario = "worst case", count, report, cutBound;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
         var holds = cutting.collect({ server.nextNodeID }), resumedAt, wasHeld = voicesHeld;
         var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
         count = count ? probeCount;
         scenario = scenario ? "worst case";
+        cutBound = cutBound ? target.numVoices;
         server.sendBundle(nil, *(engineGroups.collect({ arg group; ['/n_run', group.nodeID, 1] })
             ++ [cutting, holds].flop.collect({ arg pair;
                 ['/s_new', \strataCheckCutHold, pair[1], 1, 0, \node, pair[0], \seconds, cutHoldSeconds]
@@ -351,16 +357,18 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         check.(wasHeld and: { cutting.size > 0 } and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start, held in their fade (%: % of %%)".format(
                 label, present, cutting.size, if (wasHeld) { "" } { ", but the scenario never held the voices" }));
-        // the bound (#218) is these scenarios', not the engine's invariant: a
+        // the bound (#218) is each scenario's, not the engine's invariant: a
         // legal cutting set is up to a grain and a voice synth per voice (a
-        // synth -> buffer switch cuts both), but each case's last switch cuts
-        // one grain synth per voice (seven, measured in every scenario), so a
-        // second cutting set kept past a switch makes more. Whoever hits it:
-        // check whether the scenario change legitimately cuts a voice synth
-        // too before loosening it
-        check.(cutting.size <= target.numVoices,
-            "memory: at most one grain synth per voice is cut in these scenarios (each last switch cuts one; check that a scenario change does not legitimately cut a voice synth too before loosening this) (%: % cutting synths for % voices)".format(
-                label, cutting.size, target.numVoices));
+        // switch back to the synth cuts both: the synth -> buffer -> synth
+        // case, #502, whose bound is 2 x numVoices and which must reach it),
+        // and the other cases' last switch cuts one grain synth per voice
+        // (seven, measured in every scenario), so a second cutting set kept
+        // past a switch makes more. Whoever hits it: check whether the
+        // scenario change legitimately cuts a voice synth too before
+        // loosening it
+        check.((cutting.size <= cutBound) and: { (cutBound == target.numVoices) or: { cutting.size == cutBound } },
+            "memory: the cutting set is the scenario's (one grain synth per voice, or a grain and a voice synth per voice for synth -> buffer -> synth; check that a scenario change does not legitimately cut a voice synth too before loosening this) (%: % cutting synths for % voices, bound %)".format(
+                label, cutting.size, target.numVoices, cutBound));
         if (report.notNil) { report.value(fits, freeKB) } {
             check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
                 floorLabel, target.tier, scenario, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
@@ -399,6 +407,20 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         target.numVoices.do({ arg voice; command.(\setGrainSource, voice, voice + 1) });
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, recalled A -> B -> A -> C at once (on/synth, off/input, on/synth, on/buffer)");
+        h.stopAllVoices(target);
+        // synth -> buffer -> synth (#502): the second switch cuts the first
+        // one's fading set, the old ring grain synth and the old voice
+        // synth, beside the new voice synth: each voice holds two voice
+        // synths for the cut (14 in all) and three grain synths
+        startAll.value;
+        server.sync; 0.2.wait;
+        switchAll.({ arg voice; voice + 1 });
+        0.2.wait; server.sync;
+        holdVoices.value;
+        switchAll.({ 0 });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart", "worst case", nil, nil,
+            2 * target.numVoices);
         h.stopAllVoices(target);
         // all-buffer: 21 \strataGrainBuf, reading slots that hold audio
         target.numBuffers.do({ arg slot; command.(\loadBuffer, slot, h.stereoPath, 0) });
@@ -514,7 +536,7 @@ var checkHighWorstCase = {
         spectral.add(high.numVoices.collect({ arg voice; high.ringWriterFor(voice) })
             .count({ arg writer; writer.defName.asSymbol == \strataRingWriteSpectral }));
     });
-    check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices },
+    check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices } and: { spectral[3] == high.numVoices },
         "memory: the high run engages spectral freeze on every voice (spectral writers per scenario: %)".format(spectral));
     engine = h.replaceEngine(nil);
     check.(engine.tier == \standard, "memory: the default engine is back for the areas that follow");

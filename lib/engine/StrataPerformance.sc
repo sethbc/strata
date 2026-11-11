@@ -133,9 +133,7 @@
             while { (end < trimmed.size) and: { trimmed[end].isAlphaNum or: { trimmed[end] == $_ } } } { end = end + 1 };
             if (end > 0) { fields[trimmed.copyRange(0, end - 1)] = this.trimmedText(trimmed.copyToEnd(end)) };
         });
-        number = { arg value;
-            if (value.notNil and: { value.notEmpty } and: { value.every(_.isDecDigit) }) { value.asInteger } { nil }
-        };
+        number = { arg value; this.wholeNumber(value) };
         tierName = fields["tier"];
         case
         { tierName == "standard" } { allowed = [this.standardBufferSeconds]; history = this.standardHistorySeconds }
@@ -146,6 +144,19 @@
             or: { number.(fields["history_seconds"]) != history }) { ^nil };
         ^(tier: tierName.asSymbol, bufferSeconds: number.(fields["buffer_seconds"]), maxGrains: this.tierMaxGrains,
             historySeconds: history, reason: fields["reason"] ? "")
+    }
+
+    // A run of decimal digits as Lua's whole_number reads it (tonumber), or
+    // nil: the digits with their leading zeros dropped must be what
+    // asInteger gives back, so a string asInteger wraps at 32 bits
+    // ("4294967356", 2^32 + 60, reads 60 in sclang) is no number here, as
+    // its value is none of Lua's choices (#500)
+    wholeNumber { arg text;
+        var digits, value;
+        if (text.isString.not or: { text.isEmpty } or: { text.every(_.isDecDigit).not }) { ^nil };
+        digits = text.copyToEnd(text.detectIndex({ arg char; char != $0 }) ? (text.size - 1));
+        value = digits.asInteger;
+        ^if (value.asString == digits) { value } { nil }
     }
 
     standardPerformance { arg reason;
@@ -177,9 +188,8 @@
                 } { ignored.add(line) }
             }
             { key == "buffer_seconds" } {
-                if ((words.size == 2) and: { value.every(_.isDecDigit) }
-                    and: { this.highBufferChoices.includes(value.asInteger) }) {
-                    setting[\bufferSeconds] = value.asInteger
+                if ((words.size == 2) and: { this.highBufferChoices.includes(this.wholeNumber(value)) }) {
+                    setting[\bufferSeconds] = this.wholeNumber(value)
                 } { ignored.add(line) }
             };
         });
@@ -232,11 +242,12 @@
     }
 
     // Bytes the high tier allocates for slots of `seconds`: 8 slots x 2 mono
-    // buffers, every voice's 2-channel ring and the input ring
-    // (highHistorySeconds + ringGuardSeconds + 1), 4-byte samples
+    // buffers, every voice's 2-channel ring and 2-channel copy ring (the
+    // rings area's allocRings) and the input ring (highHistorySeconds +
+    // ringGuardSeconds + 1), 4-byte samples
     highMemoryBytes { arg seconds, sampleRate;
         ^(numBuffers * 2 * seconds * sampleRate * 4)
-            + (numVoices * 2 * this.ringSeconds * sampleRate * 4)
+            + (numVoices * 2 * 2 * this.ringSeconds * sampleRate * 4)
             + (2 * (this.highHistorySeconds + this.ringGuardSeconds + 1) * sampleRate * 4)
     }
 
