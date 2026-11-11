@@ -605,7 +605,7 @@ test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now
   local context = load_strata({ data_subdir = "pset_pulse_res" }); finish_startup(context)
   local S = local_value("S")
   os.execute("mkdir -p '" .. context.data_dir .. "'")
-  assert_true(params:lookup_param("strata_pset_format").hidden, "the format param is hidden")
+  assert_equal(params:visible("strata_pset_format"), false, "the format param is hidden")
   assert_equal(params:get("strata_pset_format"), 2, "at today's format")
   if not S.voices[5].active then toggle_voice(5) end
   -- a PSET saved now carries its format and reads back as written
@@ -624,8 +624,17 @@ test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now
   h.write_text(old_path, old_text)
   params:set("v5_res", 0.6)
   context.clear_engine_calls()
+  local function mirror_lines()
+    local count = 0
+    for _, line in ipairs(context.printed) do
+      if line:find("res mirrored", 1, true) then count = count + 1 end
+    end
+    return count
+  end
+  assert_equal(mirror_lines(), 0, "nothing said before an old PSET is read")
   params:read(old_path)
   assert_near(params:get("v5_res"), 0.8, 1e-9, "an old PSET's res 0.3 loads as 0.8")
+  assert_equal(mirror_lines(), 1, "the console says the res was mirrored")
   assert_near(S.voices[5].params.res, 0.8, 1e-9, "and the voices table follows")
   local sent = pulse_res_sent(context)
   assert_true(#sent > 0 and math.abs(sent[#sent] - 0.8) < 1e-6,
@@ -647,8 +656,10 @@ test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now
   local no_res_path = context.data_dir .. "no_res.pset"
   h.write_text(no_res_path, (old_text:gsub('"v5_res": [^\n]*\n', "")))
   params:set("v5_res", 0.5)
+  local said = mirror_lines()
   params:read(no_res_path)
   assert_near(params:get("v5_res"), 0.5, 1e-9, "a res the file does not set is not mirrored")
+  assert_equal(mirror_lines(), said, "and the console says nothing of a mirror")
   params:read(old_path)
   -- saved again, it is a PSET of today's format: never mirrored back
   assert_equal(params:get("strata_pset_format"), 2, "an old PSET leaves the format param at today's format")

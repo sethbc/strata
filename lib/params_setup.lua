@@ -176,9 +176,9 @@ return function(S)
         local id = "v" .. voice_idx .. "_res"
         if S.voices[voice_idx].params.res ~= nil and pset_line(text, id) then
           params:set(id, S.constants.PULSE_RES.mirror - params:get(id), silent)
+          print("pset from before 3.3: voice " .. voice_idx .. "'s res mirrored, so it sounds the same")
         end
       end
-      print("pset from before 3.3: the pulse voice's res mirrored, so it sounds the same")
     end
     params:set("strata_pset_format", S.constants.PSET_FORMAT, true)
     for _, id in ipairs(pset.number_params) do
