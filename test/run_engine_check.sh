@@ -80,7 +80,7 @@ YAML
 # sclang never exits by itself when engine_check.scd or the class library
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
-# seconds: a full run of every area takes about 11 minutes (3.14.1, about 660 s of areas, the figures in the workflow's comment), the check's own deadline
+# seconds: a full run of every area takes about 12 minutes (3.14.1, about 702 s of areas, the figures in the workflow's comment), the check's own deadline
 # is 30 s less (1170 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
 # long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too),
 # CI passes ENGINE_CHECK_TIMEOUT=570 so each shard stays inside its 600 s) and killed as soon as sclang reports a compile error.
@@ -180,6 +180,8 @@ while kill -0 "$sclang_pid" 2>/dev/null; do
 done
 wait "$sclang_pid"
 status=$?
+# a signal from here on has nothing of sclang's left to stop
+sclang_pid=
 stop_leftover_server
 set -e
 # 124: timeout stopped it; 137: timeout's --kill-after SIGKILL, or a

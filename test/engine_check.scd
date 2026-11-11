@@ -44,7 +44,7 @@ var areas = if (missingAreas.notEmpty) {
 // The run's own deadline (s): run_engine_check.sh passes 30 s less than its
 // timeout ($ENGINE_CHECK_TIMEOUT, 1200 by default), so a long soak can be given more
 var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 1170 } }.value;
-var context, engine, h, bootFailed, portAnswered, statusResponder, booted = false;
+var context, engine, h, runChecks, bootFailed, portAnswered, statusResponder, booted = false;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
 var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataVoiceMix, \strataInput, \strataRecord, \strataRingWrite,
@@ -648,33 +648,9 @@ SystemClock.sched(deadline, {
     SystemClock.sched(1, { 1.exit });
     nil
 });
-// A failed start ends the run at once, naming the cause (#471, #472)
-bootFailed = { arg message, quitServer = true;
-    ("ENGINE CHECK FAILED: " ++ message).postln;
-    // never quit a server this run did not start: the one on the port is another run's
-    if (quitServer) { server.quit };
-    SystemClock.sched(1, { 1.exit });
-};
-// Another server on the port would answer sclang's status request as if it
-// were ours, and two checks would drive one server (#471): ask first, and
-// boot only if nothing answers. A reply comes from the port itself.
-portAnswered = false;
-statusResponder = OSCFunc({ portAnswered = true }, '/status.reply', server.addr).oneShot;
-server.addr.sendMsg("/status");
-SystemClock.sched(0.5, {
-    statusResponder.free;
-    if (portAnswered) {
-        bootFailed.("port % already has a server".format(scPort), false);
-    } {
-        // scsynth that cannot start (a port held by another program, JACK
-        // not running) exits within seconds and its pid is gone: the check
-        // stops then, not at its deadline (#472)
-        SystemClock.sched(4, {
-            if (booted.not) {
-                if (server.pid.isNil) { bootFailed.("scsynth did not boot"); nil } { 1 }
-            } { nil }
-        });
-server.waitForBoot({
+// The check itself: runs once the server has booted (and is the function
+// waitForBoot is given below)
+runChecks = {
     var exitCode, defaultScratchDir, running, workDir = "STRATA_CHECK_TMPDIR".getenv;
     booted = true;
     // the server's PID for run_engine_check.sh, which stops this scsynth if
@@ -894,7 +870,39 @@ server.waitForBoot({
     server.quit;
     1.wait;
     exitCode.exit;
-}, 100, { bootFailed.("scsynth did not boot") });
+};
+
+// A failed start ends the run at once, naming the cause (#471, #472)
+bootFailed = { arg message, quitServer = true;
+    ("ENGINE CHECK FAILED: " ++ message).postln;
+    // never quit a server this run did not start: the one on the port is another run's
+    if (quitServer) { server.quit };
+    SystemClock.sched(1, { 1.exit });
+};
+// Another server on the port would answer sclang's status request as if it
+// were ours, and two checks would drive one server (#471): ask first, and
+// boot only if nothing answers. A reply comes from the port itself.
+portAnswered = false;
+statusResponder = OSCFunc({ portAnswered = true }, '/status.reply', server.addr).oneShot;
+server.addr.sendMsg("/status");
+SystemClock.sched(0.5, {
+    statusResponder.free;
+    if (portAnswered) {
+        bootFailed.("port % already has a server".format(scPort), false);
+    } {
+        // scsynth that cannot start (a port held by another program, JACK
+        // not running) exits within seconds and its pid is gone: the check
+        // stops then, not at its deadline (#472)
+        SystemClock.sched(4, {
+            if (booted.not) {
+                // no server of ours to quit: its pid is gone
+                if (server.pid.isNil) { bootFailed.("scsynth did not boot", false); nil } { 1 }
+            } { nil }
+        });
+        // (waitForBoot's own limit and onFailure never take effect on
+        // sclang 3.13 or 3.14.1: its doWhenBooted ignores them, so the
+        // watch above is what ends a boot that fails)
+        server.waitForBoot(runChecks);
     };
     nil
 });
