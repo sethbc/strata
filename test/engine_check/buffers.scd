@@ -632,21 +632,17 @@ var checkLoadYields = { arg other, path60;
     h.commandTo(other, \clearBuffer, 7); server.sync;
 };
 
-// Whether sclang has the file open (its /proc/<pid>/fd links), or nil
-// without a /proc (where the two checks that use it cannot see: they pass)
-var fileOpen = { arg path;
-    var fds = "/proc/" ++ thisProcess.pid ++ "/fd";
-    if (File.exists(fds)) { ("ls -l " ++ fds.shellQuote ++ " 2>/dev/null").unixCmdGetStdOut.contains(path) }
-};
+// The chunks an engine's fileDecodes has read since alloc (#375; 0 for an
+// engine that does not count them)
+var decodeChunks = { arg target; target.areaState[\files][\decodeChunks] ? 0 };
 
 // #375: a long file's check stops at the first chunk after something
 // supersedes it, and closes the file: fileDecodes asks keepGoing after
-// every chunk (a check of a 60 s file reads 192 chunks, and yields at
-// least commandGap after each, so it runs well over 20 ms); and a load and
-// a clear in one tick leave the file closed 20 ms later
+// every chunk; and a load and a clear in one tick read one chunk of the
+// file's 192 (counted, so a loaded machine cannot make it pass or fail)
 var checkDecodeStops = { arg other, path60;
     var rate = server.sampleRate.asInteger, file = SoundFile.openRead(path60), peaks = FloatArray.newClear(other.waveformPoints);
-    var asked = 0, result, done = false, open;
+    var asked = 0, result, done = false, chunks;
     fork({
         result = other.fileDecodes(file, file.numFrames, true, peaks, { asked = asked + 1; false });
         done = true;
@@ -656,17 +652,17 @@ var checkDecodeStops = { arg other, path60;
     check.((result == false) and: { asked == 1 } and: { peaks.count({ arg each; each > 0 }) == 1 },
         "buffers: a long file's check stops at the first chunk once keepGoing is false (decodes %, asked %, bins read %)".format(
             result, asked, peaks.count({ arg each; each > 0 })));
+    chunks = decodeChunks.(other);
     h.commandTo(other, \loadBuffer, 4, path60, 0);
     h.commandTo(other, \clearBuffer, 4);
-    0.02.wait;
-    open = fileOpen.(path60);
     1.0.wait; server.sync;
-    check.((open != true) and: { other.bufferFrames[4] == 0 },
-        "buffers: a long file's check superseded by a clear closes the file at once (open 20 ms after: %, % frames)".format(open, other.bufferFrames[4]));
+    chunks = decodeChunks.(other) - chunks;
+    check.(chunks.inclusivelyBetween(1, 2) and: { other.bufferFrames[4] == 0 },
+        "buffers: a long file's check superseded by a clear stops at its next chunk (% chunks of 192 read, % frames)".format(chunks, other.bufferFrames[4]));
 };
 
 var checkLongSlots = {
-    var other, path60 = scratchRoot +/+ "sixty.wav", path20 = scratchRoot +/+ "twenty.wav", freedOpen;
+    var other, path60 = scratchRoot +/+ "sixty.wav", path20 = scratchRoot +/+ "twenty.wav", freedChunks;
     var damaged = scratchRoot +/+ "twenty-damaged.flac";
     writeLongFile.(path60, 60, { arg second; (second + 1) * 0.01 });
     writeLongFile.(path20, 20, { 0.7 });
@@ -682,14 +678,15 @@ var checkLongSlots = {
     checkLoadYields.(other, path60);
     checkDecodeStops.(other, path60);
     // freed during a check: nothing applies to the freed buffers, and the
-    // check stops within a few chunks (the file closed)
+    // check stops at its next chunk (the file closed)
+    freedChunks = decodeChunks.(other);
     h.commandTo(other, \loadBuffer, 6, path60, 0);
     h.freeEngine(other);
-    0.02.wait;
-    freedOpen = fileOpen.(path60);
     1.0.wait; server.sync;
+    freedChunks = decodeChunks.(other) - freedChunks;
     check.(other.bufferFrames[6] == 0, "buffers: an engine freed during a long file's check applies nothing");
-    check.(freedOpen != true, "buffers: an engine freed during a long file's check closes the file at once (open 20 ms after: %)".format(freedOpen));
+    check.(freedChunks.inclusivelyBetween(1, 2),
+        "buffers: an engine freed during a long file's check stops at its next chunk (% chunks of 192 read)".format(freedChunks));
     [path60, path20, damaged].do({ arg path; File.delete(path) });
 };
 

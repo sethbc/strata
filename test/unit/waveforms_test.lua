@@ -206,7 +206,9 @@ test("a repeated report of the same seconds does not mark the slot again", funct
   assert_equal(opened.count, 1, "the periodic poll repeats unchanged values")
 end)
 
-test("a playable recording's peaks are reread every 0.5 s", function()
+-- the engine writes a changing loop's file at most every 2 s (#523), and
+-- the loop rereads it as often
+test("a playable recording's peaks are reread every 2 s", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   write_peaks(3, ramp(64))
@@ -220,10 +222,10 @@ test("a playable recording's peaks are reread every 0.5 s", function()
     return original_state(slot)
   end
   local opened, restore = watch_opens("buf3%.peaks$")
-  context.clock.run_for(1.6)
-  assert_equal(opened.count, 3, "three reads in 1.6 s")
+  context.clock.run_for(6.4)
+  assert_equal(opened.count, 3, "three reads in 6.4 s")
   playable = false
-  context.clock.run_for(2)
+  context.clock.run_for(4)
   assert_equal(opened.count, 3, "none once it ends")
   restore()
   S.lib.record.state = original_state

@@ -89,8 +89,12 @@ var peakBufferValues = { arg slot;
     result
 };
 // The refresh counters: writes with an action (a length to report), the
-// refreshes that wrote and those that found the overview unchanged
-var peakCounters = { state[\peakWrites] ?? { (reports: 0, refreshes: 0, unchanged: 0) } };
+// refreshes that wrote, those that found the overview unchanged and those
+// that held a changed one back (written at most every peakWriteSeconds);
+// a count the engine does not keep reads 0
+var peakCount = { arg key; (state[\peakWrites] ?? { () })[key] ? 0 };
+var peakCountsNow = { (reports: peakCount.(\reports), refreshes: peakCount.(\refreshes), unchanged: peakCount.(\unchanged), held: peakCount.(\held)) };
+var peakCountSince = { arg before, key; peakCount.(key) - before[key] };
 var noiseSource = { Synth(\strataCheckNoiseSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore) };
 // wait (at most limit s) until the slot has reported state since start: a
 // take's end comes after its peaks file is written, which is asynchronous
@@ -1297,16 +1301,17 @@ test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds 
     // counted from 0.1 s after the command (after the arming's write of the
     // new length): the refreshes come peakRefreshSeconds apart from
     // arming, so the read 1.7 s after it sees 3, or 4 if sclang was held
-    // past the fourth (#379). Noise: every refresh finds a new overview
+    // past the fourth (#379). Each refresh writes, finds its overview
+    // unchanged, or holds a changed one back (#523): all three count
     source = noiseSource.value;
     server.sync;
     record.(slot, loopSeconds, 1.0, 0, 0, 0, 1);
     settle.(0.1);
-    before = peakCounters.value.copy;
+    before = peakCountsNow.value;
     framesBefore = engine.bufferFrames[slot];
     1.6.wait; server.sync;
-    refreshes = peakCounters.value[\refreshes] - before[\refreshes];
-    reportsAfter = peakCounters.value[\reports] - before[\reports];
+    refreshes = [\refreshes, \unchanged, \held].sum({ arg key; peakCountSince.(before, key) });
+    reportsAfter = peakCountSince.(before, \reports);
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
     source.free; server.sync;
@@ -1316,32 +1321,35 @@ test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds 
 });
 // #523: a refresh writes the card only when the overview it would write
 // differs from the slot's file (a loop left recording silence, or one
-// whose bins have saturated, writes nothing), and the take's end always
-// writes. A loop of silence for 1.6 s: 3 or 4 refreshes, none written; the
-// same with noise: every one written
-test.("record: a loop recording's refresh writes its peaks file only when the overview changed", {
-    var slot = 3, before, silentWrites, silentSkips, noisyWrites, noisySkips, endWrites, source, peaksPath = engine.peaksPath(3).standardizePath, modified;
+// whose bins have saturated, writes nothing), a changing overview at most
+// every peakWriteSeconds (2 s: a live loop's bins change every pass), and
+// the take's end always writes. A loop of silence for 1.6 s: 3 or 4
+// refreshes, none written; then noise for 6 s: 12 refreshes, written at
+// most once per 2 s (2 or 3 in the window), the rest held back
+test.("record: a loop recording's refresh writes its peaks file only when the overview changed, at most every 2 s", {
+    var slot = 3, before, silentWrites, silentSkips, noisyWrites, noisySkips, noisyHeld, endWrites, source, peaksPath = engine.peaksPath(3).standardizePath;
     record.(slot, 0.25, 1.0, 0, 0, 0, 1);
     settle.(0.1);
-    before = peakCounters.value.copy;
+    before = peakCountsNow.value;
     1.6.wait; server.sync;
-    silentWrites = peakCounters.value[\refreshes] - before[\refreshes];
-    silentSkips = peakCounters.value[\unchanged] - before[\unchanged];
+    silentWrites = peakCountSince.(before, \refreshes);
+    silentSkips = peakCountSince.(before, \unchanged);
     source = noiseSource.value;
     server.sync;
-    before = peakCounters.value.copy;
-    1.6.wait; server.sync;
-    noisyWrites = peakCounters.value[\refreshes] - before[\refreshes];
-    noisySkips = peakCounters.value[\unchanged] - before[\unchanged];
-    before = peakCounters.value.copy;
+    before = peakCountsNow.value;
+    6.wait; server.sync;
+    noisyWrites = peakCountSince.(before, \refreshes);
+    noisySkips = peakCountSince.(before, \unchanged);
+    noisyHeld = peakCountSince.(before, \held);
+    before = peakCountsNow.value;
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
-    endWrites = peakCounters.value[\reports] - before[\reports];
+    endWrites = peakCountSince.(before, \reports);
     source.free; server.sync;
-    check.((silentWrites == 0) and: { [3, 4].includes(silentSkips) } and: { [3, 4].includes(noisyWrites) } and: { noisySkips == 0 }
-        and: { endWrites == 1 } and: { File.exists(peaksPath) },
-        "record: a loop recording's refresh writes its peaks file only when the overview changed (silence: % written, % unchanged; noise: % written, % unchanged; the end: % written)".format(
-            silentWrites, silentSkips, noisyWrites, noisySkips, endWrites));
+    check.((silentWrites == 0) and: { [3, 4].includes(silentSkips) } and: { [2, 3].includes(noisyWrites) } and: { noisySkips == 0 }
+        and: { noisyHeld >= 8 } and: { endWrites == 1 } and: { File.exists(peaksPath) },
+        "record: a loop recording's refresh writes its peaks file only when the overview changed, at most every 2 s (silence: % written, % unchanged; noise over 6 s: % written, % held, % unchanged; the end: % written)".format(
+            silentWrites, silentSkips, noisyWrites, noisyHeld, noisySkips, endWrites));
 });
 
 // #210: a refresh used to rename its .part through a subprocess of its own,
@@ -1354,10 +1362,13 @@ test.("record: a loop recording's refresh writes its peaks file only when the ov
 // on a loaded machine (four checks at once) between refreshes cannot fail
 // it. Counted, not the largest: fewer than lateLimit late pings of ten, and
 // fewer than lateLimit late refresh gaps of at least minimumRefreshGaps.
+// The engine writes a changing loop's file at most every peakWriteSeconds
+// (#523), so during the ticker the check writes one itself every
+// peakRefreshSeconds, through the refresh's own writeRecordPeaks.
 test.("record: a command sent during a peaks refresh is handled within 2 ms", {
     var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2, minimumRefreshGaps = 5;
     var counters = state[\peakWrites], before, refreshes, lastCount;
-    var latenesses = List.new(10), ping, sent, refreshGaps = List.new(16), longestGap = 0, last, ticker, lateGaps, latePings;
+    var latenesses = List.new(10), ping, sent, refreshGaps = List.new(16), longestGap = 0, last, ticker, writer, lateGaps, latePings;
     // noise: every refresh writes (one that finds its overview unchanged writes nothing, #523)
     var source = noiseSource.value;
     server.sync;
@@ -1376,7 +1387,12 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
         lastCount = count;
         0.001.wait
     } }).play(SystemClock);
+    writer = Routine({ loop {
+        engine.writeRecordPeaks(slot, engine.bufferFrames[slot], nil);
+        engine.peakRefreshSeconds.wait
+    } }).play(SystemClock);
     tickerSeconds.wait;
+    writer.stop;
     ticker.stop;
     ping = OSCFunc({ latenesses.add(Main.elapsedTime - sent) }, '/strataCheckRefreshPing');
     10.do({
