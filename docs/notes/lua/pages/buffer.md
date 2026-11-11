@@ -40,7 +40,7 @@ The fields (`BUFFER_FIELDS`, each `{name, label, value(), param_id() or enc(d), 
 | 7 | `thr` | `off`, `-24dB` (the option without its space) | `record_threshold` |
 | 8 | `sync` | `off`, `beat`, `bar` | `record_sync` |
 | 9 | `bm` | `2 0.25`: the selected voice's last recalled bookmark (else 1) and its position; dim unless the voice reads a buffer | steps 1..`NUM_BOOKMARKS` and recalls the one it lands on |
-| 10 | `start` | the cursor slot's start at the resolution of its band (`start_bands`): `9.05s` below 10 s, `12.1s` from 10 s, `123s` from 100 s, `20:34` from 1000 s, `123m` from 6000 s, `17h` from 60000 s; or `-` when its file fits a slot (no `file_seconds`, or not longer than `S.performance.buffer_seconds`) | E3 max(`start_min_step` 0.1 s, the band's step), ALT+E3 the band's step (0.01, 0.1, 1, 1, 60, 3600 s), so every detent changes the shown value; the result rounded to its own band's step, through `set_start`; nothing for a file that fits |
+| 10 | `start` | the cursor slot's start at the resolution of its band (`start_bands`): `9.05s` below 10 s, `12.1s` from 10 s, `123s` from 100 s, `20:34` from 1000 s, `123m` from 6000 s, `17h` from 60000 s; or `-` when its file fits a slot (no `file_seconds`, or no start to move: `S.lib.buffers.longest_start(file_seconds, sample_rate)` is 0, so a 96 kHz file of 12 s on a 16 s slot, which holds 8 s of it, has a start, #326) | E3 max(`start_min_step` 0.1 s, the band's step), ALT+E3 the band's step (0.01, 0.1, 1, 1, 60, 3600 s), so every detent changes the shown value; the result rounded to its own band's step, through `set_start`; nothing for a file that fits |
 | 11 | `fric` | `100%` | `scrub_friction` |
 
 ## Layout
@@ -54,7 +54,7 @@ The fields (`BUFFER_FIELDS`, each `{name, label, value(), param_id() or enc(d), 
 - Bookmarks of the selected voice when it reads the slot: 1x2 px filled rects at y 29-30, level 6, the last recalled (`S.lib.positions.last_recalled`) 15.
 - Slots: `S.lib.ui_field_list.draw` with three visible rows from y 37, 7 px apart (y 37, 44, 51), one row above the cursor kept in view, the scroll marker at x 127 (y 31-52). Each row:
   - slot number at x 59;
-  - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name (`name == "empty"`);
+  - name at x 65: the file name without extension, cut with `fit_text`, or `-` when the slot has no name, which what it holds says, never its name (a file may be called `empty`, #436): no `path` and not `loaded` (a dub into an empty slot is `take <n>` once it is loaded, #400);
   - right-aligned at x 124: while recording, `ARM` (armed: `S.lib.record.state(slot).phase == "armed"`), `REC` (a replace take, or a recording slot with no state), `DUB` (playable, one-shot) or `LOOP` (playable, loop); else `...` (`PAGE.checking_text`) while the engine checks a long file (`checking_from`), else the length; none for a free slot (`S.lib.buffers.is_free(slot)`: status `"empty"` or `"missing"`, the answer the fill and the grid share, #247; a named load the engine has not reported yet, `"unsettled"`, shows its name and `0.0s`). `slot_seconds_text`: below `minute_from` (59.95 s) `%.1fs` (`16.5s`), from there on `m:ss` (`1:05`, `4:59`, `5:00`);
   - names in other rows end 3 px before the widest length the tier shows (`widest_seconds_width`); on the cursor row the voices reading the slot (`v2 v6`) are right-aligned 3 px before that row's own length or state, at most 25 px (`voices_max_width`) and never into the name's first 12 px (`name_min_width`), dropping whole voices from the end with `+` (`v2+`).
 - Row level: the cursor row 15, a loaded or recording slot 6, others 2.
@@ -66,7 +66,7 @@ The fields (`BUFFER_FIELDS`, each `{name, label, value(), param_id() or enc(d), 
 - E2 moves the slot cursor; ALT+E2 the field cursor (`alt_enc` returns true for E2 only). E3 edits the field (table above); ALT+E3 is fine adjustment.
 - K3 press and the arc button (`arc_button`): `record_buffer(slot)`: records, stops early while recording (keeping what was captured), cancels while armed; does nothing while `finishing`.
 - K2 release: before 0.5 s the file selector for the cursor slot (below); held 0.5 s or more, `S.lib.files.random_into(slot)` (it flashes `buf <n>: <name>` or `no files in <folder>`). K2's press only notes its time; K3 while K2 is held just records.
-- ALT+K2 release: before 0.5 s `clear_buffer(slot)`; after, `S.lib.files.fill_empty()` (it flashes `filled <k> slots` or `no files in <folder>`).
+- ALT+K2 release: before 0.5 s `clear_buffer(slot)`; after, `S.lib.files.fill_empty()` (it flashes `filled <k> slots`, `filled 1 slot`, or `no files in <folder>`).
 - ALT+K3 release: before 0.5 s saves the whole slot (`save_buffer`), after it its loop region (`save_buffer_loop`, trim), shown by `buffer_page_flash(text)`:
   - `buf <n> busy` (and no save) while the slot is `recording` or `finishing`;
   - else `saving buf <n>` (`saving buf <n> loop`) when the save was sent (the slot reports audio, `seconds > 0`);

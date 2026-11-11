@@ -190,6 +190,51 @@ test("stub params support option, group, trigger, binary, file and set_action", 
   assert_equal(params:string("stub_text"), "hello")
 end)
 
+-- #480: core/params/file.lua lists the folder of a file param's path
+-- (File:loaddir, util.scandir: a blocking `ls` through matron) at every set
+-- that changes the path, silent or not; "-" lists nothing and forgets the
+-- folder. A test counts the listings by wrapping util.scandir. File.new's
+-- own listing is left out (only its folder is kept): it would double the
+-- suite's time
+test("stub file params list their folder as norns' File:loaddir does (#480)", function()
+  local context = load_strata()
+  local folder = context.data_dir .. "files480/"
+  util.make_dir(folder .. "sub/")
+  for _, name in ipairs({ "a.wav", "b.wav" }) do io.open(folder .. name, "w"):close() end
+  local listed = {}
+  local scandir = util.scandir
+  util.scandir = function(directory)
+    table.insert(listed, directory)
+    return scandir(directory)
+  end
+  local ok, problem = pcall(function()
+    params:add_file("stub_file480", "file", folder)
+    local param = params:lookup_param("stub_file480")
+    assert_equal(#listed, 0, "made: not listed (File.new's listing is left out)")
+    assert_equal(param.dir, folder, "but its folder is kept")
+    params:set("stub_file480", folder .. "a.wav")
+    assert_equal(table.concat(listed, " "), folder, "a new path: its folder is listed")
+    params:set("stub_file480", folder .. "b.wav", true)
+    assert_equal(#listed, 2, "a silent set lists too")
+    assert_equal(listed[2], folder)
+    assert_equal(param.dir, folder)
+    assert_equal(table.concat(param.dirfiles, " "), "a.wav b.wav", "the files, never a folder")
+    assert_equal(param.dirpos, 2, "the file's place among them")
+    params:set("stub_file480", folder .. "b.wav")
+    assert_equal(#listed, 2, "the same path lists nothing")
+    params:set("stub_file480", "-")
+    assert_equal(#listed, 2, "'-' lists nothing")
+    assert_equal(param.dir, nil); assert_equal(param.dirfiles, nil); assert_equal(param.dirpos, nil)
+    params:set("stub_file480", "x.wav")
+    assert_equal(#listed, 2, "a bare name has no folder to list")
+    params:add_file("stub_file480_none", "file")
+    assert_equal(#listed, 2, "a param made without a path is '-'")
+    assert_equal(params:get("stub_file480_none"), "-")
+  end)
+  util.scandir = scandir
+  assert_true(ok, tostring(problem))
+end)
+
 -- norns cannot see where a group ends: it takes the next n params. The
 -- stub requires each group's n params to end where its section does, at
 -- the next group or separator, or at the end of the list after init()

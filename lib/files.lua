@@ -87,7 +87,8 @@ return function(S)
   -- Fill slot with a random sound file from its folder, other than the file
   -- it holds when the folder has another; whether it loaded
   function M.random_into(slot)
-    if type(slot) ~= "number" or slot < 1 or slot > NUM_BUFFERS or slot % 1 ~= 0 then return false end
+    slot = S.lib.buffers.slot_index(slot)  -- lib/buffers.lua's one slot check (#402)
+    if not slot then return false end
     local folder = M.folder_for(slot)
     local names = sound_files(folder)
     if not names or #names == 0 then
@@ -135,7 +136,7 @@ return function(S)
         filled = filled + 1
       end
     end
-    buffer_page_flash("filled " .. filled .. " slots")
+    buffer_page_flash("filled " .. filled .. (filled == 1 and " slot" or " slots"))
     return filled
   end
 

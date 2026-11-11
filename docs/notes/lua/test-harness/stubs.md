@@ -63,6 +63,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 - Like norns, the param stub stores numeric type codes in `param.t` (`params.tOPTION` etc.), all from its one `PARAM_TYPE_CODES` table (exported as `stubs.PARAM_TYPE_CODES`).
 - `params:add` with an unknown type raises an error (norns prints one and adds nothing).
 - Never compare `param.t` with a string. A test enforces this for the script's sources, with either quote and either order: `p.t == "option"`, `'option' == p.t`.
+- A file param lists its folder as `lua/core/params/file.lua`'s `File:loaddir` does (#480): at every set that changes its path to anything but `"-"` (silent or not) it calls `util.scandir` on the path's folder and keeps `dir`, `dirfiles` (the files, never a folder) and `dirpos` (the path's place among them); `"-"` clears all three, and a path with no folder lists nothing. A test counts the listings by wrapping `util.scandir`. `File.new`'s own listing is left out (only `dir` is set): it is norns' cost at a param's creation, not one the script chooses, and the eight buffer file params made at every `load_strata` were about 23,000 listings a run, doubling the suite's time.
 
 ### Group sizes
 

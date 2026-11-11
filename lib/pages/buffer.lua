@@ -205,10 +205,12 @@ return function(S)
     if n ~= shown then S.lib.positions.recall_bookmark(S.selected_voice, n) end
   end
 
-  -- The cursor slot holds a file longer than a slot (its start can move)
+  -- The cursor slot holds a file longer than the seconds a slot holds of it
+  -- (its start can move; fewer seconds above 48 kHz, #326)
   local function long_file(slot)
     local buffer = S.buffers[slot]
-    return buffer.path ~= nil and buffer.file_seconds ~= nil and buffer.file_seconds > S.performance.buffer_seconds
+    return buffer.path ~= nil and buffer.file_seconds ~= nil
+      and S.lib.buffers.longest_start(buffer.file_seconds, buffer.sample_rate) > 0
   end
 
   -- The band a start shows in (start_bands), and the start rounded to its
@@ -344,11 +346,14 @@ return function(S)
     return cache.cut[max_width]
   end
 
-  -- A slot with no name (nothing loaded, recorded or remembered) shows "-";
-  -- a free one (S.lib.buffers.is_free: empty, or a remembered file missing
-  -- on start) shows no seconds either
+  -- A slot with no name (nothing loaded or recorded) shows "-"; a free one
+  -- (S.lib.buffers.is_free: empty, or a remembered file missing on start)
+  -- shows no seconds either. What the slot holds says so, never its name (a
+  -- file may be called "empty", #436): a file or a settled take has a path,
+  -- and a dub into an empty slot is a named take once it holds audio
+  -- (loaded, before its path comes at "ended", #400)
   local function slot_has_name(buffer)
-    return buffer.name ~= "empty"
+    return buffer.path ~= nil or buffer.loaded
   end
 
   local function slot_is_empty(slot)

@@ -1209,6 +1209,42 @@ test("the start field shows - for a file that fits and steps at the resolution i
   set_start(1, 9.996); assert_equal(shown(), "10.0s", "9.996 rounds to 10.0 s")
 end)
 
+-- #436: a row shows its name from what the slot holds, not from what it is
+-- called: a sound file named "empty" is a file
+test("a loaded file named empty shows its name; a slot with nothing shows -", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  load_buffer(1, "/tmp/empty"); context.polls.fire("bufferState", 5)
+  S.buffers[3].missing_path = "/gone/pad.wav"
+  redraw()
+  local rows = slot_rows(context)
+  assert_equal(slot_row_text(context, rows[1]), "1 empty 5.0s", "the file's name")
+  assert_equal(slot_row_text(context, rows[2]), "2 -", "an empty slot")
+  assert_equal(slot_row_text(context, rows[3]), "3 -", "a remembered file missing on start")
+  -- a dub into an empty slot is take 2 once it has a length (#400)
+  params:set("record_feedback", 50)
+  record_buffer(2); context.polls.fire("recordState", (1 * 4 + 1) * 8 + 1)
+  redraw()
+  assert_equal(slot_row_text(context, rows[2]), "2 - DUB", "nothing to name yet")
+  context.polls.fire("bufferState", 1004); redraw()
+  assert_equal(slot_row_text(context, rows[2]), "2 take 2 DUB")
+end)
+
+test("the start field offers a start for a high-rate file the slot holds only part of (#326)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local buffers = local_value("buffers")
+  -- 12 s at 96 kHz: a 16 s slot holds 8 s of it
+  context.audio.register("/tmp/hi12.wav", { channels = 2, frames = 96000 * 12, rate = 96000 })
+  load_buffer(1, "/tmp/hi12.wav"); context.polls.fire("bufferState", 8)
+  to_field(10)
+  redraw()
+  assert_equal(field_named(context, "start").value, "0.00s", "a start, not -")
+  for _ = 1, 60 do enc(3, 1) end
+  redraw()
+  assert_near(buffers[1].start, 4.0, 1e-9, "E3 reaches the file's last 8 s")
+  assert_equal(field_named(context, "start").value, "4.00s")
+end)
+
 -- The stub measures with norns' font advances (#479), so "m" is its 6 px here
 test("every start value keeps the start label whole", function()
   local ok, problem = pcall(function()

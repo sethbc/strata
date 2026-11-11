@@ -27,8 +27,9 @@ return function(S)
   -- M.read_clock (the tests find it there)
   local playable_due = {}
 
+  -- lib/buffers.lua's one slot check (#402)
   local function valid_slot(slot)
-    return type(slot) == "number" and slot >= 1 and slot <= NUM_BUFFERS and slot % 1 == 0
+    return S.lib.buffers.valid_buffer_slot(slot)
   end
 
   local function peaks_path(slot)

@@ -17,7 +17,7 @@ local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standar
 local BUFFER_DATA_VERSION = 2 -- Buffer paths file format version (written into buffers.data)
 local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
 local NUM_BOOKMARKS = 4       -- Bookmarks per voice (3.3)
-local NORNS_SAMPLE_RATE = 48000  -- norns' server rate, for lengths read from a file's header
+local NORNS_SAMPLE_RATE = 48000  -- norns' server rate (JACK, scsynth), the one copy (#516): a slot's frames, a file's seconds in it
 
 -- Record sources (3.3's record_source option order): the live input, the
 -- master before and after its effects, then each voice

@@ -99,7 +99,7 @@ return function(S)
   -- in loop mode and stops at D in a one-shot. nil unless the slot records
   -- playably (a replace take plays nothing)
   function M.record_head(slot)
-    if type(slot) ~= "number" or slot < 1 or slot > NUM_BUFFERS or slot % 1 ~= 0 then return nil end
+    if not S.lib.buffers.valid_buffer_slot(slot) then return nil end  -- the one slot check (#402)
     local state = S.lib.record.state(slot)
     if not state or state.kind ~= "playable" or state.phase ~= "recording" then return nil end
     local duration = state.seconds
@@ -112,7 +112,7 @@ return function(S)
 
   -- Whether something on a slot moves: a running voice reads it, or it records
   function M.moving(slot)
-    if type(slot) ~= "number" or slot < 1 or slot > NUM_BUFFERS or slot % 1 ~= 0 then return false end
+    if not S.lib.buffers.valid_buffer_slot(slot) then return false end
     local state = S.lib.record.state(slot)
     if state and state.phase == "recording" then return true end
     for voice_idx = 1, NUM_VOICES do
