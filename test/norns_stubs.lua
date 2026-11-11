@@ -1905,16 +1905,14 @@ local function make_arc()
       device.rings[ring] = {}
       for x = 1, 64 do device.rings[ring][x] = 0 end
     end
-    local function check_integer(value, what)
-      if not is_integer(value) then error("arc " .. what .. " must be an integer, got " .. tostring(value), 3) end
-    end
-    -- Arc:led -> _arc_set_led (luaL_checkinteger) -> dev_monome_arc_set_led:
-    -- rel adds to the LED's level, clamped to 0..15; an absolute level is
-    -- stored as it is. matron masks a ring or LED outside 1..4 / 1..64 into
-    -- range; the stub fails instead, and like the grid stub rejects an
-    -- absolute level outside 0..15
+    -- Arc:led -> _arc_set_led (luaL_checkinteger, the shared check_integer)
+    -- -> dev_monome_arc_set_led: rel adds to the LED's level, clamped to
+    -- 0..15; an absolute level is stored as it is. matron masks a ring or LED
+    -- outside 1..4 / 1..64 into range; the stub fails instead, and like the
+    -- grid stub rejects an absolute level outside 0..15
     function device:led(ring, x, level, rel)
-      check_integer(ring, "ring"); check_integer(x, "LED"); check_integer(level, "level")
+      ring, x = check_integer(ring, 2, "arc_set_led"), check_integer(x, 3, "arc_set_led")
+      level = check_integer(level, 4, "arc_set_led")
       if ring < 1 or ring > 4 or x < 1 or x > 64 then
         error(string.format("arc led out of bounds: ring %d, LED %d", ring, x), 2)
       end
@@ -1929,7 +1927,7 @@ local function make_arc()
     -- Arc:all -> dev_monome_all_led: rel adds to every level, clamped to
     -- 0..15; an absolute level outside 0..15 fails, as in led()
     function device:all(level, rel)
-      check_integer(level, "level")
+      level = check_integer(level, 2, "arc_all_led")
       if not rel and (level < 0 or level > 15) then error("arc all level out of range: " .. tostring(level), 2) end
       self.cleared = self.cleared + 1
       self.segments = {}

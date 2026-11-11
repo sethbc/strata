@@ -170,7 +170,11 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
   redraw = real_redraw
   assert_equal(screen_draws, 1, "the next request draws the screen again")
   assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the arc")
-  context.take_script_errors()  -- the printed errors this test raises (#473)
+  local claimed = context.take_script_errors()  -- the printed errors this test raises (#473)
+  assert_equal(#claimed, 2, "the screen's and the arc's failures, once each")
+  assert_true(claimed[1]:find("strata: frame draw failed: ", 1, true) == 1 and claimed[1]:find("screen draw failed", 1, true),
+    "the screen's first: " .. claimed[1])
+  assert_true(claimed[2]:find("arc draw failed", 1, true), "then the arc's: " .. claimed[2])
 end)
 
 -- The one helper every contained clock step uses (frame, playheads, LFOs,
@@ -504,7 +508,13 @@ test("a draw that keeps failing prints its error once, until the error changes (
   for _ = 1, 15 do request_redraw(); next_frame(context) end
   assert_equal(failures_printed("frame draw failed"), 2, "a table error without one prints once too")
   redraw, arc_redraw = real_redraw, real_arc_redraw
-  context.take_script_errors()  -- the printed errors this test raises (#473)
+  -- every failure the test counted above, and no other: the screen's and
+  -- the arc's, the new screen error twice, the two table errors (#473)
+  local claimed = context.take_script_errors()
+  assert_equal(#claimed, 6, "six printed failures")
+  for _, line in ipairs(claimed) do
+    assert_true(line:find("strata: frame draw failed: ", 1, true) == 1, "a frame draw failure: " .. line)
+  end
 end)
 
 test("displayed changes from every source reach the screen and arc on the next frame (#11)", function()
