@@ -706,6 +706,41 @@ test("an arc ring on a binary VOICE row toggles it once per whole step", functio
   assert_equal(params:get("v1_probe_switch"), 0, "and keeps it off")
 end)
 
+test("an arc ring on a binary VOICE row echoes its value to a MIDI-mapped controller (#519)", function()
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    local record = { name = "probe", count = 1, scene_defaults = { probe_switch = 0 },
+      discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } },
+      fader = false }
+    function record.add(voice_idx)
+      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+        { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
+    end
+    S.register_voice_params(record)
+  end })
+  finish_startup(context)
+  context.arc.plug(1)
+  local controller = context.midi.plug(1)
+  norns.pmap.data["v1_probe_switch"] = { dev = 1, ch = 1, cc = 30, in_lo = 0, in_hi = 127,
+    out_lo = 0, out_hi = 1, echo = true, value = 0 }
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("VOICE")
+  local rows = voice_page_rows(1)
+  local index = S.lib.pages_voice.row_of("v1_probe_switch")
+  place_voice_cursor(index)
+  local ring
+  local _, row_indices = voice_page_group(rows, S.cursors.voice)
+  for n, row_index in ipairs(row_indices) do
+    if row_index == index then ring = n end
+  end
+  context.arc.turn(1, ring, 20)
+  assert_equal(#controller.sent, 1, "one message to the controller")
+  assert_equal(controller.sent[1][3], 127, "on")
+  context.arc.turn(1, ring, -20)
+  assert_equal(controller.sent[2][3], 0, "off")
+end)
+
 test("VOICE rings past the last row are dark and ignored", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
@@ -1034,13 +1069,13 @@ test("a whole-step position ring at its first position lights at least one LED",
   arc_redraw()
   assert_true(lit(1) >= 1, "SEQ ring 1 at step 1")
   assert_true(lit(2) >= 1, "SEQ ring 2 at level 0")
-  assert_true(lit(4) >= 1, "SEQ ring 4 at voice 1", true)
+  assert_true(lit(4) >= 1, "SEQ ring 4 at voice 1")
   S.patterns[1][1] = 5; S.cursors.seq_step = 2; arc_redraw()
   assert_true(lit(1) > lit(4), "later positions still light more")
   show_page("SCENES")
   S.cursors.scene = 1
   arc_redraw()
-  assert_true(lit(1) >= 1, "SCENES ring 1 at slot 1", true)
+  assert_true(lit(1) >= 1, "SCENES ring 1 at slot 1")
 end)
 
 end

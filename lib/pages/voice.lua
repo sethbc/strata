@@ -174,7 +174,7 @@ return function(S)
       if row.kind == "binary" then
         -- on with a turn up, off with a turn down (a toggle's delta would
         -- flip it either way)
-        params:set(row.param_id, d > 0 and 1 or 0)
+        set_binary_param(row.param_id, d > 0 and 1 or 0)
       else
         enc_param_delta(n, row.param_id, d)
       end

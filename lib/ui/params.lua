@@ -31,6 +31,22 @@ return function(S)
     return minval < 0 and maxval > 0
   end
 
+  -- Set a binary param (a VOICE row's on/off) and send what norns'
+  -- ParamSet:delta sends after a change (lua/core/paramset.lua): when the
+  -- param is mapped (norns.pmap.data) its map's value follows it, and with
+  -- echo on the new value goes to the mapped controller as a CC. Binary:set
+  -- sends nothing itself, so params:set alone would leave a mapped
+  -- controller behind (#519)
+  function set_binary_param(param_id, value)
+    params:set(param_id, value)
+    local map = norns and norns.pmap and norns.pmap.data[param_id]
+    if map == nil then return end
+    map.value = util.round(util.linlin(map.out_lo, map.out_hi, map.in_lo, map.in_hi, params:get(param_id)))
+    if map.echo then
+      midi.vports[map.dev]:cc(map.cc, map.value, map.ch)
+    end
+  end
+
   -- A param's default value: a control param's controlspec default (a spec
   -- made without one starts at raw 0, as norns' params/control.lua does, so
   -- that value), or a number or option param's default (an option index)

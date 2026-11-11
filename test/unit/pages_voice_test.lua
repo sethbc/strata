@@ -169,6 +169,27 @@ test("VOICE's section position counts come from voice_page_rows", function()
   assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
 end)
 
+-- A MIDI-mapped param (norns.pmap.data, as lua/core/pmap.lua's pmap.new makes
+-- it, with echo on) edited from the norns echoes its new value to the
+-- controller, as ParamSet:delta does (#519): Binary:set sends nothing itself
+test("E3 on a binary VOICE row echoes its value to a MIDI-mapped controller", function()
+  local context = load_strata({ before_init = function() register_binary_row(local_value("S")) end })
+  finish_startup(context)
+  local controller = context.midi.plug(1)
+  norns.pmap.data["v1_probe_switch"] = { dev = 1, ch = 2, cc = 21, in_lo = 0, in_hi = 127,
+    out_lo = 0, out_hi = 1, echo = true, value = 0 }
+  show_page("VOICE")
+  local S = local_value("S")
+  put_cursor(S, "v1_probe_switch")
+  enc(3, 1)
+  assert_equal(#controller.sent, 1, "one message to the controller")
+  assert_equal(controller.sent[1][2], 21, "on its cc")
+  assert_equal(controller.sent[1][3], 127, "the on value, scaled to the map's range")
+  assert_equal(norns.pmap.data["v1_probe_switch"].value, 127, "the map keeps the value, as norns' does")
+  enc(3, -1)
+  assert_equal(controller.sent[2][3], 0, "off")
+end)
+
 test("E3 on a binary VOICE row sets it on and off", function()
   local context = load_strata({ before_init = function() register_binary_row(local_value("S")) end })
   finish_startup(context)

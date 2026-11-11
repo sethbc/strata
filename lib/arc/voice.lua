@@ -51,7 +51,7 @@ return function(S)
     if steps == 0 then return end
     if row.kind == "binary" then
       -- a two-value option: a step up turns it on, a step down off
-      params:set(row.param_id, steps > 0 and 1 or 0)
+      set_binary_param(row.param_id, steps > 0 and 1 or 0)
     else
       delta_with_detent(row.param_id, steps)
     end
