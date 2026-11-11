@@ -37,7 +37,7 @@ Hold K1 to use ALT. norns hands K1 to a script only once it has been held for a 
 
 - While K1 is held the hint row shows the page's ALT keys, and only keys that act: FX shows `E3:fine`, SETUP names no K3, and SCENES offers `K3:save` on a slot and no K3 on a field
 - **ALT+K2** and **ALT+K3** take the page's ALT actions instead of K2's and K3's. Where a page has no ALT action for a key (FX, SETUP, and ALT+K2 on SCENES) they do nothing: they never run the plain K2 or K3 action
-- On a page whose ALT+K2 randomizes, it acts when you let go of K2: a quick press (under half a second) randomizes, or within 5 seconds of a randomize there undoes it; a longer press does the page's hold action, if it has one. There is one undo: a randomize anywhere replaces it, so a quick ALT+K2 on another page randomizes that page
+- On a page whose ALT+K2 randomizes, it acts when you let go of K2: a quick press (under half a second) randomizes, or within 5 seconds of a randomize there undoes it; a longer press does the page's hold action, if it has one. On a page without one, hold ALT+K2 and let go to cancel: the hint says `K2:cancel` after half a second, and letting go then does nothing. There is one undo: a randomize anywhere replaces it, so a quick ALT+K2 on another page randomizes that page
 - A key pressed with K1 held stays an ALT press until it is released, even if K1 comes up first (on BUFFER such a K2 never opens the file browser)
 - On BUFFER, while K2, ALT+K2 or ALT+K3 is held, the hint row says what letting go will do, and changes after half a second
 - **ALT+E2** and **ALT+E3** take a page's ALT turns where it has them; elsewhere they act as E2 and E3 (E3 in fine steps, below)

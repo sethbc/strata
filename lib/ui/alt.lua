@@ -41,12 +41,15 @@ return function(S)
   -- The shared ALT+K2 of every randomizing page (#557), acting on release:
   -- a quick press (released within ALT_HOLD_SECONDS) undoes the randomize
   -- held there or randomizes the page's section; a longer one runs the
-  -- record's alt_hold, if it has one. A page's alt_key(2) calls k2_down and
-  -- its alt_key_release(2) k2_up(record). The record's randomize_section()
-  -- returns the spec of the section under its cursor
-  -- (S.lib.mutation.randomize), with "locked" second for a locked voice
-  -- (nothing is randomized, but an undo held there still runs), or nil.
-  -- k2_press is the press ({page, at = util.time()}) until its release
+  -- record's alt_hold, or cancels on a page without one. A page's
+  -- alt_key(2) calls k2_down and its alt_key_release(2) k2_up(record). The
+  -- record's randomize_section() returns the spec of the section under its
+  -- cursor (S.lib.mutation.randomize), with "locked" second for a locked
+  -- voice (nothing is randomized, but an undo held there still runs), or
+  -- nil. k2_press is the last press ({page, at = util.time()}): k2_up
+  -- forgets it; a page change leaves it stale until the next k2_down, which
+  -- is harmless, since k2_held reads the key's press marks and k2_up runs
+  -- only from a release key() routes, which follows a k2_down on its page
   local ALT_HOLD_SECONDS = S.constants.ALT_HOLD_SECONDS
   local k2_press = nil
 
@@ -95,11 +98,13 @@ return function(S)
     request_redraw()
   end
 
-  -- The hint for ALT+K2 on the record's page: "K2:reset" while it is held
-  -- ALT_HOLD_SECONDS on a page with alt_hold (the record animates while
-  -- k2_held(), so the hint changes then), else the quick action's
+  -- The hint for ALT+K2 on the record's page, what letting go will do:
+  -- once it is held ALT_HOLD_SECONDS, "K2:reset" on a page with alt_hold
+  -- and "K2:cancel" on one without (its release does nothing); before, the
+  -- quick action's. The record animates while k2_held(), so the frame clock
+  -- draws the change at the hold time
   function M.k2_hint(record)
-    if record.alt_hold and held_long() then return "K2:reset" end
+    if held_long() then return record.alt_hold and "K2:reset" or "K2:cancel" end
     return "K2:" .. quick_action(record)
   end
 

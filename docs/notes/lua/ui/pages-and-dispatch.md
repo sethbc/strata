@@ -24,12 +24,12 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
 - Optional, every one dispatched today:
   - `alt_enc(n, d) -> handled`, `alt_key(n)`, `alt_key_release(n)`: the ALT layer (`docs/notes/lua/ui/alt-and-keys.md`);
-  - `randomize_section() -> spec or nil, reason` and `alt_hold()`: a randomizing page's ALT+K2, through the shared handler (`docs/notes/lua/ui/alt-and-keys.md`, ALT+K2 on the randomizing pages);
   - `key_release(n)`: a plain key's release, on the page it went down on;
   - `enter()`, `leave()`: run by `set_ui_page` on a page change;
   - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_stop_selected_voice` (K3; VOICE's is `start_or_stop_selected_voice`, and `toggle_lock` locks);
   - `header_status() -> string|nil`: a text that replaces the header's indicators (`docs/notes/lua/ui/header-and-flashes.md`);
   - `layout_states`: an array of `{name, setup = function(context)}` the layout tests (`test/unit/ui_layout_test.lua`) and the page renders draw, each on a fresh script with the page shown.
+- Optional, called by the shared ALT+K2 handler (`S.lib.ui_alt.k2_up` and `k2_hint`, from the page's own `alt_key_release` and `hints`), never by strata.lua: `randomize_section() -> spec or nil, reason` (only MAIN sets it today) and `alt_hold()` (no page sets it yet). See `docs/notes/lua/ui/alt-and-keys.md`, ALT+K2 on the randomizing pages.
 - Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)` (`docs/notes/lua/arc-core.md`).
 - Ownership: the page file sets every field but the arc fields; the arc file sets only those, on `S.registry.pages[UI_PAGES.index.<PAGE>]`. So a page and its rings never edit the same file. `strata.lua` includes every page file before every arc file.
 - To add a page: add its name to `UI_PAGES` (`NUM_UI_PAGES` follows), write its file and record, include it from `strata.lua` with the other pages, and, if it has rings, an arc file like `lib/arc/fx.lua` included after the pages (`docs/notes/lua/arc-pages.md`). Every page in `UI_PAGES` already has its page file, and every page but SETUP (which has no rings) its arc file, so changing one adds no include.

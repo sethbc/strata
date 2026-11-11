@@ -710,13 +710,16 @@ test("every drawn param of every page's randomize_section calls note_param_edit 
     end
   end
   assert_true(#pages >= 1 and pages[1].name == "MAIN", "MAIN randomizes")
-  local checked = 0
   for _, page in ipairs(pages) do
+    -- per page: one whose sections draw params must have some checked; a
+    -- pattern page (its spec a pattern, SEQ) draws none
+    local checked, pattern_page = 0, false
     for _, state in ipairs(page.states) do
       local context = load_strata(); finish_startup(context)
       show_page(page.name)
       if state.setup then state.setup(context) end
       local spec = local_value("S").registry.pages[page.index].randomize_section()
+      if spec and spec.pattern ~= nil then pattern_page = true end
       local where = page.name .. ", " .. state.name
       local real_note = note_param_edit
       local noted = {}
@@ -731,8 +734,9 @@ test("every drawn param of every page's randomize_section calls note_param_edit 
       note_param_edit = real_note
       if not ok then error(problem, 0) end
     end
+    assert_true(pattern_page or checked > 0,
+      page.name .. ": a page that randomizes params draws some in one of its states (" .. checked .. " checked)")
   end
-  assert_true(checked > 0, "some drawn params were checked")
 end)
 
 end
