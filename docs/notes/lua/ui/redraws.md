@@ -1,24 +1,27 @@
 ## Must not break
 
 - Never call `redraw()` or `arc_redraw()` from script code. Call `request_redraw()`, and the frame clock draws whatever is dirty at `UI_PAGES.FRAMES_PER_SECOND` (15). Grid redraws stay direct (`grid_redraw()`).
-- A page animates through the frame clock by giving its record `animates()`: `draw_frame` marks the screen dirty each frame while the shown page's `animates()` is true, and never the arc. LFO's is true while any LFO runs (#423), SEQ's is `S.pattern_playing`. A page's `draw()` never calls `request_redraw()` to animate itself (that would redraw a connected arc at 15 fps).
-- A failing draw prints its error once per distinct error and the frame clock keeps running.
+- A page animates through the frame clock by giving its record `animates()`: `draw_frame` marks the screen dirty each frame while the shown page's `animates()` is true, and never the arc. LFO's is true while any LFO runs (#423), SEQ's is `S.pattern_playing`, BUFFER's while a held-key hint shows or something on the cursor slot moves (`S.lib.playheads.moving`), SCENES' while its overwrite prompt is armed (and once more, for the frame that takes it off). A page's `draw()` never calls `request_redraw()` to animate itself (that would redraw a connected arc at 15 fps).
+- A failing draw, a failing `animates()` and any other failure inside a frame print their error once per distinct error, and the frame clock keeps running: each runs through `S.lib.ui_frame.contained_call`, never bare (#320). An `animates()` that fails counts as false.
+- A page `draw()` that fails still finishes the frame: `redraw()` clears the half-drawn body, draws the header again (the title of the page the keys act on), `draw error` on the hint row, and calls `screen.update()` (#424).
 
 ## Redraws
 
 Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - Anything that changes what the screen or the arc shows calls the global `request_redraw()`, which sets `UI_PAGES.screen_dirty` and `UI_PAGES.arc_dirty`.
-- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in init's last start step, `stop_frame_clock()` in `cleanup`, after the start-up clock) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()`.
+- The frame clock (`UI_PAGES.frame_clock`, `start_frame_clock()` in its start step `START_ORDER.frame_clock`, after the start-up clock and before the peaks loop and the playhead clock; `stop_frame_clock()` in `cleanup`) sleeps `1 / UI_PAGES.FRAMES_PER_SECOND` (15) and runs `draw_frame()` through `contained_call` (key `frame`), so nothing in a frame can end the clock.
 - `draw_frame()` clears each dirty flag and calls the global `redraw()` and/or `arc_redraw()`. A burst of arc turns, encoder steps, MIDI or param changes costs one screen draw and one arc redraw per frame, and an idle frame draws nothing.
 - Both flags start set, so the first frame draws the screen and any arc connected at start.
-- On the LFO page while an LFO runs, and on SEQ while `S.pattern_playing`, `draw_frame` marks the screen dirty every frame (screen only, never the arc), through their records' `animates()`, so the dots and the playing column move. Neither page has a clock of its own.
+- On the LFO page while an LFO runs, on SEQ while `S.pattern_playing`, on BUFFER while a held-key hint shows or the cursor slot's heads move, and on SCENES while its overwrite prompt is armed, `draw_frame` marks the screen dirty every frame (screen only, never the arc), through their records' `animates()`, so the dots, the playing column, the heads and the hints move. None of these pages has a clock of its own.
+- `draw_frame` reads the shown record's `animates()` through `contained_call(UI_PAGES.draw_errors, "animates", "page animates", ...)`: an error there prints once (`strata: page animates failed: ` and its traceback) and counts as false, so the frame still draws what was asked for and the clock goes on (#320).
 
 Draw errors:
 - Each draw runs through `draw_frame_part(part, draw)` (`part` is `"screen"` or `"arc"`): `S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, part, "frame draw", draw)`, an `xpcall` with `draw_error_report`, which returns a key and the error with its traceback.
+- Inside `redraw()`, the page record's `draw()` runs through `contained_call(UI_PAGES.draw_errors, "page", "page draw", record.draw)`. When it fails the frame is still finished: the screen is cleared, the header drawn again, the hint row shows `draw error` (over any hints flash) and `screen.update()` pushes it, so the screen never keeps the previous page while the keys act on the new one (#424). The error prints once, with its traceback; the next good draw shows the page's hints again.
 - `contained_call(errors, key, label, fn, ...)` is the one containment every clock step uses (a frame's draw, the playhead tick's parts, an LFO step, a glide step, a mutation tick): `fn(...)` under that `xpcall`; a failure prints `strata: <label> failed: ` and the traceback once per distinct message for its key (`errors[key]` holds the message last printed), a success forgets it. It returns whether `fn` ran without an error.
 - The key: a string error is its own key; a table error (a new table each time) is keyed by its `message` field (also what is printed), or else by its type.
 - An error is printed to the console with its traceback and the clock keeps running. The flag was already cleared, so the failed draw is not retried; the next `request_redraw()` draws again.
-- `UI_PAGES.draw_errors[part]` holds the key last printed, so a draw that keeps failing with the same error (e.g. on the LFO page, which draws every frame) prints it once instead of 15 times a second.
+- `UI_PAGES.draw_errors[key]` (`screen`, `arc`, `page`, `animates`, `frame`) holds the message last printed, so a draw that keeps failing with the same error (e.g. on the LFO page, which draws every frame) prints it once instead of 15 times a second.
 - Another message prints, and a good draw clears the key, so the same error after a good frame prints again (issue #49).
 
 norns' swaps still apply, because `draw_frame` calls the global `redraw`:

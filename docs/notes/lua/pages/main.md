@@ -13,7 +13,7 @@
 
 ## Owns
 
-- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_param_label`, `main_fields`.
+- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_fields`.
 - Its unit tests: `test/unit/pages_main_test.lua`. Its rings: `lib/arc/main.lua` (`docs/notes/lua/arc-pages.md`).
 
 ## Keys
@@ -28,8 +28,7 @@
 ## Main parameter and fields
 
 - `main_param_id(voice_idx)` returns the param of field 1 and arc ring 2: `v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring.
-- `main_param_label(voice_idx)` returns its screen label.
-- Both read `main_param_entry(voice_idx)`:
+- It reads `main_param_entry(voice_idx)`, whose `label` is its screen label:
   - the `MAIN_PARAMS` entry for the voice type (param id suffix, screen label, value format; arc ring 2 sweeps it with `arc_sweep_param`);
   - `BUFFER_MAIN_PARAM` (`buf_pos`, label `pos`, `%.2f`) for a buffer source (3.0 design §1);
   - `INPUT_MAIN_PARAM` (`grain_size`, label `size`, `%.2f s`) for the input source (its synth and buffer params do nothing).

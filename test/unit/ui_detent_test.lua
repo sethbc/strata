@@ -228,4 +228,47 @@ test("no page or ring calls params:delta", function()
   end
   assert_equal(#offenders, 0, table.concat(offenders, "; "))
 end)
+
+-- The UI core's call rules (AGENTS.md, UI), over strata.lua and every lib/
+-- file with comments and strings blanked: only the frame clock calls
+-- redraw() and arc_redraw(), S.ui_page is set only where it starts
+-- (lib/ui/frame.lua) and by set_ui_page (lib/ui/keys.lua), alt_key runs
+-- only through alt_action (lib/ui/alt.lua), and only redraw() and the
+-- header draw the hint row (#427)
+test("only the UI core redraws, sets the page, runs alt_key and draws the hint row (#427)", function()
+  -- `field`: a call through another table (fileselect.redraw(), a page
+  -- record's arc_redraw(port)) is another function, not the rule's
+  local RULES = {
+    { name = "a redraw() call", pattern = "()%f[%w_]redraw%s*%(", field = true,
+      allowed = { ["lib/ui/frame.lua"] = true } },
+    { name = "an arc_redraw() call", pattern = "()%f[%w_]arc_redraw%s*%(", field = true,
+      allowed = { ["lib/ui/frame.lua"] = true } },
+    { name = "an assignment to ui_page", pattern = "()%f[%w_]ui_page%s*=[^=]",
+      allowed = { ["lib/ui/frame.lua"] = true, ["lib/ui/keys.lua"] = true } },
+    { name = "an alt_key call", pattern = "()[%.:]alt_key%s*%(", allowed = { ["lib/ui/alt.lua"] = true } },
+    { name = "a draw_hints call", pattern = "()%f[%w_]draw_hints%s*%(",
+      allowed = { ["strata.lua"] = true, ["lib/ui/header.lua"] = true } },
+  }
+  local offenders, scanned = {}, 0
+  for _, source in ipairs(h.read_lua_sources()) do
+    scanned = scanned + 1
+    local sanitized = h.sync_check.sanitize_lua(source.text)
+    for _, rule in ipairs(RULES) do
+      if not rule.allowed[source.path] then
+        for start in sanitized:gmatch(rule.pattern) do
+          local before = sanitized:sub(math.max(1, start - 60), start - 1)
+          -- a definition (function redraw(), function record.alt_key(n)) is no call
+          local definition = before:match("function%s+[%w_.:]*$")
+          local through_field = rule.field and before:match("[%.:]%s*$")
+          if not definition and not through_field then
+            local line = select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
+            table.insert(offenders, source.path .. ":" .. line .. ": " .. rule.name)
+          end
+        end
+      end
+    end
+  end
+  assert_true(scanned > 50, "scanned strata.lua and every lib/ file (" .. scanned .. ")")
+  assert_equal(#offenders, 0, table.concat(offenders, "; "))
+end)
 end

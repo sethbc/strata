@@ -233,8 +233,7 @@ local MODULE_HOMES = {
   ["lib/ui/alt.lua"] = { "alt_action" },
   ["lib/ui/detent.lua"] = { "delta_with_detent", "enc_param_delta" },
   ["lib/ui/menu_watch.lua"] = { "forget_keys_held_through_menu", "watch_menu_opening", "unwatch_menu_opening" },
-  ["lib/pages/main.lua"] = { "update_voice_list", "main_param_entry", "main_param_id", "main_param_label",
-    "redraw_main" },
+  ["lib/pages/main.lua"] = { "update_voice_list", "main_param_entry", "main_param_id", "redraw_main" },
   ["lib/pages/fx.lua"] = { "redraw_fx" },
   ["lib/pages/lfo.lua"] = { "lfo_shape_value", "redraw_lfo" },
   ["lib/pages/buffer.lua"] = { "buffer_page_flash", "redraw_buffer",
@@ -746,6 +745,7 @@ local function start_steps()
   end
   table.insert(voice_sync, 1, "clock started")
   return {
+    { "started", {} },
     { "voice list", { "voice list built" } },
     { "voice layout states", {} },
     { "E1 settings", { "encoder 1 accel false", "encoder 1 sens 4" } },

@@ -120,7 +120,7 @@ test("source switching syncs through setGrainSource and swaps the main param", f
   local calls = context.calls_named("setGrainSource")
   assert_equal(#calls, 1, "one setGrainSource per switch")
   assert_equal(calls[1].args[1], 0); assert_equal(calls[1].args[2], 3)
-  assert_equal(main_param_id(1), "v1_buf_pos"); assert_equal(main_param_label(1), "pos")
+  assert_equal(main_param_id(1), "v1_buf_pos"); assert_equal(main_param_entry(1).label, "pos")
   params:set("v1_source", 10); calls = context.calls_named("setGrainSource"); assert_equal(calls[#calls].args[2], 9)
   assert_equal(main_param_id(1), "v1_grain_size", "input source shows grain size (a 3.0 decision: its buffer params are dead too)")
   params:set("v1_source", 1); assert_equal(main_param_id(1), "v1_freq")

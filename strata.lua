@@ -180,8 +180,11 @@ end
 
 -- Encoders. E1 selects the page (with or without ALT). E2 and E3 go to the
 -- page record's enc; with ALT held, to its alt_enc first, and on to enc
--- when it has none or it returns false (not handled)
+-- when it has none or it returns false (not handled). Before init's first
+-- start step (S.started, lib/ui/frame.lua) enc, key and redraw do nothing:
+-- norns routes them to the script if its menu closes while the engine loads
 function enc(n, d)
+  if not S.started then return end
   if n == 1 then
     S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
   else
@@ -201,6 +204,7 @@ end
 -- does nothing when it comes up): an ALT press's to alt_key_release, even
 -- if K1 came up first, any other's to key_release (if the record has them).
 function key(n, z)
+  if not S.started then return end
   if n == 1 then
     S.lib.ui_alt.set(z == 1)
   elseif z == 1 then
@@ -228,8 +232,11 @@ end
 
 -- Redraw: the header, the page record's body (draw), then the hint row:
 -- the "hints" flash while one shows (lib/ui/flash.lua), else the record's
--- hints(alt_held)
+-- hints(alt_held). A body that fails still finishes the frame (#424): its
+-- error prints once (contained_call, key "page"), and the screen shows the
+-- header of the page the keys act on and "draw error" on the hint row
 function redraw()
+  if not S.started then return end
   -- the open file selector owns the screen: norns' own redraw() calls (as
   -- the norns menu closes) and Strata's draw the file list, never the page
   if S.BUFFER_PAGE.file_selector_open then
@@ -240,8 +247,13 @@ function redraw()
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
-  record.draw()
-  draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held))
+  if S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, "page", "page draw", record.draw) then
+    draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held))
+  else
+    screen.clear()  -- no half-drawn body
+    draw_header()
+    draw_hints("draw error")
+  end
   screen.update()
 end
 

@@ -156,6 +156,7 @@ local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
 -- scenes before the buffers, which they may use), and the clocks last.
 -- Spaced by 10, so a new step can go between two others
 local START_ORDER = {
+  started = 5,           -- lib/ui/frame.lua: S.started (redraw, key and enc act from here on)
   voice_list = 10,       -- lib/pages/main.lua: MAIN's voice list
   voice_layout_states = 15,  -- lib/pages/voice.lua: the registered voice params' layout states
   e1_settings = 20,      -- strata.lua: E1 steps pages (no acceleration)
