@@ -16,8 +16,8 @@ One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/pa
 | `v<i>_filter_freq` | control | 20-20000 Hz exp, 5000 | `filterFreq` |
 | `v<i>_filter_res` | control | 0-1, 0.5 | `filterRes` |
 | `v<i>_filter_mix` | control | 0-1, 0 (the filter left out) | `filterMix` |
-| `v<i>_delay_send` | control | 0-1, 1 | `delaySend` |
-| `v<i>_reverb_send` | control | 0-1, 1 | `reverbSend` |
+| `v<i>_delay_send` | control | 0-1, 1 (shown as a percent, `100 %`) | `delaySend` |
+| `v<i>_reverb_send` | control | 0-1, 1 (shown as a percent, `100 %`) | `reverbSend` |
 
 - Stored in `S.voices[i].extras`; scene defaults are the param defaults (3.1's chain), and `discrete = {filter_type = {1, 3}}`.
 - VOICE: the section `filter & sends`, after mix, on every source (`M.VOICE_MIX.section`). Its `layout_states` put each voice on each source (synth, buf 1, input) with the cursor on the section's first and last row, at bandpass and 20000 Hz.

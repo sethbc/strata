@@ -38,6 +38,9 @@ return function(S)
     return bypass ~= nil and params:get(bypass.param_id) == 1
   end
 
+  -- The sends are 0-1 values shown as a percent (display only)
+  local function send_percent(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end
+
   -- The params' specs (a params:add table without an id), by key
   local function voice_mix_param(key)
     if key == "filter_type" then
@@ -49,9 +52,11 @@ return function(S)
     elseif key == "filter_mix" then
       return {type = "control", name = "filter mix", controlspec = controlspec.new(0, 1, "lin", 0.01, 0)}
     elseif key == "delay_send" then
-      return {type = "control", name = "delay send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1)}
+      return {type = "control", name = "delay send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1),
+        formatter = send_percent}
     end
-    return {type = "control", name = "reverb send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1)}
+    return {type = "control", name = "reverb send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1),
+      formatter = send_percent}
   end
 
   -- VOICE's layout tests and page renders: each source, the cursor on the

@@ -270,4 +270,26 @@ test("randomize, mutation and the fader pages leave the voice filter and sends a
   assert_equal(params:get("delay_bypass"), 0); assert_equal(params:get("reverb_bypass"), 0)
 end)
 
+test("the voice sends show in percent and send the same value (#387)", function()
+  local context = load_strata(); finish_startup(context)
+  for voice_idx = 1, 7 do
+    for _, key in ipairs({"delay_send", "reverb_send"}) do
+      local id = "v" .. voice_idx .. "_" .. key
+      assert_equal(params:string(id), "100 %", id .. " at 1.0")
+      params:set(id, 0.5)
+      assert_equal(params:string(id), "50 %", id .. " at 0.5")
+      assert_near(params:get(id), 0.5, 1e-9, "the stored value is unchanged")
+      params:set(id, 1)
+    end
+  end
+  if not local_value("voices")[1].active then toggle_voice(1) end
+  context.clear_engine_calls()
+  params:set("v1_delay_send", 0.25)
+  local sent
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "delaySend" then sent = call.args[3] end
+  end
+  assert_near(sent, 0.25, 1e-9, "the engine still gets the 0-1 value")
+end)
+
 end
