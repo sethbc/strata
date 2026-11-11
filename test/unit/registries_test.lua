@@ -323,7 +323,11 @@ test("the LFO page's ALT+E3 groups keep each voice and add the registered destin
   local S = local_value("S")
   local built_in = #built_in_lfo_labels()
   assert_equal(S.lib.lfos.BUILT_IN_DESTINATIONS, built_in)
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 " .. (built_in + 1))
+  -- each registered destination is a group from its v1 (#511): the script's own, then the probe
+  local registered_starts = {}
+  for k = 0, #S.registry.lfo_destinations - 1 do table.insert(registered_starts, built_in + 1 + k * 7) end
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 " .. table.concat(registered_starts, " "))
+  assert_equal(S.LFO_DESTINATIONS[registered_starts[#registered_starts]].label, "v1 probe")
   -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the registered group
   h.show_page("LFO")
   S.lfo_field = 1
@@ -335,11 +339,12 @@ test("the LFO page's ALT+E3 groups keep each voice and add the registered destin
     table.insert(landed, S.LFO_DESTINATIONS[params:get("strata_lfo1_dest")].label)
   end
   key(1, 0)
-  -- the registered group starts at the first registered destination (the
-  -- script's own, lib/history.lua's, before the test's probe)
+  -- the registered groups start at the first registered destination (the
+  -- script's own, lib/history.lua's, before the test's probe), then the next
   local first_registered = S.LFO_DESTINATIONS[built_in + 1].label
+  local second_registered = S.LFO_DESTINATIONS[built_in + 8].label
   assert_equal(table.concat(landed, ","),
-    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main," .. first_registered .. "," .. first_registered)
+    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main," .. first_registered .. "," .. second_registered)
 end)
 
 test("registered fx params grow the fx group and follow its 11 params", function()

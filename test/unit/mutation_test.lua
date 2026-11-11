@@ -383,4 +383,48 @@ test("the undo flag clears after an error in a param action, and cleanup cancels
   assert_equal(context.clock.threads[clock_id], nil, "the clock is gone")
 end)
 
+-- The mutation metro's tick never raises: an error in a step is printed
+-- once with its traceback, and the next tick mutates again (#517)
+test("an error inside a mutation tick is printed once and the next tick mutates (#517)", function()
+  local context = load_strata(); finish_startup(context)   -- voice 1 (synth source) running
+  local S = local_value("S")
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  local real_spec = get_param_spec
+  local failure = "mutation boom"
+  get_param_spec = function(...)
+    if failure then error(failure) end
+    return real_spec(...)
+  end
+  local function reports()
+    local count, traced = 0, false
+    for _, line in ipairs(context.printed) do
+      if line:find("strata: mutation failed: ", 1, true) == 1 then
+        count = count + 1
+        traced = traced or line:find("stack traceback", 1, true) ~= nil
+      end
+    end
+    return count, traced
+  end
+  context.printed = {}
+  local ok, problem = pcall(function()
+    for _ = 1, 3 do S.mutation_metro.event() end
+    local count, traced = reports()
+    assert_equal(count, 1, "the same error on every tick prints once")
+    assert_true(traced, "with its traceback")
+    failure = nil
+    math.randomseed(4)
+    local freq = params:get("v1_freq")
+    S.mutation_metro.event()
+    assert_true(params:get("v1_freq") ~= freq, "the next good tick mutates")
+    failure = "mutation boom"
+    S.mutation_metro.event()
+    assert_equal(reports(), 2, "the error after a good tick prints again")
+    failure = "another mutation boom"
+    S.mutation_metro.event()
+    assert_equal(reports(), 3, "a different message prints at once")
+  end)
+  get_param_spec = real_spec
+  if not ok then error(problem, 0) end
+end)
+
 end

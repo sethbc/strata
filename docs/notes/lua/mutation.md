@@ -7,6 +7,7 @@
 - The drift writes only through `set_drifted_param`, which sets `S.drift_writing` around each write inside an `xpcall`, so the flag always clears and an error is raised again with its traceback.
 - `mean_reverting_step` draws exactly one `math.random()` per call.
 - Cleanup stops the mutation metro and sets `mutation_enabled` to 0, so param and state agree.
+- `gentle_mutate` (the mutation metro's event) never raises (#517): it runs the step (`mutate_voices`) under `xpcall` with the frame clock's `draw_error_report` and prints `strata: mutation failed:` with the traceback, once per distinct message (a good step forgets it), so the next tick mutates again.
 - Randomize undo: `randomize_voice` stores the previous value of every param it sets, through its local `randomize_param`, and only those. A param it starts setting needs a `note_param_edit(param_id)` call in its action (`lib/params_setup.lua`), or a manual edit would be overwritten by an undo.
 - The undo is one level and cleared by: a randomize (of any voice: a new one replaces it), a scene recall (`recall_scene` and `recall_scene_instant`), a `gentle_mutate` step that changes a param of the undo's voice (`set_mutated_param`), an edit of a stored param (`note_param_edit`) and the end of the window (`undo_clock`). The drift's writes (`S.drift_writing`) and randomize's and undo's own (`undo_writing`) never clear it.
 - `undo_writing` is set around the writes inside an `xpcall` (`write_as_undo`), so the flag always clears and an error is raised again with its traceback.

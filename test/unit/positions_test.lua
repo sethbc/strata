@@ -443,6 +443,62 @@ test("a fling glides and decays with the friction; 100% never glides", function(
   end
 end)
 
+-- An error inside the glide's clock never ends it: it is printed once with
+-- its traceback and the glide runs on to its end (#517)
+test("an error inside the glide is printed once and the glide runs on to its end (#517)", function()
+  local context, S = buffer_voices()
+  params:set("scrub_friction", 50)   -- tau 2 s
+  local real_set_grain = engine.setGrainParam
+  local failures, sends = 0, 0
+  local failing = function() return true end
+  engine.setGrainParam = function(voice, name, value)
+    if name == "scrubRate" then
+      sends = sends + 1
+      if failing(sends) then failures = failures + 1; error("glide boom") end
+    end
+    return real_set_grain(voice, name, value)
+  end
+  local function reports()
+    local count, traced = 0, false
+    for _, line in ipairs(context.printed) do
+      if line:find("strata: scrub glide failed: ", 1, true) == 1 then
+        count = count + 1
+        traced = traced or line:find("stack traceback", 1, true) ~= nil
+      end
+    end
+    return count, traced
+  end
+  local ok, problem = pcall(function()
+    fling(context, S, 0.1, 0.3)
+    context.printed = {}
+    context.clock.run_for(30)   -- every send of the glide raises
+    assert_equal(#context.clock.take_errors(), 0, "the scheduler reported no clock error")
+    assert_true(failures > 10, "the glide ran on through its failing steps (" .. failures .. ")")
+    local count, traced = reports()
+    assert_equal(count, 1, "the same error on every step prints once")
+    assert_true(traced, "with its traceback")
+    assert_equal(S.lib.positions.scrub_rate(1), 0, "and the glide still decayed to its end")
+    local ended = failures
+    context.clock.run_for(2)
+    assert_equal(failures, ended, "then nothing more runs")
+    -- one failing step, the third send of the next glide: after its good
+    -- steps the error prints again, and the glide sends the rest of its rates
+    local first_send = sends
+    failing = function(count) return count == first_send + 3 end
+    context.clear_engine_calls()
+    fling(context, S, 0.1, 0.3)
+    context.clock.run_for(30)
+    assert_equal(failures, ended + 1, "one step failed")
+    assert_equal(reports(), 2, "the error after good steps prints again")
+    assert_equal(#context.clock.take_errors(), 0)
+    local rates = grain_calls(context, "scrubRate")
+    assert_true(#rates > 10, "the glide went on after its failed step (" .. #rates .. " sends)")
+    assert_equal(rates[#rates].value, 0, "and ended at 0")
+  end)
+  engine.setGrainParam = real_set_grain
+  if not ok then error(problem, 0) end
+end)
+
 test("a new turn, a jump or a source switch ends the glide at once", function()
   local context, S = buffer_voices()
   params:set("scrub_friction", 0)

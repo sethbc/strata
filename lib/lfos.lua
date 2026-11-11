@@ -42,7 +42,10 @@ return function(S)
   -- at 120 BPM) while a 10 Hz LFO still gets several steps per cycle
   local LFO_PPQN = 48
   -- An LFO step is not sent when the destination's engine value would move by
-  -- less than this fraction of its range since the last value sent to it
+  -- less than this fraction of its range since the last value sent to it,
+  -- measured along the range's warp (destination_position): an exponential
+  -- range (a frequency) in octaves, so a slow LFO glides evenly at its low
+  -- end too (#406)
   local LFO_SEND_THRESHOLD = 1 / 1000
 
   -- LFO destinations in strata_lfo<n>_dest option order: {label, resolve},
@@ -121,8 +124,22 @@ return function(S)
     send_param_to_engine(param_id, params:get(param_id))
   end
 
-  -- LFO n's action (the library passes scaled and raw)
-  function apply_lfo(n, scaled, raw)
+  -- A value's position (0-1) along a destination's range, as its
+  -- controlspec's warp places it (an exponential range in octaves), without
+  -- the rounding to the param's step that unmap does first: a move finer
+  -- than the step must count (a 0.01-step mix still sends every 1/1000).
+  -- unmap rounds by spec.step, so the step is 0 for the call
+  local function destination_position(param_id, value)
+    local spec = params:lookup_param(param_id).controlspec
+    local step = spec.step
+    spec.step = 0
+    local position = spec:unmap(value)
+    spec.step = step
+    return position
+  end
+
+  -- One step of LFO n (the library passes scaled and raw)
+  local function step_lfo(n, scaled, raw)
     S.lfo_last_raw[n] = raw
     local param_id = lfo_destination_id(n)
     -- a "main" destination re-resolves to another param when the voice's
@@ -135,21 +152,58 @@ return function(S)
     -- skip steps too small to matter (a slow LFO moves very little per step)
     local last_sent = S.engine_param_values[param_id]
     if last_sent ~= nil then
-      local minval, maxval = param_range(param_id)
-      if math.abs(value - last_sent) < (maxval - minval) * LFO_SEND_THRESHOLD then return end
+      local moved = math.abs(destination_position(param_id, value) - destination_position(param_id, last_sent))
+      if moved < LFO_SEND_THRESHOLD then return end
     end
     S.lib.engine_sync.send_engine_value(param_id, value)
   end
 
-  -- LFO page dot: the library's running phase is internal (get("phase") is
-  -- the phase offset setting), so Strata estimates it from the time since the
-  -- LFO's last reset and its period. lfo_phase_base[n] is the phase (before the
-  -- offset) at time lfo_phase_time[n]; a period change rebases it so the dot
-  -- keeps its place, as the library keeps its phase.
+  -- LFO n's action: its step, protected. norns' lattice runs every LFO's
+  -- step, so an error raised in one would stop them all for the session
+  -- (#517): it is printed with its traceback instead, once per distinct
+  -- message per LFO (a good step forgets it), as the frame clock does
+  -- (draw_error_report, lib/ui/frame.lua)
+  local step_errors = {}  -- per LFO: the error message it last printed
+  function apply_lfo(n, scaled, raw)
+    local stepped, report = xpcall(step_lfo, draw_error_report, n, scaled, raw)
+    if stepped then
+      step_errors[n] = nil
+    elseif report.message ~= step_errors[n] then
+      step_errors[n] = report.message
+      print("strata: LFO " .. n .. " step failed: " .. report.traceback)
+    end
+  end
+
+  -- LFO page dot: the library's running phase moves on its lattice's steps
+  -- (get("phase") is the phase offset setting), so Strata estimates it from
+  -- the time since the phase was last taken and the period.
+  -- lfo_phase_base[n] is the phase (before the offset) at time
+  -- lfo_phase_time[n]. A reset and a mode change take it from the library
+  -- (sync_lfo_phase); a period change rebases it so the dot keeps its place,
+  -- as the library keeps its phase.
   local lfo_phase_base = {}
   local lfo_phase_time = {}
-  -- the phase LFO:reset_phase restarts the cycle at, per reset target
-  local LFO_RESET_PHASES = {floor = 0.75, ceiling = 0.25, ["mid: rising"] = 0, ["mid: falling"] = 0.5}
+
+  -- The library's phase now (before the offset), from its phase counter (in
+  -- beats), as its process_lfo computes it: phase_counter / period when
+  -- clocked, phase_counter x beat length / period when free
+  local function library_phase(n)
+    local lfo = S.lfos[n]
+    local phase = lfo.phase_counter / lfo:get("period")
+    if lfo:get("mode") ~= "clocked" then phase = phase * clock.get_beat_sec() end
+    return phase % 1
+  end
+
+  -- After the library moved its phase: the dot goes on from there. A reset
+  -- lands on the reset target (mid: rising lands at (beat length / period)^2
+  -- of a free cycle, the library's own arithmetic); a mode change scales the
+  -- phase by the beat length, since the library's mode action sets the mode
+  -- before the period and change_period reads the old period in the new
+  -- mode's unit (#409)
+  local function sync_lfo_phase(n)
+    lfo_phase_base[n] = library_phase(n)
+    lfo_phase_time[n] = util.time()
+  end
 
   local function lfo_period_seconds(n)
     local period = S.lfos[n]:get("period")
@@ -165,11 +219,6 @@ return function(S)
 
   local function rebase_lfo_phase(n)
     lfo_phase_base[n] = lfo_running_phase(n)
-    lfo_phase_time[n] = util.time()
-  end
-
-  local function note_lfo_reset(n)
-    lfo_phase_base[n] = LFO_RESET_PHASES[S.lfos[n]:get("reset_target")] or 0
     lfo_phase_time[n] = util.time()
   end
 
@@ -221,7 +270,7 @@ return function(S)
       local depth_param = params:lookup_param("lfo_depth_" .. n)
       depth_param.default = math.floor(depth_param.default + 0.5)
       depth_param.value = depth_param.default
-      note_lfo_reset(n)
+      sync_lfo_phase(n)
       -- the library's state action re-bangs the baseline, whose
       -- change_offset sets lfo_offset_<n> to 0 (#103): keep the offset across
       -- on/off (a real baseline change still zeroes it)
@@ -240,13 +289,25 @@ return function(S)
       wrap_param_action("lfo_depth_" .. n, nil, function(depth)
         if depth == 0 then restore_lfo_destination(n) end
       end)
-      wrap_param_action("lfo_reset_" .. n, nil, function() note_lfo_reset(n) end)
-      for _, prefix in ipairs({"lfo_mode_", "lfo_clocked_", "lfo_free_"}) do
+      wrap_param_action("lfo_reset_" .. n, nil, function() sync_lfo_phase(n) end)
+      for _, prefix in ipairs({"lfo_clocked_", "lfo_free_"}) do
         wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end)
       end
-      -- arc ring 4's carried ticks were for the other mode's period param
+      -- a mode change moves the library's phase (sync_lfo_phase), and arc
+      -- ring 4's carried ticks were for the other mode's period param
       wrap_param_action("lfo_mode_" .. n, nil, function()
+        sync_lfo_phase(n)
         if n == S.selected_lfo then forget_arc_lfo_period_ticks() end
+      end)
+      -- norns' library raises inside its lattice on a random step whose min
+      -- is above its max (#528): the bound set takes the other with it, so
+      -- min never passes max, and a pair set one value at a time (a PSET)
+      -- lands as stored in either order
+      wrap_param_action("lfo_min_" .. n, function(low)
+        if low > params:get("lfo_max_" .. n) then params:set("lfo_max_" .. n, low) end
+      end)
+      wrap_param_action("lfo_max_" .. n, function(high)
+        if high < params:get("lfo_min_" .. n) then params:set("lfo_min_" .. n, high) end
       end)
     end
   end

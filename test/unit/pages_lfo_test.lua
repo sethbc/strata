@@ -60,18 +60,42 @@ end)
 
 test("group starts come from the destinations list", function()
   load_strata()
-  -- the registered destinations (lib/history.lua's) are one more group
-  local registered = #local_value("S").registry.lfo_destinations > 0
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61" .. (registered and " 69" or ""))
+  -- each registered destination (3.2's hist, vfilt, dsend, rsend: v1-v7
+  -- each, after the 68 built-in ones) is a group of its own (#511)
+  assert_equal(#local_value("S").registry.lfo_destinations, 4, "3.2's four registered destinations")
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 69 76 83 90")
   local destinations = local_value("LFO_DESTINATIONS")
   for _, start in ipairs({ 13, 21, 61 }) do
     assert_true(destinations[start].label:find(" main$"), destinations[start].label .. " starts a voice group")
   end
+  local registered_labels = { [69] = "v1 hist", [76] = "v1 vfilt", [83] = "v1 dsend", [90] = "v1 rsend" }
+  for start, label in pairs(registered_labels) do
+    assert_equal(destinations[start].label, label, "a registered group starts at voice 1")
+  end
   assert_equal(lfo_dest_group_jump(1, -1), 1, "clamped at none")
   assert_equal(lfo_dest_group_jump(5, 1), 13, "next start above")
   assert_equal(lfo_dest_group_jump(5, -1), 2, "last start below")
-  assert_equal(lfo_dest_group_jump(61, 1), registered and 69 or 61, "clamped at v7, or on to the registered group")
+  assert_equal(lfo_dest_group_jump(61, 1), 69, "from v7 main on to the registered groups")
   assert_equal(lfo_dest_group_jump(68, -1), 61, "from v7 scan back to v7 main")
+  assert_equal(lfo_dest_group_jump(96, 1), 96, "clamped at the last destination")
+end)
+
+test("ALT+E3 lands on each registered group's first voice, both ways (#511)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  local function alt_e3(d) with_alt(function() enc(3, d) end) end
+  params:set("strata_lfo1_dest", 61)   -- v7 main
+  local labels = {}
+  for _ = 1, 5 do
+    alt_e3(1)
+    table.insert(labels, local_value("LFO_DESTINATIONS")[params:get("strata_lfo1_dest")].label)
+  end
+  assert_equal(table.concat(labels, ", "), "v1 hist, v1 vfilt, v1 dsend, v1 rsend, v1 rsend", "then clamped")
+  params:set("strata_lfo1_dest", 96)   -- v7 rsend, the last destination
+  alt_e3(-1); assert_equal(params:get("strata_lfo1_dest"), 90, "back to v1 rsend")
+  alt_e3(-2); assert_equal(params:get("strata_lfo1_dest"), 76, "two groups back: v1 vfilt")
+  params:set("strata_lfo1_dest", 70)   -- v2 hist
+  alt_e3(-1); assert_equal(params:get("strata_lfo1_dest"), 69, "inside a group: back to its start")
 end)
 
 test("E2 moves along the strip and E3 edits the field both ways", function()
@@ -268,7 +292,7 @@ test("LFO hints", function()
   key(1, 0)
 end)
 
-test("the LFO page redraws on every frame while it is shown, with no clock of its own", function()
+test("the LFO page redraws on every frame only while an LFO runs, with no clock of its own (#423)", function()
   local context = load_strata(); finish_startup(context)
   local baseline = context.clock.pending_count()
   show_page("LFO")
@@ -276,12 +300,20 @@ test("the LFO page redraws on every frame while it is shown, with no clock of it
   next_frame(context)
   local counter = count_screen_draws()
   next_frame(context); next_frame(context)
-  assert_equal(counter.screen, 2, "each frame redraws, so the dots move")
-  show_page("BUFFER"); next_frame(context)
+  assert_equal(counter.screen, 0, "no LFO runs: an idle frame draws nothing")
+  params:set("lfo_2", 2); next_frame(context)
+  counter.screen = 0
+  next_frame(context); next_frame(context)
+  assert_equal(counter.screen, 2, "an LFO runs: each frame redraws, so its dot moves")
+  params:set("lfo_2", 1); next_frame(context)
+  assert_equal(counter.screen, 3, "turning it off draws once, without its dot")
+  next_frame(context); next_frame(context)
+  assert_equal(counter.screen, 3, "then the page is idle again")
+  params:set("lfo_3", 2); show_page("BUFFER"); next_frame(context)
   counter.screen = 0
   next_frame(context)
   counter.restore()
-  assert_equal(counter.screen, 0, "other pages draw only when asked")
+  assert_equal(counter.screen, 0, "other pages draw only when asked, LFOs running or not")
 end)
 
 -- The LFO page's waveform, dot and labels for LFO n
@@ -333,7 +365,8 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
   -- reset to the floor (phase 0.75) at t 100, so at t 100 the dot is at 0.75
   local dot = row.rects[1]
   assert_near(dot.x + 1, 12 + 0.75 * 63, 0.51, "dot x from the phase since the reset")
-  assert_near(dot.y + 1, top + 10 - 0.25 * 10, 0.51, "dot y from the last raw value")
+  -- raw 0.25 swings a quarter below the middle line at full depth: half that at 50 %
+  assert_near(dot.y + 1, top + 10 - (0.5 - 0.25 * 0.5) * 10, 0.51, "dot y from the last raw value and the depth")
   assert_true(table.concat(row.texts, " "):find("filt freq"), "destination label")
   assert_true(table.concat(row.texts, " "):find("on 50%%"), "state and depth")
   -- one second later at a 4 s period: a quarter cycle further, wrapped to 0
@@ -382,6 +415,31 @@ test("LFO page rows: waveform, dot from the last raw value and elapsed period, l
   end
   -- cleanup turns a running LFO off
   params:set("lfo_3", 2); cleanup(); assert_equal(params:get("lfo_3"), 1, "cleanup stops LFO 3")
+end)
+
+-- The dot swings around the row's middle line (y top + 5) by the depth: at
+-- full depth over the whole wave, at 0 (which moves nothing) on the line (#520)
+test("the dot's swing follows the depth; at depth 0 it sits on the middle line (#520)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("lfos")
+  params:set("strata_lfo1_dest", 4); params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
+  show_page("LFO")
+  local top = pages_lfo().row_top(1)
+  local function dot_y()
+    redraw()
+    local rects = lfo_row_drawing(context, 1).rects
+    assert_equal(#rects, 1, "one dot")
+    return rects[1].y + 1
+  end
+  context.lfo.tick(lfos[1], 1.0)
+  assert_near(dot_y(), top, 0.51, "full depth, raw 1: the top of the wave")
+  context.lfo.tick(lfos[1], 0.0)
+  assert_near(dot_y(), top + 10, 0.51, "full depth, raw 0: its bottom")
+  params:set("lfo_depth_1", 50); context.lfo.tick(lfos[1], 1.0)
+  assert_near(dot_y(), top + 10 - 0.75 * 10, 0.51, "50 %: half the swing")
+  params:set("lfo_depth_1", 0)
+  context.lfo.tick(lfos[1], 0.0)   -- the library sends nothing at depth 0
+  assert_near(dot_y(), top + 5, 0.51, "depth 0: on the middle line, whatever the last raw value")
 end)
 
 test("LFO ALT+K3 reaches the screen and arc on the next frame (#11)", function()

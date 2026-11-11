@@ -6,7 +6,7 @@ The decisions taken during development, one section per release. Each was taken 
 
 - **Limiter placement:** the master limiter sits *before* the tanh saturator, where the design said "after". After it, the limiter could never act. If wrong: a one-line revert.
 - **Input voices' main param:** for input-sourced voices, E3, arc ring 2, the MAIN label and the first fader control **grain size**. Randomize, mutate and drift touch only grain params, because synth and buffer params are dead for live input. If wrong: revert one branch of `main_param_entry`.
-- **LFO rate:** LFOs step 48 times per beat (`LFO_PPQN`), and a send is skipped when the value moved less than 1/1000 of the range. This bounds the message rate; the cost is slightly steppier fast LFOs.
+- **LFO rate:** LFOs step 48 times per beat (`LFO_PPQN`), and a send is skipped when the value moved less than 1/1000 of the range. This bounds the message rate; the cost is slightly steppier fast LFOs. Since 3.3 the 1/1000 is measured along the destination's warp (#406): an exponential range in octaves (7.97 cents on a voice's freq, where 1.98 Hz was up to 68 cents at 50 Hz), a linear one as before. If wrong: one function, `destination_position` in `lib/lfos.lua`; a slow exponential LFO sends about seven times as often as with the linear measure (131 sends a cycle in #406's probe, against 19).
 - **Buffer-length poll:** the `bufferState` poll sends one float per slot (`slot * 100 + seconds`), because matron's data polls only take blobs. It could be replaced by eight polls later.
 - **`stopRecord` added:** K3 on the BUFFER page can stop a recording early, as the design requires.
 - **Save gesture:** K2 acts on release (load a file); holding K2 and pressing K3 saves.
