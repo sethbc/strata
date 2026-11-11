@@ -1,5 +1,25 @@
 # Strata Changelog
 
+## Version 3.3.1 - 2026-11-11
+
+A fix release after 3.3.0. Buffers recorded in time with the clock start on the beat even right after a tempo change or while the engine is busy, and the saved buffer paths no longer hold the script up on file writes. One engine file changed, so norns needs a restart after updating. No param, scene or file format changes.
+
+### Upgrade Notes
+
+- **Restart norns after updating** (SYSTEM > RESTART): `lib/engine/StrataRecord.sc` changed, and SuperCollider compiles it only at a restart. `engine.recordBuffer` takes a ninth argument, `sent`, so the script and the engine must be the same version. No engine file was renamed or deleted.
+
+### Fixes
+
+- **A clock-synced recording follows a tempo change at once** (#567): started right after a tempo change, it gets the new tempo's length and waits for the new tempo's beat or bar, and BUFFER's `len` field shows the new tempo's beats immediately. On the internal clock the tempo is the CLOCK > tempo param; on a MIDI, crow or Link clock it is the clock's own tempo. Link is the one case that still lags: a take started within about 20 ms of a local Link tempo change uses the old tempo.
+- **A clock-synced recording sent while the engine is busy starts on time** (#565): with another buffer's file still loading, for example, a synced take starts its delay after the moment it was sent, also when several are sent during the wait. Before, only the first started on time and the others started late by the rest of the wait.
+- **The saved buffer paths are written once per burst of changes,** 0.1 s after the first and carrying the newest state, instead of inside each engine report (#566), so filling several slots at once no longer stalls the script on file writes. Leaving the script right after a load still saves it.
+
+Development:
+- The engine check's freeze area redoes a case's setup up to three times when a copy lands before its voiceOff, so it no longer fails on a slow machine (#569).
+- The local engine check's default timeout is 1800 s, so a full run has about 14 minutes to spare (#570).
+- 3.4's design is re-planned from 3.3.0's measured memory (#229), and the Faderpunk and Faderbank are scheduled for 3.6 (#555): design documents only.
+- Page randomize for VOICE, FX and LFO (#557) is not in this release; it is next, as 3.3.2.
+
 ## Version 3.3.0 - 2026-11-11
 
 Buffers become instruments: overdub and loop recordings that keep playing while they record, record sources, recordings armed by level or started on the clock, random loads, a long file's start point, saving a loop region, waveforms and playheads on the BUFFER page, position jumps and bookmarks, arc scrubbing with friction, and a position page on every grid. Underneath, each voice's filter and sends move into one mix stage per voice, which takes about 16 KB of real-time memory out of every grain synth. The release also fixes every finding of a whole-project code review (#300-#559) and of two audits, of the script's state handling (#232-#258, #295) and of the engine's state (#259-#262): the master is brighter and steadier, the Pulse voice's res turns the way every other res does, saved scenes and buffers reach the card at once and safely, and the data files are read without being run. Scenes, `buffers.data`, PSETs and PARAMS > MAP mappings from 3.2 load, and every new setting starts where it sounds as 3.2 did; what does sound different is under Sound Changes. norns needs one restart after updating (see Upgrade Notes).

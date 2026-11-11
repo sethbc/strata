@@ -31,6 +31,10 @@
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
 
+## Version 3.3.1 (2026-11-11)
+
+A fix release. A clock-synced recording takes its length and wait from the tempo the clock will run at (internal clock: the `clock_tempo` param; Link, MIDI and crow: `clock.get_tempo()`) and starts `delay` after the moment Lua sent it, however busy the engine is (`recordBuffer`'s ninth argument, `sent`, Lua's wall clock modulo 1000 s: #565, #567); `buffers.data` is written once per burst of changes, 0.1 s after the first, with the newest state (#566); the freeze check's setup is retried and the local check's timeout is 1800 s (#569, #570). See CHANGELOG.md and `docs/status.md`.
+
 ## Version 3.3.0 (2026-11-11)
 
 Buffers as instruments (design: `docs/design/3.3-design.md`). 3.2's sound by default, apart from 5 ms record fades, a re-gated buffer voice restarting its scan and the grain synths' fades running before the voice filter; the review fixes add the brighter master, the cutoff's rise limit, the FM and Ring highpass and the 4 ms trigger bound. Highlights:
