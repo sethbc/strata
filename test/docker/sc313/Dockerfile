@@ -15,7 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive QT_QPA_PLATFORM=offscreen
 
 RUN echo "jackd2 jackd/tweak_rt_limits boolean false" | debconf-set-selections \
   && apt-get update \
-  && apt-get install -y --no-install-recommends jackd2 procps coreutils \
+  && apt-get install -y --no-install-recommends jackd2 procps coreutils python3 \
     "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION" \
   && apt-get clean
 
