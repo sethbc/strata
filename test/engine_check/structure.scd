@@ -77,12 +77,15 @@ var childrenOf = { arg group;
 // group, buses not freed, buffers not freed] (nil state, never made, counts
 // as freed)
 var engineLeft = { arg target;
-    var rings = target.areaState[\rings], record = target.areaState[\record];
+    var rings = target.areaState[\rings], record = target.areaState[\record], mix = target.areaState[\mix];
     var buses = [target.inputBus, target.silentBus, target.mainBus, target.filterBus, target.delayBus, target.reverbBus]
         ++ target.granBuses ++ target.modBuses ++ target.recordFrameBuses ++ (rings[\phaseBuses] ? [])
-        ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]];
+        ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]]
+        ++ [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost, \fxMix].collect({ arg name; mix[name] })
+        ++ (mix[\synthPaths] ? []) ++ (mix[\otherPaths] ? []);
     var buffers = target.envBuffers ++ target.buffersL ++ target.buffersR
-        ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]];
+        ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
+        ++ (target.areaState[\waveform][\peakBuffers] ? []);
     [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
         buffers.count({ arg buffer; buffer.notNil and: { buffer.bufnum.notNil } })]
 };
@@ -122,9 +125,11 @@ var checkFreeContained = {
 // runs alloc in a fork of its own, where nothing could catch the error, so
 // the engine is made with newCopyArgs, given the state CroneEngine's init
 // gives, and the check calls alloc itself. The performance area's files go
-// below the check's temp dir, as buildEngine's.
-var checkAllocRolledBack = {
-    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised, left;
+// below the check's temp dir, as buildEngine's. Returns (engine, raised,
+// lines: the invariant lines it posted, group: its engine group, freed by
+// the caller after h.freeEngine, which gives the OSC defs back to h.engine).
+var failingAlloc = {
+    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised;
     var settings = [Engine_Strata.settingsDir, Engine_Strata.modelPath];
     built.instVarPut(\context, (server: server, xg: group, out_b: { Error("check: no output bus").throw }));
     built.instVarPut(\commands, List.new);
@@ -137,7 +142,17 @@ var checkAllocRolledBack = {
     Engine_Strata.settingsDir = settings[0];
     Engine_Strata.modelPath = settings[1];
     server.sync;
-    left = engineLeft.(built);
+    (engine: built, raised: raised, lines: lines, group: group)
+};
+
+// The rollback also undoes what norns' deinit would (Crone calls it only on
+// an engine whose alloc returned): the commands' OSC defs are freed, and
+// the polls another engine holds under the same names (h.engine's, here:
+// CronePollRegistry keeps the first poll of a name) stay that engine's.
+var checkAllocRolledBack = {
+    var names = engine.pollNames.asArray, held = names.collect({ arg name; CronePollRegistry.getPollFromName(name) });
+    var failed = failingAlloc.value, built = failed[\engine], lines = failed[\lines], raised = failed[\raised];
+    var left = engineLeft.(built), defsLeft = built.commands.select({ arg command; OSCdef.all[command.name].notNil });
     check.((raised !? { raised.errorString.find("check: no output bus").notNil }) == true,
         "structure: alloc raises the error that stopped it again (#499; got %)".format(raised !? _.errorString));
     check.(left == [0, 0, 0],
@@ -147,9 +162,52 @@ var checkAllocRolledBack = {
     // message names the phases without quoting the lines)
     check.(lines.isEmpty, "structure: alloc's rollback raises in no area's stop or free (% reported: %)".format(lines.size,
         lines.collect({ arg line; line.copyRange(line.find("the ") ? 0, (line.find(" raised") ? line.size) - 1) })));
+    check.(built.commands.notEmpty and: { defsLeft.isEmpty },
+        "structure: alloc that raises frees its commands' OSC defs (#499; % commands, % left)".format(built.commands.size, defsLeft.size));
+    check.((names.size == 4) and: { names.every({ arg name, index; CronePollRegistry.getPollFromName(name) === held[index] }) },
+        "structure: alloc that raises leaves the polls another engine holds under its names (%)".format(names));
     h.freeEngine(built);  // (the commands back to h.engine)
     server.sync;
-    group.free;
+    failed[\group].free;
+};
+
+// A rolled-back engine leaves no poll of its own (#499). Polls a failed
+// alloc registered stayed in norns' CronePollRegistry, which keeps the
+// first poll of a name, so the next engine got the dead one's: its periodic
+// bufferState reported the dead engine's slots. On norns a failed load is
+// the only engine; here h.engine's polls are taken out of the registry
+// first, so the failing engine registers its own, then a new engine is
+// built, loads slot 1 (0.5 s) and must report it through the registry's
+// bufferState (its function, called here: one slot per call, then the
+// slots' length). Afterward h.engine's polls go back at their indices
+// (h.pollValues reads by index), running as before.
+var checkRollbackPolls = {
+    var names = engine.pollNames.asArray.sort({ arg a, b;
+        CronePollRegistry.getPollFromName(a).index < CronePollRegistry.getPollFromName(b).index });
+    var held = names.collect({ arg name; CronePollRegistry.getPollFromName(name) });
+    var running = held.collect({ arg poll; poll.instVarAt(\isRunning) == true });
+    var failed, fresh, left, reports, slotOne, restored;
+    names.do({ arg name; CronePollRegistry.remove(name) });
+    failed = failingAlloc.value;
+    left = names.select({ arg name; CronePollRegistry.getPollFromName(name).notNil });
+    fresh = h.startEngine;
+    h.commandTo(fresh, \loadBuffer, 0, h.stereoPath, 0);
+    h.waitFor({ fresh.bufferFrames[0] > 0 }, 3);
+    reports = (fresh.numBuffers + 1).collect({ CronePollRegistry.getPollFromName(\bufferState).instVarAt(\function).value });
+    slotOne = reports.detect({ arg value; value < fresh.bufferStateStride });
+    h.freeEngine(failed[\engine]);
+    h.freeEngine(fresh);
+    server.sync;
+    failed[\group].free;
+    // h.engine's polls back, at their indices, running as before
+    names.do({ arg name; CronePollRegistry.remove(name) });
+    held.do({ arg poll; CronePollRegistry.register(poll.name, poll.instVarAt(\function), poll.period, poll.type, poll.periodic) });
+    held.do({ arg poll, index; if (running[index]) { poll.start } });
+    restored = held.every({ arg poll; CronePollRegistry.getPollFromName(poll.name).index == poll.index });
+    check.(left.isEmpty, "structure: alloc that raises leaves no poll of its own in norns' poll registry (#499; left: %)".format(left));
+    check.((slotOne !? { (slotOne - 0.5).abs < 0.01 }) == true,
+        "structure: the engine built after a failed one reports its own slots through bufferState (#499; slot 1 reads %)".format(slotOne));
+    check.(restored and: { names.size == 4 }, "structure: h.engine's polls are back at their indices (%)".format(names));
 };
 
 // SynthDefs
@@ -326,4 +384,5 @@ check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] }
 
 checkFreeContained.value;
 checkAllocRolledBack.value;
+checkRollbackPolls.value;
 }

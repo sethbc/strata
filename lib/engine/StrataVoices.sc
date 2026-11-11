@@ -81,19 +81,21 @@
 
             if (this.validVoice(voice)) {
                 // All 3 mod slots start on the silent bus (no modulation) and
-                // bend at 1. Voice-specific params, posSpread, crossmod
-                // routing and mod speed are pushed by the Lua script
-                // (sync_voice_to_engine) right after voiceOn; the Lua voices
-                // table is the only source of their values.
+                // bend at 1. The Lua script sends the voice-level values (the
+                // synthesis params, crossmod routing and amounts, mod speed,
+                // bend) right after voiceOn, since these are reset here; the
+                // source and every grain value come just before it (#325).
+                // The Lua voices table is the only source of their values.
                 voiceControls[voice] = Dictionary[
                     \freq -> msg[2], \amp -> msg[3], \pan -> msg[4], \bend -> 1,
                     \modBus1 -> silentBus.index, \modBus2 -> silentBus.index, \modBus3 -> silentBus.index,
                     \modAmpAmt1 -> 0, \modAmpAmt2 -> 0, \modAmpAmt3 -> 0,
                     \modFreqAmt1 -> 0, \modFreqAmt2 -> 0, \modFreqAmt3 -> 0
                 ];
-                // Merged into the grain controls the voice already has, so a
-                // grain synth voiceOn builds starts in the voice's grain mode,
-                // envelope and buffer position (Lua re-sends them right after)
+                // Merged into the grain controls the voice already has (Lua
+                // sends every grain value just before voiceOn, and a stopped
+                // voice keeps them), so a grain synth voiceOn builds or
+                // re-gates plays this start's grain values from its first grain
                 grainControls[voice].putAll(Dictionary[
                     \grainSize -> msg[5], \grainDensity -> msg[6], \pitchShift -> msg[7]
                 ]);

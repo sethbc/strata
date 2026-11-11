@@ -355,8 +355,12 @@
     // Free the voice's synths still in their kill fade, at once. One may
     // have ended its fade on the server already (its /n_end not yet in
     // sclang): sendToSynth keeps that /n_free from being reported. onFree
-    // forgets them; they are never in synths or releasingSynths.
+    // forgets them; they are never in synths or releasingSynths. A synth
+    // that never started is forgotten first (forgetFailedStarts): once out
+    // of the cutting set nothing would find it again, and it would stay a
+    // ring reader and an unconfirmed start for good (#497).
     freeCuttingSynths { arg voice;
+        this.forgetFailedStarts(voice);
         cuttingSynths[voice].do({ arg synth;
             if (synth.isPlaying) { this.sendToSynth(synth.freeMsg) };
         });

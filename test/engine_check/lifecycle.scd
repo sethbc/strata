@@ -287,6 +287,28 @@ var checkFailedStarts = { arg voice, before;
     check.(synthNames.(context.xg).size == before, "lifecycle: the voice is back to one trio");
 };
 
+// ... and one that only source switches meet (#497): a running voice's grain
+// synth that never started, past startConfirmWait, switched away three
+// times before any voiceOn (the first switch releases it into the fading
+// set, the second cuts it, the third frees what is cutting) is forgotten,
+// not left as a ring reader or unconfirmed start for good. The voice ends
+// on its synth source with one trio.
+var checkFailedStartSwitches = { arg voice, before;
+    var grainKey = engine.grainKey(voice), unstarted, bundle, kept;
+    command.(\voiceOff, voice); 2.5.wait; server.sync;
+    bundle = server.makeBundle(false, { command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0) });
+    unstarted = engine.synths[grainKey];
+    server.sendBundle(nil, *bundle.reject({ arg msg; (msg[0] == 9) and: { msg[2] == unstarted.nodeID } }));
+    server.sync; 1.0.wait;
+    [9, 0, 9].do({ arg source; command.(\setGrainSource, voice, source); server.sync });
+    kept = [engine.ringReaders[unstarted].notNil, engine.unconfirmedStarts[unstarted].notNil,
+        engine.fadingSynths[voice].includes(unstarted), engine.cuttingSynths[voice].includes(unstarted)];
+    check.(kept.every(_.not),
+        "lifecycle: a grain synth that never started, switched away three times before a voiceOn, is forgotten (#497; kept as a ring reader, unconfirmed, fading, cutting: %)".format(kept));
+    command.(\setGrainSource, voice, 0); 2.5.wait; server.sync;
+    check.(synthNames.(context.xg).size == before, "lifecycle: the voice is back to one trio after the switches");
+};
+
 // A voiceOn that re-gates a releasing synth (sendToSynth: a bundle quiet
 // for its own messages) still has the server report the starts that follow
 // in the same bundle (#498): /error -1 turns reports off until the end of
@@ -620,6 +642,7 @@ checkStopStartCycles.(3);
 checkInvariantWarnings.(3, before);
 checkQuietNodeSends.(3, before);
 checkFailedStarts.(5, before);
+checkFailedStartSwitches.(5, before);
 checkRegateReportsStarts.(2);
 
 // A re-gated synth whose release ends just as the gate arrives frees
