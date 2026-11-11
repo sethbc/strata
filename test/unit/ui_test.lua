@@ -208,6 +208,7 @@ test("contained_call prints a failure once per message and key, and again after 
   contained_call(errors, "a", "probe", failing, "bang")
   assert_equal(reports("bang"), 2, "so the same message prints again")
   assert_equal(errors.b ~= nil, true, "another key keeps its own")
+  h.claim_script_errors(context, 4, "strata: probe failed: ", "bang")  -- the four it caused (#473)
 end)
 
 -- The lines context.printed holds that contain `text`
@@ -245,6 +246,7 @@ test("an animates() that fails prints once, counts as false, and the frame clock
   counter.restore()
   record.animates = real_animates
   assert_equal(counter.screen, 15, "animates() true again draws every frame")
+  h.claim_script_errors(context, 1, "strata: page animates failed: ", "animates boom")  -- the one it caused (#473)
 end)
 
 -- The frame clock's body is contained too: nothing in a frame ends it (#320)
@@ -262,6 +264,7 @@ test("a frame that fails outside its draws prints once and the frame clock keeps
   request_redraw(); next_frame(context)
   counter.restore()
   assert_equal(counter.screen, 1, "the next request draws")
+  h.claim_script_errors(context, 1, "strata: frame failed: ", "frame boom")  -- the one it caused (#473)
 end)
 
 -- A page draw that fails still finishes the frame: the header of the page
@@ -302,6 +305,7 @@ test("a page draw that fails still shows its page: the title, draw error on the 
   request_redraw(); next_frame(context)
   context.screen.update = real_update
   assert_true(h.hint_text(context) ~= "draw error", "a good draw shows the page's hints again")
+  h.claim_script_errors(context, 1, "strata: page draw failed: ", "lfo draw failed")  -- the one it caused (#473)
 end)
 
 -- A page whose hints() fails gives the same frame as a failing draw: the
@@ -334,6 +338,7 @@ test("a page whose hints() fails shows the draw error frame, and later redraws w
   context.screen.update = real_update
   assert_equal(updates, 2, "the next redraw is pushed too")
   assert_equal(h.hint_text(context), real_hints(false), "and shows the page's hints again")
+  h.claim_script_errors(context, 1, "strata: page draw failed: ", "fx hints failed")  -- the one it caused (#473)
 end)
 
 -- The menu watch's wrapper (lib/ui/menu_watch.lua) never lets a failure
@@ -365,6 +370,7 @@ test("a failing ALT-release hook does not stop the menu opening (#425)", functio
   assert_true(not S.alt_held, "ALT is forgotten")
   assert_equal(lines_printed(context, "alt release boom"), 1, "the failure prints one line")
   _menu.set_mode(false)
+  h.claim_script_errors(context, 1, "strata: forgetting held keys failed: ", "alt release boom")  -- the one it caused (#473)
 end)
 
 test("a set_mode(false) that raises still runs the menu-close hooks, then raises (#425)", function()

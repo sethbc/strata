@@ -13,7 +13,7 @@
 - on MAIN every string between the header and the hint row ends by x=60 or starts at x=65 or later (never across the divider).
 
 `test/unit/ui_layout_test.lua` runs it on every page record with every voice (1-7), source (synth, buf 1, input), ALT state (up, down) and flash (none, a long header flash, the longest hints flash), then on each record's `layout_states` (each on a fresh script, with ALT up and down). It also keeps the older every-page checks (the widest SETUP page with four grids, the voice list's last row above the hint row). Each page's own layout tests are in its unit file (`pages_main_test.lua`, ...); the header and flash tests in `test/unit/ui_header_test.lua`.
-- Keep them passing when adding text. The width estimate is `stubs.text_width` in `test/norns_stubs.lua` (it counts UTF-8 characters, not bytes), which the screen stub also uses for `screen.text_extents` (returns width, 8).
+- Keep them passing when adding text. The widths are `stubs.text_width` in `test/norns_stubs.lua` (norns' font advances; it counts UTF-8 characters, not bytes), which the screen stub also uses for `screen.text_extents` (returns width, 8).
 - The stub records each string's `x`, `y`, `align` (`left`, `right`, `center`) and `level`, and each rect and line with `filled` (true after `screen.fill()`, false after `screen.stroke()`).
 - The stub's `UI.ScrollingList:redraw` is the real one from `lua/lib/ui.lua`, so the list's entries are recorded like any other text (an empty string where the list scrolls past an end).
 

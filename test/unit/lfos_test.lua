@@ -359,6 +359,7 @@ test("an error inside an LFO step is printed once and the LFO keeps stepping (#5
   end)
   S.lib.engine_sync.send_engine_value = real_send
   if not ok then error(problem, 0) end
+  h.claim_script_errors(context, 3, "strata: LFO 1 step failed: ", "another lfo boom")  -- the three it caused (#473)
 end)
 
 -- The dot's estimate against the library's phase. The stub has no lattice:

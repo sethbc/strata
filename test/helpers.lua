@@ -234,6 +234,24 @@ local function run_test(func)
   return ok, err
 end
 
+-- Claim the errors the script caught and printed in the current test
+-- (context.take_script_errors, #473) and check them: exactly `count` lines,
+-- each starting with `prefix` (such as "strata: frame failed: "), the last
+-- holding `last_text` when given. Returns the lines
+local function claim_script_errors(context, count, prefix, last_text)
+  local claimed = context.take_script_errors()
+  if #claimed ~= count then
+    fail(string.format("%d printed errors expected, got %d:\n%s", count, #claimed, table.concat(claimed, "\n")), 2)
+  end
+  for _, line in ipairs(claimed) do
+    if line:find(prefix, 1, true) ~= 1 then fail("a printed error starting '" .. prefix .. "' expected, got: " .. line, 2) end
+  end
+  if last_text and count > 0 and not claimed[count]:find(last_text, 1, true) then
+    fail("the last printed error holds '" .. last_text .. "', got: " .. claimed[count], 2)
+  end
+  return claimed
+end
+
 -- Find a script value by name: a field of S (one it holds, or one ever
 -- assigned, even to nil: S.__declared), then of S.constants, then a script
 -- local, found by searching the upvalues of global functions. Returns the
@@ -796,6 +814,7 @@ return {
   test = test,
   fail = fail,
   run_test = run_test,
+  claim_script_errors = claim_script_errors,
   check_invariants = check_invariants,
   allow_broken_invariants = allow_broken_invariants,
   with_failing_setting_write = with_failing_setting_write,

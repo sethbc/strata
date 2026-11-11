@@ -35,5 +35,5 @@ Input:
 - `lfo_dest_group_jump(index, d)`: the first start above `index` (d > 0) or the last start below it (d < 0); `index` itself when there is none. The built-in starts are 1, 2, 13, 21, ..., 61; 3.2's four registered destinations add 69 (`v1 hist`), 76 (`v1 vfilt`), 83 (`v1 dsend`) and 90 (`v1 rsend`), so from v7 main (61) the last voice's reverb send (96) is four jumps (69, 76, 83, 90) and six detents.
 - K2/K3: `select_lfo_by(-1|1)`, clamped to 1..`NUM_LFOS`.
 - `alt_key`: ALT+K2 sets the field's param to `param_default(id)` (depth 25, destination none, free period 4 s, offset 0, on/off off); ALT+K3 toggles the selected LFO. `arc_button` is the same toggle.
-- Hints: `K2/K3:lfo E3:<label>`; with ALT `K2:reset K3:on|off`, plus ` E3:group` on the destination field (`K2:reset K3:off E3:group`, 120 px by the stub's estimate, is the longest).
+- Hints: `K2/K3:lfo E3:<label>`; with ALT `K2:reset K3:on|off`, plus ` E3:group` on the destination field (`K2:reset K3:off E3:group`, 103 px by norns' font advances, is the longest).
 - `layout_states`: `lfo1`-`lfo3` (each selected, running, on the last destination), `field-dest` ... `field-state` (LFO 2 with wide values: v7 scan, random, 300 s, 100 %, -50 %), `clocked` (LFO 3 at `5/16`), `free` (LFO 1 at 0.1 s).

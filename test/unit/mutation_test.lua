@@ -426,6 +426,7 @@ test("an error inside a mutation tick is printed once and the next tick mutates 
   end)
   math.random = real_random
   if not ok then error(problem, 0) end
+  h.claim_script_errors(context, 3, "strata: mutation failed: ", "another mutation boom")  -- the three it caused (#473)
 end)
 
 end

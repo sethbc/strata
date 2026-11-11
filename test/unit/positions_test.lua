@@ -503,6 +503,7 @@ test("an error inside the glide is printed once and the glide runs on to its end
   end)
   engine.setGrainParam = real_set_grain
   if not ok then error(problem, 0) end
+  h.claim_script_errors(context, 2, "strata: scrub glide failed: ", "glide boom")  -- the two it caused (#473)
 end)
 
 test("a new turn, a jump or a source switch ends the glide at once", function()
