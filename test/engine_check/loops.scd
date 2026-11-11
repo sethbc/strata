@@ -135,6 +135,21 @@ near = { arg value, target, frames = 2; (value - target).abs <= frames };
             .format(rate, still[0], still[1], moving[0], moving[1]));
 });
 
+// bufPos 1 alone starts at the loop's last start, not its first (a wrap
+// maps exactly 1 to 0): the whole region's (forward, where a grain ends at
+// the region's end; reverse, the region's end) and a 0.25/0.25 loop's
+[1, -1].do({ arg rate;
+    var durFrames = 0.1 * sampleRate, whole, looped;
+    var last = if (rate > 0) { sampleRate - margin - durFrames } { sampleRate - margin };
+    whole = starts.([\validFrames, sampleRate, \durFrames, durFrames, \rate, rate, \bufPos, 1, \bufScan, 0, \posSpread, 0,
+        \loopStart, 0, \loopLength, 1]);
+    looped = starts.([\loopStart, 0.25, \loopLength, 0.25]);
+    check.(near.(whole[0], last) and: { near.(whole[1], last) } and: { near.(looped[0], 0.5 * sampleRate) }
+        and: { near.(looped[1], 0.5 * sampleRate) },
+        "loops: bufPos 1 alone starts at the loop's last start (rate %; the whole region: % to %, its last start %; loop 0.25/0.25: % to %)"
+            .format(rate, whole[0], whole[1], last, looped[0], looped[1]));
+});
+
 // a grain may play past the loop end but never past the valid region:
 // a loop in the middle gets full-length grains, past its end (or, reverse,
 // its start); one at the region's end starts them where they still fit

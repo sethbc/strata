@@ -12,6 +12,10 @@
         ^(order: 100)
     }
 
+    // The largest bufPos slotGrainPos takes: under 1, which the wrap maps
+    // to 0 (one millionth of the loop from its last start)
+    lastLoopPosition { ^0.999999 }
+
     // A buffer grain's start, as a fraction (0-1) of the slot's valid
     // region (validFrames frames). bufPos is the voice's position, scanPhase
     // the scan's offset (0-1, wrapping), spreadDraw the grain's position
@@ -49,7 +53,10 @@
         // grain before's)
         var loopFirst = (first * validFrames).max(lowest).min(highest);
         var loopLast = ((first + loopLength.clip(0, 1)).min(1) * validFrames).max(loopFirst).min(highest);
-        var frame = loopFirst + ((bufPos + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
+        // bufPos 1 is the loop's last start, not its first: the position
+        // stays just under 1, which the wrap maps to 0 (the scan and the
+        // spread still wrap past it)
+        var frame = loopFirst + ((bufPos.min(this.lastLoopPosition) + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
         ^this.slotHeadGuard(frame, lowest, highest, rate, durFrames, recHead) / validFrames.max(1)
     }
 }
