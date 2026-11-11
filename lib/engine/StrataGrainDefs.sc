@@ -12,9 +12,11 @@
     // The shortest time between two grain starts (s): a trigger sooner after
     // the last start starts no grain, so at most 125 grains of
     // grainMaxSeconds sound at once, under GrainBuf's maxGrains - 1 (past it
-    // GrainBuf drops grains and prints "Too many grains"). Only a flood of
-    // retriggers comes this close (more than 250 a second: a MIDI flood);
-    // continuous grains come at most 200 a second (density 100 x master 2)
+    // GrainBuf drops grains and prints "Too many grains"). Two retriggers on
+    // one voice within it (a MIDI flood, or a chord's notes arriving in
+    // separate blocks) give one grain; pattern steps (at least 50 ms apart)
+    // and continuous grains (at most 200 a second: density 100 x master 2)
+    // never lose one
     grainTriggerSeconds { ^0.004 }
 
     // The grains area (order 30)
@@ -233,8 +235,9 @@
     // mode. history is clipped to historySeconds. ringScanOffset (the
     // freeze area's hook; neutral 0) moves the read point further back by
     // the voice's scan, for a frozen ring.
-    // The head, the ring's frames and the history are each held for the
-    // block (Latch on a block-rate tick, as slotHeadGuard holds its head),
+    // The head, the ring's frames, the history and the freeze flag are each
+    // held for the block (Latch on a block-rate tick, as slotHeadGuard holds
+    // its head),
     // and while the head advanced by one block since the last (the writer
     // runs; counted round the ring, so across its wrap too) the sample's
     // offset in the block is added: a grain starts at head - one block +
@@ -255,8 +258,12 @@
             var length = dur + (mode * ((dur / ahead.max(1)) - dur));
             var spread = TRand.ar(0, posSpread * this.ringSpreadSeconds, trig) * (1 - mode);
             var head = In.kr(phaseBus, 1), frames = BufFrames.kr(bufL);
+            // the freeze flag held for the block too: an unfreeze sends
+            // freeze 0 in the block it points the reader back at the input
+            // ring, and ringScanOffset's control-rate flag times its
+            // audio-rate offset would ramp across that block
             var lookback = this.ringReadMargin + Latch.ar(history.clip(0, historySeconds), tick) + spread + (ahead * length)
-                + this.ringScanOffset(bufScan, freeze);
+                + this.ringScanOffset(bufScan, Latch.ar(freeze, tick));
             var advanced = Latch.ar((HPZ1.kr(head) * 2).wrap(0, frames).absdif(block) < 0.5, tick);
             var offset = advanced * (Phasor.ar(0, 1, 0, block) - block);
             var heldFrames = Latch.ar(frames, tick);

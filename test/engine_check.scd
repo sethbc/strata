@@ -118,6 +118,10 @@ var addDefs32 = { arg e;
         Out.ar(\reverbSendOut.kr(e.mixBus(\reverbSend).index), sig * (toReverb * pastDelay));
         Out.ar(mirrorOut, sig * mirrorLevel);
     };
+    // (3.2's clips: control-rate Clips that read a grain's bounds once per
+    // block (#304). The comparisons run the draws off, so the bounds never
+    // change between grains there and the engine's audio-rate max and min
+    // give the same starts.)
     var slotGrainPos32 = { arg trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength;
         var reverse = rate < 0;
         var lowest = durFrames * reverse;

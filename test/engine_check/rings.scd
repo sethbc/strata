@@ -458,27 +458,38 @@ check.(((readings[1] / 0.25) - 1).abs < 0.02 and: { readings[0] > 0.19 },
 command.(\voiceOff, 2);
 
 // A reader pointed between two rings (what a freeze and an unfreeze of an
-// input voice send in one message: the rings, the phase bus and the
-// history), with a trigger in every block, 40 times: every grain starts at
-// the old read point (the input ring at history 2) or the new one (voice
-// 1's ring at history 0), never between them
-ringStarts = ringStart.(engine.ringBuffersFor(0, engine.inputSource), [\history, 2.0, \expect, engine.ringReadMargin + 2.0,
-    \expectB, engine.ringReadMargin]);
-server.sync; 0.1.wait;
-ringStarts[\synth].set(\t_reset, 1);
-20.do({
-    var voiceRing = engine.ringBuffersFor(0, 0), inputRing = engine.ringBuffersFor(0, engine.inputSource);
-    ringStarts[\synth].set(\bufL, voiceRing[0].bufnum, \bufR, voiceRing[1].bufnum, \phaseBus, voiceRing[2].index, \history, 0);
-    0.03.wait;
-    ringStarts[\synth].set(\bufL, inputRing[0].bufnum, \bufR, inputRing[1].bufnum, \phaseBus, inputRing[2].index, \history, 2.0);
-    0.03.wait;
+// input voice send: the rings, the phase bus and the history in one
+// message, and an unfreeze's freeze 0 in the same block), with a trigger
+// in every block, 40 times: every grain starts at the old read point (the
+// input ring at history 2) or the new one (voice 1's ring at history 0),
+// never between them. Once with freeze 0 throughout, once with the voice
+// ring frozen (freeze 1, which starts a frozen ring's grains a further
+// grainMaxSeconds back, bufScan 0) and freeze 0 again as the reader
+// returns to the input ring: ringScanOffset's freeze term would otherwise
+// ramp across that block
+[0, 1].do({ arg frozen;
+    var held = frozen * engine.grainMaxSeconds;
+    ringStarts = ringStart.(engine.ringBuffersFor(0, engine.inputSource), [\history, 2.0, \expect, engine.ringReadMargin + 2.0,
+        \expectB, engine.ringReadMargin + held]);
+    server.sync; 0.1.wait;
+    ringStarts[\synth].set(\t_reset, 1);
+    20.do({
+        var voiceRing = engine.ringBuffersFor(0, 0), inputRing = engine.ringBuffersFor(0, engine.inputSource);
+        ringStarts[\synth].set(\bufL, voiceRing[0].bufnum, \bufR, voiceRing[1].bufnum, \phaseBus, voiceRing[2].index, \history, 0,
+            \freeze, frozen);
+        0.03.wait;
+        ringStarts[\synth].set(\bufL, inputRing[0].bufnum, \bufR, inputRing[1].bufnum, \phaseBus, inputRing[2].index, \history, 2.0,
+            \freeze, 0);
+        0.03.wait;
+    });
+    readings = readBus.(ringStarts[\bus]);
+    ringStarts[\synth].free; ringStarts[\bus].free;
+    check.((readings[3] > 500) and: { readings[2] == 0 } and: { readings[0] >= -0.00005 }
+        and: { readings[1] <= ((block / sampleRate) + 0.00005) },
+        "rings: a reader pointed at another ring starts every grain at the old read point or the new one (% ; % to % ms past the nearer lookback, % of % triggers more than three blocks off)"
+            .format(if (frozen > 0) { "freeze 1 on the voice ring, 0 back on the input ring" } { "freeze 0" },
+                (readings[0] * 1000).round(0.001), (readings[1] * 1000).round(0.001), readings[2], readings[3]));
 });
-readings = readBus.(ringStarts[\bus]);
-ringStarts[\synth].free; ringStarts[\bus].free;
-check.((readings[3] > 500) and: { readings[2] == 0 } and: { readings[0] >= -0.00005 }
-    and: { readings[1] <= ((block / sampleRate) + 0.00005) },
-    "rings: a reader pointed at another ring starts every grain at the old read point or the new one (% to % ms past the nearer lookback, % of % triggers more than three blocks off)"
-        .format((readings[0] * 1000).round(0.001), (readings[1] * 1000).round(0.001), readings[2], readings[3]));
 
 // Grain rates are clipped to +/- ringMaxRate (4): pitchShift 4 with an
 // interval of +24 (and on the input voice a bend of 2) asks a synth voice
