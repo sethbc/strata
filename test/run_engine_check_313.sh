@@ -29,9 +29,10 @@
 #
 # Each run ends in one of five ways (#545): passed; failed (any FAIL, ERROR
 # or "Strata invariant broken" line, whatever ended it); capped (the memory
-# cap killed a process in the container, #544); collector (sclang ended on a
+# cap killed a process in the container: oom_kill above 0, #544); collector (sclang ended on a
 # signal after the collector's count-error lines (sclang spells it with an e: the pattern is written gr[e]y so the US spelling check passes): the collector failure of #211); or
-# crashed (a signal with none of those: #131). The summary gives the
+# crashed (a signal with none of those: #131); a bare exit 137 with no cap
+# kill is "killed" (stopped from outside). The summary gives the
 # counts; the exit status is 0 only when every run passed.
 set -eu
 
@@ -124,7 +125,14 @@ for count in "$runs" "$parallel"; do
   esac
 done
 
-if [ -z "$log_dir" ]; then
+if [ -n "$classify_only" ]; then
+  # classifying makes no folder: it reads the one it is given
+  if [ -z "$log_dir" ] || [ ! -d "$log_dir" ]; then
+    echo "-c needs -o <the folder holding run-<i>.log and run-<i>.status>" >&2
+    exit 2
+  fi
+  log_dir=$(cd "$log_dir" && pwd)
+elif [ -z "$log_dir" ]; then
   log_dir=$(mktemp -d "${TMPDIR:-/tmp}/strata-sc313-logs.XXXXXX")
 else
   mkdir -p -- "$log_dir"
@@ -139,6 +147,7 @@ failed=0
 collector=0
 crashed=0
 capped=0
+killed=0
 run=1
 while [ "$run" -le "$runs" ]; do
   log=$log_dir/run-$run.log
@@ -150,13 +159,18 @@ while [ "$run" -le "$runs" ]; do
   elif grep -qE "^FAIL|^ERROR|Strata invariant broken" "$log"; then
     failed=$((failed + 1))
     note=
-    grep -q "^gr[e]y count error" "$log" && note="; the collector failed too (#211)"
+    grep -q "gr[e]y count error" "$log" && note="; the collector failed too (#211)"
     grep -qE "^strata cgroup oom_kill: [1-9]" "$log" && note="$note; the memory cap killed a process (#544)"
     echo "run $run: failed ($(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$log")$note), $log"
-  elif grep -qE "^strata cgroup oom_kill: [1-9]" "$log" || [ "$status" = 137 ]; then
+  elif grep -qE "^strata cgroup oom_kill: [1-9]" "$log"; then
     capped=$((capped + 1))
     echo "run $run: capped (the container's memory cap of $memory_cap killed it; ${signal:-no sclang signal}), $log"
-  elif [ -n "$signal" ] && grep -q "^gr[e]y count error" "$log"; then
+  elif [ "$status" = 137 ]; then
+    # SIGKILL from outside (a docker kill, the host's own out-of-memory
+    # killer) with no cap kill in the container's own count
+    killed=$((killed + 1))
+    echo "run $run: killed (exit 137 with no memory-cap kill: stopped from outside), $log"
+  elif [ -n "$signal" ] && grep -q "gr[e]y count error" "$log"; then
     collector=$((collector + 1))
     echo "run $run: collector failure (#211; $signal, after count errors), $log"
   elif [ -n "$signal" ]; then
@@ -168,5 +182,5 @@ while [ "$run" -le "$runs" ]; do
   fi
   run=$((run + 1))
 done
-echo "passed $passed of $runs; failed $failed; capped $capped (#544); collector failure $collector (#211); crashed $crashed (#131)"
+echo "passed $passed of $runs; failed $failed; capped $capped (#544); killed $killed; collector failure $collector (#211); crashed $crashed (#131)"
 [ "$passed" -eq "$runs" ]

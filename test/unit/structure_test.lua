@@ -1527,7 +1527,8 @@ test("the 3.13 script classifies a run by its log (#545, #544)", function()
     -- a FAIL line makes it failed, whatever ended it
     { status = 1, log = "ok a check\nFAIL waveform: a 300 s load\nENGINE CHECK FAILED: sclang ended on signal 9 after 752 s; sclang stopped\n" },
     -- a signal after count errors: the collector failure (#211)
-    { status = 1, log = COUNT_ERROR .. "\n" .. COUNT_ERROR .. "\nENGINE CHECK FAILED: sclang ended on signal 11 after 300 s; sclang stopped\n" },
+    -- (the lines are as sclang 3.13 printed them in a real run: bare, and inside its exception report)
+    { status = 1, log = COUNT_ERROR .. "\n" .. COUNT_ERROR .. "\ncaught exception '" .. COUNT_ERROR .. "\n' in primitive in method Meta_Thread:primitiveErrorString\nENGINE CHECK FAILED: sclang ended on signal 11 after 300 s; sclang stopped\n" },
     -- a bare signal: #131
     { status = 1, log = "ok a check\nENGINE CHECK FAILED: sclang ended on signal 6 after 90 s; sclang stopped\n" },
     -- the memory cap's kill
@@ -1535,17 +1536,29 @@ test("the 3.13 script classifies a run by its log (#545, #544)", function()
     -- ERROR and an invariant line are failures too
     { status = 1, log = "ERROR: something\nENGINE CHECK FAILED: sclang ended on signal 9 after 4 s; sclang stopped\n" },
     { status = 0, log = "ENGINE CHECK PASSED\nstrata cgroup oom_kill: 0\n" },
+    -- exit 137 with no cap kill: stopped from outside, not capped
+    { status = 137, log = "ok a check\nstrata cgroup oom_kill: 0\n" },
+    -- a count error inside sclang's exception report alone still marks the collector
+    { status = 1, log = "caught exception '" .. COUNT_ERROR .. "\n' in primitive\nENGINE CHECK FAILED: sclang ended on signal 6 after 9 s; sclang stopped\n" },
   }
   for index, fixture in ipairs(fixtures) do
     local log = assert(io.open(root .. "/run-" .. index .. ".log", "w")); log:write(fixture.log); log:close()
     local status = assert(io.open(root .. "/run-" .. index .. ".status", "w")); status:write(fixture.status .. "\n"); status:close()
   end
+  -- classifying alone makes no folder: -c without -o is refused
+  local refused = run_313_script(root, "-c -n 1")
+  assert_true(refused:find("-c needs -o", 1, true) ~= nil and refused:find("exit=2", 1, true) ~= nil, "-c without -o is refused: " .. refused)
+  local listing = io.popen("ls " .. shell_quote(root))
+  local made = {}
+  for name in listing:lines() do if name:match("^strata%-sc313%-logs") then made[#made + 1] = name end end
+  listing:close()
+  assert_equal(#made, 0, "no log folder is made when only classifying")
   local output = run_313_script(root, "-c -n " .. #fixtures .. " -o " .. shell_quote(root))
   for _, expected in ipairs({ "run 1: failed (FAIL waveform", "run 2: collector failure (#211", "run 3: crashed (sclang ended on signal 6",
-      "run 4: capped (", "run 5: failed (ERROR: something", "run 6: passed", "exit=1" }) do
+      "run 4: capped (", "run 5: failed (ERROR: something", "run 6: passed", "run 7: killed (exit 137", "run 8: collector failure (#211", "exit=1" }) do
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
-  assert_true(output:find("passed 1 of 6; failed 2; capped 1 (#544); collector failure 1 (#211); crashed 1 (#131)", 1, true) ~= nil,
+  assert_true(output:find("passed 1 of 8; failed 2; capped 1 (#544); killed 1; collector failure 2 (#211); crashed 1 (#131)", 1, true) ~= nil,
     "the counts: " .. output)
   -- a cap kill with no FAIL line is its own outcome
   os.execute("rm -f -- " .. shell_quote(root .. "/run-1.log") .. " " .. shell_quote(root .. "/run-1.status"))
