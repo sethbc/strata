@@ -228,7 +228,9 @@
     // The frame a buffer grain starts at (slotGrainPos), moved behind the
     // record head when its life would carry it across the head (design 3.3,
     // section 1.5). The head moves one frame per output frame, a grain |r| frames
-    // of the slot per output frame for L = durFrames / |r| output frames
+    // of the slot per output frame (rate is that read rate, signed: never
+    // GrainBuf's rate argument, which the server's BufRateScale divides)
+    // for L = durFrames / |r| output frames
     // (|r| floored at 0.001, as readRate is), so a start s is in danger when
     //   forward (r >= 0): [h - m - max(r - 1, 0) * L, h + m + max(1 - r, 0) * L]
     //   reverse (r < 0):  [h - m,                     h + m + (|r| + 1) * L]
