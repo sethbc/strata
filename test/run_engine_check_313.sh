@@ -27,12 +27,14 @@
 # their hash), so a fresh machine needs no manual step; the one-time build
 # takes about a minute (it downloads Ubuntu's SuperCollider and JACK).
 #
-# Each run ends in one of five ways (#545): passed; failed (any FAIL, ERROR
+# Each run ends in one of six ways (#545): passed; failed (any FAIL, ERROR
 # or "Strata invariant broken" line, whatever ended it); capped (the memory
-# cap killed a process in the container: oom_kill above 0, #544); collector (sclang ended on a
-# signal after the collector's count-error lines (sclang spells it with an e: the pattern is written gr[e]y so the US spelling check passes): the collector failure of #211); or
-# crashed (a signal with none of those: #131); a bare exit 137 with no cap
-# kill is "killed" (stopped from outside). The summary gives the
+# cap killed a process in the container: oom_kill above 0, #544); killed
+# (exit 137 with no cap kill: stopped from outside); collector (sclang ended
+# on a signal after the collector's count-error lines, the collector failure
+# of #211; sclang spells the word with an e, so the pattern is written gr[e]y
+# for the US spelling check); or crashed (a signal with none of those:
+# #131). The summary gives the
 # counts; the exit status is 0 only when every run passed.
 set -eu
 
