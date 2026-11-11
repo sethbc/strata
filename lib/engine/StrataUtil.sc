@@ -172,6 +172,28 @@
         ^found.sort({ arg a, b; a[\order] < b[\order] }).asArray
     }
 
+    // CroneEngine's addPoll, for a name no poll holds yet. A name another
+    // engine on the same server already holds (CronePollRegistry keeps the
+    // first poll of a name) gives that poll back without counting it among
+    // this engine's pollNames, so neither norns' deinit nor a rolled-back
+    // alloc (releaseCroneRegistrations) removes another engine's poll (#499)
+    addPoll { arg name, func, periodic = true;
+        var held = CronePollRegistry.getPollFromName(name.asSymbol);
+        if (held.notNil) { ^held };
+        ^super.addPoll(name, func, periodic)
+    }
+
+    // What norns' deinit undoes before free, for an alloc that raised:
+    // Crone calls deinit only on an engine whose alloc returned, so the
+    // commands' OSC defs would stay and this engine's polls would stay in
+    // CronePollRegistry, where the next engine would get them (its
+    // bufferState reporting this one's slots) (#499)
+    releaseCroneRegistrations {
+        commands.do({ arg command; command.oscdef.free });
+        pollNames.do({ arg name; CronePollRegistry.remove(name) });
+        pollNames.clear;
+    }
+
     // One phase (\stop or \free) of every area in the list, in descending
     // order, each under its own try (#499): an area that raises is named in
     // one invariant line (warnInvariant) and the others still run, so every

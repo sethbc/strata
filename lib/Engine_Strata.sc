@@ -112,9 +112,11 @@ Engine_Strata : CroneEngine {
     // grainDefTable, grainParamHandlers and controlNameSets are built from
     // what the areas register. An error in any phase rolls back what was
     // built (#499): every area whose start began is stopped and every area
-    // whose allocState began is freed (runAreaPhases, as free does), then the
-    // error is raised again. norns frees an engine only once its alloc has
-    // returned, so nothing else would free them.
+    // whose allocState began is freed (runAreaPhases, as free does), the
+    // commands' OSC defs and this engine's polls are released
+    // (releaseCroneRegistrations, what norns' deinit does), then the error is
+    // raised again. norns frees an engine only once its alloc has returned,
+    // so nothing else would free them.
     alloc {
         var defNames = List.new, allocated = List.new, started = List.new;
         areas = this.strataAreas;
@@ -147,6 +149,7 @@ Engine_Strata : CroneEngine {
         } { arg error;
             this.runAreaPhases(started, \stop);
             this.runAreaPhases(allocated, \free);
+            this.releaseCroneRegistrations;
             areas = nil;  // nothing left for free
             error.throw;
         };
