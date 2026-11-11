@@ -5,7 +5,7 @@
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
-local deep_copy = h.deep_copy
+local deep_copy, show_page = h.deep_copy, h.show_page
 
 test("grain pitch drift wanders subtly around the user-set pitch (C4)", function()
   local context = load_strata()
@@ -530,6 +530,209 @@ test("the undo's expiry clock forgets its id before it clears the undo, so it ne
   assert_true(not undo_available(1), "the undo expired")
   assert_true(not self_canceled, "the expiry clock never canceled itself")
   assert_equal(local_value("undo_clock"), nil, "its id is forgotten")
+end)
+
+-- #557: one randomize and undo for every page, S.lib.mutation.randomize(spec)
+-- and S.lib.mutation.undo(), with the one S.undo naming its page, section
+-- and voice
+
+-- A value of param_id other than its current one, so a set runs its action
+local function other_value(param_id)
+  local param = params:lookup_param(param_id)
+  if param.t == params.tOPTION then return param.selected % param.count + 1 end
+  if param.t == params.tBINARY then return 1 - params:get(param_id) end
+  if param.t == params.tNUMBER then
+    return params:get(param_id) < param.max and params:get(param_id) + 1 or params:get(param_id) - 1
+  end
+  local spec = param.controlspec
+  return spec:map(spec:unmap(params:get(param_id)) < 0.5 and 0.9 or 0.1)
+end
+
+local function page_index(name) return local_value("S").constants.UI_PAGES.index[name] end
+
+test("randomize records the old values and undo restores them (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local FX = page_index("FX")
+  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "reverb mix at its default")
+  assert_near(params:get("reverb_size"), 0.8, 1e-9, "reverb size at its default")
+  local size_saw_mix
+  local engine_calls = #context.engine_calls
+  assert_equal(mutation.randomize({ page = FX, section = "reverb", draws = {
+    { id = "reverb_mix", draw = function() return 0.45 end },
+    { id = "reverb_size", draw = function() size_saw_mix = params:get("reverb_mix"); return 0.9 end },
+  } }), true, "randomize reports the randomize")
+  assert_near(params:get("reverb_mix"), 0.45, 1e-9, "the first draw is set")
+  assert_near(params:get("reverb_size"), 0.9, 1e-9, "the second draw is set")
+  assert_near(size_saw_mix, 0.45, 1e-9, "a later draw reads an earlier one's new value")
+  assert_true(#context.engine_calls > engine_calls, "the draws reach the engine through the actions")
+  local undo = local_value("undo")
+  assert_equal(undo.page, FX, "S.undo.page")
+  assert_equal(undo.section, "reverb", "S.undo.section")
+  assert_equal(undo.voice, nil, "S.undo.voice: FX has none")
+  assert_near(undo.values.reverb_mix, 0.3, 1e-9, "the old mix is held")
+  assert_near(undo.values.reverb_size, 0.8, 1e-9, "the old size is held")
+  assert_near(undo.until_time, util.time() + 5, 1e-9, "S.undo.until_time")
+  assert_true(local_value("undo_clock") ~= nil, "the expiry clock runs")
+  assert_equal(mutation.undo(), true, "undo reports the undo")
+  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "the mix is back")
+  assert_near(params:get("reverb_size"), 0.8, 1e-9, "the size is back")
+  assert_equal(local_value("undo"), nil, "the undo ends")
+  assert_equal(local_value("undo_clock"), nil, "with its expiry clock")
+  assert_equal(mutation.undo(), false, "nothing more to undo")
+end)
+
+test("a locked voice's spec changes nothing (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local VOICE = page_index("VOICE")
+  mutation.randomize({ page = page_index("FX"), section = "delay",
+    draws = { { id = "delay_mix", draw = function() return 0.2 end } } })
+  local earlier = local_value("undo")
+  toggle_lock(2)
+  local size = params:get("v2_grain_size")
+  local drawn = false
+  assert_equal(mutation.randomize({ page = VOICE, section = "grain", voice = 2,
+    draws = { { id = "v2_grain_size", draw = function() drawn = true; return 0.4 end } } }), false,
+    "a locked voice's randomize reports nothing done")
+  assert_equal(params:get("v2_grain_size"), size, "its param is unchanged")
+  assert_true(not drawn, "nothing is drawn")
+  assert_true(local_value("undo") == earlier, "the earlier undo stays")
+  assert_equal(mutation.randomize({ page = VOICE, section = "mix", voice = 1, draws = {} }), false,
+    "an empty section reports nothing done")
+  assert_true(local_value("undo") == earlier, "and keeps the earlier undo")
+end)
+
+test("undo_for is true only on the same page, section and voice within 5 s (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local VOICE, MAIN = page_index("VOICE"), page_index("MAIN")
+  assert_true(not mutation.undo_for(VOICE, "grain", 2), "nothing held before a randomize")
+  mutation.randomize({ page = VOICE, section = "grain", voice = 2,
+    draws = { { id = "v2_grain_size", draw = function() return 0.4 end } } })
+  assert_true(mutation.undo_for(VOICE, "grain", 2), "the same page, section and voice")
+  assert_true(not mutation.undo_for(VOICE, "crossmod", 2), "another section")
+  assert_true(not mutation.undo_for(VOICE, "grain", 1), "another voice")
+  assert_true(not mutation.undo_for(MAIN, "grain", 2), "another page")
+  assert_true(not undo_available(2), "MAIN's undo_available is MAIN's whole-voice undo only")
+  context.set_time(util.time() + 4.9)
+  assert_true(mutation.undo_for(VOICE, "grain", 2), "still at 4.9 s")
+  context.set_time(util.time() + 0.1)
+  assert_true(not mutation.undo_for(VOICE, "grain", 2), "not at 5 s")
+  assert_equal(mutation.undo(), false, "and undo does nothing then")
+  -- randomize_voice is MAIN's whole-voice spec
+  randomize_voice(3)
+  assert_true(mutation.undo_for(MAIN, "voice", 3) and undo_available(3), "randomize_voice holds MAIN's undo")
+end)
+
+-- The params a page randomize may set besides randomize_voice's (VOICE's
+-- grain and crossmod sections, FX's), each ending the undo when edited
+local PAGE_RANDOMIZED_IDS = { "v1_grain_density", "v1_grain_spread", "v1_grain_env", "v1_mod_speed",
+  "v1_mod_amp_amt_1", "v1_mod_amp_amt_2", "v1_mod_amp_amt_3", "v1_mod_freq_amt_1", "v1_mod_freq_amt_2",
+  "v1_mod_freq_amt_3", "master_density", "drift_amount", "filter_type", "filter_freq", "filter_res",
+  "delay_time", "delay_feedback", "delay_mix", "reverb_mix", "reverb_size", "reverb_damp" }
+
+test("an edit of a held param ends the undo (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local FX = page_index("FX")
+  for _, id in ipairs(PAGE_RANDOMIZED_IDS) do
+    mutation.randomize({ page = FX, section = "probe", draws = { { id = id, draw = function() return other_value(id) end } } })
+    local other = id == "reverb_damp" and "reverb_size" or "reverb_damp"
+    params:set(other, other_value(other))
+    assert_true(mutation.undo_for(FX, "probe", nil), id .. ": an edit of a param the undo does not hold keeps it")
+    params:set(id, other_value(id))
+    assert_equal(local_value("undo"), nil, "an edit of " .. id .. " ends the undo")
+  end
+end)
+
+-- #538: norns' Binary:set sends no MIDI-map CC, so a binary draw goes
+-- through set_binary_param and a controller mapped to it follows
+test("a binary draw goes through set_binary_param, echoing to a mapped CC (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local controller = context.midi.plug(1)
+  norns.pmap.data.v1_quantize = { dev = 1, ch = 1, cc = 31, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  local function echoes()
+    local values = {}
+    for _, message in ipairs(controller.sent) do
+      if message[2] == 31 then table.insert(values, message[3]) end
+    end
+    return table.concat(values, ",")
+  end
+  assert_equal(params:get("v1_quantize"), 0, "quantize starts off")
+  mutation.randomize({ page = page_index("VOICE"), section = "variation", voice = 1,
+    draws = { { id = "v1_quantize", draw = function() return 1 end } } })
+  assert_equal(params:get("v1_quantize"), 1, "the draw is set")
+  assert_equal(echoes(), "127", "the controller hears the randomize")
+  assert_true(mutation.undo(), "undo")
+  assert_equal(params:get("v1_quantize"), 0, "the old value is back")
+  assert_equal(echoes(), "127,0", "and the controller hears the undo")
+end)
+
+test("a pattern spec restores the exact old steps (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local mutation, SEQ = S.lib.mutation, page_index("SEQ")
+  local old = { 15, 0, 8, 0, 12, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 10 }
+  S.lib.sequencer.replace_pattern(3, old)
+  toggle_lock(3)                                       -- lock covers params, not patterns
+  math.randomseed(12)
+  assert_equal(mutation.randomize({ page = SEQ, section = "pattern", voice = 3, pattern = 3 }), true,
+    "a pattern spec randomizes a locked voice's pattern")
+  assert_true(table.concat(S.patterns[3], ",") ~= table.concat(old, ","), "the pattern changed")
+  assert_true(mutation.undo_for(SEQ, "pattern", 3), "its undo is held")
+  assert_true(mutation.undo(), "undo")
+  assert_equal(table.concat(S.patterns[3], ","), table.concat(old, ","), "the exact old steps are back")
+  -- a pattern edit of the held voice ends the undo, one of another voice does not
+  mutation.randomize({ page = SEQ, section = "pattern", voice = 3, pattern = 3 })
+  mutation.note_pattern_edit(2)
+  assert_true(mutation.undo_for(SEQ, "pattern", 3), "an edit of another voice's pattern keeps it")
+  mutation.note_pattern_edit(3)
+  assert_equal(local_value("undo"), nil, "an edit of the held voice's pattern ends it")
+end)
+
+-- Every page record with randomize_section: in each of its layout states,
+-- every param its spec draws reports an edit to note_param_edit, so an edit
+-- ends the undo and never comes back on it (AGENTS.md, Randomize undo). The
+-- pages that randomize add the field; this test covers each one
+test("every drawn param of every page's randomize_section calls note_param_edit (#557)", function()
+  load_strata()
+  local S = local_value("S")
+  local pages = {}
+  for index, name in ipairs(S.constants.UI_PAGES) do
+    local record = S.registry.pages[index]
+    if record.randomize_section then
+      local states = { { name = "as loaded" } }
+      for _, state in ipairs(record.layout_states or {}) do states[#states + 1] = state end
+      pages[#pages + 1] = { index = index, name = name, states = states }
+    end
+  end
+  assert_true(#pages >= 1 and pages[1].name == "MAIN", "MAIN randomizes")
+  local checked = 0
+  for _, page in ipairs(pages) do
+    for _, state in ipairs(page.states) do
+      local context = load_strata(); finish_startup(context)
+      show_page(page.name)
+      if state.setup then state.setup(context) end
+      local spec = local_value("S").registry.pages[page.index].randomize_section()
+      local where = page.name .. ", " .. state.name
+      local real_note = note_param_edit
+      local noted = {}
+      note_param_edit = function(param_id) noted[param_id] = true; return real_note(param_id) end
+      local ok, problem = pcall(function()
+        for _, entry in ipairs(spec and spec.draws or {}) do
+          params:set(entry.id, other_value(entry.id))
+          assert_true(noted[entry.id], where .. ": an edit of " .. entry.id .. " calls note_param_edit")
+          checked = checked + 1
+        end
+      end)
+      note_param_edit = real_note
+      if not ok then error(problem, 0) end
+    end
+  end
+  assert_true(checked > 0, "some drawn params were checked")
 end)
 
 end

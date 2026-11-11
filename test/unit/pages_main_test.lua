@@ -333,6 +333,99 @@ test("ALT's K2 hint reads locked for a locked voice", function()
   key(1, 0)
 end)
 
+-- What randomize_voice set before #557, derived here from its draws, in
+-- their order: for a synth source each synthesis param but amp at
+-- spec:map(random), in the voices table's pairs order; for a buffer source
+-- buf_pos r, buf_rate 2 ^ (2r - 1), buf_scan r - 0.5; then grain size
+-- 0.3r + 0.05 and grain pitch 2r + 0.5. Each value as its param stores it
+local function randomize_voice_draws(voice_idx, seed)
+  math.randomseed(seed)
+  local prefix = "v" .. voice_idx .. "_"
+  local drawn = {}
+  local function draw(key, value)
+    local spec = params:lookup_param(prefix .. key).controlspec
+    drawn[prefix .. key] = spec:map(spec:unmap(value))
+  end
+  if voice_uses_synth(voice_idx) then
+    for key in pairs(local_value("voices")[voice_idx].params) do
+      if key ~= "amp" then draw(key, params:lookup_param(prefix .. key).controlspec:map(math.random())) end
+    end
+  elseif voice_uses_buffer(voice_idx) then
+    draw("buf_pos", math.random())
+    draw("buf_rate", 2 ^ (math.random() * 2 - 1))
+    draw("buf_scan", math.random() - 0.5)
+  end
+  draw("grain_size", math.random() * 0.3 + 0.05)
+  draw("grain_pitch", math.random() * 2 + 0.5)
+  return drawn
+end
+
+-- Every param's value, by id
+local function all_param_values()
+  local values = {}
+  for _, param in ipairs(params.params) do
+    if param.id and param.t ~= params.tSEPARATOR and param.t ~= params.tGROUP then values[param.id] = params:get(param.id) end
+  end
+  return values
+end
+
+test("MAIN's ALT+K2 acts on release and changes what randomize_voice changed before (#557)", function()
+  for _, case in ipairs({ { voice = 1, source = 1, what = "resonator, synth" }, { voice = 2, source = 1, what = "fm, synth" },
+    { voice = 6, source = 1, what = "karplus, synth" }, { voice = 1, source = 3, what = "buffer 2" },
+    { voice = 3, source = 10, what = "input" } }) do
+    local context = load_strata(); finish_startup(context)
+    params:set("v" .. case.voice .. "_source", case.source)
+    select_voice(case.voice)
+    show_page("MAIN")
+    local drawn = randomize_voice_draws(case.voice, 31)
+    local before = all_param_values()
+    math.randomseed(31)
+    key(1, 1); key(2, 1)
+    for id, value in pairs(all_param_values()) do
+      assert_equal(value, before[id], case.what .. ": the press leaves " .. id)
+    end
+    key(2, 0); key(1, 0)
+    local changed = 0
+    for id, value in pairs(all_param_values()) do
+      if drawn[id] then
+        assert_near(value, drawn[id], 1e-9, case.what .. ": " .. id .. " takes randomize_voice's draw")
+        if value ~= before[id] then changed = changed + 1 end
+      else
+        assert_equal(value, before[id], case.what .. ": " .. id .. " is left alone")
+      end
+    end
+    assert_true(changed > 0, case.what .. ": the release randomized")
+    assert_true(undo_available(case.voice), case.what .. ": and holds MAIN's undo")
+  end
+end)
+
+test("the hint is K2:rand, K2:undo, K2:locked (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("MAIN")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "a quick press randomizes")
+  key(2, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "while K2 is down: still the quick press's")
+  key(2, 0); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:lock", "after the randomize: undo")
+  tap(3); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:unlock", "a locked voice's undo still runs")
+  tap(2); redraw()
+  assert_equal(hint_text(context), "K2:locked K3:unlock", "undone: the locked voice offers nothing")
+  local before = all_param_values()
+  tap(2)
+  for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "locked: " .. id .. " unchanged") end
+  tap(3); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "unlocked")
+  -- MAIN has no hold action: a press held past 0.5 s does nothing on release
+  key(2, 1); context.clock.run_for(0.6); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "held: MAIN has no hold hint")
+  key(2, 0)
+  for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "held: " .. id .. " unchanged") end
+  assert_true(not undo_available(1), "held: no undo")
+  key(1, 0)
+end)
+
 test("MAIN hints follow the voice state", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")
