@@ -800,12 +800,55 @@ test("the file param lists a loaded file's folder only, never one the shell read
     assert_equal(#listed, 1, "a take lists nothing")
     load_buffer(3, odd .. "c.wav")
     assert_equal(#listed, 1, "a folder the shell would read is not listed")
-    assert_equal(params:get("buf3_file"), odd .. "c.wav", "the param still shows the file")
-    assert_equal(params:string("buf3_file"), "c.wav")
+    assert_equal(params:get("buf3_file"), _path.audio, "nor does it enter the param (#559)")
   end)
   util.scandir = scandir
   assert_true(ok, tostring(problem))
   assert_true(not util.file_exists(marker), "no folder name ran as a command")
+end)
+
+-- #559: a folder the shell reads inside double quotes ($, `, \ or ") never
+-- enters norns' file param: PARAMETERS' file selector opens in the param's
+-- dir (fs.pushd, then util.scandir with the folder between double quotes),
+-- and a PSET saves its path for a later read's File:set to list. The param
+-- shows the slot as an empty one (the audio folder); the slot's file lives
+-- in Strata's state and buffers.data, which restores it
+test("a folder name with shell syntax never enters the buffer's file param (#559)", function()
+  local subdir = "shell_folder_" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local marker = context.audio_dir .. "f559_marker"
+  local odd = context.audio_dir .. "$(touch " .. marker .. ")/"
+  util.make_dir(context.audio_dir)
+  os.execute("mkdir -p -- '" .. odd:gsub("'", "'\\''") .. "'")
+  io.open(odd .. "c.wav", "w"):close()
+  load_buffer(3, odd .. "c.wav")
+  assert_equal(local_value("buffers")[3].path, odd .. "c.wav", "the slot holds the file")
+  local param = params:lookup_param("buf3_file")
+  for _, field in ipairs({ "path", "dir" }) do
+    assert_true(not tostring(param[field]):find("touch", 1, true), field .. " holds no part of the folder")
+  end
+  assert_equal(params:get("buf3_file"), _path.audio, "the param shows an empty slot's value")
+  -- PARAMETERS > buffer 3 file, K3: fs.enter(_path.dust), then fs.pushd(dir)
+  local fileselect = require("fileselect")
+  fileselect.enter(_path.data, function() end)
+  if param.dir then fileselect.pushd(param.dir) end
+  for _, name in ipairs(fileselect.last.list or {}) do
+    assert_true(name ~= "c.wav", "the selector lists nothing from the folder")
+  end
+  fileselect.close()
+  assert_true(not util.file_exists(marker), "no folder name ran as a command")
+  -- a PSET holds no part of it
+  local pset = context.data_dir .. "shell-559.pset"
+  params:write(pset)
+  local file = assert(io.open(pset, "r")); local text = file:read("*a"); file:close()
+  assert_true(not text:find("touch", 1, true), "the PSET holds no part of the folder")
+  -- buffers.data keeps the file, and a restart restores it
+  cleanup()
+  context = load_strata({ data_subdir = subdir })
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1); assert_equal(loads[1].args[1], 2); assert_equal(loads[1].args[2], odd .. "c.wav")
+  assert_equal(params:get("buf3_file"), _path.audio, "restored without entering the param")
+  assert_true(not util.file_exists(marker), "nor did the restore run it")
 end)
 
 -- #524: a PSET read sets each file param, and norns' File:set runs the

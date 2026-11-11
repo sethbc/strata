@@ -2544,6 +2544,19 @@ local function make_fileselect()
     menu_init_redraw()
     fileselect.redraw()
   end
+  -- fs.pushd: open the selector in a folder below the one entered (norns'
+  -- PARAMS menu passes a file param's dir, core/menu/params.lua), listing
+  -- it as fs.getlist does: util.scandir, the folder between double quotes
+  -- (#559). The folder is matched as a Lua pattern, as fs.pushd does; the
+  -- listing is kept in `last.list`
+  function fileselect.pushd(dir)
+    local request = assert(fileselect.last, "fileselect.pushd before fileselect.enter")
+    local subdir = dir:match(request.folder .. "(.*)")
+    request.folders = request.folders or {}
+    for match in subdir:gmatch("([^/]*)/") do table.insert(request.folders, match .. "/") end
+    request.list = _G.util.scandir(request.folder .. table.concat(request.folders))
+    fileselect.redraw()
+  end
   -- Test helper: close the selector the way fs.exit does, with `path`
   -- chosen, or canceled when path is nil
   function fileselect.close(path)

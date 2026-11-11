@@ -200,14 +200,20 @@ return function(S)
   -- a blocking ls with the folder between double quotes, #480). A file's
   -- folder is listed, since PARAMETERS' E3 steps through it from the file.
   -- A folder itself (the audio folder: a clear, a take, a dub's end) names
-  -- no file to step from, and a folder the shell still reads inside double
-  -- quotes ($, `, \ or ") would run what its name says (#465): both are
-  -- shown as File:set would leave them, without the listing (the folder
-  -- PARAMETERS' file selector opens in, nothing for E3 to step through)
+  -- no file to step from: it is shown as File:set would leave it, without
+  -- the listing (the folder PARAMETERS' file selector opens in, nothing for
+  -- E3 to step through). A folder the shell still reads inside double
+  -- quotes ($, `, \ or ") never enters the param at all (#559): norns
+  -- would run what its name says when it lists it (File:loaddir), when
+  -- PARAMETERS' file selector opens in the param's dir (fs.pushd) and when
+  -- a PSET that saved it is read. The param shows an empty slot's value
+  -- (the audio folder) instead; the slot's file is in S.buffers and
+  -- buffers.data, which restores it
   function set_buffer_file_param(slot, path)
     local id = "buf" .. slot .. "_file"
     local folder = type(path) == "string" and path:match("^(.*/)") or nil
-    if folder ~= nil and (folder == path or folder:find('["$`\\]')) then
+    if folder ~= nil and folder:find('["$`\\]') then path, folder = _path.audio, _path.audio end
+    if folder ~= nil and folder == path then
       local param = params:lookup_param(id)
       param.path, param.dir, param.dirfiles, param.dirpos = path, folder, nil, nil
       return
@@ -609,15 +615,15 @@ return function(S)
   -- taking effect (its read then settles as any load's), or, over an empty
   -- slot, its new length.
   local function buffer_state_changed(value)
-    local slot_index = math.floor(value / BUFFER_STATE_STRIDE)
-    local slot = slot_index + 1
+    local engine_slot = math.floor(value / BUFFER_STATE_STRIDE)
+    local slot = engine_slot + 1
     -- slot index NUM_BUFFERS: the engine's slot length, not a slot (#153)
-    if slot_index == NUM_BUFFERS then
-      S.lib.performance.engine_slot_seconds(value - slot_index * BUFFER_STATE_STRIDE)
+    if engine_slot == NUM_BUFFERS then
+      S.lib.performance.engine_slot_seconds(value - engine_slot * BUFFER_STATE_STRIDE)
       return
     end
     if not valid_buffer_slot(slot) then return end
-    local seconds = value - slot_index * BUFFER_STATE_STRIDE
+    local seconds = value - engine_slot * BUFFER_STATE_STRIDE
     local buffer = S.buffers[slot]
     local changed = buffer.seconds ~= seconds
     buffer.seconds = seconds
