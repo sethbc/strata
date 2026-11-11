@@ -54,14 +54,15 @@ Each voice generates a modulation signal (envelope follower + slow LFO) that can
 ## Voice SynthDefs
 
 **Modulation Signal Clamping (v2.0+, frequency floor in v2.1)**:
-To prevent excessive amplitude spikes when multiple modulation sources are active, every voice SynthDef (including FM and Sub) clamps:
+To prevent excessive amplitude spikes when multiple modulation sources are active, every voice SynthDef (including FM and Sub) takes its accent, crossmod, bend and level from one helper, `voiceModulation` (`lib/engine/StrataVoiceDefs.sc`, #372; written out seven times before), which clamps:
 ```supercollider
-// Mix modulation signals with clamping to prevent excessive modulation
-modSig = ((mod1Sig * modAmpAmt1) + (mod2Sig * modAmpAmt2) + (mod3Sig * modAmpAmt3)).clip(-2, 2);
-modFreq = freq * (1 + ((mod1Sig * modFreqAmt1) + (mod2Sig * modFreqAmt2) + (mod3Sig * modFreqAmt3)).clip(-0.9, 2));
-modAmp = (amp * (1 + modSig) * (1 + accent)).clip(0, 2);
+// voiceModulation(freq, bend, amp, modBuses, modAmpAmts, modFreqAmts, t_trig, velocity)
+accent = voiceAccent(t_trig, velocity);           // EnvGen.kr(Env.perc(0.005, 0.4), t_trig, levelScale: velocity)
+modSig = crossmodAmp(mods, modAmpAmts);           // ((m1 * a1) + (m2 * a2) + (m3 * a3)).clip(-2, 2)
+modFreq = freq * bend * (1 + crossmodFreq(mods, modFreqAmts));   // the sum of m * f, clipped to -0.9..2
+modAmp = voiceLevel(amp, modSig, accent);         // (amp * (1 + modSig) * (1 + accent)).clip(0, 2)
 ```
-This prevents the theoretical 4× amplitude spike that could occur with 3 sources all at maximum positive modulation. The frequency modulator is clamped to -0.9 (not -2) so the modulated frequency never reaches zero or goes negative (Karplus uses `modFreq.reciprocal` as a delay time, Resonator uses it as a filter cutoff).
+The stage uses the same `voiceAccent`, `crossmodAmp` and `voiceLevel` on the other path and the grain synths the same `crossmodFreq` for their rate, so a clamp or the accent's shape is changed in one place. The helpers build every SynthDef to the same bytes as the seven written-out blocks did. This prevents the theoretical 4× amplitude spike that could occur with 3 sources all at maximum positive modulation. The frequency modulator is clamped to -0.9 (not -2) so the modulated frequency never reaches zero or goes negative (Karplus uses `modFreq.reciprocal` as a delay time, Resonator uses it as a filter cutoff).
 
 **Signal safety**: the Resonator's `RLPF` cutoff (`modFreq` × a 1-4 noise factor) is capped at `SampleRate.ir * filterCeiling` (0.45): high freq, positive frequency crossmod (×3), pitchbend and the noise factor can push it past Nyquist, where RLPF's poles leave the unit circle (for cutoff × rq between SR/2 and SR, rq up to 1) and the resulting NaN killed the output until a restart. Below 0.45 × SR with rq ≤ 1 it is always stable. As a second line, `\strataFilter` (first in the effects chain) replaces any NaN, inf or denormal sample on `mainBus` with 0 (`CheckBadValues` per channel into a `Select`), so a voice that blows up can never poison the delay feedback or the reverb combs; normal samples pass unchanged. `\strataMod` guards the same way (`zeroBadValues`, the helper both use), on its summed input before `Amplitude.kr` (a NaN would poison the follower's state, so it follows again once the bad values stop) and on its output: a NaN or inf on a voice bus never reaches its mod bus, where it would spread through crossmod into every voice it modulates and, through their own mod synths, on, for good. The engine check feeds 50 ms of inf and NaN over a tone into a `\strataMod` on a private bus and finds its mod bus finite and following the tone again, and a Resonator it modulates at full depth free of bad values. The engine check runs sixteen Resonators far past Nyquist and injects 50 ms of inf and NaN on `mainBus` (delay feeding back, reverb on) and finds no bad value at the master output afterward.
 

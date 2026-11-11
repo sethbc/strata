@@ -47,9 +47,10 @@
         ^if (source == 0) { areaState[\mix][\synthPaths][voice] } { areaState[\mix][\otherPaths][voice] }
     }
 
-    // The voice-level gain on the other path: amp, the amplitude crossmod
-    // and the accent (the one place this level is computed; 3.4's offsets
-    // change only its callers)
+    // The voice-level gain: amp, the amplitude crossmod and the accent. The
+    // one place this level is computed: the stage applies it on the other
+    // path, every voice SynthDef to its own output (voiceModulation,
+    // StrataVoiceDefs.sc); 3.4's offsets change only its callers
     voiceLevel { arg amp, modSig, accent;
         ^(amp * (1 + modSig) * (1 + accent)).clip(0, 2)
     }
@@ -159,8 +160,8 @@
             var codes = raw.collect({ arg channel; CheckBadValues.ar(channel, 0, 0) });
             var bad = codes.collect({ arg code; (code > 0.5) * (code < 2.5) }).sum > 0;
             var filtered = guard.(raw);
-            var modSig = (c[\modBuses].collect({ arg bus; In.kr(bus, 1) }) * c[\modAmpAmts]).sum.clip(-2, 2);
-            var accent = EnvGen.kr(Env.perc(0.005, 0.4), c[\t_trig], levelScale: c[\velocity]);
+            var modSig = this.crossmodAmp(c[\modBuses].collect({ arg bus; In.kr(bus, 1) }), c[\modAmpAmts]);
+            var accent = this.voiceAccent(c[\t_trig], c[\velocity]);
             var other = filtered.drop(2) * this.voiceLevel(c[\amp], modSig, accent);
             var sig = filtered.keep(2) + other;
             SendReply.ar(bad, '/strataVoiceMixBad', voice);

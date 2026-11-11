@@ -184,9 +184,10 @@
         env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(c[\gate]), doneAction: 2) * this.killFade(c[\kill]);
 
         // Crossmod (rate only; the amplitude crossmod is the stage's):
-        // clamped like the voices', kept positive, by rateLevel
+        // clamped as the voices' frequency is (crossmodFreq), kept positive,
+        // by rateLevel
         modSigs = c[\modBuses].collect({ arg bus; In.kr(bus, 1) });
-        rateMod = (modSigs * c[\modFreqAmts]).sum.clip(-0.9, 2);
+        rateMod = this.crossmodFreq(modSigs, c[\modFreqAmts]);
         bendRate = 1 + (c[\rateLevel] * ((c[\bend] * (1 + rateMod)) - 1));
 
         // (written on the control's own name: the Lua stub reads the
