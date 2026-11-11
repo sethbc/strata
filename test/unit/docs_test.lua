@@ -232,6 +232,113 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
 end)
 
+-- #459: the engine packs bufferLoadFailed, bufferSaveResult and recordState
+-- in three Value methods and Lua decodes them in three handlers. Each
+-- method's expression is read from the engine source and evaluated as
+-- sclang does (binary operators left to right, messages first), and the
+-- values it gives reach the handlers, which must act on the load, save or
+-- recording they name.
+local function engine_value_method(name)
+  local source = stubs.strip_sc_comments(engine_sources())
+  local args, body = source:match("\n%s*" .. name .. "%s*{%s*arg%s+([%w_,%s]-);%s*%^([^\n]-)%s*\n%s*}")
+  assert_true(args ~= nil, "the engine has " .. name .. " { arg ...; ^... }")
+  local names = {}
+  for arg in args:gmatch("[%w_]+") do table.insert(names, arg) end
+  return function(...)
+    local values, tokens, position = {numBuffers = engine_spec.num_buffers}, {}, 1
+    for index, arg in ipairs(names) do values[arg] = select(index, ...) end
+    -- tokens: numbers, names, ( ) + - * / and .message
+    local text = body:gsub("%s+", "")
+    local index = 1
+    while index <= #text do
+      local number = text:match("^%d+%.?%d*", index)
+      local word = text:match("^[%a_][%w_]*", index)
+      if number then table.insert(tokens, {kind = "number", value = tonumber(number)}); index = index + #number
+      elseif word then table.insert(tokens, {kind = "name", value = word}); index = index + #word
+      else table.insert(tokens, {kind = text:sub(index, index)}); index = index + 1 end
+    end
+    local operand, expression
+    local function message(value, selector)
+      if selector == "asFloat" or selector == "asInteger" then
+        assert_true(type(value) == "number", name .. ": ." .. selector .. " of a number")
+        return selector == "asInteger" and (value >= 0 and math.floor(value) or -math.floor(-value)) or value
+      elseif selector == "binaryValue" then
+        assert_true(type(value) == "boolean", name .. ": .binaryValue of a Boolean")
+        return value and 1 or 0
+      end
+      fail(name .. ": a message this test does not know: ." .. selector)
+    end
+    function operand()
+      local token, value = tokens[position], nil
+      position = position + 1
+      if token.kind == "number" then value = token.value
+      elseif token.kind == "name" then
+        value = values[token.value]
+        assert_true(value ~= nil, name .. ": a name this test does not know: " .. token.value)
+      elseif token.kind == "(" then
+        value = expression()
+        assert_equal(tokens[position].kind, ")", name .. ": a closing parenthesis")
+        position = position + 1
+      else fail(name .. ": unexpected " .. tostring(token.kind)) end
+      while tokens[position] and tokens[position].kind == "." do
+        value = message(value, tokens[position + 1].value)
+        position = position + 2
+      end
+      return value
+    end
+    function expression()
+      local value = operand()
+      while tokens[position] and ("+-*/"):find(tokens[position].kind, 1, true) do
+        local operator = tokens[position].kind
+        position = position + 1
+        local right = operand()
+        assert_true(type(value) == "number" and type(right) == "number", name .. ": arithmetic on numbers")
+        if operator == "+" then value = value + right elseif operator == "-" then value = value - right
+        elseif operator == "*" then value = value * right else value = value / right end
+      end
+      return value
+    end
+    local result = expression()
+    assert_equal(position, #tokens + 1, name .. ": the whole expression is read")
+    return result
+  end
+end
+
+test("the engine's event polls decode in Lua's handlers (#459)", function()
+  local context = load_strata(); h.finish_startup(context)
+  local S = local_value("S")
+  local buffers = local_value("buffers")
+  local record_state_value = engine_value_method("recordStateValue")
+  local load_failed_value = engine_value_method("bufferLoadFailedValue")
+  local save_result_value = engine_value_method("bufferSaveResultValue")
+  S.lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
+  -- recordState: slot 3's sixth recording (engine index 2) reports recording, then canceled
+  buffers[3].records_sent = 5
+  params:set("record_sync", 3)
+  record_buffer(3)
+  assert_equal(S.lib.record.state(3).phase, "armed")
+  context.polls.fire("recordState", record_state_value(2, 6, 1))
+  assert_equal(S.lib.record.state(3) and S.lib.record.state(3).phase, "recording", "recordState: recording")
+  context.polls.fire("recordState", record_state_value(2, 6, 3))
+  assert_equal(buffers[3].recording, false, "recordState: canceled")
+  -- bufferLoadFailed: slot 5's second load failed, its third emptied the slot
+  load_buffer(5, "/tmp/a.wav"); context.polls.fire("bufferState", 4004)
+  load_buffer(5, "/tmp/bad.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 2, false))
+  assert_equal(buffers[5].name, "a.wav", "bufferLoadFailed: load 2 undone")
+  load_buffer(5, "/tmp/gone.wav")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 3, true))
+  assert_equal(buffers[5].name, "empty", "bufferLoadFailed: load 3 emptied the slot")
+  -- bufferSaveResult: slot 6's first save written, its second failed
+  load_buffer(6, "/tmp/c.wav"); context.polls.fire("bufferState", 5004)
+  assert_true(save_buffer(6))
+  context.polls.fire("bufferSaveResult", save_result_value(5, 1, false))
+  assert_equal(S.lib.ui_flash.text("hints"), "saved buf 6", "bufferSaveResult: save 1 written")
+  assert_true(save_buffer(6))
+  context.polls.fire("bufferSaveResult", save_result_value(5, 2, true))
+  assert_equal(S.lib.ui_flash.text("hints"), "buf 6 save failed", "bufferSaveResult: save 2 failed")
+end)
+
 test("the engine's waveformPoints equals WAVEFORM_POINTS", function()
   load_strata()
   local points = tonumber(engine_sources():match("waveformPoints%s*{%s*%^(%d+)%s*}"))

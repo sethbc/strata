@@ -112,9 +112,21 @@ return function(S)
         finish_buffer_take(slot)
       end
     else
-      M.cancel_timer(slot)
       local feedback = params:get("record_feedback") / 100
       local loop = params:get("record_loop") == 2
+      -- a playable recording keeps the slot playing; one into a slot at
+      -- another sample rate is a replace take (the engine decides the same)
+      local playable = feedback > 0 or loop
+      -- While a load awaits the engine, what the slot will hold is not known:
+      -- the recording would supersede the load, and the engine would judge
+      -- the take by what the slot held at that moment. A replace take is the
+      -- same take either way; a playable one waits (K3 again once the slot
+      -- shows its length) (#455)
+      if playable and buffer.confirm_since ~= nil then
+        buffer_page_flash("buf " .. slot .. " loading")
+        return
+      end
+      M.cancel_timer(slot)
       local threshold = 0
       local threshold_index = params:get("record_threshold")
       if threshold_index > 1 then threshold = 10 ^ (THRESHOLD_DB[threshold_index - 1] / 20) end
@@ -124,33 +136,38 @@ return function(S)
       -- at most what a slot holds on this tier (the param's range already
       -- ends there; a value set before the range was known never passes it)
       seconds = math.min(seconds, S.performance.buffer_seconds)
-      -- a playable recording keeps the slot playing; one into a slot at
-      -- another sample rate is a replace take (the engine decides the same)
-      local playable = feedback > 0 or loop
-      local rate = buffer.sample_rate
+      -- (the rate of a file the engine confirmed: a slot that shows no audio
+      -- is empty to the engine, whatever file was last named for it)
+      local rate = buffer.loaded and buffer.sample_rate or nil
       if playable and rate and rate ~= S.constants.NORNS_SAMPLE_RATE then
         playable = false
         loop = false  -- a replace take ends at its length
         buffer_page_flash("buf " .. slot .. ": replaced (rate)")
       end
+      -- what a replace take replaces, put back if it is canceled before the
+      -- engine prepares its slot (taken before anything below changes it)
+      local previous = (not playable) and S.lib.buffers.state_before_take(slot) or nil
       engine.recordBuffer(slot - 1, seconds, params:get("record_level"), feedback, params:get("record_source") - 1,
         threshold, loop and 1 or 0, delay)
       buffer.records_sent = buffer.records_sent + 1
       local armed = delay > 0 or threshold > 0
       takes[slot] = {number = buffer.records_sent, kind = playable and "playable" or "take",
         phase = armed and "armed" or "recording", started_at = (not armed) and util.time() or nil,
-        seconds = seconds, loop = loop}
+        seconds = seconds, loop = loop, previous = previous}
       S.lib.buffers.recording_started(slot, playable)
       buffer.recording = true
       buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
       buffer.restoring = false
       buffer.settled_empty = false
+      buffer.kept_state = nil
       buffer.confirm_since = nil
       buffer.missing_path = nil
       buffer.checking_from, buffer.checking_load = nil, nil
       if not playable then
         set_buffer_file_param(slot, _path.audio)
-        buffer.seconds = 0  -- the engine reports 0 s until the take completes
+        -- the engine reports 0 s until the take completes; a synced take's
+        -- slot keeps its length until the engine prepares it and says so
+        if delay <= 0 then buffer.seconds = 0 end
         -- an armed take's timer starts at its recording report
         if not armed then start_take_timer(slot, seconds) end
       end
@@ -230,9 +247,15 @@ return function(S)
         buffer.loaded = buffer.seconds > 0
         set_buffer_file_param(slot, _path.audio)
         S.lib.waveforms.stale(slot)
-      elseif not buffer.finishing then
-        M.cancel_timer(slot)
-        finish_buffer_take(slot)
+      else
+        if not buffer.finishing then
+          M.cancel_timer(slot)
+          finish_buffer_take(slot)
+        end
+        -- the engine reports a take's length before "ended": a length known
+        -- by now is the take's, so it settles at once rather than at the
+        -- next periodic report (#457)
+        if buffer.seconds > 0 then settle_buffer_slot(slot) end
       end
     elseif state_code == STATE_CANCELED then
       M.cancel_timer(slot)
@@ -241,9 +264,12 @@ return function(S)
       buffer.finishing = false
       buffer.confirm_since = nil
       if take.kind == "take" then
-        -- the preparation emptied and zeroed the slot
+        -- empty, unless the engine's next bufferState report (sent right
+        -- after this one) shows audio: the take had not prepared the slot,
+        -- and buffer_state_changed puts back what it replaced
         buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
         buffer.settled_empty = false
+        buffer.kept_state = take.previous
       end
     end
     S.lib.buffers.display_changed()

@@ -341,6 +341,35 @@ test("a late or duplicate load failure report never undoes a later load, clear o
   assert_equal(buffers[4].path, scratch_take_path(4))
 end)
 
+-- #311: a synced replace take prepares its slot only just before its start;
+-- a bad load before then cancels the take and leaves the slot's audio, and
+-- the engine reports the slot's length after "canceled", then the failure
+test("a failed load while a synced replace take waits puts back what the slot holds", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  load_buffer(5, "/tmp/a.wav"); context.polls.fire("bufferState", 4000.5)
+  params:set("record_sync", 3)
+  record_buffer(5); context.polls.fire("recordState", 36)           -- armed (record 1, slot 5)
+  load_buffer(5, "/tmp/missing.wav")                                -- load 2
+  context.polls.fire("recordState", 60)                             -- canceled
+  context.polls.fire("bufferState", 4000.5)                         -- the slot as the take left it
+  context.polls.fire("bufferLoadFailed", load_failed_value(5, 2))
+  context.polls.fire("bufferState", 4000.5)                         -- the periodic report
+  assert_equal(buffers[5].name, "a.wav", "not take 5"); assert_equal(buffers[5].path, "/tmp/a.wav")
+  assert_true(buffers[5].loaded); assert_equal(params:get("buf5_file"), "/tmp/a.wav")
+  assert_equal(S.lib.buffers.status(5), "loaded")
+  -- the engine had prepared the slot (0 s): the take left it empty
+  load_buffer(6, "/tmp/b.wav"); context.polls.fire("bufferState", 5000.5)
+  record_buffer(6); context.polls.fire("recordState", 37)
+  context.polls.fire("bufferState", 5000)                           -- prepared
+  load_buffer(6, "/tmp/missing.wav")
+  context.polls.fire("recordState", 61); context.polls.fire("bufferState", 5000)
+  context.polls.fire("bufferLoadFailed", load_failed_value(6, 2))
+  assert_equal(buffers[6].name, "empty"); assert_equal(buffers[6].path, nil); assert_true(not buffers[6].loaded)
+  assert_equal(buffers[6].settled_empty, "take", "a take that had completed would still be adopted")
+end)
+
 test("a load whose server read failed leaves the slot empty, in either report order", function()
   local subdir = "failed-read-" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
@@ -945,6 +974,50 @@ test("a long file's check that no report ends falls back to the slot's previous 
   assert_equal(buffers[4].checking_from, 0, "with a whole bound from the failure")
   context.clock.run_for(0.2)
   assert_equal(buffers[4].checking_from, nil); assert_equal(buffers[4].name, "empty", "then the slot is as before")
+end)
+
+-- #311 with a long file: the engine cancels the take at the load's command
+-- and the slot keeps its audio while the file is checked
+test("a long file that fails its check while a synced take waits puts the slot back", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}    -- 120 s: checked
+  load_buffer(1, "/tmp/old.wav"); context.polls.fire("bufferState", 8)
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", 32)
+  load_buffer(1, "/tmp/long.wav")                                    -- load 2
+  assert_equal(buffers[1].checking_from, 8, "the check waits from the engine's 8 s, not a 0 Lua wrote")
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 8)   -- the command's cancel
+  assert_equal(S.lib.buffers.status(1), "loading", "the kept length does not end the check")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  assert_equal(buffers[1].name, "old.wav"); assert_equal(buffers[1].path, "/tmp/old.wav"); assert_true(buffers[1].loaded)
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  -- a synced replace take armed while the file is checked, canceled before
+  -- its preparation: the load never arrives, the slot holds what it held
+  load_buffer(2, "/tmp/old.wav"); context.polls.fire("bufferState", 1008)
+  local pending = context.clock.pending_count()
+  load_buffer(2, "/tmp/long.wav")
+  assert_equal(buffers[2].checking_from, 8)
+  record_buffer(2); context.polls.fire("recordState", 33)
+  record_buffer(2)                                                   -- K3 before the bar
+  context.polls.fire("recordState", 57); context.polls.fire("bufferState", 1008)
+  assert_equal(buffers[2].name, "old.wav"); assert_equal(buffers[2].path, "/tmp/old.wav"); assert_true(buffers[2].loaded)
+  assert_equal(buffers[2].checking_from, nil, "no check pending"); assert_equal(buffers[2].confirm_since, nil)
+  assert_equal(context.clock.pending_count(), pending, "no check fallback left")
+  assert_equal(S.lib.buffers.status(2), "loaded")
+  -- two long loads in their checks: the take supersedes both, so the slot
+  -- holds what the first one replaced
+  context.audio.files["/tmp/long2.wav"] = {2, 48000 * 90, 48000}
+  load_buffer(3, "/tmp/old.wav"); context.polls.fire("bufferState", 2008)
+  load_buffer(3, "/tmp/long.wav"); load_buffer(3, "/tmp/long2.wav")
+  record_buffer(3); context.polls.fire("recordState", 34)
+  record_buffer(3)
+  context.polls.fire("recordState", 58); context.polls.fire("bufferState", 2008)
+  assert_equal(buffers[3].name, "old.wav", "not a load the take superseded"); assert_true(buffers[3].loaded)
+  assert_equal(buffers[3].checking_from, nil); assert_equal(S.lib.buffers.status(3), "loaded")
 end)
 
 test("a standard tier never checks a load, whatever the file", function()

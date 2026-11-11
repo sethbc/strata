@@ -358,18 +358,113 @@ test("a playable recording stays loaded, shows its length and becomes take n whe
   assert_true(buffers[3].loaded); assert_equal(S_record_state(3), nil); assert_true(not buffers[3].recording)
 end)
 
-test("a canceled armed replace take leaves its slot empty; a canceled playable one keeps it", function()
+-- #311's state table: a canceled take leaves its slot as the take left it,
+-- and the engine follows "canceled" with the slot's length, which says which
+test("a replace take canceled after the engine prepared its slot leaves it empty", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
-  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", 1006)
   params:set("record_sync", 3)
-  record_buffer(1); context.polls.fire("recordState", 32); context.polls.fire("recordState", 56)
+  record_buffer(1); context.polls.fire("recordState", 32)
+  context.polls.fire("bufferState", 0)             -- the engine prepared the slot: 0 s
+  record_buffer(1)                                -- K3: canceled
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 0)
   assert_equal(buffers[1].name, "empty"); assert_true(not buffers[1].loaded); assert_true(not buffers[1].recording)
-  params:set("record_sync", 1); params:set("record_feedback", 50)
+  assert_equal(buffers[1].path, nil); assert_equal(local_value("S").lib.buffers.status(1), "empty")
+  context.polls.fire("bufferState", 8)             -- a later report of audio puts nothing back
+  assert_equal(buffers[1].name, "empty"); assert_true(not buffers[1].loaded); assert_equal(buffers[1].path, nil)
+end)
+
+test("a canceled playable recording keeps its slot", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", 1006)
+  params:set("record_feedback", 50)
   record_buffer(2); context.polls.fire("recordState", 33); context.polls.fire("recordState", 57)
   assert_equal(buffers[2].name, "b.wav"); assert_true(buffers[2].loaded); assert_equal(buffers[2].seconds, 6)
   assert_true(not buffers[2].recording)
+end)
+
+test("a synced replace take canceled before the engine prepared its slot puts the slot back", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 0.5)
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", 32)
+  assert_equal(buffers[1].seconds, 0.5, "the slot keeps its length until the engine prepares it")
+  assert_equal(S.lib.buffers.status(1), "armed")
+  record_buffer(1)                                -- K3 again before the bar
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 0.5)
+  assert_equal(buffers[1].name, "a.wav"); assert_true(buffers[1].loaded); assert_equal(buffers[1].path, "/tmp/a.wav")
+  assert_equal(params:get("buf1_file"), "/tmp/a.wav", "the file param shows it again")
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  assert_true(not buffers[1].recording and not buffers[1].finishing)
+end)
+
+test("a periodic report of the old audio between K3 and the canceled report never names the slot a take", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", 32)
+  record_buffer(1)                                -- K3: the stop is on its way
+  context.polls.fire("bufferState", 8)             -- a periodic report, sent before the engine canceled
+  assert_true(buffers[1].name ~= "take 1", "not a take: " .. tostring(buffers[1].name))
+  assert_true(buffers[1].path ~= scratch_take_path(1), "nor its path")
+  assert_equal(S.lib.buffers.status(1), "finishing", "still waiting for the canceled report")
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 8)
+  assert_equal(buffers[1].name, "a.wav"); assert_equal(buffers[1].path, "/tmp/a.wav"); assert_true(buffers[1].loaded)
+end)
+
+test("a playable recording waits for a load the engine has not confirmed", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  S.lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/b.wav")                     -- not confirmed yet
+  params:set("record_feedback", 50)
+  context.clear_engine_calls(); record_buffer(1)
+  assert_equal(#recording_calls(context), 0, "no recordBuffer while the load awaits the engine")
+  assert_equal(S.lib.buffers.status(1), "loading"); assert_equal(buffers[1].name, "b.wav")
+  assert_equal(S.lib.ui_flash.text("hints"), "buf 1 loading")
+  context.polls.fire("bufferState", 6)             -- b.wav is in
+  record_buffer(1)
+  assert_equal(#recording_calls(context), 1, "K3 once the length shows records")
+  assert_equal(S.lib.buffers.status(1), "dub")
+  -- a replace take in the same place is still sent: it is the same take on both sides
+  load_buffer(2, "/tmp/c.wav")
+  params:set("record_feedback", 0)
+  context.clear_engine_calls(); record_buffer(2)
+  assert_equal(#recording_calls(context), 1, "a replace take during a load is sent")
+  assert_equal(S.lib.buffers.status(2), "recording")
+end)
+
+-- #457: the engine reports a take's length, then "ended"; both can arrive
+-- before the take's own timer
+test("a take whose ended report beats its timer settles at once", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  params:set("record_threshold", 3); params:set("record_duration", 4)
+  local pending = context.clock.pending_count()
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(1, 0, 1)); context.polls.fire("recordState", record_state_value(1, 1, 1))
+  context.polls.fire("bufferState", 4); context.polls.fire("recordState", record_state_value(1, 2, 1))
+  assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "take 1")
+  assert_equal(buffers[1].path, scratch_take_path(1)); assert_true(not buffers[1].recording)
+  assert_equal(context.clock.pending_count(), pending, "no timer or fallback left")
+  -- the timer between the length and "ended": "ended" settles it too
+  record_buffer(2)
+  context.polls.fire("recordState", record_state_value(1, 0, 2)); context.polls.fire("recordState", record_state_value(1, 1, 2))
+  context.polls.fire("bufferState", 1004)
+  wake_buffer_clock(context, 2)                   -- the take's timer: finishing
+  assert_equal(S.lib.buffers.status(2), "finishing")
+  context.polls.fire("recordState", record_state_value(1, 2, 2))
+  assert_equal(S.lib.buffers.status(2), "loaded"); assert_equal(buffers[2].name, "take 2")
+  assert_equal(context.clock.pending_count(), pending, "no fallback left")
 end)
 
 test("a stale recordState report never acts on a newer recording", function()

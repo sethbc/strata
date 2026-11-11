@@ -35,6 +35,41 @@ var reportsFor = { arg slot, start = 0;
     }).select({ arg report; report[0] == slot })
 };
 var nowReports = { h.pollValues(\recordState).size };
+// The slot's recordState, bufferState and bufferLoadFailed reports since
+// `start` (an index into every poll message), in the order they arrived, as
+// Symbols: 'armed', 'recording', 'ended', 'canceled', 'length <seconds>',
+// 'loadFailed <load> <emptied>'
+var nowMessages = { h.pollMessages.size };
+var slotEvents = { arg slot, start;
+    var stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
+    var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
+    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
+    var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
+    h.pollMessages.array.copyRange(start, h.pollMessages.size - 1).do({ arg msg;
+        var value = msg[2], whole = value.round.asInteger;
+        case
+        { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
+            events.add(#[armed, recording, ended, canceled][(whole div: stride) % 4]) }
+        { (msg[1] == lengthIndex) and: { (value / lengthStride).floor.asInteger == slot } } {
+            events.add(("length " ++ (value - (slot * lengthStride)).round(0.01)).asSymbol) }
+        { (msg[1] == failedIndex) and: { (whole % stride) == slot } } {
+            events.add(("loadFailed " ++ ((whole div: stride) div: 2) ++ " " ++ ((whole div: stride) % 2)).asSymbol) };
+    });
+    events.asArray
+};
+// The events from the slot's first 'canceled' on (empty if none)
+var fromCanceled = { arg events; events.indexOf('canceled') !? { arg at; events.drop(at) } ? [] };
+// A peaks file's frames line, or nil when there is no file
+var peaksFileFrames = { arg path;
+    var frames;
+    if (File.exists(path)) {
+        File.readAllString(path).split($\n).do({ arg line;
+            var words = line.split($ );
+            if (words[0] == "frames") { frames = words[1].asInteger };
+        });
+    };
+    frames
+};
 // wait (at most limit s) until the slot has reported state since start: a
 // take's end comes after its peaks file is written, which is asynchronous
 var waitReported = { arg slot, start, state, limit = 3;
@@ -122,7 +157,6 @@ var guardFrame = { arg frame, rate, durFrames, head, length, lowest = 0, highest
 };
 var margin = { engine.recordGuardFrames };
 // voice 1 is engine.voice index 0
-var lateLines = List.new;
 
 SynthDef(\strataCheckRecDiff, { arg bufA, bufB, first, count, offsetB = 0, out;
     var phase = Sweep.ar(0, SampleRate.ir).min(count.max(1) - 1);
@@ -152,6 +186,11 @@ SynthDef(\strataCheckMarked, { arg out;
 }).add;
 SynthDef(\strataCheckCapture, { arg in, buf;
     RecordBuf.ar(In.ar(in, 2)[0], buf, loop: 0, doneAction: 2);
+}).add;
+// a copy of a slot's peak buffer (64 frames) taken in one block, so the
+// check reads the bins as they were at a timestamp, whenever sclang gets to it
+SynthDef(\strataCheckCopyPeaks, { arg from, to;
+    RecordBuf.ar(PlayBuf.ar(1, from, 1, 1, 0, 0), to, loop: 0, doneAction: 2);
 }).add;
 SynthDef(\strataCheckGuard, { arg frame, lowest, highest, rate, durFrames, recHead, out;
     var moved = engine.slotHeadGuard(K2A.ar(frame), lowest, highest, rate, durFrames, recHead);
@@ -280,33 +319,35 @@ test.("record: the tap group runs after the master with strataTapPreMaster first
 
 // ---- writing --------------------------------------------------------------
 test.("record: the peak buffer follows a loop recording, each bin min(1, old peak x keep + new peak)", {
-    var loopSeconds = 4.0, path = writeLevelFile.("half-loop.wav", loopSeconds, 0.25), source, values, reached = false, target;
+    var loopSeconds = 4.0, path = writeLevelFile.("half-loop.wav", loopSeconds, 0.25), source, values, delay = 0.3;
+    var copy = Buffer.alloc(server, engine.waveformPoints, 1), id = server.nextNodeID;
     h.command(\loadBuffer, 2, path, 0);
     h.waitFor({ engine.bufferFrames[2] > 0 });
     source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
     engine.slotPeakBuffer(2).fill(0, engine.waveformPoints, 0.25);
     server.sync;
-    record.(2, loopSeconds, 1.0, 0.5, 0, 0, 1);
-    // into the last bin of the first pass (one bin is 62 ms of 4 s, and a bus read takes up to a period)
-    target = 63.15 / 64 * loopSeconds * sampleRate;
-    { var limit = thisThread.seconds + loopSeconds + 1;
-        while { reached.not and: { thisThread.seconds < limit } } {
-            reached = h.readBus(state[\headBuses][2])[0] >= target;
-        };
-    }.value;
+    // the recording starts at its timestamp; the copy is taken on the
+    // server halfway through the last bin of the first pass (one bin is
+    // 62 ms of 4 s), whenever sclang reads it (#379: a read by sclang had
+    // 53 ms between the head reaching the bin and its wrap)
+    record.(2, loopSeconds, 1.0, 0.5, 0, 0, 1, delay);
+    server.sendBundle(delay + (63.5 / 64 * loopSeconds), ['/s_new', \strataCheckCopyPeaks, id, 1, state[\tapGroup].nodeID,
+        \from, engine.slotPeakBuffer(2).bufnum, \to, copy.bufnum]);
+    (delay + loopSeconds + 0.1).wait; server.sync;
     values = { var condition = Condition(false), result;
-        engine.slotPeakBuffer(2).getn(0, engine.waveformPoints, { arg array; result = array; condition.test = true; condition.signal });
+        copy.getn(0, engine.waveformPoints, { arg array; result = array; condition.test = true; condition.signal });
         h.awaitReply(condition); result }.value;
     h.command(\stopRecord, 2);
     source.free;
     waitDone.(2);
-    check.(reached and: { values.size == 64 } and: { values.every({ arg each; (each - 0.625).abs < 1e-3 }) },
-        "record: the peak buffer follows a loop recording, each bin min(1, old peak x keep + new peak) (head reached %, values % ... %)".format(
-            reached, values.keep(2), values.keep(-2)));
+    copy.free; server.sync;
+    check.(values.notNil and: { values.size == 64 } and: { values.every({ arg each; (each - 0.625).abs < 1e-3 }) },
+        "record: the peak buffer follows a loop recording, each bin min(1, old peak x keep + new peak) (values % ... %)".format(
+            values !? { values.keep(2) }, values !? { values.keep(-2) }));
 });
 test.("record: a second pass keeps old x feedback + new within 1e-4", {
     var loopSeconds = 1.0, path = writeLevelFile.("quarter.wav", loopSeconds, 0.25);
-    var source, wraps = 0, last = -1, deviation, count = (loopSeconds * sampleRate).round.asInteger, scan;
+    var source, wraps = 0, last = -1, deviation, count = (loopSeconds * sampleRate).round.asInteger;
     h.command(\loadBuffer, 2, path, 0);
     h.waitFor({ engine.bufferFrames[2] > 0 });
     source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
@@ -420,19 +461,121 @@ test.("record: delay starts the take within one block of its timestamp, also aft
     check.(error <= (blockSize + 1),
         "record: delay starts the take within one block of its timestamp, also after a replace take's fade and zeroing (off by % frames)".format(error.round(1)));
 });
+// #376: matron's command reaches sclang by OSC, and sclang may be busy when
+// it arrives (a file's check, a chunk of a write): the delay runs from the
+// message's arrival, not from when sclang gets to it. h.command calls the
+// command's function directly, so here the command goes by OSC, as matron
+// sends it, and the check holds sclang for 100 ms before it can be read.
+test.("record: a synced take's delay runs from the command's arrival, not from when sclang reads it", {
+    var delay = 0.4, hold = 0.1, frame = 2000, value, error, id = server.nextNodeID, until, path = writeLevelFile.("arrival.wav", 1, 0.3);
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] > 0 });
+    // the timecode starts `delay` after the message is sent (now, in real
+    // time: the check routine's logical time is when it last woke)
+    NetAddr.localAddr.sendMsg('/command/recordBuffer', 4, 0.3, 1.0, 0.0, 0, 0.0, 0, delay);
+    server.sendBundle(delay + (Main.elapsedTime - thisThread.seconds),
+        ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
+    until = Main.elapsedTime + hold;
+    while { Main.elapsedTime < until } { };
+    0.05.wait;
+    waitDone.(4, delay + 1);
+    server.sendBundle(nil, ['/n_free', id]);
+    server.sync;
+    value = h.bufferSample(engine.buffersL[4], frame);
+    error = (value - (frame / sampleRate)).abs * sampleRate;
+    // (10 ms: well inside the 100 ms sclang was held)
+    check.(engine.bufferFrames[4] == (0.3 * sampleRate).round.asInteger and: { error <= (0.01 * sampleRate) },
+        "record: a synced take's delay runs from the command's arrival, not from when sclang reads it (off by % frames, % frames kept)".format(
+            error.round(1), engine.bufferFrames[4]));
+});
 test.("record: a synced replace take keeps its slot playing until bufferFadeWait + recordPrepMargin before the take", {
-    var delay = 1.0, before, after, duringPlay, path = writeLevelFile.("slot.wav", 1, 0.3);
+    // (#379: each read half a second or more from the preparation, which
+    // is at 1.79 s, and from the take's end, at 3 s and its peaks)
+    var delay = 2.0, before, after, duringPlay, path = writeLevelFile.("slot.wav", 1, 0.3);
+    var prepareAt = delay - (engine.bufferFadeWait + engine.recordPrepMargin);
     h.command(\loadBuffer, 4, path, 0);
     h.waitFor({ engine.bufferFrames[4] > 0 });
     startVoiceOn.(1, 4);
-    record.(4, 0.3, 1.0, 0, 0, 0, 0, delay);
-    (delay - (engine.bufferFadeWait + engine.recordPrepMargin) - 0.1).wait; server.sync;
+    record.(4, 1.0, 1.0, 0, 0, 0, 0, delay);
+    (prepareAt - 0.5).wait; server.sync;
     before = engine.bufferFrames[4]; duringPlay = voiceBufFrames.(1);
-    0.2.wait; server.sync;
+    ((delay + 0.5) - (prepareAt - 0.5)).wait; server.sync;
     after = engine.bufferFrames[4];
-    waitDone.(4, 2);
+    waitDone.(4, 3);
     check.((before > 0) and: { duringPlay == before } and: { after == 0 },
         "record: a synced replace take keeps its slot playing until bufferFadeWait + recordPrepMargin before the take (before %, voice %, after %)".format(before, duringPlay, after));
+});
+// #311's state table: a canceled take leaves its slot as the take left it
+// (untouched before its preparation, empty after), and its "canceled"
+// report is followed by the slot's length
+test.("record: a bad load in a synced take's wait cancels it and leaves the slot's audio", {
+    var frames = (0.5 * sampleRate).round.asInteger, path = writeLevelFile.("half.wav", 0.5, 0.5), start, events, sample;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == frames });
+    start = nowMessages.value;
+    record.(4, 0.3, 1.0, 0, 0, 0, 0, 2.0);
+    0.3.wait;
+    h.command(\loadBuffer, 4, h.tempDir +/+ "no-such-file-311.wav", 0);
+    settle.(0.1);
+    sample = h.bufferSample(engine.buffersL[4], 100);
+    events = fromCanceled.(slotEvents.(4, start)).keep(3);
+    check.((engine.bufferFrames[4] == frames) and: { (sample - 0.5).abs < 1e-4 } and: { state[\takes][4].isNil }
+        and: { engine.recordSynths[4].isNil }
+        and: { events == ['canceled', 'length 0.5', ("loadFailed " ++ engine.bufferLoads[4] ++ " 0").asSymbol] },
+        "record: a bad load in a synced take's wait cancels it and leaves the slot's audio (% frames, sample %, reports %)".format(
+            engine.bufferFrames[4], sample, events));
+});
+test.("record: a synced take stopped before its preparation leaves its slot as it was", {
+    var frames = (0.5 * sampleRate).round.asInteger, path = writeLevelFile.("half.wav", 0.5, 0.5), start, events, sample, later;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == frames });
+    start = nowMessages.value;
+    record.(4, 0.3, 1.0, 0, 0, 0, 0, 2.0);
+    0.3.wait;
+    h.command(\stopRecord, 4);
+    settle.(0.1);
+    sample = h.bufferSample(engine.buffersL[4], 100);
+    events = slotEvents.(4, start);
+    // and its preparation (at 1.79 s) never runs
+    1.8.wait; server.sync;
+    later = engine.bufferFrames[4];
+    check.((engine.bufferFrames[4] == frames) and: { later == frames } and: { (sample - 0.5).abs < 1e-4 }
+        and: { state[\takes][4].isNil } and: { engine.recordSynths[4].isNil }
+        and: { events.includes('armed') } and: { fromCanceled.(events).keep(2) == ['canceled', 'length 0.5'] },
+        "record: a synced take stopped before its preparation leaves its slot as it was (% frames, at 2.2 s %, sample %, reports %)".format(
+            engine.bufferFrames[4], later, sample, events));
+});
+test.("record: a take canceled after its preparation leaves the slot empty and says so", {
+    var start, events;
+    reset.(1);
+    start = nowMessages.value;
+    record.(1, 0.3, 1.0, 0, 0, 0.9);
+    settle.(0.1);
+    h.command(\stopRecord, 1);
+    settle.(0.1);
+    events = slotEvents.(1, start);
+    check.((engine.bufferFrames[1] == 0) and: { engine.recordSynths[1].isNil }
+        and: { fromCanceled.(events).keep(2) == ['canceled', 'length 0.0'] },
+        "record: a take canceled after its preparation leaves the slot empty and says so (% frames, reports %)".format(
+            engine.bufferFrames[1], events));
+});
+test.("record: a recording sent while a load is in flight is judged on the empty slot", {
+    var path = h.tempDir +/+ "cd-rate-374.wav", other = writeLevelFile.("server-rate.wav", 0.5, 0.3), take, kind, loop, rate;
+    h.writeTestFile(path, 44100, 22050, [0.25, 0.25]);
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] > 0 });
+    // in one go: the second load empties the slot (at the server's rate:
+    // it holds no audio), its reads still to come
+    h.command(\loadBuffer, 4, other, 0);
+    rate = engine.bufferSampleRates[4];
+    record.(4, 0.2, 1.0, 0.5, 0, 0, 1);
+    take = state[\takes][4];
+    kind = take !? { take[\kind] };
+    loop = take !? { take[\loop] };
+    h.command(\stopRecord, 4);
+    waitDone.(4, 2);
+    check.((kind == \playable) and: { loop == 1 } and: { rate == sampleRate },
+        "record: a recording sent while a load is in flight is judged on the empty slot (kind %, loop %, rate %)".format(kind, loop, rate));
 });
 test.("record: a load sent during a synced take's wait drops its preparation", {
     var path = writeLevelFile.("slot.wav", 1, 0.3), nodes;
@@ -918,29 +1061,55 @@ test.("record: a clear cancels an armed recording and reports canceled", {
 });
 
 // ---- the end of a take -----------------------------------------------------
-test.("record: a take writes its peaks, then reports its length, then writes the scratch take", {
-    var steps, slot = 1, start = nowReports.value;
+// Seen from outside, as Lua sees it (#378): when the take's length report
+// arrives the peaks file names that length, "ended" comes after it, and the
+// scratch take is not in place until after "ended". The poll's message
+// arrives within a fraction of a millisecond, a rename by the mover and the
+// scratch take's server writes take longer, so a report sent before either
+// would find it missing.
+test.("record: a take's peaks file is in place when its length is reported, then it reports ended, then its scratch take lands", {
+    var slot = 1, frames = (0.1 * sampleRate).round.asInteger, order = List.new(4), watcher, peaksFrames, scratchAtEnded;
+    var peaksPath = engine.peaksPath(slot).standardizePath, takePath = engine.scratchPath(slot).standardizePath, stride = engine.numBuffers;
+    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
+    var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
+    [peaksPath, takePath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
+    watcher = OSCFunc({ arg msg;
+        var value = msg[2], whole = value.round.asInteger;
+        if ((msg[1] == lengthIndex) and: { value > ((slot * 1000) + 0.005) } and: { value < ((slot + 1) * 1000) }
+            and: { order.includes(\length).not }) {
+            order.add(\length);
+            peaksFrames = peaksFileFrames.(peaksPath);
+        };
+        if ((msg[1] == stateIndex) and: { (whole % stride) == slot } and: { ((whole div: stride) % 4) == 2 }) {
+            order.add(\ended);
+            scratchAtEnded = File.exists(takePath);
+        };
+    }, '/poll/value');
     record.(slot, 0.1);
     waitDone.(slot, 2);
-    waitReported.(slot, start, 2);
-    settle.(0.05);
-    steps = state[\endSteps] !? { arg all; all[slot] !? _.asArray };
-    check.((steps == [\peaksRead, \peaksWritten, \reported, \scratchWritten]),
-        "record: a take writes its peaks, then reports its length, then writes the scratch take (steps %)".format(steps));
+    h.waitFor({ File.exists(takePath) }, 3);
+    watcher.free;
+    check.((order.asArray == [\length, \ended]) and: { peaksFrames == frames } and: { scratchAtEnded == false }
+        and: { File.exists(takePath) },
+        "record: a take's peaks file is in place when its length is reported, then it reports ended, then its scratch take lands (order %, peaks file frames % of %, scratch take at ended %)".format(
+            order.asArray, peaksFrames, frames, scratchAtEnded));
 });
 test.("record: a loop recording's peaks file refreshes every peakRefreshSeconds without a bufferState report", {
-    var loopSeconds = 0.25, before, framesBefore, refreshes, reportsBefore, reportsAfter, slot = 2;
+    var loopSeconds = 0.25, before, framesBefore, refreshes, reportsAfter, slot = 2;
     var counters = { state[\peakWrites] ?? { (reports: 0, refreshes: 0) } };
+    // counted from the command: the refreshes come peakRefreshSeconds
+    // apart from arming, so the read 1.7 s after it sees 3, or 4 if sclang
+    // was held past the fourth (#379)
+    before = counters.value.copy;
     record.(slot, loopSeconds, 1.0, 0, 0, 0, 1);
     settle.(0.1);
-    before = counters.value.copy;
     framesBefore = engine.bufferFrames[slot];
     1.6.wait; server.sync;
     refreshes = counters.value[\refreshes] - before[\refreshes];
     reportsAfter = counters.value[\reports] - before[\reports];
     h.command(\stopRecord, slot);
     waitDone.(slot, 2);
-    check.((refreshes == 3) and: { reportsAfter == 0 } and: { engine.bufferFrames[slot] == framesBefore },
+    check.([3, 4].includes(refreshes) and: { reportsAfter == 0 } and: { engine.bufferFrames[slot] == framesBefore },
         "record: a loop recording's peaks file refreshes every peakRefreshSeconds without a bufferState report (% refreshes, % reports, frames %)".format(
             refreshes, reportsAfter, engine.bufferFrames[slot]));
 });

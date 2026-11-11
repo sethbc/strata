@@ -57,7 +57,6 @@
         // Per slot: the recording in progress or waiting to start (an Event, or nil)
         state[\takes] = Array.newClear(numBuffers);
         state[\peakWrites] = (reports: 0, refreshes: 0);
-        state[\endSteps] = Array.newClear(numBuffers);
     }
 
     addRecordDefs {
@@ -129,10 +128,22 @@
     }
 
     addRecordCommands {
+        var responder;
         // msg: slot index, seconds, level, feedback, source, threshold, loop, delay
         this.addCommand(\recordBuffer, "ifffifif", { arg msg;
             this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8]);
         });
+        // A synced take's delay runs from the command's arrival (#376), but
+        // CroneEngine's command function gets the message only, and sclang
+        // runs it when it gets to it (after a file's check, a chunk of a
+        // write). The command's own OSCdef (the one CroneEngine frees at
+        // deinit) gets a function that passes the message's OSC time on too.
+        responder = this.commands.detect({ arg command; command.name == \recordBuffer }) !? { arg command; command.oscdef };
+        if (responder.isKindOf(OSCdef)) {
+            OSCdef(responder.key, { arg msg, time;
+                this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], time);
+            }, responder.path);
+        };
 
         // End a recording now, with its fade, keeping what was captured;
         // cancels one that has not started
@@ -251,7 +262,9 @@
     // Free a recording now and forget it. A recording canceled by a load,
     // clear or a newer recording (including one still waiting to start, or
     // in its stop fade) reports "canceled"; a take whose frame count or
-    // peaks are still awaited is dropped with it (slotChanges)
+    // peaks are still awaited is dropped with it (slotChanges). It leaves
+    // the slot as the take left it; each caller then reports the slot's
+    // length (bufferChanged), so Lua learns which
     stopRecording { arg index;
         var synth = recordSynths[index], state = areaState[\record], take = state[\takes][index];
         recordSynths[index] = nil;
@@ -279,7 +292,10 @@
     }
 
     // A load cancels the slot's recording: it never completes, and the slot
-    // reads empty (0 frames). The change also drops the awaited frame count
+    // is left as the take left it: untouched before its preparation (a
+    // synced replace take still waiting, a playable recording), empty after
+    // it. "canceled" is followed by the slot's length (bufferChanged), which
+    // tells Lua which. The change also drops the awaited frame count
     // (stopReplies) and supersedes the loads up to throughLoad (every load
     // sent so far unless given: a long file's load passes the load before
     // its own, so it can still take effect after its check)
@@ -291,22 +307,24 @@
 
     // Start a recording into a slot, replacing whatever was recording in it
     // (design 3.3, section 1.2). A replace take (feedback 0 and no loop, or a
-    // slot at another sample rate: the slot would play the old and the new
-    // audio at different pitches) empties its slot, the voices reading it
-    // fade first (afterSlotFade), and reads 0 s until it ends. Any other
-    // recording is playable: the slot keeps playing; an empty slot is zeroed
-    // first, one that holds audio is left alone and at the recording's start
-    // its valid length becomes the longer of its own and the record length.
-    // A delay (seconds, Lua's clock sync) starts the record synth by a
-    // timestamped bundle that long after the command; a synced replace take
-    // prepares its slot only just before it (delay - (bufferFadeWait +
-    // recordPrepMargin)), so the slot keeps playing until then. threshold >
-    // 0 arms the take until the source's level starts it.
+    // slot holding audio at another sample rate: the slot would play the old
+    // and the new audio at different pitches) empties its slot, the voices
+    // reading it fade first (afterSlotFade), and reads 0 s until it ends.
+    // Any other recording is playable: the slot keeps playing; an empty slot
+    // is zeroed first, one that holds audio is left alone and at the
+    // recording's start its valid length becomes the longer of its own and
+    // the record length. A delay (seconds, Lua's clock sync) starts the
+    // record synth by a timestamped bundle that long after the command
+    // arrived (arrived: the command message's OSC time, #376; the logical
+    // time when not given); a synced replace take prepares its slot only
+    // just before it (bufferFadeWait + recordPrepMargin before), so the
+    // slot keeps playing until then. threshold > 0 arms the take until the
+    // source's level starts it.
     // Every delayed step (the preparation, the start) runs only if nothing
     // changed the slot meanwhile (slotChanges): a later load, clear or
     // recording always wins.
-    recordSlot { arg index, seconds, level, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0;
-        var state, server = context.server, frames, change, take, playable, prepareAt;
+    recordSlot { arg index, seconds, level, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0, arrived;
+        var state, server = context.server, frames, change, take, playable, prepareAt, now = thisThread.seconds, startAt;
         if (this.validBuffer(index).not) { ^this };
         state = areaState[\record];
         // counted first: matches Lua's records_sent, whatever happens to this command
@@ -318,19 +336,24 @@
 
         this.stopRecording(index);
         change = this.slotChanged(index);
-        playable = ((feedback > 0) or: { loop > 0 }) and: { bufferSampleRates[index] == server.sampleRate };
+        // (a slot's rate describes its audio: an empty slot has none to
+        // clash with, and is at the server's rate anyway, #374)
+        playable = ((feedback > 0) or: { loop > 0 })
+            and: { (bufferFrames[index] == 0) or: { bufferSampleRates[index] == server.sampleRate } };
+        // delay after the command arrived, never after now
+        startAt = (arrived ? now).min(now) + delay.max(0);
         take = (
             number: state[\recordCounts][index], kind: if (playable) { \playable } { \replace },
             frames: frames, level: level, feedback: if (playable) { feedback.clip(0, 1) } { 0 },
             source: source, threshold: threshold.max(0), loop: if (playable and: { loop > 0 }) { 1 } { 0 },
-            delay: delay.max(0), startAt: thisThread.seconds + delay.max(0), change: change,
-            synth: Synth.basicNew(\strataRecord, server), started: false, prepared: false, stopping: false
+            delay: delay.max(0), startAt: startAt, change: change,
+            synth: Synth.basicNew(\strataRecord, server), started: false, stopping: false
         );
         state[\takes][index] = take;
         recordSynths[index] = take[\synth];
         if ((take[\delay] > 0) or: { take[\threshold] > 0 }) { this.reportRecordState(index, take[\number], 0) };
 
-        prepareAt = take[\delay] - (bufferFadeWait + this.recordPrepMargin);
+        prepareAt = (startAt - (bufferFadeWait + this.recordPrepMargin)) - now;
         if (prepareAt > 0) {
             SystemClock.sched(prepareAt, {
                 if (slotChanges[index] == take[\change]) { this.prepareTake(index, take) };
@@ -352,7 +375,6 @@
             bufferSampleRates[index] = context.server.sampleRate;
             this.bufferChanged(index);
         };
-        take[\prepared] = true;
         if (replace or: { empty }) {
             this.afterSlotFade(index, take[\change], {
                 buffersL[index].zero;
@@ -469,6 +491,7 @@
             if (areaState[\record][\takes][index] === take) {
                 areaState[\record][\takes][index] = nil;
                 this.reportRecordState(index, take[\number], 3);
+                this.bufferChanged(index);  // after "canceled": what the slot holds
             };
             ^this
         };
@@ -485,31 +508,26 @@
     // A recording has ended and is kept: its peaks are read and written,
     // then a replace take's length is reported, then "ended", then the
     // scratch take is written. Each step runs only if the slot has not
-    // changed since (a later load, clear or recording drops the rest).
-    // endSteps lets the engine check see the order (sclang cannot spy on
-    // these calls).
+    // changed since (a later load, clear or recording drops the rest). Lua
+    // relies on the order: the peaks file names the length when it
+    // arrives, and the length comes before "ended" (the check sees it from
+    // outside, through the polls and the files, #378).
     endTake { arg index, take, frames;
         var state = areaState[\record], replace = take[\kind] == \replace, change = take[\change];
         var points = this.waveformPoints;
         var usedBins = if (replace) { (points * frames / take[\frames]).ceil.asInteger.clip(1, points) } { points };
         var valid = if (replace) { frames } { bufferFrames[index] };
         var kept = { (state[\takes][index] === take) and: { slotChanges[index] == change } };
-        var steps = List.new(4);
-        state[\endSteps][index] = steps;
         this.readSlotPeaks(index, usedBins, {
-            steps.add(\peaksRead);
             if (kept.value) {
                 this.writeRecordPeaks(index, valid, {
-                    steps.add(\peaksWritten);
                     if (kept.value) {
                         if (replace) {
                             bufferFrames[index] = frames;
                             this.bufferChanged(index);
                         };
-                        steps.add(\reported);
                         state[\takes][index] = nil;
                         this.reportRecordState(index, take[\number], 2);
-                        steps.add(\scratchWritten);
                         this.writeSlot(index, this.scratchPath(index));
                     };
                 });
@@ -521,39 +539,33 @@
     // stays in recordSynths until it frees, and only then is the frame count
     // read (recordSynthFreed), so the count includes the fade. A recording
     // that has not started (still preparing or waiting for its delay or its
-    // level) is canceled at once and keeps nothing; a synced replace take
-    // that had not yet prepared its slot empties it now (the fade, the
-    // zeroing), with one check of slotChanges, so the slot ends up as if
-    // it had prepared. An idle slot is left alone, a second stop during
-    // the fade is a no-op. The kept reply applies only if no load, record or
+    // level) is canceled and keeps nothing, and leaves the slot as the take
+    // left it: a synced replace take that had not yet prepared its slot
+    // leaves it playing (#373), one that had leaves it empty. Every such
+    // cancel is followed by the slot's length (bufferChanged), so Lua
+    // learns which. An idle slot is left alone, a second stop during the
+    // fade is a no-op. The kept reply applies only if no load, record or
     // clear changed the slot before it arrived (slotChanges).
     stopRecordSlot { arg index;
-        var state = areaState[\record], take, change, unprepared;
+        var state = areaState[\record], take, change;
         if (this.validBuffer(index).not) { ^this };
         take = state[\takes][index];
         if (take.isNil or: { recordSynths[index].isNil }) { ^this };
         if (take[\stopping]) { ^this };
-        // not started as far as sclang knows and not sent yet (still
-        // preparing): canceled here. One sent (running, or paused until its
-        // timestamp: the server computes ahead of the clock, so it may have
-        // armed already, its reply still on its way) is gated off like a
-        // started one, and after a sync (the server sends an arming reply
-        // before it answers a /sync that follows the gate) one that has
-        // still not armed is canceled: gated off unarmed it writes nothing
+        // not started as far as sclang knows and not sent yet (waiting for
+        // its preparation, or still preparing): canceled here, and the slot
+        // change drops the waiting preparation. One sent (running, or paused
+        // until its timestamp: the server computes ahead of the clock, so it
+        // may have armed already, its reply still on its way) is gated off
+        // like a started one, and after a sync (the server sends an arming
+        // reply before it answers a /sync that follows the gate) one that
+        // has still not armed is canceled: gated off unarmed it writes nothing
         if (take[\started].not and: { take[\sent] != true }) {
-            unprepared = (take[\kind] == \replace) and: { take[\prepared].not };
             this.stopRecording(index);
-            change = this.slotChanged(index);
-            if (unprepared) {
-                bufferFrames[index] = 0;
-                bufferSampleRates[index] = context.server.sampleRate;
-                this.bufferChanged(index);
-                this.afterSlotFade(index, change, {
-                    buffersL[index].zero;
-                    buffersR[index].zero;
-                    this.slotPeakBuffer(index).zero;
-                });
-            };
+            this.slotChanged(index);
+            // after "canceled", what the slot holds: its audio, untouched,
+            // when the take had not prepared it; else 0 s
+            this.bufferChanged(index);
             ^this
         };
         take[\stopping] = true;
@@ -564,7 +576,10 @@
         if (take[\started].not) {
             fork({
                 context.server.sync;
-                if (take[\started].not and: { state[\takes][index] === take }) { this.stopRecording(index) };
+                if (take[\started].not and: { state[\takes][index] === take }) {
+                    this.stopRecording(index);
+                    this.bufferChanged(index);  // after "canceled": what the slot holds
+                };
             }, SystemClock);
         };
     }
