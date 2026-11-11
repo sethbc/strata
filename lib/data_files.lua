@@ -1,6 +1,7 @@
 -- lib/data_files.lua
--- Strata's data files (S.lib.data_files): scenes.data and buffers.data are
--- written and read here, and nowhere else. Their layout is norns'
+-- Strata's data files (S.lib.data_files): scenes.data, buffers.data and
+-- grids.data (lib/grid/core.lua's rotations) are written and read here, and
+-- nowhere else. Their layout is norns'
 -- tab.save's (lib/tabutil.lua), so every earlier Strata (which reads with
 -- tab.load) reads what this writes, and the reader is a parser of exactly
 -- that layout, so a file is never run as Lua (#464):

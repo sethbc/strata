@@ -8,7 +8,7 @@ Under the selected LFO's row, one line shows its settings, left to right: destin
 
 - **E2** - Move the cursor along the settings line
 - **E3** - Change the setting under the cursor, both ways (the destination stops at none and at the end of the list, `v7 rsend`, after the voice destinations and the 28 registered ones). On the rate: ALT+E3 changes the free period in finer steps
-- **ALT+E3** on the destination - Jump a group (the ALT hint row shows `E3:group` there): none, the global destinations (density, drift, filter, delay, reverb), voice 1 ... voice 7 (each group starts at the voice's main parameter), then one last group that starts at `v1 hist` and holds all 28 registered destinations: every voice's input history (`v1 hist` ... `v7 hist`), voice filter cutoff (`vfilt`), delay send (`dsend`) and reverb send (`rsend`), voice by voice
+- **ALT+E3** on the destination - Jump a group (the ALT hint row shows `E3:group` there): none, the global destinations (density, drift, filter, delay, reverb), voice 1 ... voice 7 (each group starts at the voice's main parameter), then every voice's input history (`v1 hist` ... `v7 hist`), voice filter cutoff (`vfilt`), delay send (`dsend`) and reverb send (`rsend`), a group each, starting at voice 1
 - **K2** / **K3** - Select the previous / next LFO
 - **ALT+K2** - Reset the setting under the cursor to its default
 - **ALT+K3** - Turn the selected LFO on or off (the hint row shows `K3:on` or `K3:off`). The arc's button does the same on this page

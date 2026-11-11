@@ -11,7 +11,7 @@
 
 A page record may also have `animates()`: while it returns true for the shown page, `draw_frame` redraws the screen every frame (`docs/notes/lua/ui/redraws.md`).
 
-The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}`. `UI_PAGES.index[name]` is a page's index (`UI_PAGES.index.FX == 4`); `UI_PAGES.MAIN_PAGE` stays 1. `S.ui_page` is the index of the shown page.
+The screen has `NUM_UI_PAGES` (8, `#UI_PAGES`) pages, named in `UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}`. `UI_PAGES.index[name]` is a page's index (`UI_PAGES.index.FX == 4`, `UI_PAGES.index.MAIN == 1`; the old `UI_PAGES.MAIN_PAGE` is gone, #393). `S.ui_page` is the index of the shown page.
 
 Encoders and keys (`strata.lua`):
 - `enc(1, d)` selects the page (`S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))`), stopping at MAIN and SETUP. E1 does nothing else. `set_ui_page` does nothing when the page does not change; on a change it calls the old record's `leave()`, forgets every carried arc tick (`forget_arc_ticks()`, so ticks turned on one page never step a param on another), sets `S.ui_page` and calls the new one's `enter()`, if the records have them.

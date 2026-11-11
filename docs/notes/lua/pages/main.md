@@ -1,6 +1,6 @@
 ## Must not break
 
-- MAIN is found by index (`S.ui_page == UI_PAGES.MAIN_PAGE`), never by its title string.
+- MAIN is found by index (`S.ui_page == UI_PAGES.index.MAIN`), never by its title string.
 - No MAIN string between the header and the hint row crosses the divider at x=62: it ends by x=60 or starts at x=65 (the layout tests check it for every voice, source, lock and running state, and the fields at their widest values).
 - Every voice-list entry is plain ASCII and at most `7+ pulse [L]` wide (59 px by the harness estimate, so it ends by x=60); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters.
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).

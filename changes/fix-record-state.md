@@ -5,5 +5,5 @@
 - An armed synced take's row keeps showing the buffer's length until the engine silences the buffer, instead of 0 s at once (#311).
 - K3 for an overdub or loop recording while a file is still loading into the buffer now records nothing and flashes `buf <n> loading` (K3 again once the length shows), instead of dropping the file and letting the script and the engine run different kinds of recording (#455).
 - A loop or overdub recording sent while a load is in flight is judged on the empty buffer, never on the sample rate of the file the load replaces (#374).
-- A synced take's delay now runs from the moment the command arrives, not from when the engine gets to it, so a take started while a file loads into another buffer starts on its beat (#376).
+- A synced take's delay now runs from the moment the command arrives, not from when the engine gets to it, so a take started while a file loads into another buffer starts on its beat (#376). That holds while the engine is free: a command that waits behind another one while the engine is busy (a long file check) is still timed from when the engine reads it (#565).
 - A take whose end report arrives before its own timer settles at once, instead of showing `...` for up to 2.25 s with K3 ignored and saves refused (#457).
