@@ -163,18 +163,13 @@ return function(S)
     end
   end
 
-  -- Run one tick: each part under its own xpcall. A part's error is printed
-  -- once per distinct message (that part's good run forgets it) and never
-  -- ends the clock or skips another part
+  -- Run one tick: each part under its own xpcall (the frame's
+  -- contained_call). A part's error is printed once per distinct message
+  -- (that part's good run forgets it) and never ends the clock or skips
+  -- another part
   local function guarded_tick()
     for _, part in ipairs(TICK_PARTS) do
-      local ran, report = xpcall(part.run, draw_error_report)
-      if ran then
-        last_errors[part.key] = nil
-      elseif report.message ~= last_errors[part.key] then
-        last_errors[part.key] = report.message
-        print("strata: playhead tick failed: " .. report.traceback)
-      end
+      S.lib.ui_frame.contained_call(last_errors, part.key, "playhead tick", part.run)
     end
   end
 

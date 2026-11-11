@@ -278,17 +278,11 @@ return function(S)
 
   -- The mutation metro's tick: one mutation step, protected (#517). An
   -- error is printed with its traceback, once per distinct message (a good
-  -- step forgets it), as the frame clock does (draw_error_report,
-  -- lib/ui/frame.lua), and the next tick mutates again
-  local mutation_error = nil  -- the error message the tick last printed
+  -- step forgets it), through the frame's contained_call
+  -- (lib/ui/frame.lua), and the next tick mutates again
+  local mutation_errors = {}  -- tick: the error message the tick last printed
   function gentle_mutate()
-    local mutated, report = xpcall(mutate_voices, draw_error_report)
-    if mutated then
-      mutation_error = nil
-    elseif report.message ~= mutation_error then
-      mutation_error = report.message
-      print("strata: mutation failed: " .. report.traceback)
-    end
+    S.lib.ui_frame.contained_call(mutation_errors, "tick", "mutation", mutate_voices)
   end
 
   -- init's start steps: the per-voice drift runs from the start; the

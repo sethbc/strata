@@ -128,14 +128,20 @@ return function(S)
   -- controlspec's warp places it (an exponential range in octaves), without
   -- the rounding to the param's step that unmap does first: a move finer
   -- than the step must count (a 0.01-step mix still sends every 1/1000).
-  -- unmap rounds by spec.step, so the step is 0 for the call
+  -- So it unmaps with a copy of the spec whose step is 0, made once per
+  -- spec (keyed weakly by the spec itself, so a param given a new spec gets
+  -- a new copy); the param's own spec is never changed. A destination's
+  -- range never changes in place
+  local unstepped_specs = setmetatable({}, {__mode = "k"})
   local function destination_position(param_id, value)
     local spec = params:lookup_param(param_id).controlspec
-    local step = spec.step
-    spec.step = 0
-    local position = spec:unmap(value)
-    spec.step = step
-    return position
+    local unstepped = unstepped_specs[spec]
+    if not unstepped then
+      unstepped = spec:copy()
+      unstepped.step = 0
+      unstepped_specs[spec] = unstepped
+    end
+    return unstepped:unmap(value)
   end
 
   -- One step of LFO n (the library passes scaled and raw)
@@ -161,17 +167,11 @@ return function(S)
   -- LFO n's action: its step, protected. norns' lattice runs every LFO's
   -- step, so an error raised in one would stop them all for the session
   -- (#517): it is printed with its traceback instead, once per distinct
-  -- message per LFO (a good step forgets it), as the frame clock does
-  -- (draw_error_report, lib/ui/frame.lua)
+  -- message per LFO (a good step forgets it), through the frame's
+  -- contained_call (lib/ui/frame.lua)
   local step_errors = {}  -- per LFO: the error message it last printed
   function apply_lfo(n, scaled, raw)
-    local stepped, report = xpcall(step_lfo, draw_error_report, n, scaled, raw)
-    if stepped then
-      step_errors[n] = nil
-    elseif report.message ~= step_errors[n] then
-      step_errors[n] = report.message
-      print("strata: LFO " .. n .. " step failed: " .. report.traceback)
-    end
+    S.lib.ui_frame.contained_call(step_errors, n, "LFO " .. n .. " step", step_lfo, n, scaled, raw)
   end
 
   -- LFO page dot: the library's running phase moves on its lattice's steps

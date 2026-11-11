@@ -230,7 +230,7 @@ end)
 -- The threshold is measured on the destination's warp: on an exponential
 -- range (v1_freq, 20-2000 Hz) a slow LFO sends steps even in octaves, not
 -- even in hertz (#406)
-test("a slow LFO on an exponential destination sends steps of at most 11 cents (#406)", function()
+test("a slow LFO on an exponential destination sends steps of at most 10.4 cents (#406)", function()
   local context = load_strata(); finish_startup(context)
   local lfo = local_value("lfos")[1]
   params:set("v1_freq", 60); params:set("strata_lfo1_dest", 13)   -- v1 main: the Resonator's freq
@@ -256,6 +256,28 @@ test("a slow LFO on an exponential destination sends steps of at most 11 cents (
     largest = math.max(largest, cents)
   end
   assert_true(largest <= 10.4, "the largest step is " .. largest .. " cents")
+end)
+
+-- The threshold measures with a step-0 copy of the destination's
+-- controlspec: the param's own spec is never changed, even for the length
+-- of a call that raises
+test("an LFO step never changes its destination's controlspec, even when unmap raises (#406)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfo = local_value("lfos")[1]
+  local spec = params:lookup_param("filter_mix").controlspec
+  assert_near(spec.step, 0.01, 1e-12, "filter mix steps by 0.01")
+  params:set("filter_mix", 0.5); params:set("strata_lfo1_dest", 6)   -- filt mix
+  params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
+  spec.unmap = function() error("unmap boom") end   -- the live spec's own unmap raises
+  context.printed = {}
+  local ok, problem = pcall(function()
+    context.clear_engine_calls()
+    for step = 1, 3 do context.lfo.tick(lfo, step % 2) end
+    assert_near(spec.step, 0.01, 1e-12, "the live spec keeps its step")
+    assert_equal(#context.calls_named("setFilter"), 3, "and every step that moved far enough was sent")
+  end)
+  spec.unmap = nil
+  if not ok then error(problem, 0) end
 end)
 
 -- norns' Lua 5.3 math.random raises on an empty interval, inside the
