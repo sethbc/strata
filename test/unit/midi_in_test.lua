@@ -429,6 +429,18 @@ test("a voice MIDI started and the norns restarted is not the panic's (#529)", f
   assert_true(voices[3].active, "the panic leaves it")
 end)
 
+test("a source change keeps a MIDI-started voice the panic's (#529)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
+  context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 3 })
+  assert_true(voices[3].active, "the released key leaves voice 3 sounding")
+  params:set("v3_source", 2)
+  assert_true(voices[3].active)
+  context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 })
+  assert_true(not voices[3].active, "the panic stops it")
+end)
+
 test("all notes off and all sound off release every held note and stop its voice (#529)", function()
   for _, cc in ipairs({ 123, 120 }) do
     local context = load_strata(); finish_startup(context)
