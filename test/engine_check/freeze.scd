@@ -554,7 +554,8 @@ command.(\setGrainParam, 3, \freeze, 1.0); server.sync;
 // copy can land before it, so the unfreeze and refreeze are redone (up to
 // three tries, #569) when the copy is already in; the refreeze must follow
 // the unfreeze at once, as the readers it fades are the copy's, which leave
-// after freezeLeaveSeconds
+// after freezeLeaveSeconds. The redo leaves out the server.sync between the
+// unfreeze and the refreeze on purpose: the sync follows the refreeze.
 attempt = 1;
 while { (state[\faded][3].isEmpty or: { state[\copied][3] }) and: { attempt < 3 } } {
     command.(\setGrainParam, 3, \freeze, 0.0);
@@ -574,7 +575,7 @@ command.(\setGrainParam, 3, \freeze, 0.0); server.sync;
 readings = readings ++ [getControl.(live, \bufL) == inputRing[0].bufnum, getControl.(live, \history) == 2];
 check.(readings.every({ arg value; value == true }),
     "freeze: a grain synth re-gated onto a copy that landed while its voice was stopped is set back by the unfreeze (waiting, not copied, copied, same node, on the copy, history 0, a reader, back on the input ring, history 2: %%)".format(
-        readings, if (precondition) { "" } { "; the copy had landed before the voiceOff in all 3 tries, so the case was not set up" }));
+        readings, if (precondition) { "" } { "; the copy had landed or no reader faded before the voiceOff in all 3 tries, so the case was not set up" }));
 engine.bufferFadeWait = savedFadeWait;
 command.(\setGrainParam, 3, \history, 0.0);
 // a frozen input voice switched to its synth: unfrozen, its writer reads the voice bus again

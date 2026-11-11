@@ -15,7 +15,7 @@
 //   lengths (60 by default; 120 or 300, which allocates 8 x 2 x 300 s of
 //   server buffers, about 920 MB at 48 kHz)
 // The run must end inside its deadline (ENGINE_CHECK_TIMEOUT less 30 s,
-// 1170 s by default): give a long soak a longer ENGINE_CHECK_TIMEOUT.
+// the runner's default): give a long soak a longer ENGINE_CHECK_TIMEOUT.
 { arg h;
 var server = h.server, scratchRoot = h.tempDir;
 var check = { arg condition, message; h.check(condition, message) };
