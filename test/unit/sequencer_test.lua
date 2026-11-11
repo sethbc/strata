@@ -462,4 +462,24 @@ test("the transport handlers call the ones found at init and give them back at c
   assert_equal(clock.transport.stop, nil, "no stop handler left")
 end)
 
+test("every edit of a voice's pattern ends that voice's pattern undo, the undo's own restore does not (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local SEQ = S.constants.UI_PAGES.index.SEQ
+  local spec = {page = SEQ, section = "pattern", voice = 2, pattern = 2}
+  local function held() return S.lib.mutation.undo_for(SEQ, "pattern", 2) == true end
+  S.lib.mutation.randomize(spec); assert_true(held(), "held")
+  assert_true(S.lib.mutation.undo(), "the undo runs")
+  assert_true(not held(), "and ends itself")
+  for _, edit in ipairs({
+    function() toggle_pattern_step(2, 3) end,
+    function() clear_pattern(2) end,
+    function() S.lib.sequencer.replace_pattern(2, {4}) end }) do
+    S.lib.mutation.randomize(spec); assert_true(held(), "held")
+    edit(); assert_true(not held(), "an edit ends it")
+  end
+  S.lib.mutation.randomize(spec)
+  toggle_pattern_step(3, 3); assert_true(held(), "another voice's edit leaves it")
+end)
+
 end

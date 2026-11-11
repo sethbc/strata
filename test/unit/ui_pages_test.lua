@@ -232,6 +232,7 @@ test("with ALT held no page's hint names a key that does nothing (#419)", functi
           assert_true(record.alt_key ~= nil, name .. " names " .. key_name .. " with ALT held ('" .. hint
             .. "') but has no ALT key action")
           if key_name == "K3" and name ~= "BUFFER" then
+            if name == "SEQ" then S.patterns[S.selected_voice][1] = 5 end  -- ALT+K3 clears: give it a step
             local before = snapshot()
             key(3, 1); key(3, 0)
             assert_true(snapshot() ~= before, name .. " position " .. position .. ": ALT+K3 does nothing but the hint '"

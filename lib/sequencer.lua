@@ -42,6 +42,7 @@ return function(S)
     else
       S.patterns[voice_idx][step] = 0
     end
+    S.lib.mutation.note_pattern_edit(voice_idx)
   end
 
   -- A step level from any value: a number floored to a whole level and
@@ -64,6 +65,7 @@ return function(S)
       S.patterns[voice_idx][step] = whole_step_level(steps[step])
     end
     S.lib.grid_core.end_step_gestures(voice_idx)
+    S.lib.mutation.note_pattern_edit(voice_idx)
   end
 
   function clear_pattern(voice_idx)

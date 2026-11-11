@@ -36,6 +36,7 @@ return function(S)
     local pattern = S.patterns[voice_idx]
     if pattern == nil then return end
     pattern[step] = util.clamp(pattern[step] + steps, 0, MAX_STEP_LEVEL)
+    S.lib.mutation.note_pattern_edit(voice_idx)
     grid_redraw()  -- the grid shows the patterns
   end
 

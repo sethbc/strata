@@ -61,7 +61,7 @@ What the strip shows (all of it dark for a voice that reads no buffer):
 - **Real-time recording** - toggle steps while playing
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty): the same step the SEQ page shows, until the next one plays
 - **Tempo control** - 1-300 BPM, the range of norns' clock tempo: on the 16×16's row 8, columns 5-8, on the [SEQ page](pages/seq.md) (ALT+E3) or in PARAMETERS. The 16×8, 8×16 and 8×8 have no tempo keys
-- **Pattern operations** - clear or randomize a voice's pattern: on the 16×16's row 15 (hold the key half a second) or on the SEQ page (ALT+K2 clears, ALT+K3 randomizes the selected voice's). The 16×8, 8×16 and 8×8 have no keys for them
+- **Pattern operations** - clear or randomize a voice's pattern: on the 16×16's row 15 (hold the key half a second) or on the SEQ page (ALT+K2 randomizes, ALT+K3 clears the selected voice's). The 16×8, 8×16 and 8×8 have no keys for them
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
 - **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15. Set a step's level with the two-key gesture above
 
