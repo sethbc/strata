@@ -320,6 +320,21 @@ test("64: rows 1-2 are the grid voice's 16 positions and a pair may span both", 
   assert_near(params:get("v1_loop_length"), 0.125, 1e-6, "two cells")
 end)
 
+test("64: a synth voice's strip is dark and stores nothing (#445)", function()
+  local context, S, device = positions_grid()
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_source", 1)
+  grid_redraw()
+  for x = 1, 8 do assert_equal(device:get_led(x, 3), 0, "strip column " .. x) end
+  context.grid.press(1, 6, 3, 1)
+  context.grid.press(1, 2, 3, 1)
+  assert_equal(device:get_led(6, 3), 0, "store held: dark")
+  assert_equal(device:get_led(2, 3), 0, "the pressed bookmark: dark")
+  assert_equal(params:get("v1_bookmark_2"), 0.25, "and the bookmark keeps its value")
+  context.grid.press(1, 2, 3, 0); context.grid.press(1, 6, 3, 0)
+end)
+
 test("64: row 3 is the strip and row 7 picks the grid voice", function()
   local context, S, device = positions_grid()
   local positions = S.lib.positions

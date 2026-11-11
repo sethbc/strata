@@ -318,7 +318,12 @@ return function(S)
   end
 
   -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
-  S.registry.grid_layouts["128h"] = {key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true}
+  -- strip_page: the page its strip is on (the playhead clock repaints it
+  -- as it does the position page)
+  S.registry.grid_layouts["128h"] = {
+    key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true,
+    strip_page = LAYOUT_128H.sources_page,
+  }
 
   return M
 end

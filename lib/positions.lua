@@ -33,7 +33,8 @@ return function(S)
   -- "caller"; held exactly while it is not empty), the glide's rate (as
   -- sent), the last recalled bookmark, the glide clock and the ring's
   -- recent turns
-  local scan_hold, holders, glide_rate, recalled, glide_clock, turns = {}, {}, {}, {}, {}, {}
+  -- (fling: per voice, while its clock runs, {turned_at = the latest turn's time, gliding = bool})
+  local scan_hold, holders, glide_rate, recalled, glide_clock, turns, fling = {}, {}, {}, {}, {}, {}, {}
   for voice_idx = 1, NUM_VOICES do
     scan_hold[voice_idx], holders[voice_idx], glide_rate[voice_idx] = false, {}, 0
   end
@@ -95,6 +96,7 @@ return function(S)
     if glide_clock[voice_idx] then
       clock.cancel(glide_clock[voice_idx])
       glide_clock[voice_idx] = nil
+      fling[voice_idx] = nil
     end
   end
 
@@ -230,14 +232,33 @@ return function(S)
   -- voice (a good step forgets it), and never ends the glide's clock: the
   -- glide runs on while its rate is not 0
   local glide_errors = {}  -- per voice: the error message its glide last printed
+  -- One clock per run of turns (#515): it reads the voice's latest turn
+  -- (fling[voice].turned_at) and waits until the ring has stayed still for
+  -- SCRUB.release_seconds, then glides; a turn that comes meanwhile (the
+  -- glide's rate already set to 0 by scrub_turned) sends it back to
+  -- waiting (`fling`, above). Every sleep is outside the protected call
   local function glide(voice_idx)
     local contained_call = S.lib.ui_frame.contained_call
-    clock.sleep(SCRUB.release_seconds)
-    contained_call(glide_errors, voice_idx, "scrub glide", start_glide, voice_idx)
-    while glide_rate[voice_idx] ~= 0 do
-      clock.sleep(1 / PLAYHEADS.update_hz)
-      contained_call(glide_errors, voice_idx, "scrub glide", decay_glide, voice_idx)
+    local state = fling[voice_idx]
+    while true do
+      if not state.gliding then
+        local remaining = state.turned_at + SCRUB.release_seconds - util.time()
+        if remaining > 1e-6 then
+          clock.sleep(remaining)
+        else
+          state.gliding = true
+          contained_call(glide_errors, voice_idx, "scrub glide", start_glide, voice_idx)
+          if glide_rate[voice_idx] == 0 then break end
+        end
+      else
+        clock.sleep(1 / PLAYHEADS.update_hz)
+        if state.gliding then
+          contained_call(glide_errors, voice_idx, "scrub glide", decay_glide, voice_idx)
+          if glide_rate[voice_idx] == 0 then break end
+        end
+      end
     end
+    fling[voice_idx] = nil
     glide_clock[voice_idx] = nil
   end
 
@@ -247,14 +268,23 @@ return function(S)
   -- 100% (the ring is direct)
   function M.scrub_turned(voice_idx)
     if not buffer_voice(voice_idx) then return end
-    end_glide(voice_idx, true)
-    if params:get("scrub_friction") >= 100 then return end
+    if params:get("scrub_friction") >= 100 then
+      end_glide(voice_idx, true)
+      return
+    end
+    -- a running glide ends at once; its clock (if any) stays and waits again
+    if glide_rate[voice_idx] ~= 0 then set_scrub_rate(voice_idx, 0) end
     local now = util.time()
     local samples = turns[voice_idx] or {}
     samples[#samples + 1] = {time = now, position = params:get(param_id(voice_idx, "buf_pos"))}
     while #samples > 2 and now - samples[2].time > SCRUB.window_seconds do table.remove(samples, 1) end
     turns[voice_idx] = samples
-    glide_clock[voice_idx] = clock.run(function() glide(voice_idx) end)
+    if glide_clock[voice_idx] then
+      fling[voice_idx].turned_at, fling[voice_idx].gliding = now, false
+    else
+      fling[voice_idx] = {turned_at = now, gliding = false}
+      glide_clock[voice_idx] = clock.run(function() glide(voice_idx) end)
+    end
   end
 
   -- The grid's held keys ----------------------------------------------
@@ -365,6 +395,9 @@ return function(S)
     if not valid_voice(voice_idx) then return end
     if records[port] then end_stale_port(port, records[port]) end
     local page = S.lib.grid_core.page(port)
+    -- a press on a voice that reads no buffer records nothing (its keys are
+    -- dark and do nothing); releases always end what they ended before
+    if z == 1 and not buffer_voice(voice_idx) then return end
     if valid_bookmark(key) then
       if z == 1 then
         local record = record_of(port)
@@ -457,17 +490,20 @@ return function(S)
     end
     local head_cell = S.lib.playheads.cell_of(head, cells)
     local record_cell = record_head and S.lib.playheads.cell_of(record_head, cells)
-    -- the context (its bins table above all) is reused within one instant
-    -- while nothing it shows changed, so a redraw's cells share one
-    local now = util.time()
+    -- the context (its bins table above all) is reused while nothing it
+    -- shows changed (the key holds everything a cell's level reads, and the
+    -- peaks table's identity: the waveforms module replaces it when a slot's
+    -- peaks change), so a redraw's cells share one. Never keyed by the
+    -- time: the device's clock moves between two calls (#398)
+    local peaks = S.lib.waveforms.peaks(slot)
     local key = table.concat({start, length, head_cell, record_cell or "-", S.buffers[slot].seconds, held_key}, ",")
     local cached = context_cache[voice_idx .. ":" .. cells]
-    if cached and cached.time == now and cached.key == key then return cached.context end
+    if cached and cached.key == key and cached.peaks == peaks then return cached.context end
     local context = {
       bins = S.lib.waveforms.bins(slot, cells), start = start, length = length, cells = cells,
       head_cell = head_cell, record_cell = record_cell, held_cells = held_cells,
     }
-    context_cache[voice_idx .. ":" .. cells] = {time = now, key = key, context = context}
+    context_cache[voice_idx .. ":" .. cells] = {key = key, peaks = peaks, context = context}
     return context
   end
 
@@ -496,7 +532,8 @@ return function(S)
   -- "whole"). With a port, "store" and a stored bookmark read only that
   -- port's keys (each grid shows its own); without one, any port's
   function M.strip_level(voice_idx, key, port)
-    if not valid_voice(voice_idx) then return 0 end
+    -- no key of a voice that reads no buffer does anything: all dark (#445)
+    if not buffer_voice(voice_idx) then return 0 end
     if valid_bookmark(key) then
       if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
         return LEVELS.stored

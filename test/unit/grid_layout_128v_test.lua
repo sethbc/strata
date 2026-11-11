@@ -430,6 +430,23 @@ test("128v: columns 1-7 are the voices' positions, row 1 the slot's start", func
   end
 end)
 
+test("128v: a synth voice's strip is dark and stores nothing (#445)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 16)
+  local S = buffer_voices(context)
+  show_grid_page(context, 1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_source", 1)
+  grid_redraw()
+  for row = 10, 16 do assert_equal(device:get_led(8, row), 0, "strip row " .. row) end
+  context.grid.press(1, 8, 14, 1)
+  context.grid.press(1, 8, 12, 1)
+  assert_equal(device:get_led(8, 14), 0, "store held: dark")
+  assert_equal(device:get_led(8, 12), 0, "the pressed bookmark: dark")
+  assert_equal(params:get("v1_bookmark_2"), 0.25, "and the bookmark keeps its value")
+  context.grid.press(1, 8, 12, 0); context.grid.press(1, 8, 14, 0)
+end)
+
 test("128v: column 8 rows 10-16 are the grid voice's strip", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 8, 16)
