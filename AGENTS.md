@@ -128,7 +128,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 
-**The `voices` table is the only source of values.** The engine holds no per-voice defaults. `toggle_voice` sends `setGrainSource` and every grain value, then `engine.voiceOn`, then the synth and crossmod values (`S.lib.engine_sync.start_voice`, #325). Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
+**The `voices` table is the only source of values.** The engine holds no per-voice defaults. A start (`S.lib.engine_sync.start_voice`, from `toggle_voice` or a pattern step) sends `setGrainSource` and every grain value before `engine.voiceOn`, and the synth and crossmod values after it (#325). Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
 
 ### Invariants that are easy to break
 
@@ -241,7 +241,7 @@ Several pull requests are built at once, often by agents: a feature lives in fil
 
 - A new or changed `addCommand` needs: matching `engine.*` calls (same count and types; SC type codes i/f/s), the table row above, and the engine stub picks it up from the SC source.
 - A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `S.engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam` and `GRAIN_PARAM_IDS`.
-- Lua defaults are what the engine plays (`sync_voice_to_engine` sends them). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
+- Lua defaults are what the engine plays (`S.lib.engine_sync.start_voice` sends them at every start). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
 - New voice-level controls that a buffer or input grain synth also needs belong in `voiceControls` / `grainControls` and `controlNameSets` (see Audio Sources in `docs/notes/engine/grains.md`).
 
 ### IMPORTANT: update the UI with every feature (128×64 screen)
