@@ -198,7 +198,9 @@ return function(S)
     end
 
     screen.level(label_level)
-    screen.move(127, top + 5)
+    -- one pixel higher than the label's old place, so a descender (the y of
+    -- "density") clears the 7 px-spaced text below it (#422)
+    screen.move(127, top + 4)
     screen.text_right(S.LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label)
     screen.move(127, top + 11)
     screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get("lfo_depth_" .. n)))
@@ -335,6 +337,19 @@ return function(S)
       if setup then setup() end
     end}
   end
+  -- The index of the option called name among a param's options, so a state
+  -- keeps its meaning when the library's lists change
+  local function option_named(param_id, name)
+    for index, option in ipairs(params:lookup_param(param_id).options) do
+      if option == name then return index end
+    end
+  end
+  -- The destination whose label is `label`
+  local function destination_labeled(label)
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do
+      if destination.label == label then return index end
+    end
+  end
   local layout_states = {}
   for n = 1, NUM_LFOS do
     table.insert(layout_states, layout_state("lfo" .. n, n, DEST_FIELD, function()
@@ -346,7 +361,7 @@ return function(S)
   for field, name in ipairs(field_names) do
     table.insert(layout_states, layout_state("field-" .. name, 2, field, function()
       params:set("strata_lfo2_dest", #S.LFO_DESTINATIONS)
-      params:set("lfo_shape_2", 4)       -- random
+      params:set("lfo_shape_2", option_named("lfo_shape_2", "random"))
       params:set("lfo_free_2", 300)
       params:set("lfo_depth_2", 100)
       params:set("lfo_2", 2)
@@ -354,9 +369,16 @@ return function(S)
     end))
   end
   table.insert(layout_states, layout_state("clocked", 3, RATE_FIELD, function()
-    params:set("lfo_mode_3", 1)
-    params:set("lfo_clocked_3", 4)       -- "5/16", the widest division
+    params:set("lfo_mode_3", option_named("lfo_mode_3", "clocked"))
+    params:set("lfo_clocked_3", option_named("lfo_clocked_3", "5/16"))  -- the widest division
   end))
+  -- destinations whose labels have descenders over the state text (#422)
+  for index, label in ipairs({"density", "v1 pos", "dly fdbk"}) do
+    table.insert(layout_states, layout_state("descender " .. label, index, DEST_FIELD, function()
+      params:set("strata_lfo" .. index .. "_dest", destination_labeled(label))
+      params:set("lfo_" .. index, 2)
+    end))
+  end
   table.insert(layout_states, layout_state("free", 1, RATE_FIELD, function()
     params:set("lfo_free_1", 0.1)
   end))

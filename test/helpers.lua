@@ -655,6 +655,9 @@ local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 40, 4, 2
 
 local HEADER_FLASH_X = 40
 
+-- rows between one baseline and the next that clear a descender
+local DESCENDER_CLEARANCE = 7
+
 -- Check the drawn screen: everything inside 128x64, no two strings overlap on
 -- a row, the page title at 0,8, then either the eight page dots (at least
 -- 4 px after the title) or, while a header flash shows, its text at 40,8
@@ -676,6 +679,23 @@ local function assert_screen_layout(context, where)
     if local_value("ui_page") == 1 and entry.y > 8 and entry.y < HINT_ROW_Y then
       assert_true(right <= MAIN_LIST_RIGHT or left >= MAIN_DETAILS_LEFT,
         string.format("'%s' at %d,%d crosses the MAIN divider (%s)", entry.text, entry.x, entry.y, where))
+    end
+  end
+  -- the norns font draws 2 px below the baseline for g, j, p, q and y: a
+  -- string under one with a descender must start 7 px or more below it, or
+  -- the descender's last pixel meets the next line (#422)
+  for _, upper in ipairs(context.screen.texts) do
+    if upper.text:find("[gjpqy]") then
+      local upper_left, upper_right = text_span(upper)
+      for _, lower in ipairs(context.screen.texts) do
+        local gap = lower.y - upper.y
+        if gap > 0 and gap < DESCENDER_CLEARANCE then
+          local lower_left, lower_right = text_span(lower)
+          assert_true(lower_right <= upper_left or lower_left >= upper_right,
+            string.format("'%s' at y %d is %d px above '%s' and its descender meets it (%s)",
+              upper.text, upper.y, gap, lower.text, where))
+        end
+      end
     end
   end
   local title = PAGE_TITLES[local_value("ui_page")]

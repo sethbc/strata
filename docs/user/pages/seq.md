@@ -11,7 +11,7 @@ All seven patterns, the sequencer's transport and the tempo, so patterns can be 
 - **ALT+K2** - Clear the selected voice's pattern
 - **ALT+K3** - Randomize the selected voice's pattern (about half the steps on, at levels 8-15)
 
-Each voice has a row: its number on the left (bright for the selected voice), sixteen cells and `+` (running) or `-` (stopped) on the right. A set step is a filled cell as bright as its level; an empty step is a dim outline, so even a level-1 step reads as set. The cursor is a bright square around the selected step. While the patterns play, the column of the step playing is drawn brighter on every row, and the header shows the play mark and the tempo (`▶ 120 bpm`).
+Each voice has a row: its number on the left (bright for the selected voice), sixteen cells and `+` (running) or `-` (stopped) on the right. A set step is a filled cell as bright as its level; an empty step is a dim outline, so even a level-1 step reads as set. The cursor is a bright square around the selected step. While the patterns play, the column of the step playing is drawn brighter on every row, and the header shows the play mark beside the tempo (`▶ 120 bpm`). The tempo is always in the header on this page, whether or not the patterns play; it takes the place of `[M]` and `REC`/`ARM`, which other pages show there.
 
 A step on a stopped voice starts it; on a running voice it accents it (the step's level is the accent's velocity). Edits show on a connected grid at once. The arc's button plays and stops the patterns; the arc's SEQ rings are in [Monome Arc](../arc.md).
 

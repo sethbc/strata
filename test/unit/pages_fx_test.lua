@@ -226,6 +226,13 @@ test("FX hints name the effect", function()
   params:set("filter_mix", 0); assert_equal(hint_text(), "K3:filter on")
   S.fx_row = row_index("master_density"); assert_equal(hint_text(), "E3:value")
   S.fx_row = row_index("drift_amount"); assert_equal(hint_text(), "E3:value")
+  -- ALT+K3 does nothing on FX: the hint names no K3 (#419)
+  key(1, 1)
+  for _, id in ipairs({"delay_feedback", "reverb_mix", "filter_mix", "master_density"}) do
+    S.fx_row = row_index(id)
+    assert_equal(hint_text(), "E3:fine", "ALT on " .. id .. " offers only the fine turn")
+  end
+  key(1, 0)
 end)
 
 test("FX layout states include the delay and reverb bypassed", function()

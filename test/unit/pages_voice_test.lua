@@ -550,4 +550,27 @@ test("VOICE's layout states cover every voice and source at each section's ends"
   assert_equal(cursor_param(S), last_of_mix, "Sub on input: the mix section's last field")
 end)
 
+
+test("a locked voice keeps its whole lock tag in the filter & sends section, or none (#421)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("VOICE")
+  local S = local_value("S")
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    S.selected_voice = voice_idx
+    if not S.frozen[voice_idx] then toggle_lock(voice_idx) end
+    put_cursor(S, "v" .. voice_idx .. "_filter_mix")
+    redraw()
+    local voice_text = texts_on_row(context, SECTION_Y)[1].text
+    assert_true(voice_text:find("%[L%]$") or not voice_text:find("[", 1, true),
+      "voice " .. voice_idx .. "'s line '" .. voice_text .. "' ends with [L] or has no bracket")
+    assert_true(voice_text:find("%[L%]$") ~= nil, "voice " .. voice_idx .. " still shows it is locked")
+    h.assert_screen_layout(context, "VOICE locked, filter & sends, voice " .. voice_idx)
+  end
+  local found
+  for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.VOICE].layout_states) do
+    if state.name == "locked voice, filter & sends" then found = state end
+  end
+  assert_true(found ~= nil, "a layout state for it")
+end)
+
 end

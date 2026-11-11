@@ -7,12 +7,12 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 - Start with 2-3 voices active
 - Use ALT+K2 (hold K1, press K2) to randomize individual voices until you find interesting combinations; ALT+K2 again within 5 seconds undoes a randomize you don't like
 - Lock voices you like with ALT+K3
-- Adjust master density (arc ring 1 or PARAMETERS) to create movement
+- Adjust master density (FX page, the first row, E3; or arc ring 1, or PARAMETERS) to create movement
 - Add reverb or delay on the FX page for more space
 
 ## Exploring Cross-Modulation
 
-- Open PARAMETERS menu and navigate to a voice's cross-modulation section
+- On VOICE, turn K3 to the voice's crossmod section (or open the PARAMETERS menu and find the voice's cross-modulation section)
 - Each voice has 3 modulation slots that can be independently configured:
   - **Slot 1**: Set "mod source 1" to another active voice (e.g., voice 2)
   - Adjust "amp mod 1" (0.5 to 1.5 is a good starting range for amplitude modulation)
@@ -28,13 +28,22 @@ Workflows for evolving textures, cross-modulation, performance and mutations. Ba
 
 1. Build up layers by activating voices one at a time
 2. Randomize unlocked voices to create variation (ALT+K2 on MAIN)
-3. Use master density for dynamic swells and fades
+3. Use master density (FX page) for dynamic swells and fades
 4. Lock/unlock voices to create structural changes (ALT+K3 on MAIN), and stop or start them with K3
 5. Set up cross-modulation for interdependent voice relationships
 
+## Recording and Playing Buffers
+
+Everything here works from the norns alone.
+
+1. On BUFFER, pick a buffer with E2 and a source on the `rec` field (the input, the master, or one voice), then press K3 to record into it. Press K3 again to stop early.
+2. Set the selected voice's `v1`...`v7` field to the buffer (`buf 1` ... `buf 8`): its grains now read the recording. K2 loads a sound file instead.
+3. Turn `fb` above 0% to overdub: the buffer keeps playing while each pass layers on the old audio. `loop` records over and over the same stretch until you stop it.
+4. Save a sound you like into a SCENES slot (ALT+K3 on SCENES); K3 recalls it, K2 fades to it over the transition time.
+
 ## Using Probability-Based Mutations
 
-- Enable mutations via PARAMETERS > mutations enabled
+- Enable mutations on SETUP (the `mutations` field, E3; or PARAMETERS > mutations enabled)
 - Start with conservative settings:
   - Mutation rate: 2-3 seconds (how often mutations occur)
   - Mutation probability: 0.10-0.15 (chance each parameter will change)

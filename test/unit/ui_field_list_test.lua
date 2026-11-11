@@ -146,5 +146,28 @@ test("the scroll marker can sit at another x, with the same geometry", function(
   end
 end)
 
+test("move_scroll scrolls over the rows below the last selectable row and back (#319)", function()
+  local list = field_list()
+  local long = {}
+  for index = 1, 4 do long[index] = {label = "f" .. index} end
+  for index = 5, 12 do long[index] = {label = "s" .. index, selectable = false} end
+  -- 12 rows, 6 visible: the last page starts at row 7, the view at the cursor's row above (3)
+  assert_equal(list.first_visible(long, 4, 6), 3)
+  assert_equal(list.tail_room(long, 4, 6), 4, "four rows of room")
+  local cursor, tail = list.move_scroll(long, 1, 0, 3, 6)
+  assert_equal(cursor, 4); assert_equal(tail, 0)
+  cursor, tail = list.move_scroll(long, cursor, tail, 2, 6)
+  assert_equal(cursor, 4, "the cursor stays on the last stop"); assert_equal(tail, 2)
+  assert_equal(list.first_visible(long, cursor, 6, tail), 5)
+  cursor, tail = list.move_scroll(long, cursor, tail, 20, 6)
+  assert_equal(tail, 4, "the tail stops at the end of the list")
+  assert_equal(list.first_visible(long, cursor, 6, tail), 7)
+  cursor, tail = list.move_scroll(long, cursor, tail, -1, 6)
+  assert_equal(cursor, 4); assert_equal(tail, 3, "back up shrinks the tail first")
+  cursor, tail = list.move_scroll(long, cursor, tail, -3, 6)
+  assert_equal(tail, 0); assert_equal(cursor, 4)
+  cursor, tail = list.move_scroll(long, cursor, tail, -1, 6)
+  assert_equal(cursor, 3, "then the cursor moves")
+end)
 
 end

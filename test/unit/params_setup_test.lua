@@ -551,4 +551,25 @@ test("each crossmod slot has its source, amp mod and freq mod params, sent to it
   assert_equal(voices[5].crossmod.slot2.source, 4); assert_equal(voices[5].crossmod.slot2.amp_amt, 1)
 end)
 
+test("a tempo change from an external clock redraws SEQ and the arc (#383)", function()
+  local context = load_strata(); finish_startup(context)
+  h.show_page("SEQ")
+  local arc_device = context.arc.plug(1)
+  params:set("tempo", 130)
+  h.next_frame(context)
+  assert_true(h.screen_shows(context, "130 bpm"), "SEQ shows the tempo")
+  local refreshes = arc_device.refresh_count
+  -- what norns' clock loop does for an external source: silent clock_tempo, then the handler
+  params:set("clock_tempo", 100, true)
+  clock.tempo_change_handler(100)
+  h.next_frame(context)
+  assert_true(h.screen_shows(context, "100 bpm"), "the next frame draws the new tempo")
+  assert_true(arc_device.refresh_count > refreshes, "and the arc")
+  -- a handler call that changes nothing asks for nothing
+  local pages = local_value("S").constants.UI_PAGES
+  pages.screen_dirty = false
+  clock.tempo_change_handler(100)
+  assert_true(not pages.screen_dirty, "an unchanged tempo requests no redraw")
+end)
+
 end
