@@ -263,6 +263,19 @@ check.((grains.size >= 15) and: { semitones.every({ arg each;
     and: { semitones.collect(_.round).asSet.size >= 4 },
     "variation: a buffer voice at bufRate 2^(4/12) (MIDI E4) keeps its grains in C major (semitones %)".format(
         semitones.collect(_.round(0.01))));
+// quantize comes before bend and crossmod: a bend of half a semitone moves
+// every quantized grain half a semitone off C major, where a bend inside
+// the quantize would snap it back onto a tone
+command.(\setVoiceParam, 1, \bend, 2 ** (0.5 / 12));
+0.3.wait;
+grains = grainLog.(5.0, 1);
+semitones = grains.collect({ arg pair; pair[0].ratiomidi - 0.5 });
+check.((grains.size >= 15) and: { semitones.every({ arg each;
+        ((each - each.round).abs < 0.03) and: { majorOffsets[(60 + each.round.asInteger) % 12] == 0 } }) }
+    and: { semitones.collect(_.round).asSet.size >= 4 },
+    "variation: a bend of half a semitone moves a quantized buffer voice's grains half a semitone off the scale (semitones less 0.5: %)".format(
+        semitones.collect(_.round(0.01))));
+command.(\setVoiceParam, 1, \bend, 1.0);
 [[\pitchJitter, 0.0], [\quantize, 0.0], [\bufRate, 1.0], [\bufPos, 0.0], [\posSpread, 0.5], [\panSpread, 0.5]]
     .do({ arg pair; command.(\setGrainParam, 1, *pair) });
 command.(\setScale, 0, 4095);

@@ -21,7 +21,7 @@ A voice reading a buffer has a seventh section, **bookmarks**: four rows, `bookm
 
 E3 on the freeze row turns it on or off. A frozen voice's grains keep playing what they were playing, while pitch, spread, grain size and density still move:
 - **a synth voice**: the last 4 seconds of its synth, which stops being recorded. Its buffer scan moves backward through those 4 seconds and around again (a synth voice has no scan row here or on the grid: set `v<i>_buf_scan` in the PARAMS menu, or point an LFO at `v<i> scan`);
-- **an input voice**: the 4 seconds of input up to where it was playing (its history), so freezing never jumps to the present. The input keeps recording; unfreezing goes back to it;
+- **an input voice**: the 4 seconds of input up to where it was playing (its history), so freezing never jumps to the present. The input keeps recording; unfreezing goes back to it. Its buffer scan moves backward through those 4 seconds and around again, as for a synth voice (an input voice has no scan row either: set `v<i>_buf_scan` in the PARAMS menu, or point an LFO at `v<i> scan`);
 - **a buffer voice**: its scan stops at the current position.
 
 Frozen grains play from about half a second before the moment you froze. `spectral` (high setting only) holds one sound spectrum instead and keeps granulating it; on the standard setting, and for a buffer voice, freeze always holds. Changing the voice's source unfreezes it. Scenes save freeze and its mode, but never the audio: a recalled frozen scene freezes whatever the voice plays at the end of the transition. Randomize and mutations never change it. Map it to a MIDI CC in PARAMS > MAP. On the grid it has keys on the 256, 128h and 128v layouts ([Grid](../grid.md)).
