@@ -26,7 +26,7 @@ Keys and encoders:
 - E2: `S.lib.ui_cursors.move("voice", d)` (from the synced cursor through field_list's move: section labels take no stop, so E2 at a section's end goes on into the next; clamped at the ends; anchored where it lands).
 - E3: `enc_param_delta(3, row.param_id, d)` (option and number rows step whole values).
 - K2: the first field of the previous section; in the first section, its own first field. K3: the first field of the next section; in the last section, nothing.
-- ALT+K2: `params:set(id, param_default(id))` for the row under the cursor (on the source row this switches the source, and the rows follow). ALT+K3: `toggle_lock(S.selected_voice)`.
+- ALT+K2: `params:set(id, param_default(id))` for the row under the cursor (`set_binary_param` for a binary row, so a MIDI-mapped controller follows, #519) (on the source row this switches the source, and the rows follow). ALT+K3: `toggle_lock(S.selected_voice)`.
 - Hints: `K2:prev K3:next`; ALT `K2:reset K3:lock`, or `K3:unlock` when the voice is locked.
 - `arc_button`: `toggle_voice(S.selected_voice)`.
 

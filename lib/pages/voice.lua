@@ -203,7 +203,11 @@ return function(S)
     local rows, cursor = M.sync_cursor()
     if n == 2 then
       local param_id = rows[cursor].param_id
-      params:set(param_id, param_default(param_id))
+      if rows[cursor].kind == "binary" then
+        set_binary_param(param_id, param_default(param_id))  -- echoes to a MIDI map (#519)
+      else
+        params:set(param_id, param_default(param_id))
+      end
     elseif n == 3 then
       toggle_lock(S.selected_voice)
     end

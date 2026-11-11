@@ -311,6 +311,22 @@ test("values use the param's own string with its unit, cut to fit", function()
   spread.formatter = nil
 end)
 
+test("ALT+K2 on a mapped binary VOICE row sends one CC with its default (#519)", function()
+  local context = load_strata({ before_init = function() register_binary_row(local_value("S")) end })
+  finish_startup(context)
+  local controller = context.midi.plug(1)
+  show_page("VOICE")
+  local S = local_value("S")
+  put_cursor(S, "v1_probe_switch")
+  enc(3, 1)
+  norns.pmap.data["v1_probe_switch"] = { dev = 1, ch = 1, cc = 22, in_lo = 0, in_hi = 127,
+    out_lo = 0, out_hi = 1, echo = true, value = 127 }
+  key(1, 1); tap(2); key(1, 0)
+  assert_equal(params:get("v1_probe_switch"), 0, "reset to its default")
+  assert_equal(#controller.sent, 1, "one message to the controller")
+  assert_equal(controller.sent[1][3], 0, "the default's value")
+end)
+
 test("ALT+K2 resets the field to its default; ALT+K3 locks", function()
   local context, S = started_voice_page()
   put_cursor(S, "v1_grain_spread")
