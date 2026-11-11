@@ -1357,6 +1357,14 @@ local function peak_scan_findings(text, name)
   return found
 end
 
+test("no script file lists a folder with util.scandir (#465)", function()
+  local found = {}
+  for _, source in ipairs(read_lua_sources()) do
+    if sync_check.sanitize_lua(source.text):find("util%.scandir") then found[#found + 1] = source.path end
+  end
+  assert_equal(table.concat(found, ", "), "", "util.scandir puts the folder between double quotes: list through files.lua's list_folder")
+end)
+
 test("the peak scan allocates nothing per sample", function()
   assert_equal(#peak_scan_findings("\n  caught { var a; b = c.abs; }", "caught"), 1, "caught: a per-sample abs")
   assert_equal(#peak_scan_findings("\n  caught { var a; b = chunk.maxItem; }", "caught"), 1, "caught: maxItem")

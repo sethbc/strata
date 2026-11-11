@@ -37,6 +37,52 @@ test("folder_for uses the slot's file, then the last chosen folder, then _path.a
   assert_equal(files.folder_for(1), "/b/", "a cleared slot has no file")
 end)
 
+-- #465: util.scandir puts the folder between double quotes, where the shell
+-- still reads ", $, ` and \: such a folder listed nothing, and $(...) ran
+test("a folder named with a quote, a dollar sign, a backtick or a command lists its files and runs nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local marker = context.audio_dir .. "f465_marker"
+  local names = { 'pack "one"', "kit $HOME", "it's", "tick `id`", "back\\slash", "-rf", "semi; touch " .. marker,
+    "$(touch " .. marker .. ")", "`touch " .. marker .. "`", "a b  c", "glob *?[x]{y}" }
+  os.execute("mkdir -p '" .. context.audio_dir .. "'")
+  for index, name in ipairs(names) do
+    local folder = context.audio_dir .. name .. "/"
+    -- made without a shell reading the name: mkdir gets it as one single-quoted word
+    os.execute("mkdir -p -- '" .. folder:gsub("'", "'\\''") .. "'")
+    for _, file in ipairs({ "a.wav", "b.wav" }) do io.open(folder .. file, "w"):close() end
+    local slot = (index - 1) % 8 + 1
+    clear_buffer(slot)
+    files.note_chosen(folder .. "x.wav")
+    context.clear_engine_calls()
+    assert_true(files.random_into(slot), "a file loads from " .. name)
+    local path = context.calls_named("loadBuffer")[1].args[2]
+    assert_true(path == folder .. "a.wav" or path == folder .. "b.wav", "from that folder: " .. path)
+  end
+  assert_true(not util.file_exists(marker), "no folder name ran as a command")
+  -- fill_empty lists the same way
+  for slot = 1, 8 do clear_buffer(slot) end
+  files.note_chosen(context.audio_dir .. 'pack "one"/x.wav')
+  local_value("S").buffer_page.slot = 1
+  assert_equal(files.fill_empty(), 2, "both files of the quoted folder fill slots")
+end)
+
+test("a folder that cannot be listed says so and loads nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  files.note_chosen(context.audio_dir .. "gone/x.wav")
+  context.clear_engine_calls()
+  assert_equal(files.random_into(1), false)
+  assert_equal(flash_text(), "cannot open " .. context.audio_dir .. "gone/")
+  assert_equal(files.fill_empty(), 0)
+  assert_equal(#context.calls_named("loadBuffer"), 0)
+  -- an empty folder is a different message
+  local folder = make_folder(context, "nothing", { "notes.txt" })
+  files.note_chosen(folder .. "x.wav")
+  assert_equal(files.random_into(1), false)
+  assert_equal(flash_text(), "no files in " .. folder)
+end)
+
 test("random_into keeps sound files only and never repeats the current one", function()
   local context = load_strata(); finish_startup(context)
   local files = local_value("S").lib.files
