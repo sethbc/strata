@@ -270,6 +270,51 @@ test("randomize, mutation and the fader pages leave the voice filter and sends a
   assert_equal(params:get("delay_bypass"), 0); assert_equal(params:get("reverb_bypass"), 0)
 end)
 
+-- #557: a press of ALT+K2 on VOICE's filter & sends section draws these
+-- keys (the record's randomize): the type a uniform option, the cutoff
+-- 100-8000 Hz even in octaves, the res below self-oscillation and the sends
+-- moderate; the filter's mix is kept (0 would leave the filter out)
+test("voice_mix's randomize draws the filter's type, cutoff and res and both sends, never its mix (#557)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local record
+  for _, each in ipairs(local_value("S").registry.voice_params) do
+    if each.name == "voice_mix" then record = each end
+  end
+  local keys = {}
+  for key in pairs(record.randomize) do keys[#keys + 1] = key end
+  table.sort(keys)
+  assert_equal(table.concat(keys, ","), "delay_send,filter_freq,filter_res,filter_type,reverb_send",
+    "the drawn keys: never filter_mix")
+  math.randomseed(23)
+  local types = {}
+  for _ = 1, 200 do
+    local option = record.randomize.filter_type(3)
+    assert_true(option % 1 == 0 and option >= 1 and option <= 3, "filter_type draws an option index")
+    types[option] = true
+  end
+  assert_true(types[1] and types[2] and types[3], "every filter type is drawn")
+  local below_middle = 0
+  local low, high = math.huge, -math.huge
+  for _ = 1, 400 do
+    local value = record.randomize.filter_freq(3)
+    low, high = math.min(low, value), math.max(high, value)
+    if value < math.sqrt(100 * 8000) then below_middle = below_middle + 1 end
+  end
+  assert_true(low >= 100 and high <= 8000 and low < 120 and high > 7000, "the cutoff spans 100-8000 Hz (" .. low .. "-" .. high .. ")")
+  assert_true(below_middle > 160 and below_middle < 240, "even in octaves: half below 894 Hz (" .. below_middle .. " of 400)")
+  for key, top in pairs({ filter_res = 0.7, delay_send = 0.6, reverb_send = 0.6 }) do
+    low, high, below_middle = math.huge, -math.huge, 0
+    for _ = 1, 400 do
+      local value = record.randomize[key](3)
+      low, high = math.min(low, value), math.max(high, value)
+      if value < top / 2 then below_middle = below_middle + 1 end
+    end
+    assert_true(low >= 0 and high <= top and low < top * 0.05 and high > top * 0.95, key .. " spans 0-" .. top)
+    assert_true(below_middle > 160 and below_middle < 240, key .. " is uniform (" .. below_middle .. " of 400 below the middle)")
+  end
+end)
+
 test("the voice sends show in percent and send the same value (#387)", function()
   local context = load_strata(); finish_startup(context)
   for voice_idx = 1, 7 do

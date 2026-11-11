@@ -81,6 +81,69 @@ local function voice_sections(S)
   return sections
 end
 
+-- ALT+K2 acts on release (#557): a quick press randomizes the cursor's
+-- section (or undoes), a press held past the hold time (0.5 s) resets the row
+local HELD_SECONDS = 0.6
+local function quick_alt_k2() key(1, 1); tap(2); key(1, 0) end
+local function held_alt_k2(context)
+  key(1, 1); key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0); key(1, 0)
+end
+
+-- Every param's value, by id
+local function all_param_values()
+  local values = {}
+  for _, param in ipairs(params.params) do
+    if param.id and param.t ~= params.tSEPARATOR and param.t ~= params.tGROUP then values[param.id] = params:get(param.id) end
+  end
+  return values
+end
+
+-- The ranges VOICE's sections draw from (#557's plan), by param key; nil
+-- for a synthesis param (its whole controlspec, as MAIN's randomize) and for
+-- loop_length (0.05 to 1 - its new start, checked apart)
+local DRAW_RANGES = {
+  buf_pos = { 0, 1 }, buf_rate = { 0.5, 2 }, buf_scan = { -0.5, 0.5 }, loop_start = { 0, 0.75 },
+  history = { 0, 16 },                                                      -- the standard tier's history
+  grain_size = { 0.05, 0.35 }, grain_density = { 2, 40 }, grain_pitch = { 0.5, 2.5 }, grain_spread = { 0, 0.6 },
+  mod_speed = { 0.2, 10 }, pan = { -0.8, 0.8 },
+  reverse = { 0, 50 }, pitch_jitter = { 0, 6 }, pan_jitter = { 0, 0.5 }, size_jitter = { 0, 0.5 },
+  interval_prob = { 0, 100 },
+  filter_freq = { 100, 8000 }, filter_res = { 0, 0.7 }, delay_send = { 0, 0.6 }, reverb_send = { 0, 0.6 },
+}
+for slot = 1, 3 do
+  DRAW_RANGES["mod_amp_amt_" .. slot] = { -0.5, 0.5 }
+  DRAW_RANGES["mod_freq_amt_" .. slot] = { -0.5, 0.5 }
+end
+for n = 1, 4 do DRAW_RANGES["bookmark_" .. n] = { 0, 1 } end
+
+-- Each section a press randomizes, on voice 1 (Resonator): the source, the
+-- cursor's param and the keys drawn (every other param stays). Option keys
+-- may draw their old option; every other drawn key changes
+local SECTION_CASES = {
+  { section = "synth", source = "synth", cursor = "freq", drawn = { "freq", "rq", "noise", "mod1", "mod2" } },
+  { section = "synth", source = "buffer", cursor = "buf_scan",
+    drawn = { "buf_pos", "buf_rate", "buf_scan", "loop_start", "loop_length" } },
+  { section = "input", source = "input", cursor = "history", drawn = { "history" } },
+  { section = "grain", source = "synth", cursor = "grain_mode",
+    drawn = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env" } },
+  { section = "crossmod", source = "synth", cursor = "mod_source_2",
+    drawn = { "mod_speed", "mod_amp_amt_1", "mod_freq_amt_1", "mod_amp_amt_2", "mod_freq_amt_2", "mod_amp_amt_3",
+      "mod_freq_amt_3" } },
+  { section = "mix", source = "synth", cursor = "amp", drawn = { "pan" } },
+  { section = "variation", source = "synth", cursor = "intervals",
+    drawn = { "reverse", "pitch_jitter", "pan_jitter", "size_jitter", "interval_prob" } },
+  { section = "filter & sends", source = "synth", cursor = "filter_mix",
+    drawn = { "filter_type", "filter_freq", "filter_res", "delay_send", "reverb_send" } },
+  { section = "bookmarks", source = "buffer", cursor = "bookmark_3",
+    drawn = { "bookmark_1", "bookmark_2", "bookmark_3", "bookmark_4" } },
+}
+
+local function case_source(S, source)
+  if source == "buffer" then return S.constants.SOURCE_SYNTH + 1 end
+  if source == "input" then return S.constants.SOURCE_INPUT end
+  return S.constants.SOURCE_SYNTH
+end
+
 -- Register a record with one binary row, "v<i>_probe_switch", in the mix
 -- section (run before init)
 local function register_binary_row(S)
@@ -209,8 +272,8 @@ test("E3 on a binary VOICE row sets it on and off", function()
   enc(3, -2); assert_equal(params:get("v1_probe_switch"), 0, "more - keeps it off")
   key(1, 1); enc(3, 1); key(1, 0)
   assert_equal(params:get("v1_probe_switch"), 1, "ALT+E3 too")
-  key(1, 1); tap(2); key(1, 0)
-  assert_equal(params:get("v1_probe_switch"), 0, "ALT+K2 resets it to its default")
+  held_alt_k2(context)
+  assert_equal(params:get("v1_probe_switch"), 0, "ALT+K2 held resets it to its default")
   redraw()
   h.assert_screen_layout(context, "VOICE on a binary row")
 end)
@@ -321,25 +384,34 @@ test("ALT+K2 on a mapped binary VOICE row sends one CC with its default (#519)",
   enc(3, 1)
   norns.pmap.data["v1_probe_switch"] = { dev = 1, ch = 1, cc = 22, in_lo = 0, in_hi = 127,
     out_lo = 0, out_hi = 1, echo = true, value = 127 }
-  key(1, 1); tap(2); key(1, 0)
+  held_alt_k2(context)
   assert_equal(params:get("v1_probe_switch"), 0, "reset to its default")
   assert_equal(#controller.sent, 1, "one message to the controller")
   assert_equal(controller.sent[1][3], 0, "the default's value")
 end)
 
-test("ALT+K2 resets the field to its default; ALT+K3 locks", function()
+test("ALT+K2 held resets the field to its default; ALT+K3 locks", function()
   local context, S = started_voice_page()
   put_cursor(S, "v1_grain_spread")
   params:set("v1_grain_spread", 0.9)
   key(1, 1)
-  tap(2)
-  assert_near(params:get("v1_grain_spread"), param_default("v1_grain_spread"), 1e-9, "ALT+K2 resets the field")
+  key(2, 1); context.clock.run_for(HELD_SECONDS)
+  assert_near(params:get("v1_grain_spread"), 0.9, 1e-9, "nothing happens while K2 is down")
+  key(2, 0)
+  assert_near(params:get("v1_grain_spread"), param_default("v1_grain_spread"), 1e-9, "ALT+K2 held resets the field")
   assert_true(math.abs(params:get("v1_grain_spread") - 0.9) > 0.01, "away from 0.9")
+  assert_equal(local_value("undo"), nil, "a reset holds no undo")
   -- an option row too
   put_cursor(S, "v1_grain_env")
   params:set("v1_grain_env", 3)
-  tap(2)
+  key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0)
   assert_equal(params:get("v1_grain_env"), param_default("v1_grain_env"), "an option row resets")
+  -- a locked voice's row resets too (a locked voice can still be edited)
+  toggle_lock(1)
+  params:set("v1_grain_env", 3)
+  key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0)
+  assert_equal(params:get("v1_grain_env"), param_default("v1_grain_env"), "a locked voice's row resets")
+  toggle_lock(1)
   assert_true(not S.frozen[1], "voice 1 starts unlocked")
   tap(3)
   assert_true(S.frozen[1], "ALT+K3 locks the selected voice")
@@ -497,10 +569,259 @@ test("VOICE hints", function()
   local context, S = started_voice_page()
   assert_equal(hint_text(context), "K2:prev K3:next")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:reset K3:lock", "ALT")
+  assert_equal(hint_text(context), "K2:rand K3:lock", "ALT: a quick ALT+K2 randomizes")
   toggle_lock(1); redraw()
-  assert_equal(hint_text(context), "K2:reset K3:unlock", "ALT on a locked voice")
+  assert_equal(hint_text(context), "K2:locked K3:unlock", "ALT on a locked voice")
   key(1, 0)
+end)
+
+-- #557: ALT+K2 on VOICE acts on release. A quick press randomizes the
+-- section under the cursor (again within 5 s to undo); held past 0.5 s it
+-- resets the row; the hint says which, changing at the hold time
+test("VOICE's ALT+K2 hint: rand, undo, and reset while held (#557)", function()
+  local context, S = started_voice_page()
+  put_cursor(S, "v1_grain_size")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "a quick press randomizes")
+  key(2, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "while K2 is down: still the quick press's")
+  context.clock.run_for(HELD_SECONDS)
+  assert_equal(hint_text(context), "K2:reset K3:lock", "held past the hold time: letting go resets (drawn by the frame clock)")
+  key(2, 0); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "released: the quick hint is back")
+  tap(2); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:lock", "after a randomize: undo")
+  put_cursor(S, "v1_mod_speed")
+  assert_equal(hint_text(context), "K2:rand K3:lock", "another section: rand")
+  put_cursor(S, "v1_grain_pitch")
+  assert_equal(hint_text(context), "K2:undo K3:lock", "the same section: undo")
+  toggle_lock(1); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:unlock", "a locked voice's undo still runs")
+  tap(2); redraw()
+  assert_equal(hint_text(context), "K2:locked K3:unlock", "undone: the locked voice offers nothing")
+  key(1, 0)
+end)
+
+test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
+  for _, case in ipairs(SECTION_CASES) do
+    local what = case.section .. " (" .. case.source .. ")"
+    local context, S = started_voice_page()
+    params:set("v1_source", case_source(S, case.source))
+    if case.section == "synth" and case.source == "buffer" then
+      params:set("v1_loop_start", 0.9)                                    -- a loop length of 0.1 at most
+    end
+    put_cursor(S, "v1_" .. case.cursor)
+    assert_equal(voice_page_rows(1)[S.cursors.voice].section, case.section, what .. ": the cursor's section")
+    local drawn = {}
+    for _, key_name in ipairs(case.drawn) do drawn["v1_" .. key_name] = key_name end
+    local before = all_param_values()
+    math.randomseed(57)
+    key(1, 1); key(2, 1)
+    for id, value in pairs(all_param_values()) do assert_equal(value, before[id], what .. ": the press leaves " .. id) end
+    key(2, 0); key(1, 0)
+    for id, value in pairs(all_param_values()) do
+      local key_name = drawn[id]
+      if not key_name then
+        assert_equal(value, before[id], what .. ": " .. id .. " is left alone")
+      else
+        if params:lookup_param(id).t ~= params.tOPTION then
+          assert_true(value ~= before[id], what .. ": " .. id .. " is drawn")
+        end
+        local range = DRAW_RANGES[key_name]
+        if range then
+          assert_true(value >= range[1] - 1e-9 and value <= range[2] + 1e-9,
+            what .. ": " .. id .. " " .. value .. " within " .. range[1] .. "-" .. range[2])
+        end
+      end
+    end
+    if case.source == "buffer" and case.section == "synth" then
+      local start, length = params:get("v1_loop_start"), params:get("v1_loop_length")
+      assert_true(length >= 0.05 - 1e-9 and length <= 1 - start + 1e-9,
+        what .. ": the loop length " .. length .. " fits its new start " .. start)
+    end
+    assert_true(S.lib.mutation.undo_for(S.constants.UI_PAGES.index.VOICE, case.section, 1),
+      what .. ": the undo is VOICE's, this section's and voice 1's")
+    -- a quick press again undoes it all
+    quick_alt_k2()
+    for id, value in pairs(all_param_values()) do
+      assert_equal(value, before[id], what .. ": undone, " .. id .. " is back")
+    end
+  end
+end)
+
+test("VOICE's sections draw from their ranges (#557)", function()
+  for _, case in ipairs(SECTION_CASES) do
+    local what = case.section .. " (" .. case.source .. ")"
+    local context, S = started_voice_page()
+    params:set("v1_source", case_source(S, case.source))
+    put_cursor(S, "v1_" .. case.cursor)
+    local spec = S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section()
+    assert_equal(spec.page, S.constants.UI_PAGES.index.VOICE, what .. ": the spec's page")
+    assert_equal(spec.section, case.section, what .. ": the spec's section")
+    assert_equal(spec.voice, 1, what .. ": the spec's voice")
+    local ids = {}
+    for _, entry in ipairs(spec.draws) do ids[#ids + 1] = entry.id end
+    local expected = {}
+    for _, key_name in ipairs(case.drawn) do expected[#expected + 1] = "v1_" .. key_name end
+    assert_equal(table.concat(ids, ","), table.concat(expected, ","), what .. ": the drawn ids, in row order")
+    math.randomseed(7)
+    for _, entry in ipairs(spec.draws) do
+      local key_name = entry.id:match("^v1_(.+)$")
+      local range = DRAW_RANGES[key_name]
+      local param = params:lookup_param(entry.id)
+      local low, high, below_middle, draws = math.huge, -math.huge, 0, 400
+      local seen = {}
+      for _ = 1, draws do
+        local value = entry.draw()
+        low, high = math.min(low, value), math.max(high, value)
+        seen[value] = true
+        if range and value < (range[1] + range[2]) / 2 then below_middle = below_middle + 1 end
+      end
+      if param.t == params.tOPTION then
+        for option = 1, param.count do assert_true(seen[option], what .. ": " .. entry.id .. " draws option " .. option) end
+        for value in pairs(seen) do
+          assert_true(value % 1 == 0 and value >= 1 and value <= param.count, what .. ": " .. entry.id .. " an option index")
+        end
+      elseif range then
+        local span = range[2] - range[1]
+        assert_true(low >= range[1] - 1e-9 and high <= range[2] + 1e-9,
+          what .. ": " .. entry.id .. " draws " .. low .. "-" .. high .. " within " .. range[1] .. "-" .. range[2])
+        -- (each bookmark draws above the one before it: positions_test.lua
+        -- checks how the four spread)
+        local independent = not key_name:find("^bookmark_")
+        assert_true(not independent or (low < range[1] + span * 0.05 and high > range[2] - span * 0.05),
+          what .. ": " .. entry.id .. " spans its range (" .. low .. "-" .. high .. ")")
+        local octaves = key_name == "mod_speed" or key_name == "buf_rate" or key_name == "filter_freq"
+        if independent and not octaves then  -- (octaves: below, and voice_mix_test.lua for the cutoff)
+          assert_true(below_middle > draws * 0.4 and below_middle < draws * 0.6,
+            what .. ": " .. entry.id .. " is uniform (" .. below_middle .. " of " .. draws .. " below the middle)")
+        end
+      elseif key_name ~= "loop_length" then
+        -- a synthesis param: spec:map(random), its whole controlspec
+        local spec_range = param.controlspec
+        assert_true(low >= spec_range.minval and high <= spec_range.maxval, what .. ": " .. entry.id .. " within its spec")
+      end
+    end
+  end
+  -- mod speed and buffer rate spread evenly across octaves: half their
+  -- draws below the geometric middle (about 1.41 Hz of 0.2-10 Hz; 1 of 0.5-2)
+  for _, case in ipairs({ { source = "synth", id = "v1_mod_speed", middle = math.sqrt(0.2 * 10) },
+    { source = "buffer", id = "v1_buf_rate", middle = 1 } }) do
+    local context, S = started_voice_page()
+    params:set("v1_source", case_source(S, case.source))
+    put_cursor(S, case.id)
+    local entry
+    for _, each in ipairs(S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section().draws) do
+      if each.id == case.id then entry = each end
+    end
+    math.randomseed(8)
+    local below = 0
+    for _ = 1, 400 do if entry.draw() < case.middle then below = below + 1 end end
+    assert_true(below > 160 and below < 240, case.id .. " is even in octaves (" .. below .. " of 400 below " .. case.middle .. ")")
+  end
+end)
+
+test("a synth voice's synth section draws every synthesis param but amp and pan (#557)", function()
+  local context, S = started_voice_page()
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    S.selected_voice = voice_idx
+    local voice = S.voices[voice_idx]
+    put_cursor(S, "v" .. voice_idx .. "_" .. voice.param_order[1])
+    local ids, expected = {}, {}
+    for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section().draws) do
+      ids[#ids + 1] = entry.id
+    end
+    for _, key_name in ipairs(voice.param_order) do
+      if key_name ~= "amp" and key_name ~= "pan" then expected[#expected + 1] = "v" .. voice_idx .. "_" .. key_name end
+    end
+    assert_equal(table.concat(ids, ","), table.concat(expected, ","), voice.name .. ": its synthesis params")
+  end
+end)
+
+test("ALT+K2 on a locked voice: K2:locked and nothing changes (#557)", function()
+  local context, S = started_voice_page()
+  toggle_lock(1)
+  for _, case in ipairs(SECTION_CASES) do
+    params:set("v1_source", case_source(S, case.source))
+    put_cursor(S, "v1_" .. case.cursor)
+    key(1, 1); redraw()
+    assert_equal(hint_text(context), "K2:locked K3:unlock", case.section .. ": the hint")
+    local before = all_param_values()
+    tap(2)
+    for id, value in pairs(all_param_values()) do
+      assert_equal(value, before[id], case.section .. ": a locked voice keeps " .. id)
+    end
+    assert_equal(local_value("undo"), nil, case.section .. ": no undo")
+    key(1, 0)
+  end
+end)
+
+test("a Sub voice's mix section has no pan: K2:rand, and the press does nothing (#557)", function()
+  local context, S = started_voice_page()
+  local sub
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if S.voices[voice_idx].params.pan == nil then sub = voice_idx end
+  end
+  assert_true(sub ~= nil, "a voice without pan (Sub)")
+  S.selected_voice = sub
+  put_cursor(S, "v" .. sub .. "_amp")
+  assert_equal(#S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section().draws, 0, "no draws")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "the hint")
+  local before = all_param_values()
+  tap(2); redraw()
+  for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "Sub's mix: " .. id .. " unchanged") end
+  assert_equal(local_value("undo"), nil, "no undo")
+  assert_equal(hint_text(context), "K2:rand K3:lock", "still rand")
+  key(1, 0)
+end)
+
+-- Review Focus 3: the grain section's undo survives a source switch
+test("undo after a source switch restores the grain params (#557)", function()
+  local context, S = started_voice_page()
+  if not S.voices[1].active then toggle_voice(1) end
+  assert_true(S.voices[1].active, "voice 1 runs")
+  local grain_ids = { "v1_grain_size", "v1_grain_density", "v1_grain_pitch", "v1_grain_spread", "v1_grain_env" }
+  local before = {}
+  for _, id in ipairs(grain_ids) do before[id] = params:get(id) end
+  put_cursor(S, "v1_grain_size")
+  math.randomseed(3)
+  quick_alt_k2()
+  assert_true(params:get("v1_grain_size") ~= before.v1_grain_size, "the grain section is randomized")
+  local randomized = {}
+  for _, id in ipairs(grain_ids) do randomized[id] = params:get(id) end
+  put_cursor(S, "v1_source")
+  enc(3, 1)                                                                  -- E3: synth to buf 1
+  assert_equal(params:get("v1_source"), S.constants.SOURCE_SYNTH + 1, "the source switched")
+  for _, id in ipairs(grain_ids) do assert_equal(params:get(id), randomized[id], "the switch leaves " .. id) end
+  put_cursor(S, "v1_grain_spread")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:lock", "the grain section's undo is still held")
+  context.clear_engine_calls()
+  tap(2); key(1, 0)
+  for _, id in ipairs(grain_ids) do assert_equal(params:get(id), before[id], "undone: " .. id .. " is back") end
+  assert_equal(params:get("v1_source"), S.constants.SOURCE_SYNTH + 1, "the source stays")
+  local sizes = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "grainSize" then sizes[#sizes + 1] = call.args[3] end
+  end
+  assert_near(sizes[#sizes], before.v1_grain_size, 1e-9, "the engine hears the old size")
+end)
+
+-- The loop pair's undo: the start's action cuts a length that no longer
+-- fits, so the length held is the one before the randomize, not the cut one
+test("the synth section's undo brings a buffer voice's loop back whole (#557)", function()
+  local context, S = started_voice_page()
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_loop_start", 0)
+  params:set("v1_loop_length", 1)                                          -- the whole slot
+  put_cursor(S, "v1_buf_pos")
+  math.randomseed(5)
+  quick_alt_k2()
+  assert_true(params:get("v1_loop_start") > 1e-6, "a new start leaves no room for a length of 1")
+  quick_alt_k2()
+  assert_near(params:get("v1_loop_start"), 0, 1e-9, "undone: the start")
+  assert_near(params:get("v1_loop_length"), 1, 1e-9, "undone: the length, as it was before the randomize")
 end)
 
 test("the arc button starts and stops the selected voice on VOICE", function()

@@ -8,9 +8,10 @@
 -- VOICE section "filter & sends" and LFO destinations (the cutoff and both
 -- sends). Two fx params (S.register_fx_params), delay_bypass and
 -- reverb_bypass, free and re-create the effect's engine node
--- (engine.setBypass); PSETs store them, scenes never do. Randomize,
--- mutation and the fader pages never touch any of them. See
--- docs/notes/lua/voice-mix.md.
+-- (engine.setBypass); PSETs store them, scenes never do. MAIN's
+-- randomize, mutation and the fader pages never touch any of them; VOICE's
+-- ALT+K2 on its section draws all but the filter's mix (the record's
+-- randomize, #557). See docs/notes/lua/voice-mix.md.
 
 return function(S)
   local M = {}
@@ -108,6 +109,17 @@ return function(S)
     voice_rows = {section = M.VOICE_MIX.section, rows = M.VOICE_MIX.keys},
     layout_states = layout_states,
     fader = false,
+    -- VOICE's ALT+K2 on this section (#557): the type a uniform option, the
+    -- cutoff 100-8000 Hz even in octaves (2 ^ uniform(log2 100, log2 8000)),
+    -- the res below self-oscillation and the sends moderate. The filter's
+    -- mix is kept: 0 would leave the filter out
+    randomize = {
+      filter_type = function() return math.random(#M.VOICE_MIX.filter_types) end,
+      filter_freq = function() return 100 * (8000 / 100) ^ math.random() end,
+      filter_res = function() return math.random() * 0.7 end,
+      delay_send = function() return math.random() * 0.6 end,
+      reverb_send = function() return math.random() * 0.6 end,
+    },
   }
   S.register_voice_params(record)
   for _, destination in ipairs(M.VOICE_MIX.lfo) do

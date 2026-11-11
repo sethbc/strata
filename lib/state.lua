@@ -155,9 +155,9 @@ return function()
   --     before = <section>}: VOICE's rows (lib/ui/voice_rows.lua);
   --   layout_states: {{name, setup = fn(context)}}: VOICE's layout tests draw them;
   --   fader: never true (registered params stay off the 256 fader pages);
-  --   randomize: {key = fn() -> value}: the keys a press of ALT+K2 on their
-  --     VOICE section randomizes, each with its draw (#557); never MAIN's
-  --     randomize_voice, the mutations or the fader pages
+  --   randomize: {key = fn(voice_idx) -> value}: the keys a press of ALT+K2
+  --     on their VOICE section randomizes, each with its draw (#557); never
+  --     MAIN's randomize_voice, the mutations or the fader pages
   function M.register_voice_params(record)
     local kind = "register_voice_params"
     require_open("voice_params", kind)

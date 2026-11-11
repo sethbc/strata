@@ -333,6 +333,47 @@ test("randomize, mutation and the fader pages leave loops alone", function()
   end
 end)
 
+-- #557: a press of ALT+K2 on a buffer voice's synth section draws the loop
+-- (the record's randomize) after the buffer params: the start uniform
+-- 0-0.75, then the length uniform 0.05 to 1 - the start just set, so the
+-- pair always fits and the loop is never shorter than 0.05
+test("loops' randomize draws a start 0-0.75, then a length 0.05 to 1 - start (#557)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local record
+  for _, each in ipairs(S.registry.voice_params) do
+    if each.name == "loops" then record = each end
+  end
+  local keys = {}
+  for key in pairs(record.randomize) do keys[#keys + 1] = key end
+  table.sort(keys)
+  assert_equal(table.concat(keys, ","), "loop_length,loop_start", "the drawn keys")
+  params:set("v3_source", S.constants.SOURCE_SYNTH + 1)
+  math.randomseed(17)
+  local function sample(draw, top)
+    local low, high, below_middle = math.huge, -math.huge, 0
+    for _ = 1, 400 do
+      local value = draw(3)
+      low, high = math.min(low, value), math.max(high, value)
+      if value < top then below_middle = below_middle + 1 end
+    end
+    return low, high, below_middle
+  end
+  local low, high, below = sample(record.randomize.loop_start, 0.375)
+  assert_true(low >= 0 and high <= 0.75 and low < 0.04 and high > 0.71, "the start spans 0-0.75 (" .. low .. "-" .. high .. ")")
+  assert_true(below > 160 and below < 240, "the start is uniform (" .. below .. " of 400 below 0.375)")
+  for _, start in ipairs({ 0, 0.4, 0.75 }) do
+    params:set("v3_loop_start", start)
+    local room = 1 - start
+    low, high, below = sample(record.randomize.loop_length, (0.05 + room) / 2)
+    assert_true(low >= 0.05 and high <= room + 1e-9, "start " .. start .. ": the length fits (" .. low .. "-" .. high .. ")")
+    assert_true(low < 0.05 + (room - 0.05) * 0.05 and high > room - (room - 0.05) * 0.05,
+      "start " .. start .. ": the length spans 0.05 to " .. room)
+    assert_true(below > 160 and below < 240, "start " .. start .. ": uniform (" .. below .. " of 400 below the middle)")
+  end
+end)
+
 -- #531: scenes set the registered fields in sorted key order, so a loop's
 -- length comes before its start. The length's filter stands down while a
 -- scene sets them (clamped to the old start's room, a recall from (0.5, 0.5)

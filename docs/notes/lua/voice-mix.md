@@ -4,7 +4,7 @@
 - The voice params reach the engine only through their registered grain keys (`setGrainParam`, while the voice runs) and the voice sync; never `engine.*` from an action. `filter_type` goes as its option minus 1 (`filterType` 0-2).
 - `filter_type` is a discrete scene field (it switches at a transition's end); the other five crossfade. The cutoff and the two sends are LFO destinations (`v<i> vfilt`, `v<i> dsend`, `v<i> rsend`), registered after every built-in destination and after history, so saved destination indices keep their meaning.
 - The bypass is explicit: only `delay_bypass` and `reverb_bypass` send `engine.setBypass`. A mix of 0 (E3, PARAMS, an LFO, a scene fade, a MIDI CC) never sets a bypass, and a bypass never changes a mix.
-- PSETs store the bypass params (they are params); scenes never capture or recall them. Randomize, mutation and the 256 fader pages never touch any param of this module (`fader = false`).
+- PSETs store the bypass params (they are params); scenes never capture or recall them. MAIN's randomize, mutation and the 256 fader pages never touch any param of this module (`fader = false`). A quick ALT+K2 on VOICE's filter & sends section is the one exception (#557): the record's `randomize` draws `filter_type` (a uniform option), `filter_freq` (100-8000 Hz, even in octaves), `filter_res` (0-0.7, below self-oscillation) and `delay_send` and `reverb_send` (0-0.6 each); `filter_mix` is kept (0 would leave the filter out), and so are the bypass params.
 
 ## lib/voice_mix.lua (`S.lib.voice_mix`)
 
@@ -27,4 +27,4 @@ The bypass params (`S.register_fx_params`, record `bypass`, count 2), at the end
 
 The engine side (the voice filter inside every grain synth, the send gains, the bypass that frees and re-creates the node) is in `docs/notes/engine/effects.md`.
 
-Tests: `test/unit/voice_mix_test.lua` (defaults and sends, the sync order, the LFO destinations, the scene round trip with the type switching at the end, the bypass params in PSETs and not in scenes, mixes and bypasses independent, the VOICE section and layout states, randomize, mutation and the faders); the FX page's K3 and `byp` in `test/unit/pages_fx_test.lua`.
+Tests: `test/unit/voice_mix_test.lua` (defaults and sends, the sync order, the LFO destinations, the scene round trip with the type switching at the end, the bypass params in PSETs and not in scenes, mixes and bypasses independent, the VOICE section and layout states, randomize, mutation and the faders, the record's `randomize` draws); the FX page's K3 and `byp` in `test/unit/pages_fx_test.lua`.

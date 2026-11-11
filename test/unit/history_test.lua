@@ -221,4 +221,32 @@ test("randomize, mutation and the fader pages leave history alone", function()
   end
 end)
 
+-- #557: a press of ALT+K2 on VOICE's input section draws history, uniform
+-- from 0 to its spec's top (the tier's history)
+test("history's randomize draws 0 to the tier's history, uniform (#557)", function()
+  for _, tier in ipairs({ { name = "standard", seconds = 16 }, { name = "high", seconds = 60 } }) do
+    h.write_performance_active({ tier = tier.name, buffer_seconds = tier.seconds, max_grains = 128,
+      history_seconds = tier.seconds, reason = tier.name .. ": setting" })
+    local context = load_strata()
+    finish_startup(context)
+    local record
+    for _, each in ipairs(local_value("S").registry.voice_params) do
+      if each.name == "history" then record = each end
+    end
+    local keys = {}
+    for key in pairs(record.randomize) do keys[#keys + 1] = key end
+    assert_equal(table.concat(keys, ","), "history", tier.name .. ": the drawn key")
+    math.randomseed(19)
+    local low, high, below_middle = math.huge, -math.huge, 0
+    for _ = 1, 400 do
+      local value = record.randomize.history(4)
+      low, high = math.min(low, value), math.max(high, value)
+      if value < tier.seconds / 2 then below_middle = below_middle + 1 end
+    end
+    assert_true(low >= 0 and high <= tier.seconds, tier.name .. ": within 0-" .. tier.seconds .. " s (" .. low .. "-" .. high .. ")")
+    assert_true(low < tier.seconds * 0.05 and high > tier.seconds * 0.95, tier.name .. ": spans its range")
+    assert_true(below_middle > 160 and below_middle < 240, tier.name .. ": uniform (" .. below_middle .. " of 400 below the middle)")
+  end
+end)
+
 end

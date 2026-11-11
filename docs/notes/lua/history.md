@@ -2,7 +2,7 @@
 
 - `v<i>_history`'s range is 0 to `S.performance.history_seconds`, read when the param is added at init (16 s standard, 60 s high), so a PSET or scene value saved on a longer tier clamps silently and the engine never receives more than the tier's history.
 - History reaches the engine only through its registered grain key (`setGrainParam(voice, "history", seconds)`, while the voice runs) and the voice sync; never `engine.*` from the param's action.
-- It is a continuous scene field (default 0), an LFO destination after every built-in one, and never touched by randomize, mutation or the 256 fader pages (`fader = false`).
+- It is a continuous scene field (default 0), an LFO destination after every built-in one, and never touched by MAIN's randomize, mutation or the 256 fader pages (`fader = false`). A quick ALT+K2 on VOICE's input section is the one exception (#557): the record's `randomize` draws it uniform from 0 to its param's top (the tier's history when the params were added), reading the voice's own param, so its draw takes the voice index.
 - It is not `buf_pos`: an old scene whose voice is on input with a non-zero `buf_pos` must not jump into the past.
 
 ## lib/history.lua (`S.lib.history`)
@@ -17,4 +17,4 @@ One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/pa
 
 `M.HISTORY` names the key, engine name, LFO label and VOICE section. The engine side (the input ring and how far back a grain reads) is in `docs/notes/engine/rings.md`.
 
-Tests: `test/unit/history_test.lua` (range, sends, scene field and crossfade, a high-tier value on standard, the VOICE row and layout, the LFO destination, randomize, mutation and the faders).
+Tests: `test/unit/history_test.lua` (range, sends, scene field and crossfade, a high-tier value on standard, the VOICE row and layout, the LFO destination, randomize, mutation and the faders, the record's `randomize` draw on both tiers).

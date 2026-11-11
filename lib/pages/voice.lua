@@ -3,8 +3,9 @@
 -- voice_page_rows (synth, grain, crossmod, mix, and the registered voice
 -- params' rows and sections), through field_list. E2 moves the cursor
 -- (S.cursors.voice), E3 edits its param (a binary row: on up, off down), K2/K3 jump to the
--- previous/next section, ALT+K2 resets the field to its default, ALT+K3
--- locks the voice; the arc button starts and stops it. Registers its
+-- previous/next section, ALT+K2 on release randomizes the cursor's section
+-- or undoes it (S.lib.ui_alt's shared handler; held, it resets the field to
+-- its default), ALT+K3 locks the voice; the arc button starts and stops it. Registers its
 -- S.registry.pages record (every field but the arc fields, which are
 -- lib/arc/voice.lua's). The cursor and its anchor are lib/ui/cursors.lua's;
 -- sync_cursor and place_cursor (fields of S.lib.pages_voice) call it.
@@ -160,10 +161,73 @@ return function(S)
       function(row, y, selected) draw_row(row, y, selected, marked[row]) end)
   end
 
-  -- The hint row (redraw() draws it after the page)
+  -- ALT+K2's randomize (#557): the section under the cursor. A built-in
+  -- row's draw is VOICE_DRAWS[key](param_id), a synthesis param's (the synth
+  -- section of a synth voice) its whole controlspec, as MAIN's randomize; a
+  -- registered row's its record's randomize[key](voice_idx). Any other row
+  -- is kept: amp, the source, grain mode, the mod sources and the registered
+  -- rows without a draw (freeze, the interval set, the filter's mix)
+  local function uniform(low, high)
+    return function() return low + math.random() * (high - low) end
+  end
+  local VOICE_DRAWS = {
+    buf_pos = uniform(0, 1),                                    -- the buffer params: MAIN's ranges
+    buf_rate = function() return 2 ^ (math.random() * 2 - 1) end,
+    buf_scan = uniform(-0.5, 0.5),
+    grain_size = uniform(0.05, 0.35),
+    grain_density = uniform(2, 40),
+    grain_pitch = uniform(0.5, 2.5),
+    grain_spread = uniform(0, 0.6),
+    grain_env = function(param_id) return math.random(params:lookup_param(param_id).count) end,
+    mod_speed = function() return 0.2 * (10 / 0.2) ^ math.random() end,  -- 0.2-10 Hz, even in octaves
+    pan = uniform(-0.8, 0.8),
+  }
+  for slot = 1, S.constants.NUM_MOD_SLOTS do
+    VOICE_DRAWS["mod_amp_amt_" .. slot] = uniform(-0.5, 0.5)
+    VOICE_DRAWS["mod_freq_amt_" .. slot] = uniform(-0.5, 0.5)
+  end
+  local function synth_param_draw(param_id) return params:lookup_param(param_id).controlspec:map(math.random()) end
+
+  -- The draw of the selected voice's row (fn() -> value), or nil for a row
+  -- the randomize keeps
+  local function row_draw(voice_idx, row)
+    local key = param_key(row)
+    for _, record in ipairs(S.registry.voice_params) do
+      local draw = record.randomize and record.randomize[key]
+      if draw then return function() return draw(voice_idx) end end
+    end
+    local draw = VOICE_DRAWS[key]
+    if not draw and row.section == "synth" and S.voices[voice_idx].params[key] ~= nil then draw = synth_param_draw end
+    if draw then return function() return draw(row.param_id) end end
+  end
+
+  -- The record's randomize_section (S.lib.ui_alt's shared ALT+K2): the
+  -- spec of the cursor's section, its rows' draws in row order (a buffer
+  -- voice's loop start before its length; a Sub voice's mix has none, so
+  -- its press does nothing), with "locked" for a locked voice. The hint
+  -- calls it on every draw while ALT is held: it builds the rows once
+  local function voice_randomize_section()
+    local rows, cursor = M.sync_cursor()
+    local voice_idx = S.selected_voice
+    local section = rows[cursor].section
+    local draws = {}
+    for _, row in ipairs(rows) do
+      if row.section == section and row.selectable ~= false then
+        local draw = row_draw(voice_idx, row)
+        if draw then draws[#draws + 1] = {id = row.param_id, draw = draw} end
+      end
+    end
+    return {page = UI_PAGES.index.VOICE, section = section, voice = voice_idx, draws = draws},
+      S.frozen[voice_idx] and "locked" or nil
+  end
+
+  -- The hint row (redraw() draws it after the page): with ALT, ALT+K2's
+  -- (the shared handler's: rand, undo or locked; reset once held past the
+  -- hold time) and ALT+K3's (lock)
   local function voice_hints(alt_held)
     if alt_held then
-      return "K2:reset K3:" .. (S.frozen[S.selected_voice] and "unlock" or "lock")
+      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.VOICE]) .. " K3:"
+        .. (S.frozen[S.selected_voice] and "unlock" or "lock")
     end
     return "K2:prev K3:next"
   end
@@ -201,19 +265,39 @@ return function(S)
     end
   end
 
-  -- ALT+K2: reset the field to its default; ALT+K3: lock or unlock the voice
+  -- ALT+K2 acts on release (voice_alt_key_release): the press only notes
+  -- its time. ALT+K3: lock or unlock the voice, at the press
   local function voice_alt_key(n)
-    local rows, cursor = M.sync_cursor()
     if n == 2 then
-      local param_id = rows[cursor].param_id
-      if rows[cursor].kind == "binary" then
-        set_binary_param(param_id, param_default(param_id))  -- echoes to a MIDI map (#519)
-      else
-        params:set(param_id, param_default(param_id))
-      end
+      S.lib.ui_alt.k2_down()
     elseif n == 3 then
       toggle_lock(S.selected_voice)
     end
+  end
+
+  -- ALT+K2 released: a quick press randomizes the cursor's section or
+  -- undoes its randomize (voice_randomize_section); one held past the hold
+  -- time resets the row (voice_reset_row)
+  local function voice_alt_key_release(n)
+    if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.VOICE]) end
+  end
+
+  -- ALT+K2 held, the record's alt_hold: reset the field under the cursor to
+  -- its default (a locked voice's too: a locked voice can still be edited)
+  local function voice_reset_row()
+    local rows, cursor = M.sync_cursor()
+    local param_id = rows[cursor].param_id
+    if rows[cursor].kind == "binary" then
+      set_binary_param(param_id, param_default(param_id))  -- echoes to a MIDI map (#519)
+    else
+      params:set(param_id, param_default(param_id))
+    end
+  end
+
+  -- The frame clock redraws VOICE while ALT+K2 is down, so its hint turns
+  -- to K2:reset at the hold time
+  local function voice_animates()
+    return S.lib.ui_alt.k2_held()
   end
 
   -- The arc button on VOICE (design §7): start or stop the selected voice
@@ -287,13 +371,24 @@ return function(S)
     toggle_lock(1)
     M.place_cursor(M.row_of("v1_filter_mix"))
   end})
+  -- ALT's hint row: the widest, K2:locked K3:unlock, and ALT+K2 held past
+  -- the hold time (K2:reset)
+  table.insert(layout_states, {name = "ALT held, voice locked", setup = function()
+    toggle_lock(S.selected_voice)
+    key(1, 1)
+  end})
+  table.insert(layout_states, {name = "ALT+K2 held past the hold time", setup = function(context)
+    key(1, 1); key(2, 1)
+    context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+  end})
 
   -- The page's record, at VOICE's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/voice.lua's
   S.registry.pages[UI_PAGES.index.VOICE] = {name = "VOICE", draw = redraw_voice, hints = voice_hints,
-    enc = voice_enc, key = voice_key, alt_key = voice_alt_key, arc_button = start_or_stop_selected_voice,
-    layout_states = layout_states}
+    enc = voice_enc, key = voice_key, alt_key = voice_alt_key, alt_key_release = voice_alt_key_release,
+    randomize_section = voice_randomize_section, alt_hold = voice_reset_row, animates = voice_animates,
+    arc_button = start_or_stop_selected_voice, layout_states = layout_states}
 
   -- init's start step: every registered voice-param record's layout_states
   -- (S.registry.voice_params) after VOICE's own, so its rows are drawn by

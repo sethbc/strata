@@ -586,12 +586,21 @@ return function(S)
 
   local function fraction_text(param) return string.format("%.3f", param:get()) end
 
-  local bookmark_keys, scene_defaults, scene_ranges = {}, {}, {}
+  -- randomize_draws: VOICE's ALT+K2 on the bookmarks section (#557), four
+  -- uniform 0-1 positions in ascending order. VOICE draws them in row order,
+  -- each set before the next is drawn, so bookmark n draws the lowest of the
+  -- NUM_BOOKMARKS - n + 1 uniform positions left above bookmark n - 1 (above
+  -- 0 for the first): 1 - (1 - previous) * u ^ (1 / left)
+  local bookmark_keys, scene_defaults, scene_ranges, randomize_draws = {}, {}, {}, {}
   for n = 1, NUM_BOOKMARKS do
     local key = "bookmark_" .. n
     bookmark_keys[n] = key
     scene_defaults[key] = (n - 1) / NUM_BOOKMARKS
     scene_ranges[key] = {0, 1}
+    randomize_draws[key] = function(voice_idx)
+      local previous = n > 1 and params:get(param_id(voice_idx, bookmark_keys[n - 1])) or 0
+      return 1 - (1 - previous) * math.random() ^ (1 / (NUM_BOOKMARKS - n + 1))
+    end
   end
 
   -- VOICE's layout tests and page renders: each voice on buffer 1, the
@@ -639,6 +648,7 @@ return function(S)
     },
     layout_states = layout_states,
     fader = false,
+    randomize = randomize_draws,
   }
   S.register_voice_params(record)
 

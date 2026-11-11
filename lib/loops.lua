@@ -6,8 +6,9 @@
 -- A registered voice param record (S.register_voice_params): the loopStart
 -- and loopLength grain params, continuous scene fields, and two VOICE rows
 -- in a buffer voice's synth section. The start stops at 0.999 and the
--- length at 1 - start. Randomize, mutation and the fader pages never touch
--- them. See docs/notes/lua/loops.md.
+-- length at 1 - start. MAIN's randomize, mutation and the fader pages never
+-- touch them; VOICE's ALT+K2 on the synth section draws both (the record's
+-- randomize, #557). See docs/notes/lua/loops.md.
 
 return function(S)
   local M = {}
@@ -27,6 +28,9 @@ return function(S)
     -- near 0.001 one detent of the exponential length moves it about 7%
     -- (0.00007), which three or four decimals would hide
     format = "%.3f", fine_format = "%.5f", fine_below = 0.01,
+    -- VOICE's randomize (the record's randomize, #557): a start up to
+    -- random_max_start, then a length from random_min_length to 1 - start
+    random_max_start = 0.75, random_min_length = 0.05,
   }
   local LOOP = M.LOOP
 
@@ -140,6 +144,19 @@ return function(S)
     },
     layout_states = layout_states,
     fader = false,
+    -- VOICE's ALT+K2 on a buffer voice's synth section (#557), after the
+    -- buffer params, in row order: the start uniform 0 to random_max_start,
+    -- then the length uniform from random_min_length to 1 - the start just
+    -- set, so the pair always fits (a start left above 1 - random_min_length
+    -- by hand gets a length within its room)
+    randomize = {
+      [LOOP.start_key] = function() return math.random() * LOOP.random_max_start end,
+      [LOOP.length_key] = function(voice_idx)
+        local room = M.max_length(voice_idx)
+        local shortest = math.min(LOOP.random_min_length, room)
+        return shortest + math.random() * (room - shortest)
+      end,
+    },
   }
   S.register_voice_params(record)
 

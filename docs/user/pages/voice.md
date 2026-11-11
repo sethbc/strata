@@ -32,10 +32,24 @@ Each value is the parameter's own text with its unit, shortened when it does not
 - **E3** - Adjust the row under the cursor (ALT+E3 in finer steps)
 - **K2** - Jump to the previous section's first row (in the first section, to its first row)
 - **K3** - Jump to the next section's first row
-- **ALT+K2** - Reset the row under the cursor to its default
+- **ALT+K2** - Randomize the section under the cursor, when you let go of K2. Press it again within 5 seconds, in the same section of the same voice, to undo it. Hold it longer than half a second to reset the row under the cursor to its default instead
 - **ALT+K3** - Lock or unlock the voice (as on MAIN: a locked voice is skipped by randomize and mutations)
 
-The hint row shows `K2:prev K3:next`, and with ALT (K1 held) `K2:reset K3:lock` or `K3:unlock`.
+The hint row shows `K2:prev K3:next`. With ALT (K1 held) it shows `K2:rand`, `K2:undo` while a quick press would undo, or `K2:locked` on a locked voice (whose rows a quick press leaves alone), then `K3:lock` or `K3:unlock`. Once ALT+K2 has been held half a second it shows `K2:reset`, and letting go resets the row (a locked voice's too).
+
+### Randomize
+
+A quick ALT+K2 changes only the section the cursor is in, within ranges that keep the voice playable. It never changes the level, the source or anything that rewires the voice:
+- **synth** - every synth parameter across its range, as MAIN's randomize does. A buffer voice: its position, its rate (0.5-2, as many octaves down as up) and its scan (-0.5 to 0.5), then a loop start (0-0.75) and a loop length that fits after it (at least 0.05)
+- **input** - the history, from 0 to its top
+- **grain** - size (0.05-0.35), density (2-40), pitch (0.5-2.5), spread (0-0.6) and the envelope. The mode stays
+- **crossmod** - the speed (0.2-10 Hz) and each slot's amplitude and frequency amounts (-0.5 to 0.5). The sources stay
+- **mix** - the pan (-0.8 to 0.8). The Sub has no pan, so the press does nothing there. The source, level, freeze and freeze mode stay
+- **variation** - reverse (0-50 %), pitch jitter (0-6 st), pan and size jitter (0-0.5) and interval probability (0-100 %). The intervals, the custom intervals and quantize stay
+- **filter & sends** - the filter's type, freq (100-8000 Hz) and res (0-0.7), and both sends (0-60 %). The filter's mix stays, so a filter left out stays out
+- **bookmarks** - four new positions, in order: bookmark 1 is the lowest
+
+There is one undo for the whole script: a randomize on another page, in another section or of another voice replaces it, and so does editing a parameter it changed. See [Screen Controls](../controls.md#alt-k1-held).
 
 When the voice's source changes (from the grid, MIDI, a scene or the mix section itself) the sections change with it. The cursor stays on its parameter when the new sections still have it (grain pitch stays on grain pitch when the synth section goes), and otherwise moves to the nearest row. Selecting another voice keeps the cursor on the same parameter of that voice where it has one, and a change and back (input and back to synth, another voice and back) returns it to where it was.
 
