@@ -71,7 +71,10 @@ SynthDef(\strataCheckRingStart, { arg out, now, bufL, bufR, phaseBus, history = 
     var trig = Impulse.ar(SampleRate.ir / period), reset = T2A.ar(t_reset), on = trig > 0;
     var read = engine.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze)
         .value(trig, K2A.ar(rate), K2A.ar(dur), 0);
-    var written = BufRd.ar(1, bufL, read[\pos] * BufFrames.kr(bufL), 1, 1);
+    // (the ring's frames held for the block, as GrainBuf reads its buffer's
+    // at the trigger: a control-rate product would ramp them across the
+    // block where the reader is pointed at another ring)
+    var written = BufRd.ar(1, bufL, read[\pos] * Latch.ar(BufFrames.kr(bufL), Impulse.ar(ControlRate.ir)), 1, 1);
     var back = In.ar(now, 1) - written, blockSeconds = block / SampleRate.ir;
     var fromA = back - expect, fromB = back - expectB;
     var off = Select.ar((fromB - (0.5 * blockSeconds)).abs < (fromA - (0.5 * blockSeconds)).abs, [fromA, fromB]);
@@ -453,6 +456,57 @@ check.(((readings[1] / 0.25) - 1).abs < 0.02 and: { readings[0] > 0.19 },
     "rings: grains at rate 1 with no spread give the ring's audio back (750 Hz at 0.5, 0.1 s Hann grains at 20 a second; left rms %, want 0.25; envelope never under %)"
         .format(readings[1].round(0.0001), readings[0].round(0.0001)));
 command.(\voiceOff, 2);
+
+// A reader pointed between two rings (what a freeze and an unfreeze of an
+// input voice send in one message: the rings, the phase bus and the
+// history), with a trigger in every block, 40 times: every grain starts at
+// the old read point (the input ring at history 2) or the new one (voice
+// 1's ring at history 0), never between them
+ringStarts = ringStart.(engine.ringBuffersFor(0, engine.inputSource), [\history, 2.0, \expect, engine.ringReadMargin + 2.0,
+    \expectB, engine.ringReadMargin]);
+server.sync; 0.1.wait;
+ringStarts[\synth].set(\t_reset, 1);
+20.do({
+    var voiceRing = engine.ringBuffersFor(0, 0), inputRing = engine.ringBuffersFor(0, engine.inputSource);
+    ringStarts[\synth].set(\bufL, voiceRing[0].bufnum, \bufR, voiceRing[1].bufnum, \phaseBus, voiceRing[2].index, \history, 0);
+    0.03.wait;
+    ringStarts[\synth].set(\bufL, inputRing[0].bufnum, \bufR, inputRing[1].bufnum, \phaseBus, inputRing[2].index, \history, 2.0);
+    0.03.wait;
+});
+readings = readBus.(ringStarts[\bus]);
+ringStarts[\synth].free; ringStarts[\bus].free;
+check.((readings[3] > 500) and: { readings[2] == 0 } and: { readings[0] >= -0.00005 }
+    and: { readings[1] <= ((block / sampleRate) + 0.00005) },
+    "rings: a reader pointed at another ring starts every grain at the old read point or the new one (% to % ms past the nearer lookback, % of % triggers more than three blocks off)"
+        .format((readings[0] * 1000).round(0.001), (readings[1] * 1000).round(0.001), readings[2], readings[3]));
+
+// Grain rates are clipped to +/- ringMaxRate (4): pitchShift 4 with an
+// interval of +24 (and on the input voice a bend of 2) asks a synth voice
+// (voice 1) for rate 16 and an input voice (voice 4) for 32. Both read at
+// rate 4, never ahead of the write head and never further back than
+// margin + 3 x 0.5 s (plus a block)
+startTimecodeVoice.(0, 0, 0.5, 1.5, 4.0);
+startTimecodeVoice.(3, engine.inputSource, 0.5, 1.5, 4.0);
+[0, 3].do({ arg voice;
+    [[\intervalCount, 1.0], [\interval1, 24.0], [\intervalProb, 1.0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+});
+command.(\setVoiceParam, 3, \bend, 2.0);
+server.sync; 2.0.wait;                     // the ring holds 2 s of timecode
+readings = readsOf.([0, 3], 3.0);
+[["a synth voice, rate 16 asked", readings[0]], ["an input voice, rate 32 asked", readings[1]]].do({ arg pair;
+    var values = pair[1];
+    check.(((values[5] / 4) - 1).abs < 0.002 and: { ((values[6] / 4) - 1).abs < 0.002 }
+        and: { values[1] >= (engine.ringReadMargin - 0.0005) }
+        and: { values[0] <= (1.505 + (block / sampleRate) + 0.0005) },
+        "rings: a ring grain's rate is clipped to 4 (%: rates % to %, lookback % to % s)".format(
+            pair[0], values[6].round(0.0001), values[5].round(0.0001), values[1].round(0.0001), values[0].round(0.0001)));
+});
+[0, 3].do({ arg voice;
+    [[\intervalCount, 0.0], [\interval1, 0.0], [\pitchShift, 1.0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    command.(\voiceOff, voice);
+});
+command.(\setVoiceParam, 3, \bend, 1.0);
+command.(\setGrainSource, 3, 0);
 
 timecode.free; sine.free;
 h.stopAllVoices;

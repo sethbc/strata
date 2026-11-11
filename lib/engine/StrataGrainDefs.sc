@@ -222,30 +222,41 @@
     // mode. history is clipped to historySeconds. ringScanOffset (the
     // freeze area's hook; neutral 0) moves the read point further back by
     // the voice's scan, for a frozen ring.
+    // The head, the ring's frames and the history are each held for the
+    // block (Latch on a block-rate tick, as slotHeadGuard holds its head),
+    // and while the head advanced by one block since the last (the writer
+    // runs; counted round the ring, so across its wrap too) the sample's
+    // offset in the block is added: a grain starts at head - one block +
+    // offset - D, the true head one block late, the same distance behind
+    // it wherever in the block its trigger falls (grains at one rate stay
+    // in phase; never the head held alone). A head that did not advance by
+    // a block (a paused writer, a frozen copy's, or a reader just pointed
+    // at another ring: rings, phase bus and history in one message) gets
+    // no offset, so its grains start at one point, the new ring's, never
+    // between the old read point and the new one. HPZ1.kr(head) x 2 is the
+    // head's step since the last block (its one sample of state is the
+    // last block's head).
     ringGrainReader { arg bufL, bufR, phaseBus, posSpread, history, bufScan, freeze;
         ^{ arg trig, rate, dur, mode;
+            var block = context.server.options.blockSize, tick = Impulse.ar(ControlRate.ir);
             var ringRate = rate.clip2(this.ringMaxRate);
             var ahead = (ringRate - 1).max(0);
             var length = dur + (mode * ((dur / ahead.max(1)) - dur));
             var spread = TRand.ar(0, posSpread * this.ringSpreadSeconds, trig) * (1 - mode);
-            var lookback = this.ringReadMargin + history.clip(0, historySeconds) + spread + (ahead * length)
+            var head = In.kr(phaseBus, 1), frames = BufFrames.kr(bufL);
+            var lookback = this.ringReadMargin + Latch.ar(history.clip(0, historySeconds), tick) + spread + (ahead * length)
                 + this.ringScanOffset(bufScan, freeze);
-            var frames = BufFrames.kr(bufL), back = lookback * SampleRate.ir;
-            var head = In.kr(phaseBus, 1);
-            // The subtraction runs at audio rate, so it reads the block-rate
-            // head as a ramp from the last block's value to this one's: the
-            // head sample by sample, one block late, so every grain starts
-            // the same distance behind it wherever in a block its trigger
-            // falls (grains at one rate stay in phase; never latch the head
-            // for the block). In the block where the head has wrapped (it
-            // reads under a block) that ramp would run back through the
-            // whole ring, so there the head is read counted from half a ring
-            // back (shifted: it steps where the head crosses the half and
-            // runs on where it wraps); wrap brings the start into the ring.
-            var shifted = head - (frames * (head >= (frames * 0.5)));
-            var wrapBlock = head < context.server.options.blockSize;
-            var start = Select.ar(wrapBlock, [head - back, shifted - back]).wrap(0, frames);
-            (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: start / frames, level: 1)
+            var advanced = Latch.ar((HPZ1.kr(head) * 2).wrap(0, frames).absdif(block) < 0.5, tick);
+            var offset = advanced * (Phasor.ar(0, 1, 0, block) - block);
+            var heldFrames = Latch.ar(frames, tick);
+            var start = ((Latch.ar(head, tick) + offset) - (lookback * SampleRate.ir)).wrap(0, heldFrames);
+            // An ordinary block divides by the control-rate frame count, as
+            // 3.2 did (a steady control-rate divisor rounds in the last bit
+            // unlike an audio-rate one); a block whose head did not advance
+            // by the held frames (a changing control-rate count ramps across
+            // the block, as a reader pointed at another ring would see)
+            var pos = Select.ar(advanced, [start / heldFrames, start / frames]);
+            (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: pos, level: 1)
         }
     }
 
