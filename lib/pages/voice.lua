@@ -204,8 +204,12 @@ return function(S)
   -- The record's randomize_section (S.lib.ui_alt's shared ALT+K2): the
   -- spec of the cursor's section, its rows' draws in row order (a buffer
   -- voice's loop start before its length; a Sub voice's mix has none, so
-  -- its press does nothing), with "locked" for a locked voice. The hint
-  -- calls it on every draw while ALT is held: it builds the rows once
+  -- its press does nothing), with "locked" for a locked voice. The spec's
+  -- section is the rows' section, except a buffer voice's synth section
+  -- (its buffer params and loop), which is "synth (buffer)": its undo is
+  -- its own, so after a switch between synth and buffer a quick press
+  -- never undoes rows the section no longer shows. The hint calls it on
+  -- every draw while ALT is held: it builds the rows once
   local function voice_randomize_section()
     local rows, cursor = M.sync_cursor()
     local voice_idx = S.selected_voice
@@ -217,7 +221,9 @@ return function(S)
         if draw then draws[#draws + 1] = {id = row.param_id, draw = draw} end
       end
     end
-    return {page = UI_PAGES.index.VOICE, section = section, voice = voice_idx, draws = draws},
+    local undo_section = section
+    if section == "synth" and voice_uses_buffer(voice_idx) then undo_section = "synth (buffer)" end
+    return {page = UI_PAGES.index.VOICE, section = undo_section, voice = voice_idx, draws = draws},
       S.frozen[voice_idx] and "locked" or nil
   end
 

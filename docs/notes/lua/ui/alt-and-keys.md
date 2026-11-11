@@ -37,10 +37,10 @@ K1 held as ALT is confirmed on hardware, so the design's long-press fallback (§
 
 ## ALT+K2 on the randomizing pages
 
-One handler in `lib/ui/alt.lua` for every page whose ALT+K2 randomizes (MAIN today; #557), acting on release, as BUFFER's ALT keys do:
+One handler in `lib/ui/alt.lua` for every page whose ALT+K2 randomizes (MAIN, VOICE, SEQ, FX and LFO; #557), acting on release, as BUFFER's ALT keys do:
 - The page's `alt_key(2)` calls `S.lib.ui_alt.k2_down()`, which notes the press (`{page = S.ui_page, at = util.time()}`), and its `alt_key_release(2)` calls `S.lib.ui_alt.k2_up(record)`. strata.lua's `key` routes the release there even when K1 came up first.
 - `k2_up(record)` forgets the press, then acts only if it went down on the page showing:
-  - held `ALT_HOLD_SECONDS` (0.5 s, `lib/constants.lua`) or longer: the record's `alt_hold()`, if it has one; a page without one (MAIN) does nothing: the long press cancels;
+  - held `ALT_HOLD_SECONDS` (0.5 s, `lib/constants.lua`) or longer: the record's `alt_hold()`, if it has one (VOICE and LFO: reset to default); a page without one (MAIN, SEQ and FX) does nothing: the long press cancels;
   - quicker: `quick_action(record)`: `S.lib.mutation.undo()` while `undo_for(spec.page, spec.section, spec.voice)`, else `S.lib.mutation.randomize(spec)`, else nothing for a locked voice. Then it requests a redraw.
 - The record's `randomize_section()` returns the spec of the section under its cursor (`docs/notes/lua/mutation.md`) and, for a locked voice, `"locked"` second: the spec still comes, so an undo held there runs (MAIN's undo wins over the lock, as before #557), but nothing is randomized. `nil` (no spec) randomizes nothing.
 - `k2_hint(record)` is the hint's ALT+K2 part, what letting go will do: once the press has been held `ALT_HOLD_SECONDS`, `K2:reset` on a page with `alt_hold` and `K2:cancel` on a page without one (its release does nothing); before, the quick action's: `K2:undo`, `K2:locked` or `K2:rand`. Every randomizing page animates while `S.lib.ui_alt.k2_held()` (its `animates`, as BUFFER's does; MAIN's `main_animates`), so the frame clock draws the change at the hold time.

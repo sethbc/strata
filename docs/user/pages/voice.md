@@ -32,7 +32,7 @@ Each value is the parameter's own text with its unit, shortened when it does not
 - **E3** - Adjust the row under the cursor (ALT+E3 in finer steps)
 - **K2** - Jump to the previous section's first row (in the first section, to its first row)
 - **K3** - Jump to the next section's first row
-- **ALT+K2** - Randomize the section under the cursor, when you let go of K2. Press it again within 5 seconds, in the same section of the same voice, to undo it. Hold it longer than half a second to reset the row under the cursor to its default instead
+- **ALT+K2** - Randomize the section under the cursor, when you let go of K2. Press it again within 5 seconds, in the same section of the same voice, to undo it (the synth section of a buffer voice counts as a section of its own, so after switching the source between the synth and a buffer, the press randomizes what the section shows). Hold it longer than half a second to reset the row under the cursor to its default instead
 - **ALT+K3** - Lock or unlock the voice (as on MAIN: a locked voice is skipped by randomize and mutations)
 
 The hint row shows `K2:prev K3:next`. With ALT (K1 held) it shows `K2:rand`, `K2:undo` while a quick press would undo, or `K2:locked` on a locked voice (whose rows a quick press leaves alone), then `K3:lock` or `K3:unlock`. Once ALT+K2 has been held half a second it shows `K2:reset`, and letting go resets the row (a locked voice's too).
