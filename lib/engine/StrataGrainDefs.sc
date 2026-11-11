@@ -261,12 +261,13 @@
             var offset = advanced * (Phasor.ar(0, 1, 0, block) - block);
             var heldFrames = Latch.ar(frames, tick);
             var start = ((Latch.ar(head, tick) + offset) - (lookback * SampleRate.ir)).wrap(0, heldFrames);
-            // An ordinary block divides by the control-rate frame count, as
-            // 3.2 did (a steady control-rate divisor rounds in the last bit
-            // unlike an audio-rate one); a block whose head did not advance
-            // by the held frames (a changing control-rate count ramps across
-            // the block, as a reader pointed at another ring would see)
-            var pos = Select.ar(advanced, [start / heldFrames, start / frames]);
+            // The start as a fraction of the ring: divided by the
+            // control-rate frame count, as 3.2 did (a steady control-rate
+            // divisor rounds in the last bit unlike an audio-rate one), but
+            // in the block the count changes (a reader pointed at a ring of
+            // another length) by the held frames: a changing control-rate
+            // count ramps across the block
+            var pos = Select.ar(HPZ1.kr(frames).abs > 0, [start / frames, start / heldFrames]);
             (bufL: bufL, bufR: bufR, rate: ringRate, dur: length, pos: pos, level: 1)
         }
     }
