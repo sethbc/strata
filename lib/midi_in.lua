@@ -251,9 +251,11 @@ return function(S)
 
   -- Listen for MIDI from init on
   S.register_start(S.constants.START_ORDER.midi, function()
-    -- every voiceOn clears the flag; midi_note_on sets it after its own start
+    -- every start (the voice is not yet active when the hook runs) clears the
+    -- flag; midi_note_on sets it after its own start. A running voice's source
+    -- change runs the hook too and leaves the flag.
     S.register_grain_restart(function(voice_idx)
-      S.midi_state.started[voice_idx] = nil
+      if not S.voices[voice_idx].active then S.midi_state.started[voice_idx] = nil end
     end)
     midi.add = midi_added
     midi.remove = midi_removed
