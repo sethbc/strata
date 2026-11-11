@@ -517,33 +517,49 @@ local function lfo_snapshot(n)
   return out
 end
 
-test("ALT+K2 randomizes the selected LFO's shape and rate only", function()
-  local context = load_strata(); finish_startup(context)
-  show_page("LFO")
-  tap(3)  -- LFO 2
-  local before = lfo_snapshot(2)
-  local other = lfo_snapshot(1)
-  math.randomseed(5)
-  local shapes, free_changed = {}, false
-  for _ = 1, 12 do
-    with_alt(function() tap(2) end)
-    local now = lfo_snapshot(2)
-    shapes[now.lfo_shape_2] = true
-    assert_true(now.lfo_free_2 >= 0.5 - 1e-6 and now.lfo_free_2 <= 30 + 1e-6, "free period 0.5-30 s")
-    if now.lfo_free_2 ~= before.lfo_free_2 then free_changed = true end
-    for _, id in ipairs({ "strata_lfo2_dest", "lfo_mode_2", "lfo_depth_2", "lfo_offset_2", "lfo_2", "lfo_clocked_2" }) do
-      assert_equal(now[id], before[id], id .. " kept")
+test("ALT+K2 randomizes the selected LFO's shape and rate only, in both modes", function()
+  for _, mode in ipairs({ "free", "clocked" }) do
+    local context = load_strata(); finish_startup(context)
+    show_page("LFO")
+    tap(3)  -- LFO 2
+    params:set("lfo_mode_2", option_named_lfo("lfo_mode_2", mode))
+    params:set("strata_lfo2_dest", 5); params:set("lfo_depth_2", 60); params:set("lfo_offset_2", 10)
+    params:set("lfo_2", 2)
+    local before = lfo_snapshot(2)
+    local others = { lfo_snapshot(1), lfo_snapshot(3) }
+    local shape_count = #params:lookup_param("lfo_shape_2").options
+    local shapes, rates = {}, {}
+    math.randomseed(5)
+    for _ = 1, 15 do
+      with_alt(function() tap(2) end)
+      local now = lfo_snapshot(2)
+      assert_true(now.lfo_shape_2 >= 1 and now.lfo_shape_2 <= shape_count and now.lfo_shape_2 % 1 == 0,
+        mode .. ": a valid shape option")
+      shapes[now.lfo_shape_2] = true
+      if mode == "free" then
+        assert_true(now.lfo_free_2 >= 0.5 - 1e-6 and now.lfo_free_2 <= 30 + 1e-6, "free period 0.5-30 s")
+        assert_equal(now.lfo_clocked_2, before.lfo_clocked_2, "the clocked rate is kept in free mode")
+        rates[now.lfo_free_2] = true
+      else
+        assert_true(now.lfo_clocked_2 >= 3 and now.lfo_clocked_2 <= 16, "a division from 1/4 to 16")
+        assert_equal(now.lfo_free_2, before.lfo_free_2, "the free period is kept in clocked mode")
+        rates[now.lfo_clocked_2] = true
+      end
+      for _, id in ipairs({ "strata_lfo2_dest", "lfo_mode_2", "lfo_depth_2", "lfo_offset_2", "lfo_2" }) do
+        assert_equal(now[id], before[id], mode .. ": " .. id .. " kept")
+      end
+      for index, kept in ipairs({ 1, 3 }) do
+        for id, value in pairs(others[index]) do
+          assert_equal(params:get(id), value, mode .. ": LFO " .. kept .. " untouched: " .. id)
+        end
+      end
+      with_alt(function() tap(2) end)  -- undo
+      assert_equal(params:get("lfo_shape_2"), before.lfo_shape_2, mode .. ": undo restores the shape")
     end
-    with_alt(function() tap(2) end)  -- undo
+    local function count(set) local n = 0; for _ in pairs(set) do n = n + 1 end; return n end
+    assert_true(count(shapes) >= 2, mode .. ": the shape varies")
+    assert_true(count(rates) >= 3, mode .. ": the rate varies")
   end
-  assert_true(free_changed, "the free rate is drawn")
-  local count = 0
-  for _ in pairs(shapes) do count = count + 1 end
-  assert_true(count >= 2, "the shape varies")
-  local now_other = lfo_snapshot(1)
-  for id, value in pairs(other) do assert_equal(now_other[id], value, "LFO 1 untouched: " .. id) end
-  assert_equal(params:get("lfo_shape_2"), before.lfo_shape_2, "undo restores the shape")
-  assert_equal(params:get("lfo_free_2"), before.lfo_free_2, "and the rate")
 end)
 
 test("ALT+K2 held resets the field", function()

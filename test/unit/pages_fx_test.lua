@@ -465,6 +465,24 @@ test("ALT+K2 randomizes the selected row's section only", function()
       end
     end
     assert_true(changed >= 1, section.row .. ": the section changed")
+    -- every drawn param takes more than one value over a few seeds (a draw
+    -- that returned a constant would pass the check above)
+    local values = {}
+    for _, id in ipairs(section.ids) do values[id] = { [after[id]] = true } end
+    key(1, 1); key(2, 1); key(2, 0); key(1, 0)  -- undo
+    for seed = 21, 26 do
+      math.randomseed(seed)
+      key(1, 1); key(2, 1); key(2, 0)  -- randomize
+      for _, id in ipairs(section.ids) do values[id][params:get(id)] = true end
+      key(2, 1); key(2, 0); key(1, 0)  -- undo
+    end
+    for _, id in ipairs(section.ids) do
+      local distinct = 0
+      for _ in pairs(values[id]) do distinct = distinct + 1 end
+      assert_true(distinct > 1, section.row .. ": " .. id .. " takes more than one value")
+    end
+    key(1, 1); key(2, 1); key(2, 0); key(1, 0)  -- randomize again so the undo below has one to undo
+    math.randomseed(11)
     key(1, 1); key(2, 1); key(2, 0); key(1, 0)
     for _, id in ipairs(ALL_FX_IDS) do
       assert_equal(params:get(id), before[id], section.row .. ": the quick second press undoes " .. id)
