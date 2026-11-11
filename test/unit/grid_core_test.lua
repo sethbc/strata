@@ -435,13 +435,13 @@ test("hot-plugged grid and arc fire handlers once per event (I3)", function()
   local density = params:lookup_param("master_density")
   context.arc.plug(1)
   local before = density.raw
-  context.arc.turn(1, 1, 20)  -- one delta of 20 -> 20/512 of the range
-  assert_near(density.raw - before, 20 / 512, 1e-9, "a turn is handled once")
+  context.arc.turn(1, 1, 20)  -- one delta of 20 -> 20 ticks of the sweep
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "a turn is handled once")
   context.arc.unplug(1)
   context.arc.plug(1)
   before = density.raw
   context.arc.turn(1, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "replugged arc handles a turn once")
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "replugged arc handles a turn once")
 end)
 
 test("a grid can show page 5 and any_page(5) counts it", function()

@@ -474,9 +474,9 @@ test("main_param_id and main_param_entry's label name each voice's E3 and arc ri
   -- on 20-2000) is drawn at half a turn, not at its linear 9 %
   set_selected(1)
   params:set("v1_freq", 20)
-  for _ = 1, 256 do context.arc.turn(1, 2, 1) end
+  for _ = 1, local_value("UI_PAGES").ARC_TICKS_PER_SWEEP / 2 do context.arc.turn(1, 2, 1) end
   next_frame(context)
-  assert_near(params:get("v1_freq"), 200, 1e-6, "256 ticks reach the exp midpoint")
+  assert_near(params:get("v1_freq"), 200, 1e-6, "half a turn reaches the exp midpoint")
   assert_near(device.segments[2].to, math.pi, 1e-6, "ring 2 draws the exp midpoint at half a turn")
 end)
 

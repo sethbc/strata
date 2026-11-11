@@ -71,9 +71,10 @@ local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (8)
 UI_PAGES.index = {}  -- page name -> its index (UI_PAGES.index.FX == 4)
 for index, name in ipairs(UI_PAGES) do UI_PAGES.index[name] = index end
 -- Arc pages follow the screen pages. Every continuous arc ring sweeps its
--- param's whole range in this many ticks: half a turn of the arc's 1024
--- ticks per revolution (monome arc spec; matron passes the deltas through)
-UI_PAGES.ARC_TICKS_PER_SWEEP = 512
+-- param's whole range in this many ticks: a full turn of the arc's 1024
+-- ticks per revolution (monome arc spec; matron passes the deltas through),
+-- so the lit fill follows the hand (#552; 512 was too fast)
+UI_PAGES.ARC_TICKS_PER_SWEEP = 1024
 UI_PAGES.ARC_PORT = 1   -- preferred arc vport (arc.connect's default)
 UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- norns' Arc:segment reduces angles modulo 2*pi, so a full turn lights nothing;

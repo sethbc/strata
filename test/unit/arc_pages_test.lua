@@ -108,7 +108,7 @@ test("MAIN rings 1, 3 and 4 are drawn from the param spec, like the other rings"
   end
 end)
 
-test("every continuous arc ring sweeps its param's range in 512 ticks, following the warp", function()
+test("every continuous arc ring sweeps its param's range in a full turn, following the warp", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   local _, set_selected = find_upvalue("selected_voice")
@@ -118,14 +118,15 @@ test("every continuous arc ring sweeps its param's range in 512 ticks, following
     -- the param's step quantizes the value; step-0 params land within float error
     local tolerance = spec.step + 1e-6 * (spec.maxval - spec.minval)
     params:set(param_id, spec.minval)
-    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
-    assert_near(params:get(param_id), spec:map(0.5), tolerance, where .. ": 256 ticks reach the warp's midpoint")
-    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
-    assert_near(params:get(param_id), spec.maxval, tolerance, where .. ": 512 ticks reach the maximum")
-    for _ = 1, 512 do context.arc.turn(1, ring, -1) end
-    assert_near(params:get(param_id), spec.minval, tolerance, where .. ": 512 back reach the minimum")
+    local sweep_ticks = local_value("UI_PAGES").ARC_TICKS_PER_SWEEP
+    for _ = 1, sweep_ticks / 2 do context.arc.turn(1, ring, 1) end
+    assert_near(params:get(param_id), spec:map(0.5), tolerance, where .. ": half a turn reaches the warp's midpoint")
+    for _ = 1, sweep_ticks / 2 do context.arc.turn(1, ring, 1) end
+    assert_near(params:get(param_id), spec.maxval, tolerance, where .. ": a full turn reaches the maximum")
+    for _ = 1, sweep_ticks do context.arc.turn(1, ring, -1) end
+    assert_near(params:get(param_id), spec.minval, tolerance, where .. ": a full turn back reaches the minimum")
   end
-  assert_equal(local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 512, "half of the arc's 1024 ticks per turn")
+  assert_equal(local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1024, "a full turn of the arc's 1024 ticks per revolution")
   -- MAIN: density, every voice's main param, grain size and density
   sweep("MAIN", 1, "master_density", "MAIN ring 1")
   for voice_idx = 1, 7 do
@@ -183,7 +184,7 @@ local BUFFER_RING_PARAMS = {
   alt = { "v1_buf_pos", "v1_buf_rate", "scrub_friction", "record_feedback" },
 }
 
-test("every BUFFER ring sweeps its param's range in 512 ticks, plain and with ALT", function()
+test("every BUFFER ring sweeps its param's range in a full turn, plain and with ALT", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1); show_page("BUFFER")
   params:set("v1_source", 2)
@@ -191,22 +192,23 @@ test("every BUFFER ring sweeps its param's range in 512 ticks, plain and with AL
   -- loop_start's top stops short of 1, so its end is the value's own maximum
   local function sweep(ring, param_id, where)
     local function raw() return params:get_raw(param_id) end
+    local sweep_ticks = local_value("UI_PAGES").ARC_TICKS_PER_SWEEP
     params:set_raw(param_id, 0)
     -- loop_start sits at 0 with a whole-slot loop; loop_length starts from its minimum
-    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
-    assert_near(raw(), 0.5, 2e-3, where .. ": 256 ticks reach the middle")
-    for _ = 1, 256 do context.arc.turn(1, ring, 1) end
+    for _ = 1, sweep_ticks / 2 do context.arc.turn(1, ring, 1) end
+    assert_near(raw(), 0.5, 2e-3, where .. ": half a turn reaches the middle")
+    for _ = 1, sweep_ticks / 2 do context.arc.turn(1, ring, 1) end
     local reached = raw()
     if param_id == "v1_loop_start" then
-      assert_true(reached > 0.99, where .. ": 512 ticks reach loop_start's top, got " .. reached)
+      assert_true(reached > 0.99, where .. ": a full turn reaches loop_start's top, got " .. reached)
     elseif param_id == "v1_buf_scan" then
       -- the range runs through 0, which holds for 24 ticks (docs/notes/lua/ui/detents-and-fine.md)
-      assert_near(reached, 1 - 24 / 512, 4e-3, where .. ": 512 ticks reach the maximum less the 0 detent's hold")
+      assert_near(reached, 1 - 24 / sweep_ticks, 4e-3, where .. ": a full turn reaches the maximum less the 0 detent's hold")
     else
-      assert_near(reached, 1, 2e-3, where .. ": 512 ticks reach the maximum")
+      assert_near(reached, 1, 2e-3, where .. ": a full turn reaches the maximum")
     end
-    for _ = 1, 512 do context.arc.turn(1, ring, -1) end
-    assert_near(raw(), 0, 2e-3, where .. ": 512 back reach the minimum")
+    for _ = 1, sweep_ticks do context.arc.turn(1, ring, -1) end
+    assert_near(raw(), 0, 2e-3, where .. ": a full turn back reaches the minimum")
   end
   for ring, param_id in ipairs(BUFFER_RING_PARAMS.plain) do
     params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
@@ -288,13 +290,13 @@ test("BUFFER's rings are position, loop start, loop length and scan", function()
   params:set("v1_source", 2)
   params:set("v1_buf_pos", 0); params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
   local scan_low = params:get("v1_buf_scan")
-  context.arc.turn(1, 1, 64); assert_near(params:get("v1_buf_pos"), 0.125, 1e-6, "ring 1 buf_pos")
-  context.arc.turn(1, 2, 64); assert_near(params:get("v1_loop_start"), 0.125, 1e-6, "ring 2 loop_start")
+  context.arc.turn(1, 1, 128); assert_near(params:get("v1_buf_pos"), 0.125, 1e-6, "ring 1 buf_pos")
+  context.arc.turn(1, 2, 128); assert_near(params:get("v1_loop_start"), 0.125, 1e-6, "ring 2 loop_start")
   local length_before = raw_fraction("v1_loop_length")
-  context.arc.turn(1, 3, -64)
+  context.arc.turn(1, 3, -128)
   assert_near(raw_fraction("v1_loop_length"), length_before - 0.125, 1e-6, "ring 3 loop_length (raw fraction)")
   local scan_before = raw_fraction("v1_buf_scan")
-  context.arc.turn(1, 4, 64)
+  context.arc.turn(1, 4, 128)
   assert_near(raw_fraction("v1_buf_scan"), scan_before + 0.125, 1e-6, "ring 4 buf_scan")
   assert_true(params:get("v1_buf_scan") ~= scan_low, "buf_scan moved")
 end)
@@ -305,12 +307,12 @@ test("BUFFER's ALT rings are rate, friction and record feedback", function()
   params:set("v1_source", 2)
   key(1, 1)
   local rate_before = raw_fraction("v1_buf_rate")
-  context.arc.turn(1, 2, 64)
+  context.arc.turn(1, 2, 128)
   assert_near(raw_fraction("v1_buf_rate"), rate_before + 0.125, 1e-6, "ALT ring 2 buf_rate")
   assert_equal(params:get("scrub_friction"), 100)
-  context.arc.turn(1, 3, -64); assert_near(params:get("scrub_friction"), 87.5, 1e-6, "ALT ring 3 friction")
+  context.arc.turn(1, 3, -128); assert_near(params:get("scrub_friction"), 87.5, 1e-6, "ALT ring 3 friction")
   params:set("record_feedback", 0)
-  context.arc.turn(1, 4, 256); assert_near(params:get("record_feedback"), 50, 1e-6, "ALT ring 4 feedback")
+  context.arc.turn(1, 4, 512); assert_near(params:get("record_feedback"), 50, 1e-6, "ALT ring 4 feedback")
   next_frame(context)
   assert_near(device.segments[4].to, math.pi, 1e-6, "half the ring")
   assert_equal(device.segments[4].level, 12, "ALT ring 4 always 12")
