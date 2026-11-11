@@ -146,7 +146,11 @@
         // write). The command's own OSCdef (the one CroneEngine frees at
         // deinit) calls the command function with the message's OSC time
         // instead; without that OSCdef the delay runs from when sclang
-        // handles the command, as it did before, and says so.
+        // handles the command, as it did before, and says so. The OSC time
+        // is the arrival only while sclang is free: of the messages that
+        // arrive while it is held (a long at-once check), only the first
+        // keeps its arrival time, the later ones are stamped when sclang
+        // reads them (#565).
         responder = this.commands.detect({ arg command; command.name == \recordBuffer }) !? { arg command; command.oscdef };
         if (responder.isKindOf(OSCdef)) {
             OSCdef(responder.key, recordCommand, responder.path);
