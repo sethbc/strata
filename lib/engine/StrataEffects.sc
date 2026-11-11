@@ -324,6 +324,9 @@
                 this.setSynth(key, \mix, 0);
                 this.broadcastFxMix;
             });
+            // from the handler's own time: sclang runs an OSC handler with
+            // its thread's time at when it runs, so however late it runs the
+            // wait counts from the bundle above (docs/notes/engine/effects.md)
             SystemClock.sched(this.bypassFadeTime, {
                 if (state[\pendingFrees][key] === token) {
                     state[\pendingFrees].removeAt(key);

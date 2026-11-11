@@ -22,7 +22,7 @@ What a grain synth takes, at 48 kHz:
 
 | | 3.0.2 / 3.1 (scsynth 3.14) | 3.2 standard (scsynth 3.14.1, local) |
 |---|---|---|
-| engine idle (effects chain, input, writers; delay 2 s stereo = 1 MB, master `PitchShift` 0.2 s = 256 KB, `FreeVerb2`) | about 1460 | about 1500-1526 |
+| engine idle (effects chain, input, writers; delay 2 s stereo = 1 MB, master `PitchShift` 0.2 s = 256 KB in these columns, its window 0.01 s = 16 KB since #306, `FreeVerb2`) | about 1460 | about 1500-1526 |
 | one synth grain synth | 274 (`\strataGrain`) | 3.3 with the mix stage: 53.1 (`\strataGrainRing`, 16.0 under 3.2's 69.1, with 2c's loops, 2b's draws and 2d's voice filter and sends; 57.3 before 2d, 47.6-47.7 before 2c and 2b) |
 | one buffer grain synth | 152 | 3.3: 66.6 (`\strataGrainBuf` with the mix stage, 1a's head guard and 1c's scan hook), 21 KB under the 88 KB per-synth limit; 58.1-59.0 after 0c's stage alone, before the guard and the scan hook (16 under 3.2's 74.2-75.0; 63.2 before 2d, 51.4 before 2c and 2b) |
 | the worst case (below), with its cutting synths | about 6920 (1270 free) | standard: about 4.9 MB free (4900-4940 KB); high, with 2a's spectral freeze on every voice and 2d's FDN reverb: about 4.24-4.26 MB free (4240-4260 KB, about 4130-4150 KB counting the spectral writers' late allocations; 4750-4780 KB in the scene-recall case, which engages no spectral writer). Before 2d: 5140-5190 KB standard, 4610 KB high |

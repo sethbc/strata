@@ -9,8 +9,9 @@
 // chain's synths, the sends against check-only copies of 3.0's chain, the
 // master's drift shifter leaving a steady tone steady, the explicit bypass
 // (it frees and re-creates a node, a mix of 0 never does; a lifted delay's
-// first echo starts without a step), and the high tier's FDN reverb against
-// FreeVerb2.
+// first echo and a lifted reverb's tail start without a step; the free lands
+// after the fade when the command's handler runs late), and the high tier's
+// FDN reverb against FreeVerb2.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -26,6 +27,7 @@ var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRout
 var checkBypassFrees, checkBypassMemory, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
 var checkFreshDefaults, checkFilterTypes, checkCutoffStep, checkFilterAsBefore, checkMasterSteady, checkLiftStartsSmoothly;
+var checkBypassFreeTiming;
 var sentBy, setsControl, broadcasts;
 var floodCount = 640;
 
@@ -668,22 +670,28 @@ checkBypassFrees = {
         "effects: setBypass ignores any other effect or value");
 };
 
-// Lifting the delay's bypass while audio plays starts the first echo
-// without a step (#308): with a 100 Hz sine on the delay send (time 0.05 s,
-// feedback 0.4, mix 0.5; the filter, drift and reverb out of the way), the
-// largest sample step on the delay's return and at the output after a lift
-// (eight lifts, each at a different point of the sine's cycle, each after
-// the bypass freed the node) stays within twice the steady state's.
-checkLiftStartsSmoothly = {
+// Lifting a bypass while audio plays starts the first echo or the tail
+// without a step (#308): with a 100 Hz sine on the effect's send (the
+// delay: time 0.05 s, feedback 0.4, mix 0.5; the reverb: mix 0.5, size 0.8,
+// damp 0.5, the delay's mix 0; the filter, drift and the other effect out
+// of the way), the largest sample step on the effect's return and at the
+// output after a lift (eight lifts, each at a different point of the sine's
+// cycle, each after the bypass freed the node) stays within twice the
+// steady state's. The return's probe runs after the master, so the lifted
+// node (the delay after the third filter, the reverb before the master)
+// is always ahead of it. effect: 0 the delay, 1 the reverb.
+checkLiftStartsSmoothly = { arg effect;
+    var name = [\delay, \reverb][effect], words = ["delay's first echo", "reverb's tail"][effect];
     var stepBus = Bus.control(server, 1), outStepBus = Bus.control(server, 1), tone, stepProbe, outStepProbe;
     var resetBoth, readBoth, steady, lifted;
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
-    command.(\setReverb, 0.0, 0.8, 0.5);
-    command.(\setDelay, 0.05, 0.4, 0.5);
+    if (effect == 0) { command.(\setReverb, 0.0, 0.8, 0.5); command.(\setDelay, 0.05, 0.4, 0.5) } {
+        command.(\setDelay, 0.375, 0.4, 0.0); command.(\setReverb, 0.5, 0.8, 0.5) };
     server.sync;
-    tone = Synth(\strataCheckSine, [\out, mixBus.(\delaySend), \freq, 100], engine.processGroup, \addToTail);
-    stepProbe = Synth(\strataCheckStep, [\in, engine.delayBus, \out, stepBus], engine.synths[\master], \addBefore);
+    tone = Synth(\strataCheckSine, [\out, mixBus.([\delaySend, \reverbSend][effect]), \freq, 100], engine.processGroup, \addToTail);
+    stepProbe = Synth(\strataCheckStep, [\in, [engine.delayBus, engine.reverbBus][effect], \out, stepBus],
+        engine.synths[\master], \addAfter);
     outStepProbe = Synth(\strataCheckStep, [\in, context.out_b, \out, outStepBus], context.xg, \addAfter);
     resetBoth = { stepProbe.set(\t_reset, 1); outStepProbe.set(\t_reset, 1) };
     readBoth = { [readBus.(stepBus)[0], readBus.(outStepBus)[0]] };
@@ -691,20 +699,73 @@ checkLiftStartsSmoothly = {
     server.makeBundle(nil, { resetBoth.value }); 0.5.wait;
     steady = readBoth.value;
     lifted = 8.collect({ arg index;
-        command.(\setBypass, 0, 1);
+        command.(\setBypass, effect, 1);
         (0.2 + (index * 0.0013)).wait; server.sync;
-        server.makeBundle(nil, { resetBoth.value; command.(\setBypass, 0, 0) });
+        server.makeBundle(nil, { resetBoth.value; command.(\setBypass, effect, 0) });
         0.4.wait;
         readBoth.value
     });
-    check.(steady.every(_.notNil) and: { steady[0] > 0.001 } and: { lifted.every({ arg pair;
+    check.(steady.every(_.notNil) and: { steady[0] > 0.0005 } and: { engine.synths[name].notNil } and: { lifted.every({ arg pair;
             pair.every(_.notNil) and: { pair[0] <= (steady[0] * 2) } and: { pair[1] <= (steady[1] * 2) } }) },
-        "effects: a lifted delay's first echo starts without a step (largest step on the return %, at the output %, after eight lifts; % and % in steady state)".format(
+        "effects: a lifted % starts without a step (largest step on the return %, at the output %, after eight lifts; % and % in steady state)".format(
+            words,
             lifted.collect(_[0]).select(_.notNil).maxItem !? { arg value; value.round(0.00001) },
             lifted.collect(_[1]).select(_.notNil).maxItem !? { arg value; value.round(0.00001) },
             steady[0] !? { arg value; value.round(0.00001) }, steady[1] !? { arg value; value.round(0.00001) }));
     tone.free; stepProbe.free; outStepProbe.free; server.sync;
     stepBus.free; outStepBus.free;
+    command.(\setMasterDrift, 0.01);
+    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setDelay, 0.375, 0.4, 0.0);
+    server.sync;
+};
+
+// The bypass's free lands after the mix's lag has run out also when the
+// command's handler runs late (#308's risk: the free is scheduled
+// bypassFadeTime ahead on SystemClock, from the handler's own time). The
+// engine's commands arrive as OSC messages (matron's, through CroneEngine's
+// OSCdefs), and sclang runs an OSC handler with its thread's time set to
+// when the handler runs, not when the message arrived (3.13 and 3.14.1
+// alike), so the wait counts from the bundle that sets the mix to 0. Here
+// /command/setBypass goes to sclang over OSC while the interpreter is kept
+// busy for 100 ms, so the handler runs 100 ms late; with a 100 Hz sine on
+// the delay send (time 0.05 s, feedback 0.4, mix 0.5), the largest sample
+// step on the delay's return from the bypass to after the free stays within
+// twice the steady state's (a free inside the fade cuts the return off:
+// a step of up to the return's level), and the node is freed. Four times,
+// the delay lifted and filled again in between.
+checkBypassFreeTiming = {
+    var stepBus = Bus.control(server, 1), tone, stepProbe, steady, results, address = NetAddr.localAddr;
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setMasterDrift, 0.0);
+    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setDelay, 0.05, 0.4, 0.5);
+    server.sync;
+    tone = Synth(\strataCheckSine, [\out, mixBus.(\delaySend), \freq, 100], engine.processGroup, \addToTail);
+    stepProbe = Synth(\strataCheckStep, [\in, engine.delayBus, \out, stepBus], engine.synths[\master], \addAfter);
+    server.sync; 1.0.wait;
+    stepProbe.set(\t_reset, 1); 0.5.wait;
+    steady = readBus.(stepBus)[0];
+    results = 4.collect({
+        var sentAt, late, step, freed;
+        stepProbe.set(\t_reset, 1); server.sync;
+        sentAt = Main.elapsedTime;
+        address.sendMsg('/command/setBypass', 0, 1);
+        while { Main.elapsedTime < (sentAt + 0.1) } { };   // the interpreter busy: the handler runs 100 ms late
+        late = engine.areaState[\effects][\bypassed][\delay].not;   // it has not run yet
+        0.4.wait; server.sync;
+        step = readBus.(stepBus)[0];
+        freed = engine.areaState[\effects][\bypassed][\delay] and: { engine.synths[\delay].isNil } and: { delayNodes.value == 0 };
+        command.(\setBypass, 0, 0);
+        server.sync; 1.0.wait;
+        [step, late and: { freed }]
+    });
+    check.(steady.notNil and: { steady > 0.001 } and: { results.every({ arg each;
+            each[0].notNil and: { each[0] <= (steady * 2) } and: { each[1] } }) },
+        "effects: a bypass whose handler runs 100 ms late frees the delay after its fade (largest step on the return from the bypass to after the free %, % in steady state; ran late and freed %)".format(
+            results.collect({ arg each; each[0] !? { arg value; value.round(0.00001) } }), steady !? { arg value; value.round(0.00001) },
+            results.collect(_[1])));
+    tone.free; stepProbe.free; server.sync; stepBus.free;
     command.(\setMasterDrift, 0.01);
     command.(\setReverb, 0.3, 0.8, 0.5);
     command.(\setDelay, 0.375, 0.4, 0.0);
@@ -975,12 +1036,14 @@ h.stopAllVoices;
 
 checkMasterSteady.value;
 checkBypassFrees.value;
-checkLiftStartsSmoothly.value;
+checkLiftStartsSmoothly.(0);
+checkBypassFreeTiming.value;
 checkBypassMemory.value;
 checkBypassToggling.value;
 checkMixThroughZero.value;
 checkSetWhileBypassed.value;
 checkReverbBypass.value;
+checkLiftStartsSmoothly.(1);
 checkFdn.value;
 
 // back to the Lua defaults for the areas that follow, nothing bypassed
