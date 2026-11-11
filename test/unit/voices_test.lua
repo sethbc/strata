@@ -86,4 +86,23 @@ test("the pulse voice starts at res 0.8, the sound of 3.2's default (#314)", fun
   assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "a start sends res 0.8 (sent: " .. tostring(sent) .. ")")
 end)
 
+-- #314: the mirror that keeps older scenes and PSETs sounding the same
+-- (PULSE_RES.mirror - res, lib/scenes.lua and lib/params_setup.lua) must be
+-- the one \strataPulse plays (rq = <mirror> - res.clip(min, max)), over the
+-- param's range: if either side changes alone, saved sounds move. Read from
+-- the engine source with its comments stripped, as the FX defaults' check is
+test("the pulse res mirror is the engine's: \\strataPulse plays rq = PULSE_RES.mirror - res (#314)", function()
+  load_strata()
+  local constants = local_value("S").constants
+  local source = h.stubs.strip_sc_comments(h.engine_sources())
+  local start = assert(source:find("SynthDef%(\\strataPulse"), "the engine defines \\strataPulse")
+  local def = source:sub(start, (source:find("}%)%.add", start)))
+  local mirror, low, high = def:match("RLPF%.ar%(.-,%s*([%d%.]+)%s*%-%s*res%.clip%(%s*([%d%.]+)%s*,%s*([%d%.]+)%s*%)%s*%)")
+  assert_true(mirror ~= nil, "\\strataPulse's RLPF plays rq = <mirror> - res.clip(<min>, <max>)")
+  assert_near(tonumber(mirror), constants.PULSE_RES.mirror, 1e-9, "the engine's mirror is PULSE_RES.mirror")
+  local spec = params:lookup_param("v5_res").controlspec
+  assert_near(tonumber(low), spec.minval, 1e-9, "the engine clips res at the param's minimum")
+  assert_near(tonumber(high), spec.maxval, 1e-9, "and at its maximum")
+end)
+
 end
