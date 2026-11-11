@@ -2,7 +2,8 @@
 // Engine_Strata's shared helpers: the synth keys, the validators,
 // grainDefFor and controlPairs, warnInvariant, sendToSynth, cutSynth and
 // setSynth, the SynthDef building blocks (openedGate, killFade,
-// panBalance, zeroBadValues) and the area registry (strataAreas). See
+// panBalance, zeroBadValues, subsonicBlock), the area registry
+// (strataAreas) and the contained area phases (runAreaPhases). See
 // docs/notes/engine/structure.md.
 
 + Engine_Strata {
@@ -60,16 +61,19 @@
     // one may have freed a moment ago, its /n_end not yet in sclang
     // (isPlaying still true): a releasing synth voiceOn re-gates (gateVoice)
     // or a fading one a switch cuts (cutSynth), whose release just ended; a
-    // live synth (setSynth, releaseVoice, replaceGrainSynth, the mod synth
-    // startPlacedGrainSynth moves next to), which frees when its release
-    // ended just as voiceOn re-gated it (watchVoiceSynth starts it again); a
-    // record synth whose take just completed (stopRecording). /error -1
-    // turns off the server's error reports for this bundle only, so a
+    // live synth (setSynth, releaseVoice, replaceGrainSynth), which frees
+    // when its release ended just as voiceOn re-gated it (watchVoiceSynth
+    // starts it again); a record synth whose take just completed
+    // (stopRecording). /error -1 turns off the server's error reports, so a
     // message to such a node fails silently, where it would post "FAILURE IN
     // SERVER ... Node not found" (which test/run_engine_check.sh fails on)
-    // and send a /fail reply.
+    // and send a /fail reply; /error -2 turns them on again. The server
+    // counts the two until the end of the bundle, so the reports are off for
+    // these messages only, also when makeBundle flattens this bundle into a
+    // larger one (voiceOn's): a voice or grain synth's /s_new after it is
+    // still reported when it fails (#498).
     sendToSynth { arg ... msgs;
-        context.server.sendBundle(nil, ['/error', -1], *msgs);
+        context.server.sendBundle(nil, *([['/error', -1]] ++ msgs ++ [['/error', -2]]));
     }
 
     // End a voice or grain synth within switchCutTime through its kill
@@ -122,6 +126,17 @@
         }
     }
 
+    // A voice's signal without what lies under the audible range: a 12 dB
+    // per octave highpass at subsonicCutoff. For the two voices whose
+    // synthesis makes a component at or near 0 Hz (FM, Ring: #309), before
+    // their voice bus, so it reaches neither the grains (which would turn
+    // it into a tone at the grain rate), the crossmod follower, the sends
+    // nor the master's limiter and saturation.
+    subsonicBlock { arg sig;
+        ^HPF.ar(sig, this.subsonicCutoff)
+    }
+    subsonicCutoff { ^15 }
+
     // Set controls on a synth only if it is running. A voice's synth (voice,
     // grain or mod key) may have freed a moment ago (see watchVoiceSynth), so
     // it goes through sendToSynth; the effects chain's (effectKeys) never
@@ -155,5 +170,19 @@
             };
         });
         ^found.sort({ arg a, b; a[\order] < b[\order] }).asArray
+    }
+
+    // One phase (\stop or \free) of every area in the list, in descending
+    // order, each under its own try (#499): an area that raises is named in
+    // one invariant line (warnInvariant) and the others still run, so every
+    // node is still freed before any bus or buffer and nothing an area made
+    // is left behind by another's error. free runs it over every area;
+    // alloc's rollback over the areas whose start or allocState began.
+    runAreaPhases { arg list, phase;
+        list.reverseDo({ arg area;
+            try { area[phase].value } { arg error;
+                this.warnInvariant("the % area's % raised: %".format(area[\name], phase, error.errorString));
+            };
+        });
     }
 }

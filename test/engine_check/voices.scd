@@ -2,8 +2,10 @@
 // The voices: the voice SynthDefs' controls, velocity only as the accent's
 // levelScale (and the Karplus allowance, checked against bent copies), the
 // silent bus, voiceOn, crossmod routing and slots, pitchbend, retrigger and
-// its velocity, the Resonator's ceiling and level, the strataMod guard, and
-// commands to a stopped voice.
+// its velocity, the Resonator's ceiling and level, the strataMod guard, the
+// controls the engine refuses as param names, what a voice param sends a
+// buffer voice's grain synth, commands to a stopped voice or a bad index,
+// and the FM and Ring voices' subsonic block.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -287,6 +289,109 @@ var checkModGuard = {
     server.sync;
 };
 
+// The FM and Ring voices leave nothing under the audible range on their
+// voice bus at ratio 1, where a sideband (FM) or the difference tone (Ring)
+// falls at 0 Hz and wanders a few Hz either way with the ratio (#309):
+// below 8 Hz (two 8 Hz lowpasses) the bus peaks under subsonicCeiling
+// (0.15) of its whole peak over 14 s (0.02-0.06 measured with the 15 Hz
+// highpass; 0.47 and 0.44 without it). Both voices on their synth source.
+var checkSubsonic = {
+    var subsonicCeiling = 0.15;
+    var bus = Bus.control(server, 4), probes, values;
+    SynthDef(\strataCheckSubsonic, { arg in, out, t_reset = 0;
+        var sig = In.ar(in, 2)[0], reset = T2A.ar(t_reset);
+        Out.kr(out, A2K.kr([Peak.ar(LPF.ar(LPF.ar(sig, 8), 8).abs, reset), Peak.ar(sig.abs, reset)]));
+    }).add;
+    command.(\setGrainSource, 1, 0);
+    command.(\setGrainSource, 6, 0);
+    server.sync;
+    command.(\voiceOn, 1, 80.0, 0.25, 0.0, 0.1, 20.0, 1.0);
+    command.(\setVoiceParam, 1, \ratio, 1.0);
+    command.(\setVoiceParam, 1, \index, 2.0);
+    command.(\voiceOn, 6, 300.0, 0.25, 0.0, 0.1, 20.0, 1.0);
+    command.(\setVoiceParam, 6, \ratio, 1.0);
+    server.sync; 6.0.wait;
+    probes = [Synth(\strataCheckSubsonic, [\in, engine.granBuses[1], \out, bus.index], engine.voiceGroup, \addAfter),
+        Synth(\strataCheckSubsonic, [\in, engine.granBuses[6], \out, bus.index + 2], engine.voiceGroup, \addAfter)];
+    // (the probes' lowpasses settle before the measurement starts)
+    server.sync; 1.0.wait;
+    server.makeBundle(nil, { probes.do(_.set(\t_reset, 1)) }); 14.0.wait;
+    values = readBus.(bus);
+    check.((values.size == 4) and: { values[1] > 0.1 } and: { values[0] < (values[1] * subsonicCeiling) },
+        "voices: the FM voice at ratio 1 leaves nothing under the audible range on its bus (below 8 Hz % of a peak of %)".format(
+            values[0].round(0.0001), values[1].round(0.0001)));
+    check.((values.size == 4) and: { values[3] > 0.1 } and: { values[2] < (values[3] * subsonicCeiling) },
+        "voices: nor does the Ring voice at ratio 1 (below 8 Hz % of a peak of %)".format(
+            values[2].round(0.0001), values[3].round(0.0001)));
+    probes.do(_.free); server.sync; bus.free;
+    command.(\voiceOff, 1); command.(\voiceOff, 6);
+    h.stopAllVoices;
+};
+
+// setGrainParam and setVoiceParam keep none of the controls the engine
+// sets itself (#458): kept, a value stayed in grainControls or
+// voiceControls for good and reached every synth the engine started for
+// the voice. kill 1 cut each grain synth 50 ms in (and the engine started
+// another); the others are sent the value they already have (so a kept one
+// changes no sound) and must not be kept. bufferVoice runs on a slot,
+// synthVoice on its synth.
+var checkEngineOwnedControls = { arg bufferVoice, synthVoice;
+    var grainKey = engine.grainKey(bufferVoice), voiceKey = engine.voiceKey(synthVoice);
+    var grain = engine.synths[grainKey], voiceSynth = engine.synths[voiceKey], slot = engine.grainSource[bufferVoice] - 1;
+    var keptGrain = engine.grainControls[bufferVoice].copy, keptVoice = engine.voiceControls[synthVoice].copy;
+    var envBuf = engine.grainControls[bufferVoice][\envBuf], otherEnvelope;
+    var unchanged = { arg now, before, names; names.every({ arg name; now[name] == before[name] }) };
+    var grainNames, voiceNames;
+    command.(\setGrainParam, bufferVoice, \kill, 1);
+    command.(\setVoiceParam, synthVoice, \kill, 1);
+    server.sync; 0.3.wait;
+    check.((engine.synths[grainKey] === grain) and: { grain.isPlaying } and: { engine.grainControls[bufferVoice][\kill].isNil }
+        and: { engine.synths[voiceKey] === voiceSynth } and: { voiceSynth.isPlaying } and: { engine.voiceControls[synthVoice][\kill].isNil },
+        "voices: setGrainParam and setVoiceParam refuse kill: the grain and voice synths play on (#458)");
+    // (only where the engine took it: never again kill a synth it starts)
+    engine.grainControls[bufferVoice].removeAt(\kill); engine.voiceControls[synthVoice].removeAt(\kill);
+    otherEnvelope = engine.envBuffers.detect({ arg buffer; buffer.bufnum != envBuf }).bufnum;
+    grainNames = [\gate, 1, \out, engine.voicePathBus(bufferVoice, slot + 1).index, \t_trig, 0,
+        \bufnumL, engine.buffersL[slot].bufnum, \bufnumR, engine.buffersR[slot].bufnum, \bufFrames, engine.bufferFrames[slot],
+        \bufRateScale, 1, \envBuf, otherEnvelope, \ringLevel, 1, \rateLevel, 1,
+        \pan, engine.voiceControls[bufferVoice][\pan], \bend, engine.voiceControls[bufferVoice][\bend],
+        \modBus1, engine.voiceControls[bufferVoice][\modBus1], \modFreqAmt1, engine.voiceControls[bufferVoice][\modFreqAmt1]];
+    grainNames.pairsDo({ arg name, value; command.(\setGrainParam, bufferVoice, name, value) });
+    voiceNames = [\gate, 1, \out, engine.granBuses[synthVoice].index, \t_trig, 0, \velocity, 1, \modAmpAmt1, 0.0001, \modFreqAmt1, 0.0001];
+    voiceNames.pairsDo({ arg name, value; command.(\setVoiceParam, synthVoice, name, value) });
+    server.sync;
+    check.(unchanged.(engine.grainControls[bufferVoice], keptGrain, grainNames.clump(2).collect(_[0])),
+        "voices: setGrainParam keeps none of gate, out, t_trig, the slot's controls, envBuf, ringLevel, rateLevel, pan, bend or the crossmod (#458; kept: %)".format(
+            grainNames.clump(2).collect(_[0]).reject({ arg name; engine.grainControls[bufferVoice][name] == keptGrain[name] })));
+    check.(unchanged.(engine.voiceControls[synthVoice], keptVoice, voiceNames.clump(2).collect(_[0])),
+        "voices: setVoiceParam keeps none of gate, out, t_trig, velocity or the crossmod amounts (#458; kept: %)".format(
+            voiceNames.clump(2).collect(_[0]).reject({ arg name; engine.voiceControls[synthVoice][name] == keptVoice[name] })));
+    // (only where the engine took them)
+    engine.grainControls[bufferVoice] = keptGrain; engine.voiceControls[synthVoice] = keptVoice;
+    command.(\setGrainParam, bufferVoice, \envShape, engine.envBuffers.detectIndex({ arg buffer; buffer.bufnum == envBuf }) !? (_ + 1) ? 0);
+    command.(\setModAmpAmt, synthVoice, 1, 0); command.(\setModFreqAmt, synthVoice, 1, 0);
+    server.sync;
+};
+
+// A voice param a buffer voice's grain SynthDef lacks (the Ring voice's
+// brightness) sends its grain synth nothing; one it has (pan) one /n_set
+// with that control (#501). What the command sends is taken from a bundle
+// it builds but does not send (makeBundle false), then sent as it was.
+var checkVoiceParamSends = { arg voice;
+    var grain = engine.synths[engine.grainKey(voice)];
+    var nodeSets = { arg messages; messages.select({ arg msg; [15, '/n_set', "/n_set"].includesEqual(msg[0]) }) };
+    var sent = server.makeBundle(false, { command.(\setVoiceParam, voice, \brightness, 0.7) }) ? [];
+    var panSent;
+    if (sent.notEmpty) { server.sendBundle(nil, *sent) };
+    panSent = server.makeBundle(false, { command.(\setVoiceParam, voice, \pan, 0.0) }) ? [];
+    if (panSent.notEmpty) { server.sendBundle(nil, *panSent) };
+    server.sync;
+    check.(nodeSets.(sent).isEmpty,
+        "voices: setVoiceParam of a control the grain SynthDef lacks sends a buffer voice's grain synth nothing (#501; sent %)".format(sent));
+    check.((nodeSets.(panSent).size == 1) and: { nodeSets.(panSent)[0].asArray == [15, grain.nodeID, \pan, 0.0] },
+        "voices: setVoiceParam pan sends a buffer voice's grain synth one /n_set with pan (#501; sent %)".format(panSent));
+};
+
 // SynthDefs
 voiceDefs.do({ arg name;
     var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
@@ -318,6 +423,31 @@ checkKarplusMutants.value;
 silentIndex = engine.silentBus.index;
 check.(silentIndex != context.amp_in_b[0].index and: { silentIndex != 0 },
     "silent bus is not control bus 0 / the input amplitude bus (I4)");
+// ... and reads 0 where a freed control bus held another value (#504): a
+// freed bus keeps its last value on the server, and only the engine's own
+// silentBus.set(0) clears it. Every control bus the allocator holds free
+// (the gaps below its top, and 256 from there) is set to 1, then a new
+// engine is built on them; afterward they are set back to 0.
+{
+    var allocator = server.controlBusAllocator, ranges = List.new, cursor = allocator.pos, other, value, dirty;
+    allocator.blocks.collect({ arg block; [block.start, block.size] }).sort({ arg a, b; a[0] < b[0] }).do({ arg block;
+        if (block[0] > cursor) { ranges.add([cursor, block[0] - cursor]) };
+        cursor = cursor.max(block[0] + block[1]);
+    });
+    ranges.add([cursor, 256]);
+    ranges.do({ arg range; server.sendMsg('/c_fill', range[0], range[1], 1) });
+    server.sync;
+    other = h.startEngine;
+    value = h.readBusValue(other.silentBus);
+    dirty = ranges.any({ arg range; other.silentBus.index.inclusivelyBetween(range[0], range[0] + range[1] - 1) });
+    check.(dirty and: { value == 0 },
+        "voices: a new engine's silent bus reads 0 on a bus index that held 1 (index %, on a freed bus: %, reads %)".format(
+            other.silentBus.index, dirty, value));
+    h.freeEngine(other);
+    server.sync;
+    ranges.do({ arg range; server.sendMsg('/c_fill', range[0], range[1], 0) });
+    server.sync;
+}.value;
 
 // Start every voice
 h.startAllVoices;
@@ -351,6 +481,8 @@ server.sync;
 check.(getControl.(engine.synths[\voice1], \modBus2) == silentIndex,
     "setModSource -1 routes to the silent bus (I4)");
 checkModSlots.(1);
+checkEngineOwnedControls.(6, 2);
+checkVoiceParamSends.(6);
 
 // retrigger carries velocity to the voice synth (accent depth)
 before = synthNames.(context.xg).size;
@@ -377,26 +509,55 @@ command.(\setVoiceParam, 4, \width, 0.3);
 command.(\retrigger, 4, 0.5);
 command.(\setModSpeed, 4, 2.0);
 check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synths");
-// an index outside the voices, or not an integer, is ignored (#262).
-// Before the fix voiceOff raised for -1, numVoices and 99; 1.5 is here as a pin, so a non-integer index stays ignored.
+// an index outside the voices, or not an integer, is ignored (#262), by
+// every one of the ten voice commands (#504; voiceOn 1.5 is voice 1, below).
+// Before #262 voiceOff raised for -1, numVoices and 99; 1.5 is here as a pin, so a non-integer index stays ignored.
+// Nothing raises, and no node, tracked synth or kept value changes (the
+// grain params: a stored one, envShape, the freeze area's freeze and
+// history, a stage's filterFreq).
 {
-    var raised = 0, synthsBefore, enginesBefore, releasingBefore;
+    var raised = 0, synthsBefore, enginesBefore, releasingBefore, keptBefore, freqBefore, kept;
     var releasingTotal = { engine.releasingSynths.inject(0, { arg sum, dict; sum + dict.size }) };
+    var sorted = { arg dict; dict.keys.asArray.sort.collect({ arg key; [key, dict[key]] }) };
+    var keptState = { [engine.voiceControls.collect(sorted), engine.grainControls.collect(sorted),
+        engine.grainSource.copy, engine.modSpeeds.copy] };
     command.(\voiceOn, 0, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
     server.sync;
     synthsBefore = synthNames.(context.xg).size;
     enginesBefore = engine.synths.size;
     releasingBefore = releasingTotal.value;
+    keptBefore = keptState.value;
     [-1, engine.numVoices, 99, 1.5].do({ arg index;
+        if (index != 1.5) { try { command.(\voiceOn, index, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0) } { raised = raised + 1 } };
         try { command.(\voiceOff, index) } { raised = raised + 1 };
         try { command.(\retrigger, index, 1.0) } { raised = raised + 1 };
+        try { command.(\setVoiceParam, index, \amp, 0.3) } { raised = raised + 1 };
+        [[\grainSize, 0.2], [\envShape, 1], [\freeze, 1], [\history, 2.0], [\filterFreq, 900.0]].do({ arg pair;
+            try { command.(\setGrainParam, index, pair[0], pair[1]) } { raised = raised + 1 };
+        });
+        try { command.(\setGrainSource, index, 3) } { raised = raised + 1 };
+        try { command.(\setModSource, index, 1, 0) } { raised = raised + 1 };
+        try { command.(\setModAmpAmt, index, 1, 0.5) } { raised = raised + 1 };
+        try { command.(\setModFreqAmt, index, 1, 0.5) } { raised = raised + 1 };
+        try { command.(\setModSpeed, index, 3.0) } { raised = raised + 1 };
     });
     server.sync;
+    kept = keptState.value;
     // <= because a synth released above (voice 4) may free itself between the reads
     check.((raised == 0) and: { synthNames.(context.xg).size <= synthsBefore }
         and: { engine.synths.size == enginesBefore }
         and: { releasingTotal.value <= releasingBefore },
-        "voiceOff and retrigger ignore a voice index outside the voices (% raised)".format(raised));
+        "the ten voice commands ignore a voice index outside the voices (% raised)".format(raised));
+    check.(kept == keptBefore,
+        "the ten voice commands keep no value for a voice index outside the voices (#504; changed: %)".format(
+            [\voiceControls, \grainControls, \grainSource, \modSpeeds].select({ arg name, index; kept[index] != keptBefore[index] })));
+    // voiceOn converts its index first: 1.5 is voice 1 (running, so it takes the new freq)
+    freqBefore = getControl.(engine.synths[\voice1], \freq);
+    command.(\voiceOn, 1.5, 333.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+    server.sync;
+    check.((freqBefore != 333.0) and: { getControl.(engine.synths[\voice1], \freq) == 333.0 },
+        "voiceOn 1.5 is voiceOn 1 (#504; voice 1 at % Hz, then %)".format(freqBefore, getControl.(engine.synths[\voice1], \freq)));
 }.value;
+checkSubsonic.value;
 h.stopAllVoices;
 }

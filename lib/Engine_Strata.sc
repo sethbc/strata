@@ -26,8 +26,8 @@ Engine_Strata : CroneEngine {
     var <modBuses;  // Control buses for cross-modulation
     var <silentBus; // Always-zero control bus used for "no modulation source"
     var <envBuffers; // Grain envelope shapes 1-4 (envShape 0 is GrainIn's built-in Hann)
-    var <voiceGroup;   // Input synth and voice synths (head of context.xg)
-    var <processGroup; // Grain synths, then mod synths (after voiceGroup)
+    var <voiceGroup;   // Input synth, voice synths, then the ring writers (head of context.xg)
+    var <processGroup; // After voiceGroup: synth-source grain synths (head), then each voice's mix group (its buffer and input grain synths at its head, its stage at its tail) just before its mod synth
 
     // Audio sources: grainSource[voice] is 0 = the voice's synth,
     // 1..numBuffers = buffer slot, numBuffers + 1 = live input
@@ -110,9 +110,13 @@ Engine_Strata : CroneEngine {
     // controls controlPairs must know), then, after a sync, addCommands
     // (commands and polls) and start (persistent nodes). effectKeys,
     // grainDefTable, grainParamHandlers and controlNameSets are built from
-    // what the areas register.
+    // what the areas register. An error in any phase rolls back what was
+    // built (#499): every area whose start began is stopped and every area
+    // whose allocState began is freed (runAreaPhases, as free does), then the
+    // error is raised again. norns frees an engine only once its alloc has
+    // returned, so nothing else would free them.
     alloc {
-        var defNames = List.new;
+        var defNames = List.new, allocated = List.new, started = List.new;
         areas = this.strataAreas;
         areaState = IdentityDictionary.new;
         areas.do({ arg area; areaState[area[\name]] = IdentityDictionary.new });
@@ -126,28 +130,37 @@ Engine_Strata : CroneEngine {
             });
         });
 
-        areas.do({ arg area; area[\allocState].value });
-        areas.do({ arg area; defNames.addAll(area[\addDefs].value ? []) });
+        try {
+            areas.do({ arg area; allocated.add(area); area[\allocState].value });
+            areas.do({ arg area; defNames.addAll(area[\addDefs].value ? []) });
 
-        // The control names of every SynthDef controlPairs filters for, looked up once
-        controlNameSets = IdentityDictionary.new;
-        defNames.do({ arg defName;
-            controlNameSets[defName] = SynthDescLib.global.at(defName).controlNames.collect(_.asSymbol).as(IdentitySet);
-        });
+            // The control names of every SynthDef controlPairs filters for, looked up once
+            controlNameSets = IdentityDictionary.new;
+            defNames.do({ arg defName;
+                controlNameSets[defName] = SynthDescLib.global.at(defName).controlNames.collect(_.asSymbol).as(IdentitySet);
+            });
 
-        context.server.sync;
+            context.server.sync;
 
-        areas.do({ arg area; area[\addCommands].value });
-        areas.do({ arg area; area[\start].value });
+            areas.do({ arg area; area[\addCommands].value });
+            areas.do({ arg area; started.add(area); area[\start].value });
+        } { arg error;
+            this.runAreaPhases(started, \stop);
+            this.runAreaPhases(allocated, \free);
+            areas = nil;  // nothing left for free
+            error.throw;
+        };
     }
 
     // Two passes, each in descending order: every area's stop (its nodes:
     // recordings canceled, synths and groups freed), then every area's free
     // (its buses and buffers), so no bus or buffer is freed while a node of
-    // any area still uses it
+    // any area still uses it. Each area's phase runs under its own try
+    // (runAreaPhases): one that raises is reported and the others still run
+    // (#499).
     free {
         if (areas.isNil) { ^this };
-        areas.reverseDo({ arg area; area[\stop].value });
-        areas.reverseDo({ arg area; area[\free].value });
+        this.runAreaPhases(areas, \stop);
+        this.runAreaPhases(areas, \free);
     }
 }

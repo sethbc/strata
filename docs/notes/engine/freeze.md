@@ -10,7 +10,7 @@
 - **What a ring grain synth reads is `grainReadPairs`' answer**: the start, the re-gate and `pointAtVoiceRing` all send it, never pairs of their own (`grainControlPairs` ends with it). `returnToInputRing` alone keeps its own pairs: it sets back synths the voice may no longer own (a switch calls it with `grainSource` already changed).
 - **`inputReaders` holds only playing synths**: `noteInputReader` adds a grain synth that reads the copy (at its start, its re-gate and `pointAtVoiceRing`), and `watchVoiceSynth`'s `onFree` removes it (`forgetInputReader`), as it does `ringReaders`.
 - **The kept `freeze` control is 1 while frozen and 0 after an unfreeze**: `freezeVoice` sets 1 where it sets `\frozen`, `unfreezeVoice` 0, so a mode change (unfreeze, then freeze) leaves 1 and a grain synth a start or re-gate builds is frozen too.
-- **Real-time memory.** A spectral writer takes about 80 KB of the pool (two 2048-frame FFT chains; their FFT buffers are server buffers, outside the pool); seven, on the high tier's worst case, leave about 4.8 MB free (the `memory` area's high run engages spectral freeze on every voice and requires 4 MB).
+- **Real-time memory.** A spectral writer takes about 80 KB of the pool (two 2048-frame FFT chains; their FFT buffers are server buffers, outside the pool); the `memory` area's high run engages spectral freeze on every voice, and the floor it holds the pool to and what it leaves free are in [memory.md](memory.md).
 
 ## The freeze area
 
