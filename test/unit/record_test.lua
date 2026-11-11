@@ -467,6 +467,7 @@ test("a playable recording waits for a load the engine has not confirmed", funct
   assert_equal(#recording_calls(context), 0, "no recordBuffer while the load awaits the engine")
   assert_equal(S.lib.buffers.status(1), "loading"); assert_equal(buffers[1].name, "b.wav")
   assert_equal(S.lib.ui_flash.text("hints"), "buf 1 loading")
+  context.polls.fire("bufferState", 0)             -- the load takes effect (0 s, #401)
   context.polls.fire("bufferState", 6)             -- b.wav is in
   record_buffer(1)
   assert_equal(#recording_calls(context), 1, "K3 once the length shows records")
@@ -571,7 +572,7 @@ local function arm_dub_over_long_file(context)
   context.audio.register(DUB_FILE, {channels = 2, frames = 2880000, rate = 48000})
   load_buffer(1, DUB_FILE); context.polls.fire("bufferState", 16)
   local_value("S").lib.buffers.set_start(1, 12)
-  context.clock.run_for(0.4); context.polls.fire("bufferState", 16)
+  context.clock.run_for(0.4); context.polls.fire("bufferState", 0); context.polls.fire("bufferState", 16)
   params:set("record_feedback", 50); params:set("record_threshold", 2)
   record_buffer(1)
 end
