@@ -207,6 +207,21 @@ test("the register functions check their argument and refuse duplicates", functi
   end)
 end)
 
+-- #557: a record's randomize field holds the draws a VOICE press of its
+-- section makes, {[key] = fn() -> value}
+test("a voice param record's randomize maps its keys to draw functions (#557)", function()
+  local function draw() return 0.5 end
+  local context = load_with(function(S) S.register_voice_params(probe_record({ randomize = { probe = draw } })) end)
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.registry.voice_params[#S.registry.voice_params].randomize.probe == draw, "the record keeps its draws")
+  load_with(function(S2)
+    local function refused(fn, ...) return not pcall(fn, ...) end
+    assert_true(refused(S2.register_voice_params, probe_record({ randomize = { probe = 0.5 } })), "a draw is a function")
+    assert_true(refused(S2.register_voice_params, probe_record({ randomize = 1 })), "randomize is a table")
+  end)
+end)
+
 test("a registry read at init refuses a registration after init, naming itself", function()
   load_strata()
   local S = local_value("S")

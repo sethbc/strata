@@ -6,24 +6,25 @@
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).
 - The main parameter comes from `main_param_entry(voice_idx)` (`MAIN_PARAMS`, `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
-- Every ALT action goes through the record's `alt_key` (`alt_action`): ALT+K2 undoes only while `undo_available(S.selected_voice)`, else randomizes; ALT+K3 is `toggle_lock`. The ALT hint and ALT+K2 share one decision, `alt_k2_action(voice_idx)` (`undo`, `locked` or `rand`; `locked` does nothing), so it never offers an undo the key would not run, and says `locked` instead of `rand` when the voice is locked (randomize would do nothing).
+- ALT+K3 goes through the record's `alt_key` (`alt_action`) and is `toggle_lock`, at the press. ALT+K2 acts on release through the shared handler (`S.lib.ui_alt.k2_down` from `alt_key`, `k2_up` from `alt_key_release`, `docs/notes/lua/ui/alt-and-keys.md`): a quick press undoes only while `undo_available(S.selected_voice)` (MAIN's undo of that voice), else randomizes it; a press held `ALT_HOLD_SECONDS` does nothing (MAIN has no `alt_hold`). The hint and the release share one decision (`k2_hint`: `undo`, `locked` or `rand`; `locked` does nothing), so it never offers an undo the key would not run, and says `locked` instead of `rand` when the voice is locked (randomize would do nothing).
+- What MAIN's randomize changes is `randomize_voice`'s (`S.lib.mutation.voice_spec`, the same params, ranges and draw order as before #557): `randomize_section()` returns that spec, with `"locked"` for a locked voice, so an undo made before the lock still runs.
 - A locked voice's fields are drawn at the same levels as an unlocked one's (the selected field 15, the others 4); `[L]` is drawn at 15.
 - The status row (y 26) holds `OFF [L] [T] [F]` at its widest, ending by x 127 (fixed x: 65, 84, 99, 113). `[F]` comes from `S.lib.freeze.is_frozen` (3.2's audio freeze, `docs/notes/lua/freeze.md`), never from `S.frozen` (the lock); the voice list has no room for it.
 - The name on y 18 is cut with `fit_text` to end `LAYOUT.name_gap` px before the right-aligned source, so the two never overlap. Under the harness estimate RESONATOR and KARPLUS are cut; with the norns font only RESONATOR is (`RESONAT`).
 
 ## Owns
 
-- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_fields`.
+- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `alt_key_release`, `randomize_section`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_alt_key_release`, `main_randomize_section`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_fields`.
 - Its unit tests: `test/unit/pages_main_test.lua`. Its rings: `lib/arc/main.lua` (`docs/notes/lua/arc-pages.md`).
 
 ## Keys
 
-`main_enc`, `main_key`, `main_alt_key` (3.1 design §2):
+`main_enc`, `main_key`, `main_alt_key`, `main_alt_key_release` (3.1 design §2; ALT+K2 on release, #557):
 - E2 selects the voice (`S.lib.ui_keys.select_voice_by`), E3 adjusts the field under the cursor (`enc_param_delta`, so ALT+E3 is fine).
 - K2 steps the cursor `S.main_field` 1 → 2 → 3 → 1. One cursor for every voice: each voice has three fields, so it never needs clamping.
 - K3 starts or stops the selected voice (`toggle_voice`); the arc button does the same.
-- ALT+K2: `undo_randomize()` while `undo_available(S.selected_voice)` (the `UNDO_SECONDS` window after a randomize of this voice; `lib/mutation.lua`), else `randomize_voice(S.selected_voice)` (a locked voice is left alone). ALT+K3: `toggle_lock(S.selected_voice)`.
-- Hint row: `K2:field K3:start|stop`; with ALT `K2:undo|locked|rand K3:lock|unlock` (undo while available, else locked for a locked voice, else rand). The undo window's end redraws the hint without input (the undo clock calls `request_redraw()`).
+- ALT+K2, at its release (`S.lib.ui_alt.k2_up`): a press released within `ALT_HOLD_SECONDS` (0.5 s) undoes while `undo_available(S.selected_voice)` (the `UNDO_SECONDS` window after MAIN's randomize of this voice; `lib/mutation.lua`), else randomizes the voice (`randomize_voice`'s spec; a locked voice is left alone); a longer press does nothing. ALT+K3: `toggle_lock(S.selected_voice)`, at the press.
+- Hint row: `K2:field K3:start|stop`; with ALT `K2:undo|locked|rand K3:lock|unlock` (undo while available, else locked for a locked voice, else rand; `S.lib.ui_alt.k2_hint`). The undo window's end redraws the hint without input (the undo clock calls `request_redraw()`). An undo made on another page or section is not offered on MAIN: a quick press there randomizes.
 
 ## Main parameter and fields
 

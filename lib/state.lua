@@ -127,7 +127,7 @@ return function()
 
   local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
     sync = true, scene_defaults = true, discrete = true, scene_ranges = true, voice_rows = true,
-    layout_states = true, normalize_scene = true, fader = true}
+    layout_states = true, normalize_scene = true, fader = true, randomize = true}
   local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true}
   local FX_PARAM_FIELDS = {name = true, count = true, add = true}
 
@@ -154,7 +154,10 @@ return function()
   --   voice_rows: {section, rows = {key, ...}, when = fn(voice_idx, key),
   --     before = <section>}: VOICE's rows (lib/ui/voice_rows.lua);
   --   layout_states: {{name, setup = fn(context)}}: VOICE's layout tests draw them;
-  --   fader: never true (registered params stay off the 256 fader pages)
+  --   fader: never true (registered params stay off the 256 fader pages);
+  --   randomize: {key = fn() -> value}: the keys a press of ALT+K2 on their
+  --     VOICE section randomizes, each with its draw (#557); never MAIN's
+  --     randomize_voice, the mutations or the fader pages
   function M.register_voice_params(record)
     local kind = "register_voice_params"
     require_open("voice_params", kind)
@@ -197,6 +200,9 @@ return function()
     require_arg(record.normalize_scene == nil or type(record.normalize_scene) == "function", where,
       "normalize_scene is a function")
     require_arg(record.fader ~= true, where, "registered params stay off the 256 fader pages (fader = false)")
+    require_arg(all_entries(record.randomize, function(key, draw)
+      return type(key) == "string" and type(draw) == "function"
+    end), where, "randomize maps a key to a draw function")
     table.insert(M.registry.voice_params, record)
   end
 

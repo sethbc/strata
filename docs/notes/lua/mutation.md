@@ -10,18 +10,21 @@
 - `mean_reverting_step` draws exactly one `math.random()` per call.
 - Cleanup stops the mutation metro and sets `mutation_enabled` to 0, so param and state agree.
 - `gentle_mutate` (the mutation metro's event) never raises (#517): it runs the step (`mutate_voices`) through the frame's `S.lib.ui_frame.contained_call`, which prints `strata: mutation failed:` with the traceback, once per distinct message (a good step forgets it), so the next tick mutates again.
-- Randomize undo: `randomize_voice` stores the previous value of every param it sets, through its local `randomize_param`, and only those. A param it starts setting needs a `note_param_edit(param_id)` call in its action (`lib/params_setup.lua`), or a manual edit would be overwritten by an undo.
-- The undo is one level and cleared by: a randomize (of any voice: a new one replaces it), a scene recall (`recall_scene` and `recall_scene_instant`), a `gentle_mutate` step that changes a param of the undo's voice (`set_mutated_param`), an edit of a stored param (`note_param_edit`) and the end of the window (`undo_clock`). The drift's writes (`S.drift_writing`) and randomize's and undo's own (`undo_writing`) never clear it.
+- Every randomize goes through `S.lib.mutation.randomize(spec)` (#557): MAIN's `randomize_voice` is `randomize(voice_spec(i))`, and every other page hands it its section's spec. It stores the previous value of every param a spec draws, and only those. A param a spec starts drawing needs a `note_param_edit(param_id)` call in its action (`lib/params_setup.lua`, `add_voice_extra` for the registered params), or a manual edit would be overwritten by an undo; a test sets every drawn id of every page record's `randomize_section`, in each of its layout states, and requires the call.
+- `voice_spec(i)` keeps `randomize_voice`'s draws in their order (pairs order of the synth params, then the buffer params, then grain size and pitch), each `draw()` called just before its set, so a seeded randomize lands where it did before #557.
+- There is one undo for the whole script, `S.undo`, cleared by: a randomize (of any page, section or voice: a new one replaces it), a scene recall (`recall_scene` and `recall_scene_instant`), a `gentle_mutate` step that changes a param of the undo's voice (`set_mutated_param`), an edit of a stored param (`note_param_edit`), an edit of a pattern undo's voice's pattern (`S.lib.mutation.note_pattern_edit`) and the end of the window (`undo_clock`). The drift's writes (`S.drift_writing`) and randomize's and undo's own (`undo_writing`) never clear it.
+- A quick ALT+K2 undoes only where the undo was made: `undo_for(page, section, voice)` is true for the undo's own page, section and voice within `UNDO_SECONDS`, so a press on another page or section randomizes there (and replaces the undo).
+- A binary param a spec draws, and its restore, go through `set_binary_param`, so a controller mapped to it follows (#538).
 - `undo_writing` is set around the writes inside an `xpcall` (`write_as_undo`), so the flag always clears and an error is raised again with its traceback.
-- A locked voice returns from `randomize_voice` before anything is stored or cleared. It can still be edited.
+- A draws spec of a locked voice (`S.frozen[spec.voice]`), or one with no draws, returns false before anything is drawn, stored or cleared. A locked voice can still be edited. A pattern spec randomizes a locked voice's pattern, as SEQ always has: the lock covers params, not patterns.
 - Every `clear_undo` cancels `undo_clock`; the clock sets `undo_clock` to nil before it clears the undo, so it never cancels itself.
 
 ## Owns
 
 `lib/mutation.lua` (`S.lib.mutation`):
 - the per-voice drift: `drift_update`, `mean_reverting_step`, `set_drifted_param` (`S.drift_metro`);
-- `randomize_voice`, `gentle_mutate` (`S.mutation_metro`), `mutated_value`;
-- the randomize undo: `S.undo`, `undo_available`, `undo_randomize`, `clear_undo`, `note_param_edit`, and the locals `undo_clock`, `undo_writing`, `write_as_undo`, `set_mutated_param`;
+- every page's randomize: `S.lib.mutation.randomize(spec)`, `S.lib.mutation.voice_spec(i)` (MAIN's spec) and `randomize_voice`; `gentle_mutate` (`S.mutation_metro`), `mutated_value`;
+- the randomize undo: `S.undo`, `S.lib.mutation.undo_for`, `S.lib.mutation.undo`, `S.lib.mutation.note_pattern_edit`, the globals `undo_available`, `undo_randomize`, `clear_undo`, `note_param_edit`, and the locals `undo_clock`, `undo_writing`, `write_as_undo`, `set_randomized_param`, `check_spec`, `hold_undo`, `set_mutated_param`;
 - `S.drift_writing`, `S.grain_pitch_base` and `S.buf_pos_base`, on `S` because the grain pitch and buffer position param actions read them;
 - cleanup steps 70 (drift metro), 80 (mutation metro) and 85 (the undo's expiry clock).
 
@@ -29,8 +32,8 @@ Elsewhere:
 - Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
 - `drift_update` calls `S.lib.grid_faders.follow_faders()` (`lib/grid/faders.lua`), which redraws the grids while one shows page 2 only when a fader shown there moved, whoever moved it (#324).
 - `DISCRETE_GRAIN_KEYS`, `BUFFER_MUTATION_KEYS` and `UNDO_SECONDS` are in `lib/constants.lua`, aliased at the top of the constructor.
-- The voice param actions that randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
-- MAIN's ALT+K2 (randomize, or undo while `undo_available`) and its hint are MAIN's (`lib/pages/main.lua`, Wave 2).
+- The actions of the params a randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
+- The ALT+K2 that calls `randomize` and `undo`, and its hint, are the shared handler's (`S.lib.ui_alt.k2_down`, `k2_up`, `k2_hint`, `docs/notes/lua/ui/alt-and-keys.md`); each page's spec is its record's `randomize_section` (MAIN's: `docs/notes/lua/pages/main.md`).
 - The mutation params are the "mutations" record of `lib/params_setup.lua`.
 
 ## Mutations
@@ -110,15 +113,21 @@ Lifecycle:
 - **Control**: the `mutation_enabled` action starts and stops the metro.
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
 
-## Randomize undo
+## Randomize and its undo
 
-One level, for `UNDO_SECONDS` (5 s, `lib/constants.lua`):
-- `randomize_voice(i)` returns at once for an index outside 1..`NUM_VOICES` or a locked voice (an earlier undo stays). Otherwise it clears any undo, sets its params (synth params but `amp` for a synth source, `buf_pos`/`buf_rate`/`buf_scan` for a buffer source, nothing more for input; then `grain_size` and `grain_pitch`), storing each one's previous `params:get` value first, and sets `S.undo = {voice = i, values = {[param_id] = value}, until_time = util.time() + UNDO_SECONDS}`. The random draws are the same as before the undo existed.
-- `undo_available(i)`: `S.undo` is voice `i`'s and `util.time() < until_time`.
-- `undo_randomize()`: false when nothing is available; otherwise it clears the undo, then puts every stored value back through `params:set` (sorted by id, so the order is fixed), so the LFO offsets, the engine and the grid follow, and returns true. The grain pitch and buffer position actions take the restored values as the drift's new centers.
+One randomize for every page and one undo for the whole script, for `UNDO_SECONDS` (5 s, `lib/constants.lua`; #557):
+- **The spec** a page hands `S.lib.mutation.randomize(spec)` is one of:
+  - `{page = <UI_PAGES index>, section = <string>, voice = <1..NUM_VOICES or nil>, draws = {{id = <param id>, draw = fn() -> value}, ...}}`: each draw in order, `draw()` called just before its set, so a later draw may read an earlier one's new value;
+  - `{page, section, voice, pattern = <voice index>}`: that voice's pattern, through `randomize_pattern(voice)`, its old steps held.
+  A malformed spec (no page or section, a voice or pattern out of range, a draw without a param id or a function) raises: it is a bug in its page.
+- **`randomize(spec)`** returns false, changing nothing (an earlier undo stays), for a draws spec of a locked voice or with no draws. Otherwise it clears any undo, sets each draw through `set_randomized_param` (`params:set`, or `set_binary_param` for a binary param) inside `write_as_undo`, storing each param's previous `params:get` value first, and holds `S.undo = {page, section, voice, values = {[param_id] = value}, ids = {param_id, ...} (in the order set), pattern = {voice, steps} or nil, until_time = util.time() + UNDO_SECONDS}`; it starts `undo_clock`, requests a redraw, redraws the grids and returns true.
+- **`voice_spec(i)`** is MAIN's whole-voice spec, `{page = MAIN, section = "voice", voice = i, draws}`: synth params but `amp` (`spec:map(math.random())`) for a synth source, `buf_pos` (r), `buf_rate` (`2 ^ (2r - 1)`) and `buf_scan` (r - 0.5) for a buffer source, nothing more for input; then `grain_size` (0.3r + 0.05) and `grain_pitch` (2r + 0.5). The draws are the same, in the same order, as before #557. `randomize_voice(i)` is `randomize(voice_spec(i))`, returning false at once for an index outside 1..`NUM_VOICES`.
+- **`undo_for(page, section, voice)`**: `S.undo` is that page's, section's and voice's (`nil` matches `nil`) and `util.time() < until_time`. `undo_available(i)` is `undo_for(MAIN, "voice", i)`, MAIN's undo of voice `i`.
+- **`undo()`** (and the global `undo_randomize()`): false when nothing is held or its window has ended; otherwise it clears the undo, then puts every stored value back through `set_randomized_param`, in the order the randomize set them (so a pair a section draws in order, a loop's start then its length, comes back whole), so the LFO offsets, the engine and the grid follow, and a pattern's old steps through `S.lib.sequencer.replace_pattern`, and returns true. The grain pitch and buffer position actions take the restored values as the drift's new centers.
 - `clear_undo()` cancels the expiry clock, drops `S.undo` and requests a redraw.
-- `undo_clock` sleeps `UNDO_SECONDS` and clears the undo, which requests the redraw that puts MAIN's ALT hint back without input. Cleanup step 85 cancels it.
-- `note_param_edit(param_id)` is called from the actions of every param randomize sets. It clears the undo when `param_id` is stored, unless the drift (`S.drift_writing`) or randomize/undo (`undo_writing`) is writing. PARAMS edits, MIDI CC maps, pset loads, grid faders and arc rings all arrive through those actions.
+- `undo_clock` sleeps `UNDO_SECONDS` and clears the undo, which requests the redraw that puts the ALT hint back without input. Cleanup step 85 cancels it.
+- `note_param_edit(param_id)` is called from the actions of every param a randomize sets. It clears the undo when `param_id` is stored, unless the drift (`S.drift_writing`) or randomize/undo (`undo_writing`) is writing. PARAMS edits, MIDI CC maps, pset loads, grid faders and arc rings all arrive through those actions.
+- `S.lib.mutation.note_pattern_edit(voice)` clears a pattern undo of that voice, unless randomize/undo is writing. Only a pattern spec holds a pattern undo, and SEQ is the page that will hand one in (#557); its package has `lib/sequencer.lua`'s pattern edits call this.
 - `gentle_mutate` writes through `set_mutated_param(voice_idx, param_id, value)`, which marks the step a turn of the param (`S.lib.ui_detent.as_turn`, #318) and clears the undo when the step changed a param of the undo's voice, stored or not (grain spread too).
 - A scene recall clears it: `recall_scene` (after validation, before a fade starts) and `recall_scene_instant` (so a fade's end does too).
 

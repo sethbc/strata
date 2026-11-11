@@ -16,7 +16,7 @@ K2:field K3:stop
 - **E3** - Adjust the field under the cursor (`>`) (ALT+E3 in finer steps)
 - **K2** - Move the cursor to the next field (after the third it goes back to the first)
 - **K3** - Start the selected voice, or stop it if it is running
-- **ALT+K2** (hold K1, press K2) - Randomize the selected voice (buffer parameters for a buffer-sourced voice, only grain parameters for an input-sourced one; a locked voice is left alone). Within 5 seconds, ALT+K2 again undoes the randomize and puts the previous values back
+- **ALT+K2** (hold K1, press and let go of K2) - Randomize the selected voice (buffer parameters for a buffer-sourced voice, only grain parameters for an input-sourced one; a locked voice is left alone). It acts when you let go of K2, and only after a quick press: K2 held for half a second or more does nothing. Within 5 seconds, a quick ALT+K2 again undoes the randomize and puts the previous values back. A randomize of another voice, or on another page, in between replaces the undo, so ALT+K2 then randomizes the voice again
 - **ALT+K3** - Lock or unlock the selected voice (a locked voice is safe from randomize and mutation, and you can still edit it)
 
 The hint row shows `K2:field K3:start` (or `K3:stop` for a running voice). While K1 is held it shows the ALT keys: `K2:rand` (or `K2:undo` during the 5 seconds after a randomize, or `K2:locked` for a locked voice, which randomize leaves alone) and `K3:lock` (or `K3:unlock`).

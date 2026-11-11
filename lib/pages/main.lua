@@ -2,7 +2,8 @@
 -- The MAIN page: the voice list (S.voice_list), the selected voice's
 -- details and its three fields (main_fields, the cursor S.main_field). E2
 -- voice, E3 the field under the cursor, K2 next field, K3 start/stop; ALT+K2
--- randomize or undo, ALT+K3 lock/unlock. Registers its S.registry.pages
+-- randomize or undo on release (S.lib.ui_alt's shared handler), ALT+K3
+-- lock/unlock. Registers its S.registry.pages
 -- record. The functions that were global stay global; start_stop_selected_voice
 -- is a field of this module's table (S.lib.pages_main) and the record's
 -- arc_button.
@@ -177,21 +178,22 @@ return function(S)
     draw_details()
   end
 
-  -- What ALT+K2 does for a voice, the one decision the hint shows and the
-  -- key acts on: "undo" within UNDO_SECONDS of its randomize, else "locked"
-  -- (randomize leaves a locked voice alone), else "rand"
-  local function alt_k2_action(voice_idx)
-    if undo_available(voice_idx) then return "undo" end
-    if S.frozen[voice_idx] then return "locked" end
-    return "rand"
+  -- What ALT+K2 randomizes (S.lib.ui_alt.k2_up): the selected voice, whole
+  -- (S.lib.mutation.voice_spec, randomize_voice's spec). A locked voice's
+  -- spec comes with "locked": nothing is randomized, but its undo still runs
+  local function main_randomize_section()
+    local voice_idx = S.selected_voice
+    return S.lib.mutation.voice_spec(voice_idx), S.frozen[voice_idx] and "locked" or nil
   end
 
   -- The hint row (redraw() draws it after the page): K2 and K3, or with ALT
-  -- ALT+K2 (alt_k2_action) and ALT+K3 (lock)
+  -- ALT+K2 (the shared handler's hint: undo, locked or rand, the one
+  -- decision its release acts on) and ALT+K3 (lock)
   local function main_hints(alt_held)
     local voice_idx = S.selected_voice
     if alt_held then
-      return "K2:" .. alt_k2_action(voice_idx) .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
+      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.MAIN]) .. " K3:"
+        .. (S.frozen[voice_idx] and "unlock" or "lock")
     end
     return "K2:field K3:" .. (S.voices[voice_idx].active and "stop" or "start")
   end
@@ -219,21 +221,22 @@ return function(S)
     end
   end
 
-  -- ALT+K2 acts on alt_k2_action: undo, randomize, or nothing for a locked
-  -- voice. ALT+K3: lock/unlock
+  -- ALT+K2 acts on release (main_alt_key_release): the press only notes its
+  -- time. ALT+K3: lock/unlock, at the press
   local function main_alt_key(n)
-    local voice_idx = S.selected_voice
     if n == 2 then
-      local action = alt_k2_action(voice_idx)
-      if action == "undo" then
-        undo_randomize()
-      elseif action == "rand" then
-        randomize_voice(voice_idx)
-      end
+      S.lib.ui_alt.k2_down()
     elseif n == 3 then
-      toggle_lock(voice_idx)
+      toggle_lock(S.selected_voice)
     end
     request_redraw()
+  end
+
+  -- ALT+K2 released: a quick press undoes the voice's randomize or
+  -- randomizes it (nothing for a locked voice); MAIN has no hold action, so
+  -- a press held ALT_HOLD_SECONDS does nothing
+  local function main_alt_key_release(n)
+    if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.MAIN]) end
   end
 
   -- The layout tests' and page renders' extra states: every voice running,
@@ -263,7 +266,8 @@ return function(S)
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/main.lua's
   S.registry.pages[UI_PAGES.index.MAIN] = {name = "MAIN", draw = redraw_main, hints = main_hints,
-    enc = main_enc, key = main_key, alt_key = main_alt_key, arc_button = start_stop_selected_voice,
+    enc = main_enc, key = main_key, alt_key = main_alt_key, alt_key_release = main_alt_key_release,
+    randomize_section = main_randomize_section, arc_button = start_stop_selected_voice,
     layout_states = {
       layout_state("all locked, running, triggered, frozen, field 3", 1),
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),

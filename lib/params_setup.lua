@@ -250,6 +250,7 @@ return function(S)
       name = "master density",
       controlspec = controlspec.new(0.1, 2.0, "lin", 0.01, 1.0),
       action = function(x)
+        note_param_edit("master_density")  -- a page randomize sets it: an edit ends its undo
         send_param_to_engine("master_density", x)
       end
     }
@@ -414,6 +415,7 @@ return function(S)
       options = {"lowpass", "highpass", "bandpass"},
       default = 1,
       action = function(x)
+        note_param_edit("filter_type")
         send_param_to_engine("filter_type", x)
       end
     }
@@ -424,6 +426,7 @@ return function(S)
       name = "filter freq",
       controlspec = controlspec.new(20, 20000, "exp", 0, 5000, "Hz"),
       action = function(x)
+        note_param_edit("filter_freq")
         send_param_to_engine("filter_freq", x)
         fx_fader_changed()
       end
@@ -435,6 +438,7 @@ return function(S)
       name = "filter res",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
       action = function(x)
+        note_param_edit("filter_res")
         send_param_to_engine("filter_res", x)
         fx_fader_changed()
       end
@@ -459,6 +463,7 @@ return function(S)
       name = "delay time",
       controlspec = controlspec.new(0.01, 2, "exp", 0.001, 0.375, "s"),
       action = function(x)
+        note_param_edit("delay_time")
         send_param_to_engine("delay_time", x)
         fx_fader_changed()
       end
@@ -470,6 +475,7 @@ return function(S)
       name = "delay feedback",
       controlspec = controlspec.new(0, 0.95, "lin", 0.01, 0.4),
       action = function(x)
+        note_param_edit("delay_feedback")
         send_param_to_engine("delay_feedback", x)
         fx_fader_changed()
       end
@@ -481,6 +487,7 @@ return function(S)
       name = "delay mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
       action = function(x)
+        note_param_edit("delay_mix")
         send_param_to_engine("delay_mix", x)
         fx_fader_changed()
       end
@@ -492,6 +499,7 @@ return function(S)
       name = "reverb mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
       action = function(x)
+        note_param_edit("reverb_mix")
         send_param_to_engine("reverb_mix", x)
       end
     }
@@ -502,6 +510,7 @@ return function(S)
       name = "reverb size",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.8),
       action = function(x)
+        note_param_edit("reverb_size")
         send_param_to_engine("reverb_size", x)
       end
     }
@@ -512,6 +521,7 @@ return function(S)
       name = "reverb damping",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5),
       action = function(x)
+        note_param_edit("reverb_damp")
         send_param_to_engine("reverb_damp", x)
       end
     }
@@ -523,6 +533,7 @@ return function(S)
       controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
       formatter = function(param) return string.format("%.3f", param:get()) end,
       action = function(x)
+        note_param_edit("drift_amount")
         send_param_to_engine("drift_amount", x)
       end
     }
@@ -924,6 +935,7 @@ return function(S)
       controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density, "/s"),
       action = function(x)
         S.voices[voice_idx].grain.density = x
+        note_param_edit(prefix .. "grain_density")  -- a page randomize sets it
         send_param_to_engine(prefix .. "grain_density", x)
       end
     }
@@ -957,6 +969,7 @@ return function(S)
       controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
       action = function(x)
         S.voices[voice_idx].grain.spread = x
+        note_param_edit(prefix .. "grain_spread")
         send_param_to_engine(prefix .. "grain_spread", x)
       end
     }
@@ -972,6 +985,7 @@ return function(S)
       default = v.grain.env,
       action = function(x)
         S.voices[voice_idx].grain.env = x
+        note_param_edit(prefix .. "grain_env")
         if S.voices[voice_idx].active then
           engine.setGrainParam(voice_idx - 1, "envShape", x - 1)
         end
@@ -1029,6 +1043,7 @@ return function(S)
         controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.amp_amt),
         action = function(x)
           S.voices[voice_idx].crossmod[slot_key].amp_amt = x
+          note_param_edit(amp_id)  -- a page randomize sets it
           send_param_to_engine(amp_id, x)
         end
       }
@@ -1041,6 +1056,7 @@ return function(S)
         controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.freq_amt),
         action = function(x)
           S.voices[voice_idx].crossmod[slot_key].freq_amt = x
+          note_param_edit(freq_id)
           send_param_to_engine(freq_id, x)
         end
       }
@@ -1055,6 +1071,7 @@ return function(S)
       controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed, "Hz"),
       action = function(x)
         S.voices[voice_idx].crossmod.speed = x
+        note_param_edit(prefix .. "mod_speed")
         send_param_to_engine(prefix .. "mod_speed", x)
       end
     }

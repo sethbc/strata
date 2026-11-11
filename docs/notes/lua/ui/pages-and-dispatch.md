@@ -24,6 +24,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Required: `name`, `draw()` (the page body only), `hints(alt_held) -> string` (the hint row), `enc(n, d)` (E2, E3), `key(n)` (K2, K3 presses).
 - Optional, every one dispatched today:
   - `alt_enc(n, d) -> handled`, `alt_key(n)`, `alt_key_release(n)`: the ALT layer (`docs/notes/lua/ui/alt-and-keys.md`);
+  - `randomize_section() -> spec or nil, reason` and `alt_hold()`: a randomizing page's ALT+K2, through the shared handler (`docs/notes/lua/ui/alt-and-keys.md`, ALT+K2 on the randomizing pages);
   - `key_release(n)`: a plain key's release, on the page it went down on;
   - `enter()`, `leave()`: run by `set_ui_page` on a page change;
   - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_stop_selected_voice` (K3; VOICE's is `start_or_stop_selected_voice`, and `toggle_lock` locks);

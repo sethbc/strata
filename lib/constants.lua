@@ -200,6 +200,11 @@ local START_ORDER = {
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
 local UNDO_SECONDS = 5
 
+-- A randomizing page's ALT+K2 acts on release (lib/ui/alt.lua, k2_up): a
+-- press released within ALT_HOLD_SECONDS randomizes or undoes, a longer one
+-- runs the page's hold action
+local ALT_HOLD_SECONDS = 0.5
+
 -- Center detents (lib/ui/detent.lua): a param whose range spans 0 holds at
 -- 0 for the next encoder_detents encoder detents after reaching or crossing
 -- it, or the next arc_ticks arc ticks, within hold_seconds of reaching it
@@ -289,6 +294,7 @@ return {
   GRID_LEVELS = GRID_LEVELS,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,
+  ALT_HOLD_SECONDS = ALT_HOLD_SECONDS,
   DETENT = DETENT,
   FINE_DIVISOR = FINE_DIVISOR,
   CLEANUP_ORDER = CLEANUP_ORDER,

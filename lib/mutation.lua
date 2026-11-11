@@ -1,7 +1,8 @@
 -- lib/mutation.lua
 -- Per-voice drift (drift_update, on the 10 Hz S.drift_metro: a slow random
 -- walk of grain pitch and buffer position; not the global LFOs), randomize
--- (randomize_voice, with one level of undo: S.undo, undo_randomize) and
+-- (S.lib.mutation.randomize(spec), every page's, and MAIN's randomize_voice,
+-- with one undo for the whole script: S.undo, S.lib.mutation.undo) and
 -- mutations (gentle_mutate, on S.mutation_metro).
 -- The functions stay global. The metros are created by this module's start
 -- steps (S.register_start, at the end of this file) and stopped by its
@@ -35,12 +36,15 @@ return function(S)
   -- Mutation system
   S.mutation_metro = nil
 
-  -- Randomize undo, one level: S.undo = {voice = i, values = {[param_id] =
-  -- the value before the randomize}, until_time = util.time() at which it
-  -- expires}, or nil. undo_clock wakes at until_time to clear it and ask for
-  -- a redraw (MAIN's ALT hint goes back without input). undo_writing is true
-  -- while randomize_voice or undo_randomize sets params, so note_param_edit
-  -- does not take their writes for a manual edit.
+  -- The randomize undo, one for the whole script (#557): S.undo = {page,
+  -- section, voice (nil off a voice's page), values = {[param_id] = the
+  -- value before the randomize}, ids = the values' ids in the order the
+  -- randomize set them, pattern = {voice, steps} (a pattern spec's old steps)
+  -- or nil, until_time = util.time() at which it expires}, or nil. undo_clock
+  -- wakes at until_time to clear it and ask for a redraw (the ALT hint goes
+  -- back without input). undo_writing is true while a randomize or the undo
+  -- writes, so note_param_edit and note_pattern_edit do not take their
+  -- writes for an edit.
   S.undo = nil
   local undo_clock = nil
   local undo_writing = false
@@ -66,87 +70,183 @@ return function(S)
     end
   end
 
-  -- An undo for voice_idx is held and its window has not ended
-  function undo_available(voice_idx)
-    return S.undo ~= nil and S.undo.voice == voice_idx and util.time() < S.undo.until_time
+  -- Set a param a randomize draws or the undo restores: a binary one through
+  -- set_binary_param, so a controller mapped to it follows (#538)
+  local function set_randomized_param(param_id, value)
+    if params:lookup_param(param_id).t == params.tBINARY then
+      set_binary_param(param_id, value)
+    else
+      params:set(param_id, value)
+    end
   end
 
-  -- Put back the values the last randomize replaced, through params:set (so
-  -- the LFO offsets, the engine and the grid follow), and clear the undo.
-  -- Returns false when there is nothing to undo
-  function undo_randomize()
-    local undo = S.undo
-    if not undo or not undo_available(undo.voice) then return false end
+  local function is_index(value, count)
+    return type(value) == "number" and value % 1 == 0 and value >= 1 and value <= count
+  end
+
+  -- A spec a page hands randomize: {page, section, voice, draws} or {page,
+  -- section, voice, pattern}. A malformed one is a bug in its page: an error
+  local function check_spec(spec)
+    local function require_spec(holds, problem)
+      if not holds then error("randomize: " .. problem, 4) end
+    end
+    require_spec(type(spec) == "table", "a spec is a table")
+    require_spec(is_index(spec.page, S.constants.NUM_UI_PAGES), "page is a UI_PAGES index")
+    require_spec(type(spec.section) == "string", "section is a string")
+    require_spec(spec.voice == nil or is_index(spec.voice, NUM_VOICES), "voice is a voice index or nil")
+    if spec.pattern ~= nil then
+      require_spec(is_index(spec.pattern, NUM_VOICES), "pattern is a voice index")
+      return
+    end
+    require_spec(type(spec.draws) == "table", "a spec has draws or a pattern")
+    for _, entry in ipairs(spec.draws) do
+      require_spec(type(entry) == "table" and type(entry.id) == "string" and params.lookup[entry.id] ~= nil
+        and type(entry.draw) == "function", "each draw is {id = a param id, draw = fn}")
+    end
+  end
+
+  -- Hold the undo of the randomize just made, for UNDO_SECONDS
+  local function hold_undo(spec, values, ids, pattern)
+    S.undo = {page = spec.page, section = spec.section, voice = spec.voice, values = values, ids = ids,
+      pattern = pattern, until_time = util.time() + UNDO_SECONDS}
+    undo_clock = clock.run(function()
+      clock.sleep(UNDO_SECONDS)
+      undo_clock = nil  -- first: clear_undo would cancel this clock
+      clear_undo()
+    end)
+  end
+
+  -- A pattern spec: randomize_pattern(voice), its old steps held
+  local function randomize_pattern_spec(spec)
+    local voice_idx = spec.pattern
+    local steps = {}
+    for step, level in ipairs(S.patterns[voice_idx]) do steps[step] = level end
     clear_undo()
-    local ids = {}
-    for param_id in pairs(undo.values) do ids[#ids + 1] = param_id end
-    table.sort(ids)
+    write_as_undo(function() randomize_pattern(voice_idx) end)
+    hold_undo(spec, {}, {}, {voice = voice_idx, steps = steps})
+    request_redraw()
+    grid_redraw()
+    return true
+  end
+
+  -- Randomize what a spec names, holding its undo (it replaces any earlier
+  -- one). draws: each {id, draw} in order, draw() called just before its set
+  -- (so a later draw may read an earlier one's new value), the old value
+  -- held first; every set reaches the engine through the param's action.
+  -- pattern = <voice>: that voice's pattern, through randomize_pattern (lock
+  -- covers params, not patterns). Returns false, changing nothing, for a
+  -- draws spec of a locked voice or with no draws
+  function M.randomize(spec)
+    check_spec(spec)
+    if spec.pattern ~= nil then return randomize_pattern_spec(spec) end
+    if spec.voice ~= nil and S.frozen[spec.voice] then return false end
+    if #spec.draws == 0 then return false end
+    local values, ids = {}, {}
+    clear_undo()
     write_as_undo(function()
-      for _, param_id in ipairs(ids) do params:set(param_id, undo.values[param_id]) end
+      for _, entry in ipairs(spec.draws) do
+        if values[entry.id] == nil then
+          values[entry.id] = params:get(entry.id)
+          ids[#ids + 1] = entry.id
+        end
+        set_randomized_param(entry.id, entry.draw())
+      end
+    end)
+    hold_undo(spec, values, ids, nil)
+    request_redraw()
+    grid_redraw()
+    return true
+  end
+
+  -- Whether a quick ALT+K2 on page `page`, section `section`, voice `voice`
+  -- (nil off a voice's page) would undo: the undo held is that one's and its
+  -- window has not ended
+  function M.undo_for(page, section, voice)
+    local undo = S.undo
+    return undo ~= nil and undo.page == page and undo.section == section and undo.voice == voice
+      and util.time() < undo.until_time
+  end
+
+  -- Put back what the held randomize replaced, in the order it set them (a
+  -- pair a section draws in order, a loop's start then its length, comes
+  -- back whole), through the params' actions (so the LFO offsets, the engine
+  -- and the grid follow), and a pattern's old steps through replace_pattern;
+  -- the undo ends first. Returns false when nothing is held or its window
+  -- has ended
+  function M.undo()
+    local undo = S.undo
+    if not undo or util.time() >= undo.until_time then return false end
+    clear_undo()
+    write_as_undo(function()
+      for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
+      if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
     end)
     request_redraw()
     grid_redraw()
     return true
   end
 
-  -- Called by the voice param actions randomize can set (lib/params_setup.lua):
-  -- an edit of a stored param clears the undo, so undo never overwrites it.
-  -- The drift's writes and randomize's and undo's own are not edits
+  -- MAIN's whole-voice spec (randomize_voice, MAIN's ALT+K2): for a synth
+  -- source every synthesis param but amp, uniform in its controlspec's
+  -- normalized range (so exp params, freq and cutoff, spread evenly across
+  -- octaves); for a buffer source the buffer params (rate 0.5-2, even in
+  -- octaves; gentle scan); for the input neither (they do nothing); then
+  -- grain size and pitch. The draws keep randomize_voice's order, so a
+  -- seeded randomize lands where it always did
+  function M.voice_spec(voice_idx)
+    local prefix = "v" .. voice_idx .. "_"
+    local draws = {}
+    local function add(key, draw) draws[#draws + 1] = {id = prefix .. key, draw = draw} end
+    if voice_uses_synth(voice_idx) then
+      for key in pairs(S.voices[voice_idx].params) do
+        if key ~= "amp" then  -- never the level
+          add(key, function() return params:lookup_param(prefix .. key).controlspec:map(math.random()) end)
+        end
+      end
+    elseif voice_uses_buffer(voice_idx) then
+      add("buf_pos", function() return math.random() end)
+      add("buf_rate", function() return 2 ^ (math.random() * 2 - 1) end)
+      add("buf_scan", function() return math.random() - 0.5 end)
+    end
+    add("grain_size", function() return math.random() * 0.3 + 0.05 end)
+    add("grain_pitch", function() return math.random() * 2 + 0.5 end)
+    return {page = S.constants.UI_PAGES.index.MAIN, section = "voice", voice = voice_idx, draws = draws}
+  end
+
+  -- An undo of MAIN's randomize of voice_idx is held and its window has not ended
+  function undo_available(voice_idx)
+    return M.undo_for(S.constants.UI_PAGES.index.MAIN, "voice", voice_idx)
+  end
+
+  -- The held undo, wherever it was made (M.undo). Returns false when there
+  -- is nothing to undo
+  function undo_randomize()
+    return M.undo()
+  end
+
+  -- Called by the actions of every param a randomize can set
+  -- (lib/params_setup.lua, add_voice_extra's for the registered params): an
+  -- edit of a held param ends the undo, so undo never overwrites it. The
+  -- drift's writes and randomize's and undo's own are not edits
   function note_param_edit(param_id)
     if S.drift_writing or undo_writing then return end
     if S.undo and S.undo.values[param_id] ~= nil then clear_undo() end
   end
 
+  -- Called by every edit of voice_idx's pattern (lib/sequencer.lua): it
+  -- ends a pattern undo of that voice. The randomize's and the undo's own
+  -- writes are not edits
+  function M.note_pattern_edit(voice_idx)
+    if undo_writing then return end
+    if S.undo and S.undo.pattern and S.undo.pattern.voice == voice_idx then clear_undo() end
+  end
+
+  -- MAIN's whole-voice randomize (M.voice_spec). Returns whether it ran: an
+  -- index outside 1..NUM_VOICES or a locked voice is left alone, and so is
+  -- an earlier undo
   function randomize_voice(voice_idx)
-    if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    -- a locked voice is left alone, and so is an earlier undo
-    if S.frozen[voice_idx] then return end
-
-    local voice = S.voices[voice_idx]
-    local prefix = "v" .. voice_idx .. "_"
-    local previous = {}
-    local function randomize_param(param_id, value)
-      previous[param_id] = params:get(param_id)
-      params:set(param_id, value)
-    end
-
-    -- one level: this randomize replaces any earlier undo, another voice's too
-    clear_undo()
-    write_as_undo(function()
-      if voice_uses_synth(voice_idx) then
-        -- Randomize synth params
-        for key, _ in pairs(voice.params) do
-          if key ~= "amp" then -- Don't randomize amplitude
-            local spec = params:lookup_param(prefix .. key).controlspec
-            -- uniform in the normalized 0-1 range, so exp params (freq, cutoff)
-            -- spread evenly across octaves instead of piling up at the top
-            randomize_param(prefix .. key, spec:map(math.random()))
-          end
-        end
-      elseif voice_uses_buffer(voice_idx) then
-        -- Buffer source: the synth is not playing, so randomize the buffer
-        -- params instead (rate 0.5-2, even in octaves; gentle scan)
-        randomize_param(prefix .. "buf_pos", math.random())
-        randomize_param(prefix .. "buf_rate", 2 ^ (math.random() * 2 - 1))
-        randomize_param(prefix .. "buf_scan", math.random() - 0.5)
-      end
-      -- (input source: neither synth nor buffer params do anything; only the
-      -- grain params below are randomized)
-
-      -- Randomize some grain params
-      randomize_param(prefix .. "grain_size", math.random() * 0.3 + 0.05)
-      randomize_param(prefix .. "grain_pitch", math.random() * 2 + 0.5)
-    end)
-
-    S.undo = {voice = voice_idx, values = previous, until_time = util.time() + UNDO_SECONDS}
-    undo_clock = clock.run(function()
-      clock.sleep(UNDO_SECONDS)
-      undo_clock = nil  -- first: clear_undo would cancel this clock
-      clear_undo()
-    end)
-
-    request_redraw()
-    grid_redraw()
+    if not is_index(voice_idx, NUM_VOICES) then return false end
+    return M.randomize(M.voice_spec(voice_idx))
   end
 
   -- One step of the drift's walk: a random step of width step (+/- step / 2)
