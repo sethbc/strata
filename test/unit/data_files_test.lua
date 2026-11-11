@@ -379,11 +379,15 @@ test("a backup never replaces an earlier one; a copy is kept once per content", 
   write_text(path, "fifth")
   local moved, problem = data_files.set_aside(path, ".bak")
   assert_equal(moved, nil); assert_equal(type(problem), "string"); assert_equal(file_text(path), "fifth")
+  -- every copy name taken: copies of the format are kept already, so the
+  -- caller may write (true, "full"), and nothing is copied or replaced
   for number = 3, 9 do write_text(path .. ".v3." .. number, "x") end
-  kept, problem = data_files.keep_copy(path, ".v3")
-  assert_equal(kept, nil); assert_equal(type(problem), "string")
+  kept, how = data_files.keep_copy(path, ".v3")
+  assert_equal(kept, true, "every copy name taken: the caller may write"); assert_equal(how, "full")
   for number = 1, 9 do
     assert_true(file_text(path .. ".bak" .. (number > 1 and ("." .. number) or "")) ~= "fifth", "no backup was replaced")
+    assert_true(file_text(path .. ".v3" .. (number > 1 and ("." .. number) or "")) ~= "fifth", "no copy was replaced")
   end
+  assert_equal(file_text(path), "fifth", "the file itself is untouched")
 end)
 end

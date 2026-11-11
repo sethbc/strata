@@ -230,12 +230,50 @@ return function(S)
     end
   end
 
+  -- The first scene format saved by a script whose number params step whole
+  -- (3.3, #534): 3.2's could hold a fraction, so a scene of an older format
+  -- may too
+  M.WHOLE_NUMBERS_FORMAT = 5
+
+  -- Round, in a scene older than M.WHOLE_NUMBERS_FORMAT, every number
+  -- validate_scene wants whole (#554 does the same for a PSET's number
+  -- params): the option and registered discrete globals, and per voice the
+  -- source, the discrete grain keys, the crossmod sources, the discrete
+  -- extras and the pattern steps. A value that is not a number is left for
+  -- validate_scene to reject
+  local function round_whole_fields(data, extras)
+    local function round(parent, key)
+      if type(parent) == "table" and is_number(parent[key]) and parent[key] ~= math.floor(parent[key]) then
+        parent[key] = util.round(parent[key])
+      end
+    end
+    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
+      local param = params.lookup[global.id] and params:lookup_param(global.id)
+      if param and (param.options or (global.registered and not global.continuous)) then round(data, global.id) end
+    end
+    for i = 1, NUM_VOICES do
+      local voice_data = data.voices[i]
+      if type(voice_data) == "table" then
+        round(voice_data, "source")
+        for key in pairs(DISCRETE_GRAIN_KEYS) do round(voice_data.grain, key) end
+        for slot = 1, NUM_MOD_SLOTS do
+          round(type(voice_data.crossmod) == "table" and voice_data.crossmod["slot" .. slot], "source")
+        end
+        for key, entry in pairs(extras) do
+          if entry.range then round(voice_data.extras, key) end
+        end
+      end
+      for step = 1, PATTERN_LENGTH do round(type(data.patterns) == "table" and data.patterns[i], step) end
+    end
+  end
+
   -- Bring a loaded scene up to the current format by filling every field it
   -- lacks with its default: globals (SCENE_GLOBAL_PARAMS), top-level blocks
   -- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
   -- Filling only adds what is missing, so it runs for every file version;
   -- from_version is there for changes that must convert a particular format
-  -- (a scene older than format 5 gets its Pulse res mirrored, #314).
+  -- (a scene older than format 5 gets its Pulse res mirrored, #314, and the
+  -- numbers validate_scene wants whole rounded, round_whole_fields).
   -- Then each registered voice-param record's normalize_scene(extras), if it
   -- has one, brings values a hand edit may have left inconsistent back to
   -- what the params allow (a loop past the slot's end), so a recall ends
@@ -281,6 +319,7 @@ return function(S)
         end
       end
     end
+    if from_version < M.WHOLE_NUMBERS_FORMAT then round_whole_fields(data, extras) end
   end
 
   function capture_scene(scene_num)

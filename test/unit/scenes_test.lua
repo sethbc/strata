@@ -1602,6 +1602,72 @@ test("a scene saved before format 5 loads the pulse voice's res mirrored, once (
   assert_near(S.scenes[1].data.voices[pulse].params.res, 0.8, 1e-9, "a format 5 file read back is not mirrored again")
 end)
 
+-- 3.2's number params could hold a fraction (norns' PARAMS menu turned one
+-- by d / 20 with K3 held; Number:set never rounds, #534), so a 3.2 scene
+-- could too. validate_scene wants a crossmod source and a discrete extra
+-- whole, and one fraction set the whole file aside at the first 3.3 start.
+-- A scene older than format 5 has those numbers rounded first, as a PSET's
+-- number params are (#554); a format 5 file is still checked as it is
+test("a 3.2 scene's fractional numbers round as it loads; the file is not set aside", function()
+  local context = load_strata({ data_subdir = "fraction_source" }); finish_startup(context)
+  for slot = 1, local_value("S").constants.NUM_SCENES do capture_scene(slot) end
+  local scenes = deep_copy(local_value("scenes"))
+  scenes[3].data.voices[1].crossmod.slot1.source = 0.05   -- voice 0.05: none
+  scenes[3].data.voices[2].crossmod.slot2.source = 3.6    -- voice 4
+  scenes[5].data.voices[1].extras.intervals = 2.4         -- a discrete extra: set 2
+  for _, case in ipairs({ { version = 4, loads = true }, { version = 5, loads = false } }) do
+    local subdir = "fraction_v" .. case.version
+    local dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. dir .. "'")
+    local file = assert(io.open(dir .. "scenes.data", "w"))
+    file:write(tabutil_text({ version = case.version, scenes = scenes })); file:close()
+    load_strata({ data_subdir = subdir })
+    local loaded = local_value("scenes")
+    if case.loads then
+      for slot = 1, local_value("S").constants.NUM_SCENES do
+        assert_true(loaded[slot].populated, "format 4: scene " .. slot .. " loads")
+      end
+      assert_equal(loaded[3].data.voices[1].crossmod.slot1.source, 0, "0.05 rounds to 0 (none)")
+      assert_equal(loaded[3].data.voices[2].crossmod.slot2.source, 4, "3.6 rounds to 4")
+      assert_equal(loaded[5].data.voices[1].extras.intervals, 2, "2.4 rounds to 2")
+      assert_true(not util.file_exists(dir .. "scenes.data.bak"), "format 4: the file is not set aside")
+    else
+      assert_true(not loaded[3].populated, "format 5: a fraction is refused, as 3.3 never saves one")
+      assert_true(util.file_exists(dir .. "scenes.data.bak"), "format 5: the file is kept as scenes.data.bak")
+    end
+  end
+end)
+
+-- An older-format scenes.data is kept as scenes.data.v<n> before the first
+-- save over it (#467), at the first free of nine names. With all nine
+-- taken, copies of that format are kept already: the save writes anyway
+-- (and says why) rather than refusing every save, the exit's included
+test("a full set of format copies never blocks a scene save", function()
+  local context = load_strata({ data_subdir = "full_copies_source" }); finish_startup(context)
+  capture_scene(1)
+  local text = h.tabutil_text({ version = 4, scenes = deep_copy(local_value("scenes")) })
+  local dir = data_root .. "full_copies/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  h.write_text(dir .. "scenes.data", text)
+  local copies = {}
+  for number = 1, 9 do
+    copies[number] = dir .. "scenes.data.v4" .. (number > 1 and ("." .. number) or "")
+    h.write_text(copies[number], "copy " .. number)
+  end
+  context = load_strata({ data_subdir = "full_copies" }); finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.scenes[1].populated, "the format 4 file loads")
+  capture_scene(2)
+  assert_true(save_scenes_to_disk(), "the save goes ahead")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 5, "scenes.data is written, as format 5")
+  assert_true(S.lib.data_files.read(dir .. "scenes.data").scenes[2].populated, "with this session's scenes")
+  for number = 1, 9 do
+    assert_equal(h.file_text(copies[number]), "copy " .. number, "copy " .. number .. " is kept as it was")
+  end
+  assert_true(table.concat(context.printed, "\n"):find("every .v4 copy name is taken", 1, true),
+    "the console says why no copy was kept: " .. table.concat(context.printed, " | "))
+end)
+
 test("S.lib.scenes.save captures and flashes; capture_scene stays silent", function()
   load_strata()
   local S = local_value("S")
