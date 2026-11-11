@@ -27,6 +27,17 @@ local function with_alt(fn)
   key(1, 1); fn(); key(1, 0)
 end
 
+local function option_named_lfo(param_id, name)
+  for index, option in ipairs(params:lookup_param(param_id).options) do
+    if option == name then return index end
+  end
+end
+
+-- K2 held past the hold time, released (inside with_alt)
+local function hold_k2(context)
+  key(2, 1); context.clock.run_for(0.5); key(2, 0)
+end
+
 -- The strip's texts, left to right (the line under the selected LFO's row)
 local function strip_texts(context)
   return texts_on_row(context, pages_lfo().strip_y())
@@ -246,16 +257,16 @@ test("ALT+K2 resets the field; ALT+K3 turns the LFO on and off", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
   strip_field("depth"); params:set("lfo_depth_1", 70)
-  with_alt(function() tap(2) end)
+  with_alt(function() hold_k2(context) end)
   assert_equal(params:get("lfo_depth_1"), 25, "depth back to its default")
   strip_field("dest"); params:set("strata_lfo1_dest", 30)
-  with_alt(function() tap(2) end)
+  with_alt(function() hold_k2(context) end)
   assert_equal(params:get("strata_lfo1_dest"), 1, "destination back to none")
   strip_field("rate"); params:set("lfo_free_1", 30)
-  with_alt(function() tap(2) end)
+  with_alt(function() hold_k2(context) end)
   assert_near(params:get("lfo_free_1"), 4, 1e-9, "free period back to 4 s")
   strip_field("offset"); params:set("lfo_offset_1", -12)
-  with_alt(function() tap(2) end)
+  with_alt(function() hold_k2(context) end)
   assert_equal(params:get("lfo_offset_1"), 0, "offset back to 0")
   with_alt(function() tap(3) end)
   assert_equal(params:string("lfo_1"), "on", "ALT+K3 turns the LFO on")
@@ -282,11 +293,11 @@ test("LFO hints", function()
     assert_equal(hint_text(context), "K2/K3:lfo E3:" .. labels[field])
   end
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:reset K3:on")
+  assert_equal(hint_text(context), "K2:rand K3:on")
   tap(3); redraw()
-  assert_equal(hint_text(context), "K2:reset K3:off")
+  assert_equal(hint_text(context), "K2:rand K3:off")
   key(1, 0); enc(2, -10); key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:reset K3:off E3:group", "the destination's ALT+E3 group jump")
+  assert_equal(hint_text(context), "K2:rand K3:off E3:group", "the destination's ALT+E3 group jump")
   local _, right = text_span({ x = 0, text = hint_text(context) })
   assert_true(right <= 128, "the longest ALT hint fits")
   key(1, 0)
@@ -493,6 +504,89 @@ test("the LFO page's layout states cover each LFO, each field, clocked and free"
     "field-depth", "field-offset", "field-state", "clocked", "free" }) do
     assert_true(names[name], "a layout state " .. name)
   end
+end)
+
+
+-- #557: ALT+K2 randomizes the selected LFO's shape and rate; held, it resets
+local function lfo_snapshot(n)
+  local out = {}
+  for _, id in ipairs({ "strata_lfo" .. n .. "_dest", "lfo_mode_" .. n, "lfo_depth_" .. n, "lfo_offset_" .. n,
+    "lfo_" .. n, "lfo_shape_" .. n, "lfo_free_" .. n, "lfo_clocked_" .. n }) do
+    out[id] = params:get(id)
+  end
+  return out
+end
+
+test("ALT+K2 randomizes the selected LFO's shape and rate only", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  tap(3)  -- LFO 2
+  local before = lfo_snapshot(2)
+  local other = lfo_snapshot(1)
+  math.randomseed(5)
+  local shapes, free_changed = {}, false
+  for _ = 1, 12 do
+    with_alt(function() tap(2) end)
+    local now = lfo_snapshot(2)
+    shapes[now.lfo_shape_2] = true
+    assert_true(now.lfo_free_2 >= 0.5 - 1e-6 and now.lfo_free_2 <= 30 + 1e-6, "free period 0.5-30 s")
+    if now.lfo_free_2 ~= before.lfo_free_2 then free_changed = true end
+    for _, id in ipairs({ "strata_lfo2_dest", "lfo_mode_2", "lfo_depth_2", "lfo_offset_2", "lfo_2", "lfo_clocked_2" }) do
+      assert_equal(now[id], before[id], id .. " kept")
+    end
+    with_alt(function() tap(2) end)  -- undo
+  end
+  assert_true(free_changed, "the free rate is drawn")
+  local count = 0
+  for _ in pairs(shapes) do count = count + 1 end
+  assert_true(count >= 2, "the shape varies")
+  local now_other = lfo_snapshot(1)
+  for id, value in pairs(other) do assert_equal(now_other[id], value, "LFO 1 untouched: " .. id) end
+  assert_equal(params:get("lfo_shape_2"), before.lfo_shape_2, "undo restores the shape")
+  assert_equal(params:get("lfo_free_2"), before.lfo_free_2, "and the rate")
+end)
+
+test("ALT+K2 held resets the field", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  strip_field("depth"); params:set("lfo_depth_1", 70)
+  with_alt(function() hold_k2(context) end)
+  assert_equal(params:get("lfo_depth_1"), 25, "depth back to its default")
+  strip_field("rate"); params:set("lfo_free_1", 30)
+  with_alt(function() hold_k2(context) end)
+  assert_near(params:get("lfo_free_1"), 4, 1e-9, "free period back to 4 s")
+  strip_field("state"); params:set("lfo_1", 2)
+  with_alt(function() hold_k2(context) end)
+  assert_equal(params:string("lfo_1"), "off", "on/off back to off")
+  key(1, 1); key(2, 1); context.clock.run_for(0.5)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:reset K3:on", "the hint turns to reset")
+  key(2, 0); key(1, 0)
+end)
+
+test("a running clocked LFO keeps running, with its offset, depth, destination and on/off unchanged", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  params:set("lfo_mode_1", option_named_lfo("lfo_mode_1", "clocked"))
+  params:set("strata_lfo1_dest", 5)
+  params:set("lfo_depth_1", 60); params:set("lfo_1", 2); params:set("lfo_offset_1", 20)
+  local before = lfo_snapshot(1)
+  local seen = {}
+  math.randomseed(3)
+  for _ = 1, 20 do
+    with_alt(function() tap(2) end)
+    local now = lfo_snapshot(1)
+    for _, id in ipairs({ "strata_lfo1_dest", "lfo_mode_1", "lfo_depth_1", "lfo_offset_1", "lfo_1", "lfo_free_1" }) do
+      assert_equal(now[id], before[id], id .. " kept")
+    end
+    assert_true(now.lfo_clocked_1 >= 3 and now.lfo_clocked_1 <= 16, "a division from 1/4 to 16")
+    seen[now.lfo_clocked_1] = true
+    assert_equal(params:string("lfo_1"), "on", "still running")
+    with_alt(function() tap(2) end)
+  end
+  local count = 0
+  for _ in pairs(seen) do count = count + 1 end
+  assert_true(count >= 3, "the division varies")
 end)
 
 end

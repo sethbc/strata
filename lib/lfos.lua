@@ -291,8 +291,10 @@ return function(S)
       end)
       wrap_param_action("lfo_reset_" .. n, nil, function() sync_lfo_phase(n) end)
       for _, prefix in ipairs({"lfo_clocked_", "lfo_free_"}) do
-        wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end)
+        wrap_param_action(prefix .. n, function() rebase_lfo_phase(n) end,
+          function() note_param_edit(prefix .. n) end)  -- an edit ends a randomize undo (#557)
       end
+      wrap_param_action("lfo_shape_" .. n, nil, function() note_param_edit("lfo_shape_" .. n) end)
       -- a mode change moves the library's phase (sync_lfo_phase), and arc
       -- ring 4's carried ticks were for the other mode's period param
       wrap_param_action("lfo_mode_" .. n, nil, function()

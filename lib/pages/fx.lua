@@ -111,7 +111,8 @@ return function(S)
   local function fx_hints(alt_held)
     if alt_held then
       local param_id = cursor_row().param_id
-      return (param_id and params:lookup_param(param_id).controlspec) and "E3:fine" or ""
+      local fine = (param_id and params:lookup_param(param_id).controlspec) and " E3:fine" or ""
+      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.FX]) .. fine
     end
     local effect = cursor_row().effect
     if not effect then return "E3:value" end
@@ -141,11 +142,55 @@ return function(S)
     end
   end
 
+  -- ALT+K2 randomizes the section under the cursor (#557; S.lib.ui_alt.k2_up):
+  -- master, filter, delay or reverb, from the row's effect (master rows have
+  -- none). Ranges are musical, not the params' full ones; the filter's mix
+  -- and the bypasses are kept. A frequency or time draws evenly in octaves.
+  -- The specs are built once (the hint asks on every draw while ALT is held)
+  local function octaves(low, high)
+    return function() return low * (high / low) ^ math.random() end
+  end
+  local function between(low, high)
+    return function() return low + math.random() * (high - low) end
+  end
+  local FX_SECTION_DRAWS = {
+    master = {{"master_density", between(0.5, 1.5)}, {"drift_amount", between(0, 0.03)}},
+    filter = {{"filter_type", function() return math.random(#params:lookup_param("filter_type").options) end},
+      {"filter_freq", octaves(100, 10000)}, {"filter_res", between(0, 0.7)}},
+    delay = {{"delay_time", octaves(0.05, 1.0)}, {"delay_feedback", between(0, 0.7)}, {"delay_mix", between(0, 0.5)}},
+    reverb = {{"reverb_mix", between(0, 0.5)}, {"reverb_size", between(0.3, 0.95)}, {"reverb_damp", between(0, 1)}}
+  }
+  local FX_SECTION_SPECS = {}
+  for section, entries in pairs(FX_SECTION_DRAWS) do
+    local draws = {}
+    for index, entry in ipairs(entries) do draws[index] = {id = entry[1], draw = entry[2]} end
+    FX_SECTION_SPECS[section] = {page = UI_PAGES.index.FX, section = section, draws = draws}
+  end
+
+  local function fx_randomize_section()
+    return FX_SECTION_SPECS[cursor_row().effect or "master"]
+  end
+
+  -- The frame clock redraws FX while ALT+K2 is down, so its hint turns to
+  -- K2:cancel at the hold time
+  local function fx_animates()
+    return S.lib.ui_alt.k2_held()
+  end
+
+  -- ALT+K2 acts on release: the press notes its time; no hold action
+  local function fx_alt_key(n)
+    if n == 2 then S.lib.ui_alt.k2_down(); request_redraw() end
+  end
+  local function fx_alt_key_release(n)
+    if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.FX]) end
+  end
+
   -- The page's record, at FX's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields
   -- are lib/arc/fx.lua's
   S.registry.pages[UI_PAGES.index.FX] = {name = "FX", draw = redraw_fx, hints = fx_hints,
-    enc = fx_enc, key = fx_key,
+    enc = fx_enc, key = fx_key, alt_key = fx_alt_key, alt_key_release = fx_alt_key_release,
+    randomize_section = fx_randomize_section, animates = fx_animates,
     layout_states = {
       {name = "first row", setup = function() S.fx_row = row_of("master_density") end},
       {name = "last row", setup = function()

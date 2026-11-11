@@ -230,7 +230,7 @@ test("FX hints name the effect", function()
   key(1, 1)
   for _, id in ipairs({"delay_feedback", "reverb_mix", "filter_mix", "master_density"}) do
     S.fx_row = row_index(id)
-    assert_equal(hint_text(), "E3:fine", "ALT on " .. id .. " offers only the fine turn")
+    assert_equal(hint_text(), "K2:rand E3:fine", "ALT on " .. id .. " offers the randomize and the fine turn")
   end
   key(1, 0)
 end)
@@ -291,7 +291,7 @@ test("FX's ALT hint offers E3:fine only on a row that turns finely", function()
     "the type row offers no fine turn: " .. tostring(hint_text(context)))
   assert_screen_layout(context, "FX ALT on the filter type")
   select_row("filter_freq")
-  assert_equal(hint_text(context), "E3:fine", "the freq row turns finely")
+  assert_equal(hint_text(context), "K2:rand E3:fine", "the freq row turns finely")
   key(1, 0)
 end)
 
@@ -411,6 +411,106 @@ test("K3 on FX's delay and reverb bypass echoes to a MIDI-mapped controller (#53
     assert_equal(params:get(case.id), 0, "and lifts it: " .. case.id)
     assert_equal(cc_echoes(controller, case.cc), "127,0", "the controller hears both: " .. case.id)
   end
+end)
+
+
+-- #557: ALT+K2 randomizes the section under the cursor (acting on release)
+local FX_SECTIONS = {
+  { row = "master_density", ids = { "master_density", "drift_amount" } },
+  { row = "filter_freq", ids = { "filter_type", "filter_freq", "filter_res" } },
+  { row = "delay_time", ids = { "delay_time", "delay_feedback", "delay_mix" } },
+  { row = "reverb_size", ids = { "reverb_mix", "reverb_size", "reverb_damp" } },
+}
+local ALL_FX_IDS = { "master_density", "drift_amount", "filter_type", "filter_freq", "filter_res", "filter_mix",
+  "delay_time", "delay_feedback", "delay_mix", "delay_bypass", "reverb_mix", "reverb_size", "reverb_damp", "reverb_bypass" }
+local function fx_snapshot()
+  local out = {}
+  for _, id in ipairs(ALL_FX_IDS) do out[id] = params:get(id) end
+  return out
+end
+local function select_fx_row(param_id)
+  local S = local_value("S")
+  for index, row in ipairs(S.FX_PAGE.rows) do
+    if row.param_id == param_id then S.fx_row = index end
+  end
+end
+local FX_RANGES = {
+  master_density = { 0.5, 1.5 }, drift_amount = { 0, 0.03 }, filter_freq = { 100, 10000 }, filter_res = { 0, 0.7 },
+  delay_time = { 0.05, 1.0 }, delay_feedback = { 0, 0.7 }, delay_mix = { 0, 0.5 },
+  reverb_mix = { 0, 0.5 }, reverb_size = { 0.3, 0.95 }, reverb_damp = { 0, 1 },
+}
+
+test("ALT+K2 randomizes the selected row's section only", function()
+  for _, section in ipairs(FX_SECTIONS) do
+    local context = load_strata(); finish_startup(context)
+    show_page("FX")
+    params:set("filter_mix", 0.4)
+    local inside = {}
+    for _, id in ipairs(section.ids) do inside[id] = true end
+    select_fx_row(section.row)
+    local before = fx_snapshot()
+    math.randomseed(11)
+    key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+    local after = fx_snapshot()
+    local changed = 0
+    for _, id in ipairs(ALL_FX_IDS) do
+      if inside[id] then
+        if after[id] ~= before[id] then changed = changed + 1 end
+        local range = FX_RANGES[id]
+        if range then
+          assert_true(after[id] >= range[1] - 1e-6 and after[id] <= range[2] + 1e-6, id .. " in its range")
+        end
+      else
+        assert_equal(after[id], before[id], section.row .. ": " .. id .. " is outside the section")
+      end
+    end
+    assert_true(changed >= 1, section.row .. ": the section changed")
+    key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+    for _, id in ipairs(ALL_FX_IDS) do
+      assert_equal(params:get(id), before[id], section.row .. ": the quick second press undoes " .. id)
+    end
+  end
+end)
+
+test("the filter mix and the bypasses never change", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  params:set("filter_mix", 0.4); params:set("delay_bypass", 1); params:set("reverb_bypass", 1)
+  for _, row in ipairs({ "filter_freq", "delay_time", "reverb_size", "master_density" }) do
+    select_fx_row(row)
+    for seed = 1, 5 do
+      math.randomseed(seed)
+      key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+      assert_equal(params:get("filter_mix"), 0.4, "filter mix kept")
+      assert_equal(params:get("delay_bypass"), 1, "delay bypass kept")
+      assert_equal(params:get("reverb_bypass"), 1, "reverb bypass kept")
+    end
+  end
+end)
+
+local function shown(context)
+  context.screen.clear(); redraw()
+  return hint_text(context)
+end
+
+test("the FX hint is K2:rand or K2:undo, and fits", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  select_fx_row("filter_freq")
+  key(1, 1)
+  assert_equal(shown(context), "K2:rand E3:fine")
+  select_fx_row("filter_type")
+  assert_equal(shown(context), "K2:rand")
+  key(2, 1); key(2, 0)
+  assert_equal(shown(context), "K2:undo")
+  select_fx_row("filter_freq")
+  assert_equal(shown(context), "K2:undo E3:fine")
+  context.screen.clear(); redraw()
+  assert_screen_layout(context, "FX ALT hint K2:undo E3:fine")
+  key(2, 1); context.clock.run_for(0.5)
+  assert_equal(shown(context), "K2:cancel E3:fine", "a held press shows cancel")
+  assert_screen_layout(context, "FX ALT hint K2:cancel E3:fine")
+  key(2, 0); key(1, 0)
 end)
 
 end

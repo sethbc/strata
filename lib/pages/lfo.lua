@@ -273,7 +273,7 @@ return function(S)
     if alt_held then
       -- on the destination, ALT+E3 jumps a group
       local jump = S.lfo_field == DEST_FIELD and " E3:group" or ""
-      return "K2:reset K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
+      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.LFO]) .. " K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
     end
     return "K2/K3:lfo E3:" .. LFO_FIELDS[S.lfo_field].label
   end
@@ -315,20 +315,56 @@ return function(S)
     end
   end
 
-  -- ALT+K2 resets the cursor's field to its default; ALT+K3 turns the
-  -- selected LFO on or off
+  -- ALT+K2 acts on release (lfo_alt_key_release): the press notes its time.
+  -- ALT+K3 turns the selected LFO on or off
   local function lfo_alt_key(n)
-    local lfo = S.selected_lfo
     if n == 2 then
-      local param_id = LFO_FIELDS[S.lfo_field].param(lfo)
-      if S.lfo_field == STATE_FIELD then
-        set_lfo_running(lfo, param_default(param_id) == 2)
-      else
-        params:set(param_id, param_default(param_id))
-      end
+      S.lib.ui_alt.k2_down()
     elseif n == 3 then
       toggle_selected_lfo()
     end
+    request_redraw()
+  end
+
+  -- A quick ALT+K2 randomizes the selected LFO's shape and rate, and nothing
+  -- else (#557): the shape is any option; the rate follows the mode, a free
+  -- period of 0.5-30 s even in octaves, or a clocked division from 1/4 to 16
+  -- (norns' lfo_rates_as_strings positions 3-16), so a running LFO keeps
+  -- running with its destination, depth and offset
+  local CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST = 3, 16
+  local FREE_RANDOM_MIN, FREE_RANDOM_MAX = 0.5, 30
+  local function lfo_randomize_section()
+    local n = S.selected_lfo
+    local draws = {
+      {id = "lfo_shape_" .. n, draw = function()
+        return math.random(#params:lookup_param("lfo_shape_" .. n).options)
+      end}
+    }
+    if params:string("lfo_mode_" .. n) == "clocked" then
+      draws[2] = {id = "lfo_clocked_" .. n, draw = function()
+        return math.random(CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST)
+      end}
+    else
+      draws[2] = {id = "lfo_free_" .. n, draw = function()
+        return FREE_RANDOM_MIN * (FREE_RANDOM_MAX / FREE_RANDOM_MIN) ^ math.random()
+      end}
+    end
+    return {page = UI_PAGES.index.LFO, section = "lfo", voice = nil, draws = draws}
+  end
+
+  -- ALT+K2 held ALT_HOLD_SECONDS resets the cursor's field to its default
+  local function lfo_alt_hold()
+    local lfo = S.selected_lfo
+    local param_id = LFO_FIELDS[S.lfo_field].param(lfo)
+    if S.lfo_field == STATE_FIELD then
+      set_lfo_running(lfo, param_default(param_id) == 2)
+    else
+      params:set(param_id, param_default(param_id))
+    end
+  end
+
+  local function lfo_alt_key_release(n)
+    if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.LFO]) end
   end
 
   -- The layout test's states: each LFO selected, each strip field under the
@@ -389,7 +425,9 @@ return function(S)
   -- Only a running LFO's dot moves, so the page draws every frame only
   -- while one runs (#423); every other change asks for a redraw (the param
   -- actions, enc, key, the rings), turning the last LFO off included
+  -- (and while ALT+K2 is down, so its hint turns to K2:reset at the hold time)
   local function any_lfo_running()
+    if S.lib.ui_alt.k2_held() then return true end
     for n = 1, NUM_LFOS do
       if lfo_running(n) then return true end
     end
@@ -401,6 +439,7 @@ return function(S)
   -- are lib/arc/lfo.lua's
   S.registry.pages[UI_PAGES.index.LFO] = {name = "LFO", draw = redraw_lfo, hints = lfo_hints,
     enc = lfo_enc, alt_enc = lfo_alt_enc, key = lfo_key, alt_key = lfo_alt_key,
+    alt_key_release = lfo_alt_key_release, alt_hold = lfo_alt_hold, randomize_section = lfo_randomize_section,
     animates = any_lfo_running, arc_button = toggle_selected_lfo, layout_states = layout_states}
 
   return M

@@ -558,4 +558,26 @@ test("every control param with a sender sends its LFO-offset value; one without 
   S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
 end)
 
+
+test("an edit of the LFO shape, free period or clocked rate ends the randomize undo (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function flip(id) return params:get(id) == 1 and 2 or 1 end
+  for _, id in ipairs({ "lfo_shape_1", "lfo_free_1", "lfo_clocked_1" }) do
+    local function spec()
+      return { page = S.constants.UI_PAGES.index.LFO, section = "lfo", draws = {
+        { id = id, draw = function() return flip(id) end } } }
+    end
+    S.lib.mutation.randomize(spec())
+    assert_true(S.undo ~= nil, id .. ": an undo is held")
+    params:set(id, flip(id))
+    assert_equal(S.undo, nil, id .. ": an edit ends the undo")
+    local before = params:get(id)
+    S.lib.mutation.randomize(spec())
+    assert_true(params:get(id) ~= before, id .. ": the randomize sets it")
+    S.lib.mutation.undo()
+    assert_equal(params:get(id), before, id .. ": the undo restores it")
+  end
+end)
+
 end
