@@ -1,10 +1,10 @@
 # Running work packages through agents
 
-How a session runs a release's work packages (or a batch of fixes) through agents: one controller dispatches workers and reviewers, each worker builds one pull request, and the controller merges what passes. AGENTS.md's rules apply to every package; this file adds the process. A plan's own folder may add its specifics (the release, its waves, ports and fragment names), but never relaxes a rule here.
+How a session runs a release's work packages (or a batch of fixes) through agents: one controller dispatches workers and reviewers, each worker builds one package on a branch of its own, and the controller lands what passes, several reviewed packages to a pull request (Landing in batches, below). AGENTS.md's rules apply to every package; this file adds the process. A plan's own folder may add its specifics (the release, its waves, ports and fragment names), but never relaxes a rule here.
 
 ## Roles
 
-- **Controller**: the session that plans the dispatches, writes the briefs, starts workers and reviewers, rules on their questions, opens or merges the pull requests and keeps the ledger. It runs from the main checkout `/home/sethbc/src/strata`, never from a worktree.
+- **Controller**: the session that plans the dispatches, writes the briefs, starts workers and reviewers, rules on their questions, builds and lands the batches' pull requests and keeps the ledger. It runs from the main checkout `/home/sethbc/src/strata`, never from a worktree.
 - **Worker**: one agent building one package in its own worktree, from one brief. It neither dispatches agents nor merges.
 - **Reviewer**: one agent reading one package's diff against its brief, read-only.
 
@@ -15,7 +15,7 @@ The process runs on the superpowers skills. The session doing a step invokes its
 - **Design**: `superpowers:brainstorming`, for anything new. The design goes in `docs/design/<release>-design.md`, not the skill's default folder. An approved design is not brainstormed again.
 - **Plan**: `superpowers:writing-plans`, saved under docs/superpowers/plans/.
 - **Workspace**: `superpowers:using-git-worktrees`. A worker starts in the worktree made for it and makes no other. The controller stays in the main checkout.
-- **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan and on every resume. Packages run in parallel, one worktree and pull request each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
+- **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan and on every resume. Packages run in parallel, one worktree and branch each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
 - **Code**: `superpowers:test-driven-development`, by every worker whose package changes code or tests. A docs-only package skips it.
 - **Review**: a plan's packages are reviewed with `superpowers:subagent-driven-development`'s own task-reviewer and re-review templates, with "Review" below as the reviewer's criteria; `superpowers:requesting-code-review`, by the controller, is for a review outside a plan's task loop (a design, a docs change, a release).
 - **Finishing**: `superpowers:finishing-a-development-branch`, by the controller at the end of a plan. The choice is always its pull request option, never a local merge: `main` takes rebase merges only.
@@ -42,8 +42,8 @@ Where a brief is ambiguous or conflicts with the merged code, the worker reports
 
 ## Worker rules
 
-- **One worktree per pull request.** Start with `git fetch -q origin && git checkout -q -b <branch> origin/main` (append `-2` if the name is taken). Check with `git worktree list` that the directory is not the main checkout; if it is, stop and report without changing anything. Commit before finishing (a worktree with no commits may be deleted). Never use bare `git stash`.
-- **Rebase, never merge main in.** Update with `git fetch -q origin && git rebase origin/main` (resolve conflicts commit by commit), then `git push --force-with-lease`. Never `git merge origin/main`, never `gh pr update-branch` without `--rebase`.
+- **One worktree per package.** Start with `git fetch -q origin && git checkout -q -b <branch> origin/main` (append `-2` if the name is taken). Check with `git worktree list` that the directory is not the main checkout; if it is, stop and report without changing anything. Commit before finishing (a worktree with no commits may be deleted). Never use bare `git stash`.
+- **No rebase of your own; never merge main in.** The controller's batch puts the package's commits on `main` (Landing in batches, below), so a worker rebases only when the controller asks, and then with `git fetch -q origin && git rebase origin/main` (resolve conflicts commit by commit), then `git push --force-with-lease`. Never `git merge origin/main`, never `gh pr update-branch` without `--rebase`.
 - **Own scratch folder, own worktree, nothing else.** Workers share the session's scratchpad, so each works only in `scratchpad/<worker>/` (the name its dispatch gives) and its own worktree. Never write to, rename or delete anything outside those: not another worker's folder, worktree, logs or Docker containers, even when the names look like its own. Generic names (`v0`, `run1`) go inside the worker's folder.
 - **Guarded deletes only**: `rm -rf -- "${dir:?}"` on an absolute path inside the worker's own folder, spelled out; `git rm` for tracked files; a worktree only with `git worktree remove`, and only one the worker created.
 - **Step 0**: check every name the brief consumes against the merged code. Where a merged name differs, use it and say so in the report; where a consumed interface is missing, report NEEDS_CONTEXT.
@@ -53,11 +53,11 @@ Where a brief is ambiguous or conflicts with the merged code, the worker reports
 - **Screen changes**: anything drawn follows AGENTS.md's layout rules; look at the page renders (`lua test/render_pages.lua` then `python3 test/render_pages.py`), since the layout tests miss text over a line and strings crowding nearby baselines.
 - US English everywhere (a test enforces it); never name the maintainer in docs, commits or pull requests.
 - **Checks before each commit**: `lua test/run.lua`, `luajit test/run.lua` and `lua test/sync_check.lua`. A package that touches engine code or a check area also runs the engine check: its own areas while working (`STRATA_ENGINE_CHECK_AREAS`, on its own `STRATA_SC_PORT`), then every area before pushing, on SuperCollider 3.14.1 (`test/run_engine_check.sh`) and on 3.13, norns' and CI's version (`test/run_engine_check_313.sh`, in Docker: `docs/notes/lua/test-harness/engine-check-runner.md`). It reports #131's rate on 3.13: how many runs passed, failed and crashed, out of how many, and how many ran at once.
-- Commit with the brief's message, ending with the session's attribution line, then `git push -u origin HEAD`. Open a pull request only when the dispatch says to.
+- Commit with the brief's message, ending with the session's attribution line, then `git push -u origin HEAD`. A worker opens no pull request: its pushed branch is what the controller's batch lands.
 
 ## Findings
 
-Every problem found along the way (by a worker, a reviewer or the controller) gets its own GitHub issue and its own pull request, even when small. None is folded into an unrelated package, deferred without an issue or accepted silently. A worker that finds one outside its package reports it; the controller files it and dispatches the fix.
+Every problem found along the way (by a worker, a reviewer or the controller) gets its own GitHub issue and its own fix, in a package of its own or the package whose files it is in, even when small. None is folded into an unrelated package, deferred without an issue or accepted silently. A worker that finds one outside its package reports it; the controller files it and dispatches the fix.
 
 ## Reports
 
@@ -74,9 +74,18 @@ A reviewer checks one package against its brief, then its build quality. It is a
 - Check also: the TDD evidence, the plan's constraints, the screen layout rules if anything is drawn, US English, the changelog fragment, the notes file and the user docs.
 - Output: part 1, spec compliance (pass or fail, with what is missing, extra or misunderstood); part 2, quality (critical, important, minor, each with file:line and why); then the verdict (spec pass or fail; approved or changes requested), in under 450 words.
 
+## Landing in batches
+
+Reviewed packages land in batches, one pull request per batch, not one per package, so CI runs once for a batch instead of about three times a package (at its opening, after its rebase and on `main`):
+- **A batch** is reviewed packages whose files are disjoint, or already ordered. The controller cherry-picks each package's own commits, in order, onto `origin/main` as one landing branch (`land/batch-<n>`), so every package keeps its commits and messages (a branch stacked on another package contributes only its last commits). It runs the three Lua checks there, pushes the branch and opens one pull request whose body has every package's section and every `Fixes #<n>` line.
+- **Workers push their branches, but no pull request is opened per package,** and workers do not rebase: the batch does that. A package pull request already open is closed when its batch lands.
+- **A red batch** (a conflict while cherry-picking, a failing check, a red CI run) blocks only until it is fixed: the package is fixed (its worker is resumed, and the batch rebuilt) or dropped from the batch and landed later. A failed CI job is rerun once (an engine shard can fail on a slow runner's timing) before the batch counts as red.
+- **After a batch where two packages edit the same user page** (or any shared doc), check that the later one did not overwrite the earlier's lines: a package built before the earlier one landed can carry a line's old text back onto `main` (the final review found a line of `docs/user/pages/lfo.md` reverted that way).
+- The controller merges a batch's pull request once CI is green, by rebase (`gh pr merge --rebase`), so `main` stays linear.
+
 ## Merging and cleanup
 
-- The controller merges a reviewed pull request once CI is green, by rebase (`gh pr merge --rebase`), so `main` stays linear.
-- Pull requests that touch the same file land one at a time: the later one waits until the earlier merges, then rebases on `main` and reruns the checks.
+- A pull request outside a batch (a release, a docs change) is merged the same way, once CI is green, by rebase.
+- Pull requests that touch the same file land one at a time: the later one waits until the earlier merges, then is rebuilt or rebased on `main` and reruns the checks.
 - On a conflict in a registration line, keep both lines in the order the sequence needs (AGENTS.md, Working in parallel).
 - Leftover worktrees and folders of a finished worker (reported, or stopped) are cleaned up by the controller that dispatched it or by the maintainer, never by another worker. First check that nothing is uncommitted or unpushed (`git -C <worktree> status --short`, `git log @{u}..`), then `git worktree remove <path>` and `git worktree prune`. A worktree whose branch is merged or abandoned goes; one with work not yet pushed is pushed or reported first.

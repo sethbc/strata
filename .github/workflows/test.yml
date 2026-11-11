@@ -51,9 +51,13 @@ jobs:
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
-  # Area times on 3.14.1 (s): buffers 98, effects 72, record 71, mix 68, lifecycle 65, memory 57,
-  # freeze 49, variation 47, loops 45, rings 30, files 29, waveform 22,
-  # grains 20, voices 16, positions 8, structure 3, performance 2: buffers alone, then at most about 219 s a shard (rebalanced at the release).
+  # Area times on SuperCollider 3.13 at 3.3.0 (s, the mean of four full runs in Docker; 3.14.1's are within 2 s):
+  # record 110, lifecycle 106, buffers 99, effects 87, mix 69, rings 69, memory 67, voices 66,
+  # freeze 63, loops 54, variation 52, files 29, grains 23, waveform 23, positions 8, structure 4, performance 3:
+  # 932 s in all, and at most about 152 s a shard (voices, freeze and grains), far under each
+  # shard's 570 s. waveform (a 300 s high engine, where #211's collector failure shows) shares
+  # its shard only with record, which builds no high engine (buffers, effects, files, freeze,
+  # memory and performance do); four full runs on 3.13 at 3.3.0 passed with the pair.
   engine-shard:
     name: engine (${{ matrix.areas }})
     # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
@@ -66,13 +70,13 @@ jobs:
       # tier engines), it was where sclang's garbage collector crashed (#131)
       matrix:
         areas:
-          - buffers
-          - lifecycle,loops,structure
-          - variation,effects,mix,rings,performance
-          - freeze,grains,files,voices,positions
+          - buffers,variation
+          - lifecycle,files,positions
+          - effects,loops
+          - mix,rings,structure,performance
+          - voices,freeze,grains
           - memory
-          - record
-          - waveform
+          - record,waveform
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes), in full:
@@ -133,10 +137,10 @@ jobs:
           if echo "$out" | grep -q "^ERROR"; then echo "an ERROR line follows the failure"; exit 1; fi
 
       # A port that already has a server must fail the run at once, naming the
-      # port, and must leave that server running (#471). Waveform's shard is
-      # the shortest, so these two steps run there only.
+      # port, and must leave that server running (#471). These two steps run
+      # on one shard only, record and waveform's (well under its timeout).
       - name: Engine check refuses a port that already has a server
-        if: matrix.areas == 'waveform'
+        if: matrix.areas == 'record,waveform'
         run: |
           scsynth -u 57391 > "$RUNNER_TEMP/scsynth-other.log" 2>&1 &
           other=$!
@@ -154,7 +158,7 @@ jobs:
       # A server that cannot boot (the port held by a socket that never
       # answers) must fail the run within seconds, naming the cause (#472)
       - name: Engine check fails at once when scsynth cannot boot
-        if: matrix.areas == 'waveform'
+        if: matrix.areas == 'record,waveform'
         run: |
           python3 -c 'import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 57392)); time.sleep(120)' &
           holder=$!

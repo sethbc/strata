@@ -1,2 +1,0 @@
-### Fixed
-- A scene crossfade that does not land (canceled by the scene sequencer, stopped by loading scenes from disk, or stopped by an error) puts the scene before it back as the current scene on the screen and the grids, instead of leaving its own scene shown although it was never fully applied; a crossfade interrupted by a recall that then fails leaves the last scene that landed current (#253).

@@ -26,7 +26,7 @@ Structure:
 What fails it, besides a failed check: any output line with `ERROR` or `WARNING` at its start, `FAILURE` (the server's report of a failed command), `alloc failed`, `Too many grains` (a grain UGen past `maxGrains`) or `Strata invariant broken`.
 
 Timeouts and processes:
-- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1200 s; a full run of every area takes about 12 minutes on 3.14.1, CI shards set 570 s) with line-buffered output (`stdbuf`).
+- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1200 s; a full run of every area takes about 16 minutes on 3.14.1 and on 3.13 alike, about 930 s of areas at 3.3.0, CI shards set 570 s) with line-buffered output (`stdbuf`).
 - It stops sclang as soon as the output shows a compile error (a syntax error in `engine_check.scd`, `Library has not been compiled successfully`): sclang never exits by itself then, and would hold the machine and CI's job until killed.
 - `timeout` signals the whole process group, so the scsynth sclang booted goes too. Without a `timeout` command, the script's own watch loop enforces the limit.
 - It stops the scsynth too, even after a sclang crash (through the PID the check writes to its work dir, #152), without needing `pgrep` or `timeout`.
@@ -36,7 +36,7 @@ Start-up (the check's own, `test/engine_check.scd`):
 - Before booting, it sends `/status` to `$STRATA_SC_PORT`; any reply fails the run at once with `ENGINE CHECK FAILED: port <n> already has a server`, and it never quits a server it did not start (#471).
 - A scsynth that exits without booting (a port held by a program that does not answer, JACK not running) fails the run within seconds with `ENGINE CHECK FAILED: scsynth did not boot` instead of at the deadline (#472). The script's summary prints scsynth's `*** ERROR` lines.
 - The temp dir override the check needs lives in `test/StrataTestTempDir.sc.in`, copied into a `SystemOverwrites` folder of the work dir's classes, where sclang does not warn that an extension overwrites a system method (#486).
-- CI's engine shards also run the check with an unknown area and require its failure line without an `ERROR` line (#485). The waveform shard also runs it against a port a `scsynth` already holds (the failure line naming the port, and that server still running afterward, #471) and against a port held by a silent UDP socket (`scsynth did not boot` within 40 s, #472). A boot is ended by a watch on the server's pid: `waitForBoot`'s own limit and `onFailure` are not applied by sclang 3.13 or 3.14.1.
+- CI's engine shards also run the check with an unknown area and require its failure line without an `ERROR` line (#485). The record and waveform shard also runs it against a port a `scsynth` already holds (the failure line naming the port, and that server still running afterward, #471) and against a port held by a silent UDP socket (`scsynth did not boot` within 40 s, #472). A boot is ended by a watch on the server's pid: `waitForBoot`'s own limit and `onFailure` are not applied by sclang 3.13 or 3.14.1.
 
 Ports:
 - Each run boots scsynth on `$STRATA_SC_PORT` (default 57110). Runs on different ports (avoid 57120 and the few above it, used by sclang itself) can overlap; runs on the same port collide. `docs/status.md` (Running the checks) has the details.
