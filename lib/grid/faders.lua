@@ -153,7 +153,7 @@ return function(S)
   function M.faders_signature()
     local voice_idx = S.grid_voice_select
     local ids = fader_param_ids(voice_idx)
-    local parts = {voice_idx, S.param_page, math.ceil(#ids / GRID_LAYOUT.fader_rows)}
+    local parts = {voice_idx, S.param_page, fader_page_count(voice_idx)}
     for row = 1, GRID_LAYOUT.fader_rows do
       local param_id = ids[(S.param_page - 1) * GRID_LAYOUT.fader_rows + row]
       parts[#parts + 1] = param_id and fader_position(param_id) or 0

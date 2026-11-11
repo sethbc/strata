@@ -345,11 +345,12 @@ test("a layout record says whether a position press selects the grid voice", fun
   S.buffers[1].seconds = 16
   params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
   S.grid_voice_select = 6
-  S.lib.positions.grid_key(3, 2, 5, 16, 1); S.lib.positions.grid_key(3, 2, 5, 16, 0)
+  local cells = S.constants.GRID_PAGES.position_cells
+  S.lib.positions.grid_key(3, 2, 5, cells, 1); S.lib.positions.grid_key(3, 2, 5, cells, 0)
   assert_equal(S.grid_voice_select, 6, "the grid voice is unchanged")
   -- the same press on the 128h (port 1) selects voice 2: the 12x12 ignored
   -- it for want of a layout
-  S.lib.positions.grid_key(1, 2, 5, 16, 1); S.lib.positions.grid_key(1, 2, 5, 16, 0)
+  S.lib.positions.grid_key(1, 2, 5, cells, 1); S.lib.positions.grid_key(1, 2, 5, cells, 0)
   assert_equal(S.grid_voice_select, 2, "a 128h's press selects the voice")
 end)
 
@@ -570,6 +571,36 @@ test("a layout whose redraw fails spares the other grids and the caller, and pri
   print = real_print
   layout.redraw = real_redraw
   pattern_clock_stop()
+  if not ok then error(err, 0) end
+end)
+
+-- Review of #441: the errors are kept per port, so a second grid of the
+-- same layout that draws well never clears the failing one's message
+test("one of two 16x8 grids failing its redraw prints its error once", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.grid.plug(1, 16, 8)
+  local second = context.grid.plug(2, 16, 8)
+  local layout = S.registry.grid_layouts["128h"]
+  local real_redraw = layout.redraw
+  layout.redraw = function(port, grid_device)
+    if port == 1 then error("broken on port 1") end
+    return real_redraw(port, grid_device)
+  end
+  local lines = {}
+  local real_print = print
+  print = function(text) lines[#lines + 1] = tostring(text) end
+  local ok, err = pcall(function()
+    for _ = 1, 5 do grid_redraw() end
+    assert_equal(second:get_led(5, 8), 15, "port 2 is drawn (its page key)")
+    local failed = 0
+    for _, line in ipairs(lines) do
+      if line:find("strata: grid redraw failed: ", 1, true) == 1 then failed = failed + 1 end
+    end
+    assert_equal(failed, 1, "five redraws print port 1's error once")
+  end)
+  print = real_print
+  layout.redraw = real_redraw
   if not ok then error(err, 0) end
 end)
 
@@ -990,6 +1021,8 @@ test("a port's rotation is kept in grids.data and applied at start and to a grid
   context.grid.unplug(2)
   local later = context.grid.plug(2, 16, 8)
   assert_equal(later.rotation_value, 3, "applied to a grid plugged in")
+  assert_equal(later:get_led(8, 8), local_value("S").lib.grid_layout_128v.LAYOUT.page_levels[1],
+    "and drawn as the 8x16 on page 1")
   local other = context.grid.plug(3, 16, 8)
   assert_equal(other.rotation_value, 0, "another port keeps its own")
 end)
@@ -1029,6 +1062,25 @@ test("a rotation that cannot be written is not set", function()
   assert_equal(core.set_rotation(1, 1), false, "not set")
   assert_equal(core.rotation(1), 0, "the old value")
   assert_equal(device.rotation_value, 0, "the grid not turned")
+end)
+
+-- Review of #323: norns' grid.cleanup() keeps a rotation, so the script
+-- that runs next would find a turned 128 as an 8x16
+test("cleanup puts a turned grid back to rotation 0 and keeps the setting", function()
+  local context = load_strata(); finish_startup(context)
+  local core = grid_core()
+  local device = context.grid.plug(1, 16, 8)
+  assert_equal(core.set_rotation(1, 1), true)
+  assert_equal(device.rotation_value, 1, "turned to 90")
+  cleanup()
+  assert_equal(device.rotation_value, 0, "rotation 0 after cleanup")
+  assert_equal(grid.connect(1).cols .. "x" .. grid.connect(1).rows, "16x8", "the vport reports 16x8 again")
+  assert_equal(core.rotation(1), 1, "the port's setting is kept for the next start")
+  local lit = 0
+  for x = 1, 16 do
+    for y = 1, 8 do lit = lit + device:get_led(x, y) end
+  end
+  assert_equal(lit, 0, "and the grid is dark")
 end)
 
 -- #323's comment: a rotation made outside Strata (maiden) changes the size

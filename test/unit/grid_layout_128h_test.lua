@@ -427,7 +427,7 @@ test("128h: a position press jumps, selects the grid voice and a held pair sets 
   assert_near(params:get("v2_loop_start"), 0.25, 1e-6, "loop start")
   assert_near(params:get("v2_loop_length"), 0.3125, 1e-6, "loop length")
   context.grid.press(1, 9, 2, 0); context.grid.press(1, 5, 2, 0)
-  assert_true(S.lib.positions.grid_level(2, 5, 16) > 0, "the LEDs come from positions")
+  assert_true(S.lib.positions.grid_level(2, 5, S.constants.GRID_PAGES.position_cells) > 0, "the LEDs come from positions")
 end)
 
 test("128h: the grid voice's strip on page 4 recalls, stores, holds and restores the whole loop", function()

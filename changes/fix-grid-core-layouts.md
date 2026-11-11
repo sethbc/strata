@@ -1,5 +1,5 @@
 ### Added
-- SETUP has a rotation field per grid port (`grid 1 rotation` ... `grid 4 rotation`: 0, 90, 180 or 270), kept in `grids.data` in Strata's data folder: a monome 128 stood upright at 90 or 270 uses the 8×16 layout, which it could not reach before (it reports itself as 16×8). A turned grid starts again on page 1 with no keys held, and a grid plugged into the port is turned at once (#323).
+- SETUP has a rotation field per grid port (`grid 1 rotation` ... `grid 4 rotation`: 0, 90, 180 or 270), kept in `grids.data` in Strata's data folder: a monome 128 stood upright at 90 or 270 uses the 8×16 layout, which it could not reach before (it reports itself as 16×8). A turned grid starts again on page 1 with no keys held, a grid plugged into the port is turned at once, and leaving Strata puts it back unturned for the next script (#323).
 - The 16×8's sources page lights column 11 on the grid voice's row, and the 8×16's positions page lights the grid voice's column one step brighter, so the bookmark strip's voice shows on the page the strip is on (#444).
 
 ### Changed
