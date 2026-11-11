@@ -630,110 +630,29 @@ test("tempo keys light while held and flash the new tempo in the header", functi
   tap(context, 1, 8)
 end)
 
--- #303: row 1's levels for scenes 1-5, read while the sequencer runs through
--- the clock: scenes 1-3 saved, slot 4 empty (the sequencer skips it, #513)
-test("the scene page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
+-- #452: the scene keys show the core's levels (grid_core_test.lua holds
+-- the rule: the next slot, the current scene, the blink)
+test("256 page 3: the scene keys show the core's levels (#452)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
+  local core = S_table().lib.grid_core
   tap(context, 15, 8)  -- page 3
   capture_scene(1); capture_scene(2); capture_scene(3)
   params:set("scene_sequence_length", 4)
   params:set("scene_transition_time", 0); params:set("scene_duration", 4)
-  grid_redraw()  -- capture_scene draws nothing
-  local function row_1()
-    local levels = {}
-    for x = 1, 5 do levels[x] = device:get_led(x, 1) end
-    return table.concat(levels, " ")
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)  -- scene 1 playing, scene 2 next
+  context.grid.press(1, 5, 3, 1)
+  local seen = {}
+  for i = 1, 8 do
+    assert_equal(device:get_led(i, 1), core.scene_recall_level(i), "recall key " .. i)
+    assert_equal(device:get_led(i, 2), core.scene_fade_level(i), "fade key " .. i)
+    assert_equal(device:get_led(i, 3), core.scene_save_level(1, i, 3), "save key " .. i)
+    seen[device:get_led(i, 1)] = true
   end
-  assert_equal(row_1(), "8 8 8 2 2", "stopped: populated scenes at 8, empty ones at 2")
-  params:set("scene_sequencer_enabled", 1)
-  context.clock.run_for(1, 0.001)
-  assert_equal(row_1(), "15 10 8 2 2", "1 s: scene 1 playing, scene 2 next at 10")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "8 15 10 2 2", "5 s: scene 2 playing, scene 3 next")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "10 8 15 2 2", "9 s: scene 3 playing, scene 1 next (past empty slot 4)")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "15 10 8 2 2", "13 s: scene 1 again, scene 2 next")
-  context.clock.run_for(4, 0.001)
-  assert_equal(row_1(), "8 15 10 2 2", "17 s: scene 2, scene 3 next")
-  params:set("scene_sequencer_enabled", 0)
-  assert_equal(row_1(), "8 15 8 2 2", "a stopped sequencer lights no next scene")
-  assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
-end)
-
--- #303: the sequencer's first recall waits for the next scheduler tick; until
--- then the slot it recalls first is the one lit at 10: the first that holds a
--- scene, since an empty slot is skipped (#513)
-test("from the sequencer's start the scene page lights the slot it recalls first (#303)", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.grid.plug(1, 16, 16)
-  tap(context, 15, 8)  -- page 3
-  capture_scene(1); capture_scene(2); capture_scene(3)
-  params:set("scene_sequence_length", 3)
-  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
-  local function row_1()
-    local levels = {}
-    for x = 1, 4 do levels[x] = device:get_led(x, 1) end
-    return table.concat(levels, " ")
-  end
-  params:set("scene_sequencer_enabled", 1)
-  assert_equal(S_table().current_scene, 0, "started: nothing recalled yet")
-  assert_equal(row_1(), "10 8 8 2", "before the first recall: scene 1, recalled first, at 10")
-  context.clock.run_for(1, 0.001)
-  assert_equal(row_1(), "15 10 8 2", "scene 1 playing, scene 2 next")
-  params:set("scene_sequencer_enabled", 0)
-  -- slot 1 empty: lit at 10 until the sequencer reaches it, then slot 2
-  context = load_strata(); finish_startup(context)
-  device = context.grid.plug(1, 16, 16)
-  tap(context, 15, 8)
-  capture_scene(2); capture_scene(3)
-  params:set("scene_sequence_length", 3)
-  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
-  params:set("scene_sequencer_enabled", 1)
-  assert_equal(row_1(), "2 10 8 2", "slot 1 is empty: scene 2, recalled first, at 10 (#513)")
-  context.clock.run_for(1, 0.001)
-  assert_equal(row_1(), "2 15 10 2", "scene 2 playing, scene 3 next")
-  params:set("scene_sequencer_enabled", 0)
-end)
-
--- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
-test("the scene page blinks the recall key of the scene a fade goes to", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.grid.plug(1, 16, 16)
-  tap(context, 15, 8)  -- page 3
-  capture_scene(1); capture_scene(2)
-  recall_scene(1, 0); recall_scene(2, 2)
-  context.clock.run_for(0.1)                                    -- step 2
-  assert_equal(device:get_led(2, 1), 8, "step 2: the target's recall key at its populated level")
-  context.clock.run_for(0.1)                                    -- step 3
-  assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
-end)
-
--- #254: the scene sequencer's fading target blinks between 15 and its
--- populated 8; the scene it recalls next stays at 10 (#303)
-test("the scene sequencer's fading target blinks between 15 and 8, the next scene steady at 10", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.grid.plug(1, 16, 16)
-  tap(context, 15, 8)  -- page 3
-  capture_scene(1); capture_scene(2); capture_scene(3)
-  params:set("scene_sequence_length", 3)
-  params:set("scene_transition_time", 2); params:set("scene_duration", 4)
-  params:set("scene_sequencer_enabled", 1)
-  context.clock.run_for(0.05)                                   -- the sequencer recalls scene 1: step 1
-  local S = S_table()
-  assert_equal(S.lib.scenes.fading_to(), 1, "the sequencer fades to scene 1")
-  assert_equal(S.scene_sequencer_position, 1, "its position is the target")
-  assert_equal(device:get_led(1, 1), 15, "step 1: the target's recall key at 15")
-  assert_equal(device:get_led(2, 1), 10, "step 1: scene 2, next, at 10")
-  context.clock.run_for(0.1)                                    -- step 2
-  assert_equal(device:get_led(1, 1), 8, "step 2: the key at its populated 8")
-  assert_equal(device:get_led(2, 1), 10, "step 2: scene 2 still at 10")
-  context.clock.run_for(0.1)                                    -- step 3
-  assert_equal(device:get_led(1, 1), 15, "step 3: at 15 again")
-  context.clock.run_for(2)                                      -- the fade lands
-  assert_equal(S.lib.scenes.fading_to(), nil, "the fade landed")
-  assert_equal(device:get_led(1, 1), 15, "the landed scene is steady at 15")
+  assert_true(seen[15] and seen[10] and seen[8] and seen[2], "the recall keys show all four levels")
+  assert_equal(core.scene_save_level(1, 5, 3), 15, "scene 5's save is pending")
+  context.grid.press(1, 5, 3, 0)
   params:set("scene_sequencer_enabled", 0)
 end)
 
@@ -749,9 +668,9 @@ test("256 page 3: rows 8 and 16 work and light as on the other pages (#442)", fu
   local device = context.grid.plug(1, 16, 16)
   local S = S_table()
   tap(context, 15, 8)  -- page 3
-  -- row 8: play/stop 4, tempo 4, the positions key 4, the page keys; row 16:
-  -- locks 2, the freeze key 4, the clipboard keys 2
-  assert_equal(row_levels(device, 8), "4 4 4 4 4 4 4 4 0 0 0 4 2 2 15 2", "row 8 on page 3")
+  -- row 8: play/stop 4, tempo 4, the page keys (the positions key among
+  -- them); row 16: locks 2, the freeze key 4, the clipboard keys 2
+  assert_equal(row_levels(device, 8), "4 4 4 4 4 4 4 4 0 0 0 2 2 2 15 2", "row 8 on page 3")
   assert_equal(row_levels(device, 16), "2 2 2 2 2 2 2 4 2 2 2 2 2 2 2 2", "row 16 on page 3")
   tap(context, 1, 8)
   assert_true(S.pattern_playing, "(1,8) plays")
@@ -954,7 +873,7 @@ local function page5_grid()
   return context, S, device
 end
 
-test("256: the key at x 12, y 8 shows page 5 and lights 15 there, 4 elsewhere", function()
+test("256: the key at x 12, y 8 shows page 5 and lights 15 there, 2 elsewhere", function()
   local context, S, device = page5_grid()
   assert_equal(S.lib.grid_core.page(1), 1)
   grid_tap(context, 12, 8)
@@ -962,7 +881,7 @@ test("256: the key at x 12, y 8 shows page 5 and lights 15 there, 4 elsewhere", 
   assert_equal(device:get_led(12, 8), 15, "lit on page 5")
   grid_tap(context, 13, 8)
   assert_equal(S.lib.grid_core.page(1), 1, "page 1's key is (13, 8)")
-  assert_equal(device:get_led(12, 8), 4, "dim elsewhere")
+  assert_equal(device:get_led(12, 8), 2, "dim elsewhere, as the other page keys (#526)")
 end)
 
 test("256: a position press jumps and a held pair sets the loop", function()
@@ -1091,6 +1010,21 @@ test("256: an armed slot's record key lights 11", function()
   assert_equal(S.lib.grid_core.record_level(1), 8, "loaded")
   S.buffers[1].loaded = false
   assert_equal(S.lib.grid_core.record_level(1), 2, "empty")
+end)
+
+-- #447: row 13 takes only the fader pages the voice has
+test("256 row 13 past the voice's last fader page leaves the page", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device = context.grid.plug(1, 16, 16)
+  local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
+  press(14, 8)  -- page 2
+  press(3, 14)  -- voice 3 (folder): 5 fader pages
+  press(2, 13)
+  assert_equal(S.param_page, 2, "page 2 is taken")
+  press(6, 13); press(16, 13)
+  assert_equal(S.param_page, 2, "pages 6 and 16 are not the voice's")
+  assert_equal(device:get_led(2, 13), 15, "row 13 still shows page 2")
 end)
 
 end

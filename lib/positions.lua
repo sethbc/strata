@@ -27,7 +27,7 @@ return function(S)
   -- the strip's non-bookmark keys
   local STRIP_KEYS = {"store", "hold", "whole"}
   -- the position row's cells on the page-5 grids (the change signature)
-  local DISPLAY_CELLS = 16
+  local DISPLAY_CELLS = S.constants.GRID_PAGES.position_cells
 
   -- per voice: the scan hold, its holders (a set: "grid:<port>", "arc",
   -- "caller"; held exactly while it is not empty), the glide's rate (as

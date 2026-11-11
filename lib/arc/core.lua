@@ -250,12 +250,19 @@ return function(S)
     end
   end)
 
-  -- Leave the arc dark on exit, the last cleanup step
+  -- On exit clear the followed vport's handlers and leave the arc dark, the
+  -- last cleanup step, and hand hot-plug back (no-ops; norns' arc.cleanup()
+  -- restores its own at a script change): norns' SLEEP runs only cleanup()
+  -- before the system shuts down, so a turn meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.arc_dark, function()
     if S.arc_device then
+      S.arc_device.delta = nil
+      S.arc_device.key = nil
       S.arc_device:all(0)
       S.arc_device:refresh()
     end
+    arc.add = function() end
+    arc.remove = function() end
   end)
 
   return M

@@ -7,7 +7,7 @@
 - Row 8 column 1 acts on release, not press: a release before `GRID_HOLD.half_toggle_seconds` (0.5 s) plays or stops (`pattern_toggle`). The hold goes through `on_hold` (never a clock of the layout's own), so a release, a grid removal or cleanup cancels it. When it fires it switches the half (ending the port's step gestures with `end_port_step_gestures`, so a step held in the half it leaves never takes a level, #242) and `consume`s the key, so the release does nothing. A release the core never saw pressed does nothing.
 - Columns 2-8 of row 8 toggle voices 1-7 (all seven are reachable).
 - Column 1's LED: stopped, the shown half (`LAYOUT_64.stopped_levels`: 4 for steps 1-8, 8 for steps 9-16, per port; the half switch redraws, so it shows at once); 15 while the playhead (`S.lib.sequencer.sounding_step()`, step 1 if none has sounded yet; never `S.pattern_position`, the next step) is in the shown half, and while it is in the other half a blink with the beat: 12 on odd quarter notes and 3 on even ones (`LAYOUT_64.steps_per_beat` = 4 sixteenth-note steps per beat, so steps 9-12 light and 13-16 dim). Never blink per step: that strobes at about 8 Hz at 120 BPM. The shown half's playhead is `step_brightness`'s own.
-- The geometry and LED levels live in the one `LAYOUT_64` table (`S.lib.grid_layout_64.LAYOUT`).
+- The geometry and its own LED levels live in the one `LAYOUT_64` table (`S.lib.grid_layout_64.LAYOUT`); the voice keys light at the core's `voice_level` (#526); the positions view is `S.constants.GRID_PAGES.positions` with `GRID_PAGES.position_cells` cells (#451).
 
 ## Owns
 
@@ -18,4 +18,4 @@
 
 - Rows 1-7: `step_key(port, x, y, z, y, (half - 1) * 8 + x, x, 8)`.
 - Positions view (page 5): see the first item of Must not break.
-- Row 8: column 1 play / stop on a tap's release, a 0.5 s hold cycles steps 1-8, steps 9-16 and positions; columns 2-8 `toggle_voice(x - 1)` (LED 12 running, 4 stopped).
+- Row 8: column 1 play / stop on a tap's release, a 0.5 s hold cycles steps 1-8, steps 9-16 and positions; columns 2-8 `toggle_voice(x - 1)` (LED 12 running, 2 stopped).

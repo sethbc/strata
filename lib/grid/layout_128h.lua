@@ -11,6 +11,7 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
+  local PAGES = S.constants.GRID_PAGES  -- the page numbers and position cells every layout shares
   local grid_core = S.lib.grid_core
   local FADER_ROWS = grid_core.GRID_LAYOUT.fader_rows
 
@@ -20,7 +21,6 @@ return function(S)
     play_last_column = 4,     -- columns 1-4 play/stop
     page_first_column = 5,    -- columns 5-8 pages 1-4
     num_pages = 4,
-    sequencer_next_level = 10,  -- page 3: the scene the running sequencer recalls next, row 1
     voice_first_column = 9,   -- columns 9-15 voice on/off
     voice_cycle_column = 16,  -- the next voice for page 2's faders
     -- page 2: faders on rows 1-4 (FADER_ROWS), then these rows
@@ -31,6 +31,7 @@ return function(S)
     -- 9-15), slots 1-4 then 5-8 on columns 13-16: record on rows 1-2,
     -- clear on rows 3-4
     freeze_column = 12,       -- page 4: voice v's freeze key on row v (S.lib.freeze)
+    grid_voice_column = 11,   -- page 4: lit on the grid voice's row, the voice the strip acts on (#444)
     frozen_level = 15,
     unfrozen_level = 3,
     slot_first_column = 13,
@@ -42,10 +43,9 @@ return function(S)
     strip_bookmark_row = 5,
     strip_key_row = 6,
     strip_first_column = 13,
-    -- page 5: the positions, voice v's row v (16 cells); the sources key
-    -- (page 4's own, column 8 of row 8) pressed on page 4 goes here and back
-    position_page = 5,
-    sources_page = 4,
+    -- page 5 (PAGES.positions): voice v's 16 position cells on row v; the
+    -- sources key (page 4's own, column 8 of row 8) pressed on page 4 goes
+    -- there and back, and lights position_page_level there
     position_page_level = 10,
   }
   M.LAYOUT = LAYOUT_128H
@@ -139,8 +139,8 @@ return function(S)
     local voice_offset = x - LAYOUT_128H.voice_first_column + 1
     if x <= LAYOUT_128H.play_last_column then
       pattern_toggle()
-    elseif page_offset == LAYOUT_128H.sources_page and grid_core.page(port) == LAYOUT_128H.sources_page then
-      grid_core.set_page(port, LAYOUT_128H.position_page)
+    elseif page_offset == PAGES.sources and grid_core.page(port) == PAGES.sources then
+      grid_core.set_page(port, PAGES.positions)
     elseif page_offset >= 1 and page_offset <= LAYOUT_128H.num_pages then
       grid_core.set_page(port, page_offset)
     elseif voice_offset >= 1 and voice_offset <= NUM_VOICES then
@@ -156,10 +156,10 @@ return function(S)
     -- A release reaches only the positions: the position keys and the strip's
     -- hold and store keys end on it
     if z == 0 then
-      if y ~= LAYOUT_128H.control_row and x >= 1 and x <= PATTERN_LENGTH then
-        if page == LAYOUT_128H.position_page and y <= NUM_VOICES then
-          S.lib.positions.grid_key(port, y, x, PATTERN_LENGTH, 0)
-        elseif page == LAYOUT_128H.sources_page then
+      if y ~= LAYOUT_128H.control_row and x >= 1 and x <= PAGES.position_cells then
+        if page == PAGES.positions and y <= NUM_VOICES then
+          S.lib.positions.grid_key(port, y, x, PAGES.position_cells, 0)
+        elseif page == PAGES.sources then
           local key = strip_key_of(x, y)
           if key then
             S.lib.positions.strip_key(port, S.grid_voice_select, key, 0)
@@ -172,13 +172,13 @@ return function(S)
       control_row_key(port, x)
       return
     end
-    if page == LAYOUT_128H.position_page then
-      if y <= NUM_VOICES then S.lib.positions.grid_key(port, y, x, PATTERN_LENGTH, z) end
-    elseif page == 2 then
+    if page == PAGES.positions then
+      if y <= NUM_VOICES then S.lib.positions.grid_key(port, y, x, PAGES.position_cells, z) end
+    elseif page == PAGES.faders then
       fader_page_key(x, y)
-    elseif page == 3 then
+    elseif page == PAGES.scenes then
       scene_page_key(port, x, y, z)
-    elseif page == 4 then
+    elseif page == PAGES.sources then
       local key = strip_key_of(x, y)
       if key then
         S.lib.positions.strip_key(port, S.grid_voice_select, key, z)
@@ -192,37 +192,31 @@ return function(S)
   end
 
   -- Page 2: faders on rows 1-4 (a bar at 8 up to the value at 15), the
-  -- fader pages on row 5 (selected 15), voice select on row 6 (selected 15,
-  -- others 4), lock on row 7 (locked 12, others 2)
+  -- fader pages on row 5, voice select on row 6, lock on row 7, at the
+  -- core's levels (fader_page_level, LEVELS' pick pair, lock_level)
   local function redraw_fader_page(grid_device)
     local ids = fader_param_ids(S.grid_voice_select)
+    local levels = grid_core.LEVELS
     for row = 1, FADER_ROWS do
       local param_id = ids[(S.param_page - 1) * FADER_ROWS + row]
       if param_id then grid_redraw_fader_row(grid_device, row, param_id) end
     end
     for fader_page = 1, fader_page_count(S.grid_voice_select) do
-      grid_device:led(fader_page, LAYOUT_128H.fader_page_row, fader_page == S.param_page and 15 or 4)
+      grid_device:led(fader_page, LAYOUT_128H.fader_page_row, S.lib.grid_faders.fader_page_level(fader_page))
     end
     for i = 1, NUM_VOICES do
-      grid_device:led(i, LAYOUT_128H.voice_select_row, i == S.grid_voice_select and 15 or 4)
-      grid_device:led(i, LAYOUT_128H.lock_row, S.frozen[i] and 12 or 2)
+      grid_device:led(i, LAYOUT_128H.voice_select_row, i == S.grid_voice_select and levels.picked or levels.unpicked)
+      grid_device:led(i, LAYOUT_128H.lock_row, grid_core.lock_level(i))
     end
   end
 
-  -- Page 3: the scenes (simplified from the 256's)
+  -- Page 3: the scenes (simplified from the 256's): rows 1-3 recall at
+  -- once, with the transition and save, at the core's levels
   local function redraw_scene_page(port, grid_device)
-    local next_slot = S.lib.scenes.sequencer_next_slot()
     for i = 1, NUM_SCENES do
-      -- Row 1: Scene recall (instant). The scene the running sequencer
-      -- recalls next at 10 (#303), the current scene at 15
-      local brightness = S.scenes[i].populated and 8 or 2
-      if i == next_slot then brightness = LAYOUT_128H.sequencer_next_level end
-      if S.lib.scenes.shows_current(i) then brightness = 15 end
-      grid_device:led(i, 1, brightness)
-      -- Row 2: Scene recall (with transition)
-      grid_device:led(i, 2, S.scenes[i].populated and 6 or 2)
-      -- Row 3: Scene save (15 while a save is held)
-      grid_device:led(i, 3, grid_core.hold_pending(port, i, 3) and 15 or 4)
+      grid_device:led(i, 1, grid_core.scene_recall_level(i))
+      grid_device:led(i, 2, grid_core.scene_fade_level(i))
+      grid_device:led(i, 3, grid_core.scene_save_level(port, i, 3))
     end
 
     -- Row 4: Sequence length
@@ -253,9 +247,11 @@ return function(S)
     end
   end
 
-  -- Page 4's strip, the grid voice's, at S.lib.positions' levels
+  -- Page 4's strip, the grid voice's, at S.lib.positions' levels, and the
+  -- grid voice's mark in column 11 of its row (a light, not a key)
   local function redraw_strip(port, grid_device)
     local voice_idx = S.grid_voice_select
+    grid_device:led(LAYOUT_128H.grid_voice_column, voice_idx, grid_core.LEVELS.picked)
     for n = 1, S.constants.NUM_BOOKMARKS do
       grid_device:led(LAYOUT_128H.strip_first_column + n - 1, LAYOUT_128H.strip_bookmark_row,
         S.lib.positions.strip_level(voice_idx, n, port))
@@ -269,42 +265,44 @@ return function(S)
   -- Page 5: voice v's positions on row v
   local function redraw_position_page(grid_device)
     for voice_idx = 1, NUM_VOICES do
-      for cell = 1, PATTERN_LENGTH do
-        grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PATTERN_LENGTH))
+      for cell = 1, PAGES.position_cells do
+        grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
       end
     end
   end
 
-  -- Row 8: play/stop, the pages (shown 15), the voices (running 12) and the
+  -- Row 8: play/stop, the page keys, the voices' on/off keys (the core's
+  -- levels; the sources key at position_page_level on page 5) and the
   -- voice cycle key
   local function redraw_control_row(page, grid_device)
     local y = LAYOUT_128H.control_row
+    local levels = grid_core.LEVELS
     for x = 1, LAYOUT_128H.play_last_column do
-      grid_device:led(x, y, S.pattern_playing and 15 or 4)
+      grid_device:led(x, y, grid_core.play_level())
     end
     for i = 1, LAYOUT_128H.num_pages do
-      local level = i == page and 15 or 4
-      if i == LAYOUT_128H.sources_page and page == LAYOUT_128H.position_page then
+      local level = i == page and levels.page_shown or levels.page_other
+      if i == PAGES.sources and page == PAGES.positions then
         level = LAYOUT_128H.position_page_level
       end
       grid_device:led(LAYOUT_128H.page_first_column + i - 1, y, level)
     end
     for i = 1, NUM_VOICES do
-      grid_device:led(LAYOUT_128H.voice_first_column + i - 1, y, S.voices[i].active and 12 or 2)
+      grid_device:led(LAYOUT_128H.voice_first_column + i - 1, y, grid_core.voice_level(i))
     end
     grid_device:led(LAYOUT_128H.voice_cycle_column, y, 8)
   end
 
   function grid_redraw_128h(port, grid_device)
     local page = grid_core.page(port)
-    if page == 2 then
+    if page == PAGES.faders then
       redraw_fader_page(grid_device)
-    elseif page == 3 then
+    elseif page == PAGES.scenes then
       redraw_scene_page(port, grid_device)
-    elseif page == 4 then
+    elseif page == PAGES.sources then
       redraw_source_page(grid_device)
       redraw_strip(port, grid_device)
-    elseif page == LAYOUT_128H.position_page then
+    elseif page == PAGES.positions then
       redraw_position_page(grid_device)
     else
       -- Patterns (rows 1-NUM_VOICES)
@@ -322,7 +320,7 @@ return function(S)
   -- as it does the position page)
   S.registry.grid_layouts["128h"] = {
     key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true,
-    strip_page = LAYOUT_128H.sources_page,
+    strip_page = PAGES.sources,
   }
 
   return M

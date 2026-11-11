@@ -187,11 +187,10 @@ return function(S)
       end
     end
 
-    -- Grain pitch is shown on the parameter fader page; this runs 10x/s, so
-    -- only redraw when a grid is actually showing that page
-    if S.lib.grid_core.any_page(2) then
-      grid_redraw()
-    end
+    -- The faders pages follow every param they show (the grain pitch
+    -- drifts; the screen, the arc, MIDI maps and PARAMETERS set the rest):
+    -- a grid on page 2 is redrawn when a shown fader moved (#324)
+    S.lib.grid_faders.follow_faders()
 
     -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
     forget_keys_held_through_menu()

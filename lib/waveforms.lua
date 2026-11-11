@@ -17,7 +17,7 @@ return function(S)
   local UI_PAGES = S.constants.UI_PAGES
   local PEAKS_MAGIC = "strata-peaks 1"
   local LENGTH_TOLERANCE = 0.01  -- seconds: the file's length against the slot's
-  local GRID_WAVEFORM_PAGE = 5   -- the grid page that draws peaks
+  local GRID_WAVEFORM_PAGE = S.constants.GRID_PAGES.positions   -- the grid page that draws peaks
 
   -- per slot: the valid points (a table of WAVEFORM_POINTS numbers), or nil
   local points = {}

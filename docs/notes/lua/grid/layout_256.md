@@ -9,8 +9,10 @@
 - A paste onto the copied voice changes nothing (the pattern stays as edited since the copy, the clipboard stays). Column 16 is the only way to drop the clipboard.
 - A paste writes through `S.lib.sequencer.replace_pattern(target, clipboard.steps)`, which calls `grid_core.end_step_gestures(target)`: a step of the target voice held (on any grid) from before the paste never takes a level in the pasted pattern; the next key on that voice toggles its own step.
 - The tempo keys light from `grid_core.held(port, x, 8)` (15 held, 4 otherwise); `grid_key` redraws after every press and release, so the layout keeps no lit state of its own. Each tempo press calls `header_flash("tempo <bpm>")` with the tempo it lands on.
-- Scene page row 1: the slot the running sequencer recalls next (`S.lib.scenes.sequencer_next_slot()`, nil while it is off, #303) at 10, never `S.scene_sequencer_position` itself, which through a scene's hold is the scene playing; the current scene at 15 wins over it. "Current" is `S.lib.scenes.shows_current(i)`: the scene a fade goes to drops to its level without it (8, or 10 when it is also the next slot) after each even fade step, so it blinks until the fade lands (#254).
-- The layout's keys and levels are in the `LAYOUT_256` table at the top of the constructor (no new locals per value).
+- Scene page rows 1-3 light at the core's levels (`grid_core.scene_recall_level`, `scene_fade_level`, `scene_save_level`, #452): the rule (the slot the running sequencer recalls next at 10, never `S.scene_sequencer_position` itself, #303; the current scene's 15 wins, so the scene a fade goes to blinks, #254) lives there and in `grid_core_test.lua`, never here.
+- The voice keys of row 14, the play keys and page keys of row 8 (the positions key among them) and the lock keys of row 16 light at the core's shared levels (`voice_level`, `play_level`, `lock_level`, `LEVELS`' page and pick pairs, #526); the fader page keys of row 13 at `S.lib.grid_faders.fader_page_level`.
+- Pages are numbered by `S.constants.GRID_PAGES` (aliased `PAGES`; `fx_faders_page = PAGES.sources`), and a position row has `PAGES.position_cells` cells (#451).
+- The layout's own keys and levels are in the `LAYOUT_256` table at the top of the constructor (no new locals per value).
 
 ## Owns
 
@@ -21,7 +23,7 @@
 
 Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10 (every page); rows 14-15 voice select/toggle and pattern clear/randomize (held 0.5 s); row 16 lock and copy/paste (every page).
 
-Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1-4. Page 1's key is (13, 8).
+Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`, a page key: 15 on page 5, 2 elsewhere, as columns 13-16): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1-4. Page 1's key is (13, 8).
 
 ## Row 8: tempo keys
 
@@ -57,10 +59,8 @@ Keys:
 - **Row 8** and **row 16**: as on page 1 (play/stop, tempo, the positions and page keys; lock, the freeze hold, copy and paste), #442.
 
 LEDs:
-- Populated scenes: 8 (row 1) or 6 (row 2).
-- Current scene: 15 (in row 1).
-- Empty scenes: 2.
-- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the slot it recalls next (`S.lib.scenes.sequencer_next_slot()`: counted from its position from its start until its first recall, then from the one after its position, wrapped by the sequence length as it is now, and skipping empty slots as the sequencer does, #513) at 10 while it runs. The current scene's 15 wins when they are the same key (a sequence of one slot).
+- Rows 1-3 at the core's scene levels (`docs/notes/lua/grid-core.md`, LEDs): populated scenes 8 (row 1) or 6 (row 2), the current scene 15 (row 1), empty scenes 2, the slot the running sequencer recalls next 10 (row 1; `S.lib.scenes.sequencer_next_slot()`: counted from its position from its start until its first recall, then from the one after its position, wrapped by the sequence length as it is now, and skipping empty slots as the sequencer does, #513), a pending save 15 (row 3, else 4). The current scene's 15 wins when they are the same key (a sequence of one slot).
+- Active sequencer: row 5 column 1 at 15 (4 when stopped).
 - Sequence length: 8 for included scenes, 2 for excluded.
 
 It follows changes made anywhere (issue #49):
@@ -74,7 +74,7 @@ It follows changes made anywhere (issue #49):
 `grid_key_256` has an explicit page 4 branch (`page(port) == 4`), so page 4 never falls through to the pattern page.
 - Row 1 (`GRID_LAYOUT.buffer_record_row`), columns 1-`NUM_BUFFERS`: `record_key(x)` (`record_buffer`; a second press stops early).
 - Row 2 (`GRID_LAYOUT.buffer_clear_row`): `clear_key(x)` (`clear_buffer`).
-- `grid_redraw_256_buffers`: row 1 at `record_level` (15 recording, 8 loaded, 2 empty); row 2 at `CLEAR_LEVEL` (4).
+- `grid_redraw_256_buffers`: row 1 at `record_level` (11 armed, 15 recording, 8 loaded, 2 empty); row 2 at `CLEAR_LEVEL` (4).
 - Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`; a bar at 8 up to the value, the value's column at 15).
   - The filter/delay param actions call `fx_fader_changed()` (`lib/params_setup.lua`), which redraws the grids while a 256 shows page 4 (`grid_core.any_fx_faders()`), so the faders follow the screen, the arc and scene recalls.
   - During a smooth scene transition (`S.scene_transition_active`) it does not redraw: the transition loop redraws once per step.
@@ -83,4 +83,4 @@ It follows changes made anywhere (issue #49):
   - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
   - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.
 - Rows 8 and 16 work and draw as on page 1 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`).
-- Smaller grids have no buffers / FX page: buffers and sources are on the BUFFER screen page and in params.
+- The 16x8 and the 8x16 have a sources page (their page 4) with the same source, record, clear and freeze keys through the same core helpers, and no FX faders (`docs/notes/lua/grid/layout_128h.md`, `layout_128v.md`); the 8x8 has none: its sources and buffers are on the BUFFER screen page and in params.

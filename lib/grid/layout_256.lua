@@ -16,13 +16,13 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
+  local PAGES = S.constants.GRID_PAGES  -- the page numbers and position cells every layout shares
   local grid_core = S.lib.grid_core
   local GRID_LAYOUT = grid_core.GRID_LAYOUT
 
   -- Keys and levels: row 8's tempo keys (column -> tempo change), row 16's
   -- copy/paste keys (columns 9-15 voices 1-7, column 16 clears the
-  -- clipboard) and the scene page's next scene (the one the running
-  -- sequencer recalls next)
+  -- clipboard)
   local LAYOUT_256 = {
     tempo_steps = {[5] = -10, [6] = -1, [7] = 1, [8] = 10},
     tempo_held_level = 15,
@@ -32,16 +32,13 @@ return function(S)
     copied_level = 15,      -- the copied voice's key
     paste_level = 4,        -- the other voices' keys and column 16 while a pattern is copied
     empty_level = 2,        -- columns 9-16 with nothing copied
-    sequencer_next_level = 10,
     freeze_column = 12,     -- page 4: voice v's freeze key on its source row (8 + v)
     freeze_hold_column = 8, -- row 16: held, columns 1-7 freeze instead of lock
     frozen_level = 15,
     unfrozen_level = 3,
     freeze_hold_level = 15, -- column 8 of row 16 while held
     freeze_key_level = 4,   -- and while not
-    positions_page = 5,     -- row 8 column 12 shows it (15 lit on it, 4 otherwise)
-    positions_key_column = 12,
-    positions_key_level = 4,
+    positions_key_column = 12,  -- row 8: page 5 (a page key, as columns 13-16 are pages 1-4)
     strip_first_row = 9,    -- page 5: voice v's bookmark strip is on row 8 + v
     strip_key_columns = {[1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = "store", [7] = "hold", [8] = "whole"},
     -- row 15 (pages 1 and 2): columns 1-7 clear voices 1-7's patterns,
@@ -86,12 +83,12 @@ return function(S)
   -- 16x16 grid layout
   function grid_key_256(port, x, y, z)
     local page = grid_core.page(port)
-    if page == LAYOUT_256.positions_page and y ~= 8 and y ~= 16 then
+    if page == PAGES.positions and y ~= 8 and y ~= 16 then
       -- Page 5: positions on rows 1-7, each voice's strip on row 8 + v
       -- (presses and releases: a held key makes a loop or a hold)
       local strip_voice = y - LAYOUT_256.strip_first_row + 1
       if y <= NUM_VOICES then
-        S.lib.positions.grid_key(port, y, x, 16, z)
+        S.lib.positions.grid_key(port, y, x, PAGES.position_cells, z)
       elseif strip_voice >= 1 and strip_voice <= NUM_VOICES and LAYOUT_256.strip_key_columns[x] then
         S.lib.positions.strip_key(port, strip_voice, LAYOUT_256.strip_key_columns[x], z)
       end
@@ -99,7 +96,7 @@ return function(S)
     end
     if z == 0 then return end  -- presses only
     if y == 8 and x == LAYOUT_256.positions_key_column then
-      grid_core.set_page(port, LAYOUT_256.positions_page)
+      grid_core.set_page(port, PAGES.positions)
       return
     end
     -- Handle page navigation first (always accessible from row 8)
@@ -109,7 +106,7 @@ return function(S)
       return
     end
 
-    if page == 3 then
+    if page == PAGES.scenes then
       -- Scene page: the scene keys on rows 1-5; rows 8 and 16 work as on
       -- page 1 (#442)
       if y == 1 and x <= NUM_SCENES then
@@ -136,7 +133,7 @@ return function(S)
       elseif y == 16 then
         grid_key_256_lock(port, x)
       end
-    elseif page == 4 then
+    elseif page == PAGES.sources then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
       -- sources on rows 9-15; rows 8 and 16 work as on page 1
       local fx_param_id = GRID_LAYOUT.fx_fader_ids[y - GRID_LAYOUT.fx_first_row + 1]
@@ -166,13 +163,13 @@ return function(S)
       grid_key_256_transport(x)
     elseif y >= GRID_LAYOUT.fader_first_row and y < GRID_LAYOUT.fader_first_row + GRID_LAYOUT.fader_rows then
       -- Rows 9-12 (parameter page): one fader per row for the selected voice
-      if page == 2 then
+      if page == PAGES.faders then
         local fader_index = (S.param_page - 1) * GRID_LAYOUT.fader_rows + (y - GRID_LAYOUT.fader_first_row + 1)
         set_fader_param(S.grid_voice_select, fader_index, x)
       end
     elseif y == GRID_LAYOUT.param_page_row then
       -- Row 13 (parameter page): choose which group of four faders is shown
-      if page == 2 and x <= fader_page_count(S.grid_voice_select) then
+      if page == PAGES.faders and x <= fader_page_count(S.grid_voice_select) then
         S.param_page = x
       end
     elseif y == 14 then
@@ -246,12 +243,12 @@ return function(S)
 
   function grid_redraw_256(port, grid_device)
     local page = grid_core.page(port)
-    if page == LAYOUT_256.positions_page then
+    if page == PAGES.positions then
       -- Page 5: each voice's 16 positions (rows 1-7), its strip on row
       -- 8 + v, rows 8 and 16 as on pages 1-4
       for voice_idx = 1, NUM_VOICES do
-        for cell = 1, 16 do
-          grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, 16))
+        for cell = 1, PAGES.position_cells do
+          grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
         end
         local y = LAYOUT_256.strip_first_row + voice_idx - 1
         for x, key in pairs(LAYOUT_256.strip_key_columns) do
@@ -260,27 +257,14 @@ return function(S)
       end
       grid_redraw_256_transport(port, grid_device)
       grid_redraw_256_lock(port, grid_device)
-    elseif page == 3 then
-      -- Scene page (rows 8 and 16 as on page 1)
-      -- Row 1: Scene recall (instant). The scene the running sequencer
-      -- recalls next at 10 (#303), the current scene at 15
-      local next_slot = S.lib.scenes.sequencer_next_slot()
+    elseif page == PAGES.scenes then
+      -- Scene page (rows 8 and 16 as on page 1): row 1 recalls at once,
+      -- row 2 with the transition, row 3 saves once held, at the core's
+      -- levels (scene_recall_level, scene_fade_level, scene_save_level)
       for i = 1, NUM_SCENES do
-        local brightness = S.scenes[i].populated and 8 or 2
-        if i == next_slot then brightness = LAYOUT_256.sequencer_next_level end
-        if S.lib.scenes.shows_current(i) then brightness = 15 end
-        grid_device:led(i, 1, brightness)
-      end
-
-      -- Row 2: Scene recall (with transition)
-      for i = 1, NUM_SCENES do
-        local brightness = S.scenes[i].populated and 6 or 2
-        grid_device:led(i, 2, brightness)
-      end
-
-      -- Row 3: Scene save (15 while a save is held)
-      for i = 1, NUM_SCENES do
-        grid_device:led(i, 3, grid_core.hold_pending(port, i, 3) and 15 or 4)
+        grid_device:led(i, 1, grid_core.scene_recall_level(i))
+        grid_device:led(i, 2, grid_core.scene_fade_level(i))
+        grid_device:led(i, 3, grid_core.scene_save_level(port, i, 3))
       end
 
       -- Row 5: Scene sequencer controls
@@ -294,7 +278,7 @@ return function(S)
 
       grid_redraw_256_transport(port, grid_device)
       grid_redraw_256_lock(port, grid_device)
-    elseif page == 4 then
+    elseif page == PAGES.sources then
       -- BUFFER / FX page: buffer rows 1-2, FX faders on rows 3-7, voice
       -- sources on rows 9-15, rows 8 and 16 as on page 1
       grid_redraw_256_buffers(grid_device)
@@ -317,14 +301,14 @@ return function(S)
       grid_redraw_256_transport(port, grid_device)
 
       -- Rows 9-13 (parameter page): faders and fader page selection
-      if page == 2 then
+      if page == PAGES.faders then
         grid_redraw_faders(grid_device)
       end
 
-      -- Row 14: Voice status
+      -- Row 14: the grid voice's pick keys and each voice's on/off key
       for i = 1, NUM_VOICES do
-        grid_device:led(i, 14, i == S.grid_voice_select and 15 or 4)
-        grid_device:led(i + 8, 14, S.voices[i].active and 12 or 2)
+        grid_device:led(i, 14, i == S.grid_voice_select and grid_core.LEVELS.picked or grid_core.LEVELS.unpicked)
+        grid_device:led(i + 8, 14, grid_core.voice_level(i))
       end
 
       -- Row 15: the clear and randomize keys (15 while a hold is pending)
@@ -338,8 +322,8 @@ return function(S)
     end
   end
 
-  -- 256 page 4, rows 1-2: buffer state (15 recording, 8 loaded, 2 empty)
-  -- above each slot's clear key
+  -- 256 page 4, rows 1-2: each slot's record key at the core's record_level
+  -- (11 armed, 15 recording, 8 holding audio, 2 empty) above its clear key
   function grid_redraw_256_buffers(grid_device)
     for slot = 1, NUM_BUFFERS do
       grid_device:led(slot, GRID_LAYOUT.buffer_record_row, grid_core.record_level(slot))
@@ -359,21 +343,22 @@ return function(S)
     end
   end
 
-  -- 256 row 8, columns 13-16: page indicators
+  -- 256 row 8, columns 13-16 and 12: the page keys (pages 1-4 and 5)
   function grid_redraw_256_page_row(port, grid_device)
     local page = grid_core.page(port)
+    local levels = grid_core.LEVELS
     for i = 1, 4 do
-      grid_device:led(12 + i, 8, i == page and 15 or 2)
+      grid_device:led(12 + i, 8, i == page and levels.page_shown or levels.page_other)
     end
     grid_device:led(LAYOUT_256.positions_key_column, 8,
-      page == LAYOUT_256.positions_page and 15 or LAYOUT_256.positions_key_level)
+      page == PAGES.positions and levels.page_shown or levels.page_other)
   end
 
   -- 256 row 8: pattern controls, tempo and page indicators
   function grid_redraw_256_transport(port, grid_device)
     -- columns 1-4 all act as play/stop
     for x = 1, 4 do
-      grid_device:led(x, 8, S.pattern_playing and 15 or 4)
+      grid_device:led(x, 8, grid_core.play_level())
     end
 
     -- Tempo keys: lit while held
@@ -394,7 +379,7 @@ return function(S)
       if holding then
         grid_device:led(i, 16, freeze_level(i))
       else
-        grid_device:led(i, 16, S.frozen[i] and 12 or 2)
+        grid_device:led(i, 16, grid_core.lock_level(i))
       end
     end
     grid_device:led(LAYOUT_256.freeze_hold_column, 16,
@@ -412,7 +397,7 @@ return function(S)
 
   -- fx_faders_page: the page with the FX faders (rows 3-7 of page 4), so FX
   -- changes redraw the grids only while a 256 shows it (grid_core.any_fx_faders)
-  S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256, fx_faders_page = 4}
+  S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256, fx_faders_page = PAGES.sources}
 
   return M
 end

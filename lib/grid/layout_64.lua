@@ -10,6 +10,7 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local GRID_HOLD = S.constants.GRID_HOLD
+  local PAGES = S.constants.GRID_PAGES  -- the page numbers and position cells every layout shares
   local grid_core = S.lib.grid_core
 
   -- The 64's geometry and LED levels
@@ -21,15 +22,13 @@ return function(S)
     blink_levels = {12, 3},   -- playing in the other half: odd / even beats
     steps_per_beat = 4,       -- a step is a sixteenth note: the blink follows quarter notes
     stopped_levels = {4, 8},  -- stopped: steps 1-8 shown dim, steps 9-16 brighter
-    positions_page = 5,       -- the grid page of the positions view
-    position_rows = {1, 2},   -- 16 cells: row 1 cells 1-8, row 2 cells 9-16
+    position_rows = {1, 2},   -- the positions view (PAGES.positions), 16 cells: row 1 cells 1-8, row 2 9-16
     strip_row = 3,
     strip_keys = {[1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = "store", [7] = "hold", [8] = "whole"},
     voice_row = 7,            -- columns 1-7 pick the grid voice
     positions_play_levels = {playing = 15, stopped = 6},
     voice_levels = {selected = 15, buffer = 6, other = 2},
     dark = 0,
-    voice_toggle_levels = {on = 12, off = 4},
   }
   M.LAYOUT = LAYOUT_64
 
@@ -40,6 +39,11 @@ return function(S)
 
   local function half_count(cols)
     return math.ceil(PATTERN_LENGTH / visible_steps(cols))
+  end
+
+  -- A position row's cells on the grid's width (8 on the 8x8)
+  local function position_width(cols)
+    return math.min(PAGES.position_cells, cols)
   end
 
   -- The half the port shows (1 steps 1-8, 2 steps 9-16)
@@ -53,7 +57,7 @@ return function(S)
   end
 
   local function positions_view(port)
-    return grid_core.page(port) == LAYOUT_64.positions_page
+    return grid_core.page(port) == PAGES.positions
   end
 
   -- The hold's cycle: steps 1-8, steps 9-16, positions, steps 1-8. It ends
@@ -63,10 +67,10 @@ return function(S)
     local state = grid_core.port_state(port)
     grid_core.end_port_step_gestures(port)
     if positions_view(port) then
-      grid_core.set_page(port, 1)
+      grid_core.set_page(port, PAGES.patterns)
       state.half = 1
     elseif M.shown_half(port) >= half_count(cols) then
-      grid_core.set_page(port, LAYOUT_64.positions_page)
+      grid_core.set_page(port, PAGES.positions)
     else
       state.half = M.shown_half(port) + 1
     end
@@ -95,8 +99,8 @@ return function(S)
   local function positions_key(port, x, y, z)
     local voice_idx = S.grid_voice_select
     if y == LAYOUT_64.position_rows[1] or y == LAYOUT_64.position_rows[2] then
-      local cell = (y - LAYOUT_64.position_rows[1]) * visible_steps(S.grids[port].cols) + x
-      S.lib.positions.grid_key(port, voice_idx, cell, PATTERN_LENGTH, z)
+      local cell = (y - LAYOUT_64.position_rows[1]) * position_width(S.grids[port].cols) + x
+      S.lib.positions.grid_key(port, voice_idx, cell, PAGES.position_cells, z)
     elseif y == LAYOUT_64.strip_row then
       local key = LAYOUT_64.strip_keys[x]
       if key then S.lib.positions.strip_key(port, voice_idx, key, z) end
@@ -142,17 +146,18 @@ return function(S)
     return LAYOUT_64.blink_levels[(beat + 1) % 2 + 1]
   end
 
+  -- A voice's on/off key, at the core's levels (#526)
   local function voice_toggle_level(voice_idx)
-    return S.voices[voice_idx].active and LAYOUT_64.voice_toggle_levels.on or LAYOUT_64.voice_toggle_levels.off
+    return grid_core.voice_level(voice_idx)
   end
 
   local function positions_redraw(port, grid_device)
     local voice_idx = S.grid_voice_select
-    local width = visible_steps(grid_device.cols)
+    local width = position_width(grid_device.cols)
     for row = 1, #LAYOUT_64.position_rows do
       for x = 1, width do
         local cell = (row - 1) * width + x
-        grid_device:led(x, LAYOUT_64.position_rows[row], S.lib.positions.grid_level(voice_idx, cell, PATTERN_LENGTH))
+        grid_device:led(x, LAYOUT_64.position_rows[row], S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
       end
     end
     for x = 1, width do
