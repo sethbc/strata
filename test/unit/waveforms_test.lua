@@ -154,7 +154,7 @@ test("a read that changes the values requests a redraw and redraws a page-5 grid
   S.lib.grid_core.set_page(1, 5)
   redraws, grid_redraws = 0, 0
   tick(context, 2)
-  assert_equal(redraws, 1); assert_equal(grid_redraws, 1, "a grid on page 5 is redrawn")
+  assert_equal(redraws, 1); assert_true(grid_redraws >= 1, "a grid on page 5 is redrawn (the playhead clock's first look draws too, #322)")
   request_redraw, grid_redraw = original_request, original_grid
 end)
 

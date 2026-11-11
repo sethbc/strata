@@ -471,6 +471,34 @@ test("128h: the grid voice's strip on page 4 recalls, stores, holds and restores
   assert_near(params:get("v2_loop_start"), 0, 1e-6)
 end)
 
+test("128h: page 4's strip follows a change made off the grid within a tick (#322)", function()
+  local context, S, device = position_setup()
+  tap(context, 1, 8, 8)
+  select_grid_voice(2)
+  context.clock.run_for(0.5)
+  assert_equal(grid_core().page(1), 4, "page 4")
+  assert_equal(device:get_led(15, 6), S.lib.positions.LEVELS.whole, "whole: the loop is the whole slot")
+  params:set("v2_loop_length", 0.5)  -- the arc, an LFO or a scene moves the loop
+  context.clock.run_for(1 / 15 + 0.01)
+  assert_equal(device:get_led(15, 6), S.lib.positions.LEVELS.key_up, "the strip's whole key repainted")
+end)
+
+test("128h: a synth voice's strip is dark and stores nothing (#445)", function()
+  local context, S, device = position_setup()
+  tap(context, 1, 8, 8)
+  params:set("v2_source", 1)
+  select_grid_voice(2)
+  grid_redraw()
+  for n = 1, 4 do assert_equal(device:get_led(12 + n, 5), 0, "bookmark " .. n) end
+  for column = 13, 15 do assert_equal(device:get_led(column, 6), 0, "key column " .. column) end
+  context.grid.press(1, 13, 6, 1)
+  context.grid.press(1, 14, 5, 1)
+  assert_equal(device:get_led(13, 6), 0, "store held: dark")
+  assert_equal(device:get_led(14, 5), 0, "the pressed bookmark: dark")
+  assert_equal(params:get("v2_bookmark_2"), 0.25, "and the bookmark keeps its value")
+  context.grid.press(1, 14, 5, 0); context.grid.press(1, 13, 6, 0)
+end)
+
 test("128h: pages 1-4 keep every other key", function()
   local context, S, device = position_setup()
   tap(context, 1, 8, 8)

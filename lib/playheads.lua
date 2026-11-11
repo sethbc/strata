@@ -136,11 +136,27 @@ return function(S)
 
   local function end_stale_holds() S.lib.positions.end_stale_holds() end
 
+  -- Whether a connected grid shows positions now: the position page, or the
+  -- page its layout record names as `strip_page` (the 128h's page 4 shows
+  -- the grid voice's strip)
+  local function shows_positions()
+    local grid_core = S.lib.grid_core
+    for port, grid_port in pairs(S.grids) do
+      if grid_port.device then
+        local page = grid_core.page(port)
+        local layout = grid_core.layout_of(port)
+        if page == POSITION_PAGE or (layout ~= nil and layout.strip_page == page) then return true end
+      end
+    end
+    return false
+  end
+
   local function redraw_position_grids()
-    if S.lib.grid_core.any_page(POSITION_PAGE) then
+    if shows_positions() then
       local signature = S.lib.positions.display_signature()
-      -- the first look only records: whatever put the grid on this page redrew it
-      if shown_signature ~= nil and signature ~= shown_signature then grid_redraw() end
+      -- the first look draws too: a change made between the grid's arrival
+      -- on the page and this look (up to one tick) is in what it finds (#322)
+      if signature ~= shown_signature then grid_redraw() end
       shown_signature = signature
     else
       shown_signature = nil

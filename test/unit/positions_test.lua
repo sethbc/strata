@@ -89,7 +89,8 @@ test("a two-key press sets the loop from the lower cell's start to the higher ce
   assert_near(start, 0.25, 1e-9); assert_near(length, 0.3125, 1e-9)
   assert_near(params:get("v1_buf_pos"), 0, 1e-9, "the jump to the loop's own start")
   assert_equal(#grain_calls(context, "t_scanReset"), 1)
-  positions.grid_key(1, 1, 9, 0); positions.grid_key(1, 1, 5, 0)
+  positions.grid_key(1, 1, 9, 16, 0); positions.grid_key(1, 1, 5, 16, 0)
+  assert_equal(S.lib.grid_core.port_state(1).positions.held, nil, "both releases ended the held key (#403)")
   params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
 
   positions.grid_key(1, 1, 9, 16, 1)
@@ -252,7 +253,7 @@ test("a scene recall that switches a stopped voice's source forgets its last rec
   assert_equal(S.voices[1].source, 1, "the recall switched the source")
   assert_true(not S.voices[1].active, "voice 1 is still stopped")
   assert_equal(S.lib.positions.last_recalled(1), nil, "the mark is forgotten")
-  assert_equal(S.lib.positions.strip_level(1, 2), 6, "the key is an ordinary bookmark again")
+  assert_equal(S.lib.positions.strip_level(1, 2), 0, "a voice on the synth has a dark strip (#445)")
 end)
 
 test("a stopped voice's recalled mark shows again when two scene recalls bring back the source it was recalled on", function()
@@ -273,14 +274,19 @@ test("a stopped voice's recalled mark shows again when two scene recalls bring b
   assert_equal(S.lib.positions.strip_level(1, 2), 10)
 end)
 
-test("a row's LED levels are built once per instant and follow what changes in it", function()
+test("a row's LED levels are built once while nothing in it changes, on a clock that moves (#398)", function()
   local _, S = buffer_voices()
   local positions = S.lib.positions
   local calls = 0
   local real_bins = S.lib.waveforms.bins
   S.lib.waveforms.bins = function(...) calls = calls + 1; return real_bins(...) end
+  local real_time, tick = util.time, 0
+  util.time = function() tick = tick + 1e-6; return real_time() + tick end  -- the device's clock moves between calls
   for cell = 1, 16 do positions.grid_level(1, cell, 16) end
   assert_equal(calls, 1, "one bins read for 16 cells")
+  for cell = 1, 16 do positions.grid_level(1, cell, 16) end
+  assert_equal(calls, 1, "and still one for the next redraw: nothing changed")
+  util.time = real_time
   positions.jump(1, 0.5)
   assert_equal(positions.grid_level(1, 9, 16), 15, "a moved head shows at once")
   positions.grid_key(1, 1, 3, 16, 1)
@@ -811,7 +817,7 @@ test("a synth voice's hold key stays dim and holds nothing", function()
   params:set("v3_source", 1)
   context.clear_engine_calls()
   positions.strip_key(1, 3, "hold", 1)
-  assert_equal(positions.strip_level(3, "hold"), 4, "dim")
+  assert_equal(positions.strip_level(3, "hold"), 0, "dark (#445)")
   assert_equal(#grain_calls(context, "scanHold"), 0, "no scanHold")
   assert_equal(positions.scan_held(3), false)
   positions.strip_key(1, 3, "hold", 0)
@@ -892,6 +898,72 @@ test("cleanup and an unplugged grid release their holds", function()
     if each.voice == 0 and each.value == 0 then releases = releases + 1 end
   end
   assert_equal(releases, 1, "exactly one scanHold 0 for voice 0")
+end)
+
+test("a row's levels are rebuilt when the slot's peaks change (#398)", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  local calls = 0
+  local real_bins = S.lib.waveforms.bins
+  S.lib.waveforms.bins = function(...) calls = calls + 1; return real_bins(...) end
+  local current = {}
+  for index = 1, S.constants.WAVEFORM_POINTS do current[index] = 0.5 end
+  S.lib.waveforms.peaks = function() return current end
+  assert_equal(positions.grid_level(1, 5, 16), 6, "inside the whole-slot loop: 4 + round(2)")
+  positions.grid_level(1, 6, 16)
+  assert_equal(calls, 1, "one build while the peaks table stays")
+  local louder = {}
+  for index = 1, S.constants.WAVEFORM_POINTS do louder[index] = 1 end
+  current = louder
+  assert_equal(positions.grid_level(1, 5, 16), 8, "new peaks: 4 + round(4)")
+  assert_equal(calls, 2, "one more build")
+end)
+
+test("a voice that reads no buffer has a dark strip and stores nothing (#445)", function()
+  local _, S = buffer_voices()
+  local positions = S.lib.positions
+  params:set("v1_source", 1)
+  for _, key in ipairs({1, 2, 3, 4, "store", "hold", "whole"}) do
+    assert_equal(positions.strip_level(1, key), 0, "synth voice, key " .. tostring(key))
+    assert_equal(positions.strip_level(1, key, 1), 0, "with a port, key " .. tostring(key))
+  end
+  local before = params:get("v1_bookmark_2")
+  positions.strip_key(1, 1, "store", 1)
+  positions.strip_key(1, 1, 2, 1)
+  assert_equal(positions.strip_level(1, "store"), 0, "store held: still dark")
+  assert_equal(positions.strip_level(1, 2), 0, "a pressed bookmark lights nothing")
+  assert_equal(params:get("v1_bookmark_2"), before, "and the bookmark keeps its value")
+  positions.strip_key(1, 1, 2, 0); positions.strip_key(1, 1, "store", 0)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_up, "a store that was never recorded is up on a buffer voice")
+  assert_equal(positions.strip_level(1, 2), positions.LEVELS.bookmark, "and so is the bookmark")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  assert_equal(positions.strip_level(1, 1), 0, "an input voice: dark too")
+end)
+
+test("one glide clock follows a run of turns, and a turn during the glide ends it and waits again (#515)", function()
+  local context, S = buffer_voices()
+  params:set("scrub_friction", 50)
+  local started, real_run = 0, clock.run
+  clock.run = function(...) started = started + 1; return real_run(...) end
+  fling(context, S, 0.2, 0.5)  -- 50 deltas
+  assert_equal(started, 1, "one clock for 50 deltas")
+  context.clock.run_for(0.08 + 0.001)
+  assert_true(S.lib.positions.scrub_rate(1) > 0.1, "the glide started at the last turns' speed")
+  context.clear_engine_calls()
+  S.lib.positions.scrub_turned(1)
+  assert_equal(S.lib.positions.scrub_rate(1), 0, "a turn ends the glide at once")
+  assert_equal(last_grain(context, "scrubRate", 0), 0)
+  context.clock.run_for(0.5)
+  assert_equal(S.lib.positions.scrub_rate(1), 0, "a lone turn does not restart it")
+  fling(context, S, -0.2, 0.3)
+  context.clock.run_for(0.08 + 0.001)
+  assert_true(S.lib.positions.scrub_rate(1) < -0.1, "the next fling glides at its own speed")
+  context.clock.run_for(60)
+  assert_equal(S.lib.positions.scrub_rate(1), 0, "and decays to its end")
+  fling(context, S, 0.2, 0.2)
+  clock.run = real_run
+  assert_true(started <= 4, "a few clocks over the whole run, one per fling: " .. started)
 end)
 
 end

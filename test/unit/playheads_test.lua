@@ -202,6 +202,20 @@ test("the clock redraws the grid when a page-5 grid's LED levels change", functi
   assert_equal(device.refresh_count, on_page_one, "a grid on page 1: the clock redraws nothing")
 end)
 
+test("a change within the first tick after a grid reaches page 5 is drawn (#322)", function()
+  local context, S = buffer_voice()
+  toggle_voice(1)
+  local device = context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  params:set("v1_buf_pos", 0.5)  -- before the clock's first look at the page
+  local before = device.refresh_count
+  context.clock.run_for(1 / 15 + 0.01)
+  assert_true(device.refresh_count > before, "the first look draws what it finds")
+  local after = device.refresh_count
+  context.clock.run_for(1)
+  assert_equal(device.refresh_count, after, "and then only a change redraws")
+end)
+
 test("a running playhead changing column redraws a page-5 grid once per column", function()
   local context, S = buffer_voice()
   params:set("v1_buf_pos", 0)
