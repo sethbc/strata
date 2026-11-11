@@ -4,4 +4,4 @@
 - Every PSET saved now holds a hidden `strata_pset_format` line; a PSET saved before it has its Pulse res turned around each time it loads, until it is saved again.
 
 ### Fixed
-- A PSET saved with a fraction in a whole-number setting (a mod source, the sequence length, ...) loads it as the nearest whole number.
+- A PSET saved with a fraction in a whole-number setting (a mod source, the sequence length, ...) loads it as the nearest whole number, and a running voice never receives the fraction (a mod source of 0.05 briefly made a voice modulate itself).

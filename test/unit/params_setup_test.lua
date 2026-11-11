@@ -668,7 +668,7 @@ test("a PSET's fractional number params load whole (#554)", function()
   local context = load_strata({ data_subdir = "pset_whole_numbers" }); finish_startup(context)
   local S = local_value("S")
   os.execute("mkdir -p '" .. context.data_dir .. "'")
-  -- (a running voice's action would send the engine the fraction during the read)
+  -- (a running voice: the next test)
   if S.voices[1].active then toggle_voice(1) end
   local path = context.data_dir .. "fractions.pset"
   params:write(path, "fractions")
@@ -686,6 +686,51 @@ test("a PSET's fractional number params load whole (#554)", function()
   assert_equal(params:get("v1_custom_interval_1"), -3, "custom interval -2.6 loads as -3")
   assert_equal(S.voices[1].crossmod.slot1.source, 0, "the voices table holds the whole source")
   assert_equal(params:get("link_quantum"), 4.5, "norns' own params are left alone")
+  -- a silent read runs no action: the hook alone rounds them
+  params:set("v1_mod_source_1", 2); params:set("scene_sequence_length", 2); params:set("v1_custom_interval_1", 5)
+  params:read(path, true)
+  assert_equal(params:get("v1_mod_source_1"), 0, "silent: mod source 0.05 loads as 0")
+  assert_equal(params:get("scene_sequence_length"), 4, "silent: sequence length 4.05 loads as 4")
+  assert_equal(params:get("v1_custom_interval_1"), -3, "silent: custom interval -2.6 loads as -3")
+end)
+
+-- #554: norns sets each PSET line through the param's own set, actions
+-- included, before the read hook rounds: a number param whose action
+-- reaches the engine rounds its value first, so a running voice never gets
+-- a fraction (matron casts an "i" argument: 0.05 - 1 would be voice 1)
+test("a PSET read while a voice runs sends its crossmod source and custom intervals only whole (#554)", function()
+  local context = load_strata({ data_subdir = "pset_whole_sends" }); finish_startup(context)
+  local S = local_value("S")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  if not S.voices[1].active then toggle_voice(1) end
+  params:set("v1_intervals", 5)  -- custom: the custom intervals reach the engine
+  local path = context.data_dir .. "running.pset"
+  params:write(path, "running")
+  local text = h.file_text(path)
+  for id, value in pairs({ v1_mod_source_1 = "0.05", v1_mod_source_2 = "2.6", v1_custom_interval_1 = "-2.6" }) do
+    local count
+    text, count = text:gsub('"' .. id .. '": [^\n]*\n', '"' .. id .. '": ' .. value .. '\n')
+    assert_equal(count, 1, id .. " is in the PSET")
+  end
+  h.write_text(path, text)
+  context.clear_engine_calls()
+  params:read(path)
+  local sources = {}
+  for _, call in ipairs(context.calls_named("setModSource")) do
+    if call.args[1] == 0 then sources[#sources + 1] = call.args[2] .. ":" .. call.args[3] end
+  end
+  assert_equal(table.concat(sources, " "), "1:-1 2:2", "slot 1 none, slot 2 voice 3 (SC 2), each sent once")
+  local intervals = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "interval1" then intervals[#intervals + 1] = call.args[3] end
+  end
+  assert_true(#intervals > 0, "the custom interval reaches the engine")
+  for _, value in ipairs(intervals) do assert_equal(value, -3, "interval1 is sent whole") end
+  assert_equal(S.voices[1].crossmod.slot1.source, 0)
+  assert_equal(S.voices[1].crossmod.slot2.source, 3)
+  assert_equal(S.voices[1].extras.custom_interval_1, -3)
+  assert_equal(params:get("v1_mod_source_1"), 0, "and the params are whole once the read is done")
+  assert_equal(params:get("v1_custom_interval_1"), -3)
 end)
 
 end
