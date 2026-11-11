@@ -20,7 +20,9 @@
 - `BUFFER_DATA_VERSION` is 2 (`starts`); version 1 files still load, with every start 0. A start reload (`set_start`) is canceled by a load, clear or recording in its slot, and never runs while the slot records.
 - A playable recording (a dub) keeps the file's `start`, `sample_rate` and `file_seconds` until its "ended" report makes the slot `take <n>` (start 0, neither field); a canceled one keeps all three (#244). `recording_started` is told the take's kind (`record_buffer` calls it before it sets `recording`, so `S.lib.record.state` cannot say).
 - Every poll decoder floors its slot (the rule and why: `docs/notes/lua/record.md`, #300). The `"buffer slots"` invariant checks the result: a name of the form `take <number>` is the slot's own `take <n>`, and a path in the scratch folder named `buf*.wav` is `buf<whole number>.wav`.
-- `buffer_state_changed` marks the slot's peaks stale (`S.lib.waveforms.stale`) when its seconds change to a non-zero value, and reads nothing itself.
+- `buffer_state_changed` calls `S.lib.waveforms.changed(slot)` when its seconds change (the old overview goes at once, #401), and `S.lib.waveforms.stale(slot)` when something else changed with audio (a dub's slot now loaded: a reread), and reads nothing itself.
+- **A take the engine could not write is never remembered** (#312): `take_write_failed`, the `takeWriteFailed` poll's handler, acts only on the slot's newest recording (`number == records_sent`, from 1) and only while the slot still holds its take: an unsettled take (`recording`, or `settled_empty == "take"`) gets `take_unsaved`, which `confirm_buffer_audio` honors (the take settles with no path); a settled one on the scratch path loses its path now. A loaded file, a clear or a newer recording since: nothing. `load_buffer`, `clear_buffer` and `recording_started` reset `take_unsaved`. The take stays `take <n>`, loaded; `buffers.data` then names no file for the slot.
+- **A save never takes a name in use** (#522): `buffer_save_path(slot, kind)` adds `-2`, `-3`, ... to `<date-time>-buf<n>` (`-buf<n>-loop` for `kind == "loop"`) while a file has the name or a tracked save of any slot (`pending_saves`) still writes it, so two saves within a second, or after the clock went back, never overwrite each other.
 - Lengths come from `S.performance.buffer_seconds` (16 s standard, up to 300 s high), never a constant: `record_buffer` caps a take at it and the BUFFER page sizes its seconds column from it.
 - What a slot holds has one answer, `S.lib.buffers.status(slot)` (States, below), derived only: it stores nothing and no field changes for it. Whether a slot is free is `S.lib.buffers.is_free(slot)` (status `"empty"` or `"missing"`), and the fill (`S.lib.files.fill_empty`), BUFFER's seconds column (`slot_is_empty`) and the grid's source and record keys (`source_level`, level 2; `record_level`, from the status) read only it, never a test of their own (#247).
 
@@ -32,7 +34,7 @@
 - the one slot check, `S.lib.buffers.valid_buffer_slot(slot)` and `slot_index(slot)` (#402, Must not break);
 - loading, clearing and saving (`load_buffer(slot, path, start)`, `clear_buffer`, `save_buffer` (the whole slot: region 0, 1), `save_buffer_loop`, ...); recording is `lib/record.lua`'s (`docs/notes/lua/record.md`);
 - the files' start point (`S.lib.buffers.set_start`, `recording_started`, `slot_file_seconds`, `longest_start`, below);
-- the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`, `buffer_save_result`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
+- the `bufferState`, `bufferLoadFailed`, `bufferSaveResult` and `takeWriteFailed` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`, `buffer_save_result`, the local `take_write_failed`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` (`state`, `load_failed`, `save_result`, `take_write_failed`) at init and its cleanup step 130 stops;
 - buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`, the local `remember` and `remembered_buffers`);
 - three cleanup steps: 40 (save the buffer paths), 128 (`buffer_start_reload`: the pending start reloads) and 130 (the polls and recording timers).
 
@@ -96,7 +98,7 @@ On the high tier a slot holds up to `S.performance.buffer_seconds` (60, 120 or 3
 
 ## Trim
 
-`save_buffer_loop(slot)` (global) saves the loop region of the selected voice if it reads the slot, else of the lowest-numbered voice that does, else the whole slot (`engine.saveBuffer(slot, path, start, length)`, fractions), to `<audio>/strata/<YYYYMMDD-HHMMSS>-buf<n>-loop.wav`. Its `pending_saves` entry has `loop = true`, so the result flashes `saved buf <n> loop`.
+`save_buffer_loop(slot)` (global) saves the loop region of the selected voice if it reads the slot, else of the lowest-numbered voice that does, else the whole slot (`engine.saveBuffer(slot, path, start, length)`, fractions), to `<audio>/strata/<YYYYMMDD-HHMMSS>-buf<n>-loop.wav` (`buffer_save_path(slot, "loop")`, with a counter when the name is in use). Its `pending_saves` entry has `loop = true`, so the result flashes `saved buf <n> loop`.
 
 ## Save results
 

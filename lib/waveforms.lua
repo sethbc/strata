@@ -7,7 +7,11 @@
 -- tick (and re-marks a slot that records playably every
 -- WAVEFORMS.refresh_seconds). A file is used only if it is this slot's, in
 -- version 1, holds WAVEFORM_POINTS values in 0-1 and its length (frames /
--- rate) is within LENGTH_TOLERANCE of the seconds the slot reports.
+-- rate) is within LENGTH_TOLERANCE of the seconds the slot reports. A
+-- slot whose length changes forgets its old points at once (changed), so
+-- no frame draws the old audio's overview at the new length (#401). Each
+-- tick runs contained (S.lib.ui_frame.contained_call): an error in a read
+-- or the grid redraw it calls is printed once and never ends the loop (#330).
 
 return function(S)
   local M = {}
@@ -26,6 +30,8 @@ return function(S)
   -- when each playable recording is next marked; the loop's clock is
   -- M.read_clock (the tests find it there)
   local playable_due = {}
+  -- the tick's error last printed (contained_call's key "tick"), nil after a good tick
+  local tick_errors = {}
 
   -- lib/buffers.lua's one slot check (#402)
   local function valid_slot(slot)
@@ -89,6 +95,20 @@ return function(S)
   -- A slot's audio changed: its peaks are stale (read on a later frame tick)
   function M.stale(slot)
     if valid_slot(slot) then marked[slot] = true end
+  end
+
+  -- A slot's length changed: its audio is new, so its points go now (the
+  -- old ones describe other audio, or the old length) and it is read on a
+  -- later tick. A playable recording's rereads only mark it (stale), so
+  -- a dub's waveform never blinks
+  function M.changed(slot)
+    if not valid_slot(slot) then return end
+    if points[slot] ~= nil then
+      points[slot] = nil
+      request_redraw()
+      if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
+    end
+    marked[slot] = true
   end
 
   -- A slot's peaks (WAVEFORM_POINTS values, 0-1), or nil when it has none
@@ -155,7 +175,7 @@ return function(S)
     M.read_clock = clock.run(function()
       while true do
         clock.sleep(1 / UI_PAGES.FRAMES_PER_SECOND)
-        tick()
+        S.lib.ui_frame.contained_call(tick_errors, "tick", "peaks read", tick)
       end
     end)
   end)

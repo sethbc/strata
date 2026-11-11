@@ -85,14 +85,17 @@
     // fresh chunk array: see freshReadArray.
     // yielding: called inside a routine, which yields after every chunk
     // (yieldToCommands), so a long file (a 300 s FLAC takes seconds on a Pi)
-    // never holds up the commands meanwhile.
+    // never holds up the commands meanwhile. keepGoing (nil, or a function
+    // answering whether the check is still wanted) is asked after each of
+    // those yields: false stops the check there and returns false, so a
+    // load that something superseded reads no further (#375).
     // peaks (a FloatArray of waveformPoints, or nil): filled with the
     // largest absolute sample of each bin across the channels, clipped to 1.
     // The reads are bin-aligned: at most loadCheckFrames, ending at the next
     // bin boundary, so no chunk spans two bins. A bin's peak is Signal's
     // peak, a C primitive: no array and no sclang function per sample
     // (maxItem and minItem call a function for every sample, #131).
-    fileDecodes { arg file, frames, yielding = false, peaks;
+    fileDecodes { arg file, frames, yielding = false, peaks, keepGoing;
         var channels = file.numChannels, done = 0, bin = 0, binEnd, wanted, chunk, decoded;
         peaks = peaks ?? { FloatArray.newClear(this.waveformPoints) };
         while { done < frames } {
@@ -106,7 +109,10 @@
             if (decoded > 0) { peaks[bin] = peaks[bin].max(chunk.peak.min(1.0)) };
             done = done + decoded;
             if ((decoded < wanted) and: { done < frames }) { ^(frames - done) <= loadShortfallFrames };
-            if (yielding and: { done < frames }) { this.yieldToCommands(0) };
+            if (yielding and: { done < frames }) {
+                this.yieldToCommands(0);
+                if (keepGoing.notNil and: { keepGoing.value.not }) { ^false };
+            };
         };
         ^true
     }
@@ -303,12 +309,13 @@
                 // mover's, or a subprocess's): wait for it, so renames land in
                 // write order whatever carries them (a newer one by subprocess
                 // could land before an older one the mover still holds). At
-                // most twice peaksMoverTimeout; it ends by then.
+                // most twice peaksMoverTimeout; it ends by then. Polled as
+                // often as the mover's acknowledgment (peaksMoverPollStep).
                 waitStart = Main.elapsedTime;
                 // A write a newer one supersedes stops waiting at once.
                 while { written and: { this.pathRenames[path].notNil } and: { current.value }
                     and: { (Main.elapsedTime - waitStart) < (this.peaksMoverTimeout * 2) } } {
-                    this.yieldToCommands(0.002)
+                    this.yieldToCommands(this.peaksMoverPollStep)
                 };
                 // no yield between this check and the rename's start. The
                 // newest write forgets its generation whether it succeeded or

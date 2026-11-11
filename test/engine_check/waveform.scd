@@ -132,6 +132,27 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     h.command(\clearBuffer, slot); server.sync;
 }.value;
 
+// #313: a slot's overview put on a longer length (a playable recording
+// that extends the slot): new bin b is the largest of the old bins it
+// covers, 0 past the old audio. A ramp of 64 (old bin i holds (i + 1) / 64)
+{
+    var ramp = FloatArray.fill(points, { arg bin; (bin + 1) / points }), four, longer, problems = List.new(8);
+    four = engine.tryPerform(\shrunkPeaks, ramp, 48000, 192000);
+    longer = engine.tryPerform(\shrunkPeaks, ramp, 48000, 100000);
+    if (four.isNil or: { longer.isNil }) { problems.add("no shrunkPeaks") } {
+        points.do({ arg bin;
+            var expected = if (bin < 16) { ((4 * bin) + 4) / points } { 0 };
+            if ((four[bin] - expected).abs > 0.0001) { problems.add("192000: bin % is %, not %".format(bin, four[bin], expected)) };
+        });
+        // to 100000 frames: bin 30 covers old bins 62 and 63, bin 31 is past the old audio
+        if ((longer[30] - 1).abs > 0.0001) { problems.add("100000: bin 30 is %".format(longer[30])) };
+        if (longer[31] != 0) { problems.add("100000: bin 31 is %".format(longer[31])) };
+        if ((longer[0] - (3 / points)).abs > 0.0001) { problems.add("100000: bin 0 is %".format(longer[0])) };
+        if ((four.size != points) or: { longer.size != points }) { problems.add("sizes % and %".format(four.size, longer.size)) };
+    };
+    check.(problems.isEmpty, "waveform: shrunkPeaks puts 64 bins on a longer length (%)".format(problems.keep(4)));
+}.value;
+
 // The file's format, slot, frames, rate and a rising generation
 {
     var path = scratchRoot +/+ "waveform-format.wav", slot = 2, peaksPath = engine.peaksPath(slot), first, second, values;

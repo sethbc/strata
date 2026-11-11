@@ -2,7 +2,7 @@
 // The record area: the recording synth and commands, the tap group (every
 // recording, and the persistent pre-master tap, run after the master), the
 // record heads the grain synths read and steer around (slotHeadGuard), the
-// voice tap buses and the recordState poll. Replace takes behave as 3.2's
+// voice tap buses and the recordState and takeWriteFailed polls. Replace takes behave as 3.2's
 // (the slot fades, empties and reads 0 s until the take ends); every other
 // recording is playable (feedback, loop, armed by level or delay; the slot
 // keeps playing while it records). See docs/notes/engine/record.md.
@@ -56,7 +56,7 @@
         state[\preMasterBus] = Bus.audio(server, 2);
         // Per slot: the recording in progress or waiting to start (an Event, or nil)
         state[\takes] = Array.newClear(numBuffers);
-        state[\peakWrites] = (reports: 0, refreshes: 0);
+        state[\peakWrites] = (reports: 0, refreshes: 0, unchanged: 0);
     }
 
     addRecordDefs {
@@ -158,9 +158,24 @@
         // One message per change of a recording's state (recordStateValue).
         // Not periodic.
         areaState[\record][\statePoll] = this.addPoll(\recordState, { this.recordStatePoll.value ? 0.0 }, false);
+
+        // One message per recording that ended and was kept but whose
+        // scratch take could not be written (takeWriteFailedValue), sent
+        // when the write ends (#312). Not periodic; a value request resends
+        // the last report (Lua ignores a repeat).
+        areaState[\record][\writeFailedPoll] = this.addPoll(\takeWriteFailed, { this.takeWriteFailedPoll.value ? 0.0 }, false);
     }
 
     recordStatePoll { ^areaState[\record][\statePoll] }
+    takeWriteFailedPoll { ^areaState[\record][\writeFailedPoll] }
+
+    // One float (matron's /poll/value is typed "if"): record number *
+    // numBuffers + slot index; the record number counts the slot's
+    // recordBuffer commands from 1, as in recordState. 0.0 before any
+    // report names record 0, never sent
+    takeWriteFailedValue { arg index, number;
+        ^((number * numBuffers) + index).asFloat
+    }
 
     // The tap group and its first node, and the reply that says a recording
     // has armed. Started after the effects area's master (order 130).
@@ -278,6 +293,9 @@
             state[\takes][index] = nil;
             // a stop that was sent but never armed leaves no frame count to await
             if (stopReplies[index] == take[\change]) { stopReplies[index] = nil };
+            // never armed: the slot keeps its length, so it gets back the
+            // overview the take's start had put on the record length (#313)
+            if (take[\started].not and: { take[\peaksBefore].notNil }) { this.storeSlotPeaks(index, take[\peaksBefore]) };
             this.reportRecordState(index, take[\number], 3);
         };
         // its take may have just completed (sendToSynth); free(false) marks
@@ -387,24 +405,44 @@
             this.afterSlotFade(index, take[\change], {
                 buffersL[index].zero;
                 buffersR[index].zero;
-                this.slotPeakBuffer(index).zero;
+                // sclang's copy too: the file written at arming is made from it
+                this.clearSlotPeaks(index);
                 fork({ context.server.sync; this.startTake(index, take) }, SystemClock);
             });
         } { this.startTake(index, take) };
     }
 
     // Send the record synth, if nothing changed the slot since the command.
-    // With a delay still to run it is created now, paused, and started by
-    // a timestamped /n_run: the server starts it on the block the timestamp
-    // names, and a cancel can still free it first (a timestamped /s_new
-    // could not be canceled before the node exists). Past its timestamp
-    // (a preparation that outlasted the delay) it starts at once and says
-    // so.
+    // A playable recording longer than the slot's audio first puts the
+    // slot's overview on the record length (#313: the record synth's bins
+    // are over that length from its first block), the old bins in the first
+    // valid / length of it, zeros after (shrinkSlotPeaks, one /b_getn), and
+    // keeps the overview as it was, which stopRecording puts back if the
+    // take never arms; then sendTake, if nothing changed meanwhile.
     startTake { arg index, take;
+        var synth = take[\synth], valid = bufferFrames[index];
+        var length = if (take[\kind] == \replace) { take[\frames] } { take[\frames].max(valid) };
+        var current = { (recordSynths[index] === synth) and: { slotChanges[index] == take[\change] } };
+        if (current.value.not) { ^this };
+        if ((take[\kind] == \playable) and: { valid > 0 } and: { length > valid }) {
+            this.shrinkSlotPeaks(index, valid, length, { arg before;
+                if (current.value) {
+                    take[\peaksBefore] = before;
+                    this.sendTake(index, take, length);
+                };
+            });
+        } { this.sendTake(index, take, length) };
+    }
+
+    // With a delay still to run the record synth is created now, paused,
+    // and started by a timestamped /n_run: the server starts it on the
+    // block the timestamp names, and a cancel can still free it first (a
+    // timestamped /s_new could not be canceled before the node exists).
+    // Past its timestamp (a preparation that outlasted the delay) it starts
+    // at once and says so. length: the bins' length (peakFrames)
+    sendTake { arg index, take, length;
         var server = context.server, synth = take[\synth], wait = take[\startAt] - thisThread.seconds;
-        var length = if (take[\kind] == \replace) { take[\frames] } { take[\frames].max(bufferFrames[index]) };
         var message;
-        if ((recordSynths[index] !== synth) or: { slotChanges[index] != take[\change] }) { ^this };
         // Marked playing from the moment it is sent (not when /n_go arrives),
         // so stopRecording frees it from here on
         synth.register(true);
@@ -438,7 +476,11 @@
     }
 
     // The record synth has armed: it reports "recording", a playable
-    // recording takes the slot's length, and its peaks start refreshing
+    // recording takes the slot's length, and its peaks start refreshing.
+    // A new length is reported once the peaks file of that length is in
+    // place, as a load's is (docs/notes/engine/waveform.md), unless a load,
+    // clear or recording changed the slot meanwhile (a stop, which keeps
+    // the take, does not drop it: the take's change follows the stop)
     takeArmed { arg index, take;
         var length;
         if (take[\started]) { ^this };
@@ -449,7 +491,8 @@
             if (length != bufferFrames[index]) {
                 bufferFrames[index] = length;
                 bufferSampleRates[index] = context.server.sampleRate;
-                this.bufferChanged(index);
+                this.writeRecordPeaks(index, length, { this.bufferChanged(index) },
+                    { slotChanges[index] == take[\change] });
             };
             this.refreshRecordPeaks(index, take);
         };
@@ -457,13 +500,21 @@
 
     // A playable recording's peaks file, every peakRefreshSeconds while it
     // records: no length report (bufferChanged), so a loop recording's
-    // waveform refreshes without a bufferState change
+    // waveform refreshes without a bufferState change. A refresh whose
+    // overview is what the slot's file already holds (peaksUnchanged: a
+    // loop of silence, or one whose bins have saturated) writes nothing, so
+    // a loop left recording spares the card (#523); the take's end always
+    // writes (endTake)
     refreshRecordPeaks { arg index, take;
         var state = areaState[\record];
         SystemClock.sched(this.peakRefreshSeconds, {
             if (state[\takes][index] === take) {
                 this.readSlotPeaks(index, this.waveformPoints, {
-                    if (state[\takes][index] === take) { this.writeRecordPeaks(index, bufferFrames[index], nil) };
+                    if (state[\takes][index] === take) {
+                        if (this.peaksUnchanged(index, bufferFrames[index])) {
+                            state[\peakWrites][\unchanged] = state[\peakWrites][\unchanged] + 1;
+                        } { this.writeRecordPeaks(index, bufferFrames[index], nil) };
+                    };
                 });
                 this.peakRefreshSeconds
             }
@@ -472,10 +523,10 @@
 
     // writeSlotPeaks, counted (the check cannot see inside the waveform
     // area, and sclang cannot spy on one instance)
-    writeRecordPeaks { arg index, frames, action;
+    writeRecordPeaks { arg index, frames, action, current;
         var counters = areaState[\record][\peakWrites];
         if (action.isNil) { counters[\refreshes] = counters[\refreshes] + 1 } { counters[\reports] = counters[\reports] + 1 };
-        this.writeSlotPeaks(index, frames, action);
+        this.writeSlotPeaks(index, frames, action, current);
     }
 
     // The record synth ended (a one-shot at its length, a stopRecord's
@@ -498,6 +549,7 @@
             if (stopReplies[index] == change) { stopReplies[index] = nil };
             if (areaState[\record][\takes][index] === take) {
                 areaState[\record][\takes][index] = nil;
+                if (take[\peaksBefore].notNil) { this.storeSlotPeaks(index, take[\peaksBefore]) };
                 this.reportRecordState(index, take[\number], 3);
                 this.bufferChanged(index);  // after "canceled": what the slot holds
             };
@@ -515,7 +567,9 @@
 
     // A recording has ended and is kept: its peaks are read and written,
     // then a replace take's length is reported, then "ended", then the
-    // scratch take is written. Each step runs only if the slot has not
+    // scratch take is written; one that cannot be written is reported on
+    // takeWriteFailed with the take's record number when its write ends
+    // (#312). Each step runs only if the slot has not
     // changed since (a later load, clear or recording drops the rest). Lua
     // relies on the order: the peaks file names the length when it
     // arrives, and the length comes before "ended" (the check sees it from
@@ -536,7 +590,9 @@
                         };
                         state[\takes][index] = nil;
                         this.reportRecordState(index, take[\number], 2);
-                        this.writeSlot(index, this.scratchPath(index));
+                        this.writeSlot(index, this.scratchPath(index), { arg written;
+                            if (written.not) { this.takeWriteFailedPoll.update(this.takeWriteFailedValue(index, take[\number])) };
+                        });
                     };
                 });
             };

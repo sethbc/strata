@@ -1,7 +1,7 @@
 -- lib/buffers.lua
 -- The sample buffers: what each slot holds (S.buffers), loading, clearing
--- and saving them (recording is lib/record.lua's), the engine's bufferState, bufferLoadFailed and
--- bufferSaveResult polls (S.buffer_polls), and the buffer paths kept in
+-- and saving them (recording is lib/record.lua's), the engine's bufferState, bufferLoadFailed,
+-- bufferSaveResult and takeWriteFailed polls (S.buffer_polls), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
 -- valid_buffer_slot and slot_index (the one slot check, #402: lib/record.lua,
 -- lib/files.lua, lib/waveforms.lua and lib/playheads.lua use it),
@@ -58,16 +58,20 @@ return function(S)
   -- "canceled" report until the engine's next report of the slot's length:
   -- audio means the take had not prepared the slot, which is as it was, so
   -- buffer_state_changed puts it back; 0 s drops it (nil otherwise).
+  -- take_unsaved: the engine could not write the newest recording's scratch
+  -- take (takeWriteFailed) before the take settled, so it settles with no
+  -- path (false otherwise; a load, clear or recording resets it).
   S.buffers = {}
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
       loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, records_sent = 0,
       checking_from = nil, checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil,
-      kept_state = nil}
+      kept_state = nil, take_unsaved = false}
   end
-  -- the engine's bufferState, bufferLoadFailed and bufferSaveResult polls (nil if missing)
-  S.buffer_polls = {state = nil, load_failed = nil, save_result = nil}
+  -- the engine's bufferState, bufferLoadFailed, bufferSaveResult and
+  -- takeWriteFailed polls (nil if missing)
+  S.buffer_polls = {state = nil, load_failed = nil, save_result = nil, take_write_failed = nil}
   -- confirm_seconds: a report of 0 s settles a take or load only this long
   -- after the change (the periodic poll can carry a value read before the
   -- engine finished: the recording timer ends just before the engine's take
@@ -153,7 +157,8 @@ return function(S)
     buffer.restoring = false
     if is_take then
       buffer.name = "take " .. slot
-      buffer.path = scratch_take_path(slot)
+      -- (a take whose scratch file could not be written has none: takeWriteFailed)
+      buffer.path = (not buffer.take_unsaved) and scratch_take_path(slot) or nil
     end
     if restored then S.buffers_restored = S.buffers_restored + 1 end
   end
@@ -436,6 +441,7 @@ return function(S)
     buffer.restoring = false
     buffer.settled_empty = false
     buffer.kept_state = nil
+    buffer.take_unsaved = false
     buffer.confirm_since = util.time()
     buffer.path = path
     buffer.missing_path = nil
@@ -463,6 +469,7 @@ return function(S)
     buffer.restoring = false
     buffer.settled_empty = false
     buffer.kept_state = nil
+    buffer.take_unsaved = false
     buffer.seconds = 0
     buffer.confirm_since = nil
     buffer.path = nil
@@ -473,9 +480,29 @@ return function(S)
     buffer_display_changed()
   end
 
-  -- Timestamped stereo WAV in audio/strata/, so it shows in the file browser
-  function buffer_save_path(slot)
-    return buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. ".wav"
+  -- A save's path in flight (any slot's tracked save) or a file already there
+  local function save_path_taken(path)
+    if util.file_exists(path) then return true end
+    for slot = 1, NUM_BUFFERS do
+      for _, save in ipairs(S.buffers[slot].pending_saves) do
+        if save.path == path then return true end
+      end
+    end
+    return false
+  end
+
+  -- Timestamped stereo WAV in audio/strata/, so it shows in the file
+  -- browser; kind "loop" names a loop region's file. The time is to the
+  -- second, so a name another save of this session still writes, or a file
+  -- already has (the clock set back), takes a counter: -2, -3, ... (#522)
+  function buffer_save_path(slot, kind)
+    local base = buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. (kind == "loop" and "-loop" or "")
+    local path, count = base .. ".wav", 1
+    while save_path_taken(path) do
+      count = count + 1
+      path = base .. "-" .. count .. ".wav"
+    end
+    return path
   end
 
   -- Count a save of the slot, track it for its bufferSaveResult report and
@@ -556,7 +583,7 @@ return function(S)
     start = util.clamp(start, 0, 1)
     length = util.clamp(length, 0, 1 - start)
     util.make_dir(buffer_audio_dir)
-    local path = buffer_audio_dir .. os.date("%Y%m%d-%H%M%S") .. "-buf" .. slot .. "-loop.wav"
+    local path = buffer_save_path(slot, "loop")
     send_save(slot, path, start, length, true)
     print("buffer " .. slot .. " saving its loop to " .. path)
     return true
@@ -603,6 +630,40 @@ return function(S)
     end
   end
 
+  -- takeWriteFailed poll (#312): the engine could not write the scratch
+  -- take of one of the slot's recordings (a full card, a folder it cannot
+  -- make). value = record number * NUM_BUFFERS + slot index; the engine and
+  -- record_buffer count a slot's recordings alike, from 1 (records_sent).
+  -- Only the slot's newest recording acts, and only while the slot still
+  -- holds its take: the take stays in the buffer and plays, but no file
+  -- holds it, so its path is forgotten (now, or when the take settles:
+  -- take_unsaved) and buffers.data never names the file of an older take
+  -- for it. A loaded file, a clear or a newer recording since: nothing.
+  local function take_write_failed(value)
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
+      or value ~= math.floor(value) then return end
+    local slot = math.floor(value % NUM_BUFFERS) + 1
+    local number = math.floor(value / NUM_BUFFERS)
+    if not valid_buffer_slot(slot) then return end
+    local buffer = S.buffers[slot]
+    if number < 1 or number ~= buffer.records_sent then return end
+    -- (while the take has not settled, or settled empty, path is still what
+    -- the slot held before it: the take settles with no path instead)
+    if buffer.recording then
+      buffer.take_unsaved = true
+    elseif buffer.path == scratch_take_path(slot) then
+      buffer.path = nil
+    elseif buffer.settled_empty == "take" then
+      buffer.take_unsaved = true
+    else
+      return
+    end
+    print("buffer " .. slot .. ": cannot write its take to " .. scratch_take_path(slot)
+      .. " (it plays until the script ends; save the buffer to keep it)")
+    buffer_page_flash("buf " .. slot .. " take not saved")
+    buffer_display_changed()
+  end
+
   -- bufferState poll: one slot per message, slot index * 1000 + seconds. It
   -- also settles a take or load awaiting the engine (confirm_since set,
   -- settle_buffer_slot), on any report, repeated or not: audio settles it at
@@ -626,6 +687,7 @@ return function(S)
     local seconds = value - engine_slot * BUFFER_STATE_STRIDE
     local buffer = S.buffers[slot]
     local changed = buffer.seconds ~= seconds
+    local length_changed = changed
     buffer.seconds = seconds
     local has_audio = seconds > 0
     -- the first report after a replace take was canceled (the engine sends
@@ -640,8 +702,14 @@ return function(S)
       end
     end
     if buffer.recording and S.lib.record.slot_reported(slot, seconds) then changed = true end
-    -- the engine wrote the slot's peaks before reporting its length
-    if changed and has_audio then S.lib.waveforms.stale(slot) end
+    -- the engine wrote the slot's peaks before reporting its length; a new
+    -- length's old overview goes now, never drawn at the new length (#401);
+    -- another change with audio (a dub's slot now loaded) only rereads it
+    if length_changed then
+      S.lib.waveforms.changed(slot)
+    elseif changed and has_audio then
+      S.lib.waveforms.stale(slot)
+    end
     if buffer.checking_from ~= nil then
       if seconds == buffer.checking_from then
         if changed then request_redraw() end
@@ -911,6 +979,12 @@ return function(S)
     else
       print("bufferSaveResult poll not found")
     end
+    S.buffer_polls.take_write_failed = poll.set("takeWriteFailed", take_write_failed)
+    if S.buffer_polls.take_write_failed then
+      S.buffer_polls.take_write_failed:start()
+    else
+      print("takeWriteFailed poll not found")
+    end
   end)
   S.register_start(S.constants.START_ORDER.buffers_load, function()
     -- Reload the buffers remembered on exit (after the scenes, which may use them)
@@ -948,6 +1022,7 @@ return function(S)
     if S.buffer_polls.state then S.buffer_polls.state:stop() end
     if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
     if S.buffer_polls.save_result then S.buffer_polls.save_result:stop() end
+    if S.buffer_polls.take_write_failed then S.buffer_polls.take_write_failed:stop() end
     S.lib.record.stop_all()
   end)
 
@@ -1038,6 +1113,7 @@ return function(S)
     if not slot then return end
     cancel_start_reload(slot)
     local buffer = S.buffers[slot]
+    buffer.take_unsaved = false  -- the new take's own scratch file is to come
     if not playable then
       buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     else

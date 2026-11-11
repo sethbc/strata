@@ -24,6 +24,9 @@
         var state = areaState[\waveform];
         state[\peakBuffers] = Array.fill(numBuffers, { Buffer.alloc(context.server, this.waveformPoints, 1) });
         state[\peaks] = Array.fill(numBuffers, { FloatArray.newClear(this.waveformPoints) });
+        // per slot: what the peaks file this engine last wrote holds
+        // (peaksContent: frames, rate, the values as written), nil before one
+        state[\written] = Array.newClear(numBuffers);
         state[\generation] = 0;
         this.startPeaksMover;
     }
@@ -57,21 +60,27 @@
     // <path>.<instanceTag>-<generation>.part and is renamed into place with
     // mv -f by the mover (renameIntoPlace: no fork of sclang, #210);
     // action runs once the rename has ended, only if nothing
-    // changed the slot meanwhile (slotChanges). A failed write posts why and
+    // changed the slot meanwhile (slotChanges; or, given current, a
+    // function, while it answers true: a playable recording's arming, whose
+    // take a stop may change meanwhile). A failed write posts why and
     // still runs action: a waveform is a view, never a reason to hold up
     // audio. rate is the slot's own, so frames / rate is what bufferState
-    // reports at any file rate.
-    writeSlotPeaks { arg index, frames, action;
+    // reports at any file rate. What the file holds is kept (written), so a
+    // refresh can tell when it would write the same (peaksUnchanged).
+    writeSlotPeaks { arg index, frames, action, current;
         var state = areaState[\waveform], change = slotChanges[index], path = this.peaksPath(index).standardizePath;
-        var generation, partPath;
+        var generation, partPath, content = this.peaksContent(index, frames);
         var finish = { arg written;
             if (written.not) { postln("strata: cannot write " ++ path) };
-            if (slotChanges[index] == change) { action.value };
+            state[\written][index] = if (written) { content };
+            if (current.notNil) { if (current.value) { action.value } } {
+                if (slotChanges[index] == change) { action.value }
+            };
         };
         state[\generation] = state[\generation] + 1;
         generation = state[\generation];
         partPath = path ++ "." ++ instanceTag ++ "-" ++ generation ++ ".part";
-        if (this.writePeaksFile(index, frames, generation, partPath).not) { ^finish.(false) };
+        if (this.writePeaksFile(index, content, generation, partPath).not) { ^finish.(false) };
         // mv -f would move the file into a folder at the path, and succeed
         if (PathName(path).isFolder) { File.delete(partPath); ^finish.(false) };
         this.renameIntoPlace(partPath, path, finish);
@@ -102,6 +111,15 @@
     // How long a write waits on the mover before it renames by a
     // subprocess instead (s). The mover stays in use unless it is gone.
     peaksMoverTimeout { ^1 }
+
+    // How often a write polls for the mover's acknowledgment (s), and
+    // alloc for the FIFO's name to go; writeSlot waits as often for an
+    // older rename to the same path (StrataFiles.sc)
+    peaksMoverPollStep { ^0.002 }
+
+    // How often a write that has renamed by subprocess (after
+    // peaksMoverTimeout) polls for the mover's late acknowledgment (s)
+    peaksMoverSlowPollStep { ^0.05 }
 
     // Renames the mover may hold unacknowledged: four (twelve lines), far
     // below a pipe's buffer, so a write to the FIFO never blocks sclang,
@@ -161,7 +179,7 @@
             // behind schedule and run its late waits back to back
             if (thisThread.isKindOf(Routine)) {
                 var started = Main.elapsedTime;
-                while { File.exists(fifo) and: { (Main.elapsedTime - started) < this.peaksMoverTimeout } } { 0.002.wait };
+                while { File.exists(fifo) and: { (Main.elapsedTime - started) < this.peaksMoverTimeout } } { this.peaksMoverPollStep.wait };
                 if (File.exists(fifo)) { this.abandonPeaksMover(mover, fifo, "it never opened " ++ fifo) };
             };
         } {
@@ -214,7 +232,7 @@
         }) {
             mover[\pending] = mover[\pending] + 1;
             started = Main.elapsedTime;
-            SystemClock.sched(0.002, {
+            SystemClock.sched(this.peaksMoverPollStep, {
                 case
                 { mover[\freed] } { nil }  // the engine was freed: its actions are dropped
                 { File.exists(ackPath) or: { File.exists(failPath) } } {
@@ -226,13 +244,13 @@
                     nil
                 }
                 { mover[\exited] } { mover[\pending] = mover[\pending] - 1; bySubprocess.value; nil }
-                { finished } { 0.05 }  // renamed by subprocess: waiting for the acknowledgment
+                { finished } { this.peaksMoverSlowPollStep }  // renamed by subprocess: waiting for the acknowledgment
                 { (Main.elapsedTime - started) >= this.peaksMoverTimeout } {
                     if (this.peaksMoverGone(mover)) { mover[\alive] = false };
                     bySubprocess.value;
-                    0.05
+                    this.peaksMoverSlowPollStep
                 }
-                { 0.002 }
+                { this.peaksMoverPollStep }
             });
         } {
             bySubprocess.value;
@@ -257,11 +275,28 @@
         }, false);
     }
 
-    // The peaks file's text, written to path; false when it cannot be
-    writePeaksFile { arg index, frames, generation, path;
+    // What a slot's peaks file of `frames` would hold, but its generation:
+    // the frames and rate lines, then the values as the file writes them
+    // (three decimals), from sclang's copy of the overview. Two files with
+    // the same content draw the same waveform
+    peaksContent { arg index, frames;
         var peaks = areaState[\waveform][\peaks][index].asArray.collect({ arg value; this.peakText(value) });
-        var text = "strata-peaks 1\nslot %\nframes %\nrate %\ngeneration %\npeaks %\n".format(
-            index + 1, frames.asInteger, bufferSampleRates[index].round.asInteger, generation, peaks.join(" "));
+        ^["frames %\nrate %\n".format(frames.asInteger, bufferSampleRates[index].round.asInteger), "peaks " ++ peaks.join(" ")]
+    }
+
+    // true when the slot's peaks file is there and holds what one of
+    // `frames` written now would (peaksContent): a loop recording's
+    // refresh then writes nothing (#523)
+    peaksUnchanged { arg index, frames;
+        var written = areaState[\waveform][\written][index];
+        ^written.notNil and: { written == this.peaksContent(index, frames) } and: { File.exists(this.peaksPath(index).standardizePath) }
+    }
+
+    // The peaks file's text (content: peaksContent), written to path; false
+    // when it cannot be
+    writePeaksFile { arg index, content, generation, path;
+        var text = "strata-peaks 1\nslot %\n".format(index + 1) ++ content[0] ++ "generation %\n".format(generation)
+            ++ content[1] ++ "\n";
         var file;
         try { File.mkdir(path.dirname) };
         ^try {
@@ -303,6 +338,41 @@
             spread[bin] = largest;
         });
         ^spread
+    }
+
+    // The slot's overview of oldFrames put on a longer length of newFrames
+    // (a playable recording that extends the slot, #313): read from the
+    // peak buffer (a record synth canceled since the last read may have
+    // written it), each new bin the largest of the old bins it covers,
+    // zeros past the old audio, stored in sclang and the peak buffer; then
+    // action, with the overview as it was (a FloatArray, which
+    // storeSlotPeaks puts back). A reply that arrives after something
+    // changed the slot stores nothing.
+    shrinkSlotPeaks { arg index, oldFrames, newFrames, action;
+        var points = this.waveformPoints, change = slotChanges[index];
+        this.slotPeakBuffer(index).getn(0, points, { arg values;
+            var before = FloatArray.newFrom(values);
+            if (slotChanges[index] == change) { this.storeSlotPeaks(index, this.shrunkPeaks(values, oldFrames, newFrames)) };
+            action.value(before);
+        });
+    }
+
+    // values (waveformPoints bins over oldFrames) as bins over newFrames
+    // (longer). Integers throughout, as spreadPeaks: new bin b covers the
+    // old bins from floor(b * newFrames / oldFrames) up to, not including,
+    // ceil((b + 1) * newFrames / oldFrames), and is 0 when the first of
+    // them is past the last (the largest product, 65 x 14.4 million frames,
+    // is under 2^31)
+    shrunkPeaks { arg values, oldFrames, newFrames;
+        var points = this.waveformPoints, shrunk = FloatArray.newClear(points);
+        points.do({ arg bin;
+            var from = (bin * newFrames) div: oldFrames;
+            var to = ((((bin + 1) * newFrames) + oldFrames - 1) div: oldFrames).min(points);
+            var largest = 0;
+            if (from < points) { (to - from).do({ arg offset; largest = largest.max(values[from + offset]) }) };
+            shrunk[bin] = largest;
+        });
+        ^shrunk
     }
 
     // Forget a slot's peaks: zeros, in sclang and the peak buffer. No file:
