@@ -6,3 +6,4 @@
 - A MIDI controller mapped to a voice's freeze, the scene sequencer, mutations or the delay or reverb bypass (PARAMS > MAP, with echo on) now follows when a grid key, SETUP, SCENES, FX or a source switch changes it.
 - A scenes file from 3.2 holding a fractional number (a crossmod source of `voice 0.05`, from the PARAMS menu turned with K3 held) loads, rounded, instead of all eight scenes being set aside as unreadable.
 - Scene saves no longer fail (`not on disk`, at exit too) once all nine copy names of an older scenes file (`scenes.data.v4` to `.v4.9`) are taken. The same goes for `buffers.data`.
+- A loop or overdub recording longer than its buffer's audio no longer has its new length reported before the buffer's waveform of that length is written.

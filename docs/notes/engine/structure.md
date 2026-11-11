@@ -24,6 +24,7 @@ The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth
 | `writeTestFile(path, rate, frames, values)` | a WAV of constant per-channel values; `stereoPath`, `monoPath`, `longPath` and `textPath` are written before the first area |
 | `probeFree(n)` | true when n real-time memory probes of 256 KB fit in the pool |
 | `startEngine(settings)`, `freeEngine(engine)` | a second engine instance on the same server, in a context of its own (`settings`: Engine_Strata classvars set for its build), and freeing an engine |
+| `replaceEngine(settings)` | frees `h.engine`, removes its polls from `CronePollRegistry` as norns' `deinit` does (the registry keeps a name's first poll, so without that the new engine's periodic `bufferState` was the freed engine's), and builds its replacement in the same context; the areas after it run on the new one (the memory area's high run) |
 | `startAllVoices`, `stopAllVoices(engine)` | every voice started as the check always has (voice 7 on buffer slot 4), and every voice stopped, put back on its synth source and cut until none of its synths is left |
 | `engine`, `server`, `context`, `tempDir`, `testDir`, `voiceDefs`, `grainDefs`, `allDefs`, `chainDefs`, `defaultScratchDir` | values |
 | `def32` | the names of the check-only copies of 3.2's defs (`record`, `grainRing`, `grainBuf`), built in the runner with `h.engine` (again by `replaceEngine`, since they bake in the engine's `scaleBuffer` bufnum) and compared against on the server |

@@ -801,6 +801,40 @@ test.("record: the peaks file of the new length is in place when it is reported"
     waitDone.(4);
     check.(atReport == d, "record: the peaks file of the new length is in place when it is reported (frames % at the report of 4 s)".format(atReport));
 });
+// ... and the periodic bufferState never announces it earlier: an arming
+// takes the slot's new length at once (bufferFrames), but the poll reports
+// what bufferChanged last announced, which follows the peaks file. With
+// the peaks mover stopped the write stays open (peaksMoverTimeout, then a
+// subprocess rename); a whole periodic cycle stepped meanwhile
+// (requestValue runs the poll's function) reports slot 4 at its old 1 s,
+// then at 4 s once the file of 4 s is in place
+test.("record: the periodic bufferState never announces an arming's length before its peaks file", {
+    var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, d = (4 * sampleRate).round.asInteger;
+    var mover = engine.areaState[\waveform][\mover], poll = engine.bufferStatePoll, peaksPath = engine.peaksPath(4).standardizePath;
+    var cycle = { (engine.numBuffers + 1).collect({ poll.requestValue; poll.value }) };
+    var slotValue = { arg values; values.detect({ arg value; (value >= 4000) and: { value < 5000 } }) };
+    var during, fileDuring, armed, after, fileAfter;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferFrames[4] == v });
+    0.1.wait; server.sync;
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    record.(4, 4.0, 1.0, 1.0, 0, 0, 1);
+    armed = h.waitFor({ engine.bufferFrames[4] == d }, 0.8);
+    during = slotValue.(cycle.value);
+    fileDuring = peaksFileFrames.(peaksPath);
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    h.waitFor({ peaksFileFrames.(peaksPath) == d }, 3);
+    0.1.wait;
+    after = slotValue.(cycle.value);
+    fileAfter = peaksFileFrames.(peaksPath);
+    h.command(\stopRecord, 4);
+    waitDone.(4);
+    h.waitFor({ mover[\pending] == 0 }, 3);
+    check.((engine.bufferFrames[4] == d) and: { fileDuring != d } and: { during.notNil } and: { (during - 4001.0).abs < 0.005 }
+        and: { fileAfter == d } and: { after.notNil } and: { (after - 4004.0).abs < 0.005 },
+        "record: the periodic bufferState never announces an arming's length before its peaks file (armed %; while the file held % frames: %; once it held %: %)".format(
+            armed, fileDuring, during, fileAfter, after));
+});
 test.("record: a recording that never arms gives the overview back", {
     var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, armed, after, stored;
     h.command(\loadBuffer, 4, path, 0);

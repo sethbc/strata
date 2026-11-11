@@ -835,6 +835,11 @@ runChecks = {
             replaceEngine: { arg self, settings;
                 engine.bufferStatePoll.stop;
                 freeEngine.(engine);
+                // what norns' deinit does: the old engine's polls leave the
+                // registry, which keeps a name's first poll, so the new
+                // engine's are the ones registered (else the periodic
+                // bufferState went on reporting the freed engine's slots)
+                engine.pollNames.do({ arg name; CronePollRegistry.remove(name) });
                 server.sync;
                 engine = buildEngine.(context, settings);
                 addDefs32.(engine);
