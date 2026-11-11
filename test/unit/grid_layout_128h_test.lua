@@ -483,6 +483,24 @@ test("128h: page 4's strip follows a change made off the grid within a tick (#32
   assert_equal(device:get_led(15, 6), S.lib.positions.LEVELS.key_up, "the strip's whole key repainted")
 end)
 
+test("128h: a bookmark changed off the grid repaints page 4's strip at the next tick (#322)", function()
+  local context, S, device = position_setup()
+  tap(context, 1, 8, 8)
+  select_grid_voice(2)
+  context.clock.run_for(0.5)
+  assert_equal(grid_core().page(1), 4, "page 4")
+  local before = device.refresh_count
+  params:set("v2_bookmark_3", 0.9)  -- BUFFER's field, an arc ring or a scene fade sets the param
+  context.clock.run_for(1 / 15 + 0.01)
+  assert_equal(device.refresh_count, before + 1, "a bookmark stored off the grid: one redraw")
+  S.lib.positions.store_bookmark(2, 4)  -- the strip's own store, called as the BUFFER page's would
+  params:set("v2_bookmark_4", 0)         -- and cleared
+  context.clock.run_for(1 / 15 + 0.01)
+  assert_equal(device.refresh_count, before + 2, "a bookmark cleared off the grid: one more")
+  context.clock.run_for(1)
+  assert_equal(device.refresh_count, before + 2, "and no more")
+end)
+
 test("128h: a synth voice's strip is dark and stores nothing (#445)", function()
   local context, S, device = position_setup()
   tap(context, 1, 8, 8)
