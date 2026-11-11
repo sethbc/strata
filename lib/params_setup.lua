@@ -102,7 +102,7 @@ return function(S)
   -- clock and Link, which a tempo key sets (the internal clock reports a
   -- new tempo through clock.get_tempo() only from its tick after next);
   -- clock.get_tempo() under MIDI or crow, which ignore the param. Never for
-  -- timing: beat_seconds_now is
+  -- timing: beat_seconds_now is the one a take's length and delay read
   function M.clock_tempo_now()
     local source = params:string("clock_source")
     if source == "internal" or source == "link" then return params:get("clock_tempo") end
