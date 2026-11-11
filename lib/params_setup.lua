@@ -1,7 +1,8 @@
 -- lib/params_setup.lua
 -- init's params, in PARAMS menu order: S.registry.params holds one record
--- {name, add} per part of the menu (master, mutations, scenes, fx, lfos,
--- buffers, midi, voices), and init runs each record's add in order. Also
+-- {name, add} per part of the menu (performance, master, mutations, scenes,
+-- fx, lfos, buffers, record, positions, midi, scale, voices), and init runs
+-- each record's add in order. Also
 -- the voice params (add_voice_params, get_param_spec), the redraw-on-param
 -- wrapper (redraw_on_param_changes, called by init after the records) and
 -- the tempo-follow handlers; these stay global. S.fx_last_mix.filter is
@@ -61,6 +62,8 @@ return function(S)
   -- external source's may be outside clock_tempo's range). Set the param
   -- silently, so its action does not write the clock back, then call the
   -- handler that was installed before the script's.
+  local previous_tempo_change_handler
+
   function follow_clock_tempo(bpm)
     local min_tempo, max_tempo = param_range("tempo")
     params:set("tempo", util.clamp(util.round(bpm), min_tempo, max_tempo), true)
@@ -110,7 +113,10 @@ return function(S)
 
   -- The performance tier the engine runs (lib/performance.lua): first, so
   -- S.performance is filled before any param is added. It adds no params
-  register_params("performance", function() S.lib.performance.read_active() end)
+  register_params("performance", function()
+    S.close_registries()  -- init reads the registries from here on (#384)
+    S.lib.performance.read_active()
+  end)
 
   register_params("master", function()
     params:add_separator("strata")
@@ -122,7 +128,6 @@ return function(S)
       name = "master density",
       controlspec = controlspec.new(0.1, 2.0, "lin", 0.01, 1.0),
       action = function(x)
-        S.master_density = x
         send_param_to_engine("master_density", x)
       end
     }
@@ -148,7 +153,7 @@ return function(S)
 
   register_params("mutations", function()
     -- Probability-based mutations
-    params:add_separator("strata_mutations")
+    params:add_separator("strata_mutations", "mutations")
 
     params:add{
       type = "binary",
@@ -198,7 +203,7 @@ return function(S)
 
   register_params("scenes", function()
     -- Scene system
-    params:add_separator("strata_scenes")
+    params:add_separator("strata_scenes", "scenes")
 
     params:add{
       type = "binary",
@@ -389,6 +394,7 @@ return function(S)
       id = "drift_amount",
       name = "tape drift",
       controlspec = controlspec.new(0, 0.1, "lin", 0.001, 0.01),
+      formatter = function(param) return string.format("%.3f", param:get()) end,
       action = function(x)
         send_param_to_engine("drift_amount", x)
       end
@@ -628,6 +634,13 @@ return function(S)
     end
   end
 
+  -- Synthesis params whose step is finer than the default string's 0.01 show
+  -- three decimals, so every encoder detent changes the text (#386)
+  local VOICE_PARAM_FORMATS = {
+    drift = function(param) return string.format("%.3f", param:get()) end,
+    ratio = function(param) return string.format("%.3f", param:get()) end,
+  }
+
   function add_voice_params(voice_idx)
     local v = S.voices[voice_idx]
     local prefix = "v" .. voice_idx .. "_"
@@ -653,6 +666,7 @@ return function(S)
         id = param_id,
         name = key,
         controlspec = spec,
+        formatter = VOICE_PARAM_FORMATS[key],
         action = function(x)
           x = filtered_value(voice_idx, key, param_id, x, S.voices[voice_idx].params[key])
           S.voices[voice_idx].params[key] = x
@@ -749,7 +763,7 @@ return function(S)
       type = "control",
       id = prefix .. "grain_size",
       name = "grain size",
-      controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size),
+      controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size, "s"),
       action = function(x)
         S.voices[voice_idx].grain.size = x
         note_param_edit(prefix .. "grain_size")
@@ -764,7 +778,7 @@ return function(S)
       type = "control",
       id = prefix .. "grain_density",
       name = "grain density",
-      controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density),
+      controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density, "/s"),
       action = function(x)
         S.voices[voice_idx].grain.density = x
         send_param_to_engine(prefix .. "grain_density", x)
@@ -779,7 +793,7 @@ return function(S)
       id = prefix .. "grain_pitch",
       name = "grain pitch",
       -- step 0: the drift moves in steps far smaller than 0.01
-      controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch),
+      controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch, "x"),
       action = function(x)
         S.voices[voice_idx].grain.pitch = x
         if not S.drift_writing then
@@ -984,7 +998,7 @@ return function(S)
       type = "control",
       id = prefix .. "mod_speed",
       name = "mod speed",
-      controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed),
+      controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed, "Hz"),
       action = function(x)
         S.voices[voice_idx].crossmod.speed = x
         send_param_to_engine(prefix .. "mod_speed", x)
@@ -999,30 +1013,38 @@ return function(S)
     end
   end
 
-  function get_param_spec(param_name)
-    local specs = {
+  -- Every synthesis param's spec, built once. get_param_spec hands out a copy
+  -- (add_voice_params changes the copy's default). Units and decimals are
+  -- display only (#386, #387)
+  local VOICE_PARAM_SPECS = {
       freq = controlspec.new(20, 2000, "exp", 0, 100, "Hz"),  -- step 0: MIDI notes keep exact pitch
       amp = controlspec.new(0, 1, "lin", 0.01, 0.3),
       pan = controlspec.new(-1, 1, "lin", 0.01, 0),
       rq = controlspec.new(0.01, 1, "lin", 0.01, 0.1),
       noise = controlspec.new(0, 1, "lin", 0.01, 0.5),
-      mod1 = controlspec.new(0.01, 1, "lin", 0.01, 0.1),
-      mod2 = controlspec.new(0.01, 1, "lin", 0.01, 0.15),
+      mod1 = controlspec.new(0.01, 1, "lin", 0.01, 0.1, "Hz"),
+      mod2 = controlspec.new(0.01, 1, "lin", 0.01, 0.15, "Hz"),
       ratio = controlspec.new(0.5, 8, "lin", 0.001, 1.5),  -- fine step: Ring defaults to 1.618
       index = controlspec.new(0, 10, "lin", 0.1, 2),
-      modFreq = controlspec.new(0.01, 1, "lin", 0.01, 0.05),
+      modFreq = controlspec.new(0.01, 1, "lin", 0.01, 0.05, "Hz"),
       fold = controlspec.new(0.1, 5, "lin", 0.1, 1),
       mod = controlspec.new(0.01, 2, "lin", 0.01, 0.2),
       drift = controlspec.new(0.001, 0.1, "lin", 0.001, 0.02),
       width = controlspec.new(0.05, 0.95, "lin", 0.01, 0.5),
       cutoff = controlspec.new(100, 8000, "exp", 10, 2000, "Hz"),
       res = controlspec.new(0.1, 1, "lin", 0.01, 0.3),
-      decay = controlspec.new(0.5, 10, "lin", 0.1, 4),
+      decay = controlspec.new(0.5, 10, "lin", 0.1, 4, "s"),
       damping = controlspec.new(0.1, 0.9, "lin", 0.01, 0.5),
-      excite = controlspec.new(0.1, 2, "lin", 0.01, 0.3),
+      excite = controlspec.new(0.1, 2, "lin", 0.01, 0.3, "Hz"),
       brightness = controlspec.new(0, 1, "lin", 0.01, 0.5)
-    }
-    return specs[param_name] or controlspec.new(0, 1, "lin", 0.01, 0.5)
+  }
+
+  -- A copy of a synthesis param's spec; a name with no spec is an error, so a
+  -- param left out of VOICE_PARAM_SPECS never gets a 0-1 range unseen (#315)
+  function get_param_spec(param_name)
+    local spec = VOICE_PARAM_SPECS[param_name]
+    if not spec then error("get_param_spec: no spec for " .. tostring(param_name), 2) end
+    return spec:copy()
   end
 
   return M

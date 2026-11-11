@@ -70,7 +70,6 @@ local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETU
 local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (8)
 UI_PAGES.index = {}  -- page name -> its index (UI_PAGES.index.FX == 4)
 for index, name in ipairs(UI_PAGES) do UI_PAGES.index[name] = index end
-UI_PAGES.MAIN_PAGE = UI_PAGES.index.MAIN  -- 1 (arc_key tests the page by index, not by its title)
 -- Arc pages follow the screen pages. Every continuous arc ring sweeps its
 -- param's whole range in this many ticks: half a turn of the arc's 1024
 -- ticks per revolution (monome arc spec; matron passes the deltas through)

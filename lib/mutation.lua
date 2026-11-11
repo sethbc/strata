@@ -116,7 +116,7 @@ return function(S)
         -- Randomize synth params
         for key, _ in pairs(voice.params) do
           if key ~= "amp" then -- Don't randomize amplitude
-            local spec = get_param_spec(key)
+            local spec = params:lookup_param(prefix .. key).controlspec
             -- uniform in the normalized 0-1 range, so exp params (freq, cutoff)
             -- spread evenly across octaves instead of piling up at the top
             randomize_param(prefix .. key, spec:map(math.random()))
@@ -227,7 +227,7 @@ return function(S)
             if key ~= "amp" and key ~= "pan" then
               -- Check if this parameter should mutate
               if math.random() < probability then
-                local spec = get_param_spec(key)
+                local spec = params:lookup_param("v" .. i .. "_" .. key).controlspec
 
                 -- Mutation delta as a fraction of the normalized range, so exp
                 -- params move evenly in octaves. Gaussian-like distribution by

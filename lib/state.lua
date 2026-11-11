@@ -42,10 +42,31 @@ return function()
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
   }
 
+  -- The registries init reads once (voice_params, scene_fields,
+  -- lfo_destinations, fx_params, start, menu_close) are closed when init
+  -- begins to read them (close_registries, called by the first params
+  -- record, "performance"): a registration after that is never used, so its
+  -- register function raises, naming the registry (#384)
+  local closed = {}
+  local INIT_READ = {"voice_params", "scene_fields", "lfo_destinations", "fx_params", "start", "menu_close"}
+
+  function M.close_registries()
+    for _, name in ipairs(INIT_READ) do closed[name] = true end
+  end
+
+  -- A registration is refused once its registry is closed; the error
+  -- points at the registering module's line (level 3)
+  local function require_open(registry, kind)
+    if closed[registry] then
+      error(kind .. ": the " .. registry .. " registry is read at init and closed; register at include time", 3)
+    end
+  end
+
   -- Add an {order, fn} record to one of the ordered registries (start or
   -- cleanup). Two steps never share an order (table.sort is not stable, so a
   -- tie would run in no fixed order)
   local function register_step(steps, kind, order, fn)
+    if steps == M.registry.start then require_open("start", "register_start") end
     assert(type(order) == "number", "a " .. kind .. " step needs a number order")
     assert(type(fn) == "function", "a " .. kind .. " step needs a function")
     for _, record in ipairs(steps) do
@@ -96,6 +117,20 @@ return function()
     return false
   end
 
+  -- A record holds only the fields of its documented set; a misspelled
+  -- optional field would be ignored without a word (#385)
+  local function require_known_fields(record, allowed, where)
+    for field in pairs(record) do
+      require_arg(allowed[field], where, "unknown field " .. tostring(field))
+    end
+  end
+
+  local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
+    sync = true, scene_defaults = true, discrete = true, scene_ranges = true, voice_rows = true,
+    layout_states = true, normalize_scene = true, fader = true}
+  local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true}
+  local FX_PARAM_FIELDS = {name = true, count = true, add = true}
+
   local function is_grain_key(key, value)
     return type(key) == "string" and (type(value) == "string" or (type(value) == "table"
       and type(value.name) == "string" and (value.value == nil or type(value.value) == "function")))
@@ -120,11 +155,13 @@ return function()
   --   fader: never true (registered params stay off the 256 fader pages)
   function M.register_voice_params(record)
     local kind = "register_voice_params"
+    require_open("voice_params", kind)
     require_arg(type(record) == "table", kind, "a record is a table")
     require_arg(type(record.name) == "string" and record.name ~= "", kind, "a record needs a name")
     require_arg(not name_taken(M.registry.voice_params, "name", record.name), kind,
       "a second record named " .. record.name)
     local where = kind .. " " .. record.name
+    require_known_fields(record, VOICE_PARAM_FIELDS, where)
     require_arg(is_whole(record.count, 1), where, "count is a whole number of params, at least 1")
     require_arg(type(record.add) == "function", where, "add is a function")
     require_arg(record.add_first == nil or type(record.add_first) == "function", where, "add_first is a function")
@@ -166,8 +203,10 @@ return function()
   -- instead of crossfading}. Scenes read these after S.SCENE_GLOBAL_PARAMS
   function M.register_scene_field(field)
     local kind = "register_scene_field"
+    require_open("scene_fields", kind)
     require_arg(type(field) == "table" and type(field.id) == "string" and field.id ~= "", kind, "a field needs an id")
     local where = kind .. " " .. field.id
+    require_known_fields(field, SCENE_FIELD_FIELDS, where)
     require_arg(type(field.default) == "number", where, "a default is a number")
     require_arg(field.discrete == nil or type(field.discrete) == "boolean", where, "discrete is a boolean")
     require_arg(not name_taken(M.registry.scene_fields, "id", field.id), kind, "a second field " .. field.id)
@@ -202,6 +241,7 @@ return function()
   -- watch reads the registry as its start step builds the wrapper, so
   -- hooks are registered at include time
   function M.register_menu_close(fn)
+    require_open("menu_close", "register_menu_close")
     require_arg(type(fn) == "function", "register_menu_close", "a hook is a function")
     table.insert(M.registry.menu_close, fn)
   end
@@ -234,6 +274,7 @@ return function()
   -- so saved destination indices keep their meaning
   function M.register_lfo_destination(label, suffix)
     local kind = "register_lfo_destination"
+    require_open("lfo_destinations", kind)
     require_arg(type(label) == "string" and label ~= "", kind, "a label is a string")
     require_arg(type(suffix) == "string" and suffix ~= "", kind .. " " .. label, "a suffix is a param id suffix")
     require_arg(not name_taken(M.registry.lfo_destinations, "label", label), kind, "a second label " .. label)
@@ -244,8 +285,10 @@ return function()
   -- the group's size counts them, and add must add exactly count
   function M.register_fx_params(record)
     local kind = "register_fx_params"
+    require_open("fx_params", kind)
     require_arg(type(record) == "table" and type(record.name) == "string" and record.name ~= "", kind,
       "a record needs a name")
+    require_known_fields(record, FX_PARAM_FIELDS, kind .. " " .. record.name)
     require_arg(not name_taken(M.registry.fx_params, "name", record.name), kind, "a second record " .. record.name)
     require_arg(is_whole(record.count, 1), kind .. " " .. record.name, "count is a whole number, at least 1")
     require_arg(type(record.add) == "function", kind .. " " .. record.name, "add is a function")

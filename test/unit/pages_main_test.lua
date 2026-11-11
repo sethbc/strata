@@ -296,7 +296,7 @@ test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", func
   assert_true(undo_available(1), "ALT+K2 after the window randomizes again")
   key(1, 0)
   -- the same actions through alt_action, which every ALT press goes through
-  local MAIN = local_value("S").constants.UI_PAGES.MAIN_PAGE
+  local MAIN = local_value("S").constants.UI_PAGES.index.MAIN
   assert_true(alt_action(MAIN, 3), "MAIN has ALT actions")
   assert_true(frozen[1], "alt_action(MAIN, 3) locks")
   alt_action(MAIN, 3)
@@ -557,12 +557,12 @@ end)
 test("MAIN's layout states cover every voice locked, running, triggered and frozen", function()
   load_strata()
   local S = local_value("S")
-  local states = S.registry.pages[S.constants.UI_PAGES.MAIN_PAGE].layout_states
+  local states = S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states
   assert_true(type(states) == "table" and #states >= 1, "MAIN lists layout states")
   local context = load_strata(); finish_startup(context)
   S = local_value("S")
   show_page("MAIN")
-  S.registry.pages[S.constants.UI_PAGES.MAIN_PAGE].layout_states[1].setup(context)
+  S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states[1].setup(context)
   for voice_idx = 1, 7 do
     assert_true(S.voices[voice_idx].active and S.frozen[voice_idx], "voice " .. voice_idx .. " running and locked")
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 2, "voice " .. voice_idx .. " triggered")

@@ -286,7 +286,7 @@ end
 
 Manual performance, from grid page 3:
 1. Build a sound.
-2. Press a row 3 button to save it to a scene slot.
+2. Hold a row 3 button for half a second (`scene_save_seconds`) to save it to a scene slot.
 3. Change parameters.
 4. Save to another slot.
 5. Press row 1 buttons to switch between scenes instantly.

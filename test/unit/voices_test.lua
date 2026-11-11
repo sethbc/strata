@@ -59,4 +59,12 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   assert_equal(fader_param_ids(1)[1], "v1_buf_pos")
 end)
 
+test("S keeps no master_density field: readers take the param (#393)", function()
+  load_strata()
+  local S = local_value("S")
+  params:set("master_density", 1.5)
+  assert_equal(rawget(S, "master_density"), nil, "nothing keeps a copy of the density")
+  assert_near(params:get("master_density"), 1.5, 1e-9, "the param is the value")
+end)
+
 end
