@@ -48,7 +48,7 @@ Settings for the BUFFER page's record key and each buffer's Record trigger. They
 - Scrub friction (0-100%, default 100%): how far the arc's scrub ring keeps going when you let go of it. At 100% the ring moves the buffer position directly and stops with your finger; below it, a flick keeps the position moving in the same direction and slows down, for longer the lower the friction (about 4 s at 0%). Saved in PSETs, not in scenes
 
 ## MIDI (group)
-- MIDI device: the port Strata listens to (1-4, default 1)
+- MIDI device: the port Strata listens to (1-16, the norns MIDI slots, default 1)
 - MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
 - MIDI note off: ignore (the default) or voice off
 

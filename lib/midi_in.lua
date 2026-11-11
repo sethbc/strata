@@ -13,7 +13,6 @@ return function(S)
   -- MIDI input: notes, velocity and pitchbend per voice (CC is norns' own
   -- PARAMS > MAP): the MIDI constants, in one table.
   M.MIDI = {
-    max_port = 4,             -- midi_device param range (vports 1-4)
     velocity_max = 127,       -- retrigger velocity = note velocity / 127
     rate_root_note = 60,      -- buffer-sourced voices: this note plays at rate 1
     bend_center = 8192,       -- 14-bit pitchbend value at rest
@@ -58,13 +57,15 @@ return function(S)
 
   -- Hot-plug. norns assigns the device to its vport before calling midi.add,
   -- and clears the vport only after midi.remove returns.
-  function midi.add(device)
+  -- They read the midi_device param, which init adds, so they are assigned in
+  -- the start step (below), never at include time (#469).
+  local function midi_added(device)
     attach_midi(params:get("midi_device"))
     request_redraw()  -- SETUP shows the device
     print("midi connected: " .. tostring(device.name))
   end
 
-  function midi.remove(device)
+  local function midi_removed(device)
     if device.port == params:get("midi_device") then
       reset_midi_input()
       attached_device = nil
@@ -96,19 +97,40 @@ return function(S)
     return S.midi_device.name
   end
 
-  -- Forget held notes and re-center every bent voice: called when the port or
-  -- channel mode changes or the device goes away, since the note offs and
-  -- bend returns for them will not arrive
-  function reset_midi_input()
+  -- Forget every held note. The voices those notes held are stopped when
+  -- `stop_all` (a panic) or in voice off mode: nothing can release them any
+  -- more (#407, #529).
+  local function release_held_notes(stop_all)
+    local to_stop = {}
     for i = 1, NUM_VOICES do
+      if next(S.midi_state.held[i]) ~= nil and S.voices[i].active
+          and (stop_all or params:get("midi_note_off") == 2) then
+        to_stop[#to_stop + 1] = i
+      end
       S.midi_state.held[i] = {}
+    end
+    S.midi_state.note_voice = {}
+    for _, i in ipairs(to_stop) do toggle_voice(i) end
+  end
+
+  -- Re-center every bent voice, and (unless `keep_notes`) release the held
+  -- notes: called when the port or channel mode changes or the device goes
+  -- away, since the bend returns and note offs will not arrive. A channel mode
+  -- change keeps the notes: their note offs still reach the voices their note
+  -- ons played (note_voice).
+  function reset_midi_input(keep_notes)
+    for i = 1, NUM_VOICES do
       if S.midi_state.bend[i] ~= 1 then
         S.midi_state.bend[i] = 1
         if S.voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
       end
     end
-    S.midi_state.note_voice = {}
+    if not keep_notes then release_held_notes(false) end
   end
+
+  -- All notes off (CC 123) and all sound off (CC 120): release every held
+  -- note and stop the voices they held, in either note off mode (#529)
+  M.PANIC_CCS = { [120] = true, [123] = true }
 
   -- The voice a MIDI channel addresses, or nil
   function midi_target_voice(channel)
@@ -157,6 +179,8 @@ return function(S)
     elseif msg.type == "pitchbend" then
       local voice_idx = midi_target_voice(msg.ch)
       if voice_idx then midi_pitchbend(voice_idx, msg.val) end
+    elseif msg.type == "cc" and M.PANIC_CCS[msg.cc] then
+      release_held_notes(true)
     end
   end
 
@@ -215,6 +239,8 @@ return function(S)
 
   -- Listen for MIDI from init on
   S.register_start(S.constants.START_ORDER.midi, function()
+    midi.add = midi_added
+    midi.remove = midi_removed
     midi_init()
   end)
 

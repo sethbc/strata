@@ -5,7 +5,7 @@ The MIDI input, mutations, saving and loading scenes, the performance setting, a
 A list of fields, with the status lines below it. The list scrolls (a thin bar at the right edge shows where you are).
 
 Fields:
-- **midi** - the port Strata listens to (1-4) and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`)
+- **midi** - the port Strata listens to (1-16) and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`)
 - **channels** - per voice, or omni to the selected voice
 - **mutations** - on or off
 - **mutation rate**, **mutation prob**, **mutation amt** - how often, how likely and how much

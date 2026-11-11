@@ -8,7 +8,9 @@
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
 - The selected vport's device is reconciled when the norns menu closes (`M.reconcile`, a `register_menu_close` hook). Only a change of device resets the held notes, never an ordinary menu visit: SYSTEM > DEVICES moves a device with `update_devices()` and calls neither `midi.add` nor `midi.remove`.
-- Strata's code handles no CC: norns' PARAMS > MAP maps any CC to any param.
+- Strata's code handles no CC but 123 and 120 (all notes off and all sound off: `release_held_notes(true)`); norns' PARAMS > MAP maps any other CC to any param.
+- `midi.add` and `midi.remove` are assigned in the start step, never at include time: they read the `midi_device` param, which init adds (#469).
+- A channel mode change keeps `note_voice` and `held` (`reset_midi_input(true)`), so a note off reaches the voice its note on played; a port change or unplug releases them, and in voice off mode stops the voices they held.
 
 ## Owns
 
@@ -23,7 +25,7 @@ MIDI notes, velocity and pitchbend play the voices (3.0 design §5).
 ## State
 
 Grouped in tables:
-- `S.lib.midi_in.MIDI` holds the constants: `max_port` 4, `velocity_max` 127, `rate_root_note` 60, `bend_center` 8192, `bend_semitones` 2, and the option lists.
+- `S.lib.midi_in.MIDI` holds the constants: `velocity_max` 127, `rate_root_note` 60, `bend_center` 8192, `bend_semitones` 2, and the option lists.
 - `S.midi_device` is the vport Strata listens to.
 - `S.midi_state` holds:
   - `bend[voice]`: the ratio, default 1 (transient: never a param, never in scenes);
@@ -34,8 +36,8 @@ Grouped in tables:
 ## Params
 
 Group `strata_midi`, 3 params:
-- `midi_device`: number 1..`MIDI.max_port`, default 1. Action `attach_midi(x)` then `reset_midi_input()`.
-- `midi_channel_mode`: option {`per voice`, `omni to selected`}, default 1. Action `reset_midi_input()`.
+- `midi_device`: number 1..`#midi.vports` (norns' 16 ports), default 1. Action `attach_midi(x)` then `reset_midi_input()`.
+- `midi_channel_mode`: option {`per voice`, `omni to selected`}, default 1. Action `reset_midi_input(true)` (bends only).
 - `midi_note_off`: option {`ignore`, `voice off`}, default 1.
 
 ## Device lifecycle
@@ -43,7 +45,7 @@ Group `strata_midi`, 3 params:
 - `midi_init()` (from its start step, `START_ORDER.midi`, after the grids) calls `attach_midi(params:get("midi_device"))`.
 - `attach_midi` clears the old vport's `event` and sets `S.midi_device = midi.connect(port); S.midi_device.event = midi_event`.
 - The handler lives on the vport only: norns fires both `device.event` and `vports[port].event`, as for grids and arc.
-- `midi.add(device)` re-attaches, requests a redraw (SETUP) and prints.
+- `midi.add(device)` (assigned by the start step) re-attaches, requests a redraw (SETUP) and prints.
 - `midi.remove(device)` resets the input if the device was on the selected port, requests a redraw and prints.
   - norns clears the vport as `midi.remove` returns (`Midi.update_devices`), before the next frame draws.
   - So `midi_device_name()` (the selected vport's name, or `none` without a device) then shows the port as empty.
@@ -56,7 +58,7 @@ Group `strata_midi`, 3 params:
 - `midi_target_voice(channel)`:
   - per voice: channel 1..`NUM_VOICES` addresses that voice, other channels nothing;
   - omni: every channel addresses `S.selected_voice`.
-- `midi_event(data)` parses with `midi.to_msg` and ignores everything but notes and pitchbend.
+- `midi_event(data)` parses with `midi.to_msg` and ignores everything but notes, pitchbend and CC 123 / CC 120 (`M.PANIC_CCS`: every held note is released and the voices holding them stop, in either note off mode).
 
 ## Notes
 
@@ -80,7 +82,7 @@ Note off (or note on with velocity 0):
 
 - `midi_pitchbend(voice, value)`: `ratio = 2 ^ (((value - 8192) / 8192) * 2 / 12)`, stored in `S.midi_state.bend[voice]`.
 - Sent with `setVoiceParam(i - 1, "bend", ratio)` if the voice is active. A stopped voice gets it when it starts.
-- `reset_midi_input()` (port or channel mode change, device removed) clears `held`/`note_voice` and re-centers every bent voice. It sends `bend` 1 only for voices whose bend was not 1.
+- `reset_midi_input(keep_notes)` (port or channel mode change, device removed) re-centers every bent voice, sending `bend` 1 only for active voices whose bend was not 1, and unless `keep_notes` (the channel mode change) releases the held notes: clears `held`/`note_voice`, and in voice off mode stops each active voice that held a note.
 - `midi_set_bend(voice, ratio)` stores a bend and (for an active voice) sends it.
 - Omni bend follows the selection:
   - `select_voice_by` (E2 on MAIN and BUFFER, the only place `S.selected_voice` changes) calls `midi_bend_follow_selection(previous_voice)` when the selection moved;
