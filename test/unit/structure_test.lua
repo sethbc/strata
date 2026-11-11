@@ -96,6 +96,35 @@ test("no data file is run as Lua: strata.lua and lib/ never use tab.load or a ch
   assert_equal(#found, 0, table.concat(found, "; "))
 end)
 
+-- Every mention of tab.save in the script's Lua files (a call, or the
+-- function passed on): a data file is written by lib/data_files.lua, to a
+-- checked .part file renamed into place, never rewritten in place (#301)
+local function tab_save_uses(sources)
+  local found = {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    for start in sanitized:gmatch("()%f[%w_]tab%s*%.%s*save%f[^%w_]") do
+      local line = select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
+      table.insert(found, source.path .. ":" .. line .. " tab.save")
+    end
+  end
+  return found
+end
+
+test("no data file is written in place: strata.lua and lib/ never use tab.save (#301)", function()
+  -- the scanner itself
+  local found = tab_save_uses({ { path = "lib/x.lua", text = table.concat({
+    "tab.save(value, path)",
+    "local save = tab . save",
+    '-- tab.save(value, path) in a comment; "tab.save(x)" in a string',
+    "S.lib.data_files.write(path, value); params:save(1); mytab.save(x); tab.saved = 1",
+  }, "\n") } })
+  assert_equal(table.concat(found, "; "), "lib/x.lua:1 tab.save; lib/x.lua:2 tab.save",
+    "each use is found; comments, strings and other names are not")
+  found = tab_save_uses(read_lua_sources())
+  assert_equal(#found, 0, table.concat(found, "; "))
+end)
+
 test("S is init's upvalue and holds the registries", function()
   load_strata()
   local upvalue
@@ -637,10 +666,11 @@ test("cleanup runs every registered step in today's order", function()
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
-  local real_save = tab.save
-  tab.save = function(value, path)
+  -- the data files' one writer (lib/data_files.lua), looked up as it is called
+  local real_save = S.lib.data_files.write
+  S.lib.data_files.write = function(path, value)
     observe(file_steps[path:match("[^/]*$")] or ("file " .. path))
-    return real_save(value, path)
+    return real_save(path, value)
   end
   local real_cancel = clock.cancel
   clock.cancel = function(id) observe(clock_steps[id] or ("clock " .. tostring(id))); return real_cancel(id) end
@@ -677,7 +707,7 @@ test("cleanup runs every registered step in today's order", function()
     record.fn = function(...) table.insert(log, "|"); return step(...) end
   end
   local ok, problem = pcall(cleanup)
-  tab.save, clock.cancel, params.set = real_save, real_cancel, nil
+  S.lib.data_files.write, clock.cancel, params.set = real_save, real_cancel, nil
   grid_redraw, arc_redraw = real_grid_redraw, real_arc_redraw
   assert_true(ok, tostring(problem))
 
@@ -728,7 +758,8 @@ local function start_steps()
     { "arc", { "arc connected" } },
     { "grids", { "grid connected", "print grid 1 connected: 16x16", "grid connected", "grid redrawn" } },
     { "midi", { "midi connected" } },
-    { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn" } },
+    { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
+      "redraw requested" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },

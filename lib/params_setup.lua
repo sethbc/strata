@@ -267,7 +267,12 @@ return function(S)
       id = "load_scenes",
       name = "load scenes from disk",
       action = function()
-        load_scenes_from_disk()
+        -- with a scene of this session not on disk, the first trigger only
+        -- arms (S.lib.scenes.request_load, #328)
+        if S.lib.scenes.request_load() == "confirm" then
+          print("scenes saved in this session are not on disk: trigger again within "
+            .. S.lib.scenes.SCENE_LOAD.confirm_seconds .. " s to load the file over them")
+        end
       end
     }
   end)

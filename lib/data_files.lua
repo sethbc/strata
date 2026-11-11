@@ -1,12 +1,20 @@
 -- lib/data_files.lua
 -- Strata's data files (S.lib.data_files): scenes.data and buffers.data are
--- read here. Their layout is norns' tab.save's (lib/tabutil.lua), and the
--- reader is a parser of exactly that layout, so a file is never run as Lua
--- (#464):
---   decode(text)     the value, or nil and what is wrong
---   read(path)       the value of the file at path; nil and "missing"; or
---                    nil, "unreadable" and why
---   read_text(path)  a file's bytes, or nil
+-- written and read here, and nowhere else. Their layout is norns'
+-- tab.save's (lib/tabutil.lua), so every earlier Strata (which reads with
+-- tab.load) reads what this writes, and the reader is a parser of exactly
+-- that layout, so a file is never run as Lua (#464):
+--   encode(value)        the text, each table's keys in a fixed order (the
+--                        same value always gives the same bytes)
+--   decode(text)         the value, or nil and what is wrong
+--   write(path, value)   the text to <path>.part, each step checked, then
+--                        renamed over path; nothing is written when path
+--                        already holds the same bytes (#301)
+--   read(path)           the value of the file at path; nil and "missing";
+--                        or nil, "unreadable" and why
+--   read_text(path)      a file's bytes, or nil
+--   set_aside(path, s)   rename path to its first free backup name
+--   keep_copy(path, s)   copy path to its first free backup name
 -- See docs/notes/lua/data-files.md.
 
 return function(S)
@@ -19,8 +27,78 @@ return function(S)
     -- hostile file can make the reader build (each table about 60 bytes
     -- empty, so under 1 MB for the tables themselves)
     max_tables = 8192,
+    backups = 9,  -- the backup names: <file><suffix>, then <file><suffix>.2 ... .9
   }
   M.DATA_FILES = DATA_FILES
+
+  -- A number, string or boolean as tab.save writes it (a string through %q,
+  -- the others through tostring); nil for anything else
+  local function scalar_text(value)
+    local kind = type(value)
+    if kind == "string" then return string.format("%q", value) end
+    if kind == "number" or kind == "boolean" then return tostring(value) end
+    return nil
+  end
+
+  -- tab.save's text for a table: "return {", then each table reached from
+  -- value as "-- Table: {n}" and "{ ... },", a table value as "{n}", then
+  -- "}". Per table the array part (ipairs) comes first, then the other keys
+  -- in a fixed order (numbers ascending, strings ascending, false, true),
+  -- and tables are numbered in the order first reached, so the same value
+  -- always gives the same bytes whatever order its keys were set in (what
+  -- lets write tell an unchanged file; tab.save follows pairs). A function
+  -- or userdata value and a table key are left out (Strata's data has
+  -- none; tab.save leaves the first out)
+  function M.encode(value)
+    assert(type(value) == "table", "encode: not a table")
+    local tables, lookup, out = {value}, {[value] = 1}, {"return {\n"}
+    local function item_text(item)
+      if type(item) ~= "table" then return scalar_text(item) end
+      local number = lookup[item]
+      if not number then
+        number = #tables + 1
+        tables[number] = item
+        lookup[item] = number
+      end
+      return "{" .. number .. "}"
+    end
+    local index = 0
+    while index < #tables do
+      index = index + 1
+      local current = tables[index]
+      out[#out + 1] = "-- Table: {" .. index .. "}\n{\n"
+      local listed = 0
+      for position, item in ipairs(current) do
+        listed = position
+        local text = item_text(item)
+        if text then out[#out + 1] = "   " .. text .. ",\n" end
+      end
+      local numbers, strings, booleans = {}, {}, {}
+      for key in pairs(current) do
+        local kind = type(key)
+        if kind == "string" then
+          strings[#strings + 1] = key
+        elseif kind == "number" then
+          -- past the array part (a whole key inside it is written above)
+          if not (key >= 1 and key <= listed and key % 1 == 0) then numbers[#numbers + 1] = key end
+        elseif kind == "boolean" then
+          booleans[#booleans + 1] = key
+        end
+      end
+      table.sort(numbers)
+      table.sort(strings)
+      if #booleans == 2 then booleans = {false, true} end
+      for _, keys in ipairs({numbers, strings, booleans}) do
+        for _, key in ipairs(keys) do
+          local text = item_text(current[key])
+          if text then out[#out + 1] = "   [" .. scalar_text(key) .. "]=" .. text .. ",\n" end
+        end
+      end
+      out[#out + 1] = "},\n"
+    end
+    out[#out + 1] = "}"
+    return table.concat(out)
+  end
 
   -- What %q writes after a backslash, besides digits (\n and \r are older
   -- Lua's)
@@ -224,6 +302,90 @@ return function(S)
     local value, problem = M.decode(text)
     if value == nil then return nil, "unreadable", problem end
     return value
+  end
+
+  -- Write text to <path>.part and rename it over path. The open, write,
+  -- flush, close and rename are each checked (a full card often fails only
+  -- at the flush or close); on any failure the .part file is removed and
+  -- path is left as it was. true, or false and what failed
+  local function replace_file(path, text)
+    local part_path = path .. ".part"
+    local file, problem = io.open(part_path, "wb")
+    if not file then return false, tostring(problem) end
+    local written, write_problem = file:write(text)
+    local flushed, flush_problem
+    if written then flushed, flush_problem = file:flush() end
+    local closed, close_problem = file:close()
+    if not (written and flushed and closed) then
+      os.remove(part_path)
+      return false, tostring(write_problem or flush_problem or close_problem or "the write failed")
+    end
+    local renamed, rename_problem = os.rename(part_path, path)
+    if not renamed then
+      os.remove(part_path)
+      return false, tostring(rename_problem)
+    end
+    return true
+  end
+
+  -- Save value as the file at path: true and "written"; true and
+  -- "unchanged" when path already holds exactly encode(value) (nothing is
+  -- opened for writing, so an exit or a repeated save with nothing new
+  -- costs the card no write); or false and what failed (path then holds
+  -- what it held before, whole)
+  function M.write(path, value)
+    local text = M.encode(value)
+    if read_text(path) == text then return true, "unchanged" end
+    local done, problem = replace_file(path, text)
+    if not done then return false, problem end
+    return true, "written"
+  end
+
+  -- The backup names of path: path .. suffix, then path .. suffix .. ".2"
+  -- ... up to DATA_FILES.backups
+  local function backup_name(path, suffix, number)
+    return path .. suffix .. (number > 1 and ("." .. number) or "")
+  end
+
+  -- The first backup name no file (or folder) has, or nil when every one
+  -- is taken: a backup never replaces an earlier one (#466)
+  local function free_backup_name(path, suffix)
+    for number = 1, DATA_FILES.backups do
+      local candidate = backup_name(path, suffix, number)
+      if not util.file_exists(candidate) then return candidate end
+    end
+    return nil
+  end
+
+  -- Move path out of the way, to its first free backup name: that name, or
+  -- nil and why (every name taken, or the rename failed; path is then still
+  -- in place)
+  function M.set_aside(path, suffix)
+    local backup = free_backup_name(path, suffix)
+    if not backup then return nil, "every backup name is taken" end
+    local moved, problem = os.rename(path, backup)
+    if not moved then return nil, tostring(problem) end
+    return backup
+  end
+
+  -- Keep a copy of path under its first free backup name (written to a
+  -- .part and renamed, so a copy is whole or absent): that name; the name
+  -- of a backup that already holds the same bytes (nothing is copied
+  -- again); true when path has no file (nothing to keep); or nil and why.
+  -- path itself is never touched (#467)
+  function M.keep_copy(path, suffix)
+    if not util.file_exists(path) then return true end
+    local text = read_text(path)
+    if not text then return nil, "cannot be read" end
+    for number = 1, DATA_FILES.backups do
+      local candidate = backup_name(path, suffix, number)
+      if read_text(candidate) == text then return candidate end
+    end
+    local backup = free_backup_name(path, suffix)
+    if not backup then return nil, "every backup name is taken" end
+    local done, problem = replace_file(backup, text)
+    if not done then return nil, problem end
+    return backup
   end
 
   return M

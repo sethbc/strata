@@ -101,10 +101,14 @@ return function(S)
     return slot >= 1 and slot <= NUM_BUFFERS
   end
 
-  -- Buffer state is shown on the BUFFER page and the 256 grid's page 4
+  -- Buffer state is shown on the BUFFER page and the 256 grid's page 4, and
+  -- what the slots remember goes to buffers.data when it changed (remember,
+  -- set with the disk functions further down)
+  local remember = function() end
   local function buffer_display_changed()
     request_redraw()
     grid_redraw()
+    remember()
   end
 
   -- lib/record.lua owns the take timers (S.buffer_record_clocks)
@@ -529,6 +533,7 @@ return function(S)
     if not changed then return end
     request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
     if S.lib.grid_core.any_page(4) then grid_redraw() end
+    remember()  -- a take that settled has its scratch path now
   end
 
   -- bufferLoadFailed poll: the engine could not use the file of one of the
@@ -597,26 +602,79 @@ return function(S)
   -- start that failed before init's restore leaves it false, and cleanup()
   -- then does not overwrite buffers.data with the empty paths (#72)
   S.buffers_loaded = false
+  -- What is known of buffers.data in this session (as S.scene_file, for
+  -- SETUP's status rows): version, the format of the file as read when
+  -- older than BUFFER_DATA_VERSION (nil once a save has replaced it);
+  -- problem, nil, "unreadable" or "not saved"; backup, the name an
+  -- unreadable file was kept under (nil: still in place); text, the bytes
+  -- last written or found unchanged, which remember compares with, so a
+  -- report that changes no path or start costs no file read
+  S.buffer_file = {version = nil, problem = nil, backup = nil, text = nil}
 
-  function save_buffers_to_disk()
-    if util.file_exists(S.lib.scenes.scene_data_dir) == false then
-      util.make_dir(S.lib.scenes.scene_data_dir)
-    end
-    -- a remembered file that was missing on start is kept (it may be on a
-    -- drive that is mounted again later)
+  -- What buffers.data holds: per slot the loaded file or scratch take (a
+  -- remembered file that was missing on start is kept: it may be on a drive
+  -- that is mounted again later), "" for none, and the start
+  local function remembered_buffers()
     local paths, starts = {}, {}
     for slot = 1, NUM_BUFFERS do
       paths[slot] = S.buffers[slot].path or S.buffers[slot].missing_path or ""
       starts[slot] = S.buffers[slot].start or 0
     end
-    tab.save({version = BUFFER_DATA_VERSION, paths = paths, starts = starts}, buffer_data_file())
-    print("buffer paths saved to " .. buffer_data_file())
+    return {version = BUFFER_DATA_VERSION, paths = paths, starts = starts}
+  end
+
+  -- Write the paths: true and "written" or "unchanged", or false and why
+  -- (the file is then as it was, whole). As the scenes' save: a checked
+  -- .part renamed over buffers.data (S.lib.data_files.write, #301), and a
+  -- file of an older format first kept as buffers.data.v<n> (#467)
+  function save_buffers_to_disk()
+    local data_files = S.lib.data_files
+    if util.file_exists(S.lib.scenes.scene_data_dir) == false then
+      util.make_dir(S.lib.scenes.scene_data_dir)
+    end
+    local state = S.buffer_file
+    local value = remembered_buffers()
+    local saved, detail = true, nil
+    if state.version then
+      saved, detail = data_files.keep_copy(buffer_data_file(), ".v" .. state.version)
+      if type(saved) == "string" then print("buffers file of format " .. state.version .. " kept as " .. saved) end
+    end
+    if saved then saved, detail = data_files.write(buffer_data_file(), value) end
+    if not saved then
+      state.problem = "not saved"
+      print("error: buffer paths not saved to " .. buffer_data_file() .. " (" .. tostring(detail)
+        .. "); the file is as it was")
+      request_redraw()
+      return false, detail
+    end
+    -- a failed write, or an unreadable file still in place, is over
+    if state.problem == "not saved" or (state.problem == "unreadable" and not state.backup) then
+      state.problem = nil
+      request_redraw()
+    end
+    state.version, state.text = nil, data_files.encode(value)
+    S.buffer_autosave_blocked = false
+    if detail == "written" then print("buffer paths saved to " .. buffer_data_file()) end
+    return true, detail
+  end
+
+  -- The slots changed (buffer_display_changed, a bufferState report that
+  -- changed something): write buffers.data if what it would hold differs
+  -- from what was last written (#327), once the restore at start has run
+  -- and unless an unloadable file is still in place. The restore's own
+  -- loads write nothing (S.buffers_loaded is false until it ends), nor do
+  -- set_start's detents (the reload they schedule does). A failed write is
+  -- tried again at the next change and at exit
+  remember = function()
+    if not S.buffers_loaded or S.buffer_autosave_blocked then return end
+    if S.lib.data_files.encode(remembered_buffers()) == S.buffer_file.text then return end
+    save_buffers_to_disk()
   end
 
   local function preserve_unloadable_buffer_file()
-    if not S.lib.scenes.move_aside_unloadable_file(buffer_data_file(), "buffers") then
-      S.buffer_autosave_blocked = true
-    end
+    local backup = S.lib.scenes.move_aside_unloadable_file(buffer_data_file(), "buffers")
+    if not backup then S.buffer_autosave_blocked = true end
+    S.buffer_file.problem, S.buffer_file.backup = "unreadable", backup
   end
 
   -- Reload each remembered path that still exists through load_buffer. A
@@ -626,6 +684,7 @@ return function(S)
   local function restore_buffers_from_file()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
+    S.buffer_file.version, S.buffer_file.problem, S.buffer_file.backup = nil, nil, nil
     -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
     local loaded, problem, detail = S.lib.data_files.read(buffer_data_file())
     if loaded == nil and problem == "missing" then
@@ -645,6 +704,8 @@ return function(S)
       return
     end
 
+    -- the first save keeps a version 1 file as buffers.data.v1 first (#467)
+    if loaded.version < BUFFER_DATA_VERSION then S.buffer_file.version = loaded.version end
     local reloading = 0
     for slot = 1, NUM_BUFFERS do
       local path = loaded.paths[slot]
@@ -675,7 +736,8 @@ return function(S)
     print(reloading .. " buffers reloading from " .. buffer_data_file())
   end
 
-  -- init's restore: from here on cleanup() saves the buffer paths
+  -- init's restore: from here on the buffer paths are saved (whenever they
+  -- change, remember, and by cleanup())
   function load_buffers_from_disk()
     restore_buffers_from_file()
     S.buffers_loaded = true
@@ -708,6 +770,12 @@ return function(S)
   S.register_start(S.constants.START_ORDER.buffers_load, function()
     -- Reload the buffers remembered on exit (after the scenes, which may use them)
     load_buffers_from_disk()
+    -- a file that cannot be read is named on the hint row, as the scenes'
+    -- (one text for both: this flash replaces theirs)
+    if S.buffer_file.problem == "unreadable" then
+      S.lib.ui_flash.start("hints", S.scene_file.problem == "unreadable" and "data files unreadable (SETUP)"
+        or "buffers unreadable (SETUP)", S.lib.scenes.SCENE_LOAD.start_flash_seconds)
+    end
   end)
 
   -- cleanup()'s steps: remember each buffer's file or scratch take for the

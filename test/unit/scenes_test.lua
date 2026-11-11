@@ -187,7 +187,9 @@ test("a scenes file that fails to load survives cleanup (fix round 1)", function
 
   -- if the file cannot be moved aside, cleanup must not overwrite it
   local data_dir = data_root .. "survive_blocked/strata/"
-  os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak/occupied'")  -- rename target is a non-empty dir
+  -- every backup name is taken (by a folder): the file cannot be moved aside
+  os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak." .. number .. "'") end
   local file = assert(io.open(data_dir .. "scenes.data", "w"))
   file:write(bad_files[1].content)
   file:close()
@@ -1549,6 +1551,244 @@ test("S.lib.scenes.save captures and flashes; capture_scene stays silent", funct
   S = local_value("S")
   capture_scene(3)
   assert_equal(S.lib.ui_flash.text("header"), nil, "capture_scene says nothing")
+end)
+
+-- scenes.data on disk (#301)
+
+local function file_text(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local text = file:read("*a"); file:close()
+  return text
+end
+
+local function write_text(path, text)
+  local file = assert(io.open(path, "wb")); file:write(text); file:close()
+end
+
+-- Wrap io.open: every name opened for writing is recorded, and a write to
+-- a file whose name holds `part` fails past `limit` bytes as a full card
+-- does (file:write returns nil and "No space left on device"); `limit` nil
+-- fails nothing. Returns a function that puts io.open back, and the names
+local function watch_writes(part, limit)
+  local real_open, opened = io.open, {}
+  io.open = function(name, mode)
+    local file, problem = real_open(name, mode)
+    if not file or not tostring(mode):find("w") then return file, problem end
+    table.insert(opened, name)
+    if limit == nil or not name:find(part, 1, true) then return file, problem end
+    local written, proxy = 0, {}
+    function proxy:write(text)
+      if written + #text > limit then
+        file:write(text:sub(1, limit - written)); written = limit
+        return nil, "No space left on device", 28
+      end
+      written = written + #text
+      file:write(text)
+      return self
+    end
+    function proxy:flush() return file:flush() end
+    function proxy:close() return file:close() end
+    return proxy
+  end
+  return function() io.open = real_open end, opened
+end
+
+local function printed_count(context, text)
+  local count = 0
+  for _, line in ipairs(context.printed) do
+    if line:find(text, 1, true) then count = count + 1 end
+  end
+  return count
+end
+
+test("a saved scene is on disk before the script exits; an exit with nothing new writes nothing (#327)", function()
+  local context = load_strata({ data_subdir = "scene_on_disk" }); finish_startup(context)
+  local S = local_value("S")
+  local path = context.data_dir .. "strata/scenes.data"
+  assert_true(not util.file_exists(path), "no scenes file yet")
+  scramble_state(3)
+  S.lib.scenes.save(2)
+  assert_equal(S.lib.ui_flash.text("header"), "saved S2")
+  assert_true(util.file_exists(path), "written by the save, not by the exit")
+  local freq = S.scenes[2].data.voices[1].params.freq
+  -- the same scene saved again: nothing is written
+  local restore, opened = watch_writes("scenes.data")
+  S.lib.scenes.save(2)
+  restore()
+  assert_equal(S.lib.ui_flash.text("header"), "saved S2", "an unchanged file holds the scene")
+  assert_equal(#opened, 0, "the same scene saved again opens nothing for writing")
+  -- no cleanup: a crash, a power cut, maiden's ;restart
+  context = load_strata({ data_subdir = "scene_on_disk" })
+  S = local_value("S")
+  assert_true(S.scenes[2].populated, "the scene survived without a clean exit")
+  assert_near(S.scenes[2].data.voices[1].params.freq, freq, 1e-6)
+  -- an exit with nothing new: nothing is written
+  restore, opened = watch_writes("scenes.data")
+  cleanup()
+  restore()
+  for _, name in ipairs(opened) do
+    assert_true(not name:find("scenes.data", 1, true), "an unchanged scenes.data is not rewritten: " .. name)
+  end
+end)
+
+test("a scenes write that fails keeps the old file and says so; the next save that works clears it (#301)", function()
+  local context = load_strata({ data_subdir = "scene_write_fails" }); finish_startup(context)
+  local S = local_value("S")
+  local path = context.data_dir .. "strata/scenes.data"
+  S.lib.scenes.save(1)
+  local good = file_text(path)
+  assert_true(good ~= nil and S.lib.data_files.decode(good).scenes[1].populated, "scene 1 is on disk")
+  -- the card fills: every write to scenes.data (or a file beside it) stops at 2000 bytes
+  local restore = watch_writes("scenes.data", 2000)
+  params:set("v1_freq", 333)
+  S.lib.scenes.save(2)
+  assert_equal(S.lib.ui_flash.text("header"), "S2 not on disk", "the header says the scene is in memory only")
+  assert_equal(file_text(path), good, "the file is byte for byte the last good one")
+  assert_equal(printed_count(context, "scenes saved to"), 1, "a failed write never says saved")
+  assert_equal(printed_count(context, "error: scenes not saved to " .. path), 1, "the console says why")
+  assert_true(S.scene_file.unsaved, "a scene of this session is not on disk")
+  assert_equal(S.scene_file.problem, "not saved")
+  assert_true(S.scenes[2].populated, "the scene is kept in memory")
+  -- the exit tries again and fails the same way: the file stays
+  cleanup()
+  assert_equal(file_text(path), good, "a failed exit save keeps the file too")
+  restore()
+  -- room again: the next save writes both scenes and clears the problem
+  context = load_strata({ data_subdir = "scene_write_fails" })
+  S = local_value("S")
+  S.lib.scenes.save(3)
+  restore = watch_writes("scenes.data", 2000)
+  S.lib.scenes.save(4)
+  restore()
+  assert_equal(S.scene_file.problem, "not saved")
+  S.lib.scenes.save(5)
+  assert_equal(S.lib.ui_flash.text("header"), "saved S5")
+  assert_equal(S.scene_file.problem, nil, "a write that works clears the problem")
+  assert_equal(S.scene_file.unsaved, false)
+  local saved = S.lib.data_files.read(path)
+  assert_true(saved.scenes[4].populated and saved.scenes[5].populated, "the unsaved scene went with the next save")
+end)
+
+test("a load asks for a second request only while a scene saved in this session is not on disk (#328)", function()
+  local context = load_strata({ data_subdir = "scene_load_confirm" }); finish_startup(context)
+  local S = local_value("S")
+  S.lib.scenes.save(1)
+  assert_equal(S.lib.scenes.request_load(), "loaded", "the file holds every saved scene: the load runs at once")
+  local restore = watch_writes("scenes.data", 0)
+  S.lib.scenes.save(2)
+  restore()
+  assert_equal(S.lib.scenes.request_load(), "confirm", "a scene not on disk: the first request only asks")
+  assert_true(S.scenes[2].populated, "and leaves the scene")
+  context.set_time(util.time() + 1.5)
+  assert_equal(S.lib.scenes.request_load(), "loaded", "a second request within 2 s loads")
+  assert_true(not S.scenes[2].populated, "the file's scenes replace the unsaved one")
+  assert_equal(S.scene_file.unsaved, false, "memory holds the file's scenes")
+  assert_equal(S.lib.scenes.request_load(), "loaded", "and the next request loads at once")
+  -- the request lapses after 2 s
+  restore = watch_writes("scenes.data", 0)
+  S.lib.scenes.save(2)
+  restore()
+  assert_equal(S.lib.scenes.request_load(), "confirm")
+  context.set_time(util.time() + 2.5)
+  assert_equal(S.lib.scenes.request_load(), "confirm", "a request after 2 s asks again")
+  assert_true(S.scenes[2].populated)
+  -- the PARAMS trigger: the first says so on the console and leaves the scene, the second loads
+  context.set_time(util.time() + 2.5)
+  params:set("load_scenes", 1)
+  assert_true(S.scenes[2].populated, "PARAMS: the first trigger leaves the scene")
+  assert_equal(printed_count(context, "trigger again within 2 s"), 1, "and says why")
+  params:set("load_scenes", 1)
+  assert_true(not S.scenes[2].populated, "PARAMS: the second trigger loads")
+  -- no file: "missing"; an unreadable file: "unreadable", the scenes kept
+  S.lib.scenes.save(3)
+  os.remove(context.data_dir .. "strata/scenes.data")
+  assert_equal(S.lib.scenes.request_load(), "missing")
+  assert_true(S.scenes[3].populated, "no file: the scenes stay")
+  write_text(context.data_dir .. "strata/scenes.data", "return {")
+  assert_equal(S.lib.scenes.request_load(), "unreadable")
+  assert_true(S.scenes[3].populated, "an unreadable file: the scenes stay")
+end)
+
+test("two unloadable scenes files leave two backups, each with its own bytes (#466)", function()
+  local dir = data_root .. "scene_two_backups/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  local newer = tabutil_text({ version = 99, scenes = {} })
+  write_text(dir .. "scenes.data", newer)
+  local context = load_strata({ data_subdir = "scene_two_backups" })
+  local S = local_value("S")
+  assert_equal(S.scene_file.problem, "unreadable")
+  assert_equal(S.scene_file.backup, dir .. "scenes.data.bak", "the name it was kept under")
+  cleanup()
+  write_text(dir .. "scenes.data", "return {")
+  context = load_strata({ data_subdir = "scene_two_backups" })
+  S = local_value("S")
+  assert_equal(file_text(dir .. "scenes.data.bak"), newer, "the first backup is still the first file")
+  assert_equal(file_text(dir .. "scenes.data.bak.2"), "return {", "the second file has its own backup")
+  assert_equal(S.scene_file.backup, dir .. "scenes.data.bak.2")
+  assert_true(table.concat(context.printed, "\n"):find("kept as " .. dir .. "scenes.data.bak.2", 1, true) ~= nil,
+    "the console names the backup")
+end)
+
+test("an older format's scenes.data is kept as scenes.data.v<n> when it is first replaced (#467)", function()
+  local context = load_strata({ data_subdir = "scene_old_source" })
+  capture_scene(1)
+  local scenes = deep_copy(local_value("scenes"))
+  local dir = data_root .. "scene_old/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  -- a version 3 file is a version 4 one under the older number (4 changed no field)
+  context.tab.save({ version = 3, scenes = scenes }, dir .. "scenes.data")
+  local original = file_text(dir .. "scenes.data")
+  load_strata({ data_subdir = "scene_old" })
+  assert_true(local_value("scenes")[1].populated)
+  assert_true(not util.file_exists(dir .. "scenes.data.v3"), "nothing is copied until the file is replaced")
+  cleanup()
+  assert_equal(file_text(dir .. "scenes.data.v3"), original, "the older file's bytes are kept")
+  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 4, "the file is this format now")
+  load_strata({ data_subdir = "scene_old" }); local_value("S").lib.scenes.save(2); cleanup()
+  assert_true(not util.file_exists(dir .. "scenes.data.v3.2"), "no second copy")
+  assert_equal(file_text(dir .. "scenes.data.v3"), original)
+end)
+
+test("an unreadable scenes.data is named on the hint row at start (#463)", function()
+  local dir = data_root .. "scene_start_flash/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", "return {")
+  local context = load_strata({ data_subdir = "scene_start_flash" })
+  local S = local_value("S")
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes unreadable (SETUP)", "on whatever page comes up")
+  next_frame(context)
+  -- (cut to the row by the stub's widths, which are wider than norns' font)
+  assert_true(tostring(h.hint_text(context)):find("^scenes unreadable") ~= nil, "drawn on the hint row")
+  context.clock.run_for(3.9)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes unreadable (SETUP)", "for 4 s")
+  context.clock.run_for(0.2)
+  assert_equal(S.lib.ui_flash.text("hints"), nil)
+  -- a file that reads says nothing
+  load_strata()
+  assert_equal(local_value("S").lib.ui_flash.text("hints"), nil, "no file: no flash")
+end)
+
+test("a load from disk keeps the current scene only when that slot's data is unchanged (#518)", function()
+  local context = load_strata({ data_subdir = "scene_load_current" }); finish_startup(context)
+  local S = local_value("S")
+  scramble_state(4)
+  capture_scene(3)
+  recall_scene(3, 0)
+  assert_equal(S.current_scene, 3)
+  save_scenes_to_disk()
+  load_scenes_from_disk()
+  assert_equal(S.current_scene, 3, "the file holds the same scene 3: it stays current")
+  -- slot 3 in memory differs from the file's
+  params:set("v1_freq", 333)
+  capture_scene(3)
+  load_scenes_from_disk()
+  assert_equal(S.current_scene, 0, "scene 3 is now the file's, not what was recalled: no scene is current")
+  next_frame(context)
+  assert_true(not screen_shows(context, "S3"), "the header marks no scene")
+  -- before the change it did
+  recall_scene(3, 0); next_frame(context)
+  assert_true(screen_shows(context, "S3"), "the header marks scene 3 while it is current")
 end)
 
 end

@@ -270,4 +270,165 @@ test("scenes.data and buffers.data that hold code run none of it at start and ar
   end
   assert_true(said.scenes and said.buffers, "the console says each file could not be loaded")
 end)
+
+-- The writer (#301)
+
+test("encode writes tab.save's layout, the same bytes whatever order the keys were set in", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  -- each table's array part first, then numbers, strings, false and true,
+  -- each ascending; tables numbered in the order first reached
+  local value = { "first", 2.5, { "inner" }, [0.5] = "half", [-3] = "negative", [10] = "ten",
+    version = 4, name = 'a "q"', [true] = "yes", [false] = "no", flag = false }
+  local expected = table.concat({
+    "return {",
+    "-- Table: {1}",
+    "{",
+    '   "first",',
+    "   2.5,",
+    "   {2},",
+    '   [-3]="negative",',
+    '   [0.5]="half",',
+    '   [10]="ten",',
+    "   [\"flag\"]=false,",
+    '   ["name"]="a \\"q\\"",',
+    '   ["version"]=4,',
+    '   [false]="no",',
+    '   [true]="yes",',
+    "},",
+    "-- Table: {2}",
+    "{",
+    '   "inner",',
+    "},",
+    "}",
+  }, "\n")
+  assert_equal(data_files.encode(value), expected)
+  -- twenty-six keys set in two orders: the same bytes (pairs order follows
+  -- the insertion history, so without the sort they differ)
+  local forward, backward = {}, {}
+  for code = 97, 122 do forward[string.char(code)] = code end
+  for code = 122, 97, -1 do backward[string.char(code)] = code end
+  local text = data_files.encode(forward)
+  assert_equal(data_files.encode(backward), text, "the same value in another key order gives the same bytes")
+  assert_true(text:find('["a"]=97,\n   ["b"]=98,', 1, true) ~= nil, "the keys are sorted")
+  -- a shared table is written once and stays shared; norns' reader reads the text
+  local shared = { 1, 2, 3 }
+  local nested = { list = shared, again = shared, deep = { x = 1 } }
+  text = data_files.encode(nested)
+  local path = context.data_dir .. "layout.data"
+  write_text(path, text)
+  local loaded = context.tab.load(path)
+  assert_equal(loaded.list[3], 3); assert_true(loaded.list == loaded.again, "a shared table stays shared")
+  assert_equal(loaded.deep.x, 1)
+  local decoded = assert(data_files.decode(text))
+  assert_true(decoded.list == decoded.again); assert_equal(data_files.encode(decoded), text, "decode then encode")
+  -- what norns' writer wrote encodes to this layout once read
+  assert_equal(data_files.encode(assert(data_files.decode(tabutil_text(nested)))), text)
+end)
+
+-- Wrap io.open so a file opened for writing whose name ends in `suffix`
+-- fails as a full card does: `how` is "write" (file:write returns nil and
+-- "No space left on device" past `limit` bytes), "flush" or "close" (that
+-- call returns nil and the message, after the bytes were written). Returns
+-- a function that puts io.open back and the names opened for writing
+local function fail_writes(suffix, how, limit)
+  local real_open, opened = io.open, {}
+  io.open = function(name, mode)
+    local file, problem = real_open(name, mode)
+    if not file or not tostring(mode):find("w") then return file, problem end
+    table.insert(opened, name)
+    if name:sub(-#suffix) ~= suffix then return file, problem end
+    local written, proxy = 0, {}
+    function proxy:write(text)
+      if how == "write" and written + #text > limit then
+        file:write(text:sub(1, limit - written)); written = limit
+        return nil, "No space left on device", 28
+      end
+      written = written + #text
+      file:write(text)
+      return self
+    end
+    function proxy:flush()
+      if how == "flush" then file:flush(); return nil, "No space left on device", 28 end
+      return file:flush()
+    end
+    function proxy:close()
+      if how == "close" then file:close(); return nil, "No space left on device", 28 end
+      return file:close()
+    end
+    function proxy:seek(...) return file:seek(...) end
+    function proxy:read(...) return file:read(...) end
+    return proxy
+  end
+  return function() io.open = real_open end, opened
+end
+
+test("write goes to a .part file and replaces the file only when every step worked", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local path = context.data_dir .. "w.data"
+  local saved, detail = data_files.write(path, { a = 1 })
+  assert_equal(saved, true); assert_equal(detail, "written")
+  assert_equal(file_text(path), data_files.encode({ a = 1 }))
+  local before = file_text(path)
+  -- the same value again: nothing is opened for writing
+  local restore, opened = fail_writes(".part", "none")
+  saved, detail = data_files.write(path, { a = 1 })
+  restore()
+  assert_equal(saved, true); assert_equal(detail, "unchanged")
+  assert_equal(#opened, 0, "an unchanged file is not rewritten")
+  -- a write, a flush or a close that fails: the old bytes stay, the .part is gone
+  for _, how in ipairs({ "write", "flush", "close" }) do
+    restore, opened = fail_writes(".part", how, 10)
+    saved, detail = data_files.write(path, { a = 2, b = "more than ten bytes" })
+    restore()
+    assert_equal(saved, false, how .. " fails: write says so")
+    assert_true(tostring(detail):find("No space left", 1, true) ~= nil, how .. ": " .. tostring(detail))
+    assert_equal(opened[1], path .. ".part", how .. ": the bytes went to the .part file, never the file itself")
+    assert_equal(#opened, 1, how .. ": nothing else was opened for writing")
+    assert_equal(file_text(path), before, how .. ": the file is byte for byte what it was")
+    assert_true(not util.file_exists(path .. ".part"), how .. ": the .part file is removed")
+  end
+  -- a rename that fails (the name is a folder that holds a file)
+  local folder = context.data_dir .. "taken.data"
+  os.execute("mkdir -p '" .. folder .. "/inside'")
+  saved, detail = data_files.write(folder, { a = 1 })
+  assert_equal(saved, false); assert_equal(type(detail), "string")
+  assert_true(not util.file_exists(folder .. ".part"), "the .part file is removed after a failed rename")
+  -- a folder that does not exist
+  saved, detail = data_files.write(context.data_dir .. "no/such/folder/w.data", { a = 1 })
+  assert_equal(saved, false, "an unwritable folder says so"); assert_equal(type(detail), "string")
+end)
+
+test("a backup never replaces an earlier one; a copy is kept once per content", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  assert_equal(data_files.DATA_FILES.backups, 9, "<file>.bak, then .bak.2 to .bak.9")
+  local path = context.data_dir .. "b.data"
+  write_text(path, "first"); assert_equal(data_files.set_aside(path, ".bak"), path .. ".bak")
+  assert_true(not util.file_exists(path), "set aside: moved, not copied")
+  write_text(path, "second"); assert_equal(data_files.set_aside(path, ".bak"), path .. ".bak.2")
+  assert_equal(file_text(path .. ".bak"), "first"); assert_equal(file_text(path .. ".bak.2"), "second")
+  -- a copy: the file stays; the same bytes are copied once
+  write_text(path, "third")
+  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3")
+  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3", "the same bytes are not copied twice")
+  write_text(path, "fourth")
+  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3.2", "other bytes get the next name")
+  assert_equal(file_text(path), "fourth"); assert_equal(file_text(path .. ".v3"), "third")
+  assert_equal(file_text(path .. ".v3.2"), "fourth")
+  assert_equal(data_files.keep_copy(context.data_dir .. "none.data", ".v3"), true, "no file: nothing to keep")
+  -- every name taken: nothing moves, nothing is copied
+  for number = 3, 9 do write_text(path .. ".bak." .. number, "x") end
+  write_text(path, "fifth")
+  local moved, problem = data_files.set_aside(path, ".bak")
+  assert_equal(moved, nil); assert_equal(type(problem), "string"); assert_equal(file_text(path), "fifth")
+  for number = 3, 9 do write_text(path .. ".v3." .. number, "x") end
+  local kept
+  kept, problem = data_files.keep_copy(path, ".v3")
+  assert_equal(kept, nil); assert_equal(type(problem), "string")
+  for number = 1, 9 do
+    assert_true(file_text(path .. ".bak" .. (number > 1 and ("." .. number) or "")) ~= "fifth", "no backup was replaced")
+  end
+end)
 end

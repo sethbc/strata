@@ -3,12 +3,14 @@
 -- (S.current_scene), capture and recall (instant, or a smooth transition
 -- on S.scene_transition_clock), the scene sequencer
 -- (S.scene_sequencer_clock), migration of older scene formats, validation,
--- and scenes.data on disk, with the registered voice params (voices[i].extras)
+-- and scenes.data on disk (written through lib/data_files.lua at every
+-- scene save and at exit, read at start and on request; S.scene_file), with
+-- the registered voice params (voices[i].extras)
 -- and scene fields (S.registry.scene_fields). The functions stay global. The tables tests and
 -- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
--- scene_data_dir and move_aside_unloadable_file are fields of this
--- module's table (S.lib.scenes) for lib/buffers.lua. Registers its three
+-- scene_data_dir, move_aside_unloadable_file and SCENE_LOAD are fields of
+-- this module's table (S.lib.scenes) for lib/buffers.lua. Registers its three
 -- cleanup steps (saving the scenes, the sequencer, the transition) and the
 -- transition's invariant.
 
@@ -691,54 +693,98 @@ return function(S)
   -- earlier in init) leaves it false, and cleanup() then does not save, so
   -- the empty in-memory scenes never replace the saved ones (#72)
   S.scenes_loaded = false
+  -- What is known of scenes.data in this session (SETUP's status rows, the
+  -- load prompt): version, the format of the file as read when older than
+  -- SCENE_DATA_VERSION (nil once a save has replaced it, or when none was
+  -- read); problem, nil, "unreadable" (the file could not be loaded) or
+  -- "not saved" (the last write failed); backup, the name an unreadable
+  -- file was kept under (nil: still in place); unsaved, true while a scene
+  -- captured in this session is not in the file (a write failed, or was
+  -- blocked)
+  S.scene_file = {version = nil, problem = nil, backup = nil, unsaved = false}
+  -- The load a player asks for (request_load): while a scene is unsaved, the
+  -- first request arms until armed_until, confirm_seconds long, and a second
+  -- inside it loads. start_flash_seconds: how long the start's hint row names
+  -- a file that could not be read (lib/buffers.lua's too)
+  local SCENE_LOAD = {confirm_seconds = 2, armed_until = 0, start_flash_seconds = 4}
+  M.SCENE_LOAD = SCENE_LOAD
 
+  -- Write the scenes: true and "written" or "unchanged" (the file already
+  -- held these bytes, so nothing was written), or false and why (the file
+  -- is then as it was, whole). The text goes to a checked .part file
+  -- renamed over scenes.data (S.lib.data_files.write, #301); a file of an
+  -- older format is first kept as scenes.data.v<n> (#467), and a failure to
+  -- keep it fails the save
   function save_scenes_to_disk()
-    -- Ensure data directory exists
+    local data_files = S.lib.data_files
     if util.file_exists(scene_data_dir) == false then
       util.make_dir(scene_data_dir)
     end
-
-    -- Save scenes table to disk, tagged with the format version
-    tab.save({version = SCENE_DATA_VERSION, scenes = S.scenes}, scene_data_file)
-    print("scenes saved to " .. scene_data_file)
+    local state = S.scene_file
+    local saved, detail = true, nil
+    if state.version then
+      saved, detail = data_files.keep_copy(scene_data_file, ".v" .. state.version)
+      if type(saved) == "string" then print("scenes file of format " .. state.version .. " kept as " .. saved) end
+    end
+    if saved then
+      saved, detail = data_files.write(scene_data_file, {version = SCENE_DATA_VERSION, scenes = S.scenes})
+    end
+    if not saved then
+      state.problem, state.unsaved = "not saved", true
+      print("error: scenes not saved to " .. scene_data_file .. " (" .. tostring(detail) .. "); the file is as it was")
+      request_redraw()
+      return false, detail
+    end
+    -- the file holds this session's scenes: a failed write, or an unreadable
+    -- file still in place (a save from SETUP or PARAMS replaced it), is over
+    if state.problem == "not saved" or (state.problem == "unreadable" and not state.backup) then
+      state.problem = nil
+    end
+    state.version, state.unsaved = nil, false
+    S.scene_autosave_blocked = false
+    if detail == "written" then print("scenes saved to " .. scene_data_file) end
+    request_redraw()
+    return true, detail
   end
 
-  -- A data file that failed to load must survive the save in cleanup():
-  -- move it to <file>.bak. Returns false if that failed, and the caller then
-  -- blocks its auto-save. A field of this module's table: lib/buffers.lua
-  -- uses it for buffers.data.
+  -- A data file that failed to load must survive the next save: move it to
+  -- the first free of <file>.bak, <file>.bak.2 ... (S.lib.data_files.set_aside:
+  -- a backup never replaces an earlier one, #466). Returns the backup's
+  -- name, or nil if that failed, and the caller then blocks its auto-save.
+  -- A field of this module's table: lib/buffers.lua uses it for
+  -- buffers.data.
   local function move_aside_unloadable_file(data_file, label)
-    local backup_file = data_file .. ".bak"
-    local moved, move_error = os.rename(data_file, backup_file)
-    if moved then
+    local backup_file, move_error = S.lib.data_files.set_aside(data_file, ".bak")
+    if backup_file then
       print("unloadable " .. label .. " file kept as " .. backup_file)
-      return true
+      return backup_file
     end
     print("could not move unloadable " .. label .. " file (" .. tostring(move_error) ..
-      "); " .. label .. " will not be auto-saved on exit")
-    return false
+      "); " .. label .. " will not be auto-saved")
+    return nil
   end
 
   local function preserve_unloadable_scene_file()
-    if not move_aside_unloadable_file(scene_data_file, "scenes") then
-      S.scene_autosave_blocked = true
-    end
+    local backup = move_aside_unloadable_file(scene_data_file, "scenes")
+    if not backup then S.scene_autosave_blocked = true end
+    S.scene_file.problem, S.scene_file.backup = "unreadable", backup
+    return "unreadable"
   end
 
-  -- Load scenes from disk. On any problem the current scenes (empty at
-  -- startup) are kept, a message is printed and the file is preserved; a bad
-  -- file never stops init.
+  -- Load scenes from disk: "loaded", "missing" (no file) or "unreadable".
+  -- On any problem the current scenes (empty at startup) are kept, a
+  -- message is printed and the file is preserved; a bad file never stops
+  -- init.
   local function read_scenes_file()
     -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
     local loaded, problem, detail = S.lib.data_files.read(scene_data_file)
     if loaded == nil and problem == "missing" then
       print("no saved scenes file found")
-      return
+      return "missing"
     end
     if type(loaded) ~= "table" then
       print("error loading scenes file: " .. tostring(detail))
-      preserve_unloadable_scene_file()
-      return
+      return preserve_unloadable_scene_file()
     end
 
     local scene_table, file_version
@@ -747,8 +793,7 @@ return function(S)
       if not is_integer_between(loaded.version, 1, SCENE_DATA_VERSION) then
         print("error: scenes file has version " .. tostring(loaded.version) ..
           ", expected 1 to " .. SCENE_DATA_VERSION)
-        preserve_unloadable_scene_file()
-        return
+        return preserve_unloadable_scene_file()
       end
       file_version = loaded.version
       scene_table = loaded.scenes
@@ -767,8 +812,7 @@ return function(S)
 
     if not validate_scene_data(scene_table) then
       print("error: scene file corrupted or incompatible version")
-      preserve_unloadable_scene_file()
-      return
+      return preserve_unloadable_scene_file()
     end
 
     -- Make sure every slot exists, filling gaps with empty scenes
@@ -779,8 +823,18 @@ return function(S)
     -- a running transition ends by applying its slot: after the load that
     -- would be the file's data for the slot, or nothing if it is now empty
     cancel_scene_transition()
+    -- the current scene stays current only if the file holds the same scene
+    -- in its slot (the text a write would give, so a scene saved and read
+    -- back is the same); otherwise what plays is no longer that slot (#518)
+    local current = S.current_scene
+    if is_integer_between(current, 1, NUM_SCENES) and type(S.scenes[current]) == "table"
+      and S.lib.data_files.encode(S.scenes[current]) ~= S.lib.data_files.encode(loaded_scenes[current]) then
+      S.current_scene = 0
+    end
     S.scenes = loaded_scenes
     S.scene_autosave_blocked = false
+    S.scene_file.version = file_version < SCENE_DATA_VERSION and file_version or nil
+    S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
     if file_version < SCENE_DATA_VERSION then
       print("migrated scenes file from version " .. file_version)
     end
@@ -788,12 +842,45 @@ return function(S)
 
     -- Update grid display if grids are connected
     grid_redraw()
+    return "loaded"
   end
 
-  -- init's load (and the load_scenes trigger): from here on cleanup() saves
+  -- init's load (and the load_scenes trigger, through request_load): from
+  -- here on the scenes are saved (at each scene save, and by cleanup()).
+  -- Returns "loaded", "missing" or "unreadable"
   function load_scenes_from_disk()
-    read_scenes_file()
+    local outcome = read_scenes_file()
     S.scenes_loaded = true
+    request_redraw()  -- the header's current scene, SCENES' slots, SETUP's status rows
+    return outcome
+  end
+
+  -- Write the scenes if this session may: nil when it may not (the scenes
+  -- were never loaded in it, or an unloadable file is still in place), and
+  -- the scenes are then unsaved; else what save_scenes_to_disk returns
+  function M.autosave()
+    if not S.scenes_loaded or S.scene_autosave_blocked then
+      S.scene_file.unsaved = true
+      request_redraw()
+      return nil
+    end
+    return save_scenes_to_disk()
+  end
+
+  -- The load a player asks for (SETUP's K3, the PARAMS trigger). While a
+  -- scene captured in this session is not in the file (S.scene_file.unsaved)
+  -- the first request only arms and returns "confirm"; a second within
+  -- SCENE_LOAD.confirm_seconds loads. Otherwise it loads at once: the file
+  -- then holds what memory holds (unless it was replaced from outside).
+  -- Returns "confirm", or what load_scenes_from_disk returns ("loaded",
+  -- "missing", "unreadable"), looked up as it runs
+  function M.request_load()
+    if S.scene_file.unsaved and util.time() >= SCENE_LOAD.armed_until then
+      SCENE_LOAD.armed_until = util.time() + SCENE_LOAD.confirm_seconds
+      return "confirm"
+    end
+    SCENE_LOAD.armed_until = 0
+    return load_scenes_from_disk()
   end
 
   -- Check that one scene slot holds everything recall_scene_instant reads
@@ -893,7 +980,11 @@ return function(S)
   S.register_start(S.constants.START_ORDER.scenes_load, function()
     add_registered_scene_fields()  -- before the file is read: it holds them
     -- Load saved scenes from disk
-    load_scenes_from_disk()
+    -- (a file that cannot be read is named on the hint row of whatever page
+    -- comes up; SETUP's status rows keep it)
+    if load_scenes_from_disk() == "unreadable" then
+      S.lib.ui_flash.start("hints", "scenes unreadable (SETUP)", SCENE_LOAD.start_flash_seconds)
+    end
   end)
 
   -- cleanup()'s steps: save the scenes before anything stops, unless the
@@ -945,15 +1036,17 @@ return function(S)
     end
   end)
 
-  -- A user's save: capture, say so in the header, redraw. capture_scene
-  -- stays silent for the callers that are not a save.
+  -- A user's save: capture, write scenes.data at once (a crash, a power cut
+  -- or ;restart no longer loses it, #327), say in the header whether the
+  -- scene is on disk, redraw. capture_scene stays silent for the callers
+  -- that are not a save.
   function M.save(scene_num)
     if type(scene_num) ~= "number" or scene_num % 1 ~= 0
       or scene_num < 1 or scene_num > NUM_SCENES then
       return false
     end
     capture_scene(scene_num)
-    header_flash("saved S" .. scene_num)
+    header_flash(M.autosave() and ("saved S" .. scene_num) or ("S" .. scene_num .. " not on disk"))
     grid_redraw()
     request_redraw()
     return true

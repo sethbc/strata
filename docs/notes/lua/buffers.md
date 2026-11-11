@@ -1,7 +1,9 @@
 ## Must not break
 
 - buffers.data holds paths only, never audio. Audio reaches disk only when a take completes (the engine's scratch file) or on an explicit `buf<n>_save`.
-- A buffers.data that cannot be loaded is moved aside to `buffers.data.bak`. If that fails, `S.buffer_autosave_blocked` makes cleanup skip the save, so a bad file is never silently overwritten.
+- A buffers.data that cannot be loaded is moved aside to its first free backup name (`buffers.data.bak`, `.bak.2` ... `.bak.9`), never over an earlier backup (#466). If that fails, `S.buffer_autosave_blocked` stops every write of the file (`remember` and cleanup), so a bad file is never silently overwritten.
+- buffers.data is written only through `save_buffers_to_disk`, which goes through `S.lib.data_files.write` (a checked `.part` renamed into place, nothing written when the bytes are the same, #301), never `tab.save`. It is written whenever what it would hold changes (#327): `remember()` runs at the end of `buffer_display_changed()` and at the end of `buffer_state_changed` when something changed, the two places every slot change passes, and compares `encode(remembered_buffers())` with `S.buffer_file.text`, so a report that changes no path or start costs no file read. A new place that changes a slot's `path`, `missing_path` or `start` must end in one of the two.
+- A version 1 file is kept as `buffers.data.v1` before the first save replaces it (#467); a failure to keep the copy fails the save.
 - A remembered file that is missing at start keeps its path in `missing_path` and is saved again, so the sample comes back once the file is there. A clear, a load or a new recording in the slot forgets it.
 - `S.buffers_restored` counts only the slots the engine's `bufferState` poll confirms holding audio.
 - `buffer_load_failed` undoes exactly the load its `bufferLoadFailed` report names (by load number), never a later load, clear or recording.
@@ -18,12 +20,12 @@
 ## Owns
 
 `lib/buffers.lua` (`S.lib.buffers`):
-- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine/buffers.md`, Audio Sources: Lua side, with `records_sent` that `lib/record.lua` counts), `S.buffer_polls`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`;
+- the slots' state `S.buffers` (the per-slot fields are the buffers table in `docs/notes/engine/buffers.md`, Audio Sources: Lua side, with `records_sent` that `lib/record.lua` counts), `S.buffer_polls`, `S.buffers_restored`, `S.buffer_autosave_blocked`, `S.buffers_loaded`, `S.buffer_file`;
 - what a slot holds, `S.lib.buffers.status(slot)` and `is_free(slot)` (States, below);
 - loading, clearing and saving (`load_buffer(slot, path, start)`, `clear_buffer`, `save_buffer` (the whole slot: region 0, 1), `save_buffer_loop`, ...); recording is `lib/record.lua`'s (`docs/notes/lua/record.md`);
 - the files' start point (`S.lib.buffers.set_start`, `recording_started`, below);
 - the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` poll handlers (`S.lib.buffers.buffer_state_changed`, `buffer_load_failed`, `buffer_save_result`), whose polls its start step (`START_ORDER.buffer_polls`) starts into `S.buffer_polls` at init;
-- buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`);
+- buffers.data (`save_buffers_to_disk`, `load_buffers_from_disk`, `buffer_data_file()`, the local `remember` and `remembered_buffers`);
 - three cleanup steps: 40 (save the buffer paths), 128 (`buffer_start_reload`: the pending start reloads) and 130 (the polls and recording timers).
 
 ## States
@@ -87,13 +89,21 @@ The BUFFER page is in `docs/notes/lua/pages/buffer.md`, its arc rings in `docs/n
 Location: `~/dust/data/strata/buffers.data` (`buffer_data_file()`).
 - It sits in the scenes' folder, `S.lib.scenes.scene_data_dir`, which `buffer_data_file()` reads at call time.
 
-Saving (`save_buffers_to_disk()`):
-- writes `{version = BUFFER_DATA_VERSION, paths = {[n] = S.buffers[n].path or S.buffers[n].missing_path or ""}, starts = {[n] = S.buffers[n].start}}` (version 2, 3.3; a missing file keeps its start with its path);
+`S.buffer_file` is what is known of the file in this session, as `S.scene_file` is for scenes.data (`docs/notes/lua/scenes.md`): `version` (the format read, when older than `BUFFER_DATA_VERSION`; nil once a save replaced it), `problem` (nil, `"unreadable"` or `"not saved"`), `backup` (the name an unreadable file was kept under; nil while it is still in place) and `text` (the bytes last written or found unchanged). SETUP lists a problem (`docs/notes/lua/pages/setup.md`).
+
+Saving (`save_buffers_to_disk()`, true and `"written"` or `"unchanged"`, or false and why):
+- writes `remembered_buffers()`, `{version = BUFFER_DATA_VERSION, paths = {[n] = S.buffers[n].path or S.buffers[n].missing_path or ""}, starts = {[n] = S.buffers[n].start}}` (version 2, 3.3; a missing file keeps its start with its path), through `S.lib.data_files.write` (`docs/notes/lua/data-files.md`): a checked `.part` renamed over the file, nothing written when it already holds the same bytes;
 - per slot, the loaded file or scratch take, or a remembered file that was missing on start;
-- `cleanup()` calls it after the scenes save (step 40), but only once `load_buffers_from_disk()` has run in this session (`S.buffers_loaded`, set when it returns), so a start that failed before init's restore never overwrites the saved paths with empty slots (#72).
+- with `S.buffer_file.version` set (a version 1 file was read), it first keeps the file as `buffers.data.v1` (`keep_copy`, once per content); a failure there fails the save;
+- on success: `text` is the bytes, `version` nil, a `"not saved"` problem (or an `"unreadable"` one with no backup, which the write replaced) cleared, `S.buffer_autosave_blocked` false; `buffer paths saved to ...` is printed only for `"written"`;
+- on failure: `problem = "not saved"`, `error: buffer paths not saved to <file> (<why>); the file is as it was`, and the file is as it was; the next change (or the exit) tries again, since `text` still holds the last good bytes.
+
+When (#327):
+- `remember()`, whenever the slots changed (the end of `buffer_display_changed()`, and the end of `buffer_state_changed` when something changed, which covers a take that settles): it returns at once unless `S.buffers_loaded` and not `S.buffer_autosave_blocked`, and when `encode(remembered_buffers())` equals `S.buffer_file.text`. So a load, a take's end, a clear and a failed load's undo are on disk at once; the periodic reports, the restore at start (`S.buffers_loaded` is still false) and `set_start`'s detents (they only call `request_redraw`; the reload they schedule writes) write nothing. The first change after a start compares with the file itself (`text` is nil), so it writes only if something differs.
+- `cleanup()` calls `save_buffers_to_disk` after the scenes save (step 40), but only once `load_buffers_from_disk()` has run in this session (`S.buffers_loaded`, set when it returns), so a start that failed before init's restore never overwrites the saved paths with empty slots (#72). With nothing new it writes nothing. Its untried start (a reload still waiting) is the one saved, as before.
 
 Loading (`load_buffers_from_disk()`, from its start step `START_ORDER.buffers_load`, after the scenes load):
-- resets `S.buffers_restored` and `S.buffer_autosave_blocked` first;
+- resets `S.buffers_restored`, `S.buffer_autosave_blocked` and `S.buffer_file`'s `version`, `problem` and `backup` first, and sets `version` for a version 1 file;
 - `load_buffer`s each non-empty path that `util.file_exists` at its start, clamped to what the file now leaves after a slot's length (version 1, 3.2's, has none: every start is 0; a start that is not a finite number, including the `inf` and `nan` the reader reads as numbers, is 0), and marks the slot `restoring` until it settles (with audio, or empty as `settled_empty = "restore"`, which a late report of audio still adopts and counts);
 - `S.buffers_restored` counts only the slots the poll then confirms holding audio.
 - A path that exists but that the engine cannot load (unreadable, unsupported, empty or damaged) is reported by `bufferLoadFailed`. The slot goes back to empty and the path is not saved again.
@@ -102,5 +112,6 @@ Loading (`load_buffers_from_disk()`, from its start step `START_ORDER.buffers_lo
 
 A bad file, handled as the scenes file is:
 - it is read with `S.lib.data_files.read`, which parses `tab.save`'s layout and never runs the file as Lua (#464, `docs/notes/lua/data-files.md`);
-- when it is unreadable (not that layout: `error loading buffers file: <why>`), has a version other than 1 or 2 or has no `paths` table, the file is moved to `buffers.data.bak` (shared helper `S.lib.scenes.move_aside_unloadable_file(data_file, label)`, defined in `lib/scenes.lua`);
-- if the move fails, `S.buffer_autosave_blocked` makes `cleanup()` skip the save.
+- when it is unreadable (not that layout: `error loading buffers file: <why>`), has a version other than 1 or 2 or has no `paths` table, the file is moved to its first free backup name, `buffers.data.bak` then `.bak.2` ... `.bak.9` (shared helper `S.lib.scenes.move_aside_unloadable_file(data_file, label)`, defined in `lib/scenes.lua`, through `S.lib.data_files.set_aside`), and `S.buffer_file` records `problem = "unreadable"` and the backup;
+- if the move fails (every name taken, or the rename), `S.buffer_autosave_blocked` stops `remember` and `cleanup()` from writing, and `backup` stays nil (SETUP: `buffers file unreadable`, `not saved over`);
+- its start step then flashes `buffers unreadable (SETUP)` on the hint row for `S.lib.scenes.SCENE_LOAD.start_flash_seconds` (4 s), on whatever page comes up, or `data files unreadable (SETUP)` when the scenes file could not be read either (this flash replaces the scenes').
