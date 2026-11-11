@@ -49,7 +49,7 @@ var models = (
     cm4s: "Raspberry Pi Compute Module 4S Rev 1.0", cm3: "Raspberry Pi Compute Module 3 Plus Rev 1.0",
     pi3: "Raspberry Pi 3 Model B Plus Rev 1.3", unknown: "Generic x86 desktop", empty: ""
 );
-var decision, other, dir, text, fields, parts, stale, fresh, result, readOnlyRun;
+var decision, other, dir, text, fields, parts, stale, fresh, result, readOnlyRun, flushRun;
 
 File.mkdir(root);
 
@@ -168,6 +168,38 @@ check.(other.tier == \standard and: { other.bufferSeconds == 16 } and: { other.h
     and: { File.exists(dir +/+ "performance_active.data").not },
     "performance: an unwritable settings dir runs standard");
 h.freeEngine(other);
+// A .part that cannot be flushed (#493): a file this small reaches the disk
+// when close flushes it, and close raises when that fails. The next engine's
+// .part names are made links to a device (the engine's instanceTag is one of
+// the next UniqueIDs, its first write is number 1; this relies on UniqueID
+// staying the source of instanceTag), so its write is the device's.
+// Returns [tier, bufferSeconds, reason, active file's text, .part links left,
+// synths tracked]
+flushRun = { arg name, device;
+    var folder = root +/+ name ++ "/", first = UniqueID.next, links, outcome, built;
+    writeText.(folder +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
+    links = Array.fill(200, { arg i; folder +/+ "performance_active.data." ++ (first + 1 + i) ++ "-1.part" });
+    links.do({ arg link; ("ln -s " ++ device ++ " " ++ link.shellQuote).systemCmd });
+    built = h.startEngine((settingsDir: folder, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
+    outcome = [built.tier, built.bufferSeconds, built.areaState[\performance][\decision][\reason],
+        readText.(folder +/+ "performance_active.data"), links.select({ arg link; File.exists(link) }).size,
+        built.synths.notNil];
+    // the links the engine did not use are ours to remove
+    links.do({ arg link; if (File.exists(link)) { File.delete(link) } });
+    h.freeEngine(built);
+    outcome
+};
+if (File.exists("/dev/full")) {
+    result = flushRun.("flush-full", "/dev/full");
+    check.(result[0] == \standard and: { result[1] == 16 } and: { result[2] == "standard: performance_active.data could not be written" }
+        and: { result[3].isNil } and: { result[5] == true },
+        "performance: a .part that cannot be flushed runs standard, leaves no .part and finishes alloc (got %)".format(result));
+} {
+    "performance: no /dev/full here, the flush check is skipped".postln;
+};
+result = flushRun.("flush-null", "/dev/null");
+check.(result[0] == \standard and: { result[1] == 16 } and: { result[3].isNil } and: { result[5] == true },
+    "performance: a .part that reads back empty runs standard and renames nothing (got %)".format(result));
 // An active file that cannot be replaced (a folder with a file in it): standard, no .part left
 dir = root +/+ "blocked/";
 writeText.(dir +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
