@@ -1,0 +1,17 @@
+// Test-only helper for test/run_engine_check.sh (see StrataTestNoBoot.sc.in).
+// Copied into a SystemOverwrites folder, where sclang takes an override of a
+// system method without the "overwrites" WARNING (#486). Stored as .sc.in for
+// the same reason as StrataTestNoBoot.sc.in: norns must never compile it.
+//
+// Concurrent engine checks must not share the system temp dir: the engine's
+// temporary float files carry the same instance tags in every sclang process,
+// so one run's files would count as another's leftovers. run_engine_check.sh
+// sets STRATA_CHECK_TMPDIR to its private work dir. Linux (UnixPlatform here); macOS (OSXPlatform, which overrides
+// UnixPlatform's defaultTempDir) uses StrataTestNoBootOSX.sc.in, which
+// run_engine_check.sh adds only there (the class does not exist on Linux).
++ UnixPlatform {
+    defaultTempDir {
+        var dir = "STRATA_CHECK_TMPDIR".getenv;
+        ^if(dir.notNil and: { dir.size > 0 }, { dir +/+ "" }, { ["/tmp/", this.userAppSupportDir +/+ ""].detect({ arg path; File.exists(path) }) })
+    }
+}

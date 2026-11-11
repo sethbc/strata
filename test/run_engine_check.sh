@@ -56,12 +56,16 @@ remove_work_dir() {
     /*/strata-engine-run.??????) [ -d "$work_dir" ] && rm -rf -- "$work_dir" ;;
     *) echo "left $work_dir in place (not this run's temporary folder)" >&2 ;;
   esac
+  return 0
 }
 trap remove_work_dir EXIT
-mkdir "$work_dir/classes"
+mkdir "$work_dir/classes" "$work_dir/classes/SystemOverwrites"
 cp "$script_dir/StrataTestNoBoot.sc.in" "$work_dir/classes/StrataTestNoBoot.sc"
+# the temp dir overrides go in SystemOverwrites, where sclang does not warn
+# that an extension overwrites a system method (#486)
+cp "$script_dir/StrataTestTempDir.sc.in" "$work_dir/classes/SystemOverwrites/StrataTestTempDir.sc"
 if [ "$(uname -s)" = Darwin ]; then
-  cp "$script_dir/StrataTestNoBootOSX.sc.in" "$work_dir/classes/StrataTestNoBootOSX.sc"
+  cp "$script_dir/StrataTestNoBootOSX.sc.in" "$work_dir/classes/SystemOverwrites/StrataTestNoBootOSX.sc"
 fi
 
 cat > "$work_dir/sclang_conf.yaml" <<YAML
@@ -76,7 +80,7 @@ YAML
 # sclang never exits by itself when engine_check.scd or the class library
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
-# seconds: a full run of every area takes about 9 minutes (3.14.1, 536 s of areas plus start-up), the check's own deadline
+# seconds: a full run of every area takes about 11 minutes (3.14.1, about 660 s of areas, the figures in the workflow's comment), the check's own deadline
 # is 30 s less (1170 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
 # long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too),
 # CI passes ENGINE_CHECK_TIMEOUT=570 so each shard stays inside its 600 s) and killed as soon as sclang reports a compile error.
@@ -135,6 +139,22 @@ stop_leftover_server() {
   esac
 }
 
+# A signal ends the run like its own stop does (#331): sclang's tree and its
+# server go, the folder is removed, and the status is 130. GNU timeout puts
+# sclang in a process group of its own, so without this a caller's Ctrl-C or
+# limit would leave sclang and scsynth running on the port. sh runs the trap
+# between commands, so within a second of the signal.
+sclang_pid=
+stop_on_signal() {
+  trap '' INT TERM HUP
+  [ -z "$sclang_pid" ] || kill_tree "$sclang_pid"
+  stop_leftover_server
+  remove_work_dir
+  echo "ENGINE CHECK FAILED: interrupted; sclang and its scsynth stopped" >&2
+  exit 130
+}
+trap stop_on_signal INT TERM HUP
+
 output="$work_dir/output.txt"
 set +e
 # started from the temp dir: anything the check writes to its working
@@ -183,7 +203,7 @@ fi
 
 # keep the interesting lines: class-library errors, the check results and
 # each area's time
-grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled|area )|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
+grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area )|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
@@ -191,7 +211,7 @@ grep -E "^(ok |FAIL|ERROR|WARNING|ENGINE CHECK|compiled|area )|FAILURE|alloc fai
 # invariant broken" when its synth bookkeeping finds a state it should never
 # reach; in any part of the check each is a failure
 if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] \
-  && ! grep -qE "^ERROR|FAILURE|alloc failed|Too many grains|Strata invariant broken" "$output"; then
+  && ! grep -qE "^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"

@@ -16,6 +16,10 @@
 (
 var server = Server.local;
 var failures = 0;
+// A failed precondition (an unknown area, a bad port) stops the run before
+// a server boots: sclang's 1.exit only asks it to quit, so what follows still
+// runs, and the start below is gated on this instead (#485)
+var startFailed = false;
 // The fixed order the areas run in; an absent 3.2 file is skipped
 var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \mix, \performance,
     \rings, \freeze, \variation, \loops, \record, \waveform, \positions, \soak];
@@ -30,7 +34,9 @@ var requested = areasText.split($,).collect({ arg part; part.split($ ) }).flatte
 var missingAreas = requested.reject({ arg name; areaOrder.includes(name) and: { File.exists(areaPath.(name)) } });
 var areas = if (missingAreas.notEmpty) {
     ("ENGINE CHECK FAILED: no area " ++ missingAreas[0]).postln;
+    startFailed = true;
     1.exit;
+    [];
 } {
     areaOrder.select({ arg name; File.exists(areaPath.(name))
         and: { if (requested.isEmpty) { onDemandAreas.includes(name).not } { requested.includes(name) } } })
@@ -38,7 +44,7 @@ var areas = if (missingAreas.notEmpty) {
 // The run's own deadline (s): run_engine_check.sh passes 30 s less than its
 // timeout ($ENGINE_CHECK_TIMEOUT, 1200 by default), so a long soak can be given more
 var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 1170 } }.value;
-var context, engine, h;
+var context, engine, h, bootFailed, portAnswered, statusResponder, booted = false;
 var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
     \strataPulse, \strataKarplus, \strataRing];
 var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataVoiceMix, \strataInput, \strataRecord, \strataRingWrite,
@@ -64,6 +70,7 @@ var scPort = if(scPortText.isNil or: { scPortText.size == 0 }, 57110, {
     // asInteger turns "abc" into 0, so accept digits only
     if(scPortText.every({ arg char; char.isDecDigit }).not or: { scPortText.asInteger.inclusivelyBetween(1, 65535).not }) {
         ("ENGINE CHECK FAILED: STRATA_SC_PORT must be a port number from 1 to 65535, got \"" ++ scPortText ++ "\"").postln;
+        startFailed = true;
         1.exit;
     };
     scPortText.asInteger
@@ -621,6 +628,9 @@ var finishArea = { arg name, seconds;
     ("area %: % s".format(name, seconds.round(0.1))).postln;
 };
 
+// Everything from here to the end of the file runs only when the areas and the
+// port are valid (#485); it is not indented, to keep the lines as they were.
+if (startFailed.not) {
 server.addr = NetAddr("127.0.0.1", scPort);
 ("scsynth port: %".format(scPort)).postln;
 ("engine check areas: %".format(areas.join(", "))).postln;
@@ -638,8 +648,35 @@ SystemClock.sched(deadline, {
     SystemClock.sched(1, { 1.exit });
     nil
 });
+// A failed start ends the run at once, naming the cause (#471, #472)
+bootFailed = { arg message, quitServer = true;
+    ("ENGINE CHECK FAILED: " ++ message).postln;
+    // never quit a server this run did not start: the one on the port is another run's
+    if (quitServer) { server.quit };
+    SystemClock.sched(1, { 1.exit });
+};
+// Another server on the port would answer sclang's status request as if it
+// were ours, and two checks would drive one server (#471): ask first, and
+// boot only if nothing answers. A reply comes from the port itself.
+portAnswered = false;
+statusResponder = OSCFunc({ portAnswered = true }, '/status.reply', server.addr).oneShot;
+server.addr.sendMsg("/status");
+SystemClock.sched(0.5, {
+    statusResponder.free;
+    if (portAnswered) {
+        bootFailed.("port % already has a server".format(scPort), false);
+    } {
+        // scsynth that cannot start (a port held by another program, JACK
+        // not running) exits within seconds and its pid is gone: the check
+        // stops then, not at its deadline (#472)
+        SystemClock.sched(4, {
+            if (booted.not) {
+                if (server.pid.isNil) { bootFailed.("scsynth did not boot"); nil } { 1 }
+            } { nil }
+        });
 server.waitForBoot({
     var exitCode, defaultScratchDir, running, workDir = "STRATA_CHECK_TMPDIR".getenv;
+    booted = true;
     // the server's PID for run_engine_check.sh, which stops this scsynth if
     // it outlives sclang (a crash, #152)
     if (workDir.notNil and: { workDir.size > 0 } and: { server.pid.notNil }) {
@@ -857,5 +894,9 @@ server.waitForBoot({
     server.quit;
     1.wait;
     exitCode.exit;
+}, 100, { bootFailed.("scsynth did not boot") });
+    };
+    nil
 });
+}
 )

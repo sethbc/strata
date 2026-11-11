@@ -351,8 +351,8 @@ local function watch_writes(part, fail)
 end
 
 -- The maintained docs (paths from the repo root): AGENTS.md, README.md,
--- docs/status.md, every .md file under docs/notes (recursively) and
--- docs/user. Their engine.<name>( mentions must name commands the engine
+-- docs/status.md, docs/decisions.md, every .md file under docs/notes
+-- (recursively), docs/user and docs/process. Their engine.<name>( mentions must name commands the engine
 -- has, and the repo paths they name must exist. CHANGELOG.md and docs/design/ are history: they describe a release
 -- as it was, so they are not held to today's commands and files
 local function maintained_docs()
