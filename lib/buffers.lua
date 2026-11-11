@@ -756,6 +756,16 @@ return function(S)
       if buffer.settled_empty and buffer.loaded then
         return "slot " .. slot .. " is loaded but settled empty (" .. tostring(buffer.settled_empty) .. ")"
       end
+      -- a take is named for its own slot, on a whole-numbered scratch path (a
+      -- float slot from a poll value names it "take 3.0", #300); a loaded
+      -- file whose name starts with "take " is not a take
+      if type(buffer.name) == "string" and buffer.name:match("^take [%d.]+$") and buffer.name ~= "take " .. slot then
+        return "slot " .. slot .. " is named " .. buffer.name
+      end
+      if type(buffer.path) == "string" and buffer.path:sub(1, #buffer_scratch_dir) == buffer_scratch_dir
+        and buffer.path:match("/buf[^/]*%.wav$") and not buffer.path:match("/buf%d+%.wav$") then
+        return "slot " .. slot .. " has the scratch path " .. buffer.path
+      end
       if not start_reload_clocks[slot] and buffer.start ~= buffer.sent_start then
         return "slot " .. slot .. " shows start " .. tostring(buffer.start) .. " but the load last sent was at "
           .. tostring(buffer.sent_start) .. " with no start reload pending"

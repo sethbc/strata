@@ -626,11 +626,11 @@ end
 
 local function make_util()
   local util = {}
-  -- lib/util.lua: util.time() is the wall clock in seconds. In the stub it
-  -- moves with the clocks (clock.advance, clock.run_for) and
-  -- context.set_time(seconds)
+  -- lib/util.lua: util.time() is the wall clock in seconds, s + us / 1000000:
+  -- a float, as here (also for a whole stub_now). In the stub it moves with
+  -- the clocks (clock.advance, clock.run_for) and context.set_time(seconds)
   util.stub_now = 0
-  function util.time() return util.stub_now end
+  function util.time() return util.stub_now + 0.0 end
   function util.clamp(n, min, max) return math.min(max, math.max(n, min)) end
   function util.linlin(slo, shi, dlo, dhi, f)
     if f <= slo then return dlo
@@ -1437,9 +1437,11 @@ local function make_clock(util)
     clock.tempo = bpm
   end
 
-  function clock.get_tempo() return clock.tempo end
+  -- matron pushes clock_get_tempo and clock_get_beats with lua_pushnumber
+  -- (weaver.cc): floats, also for a whole tempo or beat
+  function clock.get_tempo() return clock.tempo + 0.0 end
   function clock.get_beat_sec() return 60.0 / clock.get_tempo() end
-  function clock.get_beats() return beats_at(util.time()) end
+  function clock.get_beats() return beats_at(util.time()) + 0.0 end
 
   -- When the scheduler fires an event: a sleep at its wake time, a sync when
   -- the beat reaches its beat (at the current tempo), and never before it
@@ -2158,10 +2160,14 @@ local function make_poll(engine_polls)
     return entry
   end
 
-  -- test helper: deliver a value the way a running poll does
+  -- test helper: deliver a value the way a running poll does. matron pushes
+  -- every poll value with lua_pushnumber (weaver.cc, w_handle_poll_value): a
+  -- float, also for a whole number, so tests pass whole numbers and the
+  -- handler sees what a norns sends (#300)
   function poll.fire(name, value)
     local entry = poll.polls[name]
     assert(entry, "no poll named " .. tostring(name))
+    if type(value) == "number" then value = value + 0.0 end
     if entry.running and entry.callback then entry.callback(value) end
   end
 

@@ -828,6 +828,26 @@ test("stub fileselect, musicutil, polls and audio path", function()
   amp_poll:stop()
   context.polls.fire("amp_in_l", 0.5)
   assert_equal(#values, 1, "stopped polls do not fire"); assert_equal(values[1], 0.25)
+  -- matron's w_handle_poll_value pushes the value with lua_pushnumber: a
+  -- float on Lua 5.3, also for a whole number (LuaJIT has one number type)
+  amp_poll:start()
+  context.polls.fire("amp_in_l", 3)
+  assert_equal(values[2], 3)
+  local number_type = math.type or function() return "float" end
+  assert_equal(number_type(values[2]), "float", "a whole poll value arrives as a float")
+end)
+
+-- norns' util.time() is seconds + microseconds / 1000000, and matron pushes
+-- clock_get_tempo and clock_get_beats with lua_pushnumber: floats on Lua
+-- 5.3, also when the stub's time, tempo or beat is a whole number (#300)
+test("stub util.time, clock.get_tempo and clock.get_beats return floats, as on a norns (#300)", function()
+  local context = load_strata(); finish_startup(context)
+  local number_type = math.type or function() return "float" end
+  params:set("clock_tempo", 120); context.set_time(3)
+  assert_equal(util.time(), 3); assert_equal(number_type(util.time()), "float", "util.time() is a float")
+  assert_equal(clock.get_tempo(), 120); assert_equal(number_type(clock.get_tempo()), "float", "the tempo is a float")
+  assert_near(clock.get_beats(), 6, 1e-9)
+  assert_equal(number_type(clock.get_beats()), "float", "the beat is a float")
 end)
 
 -- test/run.lua loads the unit files load_unit_files lists: every

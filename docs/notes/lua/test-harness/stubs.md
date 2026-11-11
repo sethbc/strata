@@ -2,6 +2,7 @@
 
 - The stubs mirror the real norns libraries (`~/src/norns/lua`) and matron. Check behavior there before changing a stub.
 - `param.t` holds numeric type codes (`params.tOPTION`, ...). Never compare it with a string; a test enforces this, with either quote and either order.
+- Values are typed as matron pushes them (`matron/src/weaver.cc`). What it pushes with `lua_pushnumber` is a float, also for a whole number: every poll value (`poll.fire` adds `0.0`, so tests keep passing whole numbers), `clock.get_tempo()` and `clock.get_beats()`; norns' `util.time()` is `s + us / 1000000`, a float too. What it pushes with `lua_pushinteger` stays an integer: encoder deltas, keys, grid and arc events, MIDI bytes, metro stages and `audio.file_info`'s numbers. On Lua 5.3 a float slot builds `buf3.0_file` (#300), and LuaJIT, with one number type, cannot show it: run a new poll test on `lua`.
 
 ## The stubs
 
@@ -31,7 +32,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
   - `update_devices()` is norns': every device leaves its port, then each vport takes the device whose name it holds (a grid vport also its `cols` and `rows`).
   - `reassign(from_port, to_port)` is SYSTEM > DEVICES' K3 (`lua/core/menu/devices.lua`): `to_port` takes the name of the device on `from_port`, every other vport of that name becomes `"none"`, then `update_devices()`. It calls no `add` or `remove`, so the script hears of the move only as the norns menu closes (a test opens and closes it with `_menu.set_mode` around the call).
 - `audio.file_info(path)`: `lua/core/audio.lua`'s (matron's `sound_file_inspect`): channels, frames and sample rate of a file a test lists in `context.audio.files[path] = {channels, frames, rate}`; `context.audio.register(path, {channels, frames, rate})` lists one too, and a path under a test's data folder is read from its WAV header (`fmt ` and `data` chunks); any other path returns 0, 0, 0, as for a file libsndfile cannot open.
-- `poll.set`: the system polls plus the engine's `addPoll` names; unknown names return nil. `context.polls.fire(name, value)` reaches started polls.
+- `poll.set`: the system polls plus the engine's `addPoll` names; unknown names return nil. `context.polls.fire(name, value)` reaches started polls, with a number turned into a float (`w_handle_poll_value`'s `lua_pushnumber`).
 - `require("fileselect")`: a module through `package.preload`, never a global, so a script that relies on a `fileselect` global fails.
   - `enter` records `context.fileselect.last`, and its callback in `fileselect.callback` (as `fs.enter` keeps it in `fs.callback`, so a second `enter` replaces the first's).
   - From play mode, `enter` calls `norns.menu.init()` (so a script's `_menu.set_mode` wrapper runs), makes the `redraw()` call norns' `fs.enter` makes, then its own `fileselect.redraw()`.

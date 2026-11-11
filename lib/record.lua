@@ -194,12 +194,14 @@ return function(S)
   -- recordState poll: value = ((record number * 4) + state) * NUM_BUFFERS +
   -- slot index; state 0 armed, 1 recording, 2 ended and kept, 3 canceled.
   -- Only the slot's newest recording's reports act, in whatever order they
-  -- arrive (records_sent counts them as the engine does).
+  -- arrive (records_sent counts them as the engine does). matron hands every
+  -- poll value over as a float, so the slot is floored: on Lua 5.3 a float
+  -- slot names the take "take 3.0" and its file param "buf3.0_file" (#300).
   local STATE_ARMED, STATE_RECORDING, STATE_ENDED, STATE_CANCELED = 0, 1, 2, 3
   local function record_state_changed(value)
     if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
       or value ~= math.floor(value) then return end
-    local slot = value % NUM_BUFFERS + 1
+    local slot = math.floor(value % NUM_BUFFERS) + 1
     local rest = math.floor(value / NUM_BUFFERS)
     local state_code = rest % 4
     local number = math.floor(rest / 4)
