@@ -156,18 +156,30 @@ test("decode reads every layout tab.save writes as the value saved: escapes, inf
   assert_equal(decoded[1], "a\nb\rc")
 end)
 
--- The heap's growth while fn runs, in KB, garbage included (the collector
--- is stopped meanwhile)
-local function heap_growth_kb(fn)
+-- The heap's growth while fn runs, in bytes: full collections first, then
+-- the collector stopped while fn runs, so the figure is everything fn
+-- allocates, garbage included, whenever the collector would have run
+local function heap_growth_bytes(fn)
+  collectgarbage("collect")
   collectgarbage("collect")
   collectgarbage("stop")
   local before = collectgarbage("count")
   local ok, problem = pcall(fn)
-  local grown = collectgarbage("count") - before
+  local grown = (collectgarbage("count") - before) * 1024
   collectgarbage("restart")
   assert_true(ok, tostring(problem))
   return grown
 end
+
+-- The memory bounds, from the heap growth measured on Lua 5.3 and LuaJIT
+-- 2.1 (repeated runs: LuaJIT's figures move by up to a sixth). Each sits
+-- about halfway, on a ratio scale, between what this reader costs and what
+-- the reader before the #464 review cost, so it has room on both
+-- interpreters and still fails that reader: a table costs 72 to 97 bytes
+-- here and 320 to 465 with a wrapper, keyed and listed tables and a marker
+-- per reference; a string of \0 escapes costs 1.5 to 2.6 bytes of heap per
+-- byte of text here and 8.5 to 16.5 with a part kept per escape
+local MEMORY_BOUNDS = { bytes_per_table = 160, heap_per_text_byte = 5 }
 
 test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a bounded heap", function()
   local context = load_strata()
@@ -187,22 +199,26 @@ test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a 
   assert_true(tostring(problem):find("more than " .. max_tables .. " tables", 1, true) ~= nil, tostring(problem))
   -- 4 MB texts of empty tables, of tables of one entry and of tables of one
   -- reference: the reader gives up at max_tables + 1, having built at most
-  -- max_tables tables (under 2 MB)
+  -- max_tables tables, each at a small cost
   for _, entry in ipairs({ "", "1,", "{1}," }) do
     local text = tables_text(math.floor(max_bytes / (#entry + 4)), entry)
-    local grown = heap_growth_kb(function()
+    local grown = heap_growth_bytes(function()
       value, problem = data_files.decode(text)
     end)
     assert_equal(value, nil, "{" .. entry .. "} repeated")
-    assert_true(grown < 2048, "{" .. entry .. "} repeated grows the heap by " .. math.floor(grown) .. " KB")
+    local per_table = grown / max_tables
+    assert_true(per_table < MEMORY_BOUNDS.bytes_per_table,
+      "{" .. entry .. "} repeated costs " .. math.floor(per_table) .. " bytes per table")
   end
-  -- a 4 MB string of \0 escapes: the heap grows by at most three times the text
+  -- a 4 MB string of \0 escapes: the heap grows by a small multiple of the text
   local text = 'return {\n{\n"' .. string.rep("\\0", math.floor((max_bytes - 16) / 2)) .. '",\n},\n}'
-  local grown = heap_growth_kb(function()
+  local grown = heap_growth_bytes(function()
     value, problem = data_files.decode(text)
   end)
   assert_equal(type(value), "table", tostring(problem)); assert_equal(#value[1], math.floor((max_bytes - 16) / 2))
-  assert_true(grown < 3 * #text / 1024, "\\0 escapes grow the heap by " .. math.floor(grown) .. " KB")
+  local per_byte = grown / #text
+  assert_true(per_byte < MEMORY_BOUNDS.heap_per_text_byte,
+    string.format("\\0 escapes cost %.2f bytes of heap per byte of text", per_byte))
 end)
 
 test("read says a file is missing, too large or damaged; read_text gives a file's bytes", function()
