@@ -1,2 +1,2 @@
 ### Fixed
-- A dub or loop recording that ends on a norns no longer stops with an error (`invalid paramset index: buf3.0_file`): the slot becomes `take <n>` on its scratch file, as it should. The recording's report arrives as a decimal number on a norns, and its slot is now read as a whole number (#300).
+- A dub or loop recording that ends on a norns no longer stops with an error (`invalid paramset index: buf3.0_file`): the slot becomes `take <n>` on its scratch file, as it should. An armed replace take (threshold or sync) that the 5 s fallback settled is no longer named `take 2.0` on `buf2.0.wav`. The recording's report arrives as a decimal number on a norns, and its slot is now read as a whole number (#300).
