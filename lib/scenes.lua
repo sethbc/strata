@@ -175,8 +175,10 @@ return function(S)
   -- #254)
   S.SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
 
+  -- a finite number: NaN, inf and -inf are refused (the data files' reader
+  -- reads inf and nan as numbers, and tab.load read 1e999 as inf, #464)
   local function is_number(value)
-    return type(value) == "number" and value == value  -- rejects NaN
+    return type(value) == "number" and value > -math.huge and value < math.huge
   end
 
   local function is_integer_between(value, min, max)

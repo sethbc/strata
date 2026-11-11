@@ -14,12 +14,17 @@ return function(S)
 
   local DATA_FILES = {
     max_bytes = 4 * 1024 * 1024,  -- a larger file is not read (8 full scenes are about 100 KB)
+    -- the most tables a file may hold: a scenes file of eight full scenes
+    -- holds 546, so this leaves fifteen times that, and it bounds what a
+    -- hostile file can make the reader build (each table about 60 bytes
+    -- empty, so under 1 MB for the tables themselves)
+    max_tables = 8192,
   }
   M.DATA_FILES = DATA_FILES
 
-  -- What %q writes after a backslash, besides digits and a newline (\n and
-  -- \r are older Lua's)
-  local ESCAPES = {['"'] = '"', ["\\"] = "\\", n = "\n", r = "\r"}
+  -- What %q writes after a backslash, besides digits (\n and \r are older
+  -- Lua's)
+  local ESCAPES = {['"'] = '"', ["\\"] = "\\", ["\n"] = "\n", n = "\n", r = "\r"}
 
   -- The value tab.save's text holds, or nil and what is wrong (with the byte
   -- it was found at). A parser of exactly that layout: "return {", then per
@@ -28,11 +33,27 @@ return function(S)
   -- -inf, nan, -nan or a table reference {n}; then "}". Spaces, newlines and
   -- "--" comments may stand between tokens. Nothing in the text is run, so a
   -- file can call nothing and loop nowhere, reading takes time in proportion
-  -- to its length, and nothing is raised
+  -- to its length, at most DATA_FILES.max_tables tables are made, and
+  -- nothing is raised
   function M.decode(text)
     if type(text) ~= "string" then return nil, "not text" end
+    local max_tables = DATA_FILES.max_tables
     local position = 1
+    -- tables[n] is the file's table n, made when it is first read or first
+    -- named by a reference (a reference may name a later table, or its own),
+    -- so a reference is the table itself and nothing is linked afterward
+    local tables, highest_named = {}, 0
     local function fail(what) error({problem = what .. " at byte " .. position}, 0) end
+    local function numbered_table(number)
+      if number < 1 then fail("reference to a missing table {" .. number .. "}") end
+      if number > max_tables then fail("more than " .. max_tables .. " tables") end
+      local found = tables[number]
+      if not found then
+        found = {}
+        tables[number] = found
+      end
+      return found
+    end
 
     -- past spaces, newlines and "--" comments
     local function skip()
@@ -56,37 +77,44 @@ return function(S)
       position = position + #literal
     end
 
-    -- A string from the opening quote to the next unescaped one
+    -- One escape: a backslash's character and the (up to two) digits after
+    -- it. A digit starts a decimal escape of up to three digits; any other
+    -- character keeps the digits after it as they are
+    local function unescape(escaped, digits)
+      if escaped:find("^%d") then
+        local code = tonumber(escaped .. digits)
+        if code > 255 then fail("bad escape") end
+        return string.char(code)
+      end
+      local plain = ESCAPES[escaped]
+      if not plain then fail("bad escape") end
+      return plain .. digits
+    end
+
+    -- A string from the opening quote to the next unescaped one: its text is
+    -- taken whole and unescaped in one pass, so an escape costs no table
     local function quoted()
-      local parts = {}
-      position = position + 1  -- the opening quote
+      local first = position + 1  -- after the opening quote
+      local cursor = first
       while true do
-        local stop = text:find('["\\\n]', position)
+        local stop = text:find('["\\\n]', cursor)
         if not stop then fail("unfinished string") end
-        parts[#parts + 1] = text:sub(position, stop - 1)
         local found = text:sub(stop, stop)
-        position = stop + 1
-        if found == '"' then return table.concat(parts) end
-        if found == "\n" then fail("unfinished string") end
-        local escaped = text:sub(position, position)
-        local digits = text:match("^%d%d?%d?", position)
-        if digits then
-          if tonumber(digits) > 255 then fail("bad escape") end
-          parts[#parts + 1] = string.char(tonumber(digits))
-          position = position + #digits
-        elseif escaped == "\n" then
-          parts[#parts + 1] = "\n"
-          position = position + 1
-        elseif ESCAPES[escaped] then
-          parts[#parts + 1] = ESCAPES[escaped]
-          position = position + 1
-        else
-          fail("bad escape")
+        if found == '"' then
+          position = stop + 1
+          local raw = text:sub(first, stop - 1)
+          if not raw:find("\\", 1, true) then return raw end
+          return (raw:gsub("\\(.)(%d?%d?)", unescape))
         end
+        if found == "\n" then
+          position = stop
+          fail("unfinished string")
+        end
+        cursor = stop + 2  -- past the backslash and the character it escapes
       end
     end
 
-    -- A table reference {n}: a marker until every table is read
+    -- A table reference {n}: the table itself
     local function reference()
       expect("{")
       skip()
@@ -94,7 +122,10 @@ return function(S)
       if not digits then fail("expected a table number") end
       position = position + #digits
       expect("}")
-      return {reference = tonumber(digits)}
+      local number = tonumber(digits)
+      local found = numbered_table(number)
+      if number > highest_named then highest_named = number end
+      return found
     end
 
     local function scalar()
@@ -120,9 +151,11 @@ return function(S)
       return number
     end
 
-    -- One table's entries, as read: keyed ({key, value} pairs) and listed
-    local function entries()
-      local keyed, listed = {}, {}
+    -- One table's entries, into target. A positional value takes the next
+    -- index and wins over a keyed entry for the same index, wherever that
+    -- stands, as in a table constructor
+    local function entries(target)
+      local listed = 0
       expect("{")
       while not at("}") do
         if at("[") then
@@ -130,48 +163,32 @@ return function(S)
           local key = scalar()
           expect("]")
           expect("=")
-          keyed[#keyed + 1] = {key, scalar()}
+          local value = scalar()
+          if key ~= key then fail("a NaN key") end
+          if not (type(key) == "number" and key >= 1 and key <= listed and key % 1 == 0) then target[key] = value end
         else
-          listed[#listed + 1] = scalar()
+          listed = listed + 1
+          target[listed] = scalar()
         end
         expect(",")
       end
       expect("}")
-      return {keyed = keyed, listed = listed}
     end
 
     local ok, result = pcall(function()
-      local parsed = {}
+      local count = 0
       expect("return")
       expect("{")
       while not at("}") do
-        parsed[#parsed + 1] = entries()
+        count = count + 1
+        entries(numbered_table(count))
         expect(",")
       end
       expect("}")
       skip()
       if position <= #text then fail("text after the end") end
-      if #parsed == 0 then fail("no table") end
-      -- every table exists before any reference is resolved (a reference can
-      -- name a later table, or its own)
-      local tables = {}
-      for index = 1, #parsed do tables[index] = {} end
-      local function resolve(item)
-        if type(item) ~= "table" then return item end
-        local target = tables[item.reference]
-        if not target then fail("reference to a missing table {" .. tostring(item.reference) .. "}") end
-        return target
-      end
-      for index, source in ipairs(parsed) do
-        local target = tables[index]
-        for _, pair in ipairs(source.keyed) do
-          local key = resolve(pair[1])
-          if key ~= key then fail("a NaN key") end
-          target[key] = resolve(pair[2])
-        end
-        -- after the keyed entries, as a table constructor sets them
-        for list_index, item in ipairs(source.listed) do target[list_index] = resolve(item) end
-      end
+      if count == 0 then fail("no table") end
+      if highest_named > count then fail("reference to a missing table {" .. highest_named .. "}") end
       return tables[1]
     end)
     if ok then return result end
