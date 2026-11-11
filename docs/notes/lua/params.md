@@ -7,7 +7,7 @@
 - The actions of the voice params `randomize_voice` sets (the synthesis params, `buf_pos`, `buf_rate`, `buf_scan`, `grain_size`, `grain_pitch`) call `note_param_edit(param_id)`, so an edit ends the randomize undo (`docs/notes/lua/mutation.md`).
 - `redraw_on_param_changes()` runs once, after the last param is added. A param added, or an action set with `params:set_action`, after it runs requests no redraws.
 - The tempo handler is installed once (never chaining to itself) and given back only while the script's is still installed.
-- **What is worked out from the tempo right after a change reads `S.lib.params_setup.clock_tempo_now()`** (or `beat_seconds_now()`), never `clock.get_tempo()` or `clock.get_beat_sec()` alone (#567): a synced take's length and delay (`lib/record.lua`), BUFFER's `len` field (through `take_length`) and the 256's tempo flash. `lib/lfos.lua` keeps `clock.get_beat_sec()`, mirroring norns' LFO library's own arithmetic.
+- **What is timed from the tempo right after a change reads `S.lib.params_setup.beat_seconds_now()`, and the tempo shown reads `clock_tempo_now()`**, never `clock.get_tempo()` or `clock.get_beat_sec()` alone (#567): `beat_seconds_now` times a synced take's length and delay (`lib/record.lua`) and so BUFFER's `len` field (through `take_length`); `clock_tempo_now` is the 256's tempo flash. They differ on Link: timing reads the session's own tempo there, the flash the param a key set. `lib/lfos.lua` keeps `clock.get_beat_sec()`, mirroring norns' LFO library's own arithmetic.
 - The script never bangs its params, so Lua defaults are what the engine plays, and the filter and delay SynthDef defaults must equal the Lua param defaults (a test checks).
 - The registries (`S.registry.voice_params`, `fx_params`, `param_filters`, `source_change`) are read at init, inside a params record's `add`, never at include time, so a module that registers can be included before or after this one.
 - Six registries are closed once init begins to read them (`S.close_registries()`, run by the first params record, `performance`): `voice_params`, `scene_fields`, `lfo_destinations`, `fx_params`, `start` and `menu_close`. A register function raises after that, naming the registry (#384), so a late record is never silently ignored. Register at include time. A record with a field outside the documented set is refused too, naming the field (#385).
@@ -28,7 +28,7 @@
 - `add_voice_params`, `get_param_spec` (a copy of an entry of one table built once; a name with no entry is an error, #315, and every spec carries its display units, `s`, `Hz`, `/s` or `x`, and the params whose step is finer than 0.01 a three-decimal formatter: display only, never a value, #386, #387), `redraw_on_param_changes`;
 - `S.fx_last_mix` (`{filter}`: `filter_mix`'s action stores the mix when it rises and `toggle_filter_mix` (FX's K3 on a filter row) stores the mix at the press, which K3 restores from 0; the delay and reverb keep their mix through their bypass params) and `fx_fader_changed` (the grid's FX faders);
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
-- `S.lib.params_setup.clock_tempo_now()` and `beat_seconds_now()` (the tempo the clock runs from now on, below);
+- `S.lib.params_setup.beat_seconds_now()` (a beat's length, for timing) and `clock_tempo_now()` (the tempo to show), below;
 - the readers of the voice-param, fx-param, param-filter and source-change registries (below), and `S.lib.params_setup.add_voice_extra`;
 - `S.performance` (the tier's values, standard until `lib/performance.lua` fills it at init);
 - cleanup step 10: the tempo handler given back.
@@ -91,9 +91,10 @@ Menu order:
 - `restore_tempo_change_handler()` (from `cleanup()`, step 10) puts the previous handler back only while the script's is still installed, so a handler installed after it stays.
 - A tempo set elsewhere (PARAMETERS > CLOCK, an external source) is thus mirrored into `tempo` silently, clamped to the param's range (an external source's tempo reaches the handler unclamped).
 - So scenes and grid buttons always start from the playing tempo.
-- `clock_tempo_now()` is the tempo (BPM) the clock runs at from now on: `params:get("clock_tempo")` when `params:string("clock_source")` is `internal` or `link`, otherwise `clock.get_tempo()`; `beat_seconds_now()` is `60 / clock_tempo_now()` (#567).
-  - On the internal clock and Link, `clock_tempo`'s action sets the clock at once, while `clock.get_tempo()` lags: matron's clock thread publishes a tempo from its tick after next (one tick at the old tempo plus one at the new, 1/24 beat each: about 42 ms at 120 BPM, about 0.9 s going to 3 BPM).
-  - Under MIDI or crow the param sets nothing and only norns' external tempo poll updates it, so the clock's own tempo is the one to read.
+- `beat_seconds_now()`, for timing (take lengths, sync delays), is a beat's length in seconds from now on (#567): `60 / params:get("clock_tempo")` when `params:string("clock_source")` is `internal`, otherwise `60 / clock.get_tempo()`.
+  - On the internal clock `clock_tempo`'s action sets the clock at once, while `clock.get_tempo()` lags: matron's clock thread publishes a tempo from its tick after next (one tick at the old tempo plus one at the new, 1/24 beat each: about 42 ms at 120 BPM, about 0.9 s going to 3 BPM).
+  - On Link, MIDI and crow the param is a whole BPM (an `add_number`) that norns' clock refreshes from the clock's tempo only once a second (`lua/core/clock.lua`): a fractional Link session would be timed off on every pass (16 beats of a 123.45 BPM session timed at the param's 123 are 29 ms too long), and a peer's or an external clock's change would be stale for up to 1 s. So timing reads the clock there.
+- `clock_tempo_now()`, for showing the tempo (the 256's flash), is `params:get("clock_tempo")` on `internal` and `link`, the tempo a key set, otherwise `clock.get_tempo()` (MIDI and crow ignore the param).
 
 ## Registering params
 

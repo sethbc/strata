@@ -97,24 +97,29 @@ return function(S)
     restore_tempo_change_handler()
   end)
 
-  -- The tempo (BPM) the clock runs at from now on, for what is worked out
-  -- from it right after a change: a synced take's length and delay,
-  -- BUFFER's len field, the 256's tempo flash (#567). On the internal clock
-  -- and Link, clock_tempo's action sets the clock at once, while
-  -- clock.get_tempo() reads the old tempo until the internal clock has
-  -- ticked twice (matron publishes a tempo from its tick after next). Under
-  -- MIDI or crow only norns' external tempo poll updates the param, so the
-  -- clock's own tempo is the one to read. (lib/lfos.lua keeps
-  -- clock.get_beat_sec(): it mirrors norns' LFO library.)
+  -- The tempo (BPM) to show for the clock right after a change, for the
+  -- 256's tempo flash (#383, #567): the clock_tempo param on the internal
+  -- clock and Link, which a tempo key sets (the internal clock reports a
+  -- new tempo through clock.get_tempo() only from its tick after next);
+  -- clock.get_tempo() under MIDI or crow, which ignore the param. Never for
+  -- timing: beat_seconds_now is
   function M.clock_tempo_now()
     local source = params:string("clock_source")
     if source == "internal" or source == "link" then return params:get("clock_tempo") end
     return clock.get_tempo()
   end
 
-  -- A beat's length (s) at that tempo
+  -- A beat's length (s) the clock runs from now on, for timing: a synced
+  -- take's length and delay, and so BUFFER's len field (#567). On the
+  -- internal clock 60 / the clock_tempo param, which its action sets at
+  -- once, while clock.get_tempo() reads the old tempo until the clock has
+  -- ticked twice. On Link, MIDI and crow 60 / clock.get_tempo(): there the
+  -- param is a whole BPM that norns refreshes from the clock once a second,
+  -- so a fractional Link session or a peer's change would be off. (lib/lfos.lua
+  -- keeps clock.get_beat_sec(): it mirrors norns' LFO library.)
   function M.beat_seconds_now()
-    return 60 / M.clock_tempo_now()
+    if params:string("clock_source") == "internal" then return 60 / params:get("clock_tempo") end
+    return 60 / clock.get_tempo()
   end
 
   -- norns' number param adds a delta unrounded, and its PARAMS menu turns

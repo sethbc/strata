@@ -747,6 +747,21 @@ test("under MIDI or crow a take's length follows the clock's tempo, not the para
   end
 end)
 
+-- #567, on Link: the clock_tempo param is a whole BPM that norns refreshes
+-- from the session once a second, so a take timed from it at a fractional
+-- session tempo would be off on every pass (16 beats of 123.45 BPM timed at
+-- 123: 29 ms). The take is timed from the clock's own tempo there. (The
+-- stubs run no refresh, so the param stays at 120 here)
+test("on Link a synced take's length follows the session's fractional tempo exactly", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 2); params:set("record_beats", 16)
+  params:set("clock_source", 3)   -- link
+  clock.tempo = 123.45            -- the session's tempo
+  assert_equal(params:get("clock_tempo"), 120, "the whole param still reads 120")
+  context.clear_engine_calls(); record_buffer(1)
+  assert_near(recording_calls(context)[1].args[2], 16 * 60 / 123.45, 1e-9, "16 beats at 123.45 BPM")
+end)
+
 -- #565: a delay that runs from when sclang handles the command starts late
 -- when the command waits behind a busy sclang. The command carries Lua's
 -- wall clock modulo 1000 s (a float32 keeps about 61 us there), from which

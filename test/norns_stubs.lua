@@ -644,12 +644,14 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     end,
     -- a take never asks for more than a slot holds on the running tier;
     -- feedback and threshold 0-1, source 0 (input), 1 pre-, 2 post-master, 3..N voice 1..N,
-    -- loop 0 or 1, delay at least 0 (seconds before the take starts)
+    -- loop 0 or 1, delay at least 0 (seconds before the take starts), sent
+    -- 0-1000 (Lua's wall clock modulo 1000 s, #565: an unwrapped util.time()
+    -- fails; 1000 itself is a float32's rounding of a time just under it)
     recordBuffer = function(args)
       return slot(args) or float_range("seconds", args[2], 0, buffer_seconds())
         or float_range("feedback", args[4], 0, 1) or range("source", args[5], 0, spec.num_voices + 2)
         or float_range("threshold", args[6], 0, 1) or range("loop", args[7], 0, 1)
-        or at_least("delay", args[8], 0)
+        or at_least("delay", args[8], 0) or float_range("sent", args[9], 0, 1000)
     end,
     setModSource = function(args) return voice_and_mod_slot(args) or range("mod source", args[3], -1, last_voice) end,
     setModAmpAmt = voice_and_mod_slot, setModFreqAmt = voice_and_mod_slot,
