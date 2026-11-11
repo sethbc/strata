@@ -2087,7 +2087,7 @@ test("a scratch take that cannot be written forgets its path and flashes (#312)"
   assert_screen_layout(context, "BUFFER page take not saved flash")
   assert_true(printed_since(context, printed):find(scratch_take_path(3), 1, true), "the console names the file")
   save_buffers_to_disk()
-  assert_equal(context.tab.load(context.data_dir .. "strata/buffers.data").paths[3], "",
+  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/buffers.data").paths[3], "",
     "buffers.data names no file for the slot")
   -- record 0 (no recordBuffer has it), another record's number, bad values
   -- and a slot that holds a loaded file change nothing
