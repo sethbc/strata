@@ -802,19 +802,28 @@ server.sync;
 check.(other.synths[other.copyWriterKeys[2]].isNil and: { writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }) == 0 }
     and: { writerNodes.value.size == (other.numVoices + 1) },
     "freeze: an unfreeze frees the spectral copy writer (no copyWrite node, one writer per ring)");
-// free with a spectral copy writer running (#503): the area's stop frees
-// it and its free the FFT buffers (voice 2, still on the input, freezeMode 1)
+// free with a spectral copy writer running (#503; voice 2, still on the
+// input, freezeMode 1). The freeze area's own stop frees the writer: run
+// here alone, before any other area's stop (free runs the voices area's
+// later, and freeing voiceGroup would take the writer with it, so a free
+// alone would not show it). Then the engine's free frees the FFT buffers
 otherCommand.(\setGrainParam, 2, \freeze, 1.0);
 ok = h.waitFor({ other.synths[other.copyWriterKeys[2]].notNil }, 0.5);
 kept = other.areaState[\freeze][\spectralBuffers].flat;
+other.strataAreaFreeze[\stop].value;
+server.sync;
+readings = [writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }),
+    other.copyWriterKeys.count({ arg key; other.synths[key].notNil })];
+check.(ok and: { readings[0] == 0 } and: { readings[1] == 0 } and: { writerNodes.value.size == (other.numVoices + 1) },
+    "freeze: the freeze area's stop alone frees a running spectral copy writer (copy writer running %; spectral nodes left %, copyWrite keys left %)".format(
+        ok, readings[0], readings[1]));
 h.stopAllVoices(other);
 h.freeEngine(other);
 server.sync; 0.2.wait;
-check.(ok and: { kept.size == (2 * other.numVoices) } and: { kept.every({ arg buffer; buffer.bufnum.isNil }) }
-    and: { h.synthNames(other.context.xg).includes(\strataRingWriteSpectral).not }
-    and: { other.copyWriterKeys.every({ arg key; other.synths[key].isNil }) },
-    "freeze: free with a spectral copy writer running frees it, and the high tier's FFT buffers (copy writer running %, % FFT buffers freed %)".format(
-        ok, kept.size, kept.count({ arg buffer; buffer.bufnum.isNil })));
+check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buffer.bufnum.isNil }) }
+    and: { h.synthNames(other.context.xg).includes(\strataRingWriteSpectral).not },
+    "freeze: free frees the high tier's FFT buffers (% of % freed)".format(
+        kept.count({ arg buffer; buffer.bufnum.isNil }), kept.size));
 
 // ---- free with an input copy waiting for its fade (#503) ----
 // A second standard engine with bufferFadeWait 1 s: an input voice frozen,
@@ -833,7 +842,7 @@ ok = h.waitFor({ other.areaState[\freeze][\copied][2] }, 0.5);
 otherCommand.(\setGrainParam, 2, \freeze, 0.0);
 otherCommand.(\setGrainParam, 2, \freeze, 1.0);
 readings = [ok, other.areaState[\freeze][\faded][2].notEmpty, other.areaState[\freeze][\copied][2].not];
-fails = List.new;
+fails = List.new(8);
 failWatcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr);
 h.freeEngine(other);
 1.5.wait; server.sync;
