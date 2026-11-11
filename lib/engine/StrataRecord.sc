@@ -329,15 +329,24 @@
         this.bufferChanged(index);
     }
 
+    // Whether sent is a send time: Lua's wall clock modulo 1000 s, so 0 to
+    // 1000 (1000 itself a float32's rounding of a time just under it). nil,
+    // a negative or NaN sent (a check's direct command), or one past 1000
+    // or infinite (never Lua's) is none
+    recordSendKnown { arg sent;
+        ^sent.notNil and: { sent.isNaN.not } and: { sent >= 0 } and: { sent <= 1000 }
+    }
+
     // How long a recordBuffer waited before sclang handled it (s): sclang's
     // wall clock (seconds, whole or modulo 1000) less sent, Lua's wall clock
     // modulo 1000 s at the send, wrapped into [0, 1000), so a send at 999.99
     // read at 0.01 waited 0.02 s. matron and sclang read one system clock.
     // A sent up to recordSendLead ahead counts as just sent (0). nil when
-    // unknown: no sent (nil or negative), or a wait over recordSendWaitLimit
+    // unknown: no send time (recordSendKnown), or a wait over
+    // recordSendWaitLimit
     recordSendWait { arg sent, wallNow;
         var wait;
-        if (sent.isNil or: { sent < 0 }) { ^nil };
+        if (this.recordSendKnown(sent).not) { ^nil };
         wait = ((wallNow % 1000) - sent) % 1000;
         if (wait > (1000 - this.recordSendLead)) { ^0 };
         if (wait > this.recordSendWaitLimit) { ^nil };
@@ -355,7 +364,7 @@
     recordSendStart { arg index, sent, now;
         var wall = Date.getDate.rawSeconds, elapsed = Main.elapsedTime, wait = this.recordSendWait(sent, wall), line;
         if (wait.notNil) { ^(elapsed - wait).min(now) };
-        if (sent.notNil and: { sent >= 0 }) {
+        if (this.recordSendKnown(sent)) {
             line = "strata: buffer % recording sent % s before sclang read it (over % s): its delay runs from now".format(
                 index + 1, (((wall % 1000) - sent) % 1000).round(0.001), this.recordSendWaitLimit);
             areaState[\record][\lastSendLine] = line;

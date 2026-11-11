@@ -355,6 +355,8 @@ test("the engine stub checks the 3.3 arguments", function()
     {"recordBuffer", {0, 4, 1, 0, 0, -0.1, 0, 0, 0}, "threshold below 0"},
     {"recordBuffer", {0, 4, 1, 0, 0, 0, 2, 0, 0}, "loop past 1"},
     {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, -1, 0}, "delay below 0"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, 0, 1794412302.5}, "sent past 1000 (util.time() not wrapped)"},
+    {"recordBuffer", {0, 4, 1, 0, 0, 0, 0, 0, -1}, "sent below 0"},
     {"loadBuffer", {0, "/x.wav", -1}, "a start below 0"},
     {"saveBuffer", {0, "/x.wav", 0, 1.5}, "a length past 1"},
     {"saveBuffer", {0, "/x.wav", -0.1, 1}, "a start below 0"},
@@ -365,7 +367,7 @@ test("the engine stub checks the 3.3 arguments", function()
   for _, case in ipairs(rejected) do
     assert_true(not pcall(engine[case[1]], (table.unpack or unpack)(case[2])), "engine." .. case[1] .. " rejects " .. case[3])
   end
-  assert_true(pcall(engine.recordBuffer, 7, 16, 1, 1, 9, 0.5, 1, 2, 999.9), "every recordBuffer argument at its limit")
+  assert_true(pcall(engine.recordBuffer, 7, 16, 1, 1, 9, 0.5, 1, 2, 1000), "every recordBuffer argument at its limit")
   assert_true(pcall(engine.loadBuffer, 7, "/x.wav", 12.5), "a start inside the file")
   assert_true(pcall(engine.saveBuffer, 7, "/x.wav", 0.25, 0.5), "a region of the slot")
 end)

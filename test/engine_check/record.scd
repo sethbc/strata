@@ -542,21 +542,26 @@ test.("record: an idle engine's synced take starts delay after its send", {
 // #565: of the messages that arrive while sclang is held, sclang stamps only
 // the first with its arrival and reads the later ones when the hold ends.
 // The check thread cannot send while it holds sclang, so a sender outside
-// it does: a python3 script the check writes to its folder, which sends two
-// synced takes during a 0.5 s hold, each with its own wall clock as sent,
-// then writes their send times (the wall clock in full). Both takes start
+// it does: a python3 script the check writes to its folder. Once the check
+// creates the go file and starts holding sclang, the sender sends two
+// synced takes 0.1 s and 0.25 s later, each with its own wall clock as
+// sent, and 0.5 s after go writes their send times (the wall clock in
+// full); sclang is held until that file is there (5 s at most), so both
+// commands queue behind the hold whatever the scheduling. Both takes start
 // delay after their own send, measured on the server: each records a
-// timecode started just after the hold
+// timecode started just after the hold. The sender is killed at the end,
+// so a late one never sends into a later check
 test.("record: a synced take queued behind a busy sclang starts delay after its send (#565)", {
-    var delay = 0.8, hold = 0.5, frame = 2000, slots = #[4, 5], timecode = server.nextNodeID;
-    var script = h.tempDir +/+ "send-565.py", ready = h.tempDir +/+ "send-565.ready", sentPath = h.tempDir +/+ "send-565.sent";
+    var delay = 0.8, holdLimit = 5, frame = 2000, slots = #[4, 5], timecode = server.nextNodeID;
+    var script = h.tempDir +/+ "send-565.py", go = h.tempDir +/+ "send-565.go", sentPath = h.tempDir +/+ "send-565.sent";
     var sender = [
         "import os, socket, struct, sys, time",
-        "port, ready, out, specs = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]",
+        "port, go, out, release, specs = int(sys.argv[1]), sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5:]",
         "def pad(data):",
         "    return data + bytes(4 - len(data) % 4)",
         "sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
-        "open(ready, 'w').close()",
+        "while not os.path.exists(go):",
+        "    time.sleep(0.001)",
         "start, sent = time.time(), []",
         "for at in range(0, len(specs), 3):",
         "    wait, slot, delay = float(specs[at]), int(specs[at + 1]), float(specs[at + 2])",
@@ -565,30 +570,31 @@ test.("record: a synced take queued behind a busy sclang starts delay after its 
         "    args = struct.pack('>ifffififf', slot, 0.3, 1.0, 0.0, 0, 0.0, 0, delay, now % 1000)",
         "    sock.sendto(pad(b'/command/recordBuffer') + pad(b',ifffififf') + args, ('127.0.0.1', port))",
         "    sent.append(repr(now))",
+        "time.sleep(max(0.0, start + release - time.time()))",
         "with open(out + '.part', 'w') as file:",
         "    file.write(chr(10).join(sent) + chr(10))",
         "os.rename(out + '.part', out)"
     ].join("\n") ++ "\n";
-    var offset, holdFrom, holdUntil, limit, sends = [], starts, errors, timecodeAt, kept;
+    var offset, holdFrom, holdUntil, limit, sends = [], starts, errors, timecodeAt, kept, pid;
     slots.do({ arg slot; reset.(slot) });
-    [ready, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
+    [go, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
     File.use(script, "w", { arg file; file.write(sender) });
-    ("python3" + script.shellQuote + NetAddr.langPort + ready.shellQuote + sentPath.shellQuote
+    // exec: the pid is the sender's own, not a shell's
+    pid = ("exec python3" + script.shellQuote + NetAddr.langPort + go.shellQuote + sentPath.shellQuote + "0.5"
         + "0.1" + slots[0] + delay + "0.25" + slots[1] + delay).unixCmd(nil, false);
-    limit = Main.elapsedTime + 10;
-    while { File.exists(ready).not and: { Main.elapsedTime < limit } } { 0.002.wait };
+    File.use(go, "w", { });
     // the wall clock less the elapsed time, read together: turns the
     // sender's send times into sclang's
     offset = Date.getDate.rawSeconds - Main.elapsedTime;
     holdFrom = Main.elapsedTime;
-    holdUntil = holdFrom + hold;
-    while { Main.elapsedTime < holdUntil } { };
+    limit = holdFrom + holdLimit;
+    while { File.exists(sentPath).not and: { Main.elapsedTime < limit } } { };
+    holdUntil = Main.elapsedTime;
     timecodeAt = Main.elapsedTime + 0.05;
     server.sendBundle(timecodeAt - thisThread.seconds,
         ['/s_new', \strataCheckTimecode, timecode, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
     // sclang reads the queued commands once the check yields
     0.1.wait;
-    h.waitFor({ File.exists(sentPath) }, 5);
     if (File.exists(sentPath)) {
         sends = File.readAllString(sentPath).split($\n).reject(_.isEmpty).collect({ arg line; line.asFloat - offset });
     };
@@ -598,21 +604,24 @@ test.("record: a synced take queued behind a busy sclang starts delay after its 
     kept = slots.collect({ arg slot; engine.bufferFrames[slot] });
     starts = slots.collect({ arg slot; timecodeAt + h.bufferSample(engine.buffersL[slot], frame) - (frame / sampleRate) });
     errors = if (sends.size == 2) { [starts, sends].flop.collect({ arg pair; ((pair[0] - (pair[1] + delay)) * 1000).round(0.01) }) } { [] };
-    check.((sends.size == 2) and: { sends.every({ arg at; (at > holdFrom) and: { at < (holdUntil - 0.05) } }) }
+    check.((sends.size == 2) and: { sends.every({ arg at; (at > holdFrom) and: { at < holdUntil } }) }
         and: { kept.every({ arg frames; frames == (0.3 * sampleRate).round.asInteger }) }
         and: { errors.every({ arg milliseconds; milliseconds.abs <= 10 }) },
-        "record: a synced take queued behind a busy sclang starts delay after its send (#565) (sent % s into the hold, started % ms off, % frames kept)".format(
-            sends.collect({ arg at; (at - holdFrom).round(0.001) }), errors, kept));
-    [script, ready, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
+        "record: a synced take queued behind a busy sclang starts delay after its send (#565) (sent % s into a % s hold, started % ms off, % frames kept)".format(
+            sends.collect({ arg at; (at - holdFrom).round(0.001) }), (holdUntil - holdFrom).round(0.001), errors, kept));
+    ("kill " ++ pid ++ " 2>/dev/null").systemCmd;
+    [script, go, sentPath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
 });
 // Review focus 2: sent is modulo 1000 s, so the wait wraps there; a sent up
 // to 1 ms ahead of sclang's clock (float32 rounding) is just sent, and with
-// no sent (negative) or a wait over 10 s, which a working system never
-// produces, the wait is unknown (nil)
+// no sent (negative, NaN, or past 1000 or infinite: never one Lua sends) or
+// a wait over 10 s, which a working system never produces, the wait is
+// unknown (nil)
 test.("record: a send time wraps at 1000 s: sent 999.99 read at 0.01 waited 0.02 s", {
     var cases = [
         [999.99, 0.01, 0.02], [999.99, 1794412000.01, 0.02], [500, 500.25, 0.25], [12.5, 12.5, 0],
-        [100.0005, 100, 0], [100, 109.5, 9.5], [100, 115, nil], [-1, 500, nil]
+        [100.0005, 100, 0], [100, 109.5, 9.5], [100, 115, nil], [-1, 500, nil],
+        [0.0 / 0.0, 500, nil], [inf, 500, nil], [1234.5, 500, nil]
     ];
     var results = cases.collect({ arg each; engine.recordSendWait(each[0], each[1]) });
     check.([cases, results].flop.every({ arg pair;
