@@ -167,6 +167,10 @@ return function(S)
       buffer.path = (not buffer.take_unsaved) and scratch_take_path(slot) or nil
     end
     if restored then S.buffers_restored = S.buffers_restored + 1 end
+    -- the engine wrote the slot's peaks file before this report of its
+    -- audio: read it (a load as long as the audio it replaced reports no
+    -- new length, #401)
+    S.lib.waveforms.stale(slot)
   end
 
   -- Settle a take or load awaiting the engine (confirm_since set) from the
@@ -326,6 +330,10 @@ return function(S)
     buffer.sent_start = buffer.start
     buffer.sample_rate, buffer.file_seconds = state.sample_rate, state.file_seconds
     set_buffer_file_param(slot, state.file_param)
+    -- the overview comes back with the audio (its peaks file is still on
+    -- disk), unless the state is a long load still being checked, which
+    -- has none yet (#401)
+    if state.checking_load ~= nil then S.lib.waveforms.forget(slot) else S.lib.waveforms.stale(slot) end
   end
 
   -- The notice for a load the engine is still checking (checking_load =
@@ -436,6 +444,9 @@ return function(S)
     cancel_buffer_recording_timer(slot)
     cancel_start_reload(slot)
     engine.loadBuffer(slot - 1, path, start)
+    -- the overview shown is the replaced audio's: it goes now, even for a
+    -- file of the same length (#401)
+    S.lib.waveforms.forget(slot)
     -- the BUFFER page's file selector and a restore on start load directly
     set_buffer_file_param(slot, path)
     -- a scratch take restored on start keeps its take name

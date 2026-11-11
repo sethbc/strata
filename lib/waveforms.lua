@@ -28,6 +28,9 @@ return function(S)
   local points = {}
   -- per slot: true while the slot awaits a read
   local marked = {}
+  -- per slot: true from a load until the slot's next report of new audio
+  -- (forget): the file on disk is still the replaced audio's, never read
+  local awaiting = {}
   -- when each playable recording is next marked; the loop's clock is
   -- M.read_clock (the tests find it there)
   local playable_due = {}
@@ -78,6 +81,7 @@ return function(S)
 
   -- Read slot's peaks file now (the loop calls it; tests may too)
   local function read(slot)
+    if awaiting[slot] then return end
     local values = nil
     if S.buffers[slot].seconds > 0 then
       local file = io.open(peaks_path(slot), "r")
@@ -93,9 +97,35 @@ return function(S)
     if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
   end
 
-  -- A slot's audio changed: its peaks are stale (read on a later frame tick)
+  -- A slot's audio changed: its peaks are stale (read on a later frame
+  -- tick). The caller knows the file is the slot's now (a report of its
+  -- audio, a dub's end, a failed load's undo), so a load's wait ends
   function M.stale(slot)
-    if valid_slot(slot) then marked[slot] = true end
+    if not valid_slot(slot) then return end
+    awaiting[slot] = nil
+    marked[slot] = true
+  end
+
+  -- Points of the slot's overview, gone at once (a redraw, and a page-5
+  -- grid's), whatever happens next
+  local function drop_points(slot)
+    if points[slot] == nil then return end
+    points[slot] = nil
+    request_redraw()
+    if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
+  end
+
+  -- A load was sent for the slot (lib/buffers.lua's load_buffer): the
+  -- overview it shows is the replaced audio's, so it goes now, and the
+  -- file on disk (still that audio's) is not read until a report of the
+  -- slot's audio says the new one is in place (changed or stale), even for
+  -- a file as long as the old one, whose length report changes nothing
+  -- (#401). A load that fails gives the old overview back (stale)
+  function M.forget(slot)
+    if not valid_slot(slot) then return end
+    drop_points(slot)
+    marked[slot] = nil
+    awaiting[slot] = true
   end
 
   -- A slot's length changed: its audio is new, so its points go now (the
@@ -104,11 +134,8 @@ return function(S)
   -- a dub's waveform never blinks
   function M.changed(slot)
     if not valid_slot(slot) then return end
-    if points[slot] ~= nil then
-      points[slot] = nil
-      request_redraw()
-      if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
-    end
+    drop_points(slot)
+    awaiting[slot] = nil
     marked[slot] = true
   end
 
