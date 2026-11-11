@@ -4,4 +4,4 @@
 - A loop or overdub recording into a buffer that once held a 22.05, 44.1 or 96 kHz file no longer clicks where slow, fast or reversed grains meet the record head.
 - A buffer voice at a buffer position of exactly 1 (the encoder's end stop, a bookmark at 1.000, an LFO at the top) plays the end of its loop, as the screen says, instead of its start.
 - Freezing or unfreezing an input voice no longer plays a stray grain from a point between the live input and the frozen audio.
-- A flood of retriggers in triggered grain mode (more than 250 MIDI notes a second on one voice) no longer overloads the voice's grains: a trigger within 4 ms of the last grain's start starts none.
+- A flood of retriggers in triggered grain mode (a MIDI flood) no longer overloads a voice's grains: a trigger within 4 ms of the last grain's start starts none, so two notes on one voice within 4 ms (a chord whose notes arrive a little apart) now give one grain. Pattern steps (at least 50 ms apart) and continuous grains (at most 200 a second) never lose one.
