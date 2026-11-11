@@ -109,11 +109,21 @@ return function(S)
     return elapsed / valid
   end
 
-  -- Whether something on a slot moves: a running voice reads it, or it records
+  -- Whether a slot reports audio (its seconds above 0): the one check of
+  -- whether a voice's head means anything there, read by BUFFER's heads
+  -- and ticks, moving() and the grid's position rows (#433). An empty slot
+  -- and one recording a replace take report none
+  function M.has_audio(slot)
+    return S.lib.buffers.valid_buffer_slot(slot) and (S.buffers[slot].seconds or 0) > 0
+  end
+
+  -- Whether something drawn on a slot moves: its record head (it records
+  -- playably), or a running voice's head on its audio. A replace take, and
+  -- voices on a slot that holds nothing, show nothing that moves (#433)
   function M.moving(slot)
     if not S.lib.buffers.valid_buffer_slot(slot) then return false end
-    local state = S.lib.record.state(slot)
-    if state and state.phase == "recording" then return true end
+    if M.record_head(slot) then return true end
+    if not M.has_audio(slot) then return false end
     for voice_idx = 1, NUM_VOICES do
       if running_buffer_voice(voice_idx) and voice_buffer_slot(voice_idx) == slot then return true end
     end

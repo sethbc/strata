@@ -29,7 +29,7 @@ Every voice's grains read audio that is already there: a synth voice writes its 
 
 ### Bookmarks
 
-A buffer voice has four bookmarks: saved positions in its slot (0-1 of the slot's length, shown with three decimals), starting at 0, 0.25, 0.5 and 0.75. They are the last rows of the VOICE page for a voice reading a buffer (see [VOICE](pages/voice.md)), so you can set one like any other row, and they are saved in scenes and PSETs (a scene fades them like any other value). A bookmark changes nothing until it is recalled: recalling jumps the voice's grains there (inside its loop, or, if the bookmark lies outside the loop, the loop becomes the whole slot first) and restarts its scan. A bookmark holds a place in the slot, so it means the same place if the loop changes. Randomize and mutations never touch them.
+A buffer voice has four bookmarks: saved positions in its slot (0-1 of the slot's length, shown with three decimals), starting at 0, 0.25, 0.5 and 0.75. They are the last rows of the VOICE page for a voice reading a buffer (see [VOICE](pages/voice.md)), so you can set one like any other row (a grid's store key also sets one: [Grid](grid.md)), and they are saved in scenes and PSETs (a scene fades them like any other value). A bookmark changes nothing until it is recalled, with the BUFFER page's `bm` field (E3 steps to a bookmark, ALT+E3 returns to the one shown; see [BUFFER](pages/buffer.md)) or a grid's bookmark keys: recalling jumps the voice's grains there (inside its loop, or, if the bookmark lies outside the loop, the loop becomes the whole slot first) and restarts its scan. A bookmark holds a place in the slot, so it means the same place if the loop changes. Randomize and mutations never touch them.
 
 ### Grain variation
 

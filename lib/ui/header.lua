@@ -110,13 +110,22 @@ return function(S)
     end
   end
 
-  -- The hint row, cut to the screen (a flash can name a long file or
-  -- folder); the last cut is kept, so a steady hint is measured once
+  -- Whether the hint row shows `text` whole: a flash naming a folder picks
+  -- a shorter name when not, so the folder's own name shows (#432)
+  function M.hint_fits(text)
+    return screen.text_extents(S.lib.ui_text.printable(text)) <= HINT_ROW_WIDTH
+  end
+
+  -- The hint row, as norns' font draws it (a flash can name a file with
+  -- accented letters: S.lib.ui_text.printable, #551) and cut to the screen
+  -- (or a long file or folder); the last cut is kept, so a steady hint is
+  -- measured once
   local hint_cut = {text = nil, cut = nil}
   function draw_hints(text)
     if text ~= hint_cut.text then
       hint_cut.text = text
-      hint_cut.cut = type(text) == "string" and S.lib.ui_text.fit_text(text, HINT_ROW_WIDTH) or text
+      hint_cut.cut = type(text) == "string" and S.lib.ui_text.fit_text(S.lib.ui_text.printable(text), HINT_ROW_WIDTH)
+        or text
     end
     screen.level(4)
     screen.move(0, HINT_ROW_Y)

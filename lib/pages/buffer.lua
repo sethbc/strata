@@ -182,26 +182,35 @@ return function(S)
 
   local function synced() return params:get("record_sync") > 1 end
 
-  -- "16b", or the beats a slot holds at this tempo with " max" when the
-  -- record beats need longer than a slot ("<1b max" when not one beat
-  -- fits: the take is then a slot long, under a beat)
+  -- "16b", or the whole beats a slot holds at this tempo with " max" when
+  -- the record beats need longer than a slot ("<1b max" when not one beat
+  -- fits: the take is then a slot long, under a beat). The beats are the
+  -- take's own (S.lib.record.take_length), so the field names what K3
+  -- records (#321)
   local function beats_text()
-    local beats = params:get("record_beats")
-    local fit = math.floor(S.performance.buffer_seconds / clock.get_beat_sec() + 1e-9)
-    if fit < 1 then return "<1b max" end
-    if beats > fit then return fit .. "b max" end
-    return beats .. "b"
+    local length = S.lib.record.take_length()
+    if length.beats == 0 then return "<1b max" end
+    return length.beats .. "b" .. (length.capped and " max" or "")
   end
 
-  -- The bookmark the bm field shows: the selected voice's last recalled, else 1
+  -- The bookmark the bm field shows: the selected voice's last recalled, or
+  -- nil ("-") while it has recalled none
   local function shown_bookmark()
-    return S.lib.positions.last_recalled(S.selected_voice) or 1
+    return S.lib.positions.last_recalled(S.selected_voice)
   end
 
-  -- E3 on bm: step 1..NUM_BOOKMARKS and recall the bookmark it lands on
+  -- E3 on bm: step 1..NUM_BOOKMARKS and recall the bookmark it lands on,
+  -- only when that changes what the field shows (so a turn against 1 or 4
+  -- never restarts the scan); from none, the first detent either way lands
+  -- on 1. ALT+E3 recalls the bookmark shown again (1 from none), so the
+  -- playhead goes back to it with no jump to a neighbor first (#431)
   local function bookmark_enc(d)
     local shown = shown_bookmark()
-    local n = util.clamp(shown + d, 1, S.constants.NUM_BOOKMARKS)
+    if S.alt_held then
+      S.lib.positions.recall_bookmark(S.selected_voice, shown or 1)
+      return
+    end
+    local n = util.clamp((shown or 0) + d, 1, S.constants.NUM_BOOKMARKS)
     if n ~= shown then S.lib.positions.recall_bookmark(S.selected_voice, n) end
   end
 
@@ -273,6 +282,7 @@ return function(S)
       active = function() return voice_uses_buffer(S.selected_voice) end,
       value = function()
         local n = shown_bookmark()
+        if not n then return "-" end
         return string.format("%d %.2f", n, S.lib.positions.bookmark(S.selected_voice, n) or 0)
       end},
     {name = "start", label = "start", enc = start_enc, value = start_text},
@@ -328,8 +338,10 @@ return function(S)
   ---------------------------------------------------------------------------
 
   -- A slot's name for the screen, cut to max_width: the file name without
-  -- its extension. Cached per slot and width until the name changes (load,
-  -- take, clear), so a redraw does not measure names a character at a time
+  -- its extension, as norns' font draws it (S.lib.ui_text.printable: "café"
+  -- is "cafe", measured as it is drawn, #551; the slot keeps its real name).
+  -- Cached per slot and width until the name changes (load, take, clear),
+  -- so a redraw does not measure names a character at a time
   local display_names = {}
   local function buffer_display_name(slot, max_width)
     local buffer = S.buffers[slot]
@@ -341,7 +353,7 @@ return function(S)
     if not cache.cut[max_width] then
       local name = buffer.name:gsub("%.[^.]*$", "")
       if name == "" then name = buffer.name end
-      cache.cut[max_width] = S.lib.ui_text.fit_text(name, max_width)
+      cache.cut[max_width] = S.lib.ui_text.fit_text(S.lib.ui_text.printable(name), max_width)
     end
     return cache.cut[max_width]
   end
@@ -520,13 +532,18 @@ return function(S)
 
   -- The heads of the voices reading the slot (the selected voice's last,
   -- brightest), the record head dotted while the slot records playably,
-  -- and the selected voice's bookmark ticks when it reads the slot
+  -- and the selected voice's bookmark ticks when it reads the slot. Heads,
+  -- spreads and ticks only on a slot that reports audio, as the grid's
+  -- position rows (S.lib.playheads.has_audio, #433)
   local function draw_heads(slot)
     local selected = S.selected_voice
-    for voice_idx = 1, NUM_VOICES do
-      if voice_idx ~= selected and voice_buffer_slot(voice_idx) == slot then draw_head(voice_idx, LEVELS.other_head) end
+    local audio = S.lib.playheads.has_audio(slot)
+    if audio then
+      for voice_idx = 1, NUM_VOICES do
+        if voice_idx ~= selected and voice_buffer_slot(voice_idx) == slot then draw_head(voice_idx, LEVELS.other_head) end
+      end
+      if voice_buffer_slot(selected) == slot then draw_head(selected, LEVELS.head) end
     end
-    if voice_buffer_slot(selected) == slot then draw_head(selected, LEVELS.head) end
     local record_head = S.lib.playheads.record_head(slot)
     if record_head then
       local x = wave_x_of(record_head)
@@ -534,7 +551,7 @@ return function(S)
       for y = PAGE.wave_top, PAGE.wave_bottom, 2 do screen.rect(x, y, 1, 1) end
       screen.fill()
     end
-    if voice_buffer_slot(selected) ~= slot then return end
+    if not audio or voice_buffer_slot(selected) ~= slot then return end
     local recalled = S.lib.positions.last_recalled(selected)
     for n = 1, S.constants.NUM_BOOKMARKS do
       screen.level(n == recalled and LEVELS.recalled or LEVELS.bookmark)
@@ -584,7 +601,9 @@ return function(S)
 
   -- A poll's value: the peak follows the level up (and is held from the
   -- moment the level last reached it); a redraw only when the level or the
-  -- held peak changed
+  -- held peak changed, of the screen alone (no arc ring shows the meter,
+  -- #434), and none while the file selector covers the page (#435: the
+  -- selector's close asks for the redraw that shows the meter again)
   local function meter_input(name, value)
     if type(value) ~= "number" or value ~= value then value = 0 end
     meter.amps[name] = value
@@ -595,7 +614,7 @@ return function(S)
     local shown = level * (INPUT_METER.segments + 1) + held_peak(now)
     if shown ~= meter.shown then
       meter.shown = shown
-      request_redraw()
+      if not PAGE.file_selector_open then S.lib.ui_frame.request_screen_redraw() end
     end
   end
 
@@ -987,8 +1006,13 @@ return function(S)
     {name = "load failed flash", setup = function() buffer_page_flash("buf 8 load failed") end},
     {name = "random file flash", setup = function() buffer_page_flash("buf 8: " .. LAYOUT.long_names[2]) end},
     {name = "filled flash", setup = function() buffer_page_flash("filled 8 slots") end},
+    -- an empty folder whose path below the audio folder is too long: its own name
     {name = "no files flash", setup = function()
-      buffer_page_flash("no files in " .. _path.audio .. "a_long_folder_name/another_one/") end},
+      local folder = _path.audio .. "a_long_folder_name/another_one/"
+      util.make_dir(folder)
+      S.lib.files.note_chosen(folder .. "x.wav")
+      S.lib.files.random_into(1)
+    end},
     {name = "meter peak", setup = function(context)
       context.polls.fire("amp_in_l", 1); context.polls.fire("amp_in_r", 0.2)
       context.polls.fire("amp_in_l", 0.05)
@@ -1057,16 +1081,24 @@ return function(S)
     end})
   end
 
+  -- Whether the frame clock redraws the page every frame: while something
+  -- drawn on the cursor slot moves (a voice's head on its audio, or its
+  -- record head: S.lib.playheads.moving, #433), so the heads move at the
+  -- frame rate, or a hold hint shows, so the hint changes at hold_seconds.
+  -- Never while the file selector covers the page: redraw() would draw
+  -- norns' file list again every frame for nothing (#435)
+  local function buffer_animates()
+    if PAGE.file_selector_open then return false end
+    return held_hint() ~= nil or S.lib.playheads.moving(cursor_slot())
+  end
+
   -- The page's record, at BUFFER's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc rings
-  -- are lib/arc/buffer.lua's; its arc button records, as K3 does. It
-  -- animates while something on the cursor slot moves (a voice reads it, or
-  -- it records), so the heads move at the frame rate; also while a hold hint
-  -- shows, so the hint changes at hold_seconds
+  -- are lib/arc/buffer.lua's; its arc button records, as K3 does
   S.registry.pages[BUFFER_INDEX] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, alt_enc = buffer_alt_enc, key = buffer_key, key_release = buffer_key_release,
     alt_key = buffer_alt_key, alt_key_release = buffer_alt_key_release, enter = start_input_meter,
-    leave = stop_input_meter, animates = function() return held_hint() ~= nil or S.lib.playheads.moving(cursor_slot()) end,
+    leave = stop_input_meter, animates = buffer_animates,
     arc_button = record_cursor_slot, layout_states = layout_states}
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.input_meter, function()

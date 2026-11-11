@@ -475,7 +475,7 @@ return function(S)
   local function row_context(voice_idx, cells)
     if not buffer_voice(voice_idx) then return nil end
     local slot = voice_buffer_slot(voice_idx)
-    if not S.buffers[slot] or (S.buffers[slot].seconds or 0) <= 0 then return nil end
+    if not S.lib.playheads.has_audio(slot) then return nil end  -- as BUFFER's heads (#433)
     local start, length = loop_of(voice_idx)
     local head = S.lib.playheads.position(voice_idx)
     if not head then head = start + params:get(param_id(voice_idx, "buf_pos")) * length end

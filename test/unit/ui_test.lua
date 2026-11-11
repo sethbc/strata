@@ -454,6 +454,39 @@ test("fit_text stops when a pass removes nothing (#514)", function()
   assert_equal(fit_text("abcdef", 10), "ab", "a text that can fit is cut to fit, as before")
 end)
 
+-- #551: norns' font draws printable ASCII only (norns.ttf has no glyph for
+-- most accented letters), so a file name is drawn through printable
+test("printable keeps printable ASCII, writes accented letters plainly and anything else as ? (#551)", function()
+  load_strata()
+  local printable = local_value("S").lib.ui_text.printable
+  local ascii = {}
+  for code = 32, 126 do ascii[#ascii + 1] = string.char(code) end
+  ascii = table.concat(ascii)
+  assert_equal(printable(ascii), ascii, "printable ASCII as it is")
+  assert_equal(printable("café crème.wav"), "cafe creme.wav")
+  assert_equal(printable("ñandú über"), "nandu uber")
+  assert_equal(printable("ÀÉÎÕÜÇÑÝ àéîõüçñýÿ"), "AEIOUCNY aeioucnyy")
+  assert_equal(printable("Æon straße Øresund œuvre"), "AEon strasse Oresund oeuvre", "letters written as two")
+  assert_equal(printable("日本 pad.wav"), "?? pad.wav", "one ? per character the font lacks")
+  assert_equal(printable("a\tb\127c"), "a?b?c", "control characters")
+  assert_equal(printable("\200x\128y"), "?x?y", "bytes that are not UTF-8")
+end)
+
+-- #434: a change only the screen shows asks for the screen alone
+test("a screen-only redraw request draws the screen on the next frame and never the arc (#434)", function()
+  local context = load_strata(); finish_startup(context)
+  local arc_hardware = context.arc.plug(1)
+  next_frame(context)
+  local counter = count_screen_draws()
+  local refreshes = arc_hardware.refresh_count
+  local_value("S").lib.ui_frame.request_screen_redraw()
+  assert_equal(counter.screen, 0, "nothing draws before the frame")
+  next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 1, "the next frame draws the screen once")
+  assert_equal(arc_hardware.refresh_count, refreshes, "and not the arc")
+end)
+
 -- alt-and-keys.md's list of the menu-close hooks names as many as are
 -- registered (#428)
 test("the alt-and-keys notes name every menu-close hook (#428)", function()

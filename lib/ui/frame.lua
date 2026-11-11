@@ -36,6 +36,13 @@ return function(S)
     UI_PAGES.arc_dirty = true
   end
 
+  -- The screen alone, for a change no arc ring shows that comes often (the
+  -- BUFFER input meter's level): the next frame draws the screen and leaves
+  -- a connected arc alone, as an animating page's frames do (#434)
+  function M.request_screen_redraw()
+    UI_PAGES.screen_dirty = true
+  end
+
   -- Run one draw of a frame (`part` names it: "screen" or "arc"). An error is
   -- printed with its traceback instead of ending the frame clock, so one
   -- failing frame never freezes the display: the next request draws again. A

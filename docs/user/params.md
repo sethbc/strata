@@ -81,7 +81,7 @@ Each voice includes:
 - Quantize (off/on, default off), first, right after the voice's heading and above its freq, so a PSET sets it before the freq
 - Synthesis parameters (varies by voice type). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a scene or PSET saved then still sounds the same, and shows the mirrored number (0.3 shows as 0.8)
 - Source (synth, buf 1-8, input; default synth)
-- Bookmarks 1-4 (buffer voices; 0-1, default 0, 0.25, 0.5 and 0.75): saved positions in the slot, recalled from the grid. Kept in scenes (they fade like other values) and PSETs, never randomized or mutated ([voices and grains](voices-and-grains.md#bookmarks))
+- Bookmarks 1-4 (buffer voices; 0-1, default 0, 0.25, 0.5 and 0.75): saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs, never randomized or mutated ([voices and grains](voices-and-grains.md#bookmarks))
 - Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0)
 - Grain size
 - Grain density
