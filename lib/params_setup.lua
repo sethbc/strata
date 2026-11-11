@@ -448,7 +448,7 @@ return function(S)
       id = "midi_device",
       name = "midi device",
       min = 1,
-      max = S.lib.midi_in.MIDI.max_port,
+      max = #midi.vports,  -- every norns port (#333)
       default = 1,
       action = function(x)
         attach_midi(x)
@@ -463,7 +463,8 @@ return function(S)
       options = S.lib.midi_in.MIDI.channel_mode_options,
       default = 1,
       action = function()
-        reset_midi_input()  -- held notes and bends now belong to other voices
+        -- bends re-center; held notes stay, so their note offs reach the voices their note ons played
+        reset_midi_input(true)
       end
     }
 
