@@ -173,17 +173,26 @@ h.freeEngine(other);
 // .part names are made links to a device (the engine's instanceTag is one of
 // the next UniqueIDs, its first write is number 1; this relies on UniqueID
 // staying the source of instanceTag), so its write is the device's.
-// Returns [tier, bufferSeconds, reason, active file's text, .part links left,
-// synths tracked]
+// Returns [tier, bufferSeconds, reason, active file's text, synths tracked,
+// a second write of the decision: its result, how many of 40 links to the
+// device (the names tag-2 to tag-41) are left, the active file's text after].
+// deleteStaleParts removes the links at alloc, so the first write's .part
+// cannot be checked after the build; the second write uses one of the 40
+// names, and exactly that one must be gone (39 left)
 flushRun = { arg name, device;
-    var folder = root +/+ name ++ "/", first = UniqueID.next, links, outcome, built;
+    var folder = root +/+ name ++ "/", first = UniqueID.next, links, outcome, built, again, againParts;
     writeText.(folder +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
     links = Array.fill(200, { arg i; folder +/+ "performance_active.data." ++ (first + 1 + i) ++ "-1.part" });
     links.do({ arg link; ("ln -s " ++ device ++ " " ++ link.shellQuote).systemCmd });
     built = h.startEngine((settingsDir: folder, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
     outcome = [built.tier, built.bufferSeconds, built.areaState[\performance][\decision][\reason],
-        readText.(folder +/+ "performance_active.data"), links.select({ arg link; File.exists(link) }).size,
-        built.synths.notNil];
+        readText.(folder +/+ "performance_active.data"), built.synths.notNil];
+    againParts = Array.fill(40, { arg i; folder +/+ "performance_active.data." ++ built.instanceTag ++ "-" ++ (i + 2) ++ ".part" });
+    againParts.do({ arg link; ("ln -s " ++ device ++ " " ++ link.shellQuote).systemCmd });
+    // (the settings folder is a classvar set only around a build)
+    again = withClassvars.([[\settingsDir, folder]], { built.writeActivePerformance(built.areaState[\performance][\decision]) });
+    outcome = outcome ++ [again, againParts.select({ arg link; File.exists(link) }).size, readText.(folder +/+ "performance_active.data")];
+    againParts.do({ arg link; if (File.exists(link)) { File.delete(link) } });
     // the links the engine did not use are ours to remove
     links.do({ arg link; if (File.exists(link)) { File.delete(link) } });
     h.freeEngine(built);
@@ -192,13 +201,13 @@ flushRun = { arg name, device;
 if (File.exists("/dev/full")) {
     result = flushRun.("flush-full", "/dev/full");
     check.(result[0] == \standard and: { result[1] == 16 } and: { result[2] == "standard: performance_active.data could not be written" }
-        and: { result[3].isNil } and: { result[5] == true },
+        and: { result[3].isNil } and: { result[4] == true and: { result[5] == false } and: { result[6] == 39 } and: { result[7].isNil } },
         "performance: a .part that cannot be flushed runs standard, leaves no .part and finishes alloc (got %)".format(result));
 } {
     "performance: no /dev/full here, the flush check is skipped".postln;
 };
 result = flushRun.("flush-null", "/dev/null");
-check.(result[0] == \standard and: { result[1] == 16 } and: { result[3].isNil } and: { result[5] == true },
+check.(result[0] == \standard and: { result[1] == 16 } and: { result[3].isNil } and: { result[4] == true and: { result[5] == false } and: { result[6] == 39 } and: { result[7].isNil } },
     "performance: a .part that reads back empty runs standard and renames nothing (got %)".format(result));
 // An active file that cannot be replaced (a folder with a file in it): standard, no .part left
 dir = root +/+ "blocked/";
