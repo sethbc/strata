@@ -2,7 +2,7 @@
 -- The audio folder and the sample files BUFFER fills slots from: the folder a
 -- slot's files come from, a random file into a slot and the empty slots
 -- filled from one folder. Every load goes through load_buffer (at start 0).
--- Not recursive: util.scandir lists one folder.
+-- Not recursive: one folder is listed (list_folder).
 
 return function(S)
   local M = {}
@@ -39,11 +39,37 @@ return function(S)
     if folder then M.last_folder = folder end
   end
 
+  -- A string as one /bin/sh word: in single quotes, each ' written as '\''.
+  -- Nothing inside single quotes is special to the shell
+  local function shell_quote(text)
+    return "'" .. text:gsub("'", "'\\''") .. "'"
+  end
+
+  -- The names in folder as `ls -pL` lists them (a folder's name ends in
+  -- "/"), or nil for a folder that cannot be listed (not an absolute path,
+  -- or not there). Not util.scandir: it puts the folder between double
+  -- quotes, where the shell still reads ", $, ` and \, so such a folder
+  -- listed nothing and $(...) in a name ran as a command (#465). Here the
+  -- folder is one single-quoted word after --: no name is read as a
+  -- command or an option
+  local function list_folder(folder)
+    if type(folder) ~= "string" or folder:sub(1, 1) ~= "/" or folder:find("\0", 1, true)
+      or not util.file_exists(folder) then
+      return nil
+    end
+    local names = {}
+    local listing = util.os_capture("ls -pL -- " .. shell_quote(folder) .. " 2>/dev/null", true)
+    for name in listing:gmatch("[^\r\n]+") do names[#names + 1] = name end
+    return names
+  end
+
   -- The sound files in folder, by name: not folders (ls -p marks them with
-  -- "/"), not dot files
+  -- "/"), not dot files. nil for a folder that cannot be listed
   local function sound_files(folder)
+    local names = list_folder(folder)
+    if not names then return nil end
     local found = {}
-    for _, name in ipairs(util.scandir(folder)) do
+    for _, name in ipairs(names) do
       local extension = name:match("%.([^./]+)$")
       if name:sub(1, 1) ~= "." and name:sub(-1) ~= "/" and extension and SOUND_EXTENSIONS[extension:lower()] then
         found[#found + 1] = name
@@ -52,14 +78,20 @@ return function(S)
     return found
   end
 
+  -- The flash for a folder that gave no file: it cannot be opened, or it
+  -- holds no sound file
+  local function flash_no_files(folder, names)
+    buffer_page_flash((names and "no files in " or "cannot open ") .. tostring(folder))
+  end
+
   -- Fill slot with a random sound file from its folder, other than the file
   -- it holds when the folder has another; whether it loaded
   function M.random_into(slot)
     if type(slot) ~= "number" or slot < 1 or slot > NUM_BUFFERS or slot % 1 ~= 0 then return false end
     local folder = M.folder_for(slot)
     local names = sound_files(folder)
-    if #names == 0 then
-      buffer_page_flash("no files in " .. folder)
+    if not names or #names == 0 then
+      flash_no_files(folder, names)
       return false
     end
     local candidates = names
@@ -83,8 +115,8 @@ return function(S)
   function M.fill_empty()
     local folder = M.folder_for(S.buffer_page.slot)
     local names = sound_files(folder)
-    if #names == 0 then
-      buffer_page_flash("no files in " .. folder)
+    if not names or #names == 0 then
+      flash_no_files(folder, names)
       return 0
     end
     -- a file another slot holds is not given again
