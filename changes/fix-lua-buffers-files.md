@@ -11,4 +11,5 @@
 - A sound file named `empty` shows its name on BUFFER instead of `-` (#436).
 - Filling the empty buffers flashes `filled 1 slot` for one (#512).
 - A buffer number that is not a whole number is ignored everywhere instead of raising an error, and 3.0 is buffer 3 (#402).
-- Loading a file from a folder whose name holds `$`, a backtick, `\` or `"` never runs that name as a command through the buffer's file param, and a clear or a recording no longer makes norns list the audio folder (#480).
+- A clear or a recording no longer makes norns list the audio folder (#480).
+- A file loaded from a folder whose name holds `$`, a backtick, `\` or `"` never enters the buffer's file param, so norns never runs that name as a command (when it lists the folder, when PARAMETERS opens the file selector there, or when a PSET is read); the file still loads and is restored at the next start, but PARAMETERS and PSETs do not show or save it (#480, #559).

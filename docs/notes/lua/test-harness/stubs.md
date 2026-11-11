@@ -42,6 +42,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 - `poll.set`: the system polls plus the engine's `addPoll` names; unknown names return nil. `context.polls.fire(name, value)` reaches started polls, with a number turned into a float (`w_handle_poll_value`'s `lua_pushnumber`).
 - `require("fileselect")`: a module through `package.preload`, never a global, so a script that relies on a `fileselect` global fails.
   - `enter` records `context.fileselect.last`, and its callback in `fileselect.callback` (as `fs.enter` keeps it in `fs.callback`, so a second `enter` replaces the first's). A folder that is not a string raises, as `fs.enter`'s `fs.folder:sub` does (#481).
+  - `pushd(dir)` opens the selector in a folder below the one entered, as norns' PARAMS menu does with a file param's `dir`: it lists the folder through `util.scandir` (the folder between double quotes, as `fs.getlist` does) into `last.list` (#559).
   - From play mode, `enter` calls `norns.menu.init()`, whose `set_mode(false)` runs a script's `_menu.set_mode` wrapper and makes the `redraw()` call norns' `fs.enter` makes, then its own `fileselect.redraw()`.
   - `fileselect.redraw` draws nothing and counts its calls in `context.fileselect.redraws`.
   - `context.fileselect.close(path)` closes it as `fs.exit` does: from play mode `norns.menu.init()` (with its `redraw()`), then the callback with `path`, or `"cancel"` when nil.

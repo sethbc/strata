@@ -10,7 +10,6 @@
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
-  local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local PLAYHEADS = S.constants.PLAYHEADS
   -- the page the grids show positions on (design 3.3 section 9)
   local POSITION_PAGE = S.constants.GRID_PAGES.positions
