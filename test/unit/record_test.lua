@@ -321,7 +321,7 @@ test("a synced length that does not fit is the whole beats that do, as BUFFER sh
   -- the whole beats a 16 s slot holds, and their seconds, by hand: 60 / bpm a beat
   for _, case in ipairs({ { bpm = 100, beats = 26, seconds = 15.6 }, { bpm = 110, beats = 29, seconds = 29 * 60 / 110 },
     { bpm = 30, beats = 8, seconds = 16 }, { bpm = 120, beats = 32, seconds = 16 } }) do
-    params:set("clock_tempo", case.bpm)
+    params:set("clock_tempo", case.bpm); context.clock.run_for(1)   -- once the clock reports it
     local length = S.lib.record.take_length()
     assert_equal(length.beats, case.beats, case.bpm .. " BPM: the whole beats a 16 s slot holds")
     assert_equal(length.capped, true, case.bpm .. " BPM: capped")
@@ -335,11 +335,11 @@ test("a synced length that does not fit is the whole beats that do, as BUFFER sh
     context.polls.fire("recordState", ((S.buffers[1].records_sent * 4) + 3) * 8)
   end
   -- beats that fit are sent whole; under a beat the take is a slot long
-  params:set("clock_tempo", 100); params:set("record_beats", 16)
+  params:set("clock_tempo", 100); params:set("record_beats", 16); context.clock.run_for(1)
   assert_near(S.lib.record.take_length().seconds, 9.6, 1e-6, "16 beats at 100 BPM")
   assert_equal(S.lib.record.take_length().capped, false, "16 beats fit")
   assert_equal(S.lib.record.take_length().beats, 16)
-  params:set("clock_tempo", 3); params:set("record_beats", 64)
+  params:set("clock_tempo", 3); params:set("record_beats", 64); context.clock.run_for(1)
   assert_equal(S.lib.record.take_length().seconds, 16, "not one beat fits: a slot")
   assert_equal(S.lib.record.take_length().beats, 0, "shown as <1b max")
   -- sync off: the duration, no beats
@@ -704,6 +704,7 @@ end)
 test("a synced take at 90 BPM lasts record_beats x 60 / 90 s", function()
   local context = load_strata(); finish_startup(context)
   params:set("clock_tempo", 90); params:set("record_sync", 2); params:set("record_beats", 16)
+  context.clock.run_for(1)   -- once the clock reports the tempo
   context.clear_engine_calls(); record_buffer(1)
   assert_near(recording_calls(context)[1].args[2], 16 * 60 / 90, 1e-6, "16 beats at 90 BPM")
 end)

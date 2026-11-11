@@ -441,8 +441,8 @@ test("stub clock follows matron's scheduler: sync beats, offsets, FLT_EPSILON, t
   assert_near(clock.get_beats(), 36, 1e-9, "on beat 36")
   params:set("clock_tempo", 60)
   assert_near(clock.get_beats(), 36, 1e-9, "the beat does not jump")
-  assert_equal(clock.get_tempo(), 60, "the clock tempo follows clock_tempo")
   assert_near(wake_after(function() clock.sync(1) end), 1, 1e-9, "beat 37, 1 s a beat")
+  assert_equal(clock.get_tempo(), 60, "the clock tempo follows clock_tempo, once it has ticked")
   local from, woke = util.time(), nil
   clock.run(function() clock.sync(1); woke = util.time() end)
   params:set("clock_tempo", 240)                           -- while it waits for beat 41
@@ -454,6 +454,30 @@ test("stub clock follows matron's scheduler: sync beats, offsets, FLT_EPSILON, t
   clock.run(function() slept = clock.sleep(0.25) end)
   context.clock.run_for(0.5)
   assert_near(slept, from + 0.25, 1e-9, "clock.sleep returns the time it woke")
+end)
+
+-- matron's internal clock thread reads the tempo before each tick's sleep
+-- and publishes it after it (clock_internal.cc): clock.get_tempo() reports
+-- a tempo set on it only from the tick after next, never at once
+test("stub clock: the internal clock reports a new tempo only once it has ticked", function()
+  local context = load_strata(); finish_startup(context)
+  assert_equal(clock.get_tempo(), 120, "120 BPM to start")
+  params:set("clock_tempo", 121)
+  assert_equal(clock.get_tempo(), 120, "the old tempo until the clock ticks")
+  assert_near(clock.get_beat_sec(), 0.5, 1e-12, "and the old beat length")
+  -- one tick at the old tempo and one at the new: 60/(24*120) + 60/(24*121) s
+  context.clock.run_for(0.05)
+  assert_equal(clock.get_tempo(), 121, "the new tempo once the clock has ticked")
+  -- two changes before it ticks: the old tempo, then the last one
+  params:set("clock_tempo", 130)
+  params:set("clock_tempo", 140)
+  assert_equal(clock.get_tempo(), 121, "neither change shows before a tick")
+  context.clock.run_for(0.05)
+  assert_equal(clock.get_tempo(), 140, "the last change once it has ticked")
+  -- an external source's tempo (a test sets clock.tempo itself) reads at once
+  params:set("clock_source", 2)
+  clock.tempo = 100
+  assert_equal(clock.get_tempo(), 100, "an external tempo reads at once")
 end)
 
 test("stub clock errors: reported per wake-up, the other clocks keep running (#27)", function()
@@ -670,7 +694,7 @@ test("stub clock.advance resumes every event with the step's time and beat, what
   clock.run(function() woke_at = clock.sleep(1) end)
   context.set_time(2)
   context.clock.advance()
-  assert_equal(clock.get_tempo(), 60, "A changed the tempo")
+  assert_equal(params:get("clock_tempo"), 60, "A changed the tempo")
   assert_near(woke_on_beat, 4, 1e-9, "S resumes with the beat at the step, sampled before A ran")
   assert_near(woke_at, 2, 1e-9, "L resumes with the time at the step")
 end)

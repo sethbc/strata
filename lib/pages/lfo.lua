@@ -16,14 +16,17 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local UI_PAGES = S.constants.UI_PAGES
 
-  -- LFO page: one row per LFO from y 12 (clear of the header): "L<n>", one
+  -- LFO page: one row per LFO from y 11 (clear of the header): "L<n>", one
   -- cycle of its shape (64 px), a dot at the estimated phase and last raw
   -- value while it runs, then its destination and state/depth right-aligned.
   -- The selected LFO's field strip sits under its row, and the rows below it
-  -- move down to make room, so everything ends by y 55, above the hint row
+  -- move down to make room, so everything ends by y 55, above the hint row.
+  -- Rows 13 px apart: a destination (baseline top + 4) sits 6 px under the
+  -- row above's state text (top - 2), a blank pixel row between them, and
+  -- 7 px over its own (top + 11), which its descender clears (#422)
   local LFO_PAGE = {
-    row_first_y = 12,   -- top of LFO 1's row
-    row_spacing = 12,
+    row_first_y = 11,   -- top of LFO 1's row
+    row_spacing = 13,
     wave_height = 10,   -- shape value 1 at the row top, 0 at top + 10
     wave_x = 12,
     wave_width = 64,
@@ -198,8 +201,8 @@ return function(S)
     end
 
     screen.level(label_level)
-    -- one pixel higher than the label's old place, so a descender (the y of
-    -- "density") clears the 7 px-spaced text below it (#422)
+    -- 7 px above the state text, so a descender (the y of "density") clears
+    -- it (#422), and 6 px under the row above's (LFO_PAGE.row_spacing)
     screen.move(127, top + 4)
     screen.text_right(S.LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label)
     screen.move(127, top + 11)

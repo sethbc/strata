@@ -234,10 +234,12 @@ return function(S)
   -- The hint row (redraw() draws it after the page). An action row offers
   -- no E3 (it does nothing there). With ALT held no K3 shows (ALT+K3 does
   -- nothing here), and E3 is offered only where it turns finely: the
-  -- mutation rate, probability and amount
+  -- mutation rate, probability and amount. While the view is scrolled past
+  -- the cursor's field (setup_view.tail) E3 edits nothing: it scrolls back
   local function setup_hints(alt_held)
     local field = setup_rows()[S.setup_cursor]
     local kind = field and field.kind
+    if setup_view.tail > 0 then return alt_held and "E2:field" or "E2:field E3:back" end
     if alt_held then
       return field and field.format and "E2:field E3:fine" or "E2:field"
     end
@@ -287,11 +289,15 @@ return function(S)
     end
   end
 
-  -- E2 moves over the fields, E3 edits the one under the cursor
+  -- E2 moves over the fields, E3 edits the one under the cursor. While E2
+  -- has scrolled the view on past the last field (#319), the field may be
+  -- out of view: E3 then only scrolls back to it, editing nothing
   function setup_enc(n, d)
     if n == 2 then
       S.setup_cursor, setup_view.tail = field_list.move_scroll(setup_rows(), S.setup_cursor,
         setup_view.tail, d, SETUP_PAGE.visible)
+    elseif n == 3 and setup_view.tail > 0 then
+      setup_view.tail = 0
     elseif n == 3 then
       local field = setup_rows()[S.setup_cursor]
       if field and field.kind == "rotation" then

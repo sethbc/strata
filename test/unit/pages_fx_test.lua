@@ -7,7 +7,7 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, find_upvalue, local_value, next_frame = h.load_strata, h.find_upvalue, h.local_value, h.next_frame
 local finish_startup, text_span, PAGE_TITLES, HINT_ROW_Y = h.finish_startup, h.text_span, h.PAGE_TITLES, h.HINT_ROW_Y
 local TEXT_HEIGHT, show_page, assert_screen_layout, count_screen_draws = h.TEXT_HEIGHT, h.show_page, h.assert_screen_layout, h.count_screen_draws
-local tap = h.tap
+local tap, hint_text = h.tap, h.hint_text
 
 test("FX page: E2 selects a row, E3 adjusts it, K3 bypasses the filter", function()
   local context = load_strata(); show_page("FX"); enc(2, 3)  -- cursor on filter freq
@@ -267,6 +267,32 @@ test("FX layout states find their rows by param id, wherever the rows sit (#114)
     end
   end
   table.remove(S.FX_PAGE.rows, 1)
+end)
+
+-- ALT+E3 turns a control param finely, but an option (the filter type)
+-- keeps whole steps: its row offers no fine turn, as SETUP's rows do
+test("FX's ALT hint offers E3:fine only on a row that turns finely", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  local function select_row(param_id)
+    for index, row in ipairs(S.FX_PAGE.rows) do
+      if row.param_id == param_id then S.fx_row = index end
+    end
+    context.screen.clear(); redraw()
+  end
+  key(1, 1)
+  select_row("filter_type")
+  local before = params:get("filter_type")
+  enc(3, 1)
+  assert_equal(params:get("filter_type"), before + 1, "ALT+E3 on the type steps a whole option")
+  select_row("filter_type")
+  assert_true(not (hint_text(context) or ""):find("fine", 1, true),
+    "the type row offers no fine turn: " .. tostring(hint_text(context)))
+  assert_screen_layout(context, "FX ALT on the filter type")
+  select_row("filter_freq")
+  assert_equal(hint_text(context), "E3:fine", "the freq row turns finely")
+  key(1, 0)
 end)
 
 test("ALT+E3 on FX is fine", function()

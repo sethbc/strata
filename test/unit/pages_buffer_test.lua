@@ -1276,10 +1276,10 @@ test("the len field shows beats with sync on and 16b max when capped", function(
   assert_equal(field_named(context, "len").value, "16b", "16 beats at 120 BPM fit the slot")
   enc(3, 1); assert_equal(params:get("record_beats"), 17, "E3 sets the beats with sync on")
   params:set("record_beats", 16)
-  params:set("clock_tempo", 30); redraw()
+  params:set("clock_tempo", 30); context.clock.run_for(1); redraw()   -- once the clock reports it
   assert_equal(field_named(context, "len").value, "8b max", "16 beats at 30 BPM are 32 s: 8 beats fit")
   assert_screen_layout(context, "BUFFER len capped")
-  params:set("clock_tempo", 3); redraw()
+  params:set("clock_tempo", 3); context.clock.run_for(1); redraw()
   assert_equal(field_named(context, "len").value, "<1b max", "at 3 BPM not one beat fits: the take is 16 s")
   assert_screen_layout(context, "BUFFER len under a beat")
   params:set("record_sync", 1); redraw()

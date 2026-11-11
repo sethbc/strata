@@ -5,7 +5,7 @@
 - The filter's restore value is `S.fx_last_mix.filter`, written only in `lib/params_setup.lua`: `filter_mix`'s action sets it when the mix rises above the mix before (E3, PARAMS, scenes, PSET), and `S.lib.params_setup.toggle_filter_mix()` sets it to the mix at the press before turning a mix above 0 to 0. Never write it from the page. K3 on a filter row calls `toggle_filter_mix` and nothing else (#235). The delay and reverb have no restore mix: their bypass params keep it.
 - Section labels (`selectable = false` rows) take no cursor stop: always move through `S.lib.ui_field_list` (`move`, `clamp`), and clamp `S.fx_row` before use. Select a row by its param id (the layout states use `row_of`), never by a hard-coded index (#114).
 - K3 acts on the effect of the row under the cursor (`row.effect`); master rows (density, drift) do nothing, and their hint is `E3:value`.
-- The hint names only keys that act (#419): `K3:<effect> bypass|on` or `E3:value` while ALT is up, `E3:fine` while it is held (FX has no ALT key actions; ALT+K3 does nothing).
+- The hint names only keys that act (#419): `K3:<effect> bypass|on` or `E3:value` while ALT is up, `E3:fine` while it is held on a row that turns finely, a control param, and nothing on the filter type, an option that keeps whole steps (as SETUP's hints do; FX has no ALT key actions; ALT+K3 does nothing).
 - Every row stays inside 128×64 at both ends of its range and every row position, `byp` included (the FX layout test and `layout_states`).
 
 ## States

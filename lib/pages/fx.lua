@@ -105,9 +105,14 @@ return function(S)
     return params:get(effect .. "_mix") > 0
   end
 
-  -- The hint row (redraw() draws it after the page)
+  -- The hint row (redraw() draws it after the page). With ALT held no K3
+  -- shows (ALT+K3 does nothing on FX), and E3:fine only on a row that turns
+  -- finely: a control param (an option, the filter type, keeps whole steps)
   local function fx_hints(alt_held)
-    if alt_held then return "E3:fine" end  -- ALT+K3 does nothing on FX
+    if alt_held then
+      local param_id = cursor_row().param_id
+      return (param_id and params:lookup_param(param_id).controlspec) and "E3:fine" or ""
+    end
     local effect = cursor_row().effect
     if not effect then return "E3:value" end
     return "K3:" .. effect .. " " .. (effect_on(effect) and "bypass" or "on")
