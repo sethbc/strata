@@ -299,6 +299,38 @@ test("a page draw that fails still shows its page: the title, draw error on the 
   assert_true(h.hint_text(context) ~= "draw error", "a good draw shows the page's hints again")
 end)
 
+-- A page whose hints() fails gives the same frame as a failing draw: the
+-- page's title, "draw error" on the hint row, an update (#424)
+test("a page whose hints() fails shows the draw error frame, and later redraws work (#424)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages = S.constants.UI_PAGES
+  show_page("FX")
+  next_frame(context)
+  local fx = S.registry.pages[pages.index.FX]
+  local real_hints = fx.hints
+  fx.hints = function() error("fx hints failed") end
+  local updates = 0
+  local real_update = context.screen.update
+  context.screen.update = function() updates = updates + 1 end
+  context.printed = {}
+  request_redraw(); next_frame(context)
+  assert_equal(updates, 1, "the frame is pushed to the screen")
+  local title
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == 8 then title = entry.text end
+  end
+  assert_equal(title, "FX", "the header names the page that is shown")
+  assert_equal(h.hint_text(context), "draw error", "the hint row says the draw failed")
+  assert_equal(lines_printed(context, "fx hints failed"), 1, "the error prints once")
+  h.assert_screen_layout(context, "FX after failed hints")
+  fx.hints = real_hints
+  request_redraw(); next_frame(context)
+  context.screen.update = real_update
+  assert_equal(updates, 2, "the next redraw is pushed too")
+  assert_equal(h.hint_text(context), real_hints(false), "and shows the page's hints again")
+end)
+
 -- The menu watch's wrapper (lib/ui/menu_watch.lua) never lets a failure
 -- stop the menu opening or the close hooks running (#425)
 test("the menu opening forgets held keys even with the forget_held_keys global gone (#425)", function()
