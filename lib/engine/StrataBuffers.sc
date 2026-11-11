@@ -246,6 +246,10 @@
         this.stopRecording(index);
         change = this.slotChanged(index, load);
         bufferFrames[index] = 0;
+        // an empty slot is at the server's rate: a recording sent before the
+        // reads end is judged by what the slot holds, nothing (#374; with 0
+        // frames slotLengthPairs sends no rate, so fading grains keep theirs)
+        bufferSampleRates[index] = context.server.sampleRate;
         this.bufferChanged(index);
         this.afterSlotFade(index, change, {
             buffersL[index].zero;
@@ -292,11 +296,13 @@
     // early whose frame count has not arrived yet (stopReplies; the slot
     // change drops that reply), as Lua's load_buffer expects: that take
     // never completes, so it is never adopted under the bad file's name.
-    // The slot reads empty (0 frames), as for a recording a clear canceled.
-    // Either way the bufferLoadFailed poll reports the failure (load is the
-    // slot's load number), so Lua puts back what the slot held (its
-    // bufferState reports cannot tell a rejected load over audio from a
-    // good one).
+    // The canceled take leaves the slot as it left it: untouched before its
+    // preparation (a synced replace take still waiting keeps the slot's
+    // audio, #311), empty after it; "canceled" is followed by the slot's
+    // length (cancelSlotRecording), then the failure. Either way the
+    // bufferLoadFailed poll reports the failure (load is the slot's load
+    // number), so Lua puts back what the slot held (its bufferState reports
+    // cannot tell a rejected load over audio from a good one).
     // canceled: a long file's command already canceled the slot's recording
     rejectLoad { arg index, load, reason, canceled = false;
         var recording = this.slotRecording(index);

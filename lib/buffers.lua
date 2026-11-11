@@ -49,12 +49,17 @@ return function(S)
   -- is that load's number; if no differing report comes within
   -- BUFFER_SETTLE.check_fallback_seconds, the slot goes back to the state
   -- the load replaced (start_check_fallback).
+  -- kept_state is what a canceled replace take had replaced, from its
+  -- "canceled" report until the engine's next report of the slot's length:
+  -- audio means the take had not prepared the slot, which is as it was, so
+  -- buffer_state_changed puts it back; 0 s drops it (nil otherwise).
   S.buffers = {}
   for slot = 1, NUM_BUFFERS do
     S.buffers[slot] = {name = "empty", loaded = false, recording = false, finishing = false, restoring = false,
       settled_empty = false, seconds = 0, path = nil, confirm_since = nil, missing_path = nil,
       loads_sent = 0, pending_loads = {}, saves_sent = 0, pending_saves = {}, records_sent = 0,
-      checking_from = nil, checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil}
+      checking_from = nil, checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil,
+      kept_state = nil}
   end
   -- the engine's bufferState, bufferLoadFailed and bufferSaveResult polls (nil if missing)
   S.buffer_polls = {state = nil, load_failed = nil, save_result = nil}
@@ -191,22 +196,68 @@ return function(S)
   end
 
   -- What a load replaces in the slot, for buffer_load_failed to put back: the
-  -- shown state and the buf<n>_file param. A recording (or a take waiting for
-  -- the engine) has nothing to put back: the engine cancels it when the load
-  -- fails, so the slot becomes empty, settled_empty "take" so that a take
-  -- that had already completed is still adopted from the engine's report.
+  -- shown state and the buf<n>_file param. A replace take recording (or
+  -- waiting for the engine) has nothing to put back: the engine cancels it
+  -- when the load fails and the take had emptied the slot, so the slot
+  -- becomes empty, settled_empty "take" so that a take that had already
+  -- completed is still adopted from the engine's report. A replace take
+  -- still armed may not have prepared its slot (a synced take keeps it
+  -- playing until just before its start), so the state is decided when the
+  -- failure is reported, by the length the engine sent after "canceled"
+  -- (resolve_previous): {after_cancel = true, kept = what the take replaced}.
   -- A playable recording (S.lib.record.state(slot).kind == "playable") keeps
   -- the slot's audio, so a failed load during one restores the slot as it was.
   function buffer_state_before_load(slot)
     local buffer = S.buffers[slot]
     local record_state = S.lib.record.state(slot)
     local playable = record_state ~= nil and record_state.kind == "playable"
-    if (buffer.recording or buffer.finishing) and not playable then return empty_buffer_state("take") end
+    if (buffer.recording or buffer.finishing) and not playable then
+      if record_state and record_state.phase == "armed" and not buffer.finishing and record_state.previous then
+        return {after_cancel = true, kept = record_state.previous}
+      end
+      return empty_buffer_state("take")
+    end
+    return M.shown_state(slot)
+  end
+
+  -- The slot's shown state and file param, as apply_buffer_state takes it
+  function M.shown_state(slot)
+    local buffer = S.buffers[slot]
     return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
       settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
       missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file"),
       checking_from = buffer.checking_from, checking_load = buffer.checking_load,
       start = buffer.sent_start, sample_rate = buffer.sample_rate, file_seconds = buffer.file_seconds}
+  end
+
+  -- What a failed load puts back, once the engine has said how the load left
+  -- the slot: a state from buffer_state_before_load as it is, or, for a load
+  -- that canceled a replace take still armed, what the take had replaced
+  -- when the slot still reads audio (the take had not prepared it), else the
+  -- empty slot a prepared take leaves
+  local function resolve_previous(slot, previous)
+    if not previous.after_cancel then return previous end
+    if S.buffers[slot].seconds > 0 then return previous.kept end
+    return empty_buffer_state("take")
+  end
+
+  -- What a replace take replaces, put back if it is canceled before the
+  -- engine prepares its slot: the shown state, or, while the engine still
+  -- checks loads (which the take supersedes, every one, so none arrives),
+  -- what the earliest of them replaced (an empty slot if one is no longer
+  -- tracked). Each load's state names an earlier load, so this ends
+  function M.state_before_take(slot)
+    local buffer = S.buffers[slot]
+    local state = M.shown_state(slot)
+    while state.checking_load do
+      local replaced = nil
+      for _, load in ipairs(buffer.pending_loads) do
+        if load.number == state.checking_load then replaced = load.previous end
+      end
+      if not replaced then return empty_buffer_state(false) end
+      state = resolve_previous(slot, replaced)
+    end
+    return state
   end
 
   -- Give the slot a state from buffer_state_before_load or
@@ -246,7 +297,7 @@ return function(S)
       local previous = empty_buffer_state(false)
       for index, load in ipairs(buffer.pending_loads) do
         if load.number == load_number then
-          previous = table.remove(buffer.pending_loads, index).previous
+          previous = resolve_previous(slot, table.remove(buffer.pending_loads, index).previous)
           break
         end
       end
@@ -321,6 +372,7 @@ return function(S)
     buffer.finishing = false
     buffer.restoring = false
     buffer.settled_empty = false
+    buffer.kept_state = nil
     buffer.confirm_since = util.time()
     buffer.path = path
     buffer.missing_path = nil
@@ -345,6 +397,7 @@ return function(S)
     buffer.finishing = false
     buffer.restoring = false
     buffer.settled_empty = false
+    buffer.kept_state = nil
     buffer.seconds = 0
     buffer.confirm_since = nil
     buffer.path = nil
@@ -508,6 +561,17 @@ return function(S)
     local changed = buffer.seconds ~= seconds
     buffer.seconds = seconds
     local has_audio = seconds > 0
+    -- the first report after a replace take was canceled (the engine sends
+    -- it right after "canceled") says what the take left: audio means it had
+    -- not prepared the slot, which is as it was before the take
+    if buffer.kept_state ~= nil then
+      local kept = buffer.kept_state
+      buffer.kept_state = nil
+      if has_audio then
+        apply_buffer_state(slot, kept)
+        changed = true
+      end
+    end
     if buffer.recording then S.lib.record.slot_reported(slot, seconds) end
     -- the engine wrote the slot's peaks before reporting its length
     if changed and has_audio then S.lib.waveforms.stale(slot) end
@@ -521,7 +585,12 @@ return function(S)
       buffer.confirm_since = util.time()
       changed = true
     end
-    if buffer.confirm_since ~= nil
+    -- a take stopped while still armed has recorded nothing: no length
+    -- settles it (a synced take's slot still reports its old audio), only
+    -- its "canceled" or "recording" report, or the finishing fallback
+    local take = buffer.finishing and S.lib.record.state(slot) or nil
+    local stopped_armed = take ~= nil and take.phase == "armed"
+    if buffer.confirm_since ~= nil and not stopped_armed
       and (has_audio or util.time() - buffer.confirm_since >= BUFFER_SETTLE.confirm_seconds) then
       settle_buffer_slot(slot)
       changed = true
@@ -572,7 +641,7 @@ return function(S)
     end
     if not found then return end
     local failed = table.remove(pending, found)
-    local left = emptied and empty_buffer_state(false) or failed.previous
+    local left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
     if found <= #pending then
       pending[found].previous = left
     else
@@ -806,14 +875,18 @@ return function(S)
     S.lib.record.stop_all()
   end)
 
-  -- A slot finishes only a recording, checks a load only while it awaits
-  -- the engine's report, never settles empty while loaded, and shows a start
+  -- A slot finishes only a recording, keeps a canceled take's state only
+  -- once it no longer records, checks a load only while it awaits the
+  -- engine's report, never settles empty while loaded, and shows a start
   -- other than the last sent one only while a start reload is pending
   S.register_invariant("buffer slots", function()
     for slot = 1, NUM_BUFFERS do
       local buffer = S.buffers[slot]
       if buffer.finishing and not buffer.recording then
         return "slot " .. slot .. " is finishing but not recording"
+      end
+      if buffer.kept_state ~= nil and buffer.recording then
+        return "slot " .. slot .. " records but keeps a canceled take's state"
       end
       if buffer.checking_from ~= nil and buffer.confirm_since == nil then
         return "slot " .. slot .. " is checking a load but awaits no report (confirm_since nil)"
