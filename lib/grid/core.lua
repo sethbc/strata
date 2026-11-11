@@ -216,6 +216,7 @@ return function(S)
     local held, held_x, held_y = held_step(port, voice_idx, x, y)
     if held then
       S.patterns[voice_idx][held.step] = M.level_for_position(position, positions)
+      S.lib.mutation.note_pattern_edit(voice_idx)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})

@@ -1,16 +1,16 @@
 ## Must not break
 
 - The page file sets every record field but the arc fields; SEQ's rings are `lib/arc/seq.lua`'s (`docs/notes/lua/arc-pages.md`).
-- Pattern edits go through the sequencer's functions or write `S.patterns[voice][step]` within bounds (voice 1..`NUM_VOICES`, step 1..`PATTERN_LENGTH`, level 0..`MAX_STEP_LEVEL`), and call `grid_redraw()`, so the grid follows. They request no screen redraw of their own: `enc` and `key` (strata.lua) request one after every handler, and the arc's `arc_delta` does for ring 2. `lib/sequencer.lua` is consumed, never edited.
+- Pattern edits go through the sequencer's functions or write `S.patterns[voice][step]` within bounds (voice 1..`NUM_VOICES`, step 1..`PATTERN_LENGTH`, level 0..`MAX_STEP_LEVEL`), and call `grid_redraw()`, so the grid follows. They request no screen redraw of their own: `enc` and `key` (strata.lua) request one after every handler, and the arc's `arc_delta` does for ring 2. A step edit calls `S.lib.mutation.note_pattern_edit(voice)` (E3 here, the arc's ring 2, the grid's level gesture, `toggle_pattern_step` and `replace_pattern` do), which ends a pattern undo of that voice (#557).
 - An empty step (0) is drawn as an outline, never as a filled cell at level 0 or 1, so a level-1 step never reads as empty.
 - The playing column is `S.lib.sequencer.sounding_step()`, the step that sounded last (nil while stopped and before the first step): the pattern clock plays `S.pattern_position` and then advances it, so never draw from `S.pattern_position`. Every grid layout lights the same step, between steps too (#113).
 - While the patterns play, the frame clock redraws SEQ's screen every frame (screen only, never the arc; the rule is in `docs/notes/lua/ui/redraws.md`), so the column moves. `draw()` requests no redraw. When they stop or another page shows, nothing extra draws. While the norns menu is open the frame still calls the global `redraw` (norns.none then), so the page itself never draws and the arc gets no extra frames (tested).
-- ALT+K2/ALT+K3 are the record's `alt_key` (reached through `alt_action`), never handled in `key`. ALT+E3 changes `tempo` through `enc_param_delta` (a number param: whole BPM).
+- ALT+K2/ALT+K3 are the record's `alt_key` (reached through `alt_action`), never handled in `key`. ALT+K2 acts on release (`alt_key_release`, `S.lib.ui_alt.k2_up`): the press only calls `k2_down`. SEQ has no `alt_hold` until 3.4 (the step edit view), so a held press cancels and the hint says `K2:cancel`. ALT+E3 changes `tempo` through `enc_param_delta` (a number param: whole BPM).
 - The arc button (`arc_button`) plays/stops, like K2; K3 is the step's on/off (design §7 lists SEQ play/stop for the button).
 
 ## Owns
 
-- `lib/pages/seq.lua` (`S.lib.pages_seq`): the SEQ record (`S.registry.pages[UI_PAGES.index.SEQ]`) with `draw`, `hints`, `enc`, `key`, `alt_enc`, `alt_key`, `header_status`, `arc_button` and `layout_states`; its layout constants are the local `SEQ_PAGE` table. The module's table has no fields.
+- `lib/pages/seq.lua` (`S.lib.pages_seq`): the SEQ record (`S.registry.pages[UI_PAGES.index.SEQ]`) with `draw`, `hints`, `enc`, `key`, `alt_enc`, `alt_key`, `alt_key_release`, `randomize_section`, `header_status`, `arc_button` and `layout_states`; its layout constants are the local `SEQ_PAGE` table. The module's table has no fields.
 - Its unit tests: `test/unit/pages_seq_test.lua`. Its step cursor is `S.cursors.seq_step` (`lib/ui/cursors.lua`); the row is `S.selected_voice`.
 
 ## The page
@@ -27,8 +27,8 @@ Keys:
 - E2: `S.lib.ui_cursors.move("seq_step", d)`. E3: the step's level, clamped to 0..`MAX_STEP_LEVEL`.
 - K2: `pattern_toggle()`. K3: `toggle_pattern_step(S.selected_voice, step)` (on at 15, or off).
 - ALT+E2: `S.lib.ui_keys.select_voice_by(d)` (MAIN's list and the MIDI bend follow). ALT+E3: `enc_param_delta(3, "tempo", d)`.
-- ALT+K2: `clear_pattern(S.selected_voice)`. ALT+K3: `randomize_pattern(S.selected_voice)`.
-- Hints: `K2:play K3:step E3:level` (`K2:stop` while playing); ALT: `K2:clr K3:rand E3:bpm`.
+- ALT+K2, on release: a quick press undoes the randomize held for this voice's pattern (within 5 s) or randomizes it, through `S.lib.mutation.randomize` with the spec `randomize_section` returns (`{page = SEQ, section = "pattern", voice, pattern = voice}`; never locked: lock covers params). The undo restores the old steps through `replace_pattern`, also while the pattern clock plays. The record animates while ALT+K2 is held (the hint turns to `K2:cancel` at 0.5 s). ALT+K3: `clear_pattern(S.selected_voice)`, which ends the undo.
+- Hints: `K2:play K3:step E3:level` (`K2:stop` while playing); ALT: `K2:rand K3:clr E3:bpm` (`K2:undo` while an undo is held, `K2:cancel` after 0.5 s held).
 
 `layout_states`: the cursor at steps 1 and 16 on voices 1 and 7, every row with levels while playing (`levels-playing`), and 300 BPM while playing (`tempo-300`).
 

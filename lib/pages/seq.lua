@@ -4,7 +4,8 @@
 -- running), a step cursor on the selected voice's row. E2 moves the step,
 -- E3 sets its level, K2 plays/stops, K3 turns the step on or off; ALT+E2
 -- moves to another voice's row (the selected voice follows), ALT+E3 the
--- tempo, ALT+K2 clears and ALT+K3 randomizes the voice's pattern. The
+-- tempo, ALT+K2 randomizes (on release, again within 5 s to undo: the
+-- shared handler, S.lib.ui_alt) and ALT+K3 clears the voice's pattern. The
 -- header shows the tempo (header_status). E3 (and arc ring 2,
 -- lib/arc/seq.lua) set the step's level in S.patterns directly, within
 -- bounds; clear and randomize call the sequencer's clear_pattern and
@@ -83,7 +84,9 @@ return function(S)
 
   -- The hint row (redraw() draws it after the page)
   local function seq_hints(alt_held)
-    if alt_held then return "K2:clr K3:rand E3:bpm" end
+    if alt_held then
+      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.SEQ]) .. " K3:clr E3:bpm"
+    end
     return "K2:" .. (S.pattern_playing and "stop" or "play") .. " K3:step E3:level"
   end
 
@@ -94,6 +97,7 @@ return function(S)
       local pattern, step = S.patterns[S.selected_voice], cursor_step()
       if not pattern then return end
       pattern[step] = util.clamp(pattern[step] + d, 0, MAX_STEP_LEVEL)
+      S.lib.mutation.note_pattern_edit(S.selected_voice)
       pattern_changed()
     end
   end
@@ -121,13 +125,29 @@ return function(S)
     end
   end
 
-  -- ALT+K2 and ALT+K3 (through alt_action): the selected voice's pattern
+  -- What ALT+K2 randomizes (S.lib.ui_alt.k2_up): the selected voice's
+  -- pattern (lock covers params, not patterns, so never "locked")
+  local function seq_randomize_section()
+    local voice_idx = S.selected_voice
+    return {page = UI_PAGES.index.SEQ, section = "pattern", voice = voice_idx, pattern = voice_idx}
+  end
+
+  -- ALT+K2 (through alt_action) only notes its press: it acts on release.
+  -- ALT+K3 clears the selected voice's pattern
   local function seq_alt_key(n)
     if n == 2 then
+      S.lib.ui_alt.k2_down()
+    elseif n == 3 then
       clear_pattern(S.selected_voice)
       pattern_changed()
-    elseif n == 3 then
-      randomize_pattern(S.selected_voice)
+    end
+  end
+
+  -- ALT+K2 released: a quick press undoes or randomizes the pattern (the
+  -- grid follows); SEQ has no hold action, so a long press cancels
+  local function seq_alt_key_release(n)
+    if n == 2 then
+      S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.SEQ])
       pattern_changed()
     end
   end
@@ -176,8 +196,9 @@ return function(S)
   -- are lib/arc/seq.lua's
   S.registry.pages[UI_PAGES.index.SEQ] = {name = "SEQ", draw = redraw_seq, hints = seq_hints,
     enc = seq_enc, key = seq_key, alt_enc = seq_alt_enc, alt_key = seq_alt_key,
+    alt_key_release = seq_alt_key_release, randomize_section = seq_randomize_section,
     header_status = seq_header_status,
-    animates = function() return S.pattern_playing end, arc_button = seq_arc_button, layout_states = layout_states}
+    animates = function() return S.pattern_playing or S.lib.ui_alt.k2_held() end, arc_button = seq_arc_button, layout_states = layout_states}
 
   return M
 end

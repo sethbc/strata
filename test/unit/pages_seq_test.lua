@@ -208,17 +208,17 @@ test("SEQ playing while another page shows adds no redraws", function()
   assert_equal(counter.screen, 0, "patterns playing, SEQ not shown")
 end)
 
-test("ALT+K2 clears and ALT+K3 randomizes the voice's pattern", function()
+test("ALT+K3 clears the voice's pattern and ALT+K2 randomizes it at levels 8-15", function()
   local _, S = started_on_seq()
   S.selected_voice = 4
   for step = 1, 16 do S.patterns[4][step] = 7; S.patterns[5][step] = 3 end
-  key(1, 1); tap(2); key(1, 0)
+  key(1, 1); tap(3); key(1, 0)
   for step = 1, 16 do
-    assert_equal(S.patterns[4][step], 0, "ALT+K2 clears voice 4's step " .. step)
+    assert_equal(S.patterns[4][step], 0, "ALT+K3 clears voice 4's step " .. step)
     assert_equal(S.patterns[5][step], 3, "and leaves voice 5's")
   end
   math.randomseed(1)
-  key(1, 1); tap(3); key(1, 0)
+  key(1, 1); tap(2); key(1, 0)
   local set = 0
   for step = 1, 16 do
     local level = S.patterns[4][step]
@@ -226,7 +226,7 @@ test("ALT+K2 clears and ALT+K3 randomizes the voice's pattern", function()
     if level > 0 then set = set + 1 end
     assert_equal(S.patterns[5][step], 3, "voice 5 untouched")
   end
-  assert_true(set > 0, "ALT+K3 sets some steps")
+  assert_true(set > 0, "ALT+K2 sets some steps")
   assert_true(not S.pattern_playing, "the ALT keys never start the transport")
 end)
 
@@ -263,11 +263,11 @@ test("pattern edits on SEQ reach the grid", function()
   enc(3, 5); assert_equal(led(), 5, "E3's level on the grid")
   tap(3); assert_equal(led(), 0, "K3 off")
   tap(3); assert_equal(led(), 15, "K3 on")
-  key(1, 1); tap(2); key(1, 0); assert_equal(led(), 0, "ALT+K2 clear")
+  key(1, 1); tap(3); key(1, 0); assert_equal(led(), 0, "ALT+K3 clear")
   math.randomseed(3)
-  key(1, 1); tap(3); key(1, 0)
+  key(1, 1); tap(2); key(1, 0)
   for step = 1, 16 do
-    assert_equal(device:get_led(step, 2), S.patterns[2][step], "ALT+K3's step " .. step .. " on the grid")
+    assert_equal(device:get_led(step, 2), S.patterns[2][step], "ALT+K2's step " .. step .. " on the grid")
   end
 end)
 
@@ -288,13 +288,96 @@ test("a SEQ pattern edit requests one redraw, enc's or key's own", function()
   assert_equal(count(function() key(3, 1) end), 1, "K3")
   key(3, 0)
   key(1, 1)
-  assert_equal(count(function() key(2, 1) end), 1, "ALT+K2")
-  key(2, 0)
   assert_equal(count(function() key(3, 1) end), 1, "ALT+K3")
-  key(3, 0); key(1, 0)
+  key(3, 0)
+  assert_equal(count(function() key(2, 1) end), 1, "ALT+K2's press")
+  key(2, 0)
+  key(1, 0)
   grid_redraw = real_grid
   request_redraw = real
   assert_true(grids >= 4, "each edit still redraws the grid")
+end)
+
+local function steps_of(S, voice_idx)
+  local steps = {}
+  for step = 1, 16 do steps[step] = S.patterns[voice_idx][step] end
+  return steps
+end
+
+local function same_steps(a, b)
+  for step = 1, 16 do if a[step] ~= b[step] then return false end end
+  return true
+end
+
+test("SEQ's ALT+K2 randomizes the selected voice's pattern on release; ALT+K3 clears it (#557)", function()
+  local _, S = started_on_seq()
+  S.selected_voice = 3
+  math.randomseed(5)
+  key(1, 1); key(2, 1)
+  local empty = true
+  for step = 1, 16 do if S.patterns[3][step] ~= 0 then empty = false end end
+  assert_true(empty, "the press alone changes nothing")
+  key(2, 0)
+  local on = 0
+  for step = 1, 16 do if S.patterns[3][step] > 0 then on = on + 1 end end
+  assert_true(on > 0, "the release randomized")
+  for voice_idx = 1, 7 do
+    if voice_idx ~= 3 then
+      for step = 1, 16 do assert_equal(S.patterns[voice_idx][step], 0, "other voices stay") end
+    end
+  end
+  key(3, 1); key(3, 0); key(1, 0)
+  for step = 1, 16 do assert_equal(S.patterns[3][step], 0, "ALT+K3 clears") end
+end)
+
+test("a quick ALT+K2 within 5 s restores the exact old steps (#557)", function()
+  local _, S = started_on_seq()
+  S.selected_voice = 2
+  S.patterns[2][1] = 7; S.patterns[2][9] = 12
+  local old = steps_of(S, 2)
+  key(1, 1); tap(2)
+  assert_true(not same_steps(steps_of(S, 2), old), "randomized")
+  tap(2)
+  assert_true(same_steps(steps_of(S, 2), old), "the second press undid it")
+  key(1, 0)
+end)
+
+test("a step edit ends the pattern undo (#557)", function()
+  local context, S = started_on_seq()
+  S.selected_voice = 2; S.cursors.seq_step = 4
+  local mutation = S.lib.mutation
+  local function undoable() return mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 2) == true end
+  local function randomized() key(1, 1); tap(2); key(1, 0); assert_true(undoable(), "an undo is held") end
+  randomized(); enc(3, 1); io.stderr:write("AFTER ", tostring(S.undo), " ", S.patterns[2][4], "\n"); assert_true(not undoable(), "E3 ends it")
+  randomized(); key(1, 0); tap(3); assert_true(not undoable(), "K3 (a toggle) ends it")
+  randomized(); toggle_pattern_step(2, 5); assert_true(not undoable(), "toggle_pattern_step ends it")
+  randomized(); clear_pattern(2); assert_true(not undoable(), "clear_pattern ends it")
+  randomized(); S.lib.sequencer.replace_pattern(2, {1}); assert_true(not undoable(), "replace_pattern ends it")
+  randomized(); S.lib.sequencer.replace_pattern(5, {1}); assert_true(undoable(), "another voice's edit does not")
+end)
+
+test("undo while the pattern clock plays restores the old steps (#557)", function()
+  local context, S = started_on_seq()
+  S.selected_voice = 1
+  S.patterns[1][3] = 9
+  local old = steps_of(S, 1)
+  tap(2)
+  assert_true(S.pattern_playing)
+  context.clock.run_for(0.3)
+  key(1, 1); tap(2)
+  context.clock.run_for(0.3)
+  tap(2)
+  assert_true(same_steps(steps_of(S, 1), old), "the exact old steps are back")
+  key(1, 0)
+  tap(2)
+end)
+
+test("SEQ's hold of ALT+K2 cancels (#557)", function()
+  local context, S = started_on_seq()
+  key(1, 1); key(2, 1); context.clock.run_for(0.6); redraw()
+  assert_equal(hint_text(context), "K2:cancel K3:clr E3:bpm", "held")
+  key(2, 0); key(1, 0)
+  for step = 1, 16 do assert_equal(S.patterns[1][step], 0, "nothing randomized") end
 end)
 
 test("SEQ hints", function()
@@ -303,7 +386,7 @@ test("SEQ hints", function()
   tap(2); redraw()
   assert_equal(hint_text(context), "K2:stop K3:step E3:level", "playing")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:clr K3:rand E3:bpm", "ALT")
+  assert_equal(hint_text(context), "K2:rand K3:clr E3:bpm", "ALT")
   key(1, 0); tap(2)
   assert_true(not S.pattern_playing)
 end)
