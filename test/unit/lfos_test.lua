@@ -526,7 +526,7 @@ test("every control param with a sender sends its LFO-offset value; one without 
     if math.abs(value - params:get(param.id)) < 1e-9 then value = spec:map(0.65) end
     return value
   end
-  local checked, unsent = 0, 0
+  local checked = 0
   for _, param in ipairs(params.params) do
     if param.t == params.tCONTROL and param.id:sub(1, 5) ~= "lfo_" and param.id:sub(1, 6) ~= "strata" then
       local sender = S.engine_senders[param.id]
@@ -550,13 +550,11 @@ test("every control param with a sender sends its LFO-offset value; one without 
         context.clear_engine_calls()
         params:set(param.id, value)
         assert_equal(#context.engine_calls, 0, param.id .. " has no sender and makes no engine call")
-        unsent = unsent + 1
       end
     end
   end
   assert_true(checked > 200, "many control params have senders: " .. checked)
   S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
-  assert_true(unsent >= 0)
 end)
 
 end
