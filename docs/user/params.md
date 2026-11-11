@@ -4,6 +4,8 @@ Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](
 
 Everything is in the PARAMETERS menu. The menu shows the master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **buffers** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
+PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
+
 ## Master
 - Master density
 - Tempo (1-300 BPM, the range of norns' clock tempo; sets norns' clock tempo, starts at the current clock tempo)
@@ -65,7 +67,7 @@ Settings for the BUFFER page's record key and each buffer's Record trigger. They
 - Scene sequence length (1-8 scenes)
 - Save scenes to disk (manual trigger; each scene save already writes the file, [Saved scenes on disk](scenes.md#saved-scenes-on-disk))
 - Load scenes from disk (manual trigger; while a scene saved in this session is not on disk, the first trigger only prints a line in the console and a second within 2 seconds loads. A damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to the first free of `scenes.data.bak`, `scenes.data.bak.2` ... `scenes.data.bak.9`, so it is never overwritten and an earlier copy is never replaced)
-- Scene files from earlier versions of Strata still load: settings they do not contain (filter, delay, grain envelope and mode, sources and buffer settings, LFOs) start at their defaults (LFOs off, every voice on its synth), and the console prints `migrated scenes file from version 1`. The next save writes the new format and first keeps the original file as `scenes.data.v<n>` (`scenes.data.v1` here), once; `buffers.data` from 3.2 is kept as `buffers.data.v1` the same way
+- Scene files from earlier versions of Strata still load: settings they do not contain (filter, delay, grain envelope and mode, sources and buffer settings, LFOs) start at their defaults (LFOs off, every voice on its synth), the Pulse voice's res is turned around so it sounds the same (it ran the other way before 3.3), and the console prints `migrated scenes file from version 1`. The next save writes the new format and first keeps the original file as `scenes.data.v<n>` (`scenes.data.v1` here), once; `buffers.data` from 3.2 is kept as `buffers.data.v1` the same way
 
 Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
 
@@ -77,7 +79,7 @@ Scenes capture each voice's source and buffer position, rate and scan, but **not
 ## Per-Voice Sections
 Each voice includes:
 - Quantize (off/on, default off), first, right after the voice's heading and above its freq, so a PSET sets it before the freq
-- Synthesis parameters (varies by voice type)
+- Synthesis parameters (varies by voice type). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a scene or PSET saved then still sounds the same, and shows the mirrored number (0.3 shows as 0.8)
 - Source (synth, buf 1-8, input; default synth)
 - Bookmarks 1-4 (buffer voices; 0-1, default 0, 0.25, 0.5 and 0.75): saved positions in the slot, recalled from the grid. Kept in scenes (they fade like other values) and PSETs, never randomized or mutated ([voices and grains](voices-and-grains.md#bookmarks))
 - Buffer position (0-1, default 0), buffer rate (0.25-4, default 1) and buffer scan (-2 to 2, default 0)

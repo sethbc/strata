@@ -234,7 +234,8 @@ return function(S)
   -- lacks with its default: globals (SCENE_GLOBAL_PARAMS), top-level blocks
   -- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
   -- Filling only adds what is missing, so it runs for every file version;
-  -- from_version is there for changes that must convert a particular format.
+  -- from_version is there for changes that must convert a particular format
+  -- (a scene older than format 5 gets its Pulse res mirrored, #314).
   -- Then each registered voice-param record's normalize_scene(extras), if it
   -- has one, brings values a hand edit may have left inconsistent back to
   -- what the params allow (a loop past the slot's end), so a recall ends
@@ -269,6 +270,14 @@ return function(S)
           for _, record in ipairs(S.registry.voice_params) do
             if record.normalize_scene then record.normalize_scene(data.voices[i].extras) end
           end
+        end
+        -- format 5 (3.3): the Pulse voice's res rises with resonance; a
+        -- scene of an older format holds the filter's rq, mirrored here so
+        -- it sounds the same (#314). Keyed on the voice having a res param
+        local voice_params = data.voices[i].params
+        if from_version < S.constants.PULSE_RES.scene_format and S.voices[i].params.res ~= nil
+          and type(voice_params) == "table" and is_number(voice_params.res) then
+          voice_params.res = S.constants.PULSE_RES.mirror - voice_params.res
         end
       end
     end

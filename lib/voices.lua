@@ -147,7 +147,7 @@ return function(S)
         pan = 0,
         width = 0.5,
         cutoff = 2000,
-        res = 0.3
+        res = 0.8  -- rises with resonance: 0.8 is the filter's rq 0.3, 3.2's default 0.3 (#314)
       },
       grain = {
         size = 0.12,

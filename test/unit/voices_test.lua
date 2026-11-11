@@ -67,4 +67,23 @@ test("S keeps no master_density field: readers take the param (#393)", function(
   assert_near(params:get("master_density"), 1.5, 1e-9, "the param is the value")
 end)
 
+-- #314: the Pulse voice's res rises with resonance (the engine plays the
+-- filter's rq as 1.1 - res); its default 0.8 plays rq 0.3, the sound 3.2's
+-- default 0.3 had
+test("the pulse voice starts at res 0.8, the sound of 3.2's default (#314)", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  assert_equal(voices[5].name, "pulse")
+  assert_near(voices[5].params.res, 0.8, 1e-9, "the voices table's default")
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "the param's default")
+  if voices[5].active then toggle_voice(5) end
+  context.clear_engine_calls()
+  toggle_voice(5)
+  local sent
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 4 and call.args[2] == "res" then sent = call.args[3] end
+  end
+  assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "a start sends res 0.8 (sent: " .. tostring(sent) .. ")")
+end)
+
 end

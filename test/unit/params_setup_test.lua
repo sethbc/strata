@@ -587,4 +587,105 @@ test("the 256 grid's tempo keys flash the tempo the clock runs, under an externa
   assert_equal(flash.text("header"), "tempo " .. math.floor(clock.get_tempo() + 0.5), "internal: the tempo it landed on")
 end)
 
+-- The res setVoiceParam(4, "res", value) values sent to the Pulse voice
+local function pulse_res_sent(context)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 4 and call.args[2] == "res" then sent[#sent + 1] = call.args[3] end
+  end
+  return sent
+end
+
+-- #314: the Pulse voice's res rises with resonance since 3.3 (the engine
+-- plays rq = 1.1 - res). A PSET saved before holds the filter's rq and has
+-- no strata_pset_format line (format 1): the read hook mirrors its res once
+-- the read is done, every time it is read, until it is saved again. A PSET
+-- saved now carries the line and reads back as written
+test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now loads as it is (#314)", function()
+  local context = load_strata({ data_subdir = "pset_pulse_res" }); finish_startup(context)
+  local S = local_value("S")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  assert_true(params:lookup_param("strata_pset_format").hidden, "the format param is hidden")
+  assert_equal(params:get("strata_pset_format"), 2, "at today's format")
+  if not S.voices[5].active then toggle_voice(5) end
+  -- a PSET saved now carries its format and reads back as written
+  local new_path = context.data_dir .. "new.pset"
+  params:set("v5_res", 0.3)
+  params:write(new_path, "new")
+  local text = h.file_text(new_path)
+  assert_true(text:find('"strata_pset_format": 2\n', 1, true) ~= nil, "the PSET holds its format")
+  params:set("v5_res", 0.6)
+  params:read(new_path)
+  assert_near(params:get("v5_res"), 0.3, 1e-9, "a PSET saved now reads back as written")
+  -- the same PSET without the format line is one saved before: its res held the rq
+  local old_path = context.data_dir .. "old.pset"
+  local old_text = text:gsub('"strata_pset_format": [^\n]*\n', "")
+  assert_true(not old_text:find("strata_pset_format", 1, true), "the old PSET has no format line")
+  h.write_text(old_path, old_text)
+  params:set("v5_res", 0.6)
+  context.clear_engine_calls()
+  params:read(old_path)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "an old PSET's res 0.3 loads as 0.8")
+  assert_near(S.voices[5].params.res, 0.8, 1e-9, "and the voices table follows")
+  local sent = pulse_res_sent(context)
+  assert_true(#sent > 0 and math.abs(sent[#sent] - 0.8) < 1e-6,
+    "the engine plays the mirrored value last (sent: " .. table.concat(sent, ", ") .. ")")
+  -- read again: mirrored from the file's value, never twice
+  params:read(old_path)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "a second read gives the same value")
+  -- a silent read is mirrored too, silently
+  params:set("v5_res", 0.5)
+  context.clear_engine_calls()
+  params:read(old_path, true)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "a silent read is mirrored too")
+  assert_equal(#pulse_res_sent(context), 0, "and sends nothing")
+  -- a hand-edited format 1 line is a PSET from before too
+  h.write_text(old_path, old_text .. '"strata_pset_format": 1\n')
+  params:read(old_path)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "a format 1 PSET is mirrored")
+  -- an old PSET that does not set the res leaves it as it is
+  local no_res_path = context.data_dir .. "no_res.pset"
+  h.write_text(no_res_path, (old_text:gsub('"v5_res": [^\n]*\n', "")))
+  params:set("v5_res", 0.5)
+  params:read(no_res_path)
+  assert_near(params:get("v5_res"), 0.5, 1e-9, "a res the file does not set is not mirrored")
+  params:read(old_path)
+  -- saved again, it is a PSET of today's format: never mirrored back
+  assert_equal(params:get("strata_pset_format"), 2, "an old PSET leaves the format param at today's format")
+  local resaved = context.data_dir .. "resaved.pset"
+  params:write(resaved, "resaved")
+  params:set("v5_res", 0.5)
+  params:read(resaved)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "the PSET saved again reads back as written")
+end)
+
+-- #554: a PSET saved while a number param held a fraction (norns' PARAMS
+-- menu turned a number param by d / 20 with K3 held, #534) loads it whole:
+-- after the read the hook rounds every number param Strata's records added
+-- (its own and the LFO library's, the registered voice params too), never
+-- one of norns' system params
+test("a PSET's fractional number params load whole (#554)", function()
+  local context = load_strata({ data_subdir = "pset_whole_numbers" }); finish_startup(context)
+  local S = local_value("S")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  -- (a running voice's action would send the engine the fraction during the read)
+  if S.voices[1].active then toggle_voice(1) end
+  local path = context.data_dir .. "fractions.pset"
+  params:write(path, "fractions")
+  local text = h.file_text(path)
+  for id, value in pairs({ v1_mod_source_1 = "0.05", scene_sequence_length = "4.05", v1_custom_interval_1 = "-2.6" }) do
+    local count
+    text, count = text:gsub('"' .. id .. '": [^\n]*\n', '"' .. id .. '": ' .. value .. '\n')
+    assert_equal(count, 1, id .. " is in the PSET")
+  end
+  h.write_text(path, text)
+  params:set("link_quantum", 4.5)  -- a system param (not saved in PSETs) holding a fraction
+  params:read(path)
+  assert_equal(params:get("v1_mod_source_1"), 0, "mod source 0.05 loads as 0")
+  assert_equal(params:get("scene_sequence_length"), 4, "sequence length 4.05 loads as 4")
+  assert_equal(params:get("v1_custom_interval_1"), -3, "custom interval -2.6 loads as -3")
+  assert_equal(S.voices[1].crossmod.slot1.source, 0, "the voices table holds the whole source")
+  assert_equal(params:get("link_quantum"), 4.5, "norns' own params are left alone")
+end)
+
 end

@@ -109,18 +109,70 @@ return function(S)
     end
   end
 
+  -- The PSET read hook's state (#314, #554): number_params, every number
+  -- param the records add (Strata's own and the LFO library's, never norns'
+  -- system params), in menu order, filled at init
+  local pset = {number_params = {}}
+
   -- Add one part of the PARAMS menu: init runs the records' add functions
   -- in the order they are registered here, which is the menu's order. Each
   -- number param a record adds (Strata's own and the LFO library's, never
-  -- norns' system params) steps whole numbers (step_whole)
+  -- norns' system params) steps whole numbers (step_whole) and joins
+  -- pset.number_params, which a PSET read rounds (#554)
   local function register_params(name, add)
     S.registry.params[#S.registry.params + 1] = {name = name, add = function()
       local before = #params.params
       add()
       for index = before + 1, #params.params do
-        if params.params[index].t == params.tNUMBER then step_whole(params.params[index]) end
+        local param = params.params[index]
+        if param.t == params.tNUMBER then
+          step_whole(param)
+          pset.number_params[#pset.number_params + 1] = param.id
+        end
       end
     end}
+  end
+
+  -- Whether a PSET file's text has a line for param id (as norns writes
+  -- it, `"id": value`), and that line's value
+  local function pset_line(text, id)
+    return text:match('"' .. id .. '"%s*:%s*([^\n]*)')
+  end
+
+  -- norns' params.action_read, run after every params:read (PARAMS > PSET,
+  -- a script's read), with the file's path and the read's silent flag;
+  -- every change goes through params:set, so the voices table, the engine
+  -- and the screen follow, and honors silent.
+  -- 1. A PSET saved before format PULSE_RES.pset_format (one without a
+  --    strata_pset_format line is format 1, saved before 3.3) holds the
+  --    Pulse voice's res as the filter's rq: a res the file sets is
+  --    mirrored (#314), from the value the read set, so a PSET read twice is
+  --    never mirrored twice. Keyed on the voice having a res param, not on
+  --    voice 5.
+  -- 2. strata_pset_format goes back to PSET_FORMAT (the read set the file's,
+  --    or left it), so the PSET saved next is today's format.
+  -- 3. Every number param pset.number_params lists is rounded to its step,
+  --    a whole number (#554): one saved holding a fraction (norns' PARAMS
+  --    menu turned a number param by d / 20 with K3 held) loads whole.
+  function M.migrate_read_pset(filename, silent)
+    local file = io.open(filename, "r")
+    local text = file and file:read("*a")
+    if file then file:close() end
+    local format = text and (tonumber(pset_line(text, "strata_pset_format")) or 1)
+    if format and format < S.constants.PULSE_RES.pset_format then
+      for voice_idx = 1, NUM_VOICES do
+        local id = "v" .. voice_idx .. "_res"
+        if S.voices[voice_idx].params.res ~= nil and pset_line(text, id) then
+          params:set(id, S.constants.PULSE_RES.mirror - params:get(id), silent)
+        end
+      end
+      print("pset from before 3.3: the pulse voice's res mirrored, so it sounds the same")
+    end
+    params:set("strata_pset_format", S.constants.PSET_FORMAT, true)
+    for _, id in ipairs(pset.number_params) do
+      local value = params:get(id)
+      if value ~= math.floor(value) then params:set(id, util.round(value), silent) end
+    end
   end
 
   -- Run a registered record's add(...) and check it added exactly
@@ -144,6 +196,15 @@ return function(S)
 
   register_params("master", function()
     params:add_separator("strata")
+
+    -- The PSET format (#314): saved with every PSET, shown nowhere. A PSET
+    -- without it was saved before 3.3; the read hook converts what changed
+    -- meaning since (M.migrate_read_pset). norns clears params.action_read
+    -- with the script's params, so no cleanup step is needed
+    params:add{type = "number", id = "strata_pset_format", name = "pset format",
+      min = 1, max = S.constants.PSET_FORMAT, default = S.constants.PSET_FORMAT}
+    params:hide("strata_pset_format")
+    params.action_read = function(filename, silent) M.migrate_read_pset(filename, silent) end
 
     -- Master controls
     params:add{
@@ -986,7 +1047,7 @@ return function(S)
       drift = controlspec.new(0.001, 0.1, "lin", 0.001, 0.02),
       width = controlspec.new(0.05, 0.95, "lin", 0.01, 0.5),
       cutoff = controlspec.new(100, 8000, "exp", 10, 2000, "Hz"),
-      res = controlspec.new(0.1, 1, "lin", 0.01, 0.3),
+      res = controlspec.new(0.1, 1, "lin", 0.01, 0.8),  -- the Pulse's: rises with resonance (#314)
       decay = controlspec.new(0.5, 10, "lin", 0.1, 4, "s"),
       damping = controlspec.new(0.1, 0.9, "lin", 0.01, 0.5),
       excite = controlspec.new(0.1, 2, "lin", 0.01, 0.3, "Hz"),

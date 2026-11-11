@@ -8,7 +8,14 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 8
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 4  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 5  -- Scene file format version (written into scenes.data)
+local PSET_FORMAT = 2         -- PSET format, saved in every PSET as the hidden strata_pset_format (none: 1)
+-- The Pulse voice's res rises with resonance from scene format 5 and PSET
+-- format 2 (3.3, #314): the engine plays the filter's rq as mirror - res
+-- (StrataVoiceDefs.sc). A scene or PSET of an older format holds the rq
+-- itself, so its res is mirrored as it loads (res' = mirror - res) and
+-- sounds the same: 0.1-1 maps onto 1-0.1, on the param's 0.01 grid
+local PULSE_RES = {mirror = 1.1, scene_format = 5, pset_format = 2}
 local NUM_MOD_SLOTS = 3       -- Cross-modulation slots per voice
 local E1_TICKS_PER_PAGE = 4  -- E1 encoder sensitivity (norns.enc.sens)
 local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 15 = retrigger velocity
@@ -243,6 +250,8 @@ return {
   NUM_SCENES = NUM_SCENES,
   PATTERN_LENGTH = PATTERN_LENGTH,
   SCENE_DATA_VERSION = SCENE_DATA_VERSION,
+  PSET_FORMAT = PSET_FORMAT,
+  PULSE_RES = PULSE_RES,
   NUM_MOD_SLOTS = NUM_MOD_SLOTS,
   NUM_UI_PAGES = NUM_UI_PAGES,
   E1_TICKS_PER_PAGE = E1_TICKS_PER_PAGE,
