@@ -24,12 +24,28 @@
 - ~~Sample buffers and live input~~ ✓ Implemented (v3.0 - per-voice sources)
 - ~~Global LFOs~~ ✓ Implemented (v3.0 - three, on norns `lua/lib/lfo.lua`)
 - Engine-side LFOs (above the Lua library's 10 Hz ceiling)
-- Buffer waveform display on the BUFFER page
+- ~~Buffer waveform display on the BUFFER page~~ ✓ Implemented (v3.3 - peaks files, `lib/waveforms.lua`)
 - Tempo-synced delay times
 - Undo/redo for parameter changes
 - Parameter automation recording
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
+
+## Version 3.3.0 (2026-11-11)
+
+Buffers as instruments (design: `docs/design/3.3-design.md`). 3.2's sound by default, apart from 5 ms record fades, a re-gated buffer voice restarting its scan and the grain synths' fades running before the voice filter; the review fixes add the brighter master, the cutoff's rise limit, the FM and Ring highpass and the 4 ms trigger bound. Highlights:
+- The per-voice mix stage: one persistent `\strataVoiceMix` per voice (`lib/engine/StrataMix.sc`) holds the voice filter, the voice-level gain, the sends, the mirror and the voice tap; grain synths write their source kind's path only, about 16 KB less each.
+- Recording: the record area (`lib/engine/StrataRecord.sc`, `lib/record.lua`): playable overdub and loop recordings with the head guard (`slotHeadGuard`), record sources, threshold arming with a 10 ms pre-roll, clock sync through `recordBuffer`'s `delay`, and the `recordState` and `takeWriteFailed` polls.
+- Files and waveforms: `loadBuffer`'s start, `saveBuffer`'s region, the peaks files and their mover (`lib/engine/StrataWaveform.sc`, `lib/waveforms.lua`), random loads and fills (`lib/files.lua`); `buffers.data` version 2.
+- Positions: the scan phase's `t_scanReset`, `scrubRate` and `scanHold` (`lib/engine/StrataPositions.sc`), jumps, loops, the scan hold's holders and the scrub glide (`lib/positions.lua`), playheads (`lib/playheads.lua`), bookmarks and 3.4's interface (`lib/bookmarks.lua`).
+- UI: BUFFER's fields, waveform and heads, its keys on release, its arc rings; a position page on every grid layout, and a rotation per grid port (`grids.data`). Registries: `grain_restart`, `alt_release`, `menu_close`, `invariants`.
+- Data files: `lib/data_files.lua` writes `scenes.data` and `buffers.data` through a checked `.part` and reads them with a parser, never `tab.save` or `tab.load`; scenes are format 5 and every PSET holds `strata_pset_format`.
+- Memory: floors of 3 MB standard and 3.5 MB high, the all-buffer and synth -> buffer -> synth worst cases, recordings in the check; a copy ring per voice for a frozen input (`docs/notes/engine/memory.md`).
+- Tests: 1189 Lua tests; the engine check has record, waveform and positions areas.
+
+Before the release, three rounds of fixes landed on main: an audit of the script's state handling (#232-#258, #295), with the invariants harness (`S.register_invariant`, checked after every unit test); an audit of the engine's state (#259-#262) and CI's job timeouts (#225); and a whole-project code review's 236 issues (#300-#535) and the issues its fixes filed (to #559), landed as reviewed packages in batches, one pull request per batch (`docs/process/agents.md`), with a final review and one fix wave. Their decisions are in `docs/decisions.md` (3.3).
+
+See CHANGELOG.md and `docs/status.md`.
 
 ## Version 3.2.0 (2026-11-09)
 
