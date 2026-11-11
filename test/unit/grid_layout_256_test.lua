@@ -144,7 +144,7 @@ end)
 test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", function()
   local context = load_strata()
   local device = context.grid.plug(1, 16, 16)
-  -- row 14, columns 9-15 show voice on/off; row 16 shows freeze
+  -- row 14, columns 9-15 show voice on/off; row 16 shows the lock
   toggle_voice(5)
   assert_equal(device:get_led(13, 14), 12, "voice 5 on lights row 14")
   toggle_voice(5)
@@ -202,7 +202,7 @@ test("grid scene LEDs light the scene a sequenced instant recall loaded at once 
   context.clock.run_for(4, 0.001)
   assert_equal(local_value("current_scene"), 2, "the sequencer recalled scene 2")
   assert_equal(device:get_led(2, 1), 15, "scene 2 is lit")
-  assert_equal(device:get_led(1, 1), 8, "scene 1 shows as populated, no longer as the current scene")
+  assert_equal(device:get_led(1, 1), 10, "scene 1, no longer current, is the scene the sequencer recalls next (#303)")
   params:set("scene_sequencer_enabled", 0)
   -- recalls from outside the grid (MIDI-mapped, the sequencer): an instant
   -- one repaints the grid once, a smooth one lights its scene at once
@@ -259,8 +259,8 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
     end
   end
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 play on page 4")
-  context.grid.press(1, 1, 16, 1); assert_true(local_value("frozen")[1], "row 16 freeze on page 4")
-  assert_equal(device:get_led(1, 16), 12, "row 16 shows freeze on page 4")
+  context.grid.press(1, 1, 16, 1); assert_true(local_value("frozen")[1], "row 16 locks on page 4")
+  assert_equal(device:get_led(1, 16), 12, "row 16 shows the lock on page 4")
   assert_equal(device:get_led(16, 8), 15, "row 8 shows page 4 selected")
   -- FX changes made elsewhere move the faders
   params:set("delay_mix", 1)
@@ -371,7 +371,7 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   -- a second row-1 press stops early; row 8 and 16 keep their meaning
   context.grid.press(1, 4, 1, 1); context.grid.press(1, 4, 1, 1)
   assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
-  context.grid.press(1, 3, 16, 1); assert_true(local_value("frozen")[3], "row 16 freezes on page 4")
+  context.grid.press(1, 3, 16, 1); assert_true(local_value("frozen")[3], "row 16 locks on page 4")
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 transport on page 4")
   -- the FX faders are still on rows 3-7
   context.grid.press(1, 16, 7, 1); assert_near(params:get("delay_mix"), 1, 1e-6, "row 7 delay mix")
@@ -382,20 +382,63 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   assert_equal(params:get("v3_source"), 1)
 end)
 
+-- #449: the distinct keys the layout is handed at press, per grid page, from
+-- now on (view(port) names it), and how many there are
+local function record_presses(layout_name, view)
+  local layout = local_value("S").registry.grid_layouts[layout_name]
+  local real_key, pressed = layout.key, {}
+  layout.key = function(port, x, y, z)
+    if z == 1 then
+      local shown = view(port)
+      pressed[shown] = pressed[shown] or {}
+      pressed[shown][x .. "," .. y] = true
+    end
+    return real_key(port, x, y, z)
+  end
+  return pressed
+end
+local function key_count(keys)
+  local count = 0
+  for _ in pairs(keys or {}) do count = count + 1 end
+  return count
+end
+
+-- Voice 1 on buffer 1, which holds 16 s, so position keys act (#449)
+local function voice_on_loaded_buffer(S)
+  S.buffers[1].seconds = 16; S.buffers[1].loaded = true
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+end
+
+-- Counts S.lib.positions.jump calls (a position key that reached a buffer voice)
+local function count_jumps(S)
+  local counter = { jumps = 0 }
+  local real_jump = S.lib.positions.jump
+  S.lib.positions.jump = function(...) counter.jumps = counter.jumps + 1; return real_jump(...) end
+  return counter
+end
+
 test("every 256 grid key on every page runs without error", function()
   local context = load_strata()
+  local S = local_value("S")
   local device = context.grid.plug(1, 16, 16)
-  -- four pages selected from row 8
-  for page = 1, 4 do
+  local pressed = record_presses("256", function(port) return S.lib.grid_core.page(port) end)
+  local counter = count_jumps(S)
+  -- all five pages, each key pressed on its page (set before every key: row
+  -- 8's page keys move it), with a voice on a loaded buffer
+  for page = 1, 5 do
+    voice_on_loaded_buffer(S)
     for y = 1, 16 do
       for x = 1, 16 do
-        context.grid.press(1, 12 + page, 8, 1)
+        S.lib.grid_core.set_page(1, page)
+        assert_equal(S.lib.grid_core.page(1), page, "the sweep is on page " .. page)
         context.grid.press(1, x, y, 1)
         context.grid.press(1, x, y, 0)
         context.clock.advance()
       end
     end
   end
+  for page = 1, 5 do assert_equal(key_count(pressed[page]), 256, "page " .. page .. ": all 256 keys pressed") end
+  assert_true(counter.jumps > 0, "page 5's position keys reached the buffer voice")
   assert_true(device.refresh_count > 0, "256 grid was redrawn")
 end)
 
@@ -528,7 +571,7 @@ test("pasting onto the copied voice changes nothing", function()
   assert_equal(device:get_led(10, 16), 15, "and stays lit")
 end)
 
-test("the clipboard is per grid, works on pages 2 and 4 and goes with the grid", function()
+test("the clipboard is per grid, works on pages 2, 3 and 4 and goes with the grid", function()
   local context = load_strata(); finish_startup(context)
   local first = context.grid.plug(1, 16, 16)
   local second = context.grid.plug(2, 16, 16)
@@ -546,9 +589,9 @@ test("the clipboard is per grid, works on pages 2 and 4 and goes with the grid",
   tap(context, 13, 16)
   assert_equal(patterns[5][2], 15, "page 4 pastes")
   assert_equal(first:get_led(9, 16), 15, "page 4 shows the clipboard")
-  tap(context, 15, 8)  -- page 3: row 16 is not part of the scene page
+  tap(context, 15, 8)  -- page 3, the scenes page, has row 16 too (#442)
   tap(context, 14, 16)
-  assert_equal(patterns[6][2], 0, "the scene page has no row 16")
+  assert_equal(patterns[6][2], 15, "page 3 pastes")
   context.grid.unplug(1)
   first = context.grid.plug(1, 16, 16)
   assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "unplugging forgets the clipboard")
@@ -587,35 +630,35 @@ test("tempo keys light while held and flash the new tempo in the header", functi
   tap(context, 1, 8)
 end)
 
-test("the scene page lights the sequencer position at 10 and the current scene at 15", function()
+-- #303: row 1's levels for scenes 1-5, read while the sequencer runs through
+-- the clock: scenes 1-3 saved, slot 4 empty (the sequencer waits on it)
+test("the scene page lights the scene the running sequencer recalls next at 10, the current at 15 (#303)", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
   tap(context, 15, 8)  -- page 3
   capture_scene(1); capture_scene(2); capture_scene(3)
-  params:set("scene_sequence_length", 3)
+  params:set("scene_sequence_length", 4)
   params:set("scene_transition_time", 0); params:set("scene_duration", 4)
-  params:set("scene_sequencer_enabled", 0)
-  local S = S_table()
-  S.current_scene = 1; grid_redraw()
-  assert_equal(device:get_led(1, 1), 15, "the current scene at 15")
-  assert_equal(device:get_led(2, 1), 8, "a populated scene at 8")
-  assert_equal(device:get_led(4, 1), 2, "an empty scene at 2")
+  grid_redraw()  -- capture_scene draws nothing
+  local function row_1()
+    local levels = {}
+    for x = 1, 5 do levels[x] = device:get_led(x, 1) end
+    return table.concat(levels, " ")
+  end
+  assert_equal(row_1(), "8 8 8 2 2", "stopped: populated scenes at 8, empty ones at 2")
   params:set("scene_sequencer_enabled", 1)
   context.clock.run_for(1, 0.001)
-  assert_equal(S.current_scene, 1, "the sequencer recalled scene 1")
-  -- it holds scene 1 for its duration, then recalls scene 2 and moves on
+  assert_equal(row_1(), "15 10 8 2 2", "1 s: scene 1 playing, scene 2 next at 10")
   context.clock.run_for(4, 0.001)
-  assert_equal(S.current_scene, 2)
-  S.scene_sequencer_position = 3; grid_redraw()
-  assert_equal(device:get_led(3, 1), 10, "the sequencer position at 10")
-  assert_equal(device:get_led(2, 1), 15, "the current scene at 15")
-  assert_equal(device:get_led(1, 1), 8, "scene 1 back to populated")
-  S.scene_sequencer_position = 2; grid_redraw()
-  assert_equal(device:get_led(2, 1), 15, "the current scene wins over the position")
-  S.scene_sequencer_position = 5; grid_redraw()
-  assert_equal(device:get_led(5, 1), 10, "an empty scene at the position lights at 10 too")
+  assert_equal(row_1(), "8 15 10 2 2", "5 s: scene 2 playing, scene 3 next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(row_1(), "8 8 15 10 2", "9 s: the empty slot 4 is next and lights at 10 too")
+  context.clock.run_for(4, 0.001)
+  assert_equal(row_1(), "10 8 15 2 2", "13 s: waiting on slot 4, scene 1 next (wrapped)")
+  context.clock.run_for(4, 0.001)
+  assert_equal(row_1(), "15 10 8 2 2", "17 s: scene 1 again, scene 2 next")
   params:set("scene_sequencer_enabled", 0)
-  assert_equal(device:get_led(5, 1), 2, "a stopped sequencer shows no position")
+  assert_equal(row_1(), "15 8 8 2 2", "a stopped sequencer lights no next scene")
   assert_equal(device:get_led(1, 5), 4, "the sequencer key dims")
 end)
 
@@ -632,9 +675,9 @@ test("the scene page blinks the recall key of the scene a fade goes to", functio
   assert_equal(device:get_led(2, 1), 15, "step 3: the target's recall key at 15")
 end)
 
--- #254: during the scene sequencer's fade its position is the target, so the
--- key blinks between 15 and the position's 10
-test("the scene sequencer's fading target blinks between 15 and its position's 10", function()
+-- #254: the scene sequencer's fading target blinks between 15 and its
+-- populated 8; the scene it recalls next stays at 10 (#303)
+test("the scene sequencer's fading target blinks between 15 and 8, the next scene steady at 10", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
   tap(context, 15, 8)  -- page 3
@@ -647,14 +690,108 @@ test("the scene sequencer's fading target blinks between 15 and its position's 1
   assert_equal(S.lib.scenes.fading_to(), 1, "the sequencer fades to scene 1")
   assert_equal(S.scene_sequencer_position, 1, "its position is the target")
   assert_equal(device:get_led(1, 1), 15, "step 1: the target's recall key at 15")
+  assert_equal(device:get_led(2, 1), 10, "step 1: scene 2, next, at 10")
   context.clock.run_for(0.1)                                    -- step 2
-  assert_equal(device:get_led(1, 1), 10, "step 2: the key at the position's 10")
+  assert_equal(device:get_led(1, 1), 8, "step 2: the key at its populated 8")
+  assert_equal(device:get_led(2, 1), 10, "step 2: scene 2 still at 10")
   context.clock.run_for(0.1)                                    -- step 3
   assert_equal(device:get_led(1, 1), 15, "step 3: at 15 again")
   context.clock.run_for(2)                                      -- the fade lands
   assert_equal(S.lib.scenes.fading_to(), nil, "the fade landed")
   assert_equal(device:get_led(1, 1), 15, "the landed scene is steady at 15")
   params:set("scene_sequencer_enabled", 0)
+end)
+
+-- The levels of a row, columns 1-16, as one string
+local function row_levels(device, y)
+  local levels = {}
+  for x = 1, 16 do levels[x] = device:get_led(x, y) end
+  return table.concat(levels, " ")
+end
+
+test("256 page 3: rows 8 and 16 work and light as on the other pages (#442)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  tap(context, 15, 8)  -- page 3
+  -- row 8: play/stop 4, tempo 4, the positions key 4, the page keys; row 16:
+  -- locks 2, the freeze key 4, the clipboard keys 2
+  assert_equal(row_levels(device, 8), "4 4 4 4 4 4 4 4 0 0 0 4 2 2 15 2", "row 8 on page 3")
+  assert_equal(row_levels(device, 16), "2 2 2 2 2 2 2 4 2 2 2 2 2 2 2 2", "row 16 on page 3")
+  tap(context, 1, 8)
+  assert_true(S.pattern_playing, "(1,8) plays")
+  assert_equal(device:get_led(1, 8), 15, "and lights")
+  tap(context, 1, 8)
+  assert_true(not S.pattern_playing, "a second press stops")
+  params:set("tempo", 120)
+  context.grid.press(1, 8, 8, 1)
+  assert_equal(params:get("tempo"), 130, "(8,8) adds 10")
+  assert_equal(device:get_led(8, 8), 15, "lit while held")
+  context.grid.press(1, 8, 8, 0)
+  tap(context, 1, 16)
+  assert_true(S.frozen[1], "(1,16) locks voice 1")
+  assert_equal(device:get_led(1, 16), 12, "and lights at 12")
+  context.grid.press(1, 8, 16, 1)  -- hold the freeze key
+  tap(context, 2, 16)
+  assert_equal(params:get("v2_freeze"), 1, "(2,16) freezes voice 2 while (8,16) is held")
+  assert_equal(device:get_led(2, 16), 15, "and shows it")
+  context.grid.press(1, 8, 16, 0)
+  S.patterns[1][3] = 15
+  tap(context, 9, 16)
+  assert_equal(S.lib.grid_core.port_state(1).clipboard.voice, 1, "(9,16) copies voice 1")
+  assert_equal(device:get_led(9, 16), 15, "the copied voice's key lights")
+  tap(context, 11, 16)
+  assert_equal(S.patterns[3][3], 15, "(11,16) pastes onto voice 3")
+  assert_equal(S.lib.grid_core.page(1), 3, "still on page 3")
+end)
+
+test("256 row 15: clear and randomize light at 2 and act only once held half a second (#443)", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  for _, page in ipairs({ 1, 2 }) do
+    tap(context, 12 + page, 8)
+    assert_equal(row_levels(device, 15), "2 2 2 2 2 2 2 0 2 2 2 2 2 2 2 0", "page " .. page .. ": row 15's keys at 2")
+  end
+  tap(context, 13, 8)  -- page 1
+  S.patterns[3][1], S.patterns[3][5] = 15, 9
+  tap(context, 3, 15)
+  assert_equal(S.patterns[3][1], 15, "a tap on (3,15) clears nothing")
+  context.grid.press(1, 3, 15, 1)
+  assert_equal(device:get_led(3, 15), 15, "lit 15 while the hold is pending")
+  context.clock.run_for(0.4)
+  context.grid.press(1, 3, 15, 0)
+  assert_equal(S.patterns[3][1], 15, "released at 0.4 s: nothing cleared")
+  assert_equal(device:get_led(3, 15), 2, "the release puts it back at 2")
+  local real_request_redraw, screen_requests = request_redraw, 0
+  request_redraw = function() screen_requests = screen_requests + 1; real_request_redraw() end
+  context.grid.press(1, 3, 15, 1)
+  local requests_at_press = screen_requests
+  context.clock.run_for(0.4)
+  assert_equal(screen_requests, requests_at_press, "nothing asks for a screen redraw while the hold is pending")
+  context.clock.run_for(0.11)
+  request_redraw = real_request_redraw
+  assert_equal(S.patterns[3][1], 0, "held 0.5 s: voice 3's pattern is cleared")
+  assert_equal(S.patterns[3][5], 0)
+  assert_true(screen_requests > requests_at_press, "the screen (SEQ) is asked to show it")
+  assert_equal(device:get_led(1, 3), 0, "the grid shows the cleared pattern")
+  assert_equal(device:get_led(3, 15), 2, "the key is back at 2 once it has acted")
+  context.grid.press(1, 3, 15, 0)
+  -- (11,15) on page 2 randomizes voice 3, once held
+  local randomized = {}
+  local real_randomize = randomize_pattern
+  randomize_pattern = function(voice_idx) table.insert(randomized, voice_idx); real_randomize(voice_idx) end
+  tap(context, 14, 8)  -- page 2
+  tap(context, 11, 15)
+  assert_equal(#randomized, 0, "a tap on (11,15) randomizes nothing")
+  context.grid.press(1, 11, 15, 1)
+  assert_equal(device:get_led(11, 15), 15, "lit 15 while pending")
+  context.clock.run_for(0.51)
+  assert_equal(table.concat(randomized, " "), "3", "held 0.5 s: voice 3's pattern is randomized")
+  assert_equal(device:get_led(11, 15), 2)
+  context.grid.press(1, 11, 15, 0)
+  assert_equal(#randomized, 1, "the release does nothing more")
+  randomize_pattern = real_randomize
 end)
 
 test("row 16 columns 1-7 lock voices", function()
