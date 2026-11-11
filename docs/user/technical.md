@@ -69,7 +69,7 @@ jackd --no-realtime -d dummy -r 48000 -p 1024 &
 QT_QPA_PLATFORM=offscreen test/run_engine_check.sh ~/src/norns
 ```
 
-Run only one engine check at a time per machine (it uses scsynth's port 57110).
+Two runs on the same scsynth port collide (it is 57110 unless `STRATA_SC_PORT` says otherwise), so give each run its own `STRATA_SC_PORT` to run checks side by side, avoiding 57120 and the few ports above it.
 
 `test/run.lua` also checks that AGENTS.md's engine command table lists exactly the engine's commands, and that the docs name no engine command or repository file that no longer exists.
 

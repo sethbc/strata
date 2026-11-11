@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# The jobs only read the repository (a pull request runs its own test code
+# here), so the token gets no more than that (#490)
+permissions:
+  contents: read
+
 # A new push to a pull request cancels its superseded run. Runs on main are
 # never canceled: each gets a group of its own (in a shared group a pending
 # run would still be replaced by the next one, even without cancel-in-progress)
@@ -19,7 +24,11 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`
+      # names the newest release, its tag's commit goes here with the version in the comment (#533)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
       - name: Install Lua 5.3 and LuaJIT
@@ -66,8 +75,9 @@ jobs:
           - waveform
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
-      # the norns commit the engine is compiled against (sc/core classes)
-      NORNS_REF: 227aa044
+      # the norns commit the engine is compiled against (sc/core classes), in full:
+      # a short name could match a branch or tag of that name first (#490)
+      NORNS_REF: 227aa0442181e3eab3fc189ee6b5342648ce7300
       NORNS_DIR: ${{ github.workspace }}/norns
       QT_QPA_PLATFORM: offscreen
       DEBIAN_FRONTEND: noninteractive
@@ -83,7 +93,11 @@ jobs:
       # it (see `apt-cache show supercollider-language`).
       SC_APT_VERSION: 1:3.13.0+repack-1ubuntu3
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`
+      # names the newest release, its tag's commit goes here with the version in the comment (#533)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check out norns
         run: |
@@ -106,6 +120,17 @@ jobs:
 
       - name: Engine check
         run: SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=570 timeout 600 test/run_engine_check.sh "$NORNS_DIR"
+
+      # A failed precondition must end the run with its own line and nothing
+      # after it (#485): the unknown area's failure line, and no ERROR line
+      - name: Engine check refuses an unknown area cleanly
+        run: |
+          status=0
+          out=$(STRATA_ENGINE_CHECK_AREAS=nosucharea SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=60 test/run_engine_check.sh "$NORNS_DIR" 2>&1) || status=$?
+          echo "$out" | head -20
+          test "$status" -eq 1
+          echo "$out" | grep -q "^ENGINE CHECK FAILED: no area nosucharea"
+          if echo "$out" | grep -q "^ERROR"; then echo "an ERROR line follows the failure"; exit 1; fi
 
   # The required status check: passes only when every shard passed (a
   # failed, canceled or skipped shard fails it), so branch protection keeps

@@ -1,7 +1,10 @@
 ## Must not break
 
 - Only one engine check runs per scsynth port: runs on the same port collide.
-- `test/StrataTestNoBoot.sc.in` stays a `.sc.in` file: norns compiles every `.sc` under `~/dust`, and that test class disables Crone's boot.
+- `test/StrataTestNoBoot.sc.in`, `test/StrataTestTempDir.sc.in` and `test/StrataTestNoBootOSX.sc.in` stay `.sc.in` files: norns compiles every `.sc` under `~/dust`, and these test classes disable Crone's boot and replace the platform's temp dir. A structure test fails on any tracked `.sc` that is not `lib/Engine_Strata.sc` or `lib/engine/Strata*.sc` (#332), and `.gitignore` keeps `test/**/*.sc` out of a commit.
+- A signal (INT, TERM, HUP) to the script stops sclang's whole tree, its scsynth and the work folder, and exits 130 (#331; GNU `timeout` keeps sclang in a process group of its own, so the script's death alone would leave it running on the port).
+- Any `WARNING` line fails a run, as `ERROR` does (#486).
+- A failed precondition (an unknown area, a bad port) or a failed start ends the run with its own `ENGINE CHECK FAILED:` line and nothing after it (#485, #471, #472).
 
 ## The engine check
 
@@ -22,11 +25,17 @@ Structure:
 What fails it, besides a failed check: any output line with `ERROR` at its start, `FAILURE` (the server's report of a failed command), `alloc failed`, `Too many grains` (a grain UGen past `maxGrains`) or `Strata invariant broken`.
 
 Timeouts and processes:
-- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1200 s; a full run of every area takes about 9 minutes on 3.14.1, CI shards set 570 s) with line-buffered output (`stdbuf`).
+- The script runs sclang under `timeout` (`ENGINE_CHECK_TIMEOUT`, default 1200 s; a full run of every area takes about 11 minutes on 3.14.1, CI shards set 570 s) with line-buffered output (`stdbuf`).
 - It stops sclang as soon as the output shows a compile error (a syntax error in `engine_check.scd`, `Library has not been compiled successfully`): sclang never exits by itself then, and would hold the machine and CI's job until killed.
 - `timeout` signals the whole process group, so the scsynth sclang booted goes too. Without a `timeout` command, the script's own watch loop enforces the limit.
 - It stops the scsynth too, even after a sclang crash (through the PID the check writes to its work dir, #152), without needing `pgrep` or `timeout`.
-- The script's own stop signals sclang and every descendant (`kill_tree`, children first), so no scsynth is left on its port. Exit 124 or 137 (timeout's `--kill-after` SIGKILL) reports as a timeout.
+- The script's own stop signals sclang and every descendant (`kill_tree`, children first), so no scsynth is left on its port. Exit 124 or 137 (timeout's `--kill-after` SIGKILL) reports as a timeout. A signal to the script itself runs the same stop (`stop_on_signal`) and exits 130.
+
+Start-up (the check's own, `test/engine_check.scd`):
+- Before booting, it sends `/status` to `$STRATA_SC_PORT`; any reply fails the run at once with `ENGINE CHECK FAILED: port <n> already has a server`, and it never quits a server it did not start (#471).
+- A scsynth that exits without booting (a port held by a program that does not answer, JACK not running) fails the run within seconds with `ENGINE CHECK FAILED: scsynth did not boot` instead of at the deadline (#472). The script's summary prints scsynth's `*** ERROR` lines.
+- The temp dir override the check needs lives in `test/StrataTestTempDir.sc.in`, copied into a `SystemOverwrites` folder of the work dir's classes, where sclang does not warn that an extension overwrites a system method (#486).
+- CI's engine shards also run the check with an unknown area and require its failure line without an `ERROR` line (#485).
 
 Ports:
 - Each run boots scsynth on `$STRATA_SC_PORT` (default 57110). Runs on different ports (avoid 57120 and the few above it, used by sclang itself) can overlap; runs on the same port collide. `docs/status.md` (Running the checks) has the details.

@@ -16,3 +16,6 @@ Thumbs.db
 
 # Agent task reports (kept untracked)
 TASK-*-REPORT.md
+
+# A generated copy of a test class: norns compiles every .sc under ~/dust (#332)
+test/**/*.sc

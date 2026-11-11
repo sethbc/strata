@@ -1006,7 +1006,8 @@ test("every variable Engine_Strata.sc declares is used in the engine's code", fu
 end)
 
 -- The engine areas and their orders (the 3.2 design, §0)
-local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70 }
+local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
+  scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}
@@ -1028,6 +1029,7 @@ test("every engine file is named Strata*.sc and defines each strataArea method o
           assert_true(order ~= nil, method.name .. " has an order")
           assert_true(orders[order] == nil, method.name .. " shares order " .. tostring(order) .. " with " .. tostring(orders[order]))
           orders[order] = method.name
+          assert_true(ENGINE_AREAS[area] ~= nil, method.name .. " is in ENGINE_AREAS (the table pins every area's order, #492)")
           if ENGINE_AREAS[area] then assert_equal(order, ENGINE_AREAS[area], method.name .. "'s order") end
         end
       end
@@ -1038,6 +1040,34 @@ test("every engine file is named Strata*.sc and defines each strataArea method o
   for _, block in ipairs(sc_blocks(files[1].text)) do
     for _, method in ipairs(block.methods) do assert_true(not method.name:match("^strataArea"), "no area in Engine_Strata.sc") end
   end
+end)
+
+-- norns compiles every .sc under ~/dust (#332): a class file anywhere else
+-- in the repository would load on the device. Only the engine's files may
+-- be .sc; the runner's test classes are .sc.in.
+local function stray_sc_files(paths)
+  local stray = {}
+  for _, path in ipairs(paths) do
+    if path:match("%.sc$") and path ~= "lib/Engine_Strata.sc" and not path:match("^lib/engine/Strata%u[%w]*%.sc$") then
+      stray[#stray + 1] = path
+    end
+  end
+  return stray
+end
+
+test("no .sc file is tracked outside the engine's files (#332)", function()
+  local planted = stray_sc_files({ "lib/Engine_Strata.sc", "lib/engine/StrataMix.sc", "test/StrataTestNoBoot.sc",
+    "docs/StrayClass.sc", "lib/engine/helper.sc", "test/StrataTestNoBoot.sc.in" })
+  assert_equal(table.concat(planted, " "), "test/StrataTestNoBoot.sc docs/StrayClass.sc lib/engine/helper.sc", "the scan names the strays")
+  local paths = {}
+  local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files"))
+  for path in listing:lines() do paths[#paths + 1] = path end
+  listing:close()
+  assert_true(#paths > 100, "git ls-files listed the repository")
+  local stray = stray_sc_files(paths)
+  assert_equal(#stray, 0, "norns would compile: " .. table.concat(stray, ", "))
+  local file = assert(io.open(repo_root .. "/.gitignore", "r")); local ignore = file:read("*a"); file:close()
+  assert_true(ignore:find("test/**/*.sc", 1, true) ~= nil, ".gitignore keeps a generated copy of a test class out of a commit")
 end)
 
 -- A LocalBuf built into a SynthDef corrupts sclang 3.13's garbage collector
@@ -1357,10 +1387,14 @@ local function run_runner_without_tools(case, timeout)
   server:close()
   os.execute("chmod +x " .. shell_quote(root .. "/scsynth"))
   local lines = { "#!/bin/sh", shell_quote(root .. "/scsynth") .. " 60 &", "echo $! > " .. shell_quote(root .. "/fake.pid") }
-  if case == "compile-error" then
+  if case == "warning" then
+    -- a run that passes in every way but one WARNING line (#486)
+    lines[#lines + 1] = 'echo "WARNING: Extension overwrites a method"'
+    lines[#lines + 1] = 'echo "ENGINE CHECK PASSED"'
+  elseif case == "compile-error" then
     lines[#lines + 1] = 'echo "ERROR: syntax error, unexpected"'
     lines[#lines + 1] = "sleep 60"
-  elseif case == "hang" then
+  elseif case == "hang" or case == "signal" then
     -- a sclang that stops running: its own deadline never posts its FAIL line
     lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
     lines[#lines + 1] = "sleep 60"
@@ -1372,11 +1406,27 @@ local function run_runner_without_tools(case, timeout)
   sclang:write(table.concat(lines, "\n") .. "\n")
   sclang:close()
   os.execute("chmod +x " .. shell_quote(root .. "/sclang"))
-  local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(root .. "/bin")
+  local run = "cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(root .. "/bin")
     .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
-    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1")
+    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1"
+  local leftover_folders
+  if case == "signal" then
+    -- the runner in the background; once the fake sclang has its server
+    -- going, the runner is sent TERM, the way a caller's timeout would
+    run = "cd " .. shell_quote(repo_root) .. " && ( PATH=" .. shell_quote(root .. "/bin")
+      .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
+      .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1 & runner=$!;"
+      .. " n=0; while [ ! -s " .. shell_quote(root .. "/fake.pid") .. " ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; sleep 1;"
+      .. " kill -TERM $runner; wait $runner; echo exit=$?; sleep 1 )"
+  else
+    run = run .. "; echo exit=$?"
+  end
+  local pipe = io.popen(run)
   local output = pipe:read("*a")
   pipe:close()
+  local folders = io.popen("ls " .. shell_quote(root) .. " | grep -c '^strata-engine-run\\.'")
+  leftover_folders = tonumber(folders:read("*l")) or 0
+  folders:close()
   local pid_file = io.open(root .. "/fake.pid", "r")
   local pid = pid_file and pid_file:read("*l")
   if pid_file then pid_file:close() end
@@ -1384,7 +1434,7 @@ local function run_runner_without_tools(case, timeout)
   alive = alive == true or alive == 0
   if alive then os.execute("kill " .. pid .. " 2>/dev/null") end
   h.remove_tree(root)
-  return output, pid, alive
+  return output, pid, alive, leftover_folders
 end
 
 test("the engine check runner stops sclang's scsynth without pgrep or timeout (#152)", function()
@@ -1412,6 +1462,71 @@ test("the engine check runner stops the scsynth a crashed sclang left behind (#1
   assert_true(not alive, "the orphaned server is stopped through its PID file: " .. output)
 end)
 
+-- #331: a signal to the runner stops sclang's tree, its server and its folder
+test("the engine check runner stops its sclang, scsynth and work folder when it is signaled (#331)", function()
+  local output, pid, alive, folders = run_runner_without_tools("signal")
+  assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
+  assert_true(output:find("exit=130", 1, true) ~= nil, "the runner exits 130: " .. output)
+  assert_true(not alive, "the server is stopped with the runner: " .. output)
+  assert_equal(folders, 0, "the work folder is removed")
+end)
+
+-- #486: any WARNING line fails a run
+test("the engine check runner fails a run that printed a WARNING line (#486)", function()
+  local output = run_runner_without_tools("warning")
+  assert_true(output:find("exit=1", 1, true) ~= nil, "a WARNING fails the run: " .. output)
+end)
+
+-- The workflow (#490, #533): read-only token, credentials not kept, norns
+-- pinned by its full commit, actions/checkout by commit on the current major
+local function read_repo_text(path)
+  local file = assert(io.open(repo_root .. "/" .. path, "r")); local text = file:read("*a"); file:close()
+  return text
+end
+
+test("the workflow reads only, keeps no credentials and pins by full commit (#490, #533)", function()
+  local workflow = read_repo_text(".github/workflows/test.yml")
+  assert_true(workflow:find("\npermissions:\n  contents: read\n") ~= nil, "a top-level permissions: contents: read")
+  local checkouts = 0
+  for step in workflow:gmatch("%-%s*uses:%s*actions/checkout@[^\n]*\n[^\n]*\n[^\n]*") do
+    checkouts = checkouts + 1
+    assert_true(step:find("persist%-credentials: false") ~= nil, "a checkout keeps no credentials: " .. step)
+  end
+  assert_equal(checkouts, 2, "both checkouts")
+  for pin, version in workflow:gmatch("actions/checkout@(%S+)%s*#%s*v(%d+)") do
+    assert_true(pin:match("^%x+$") ~= nil and #pin == 40, "actions/checkout is pinned by its 40-character commit: " .. pin)
+    assert_true(tonumber(version) >= 7, "actions/checkout is on the current major (v7 or later), not v" .. version)
+  end
+  local ref = workflow:match("NORNS_REF:%s*(%S+)")
+  assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "NORNS_REF is a full 40-character commit: " .. tostring(ref))
+end)
+
+-- #491: the docs say what the runner runs, in its order, and how long a
+-- full run takes (the workflow's own area times)
+test("the engine notes give the runner's area order and the full run's time (#491)", function()
+  local runner = read_repo_text("test/engine_check.scd"):gsub("//[^\n]*", "")
+  local order = {}
+  for name in runner:match("var%s+areaOrder%s*=%s*(%b[])"):gmatch("\\(%w+)") do order[#order + 1] = name end
+  local notes = read_repo_text("docs/notes/engine/structure.md")
+  local listed = notes:match("%(`areaOrder`: ([^)]-)%)")
+  assert_true(listed ~= nil, "structure.md gives areaOrder in a parenthesis")
+  local names = {}
+  for name in listed:gsub("then the on%-demand ", ""):gmatch("%a+") do names[#names + 1] = name end
+  assert_equal(table.concat(names, " "), table.concat(order, " "), "structure.md's areaOrder sentence, in the runner's order")
+  local times = read_repo_text(".github/workflows/test.yml"):match("Area times on [^\n]*:([^\n]*\n[^\n]*\n[^\n]*)")
+  times = times:match("^(.-):") or times
+  local total = 0
+  for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
+  assert_true(total > 500, "the workflow's area times sum (" .. total .. " s)")
+  local minutes = math.floor(total / 60 + 0.5)
+  for _, path in ipairs({ "AGENTS.md", "docs/status.md", "docs/notes/lua/test-harness/engine-check-runner.md",
+      "docs/notes/engine/structure.md", "test/run_engine_check.sh" }) do
+    local text = read_repo_text(path)
+    assert_true(text:find("about " .. minutes .. " minutes", 1, true) ~= nil,
+      path .. " says a full run takes about " .. minutes .. " minutes (the workflow's area times sum to " .. total .. " s)")
+    assert_true(text:find("about 9 minutes", 1, true) == nil, path .. " still says 9 minutes")
+  end
+end)
 
 -- The peak scan (#131): fileDecodes and every method of StrataFiles.sc it
 -- calls allocate no array per sample and run no sclang function per sample.
