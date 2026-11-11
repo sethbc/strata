@@ -21,6 +21,16 @@ return function(S)
     value_right = 124,    -- the scroll marker owns x 127
     note_indent = 8,      -- a field's dim note row ("(next start)", ...) starts here
     xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
+    -- the hint row's flash for each answer of S.lib.scenes.request_load
+    load_texts = {loaded = "scenes loaded", missing = "no scenes file", unreadable = "scenes unreadable",
+      confirm = "K3 again: drop unsaved"},
+    -- the status rows for a data file with a problem (S.scene_file,
+    -- S.buffer_file), after its label ("scenes", "buffers"): kept, a file
+    -- that could not be read and was moved to the backup the note row names;
+    -- unreadable, one still in place, which is not saved over; not saved, a
+    -- write that failed
+    file_texts = {kept = " unreadable, kept", unreadable = " file unreadable", ["not saved"] = " file not saved",
+      kept_note = "as ", in_place_note = "not saved over"},
   }
   M.SETUP_PAGE = SETUP_PAGE
 
@@ -29,6 +39,8 @@ return function(S)
   -- or the param's own string); the MIDI port's row reads "<label> <port>:
   -- <device>". kind "action": K3 calls run and hint names the K3 hint (run
   -- looks the scenes function up as it runs, so a test can stand in for it)
+  -- and flashes what it did (#463): the load asks for a second K3 while a
+  -- scene of this session is not on disk (#328)
   local SETUP_FIELDS = {
     {label = "midi", kind = "param", param_id = "midi_device"},
     {label = "channels", kind = "param", param_id = "midi_channel_mode"},
@@ -36,10 +48,22 @@ return function(S)
     {label = "mutation rate", kind = "param", param_id = "mutation_rate", format = "%.1f s"},
     {label = "mutation prob", kind = "param", param_id = "mutation_probability", format = "%.2f"},
     {label = "mutation amt", kind = "param", param_id = "mutation_amount", format = "%.2f"},
-    {label = "save scenes", kind = "action", run = function() save_scenes_to_disk() end, hint = "save"},
-    {label = "load scenes", kind = "action", run = function() load_scenes_from_disk() end, hint = "load"},
+    {label = "save scenes", kind = "action", hint = "save", run = function()
+      M.flash(save_scenes_to_disk() and "scenes saved" or "scenes not saved")
+    end},
+    {label = "load scenes", kind = "action", hint = "load", run = function()
+      local outcome = S.lib.scenes.request_load()
+      M.flash(SETUP_PAGE.load_texts[outcome],
+        outcome == "confirm" and S.lib.scenes.SCENE_LOAD.confirm_seconds or nil)
+    end},
   }
   M.SETUP_FIELDS = SETUP_FIELDS
+
+  -- What a save or load field's K3 did, on the hint row while SETUP is up,
+  -- for seconds (HEADER.flash_seconds when nil); nil text ends the flash
+  function M.flash(text, seconds)
+    S.lib.ui_flash.start("hints", text, seconds, UI_PAGES.index.SETUP)
+  end
 
   -- The performance setting's fields (kind "performance": E3 steps key's
   -- choices in S.lib.performance.PERFORMANCE)
@@ -97,13 +121,35 @@ return function(S)
     end
   end
 
-  -- The fields, then the status lines (no cursor stops). The sizes line
-  -- exists only while a grid is connected. Restored buffers are confirmed by
-  -- the engine; missing files are remembered paths not found on start
+  -- A row (and its dim note row) per data file with a problem (#463): one
+  -- that could not be read, kept under its backup's name or still in place
+  -- (not saved over), or one whose last write failed. They follow the last
+  -- field's notes, before the status lines: the view, which keeps one row
+  -- above the cursor, shows them with the cursor on the last field, and no
+  -- row ever appears above a field (the cursor is a row index)
+  local function add_data_file_rows(rows)
+    local texts = SETUP_PAGE.file_texts
+    for _, entry in ipairs({{"scenes", S.scene_file}, {"buffers", S.buffer_file}}) do
+      local label, state = entry[1], entry[2]
+      if state.problem == "unreadable" then
+        table.insert(rows, {selectable = false, text = label .. (state.backup and texts.kept or texts.unreadable)})
+        table.insert(rows, note_row(state.backup and (texts.kept_note .. state.backup:match("[^/]*$"))
+          or texts.in_place_note))
+      elseif state.problem then
+        table.insert(rows, {selectable = false, text = label .. texts[state.problem]})
+      end
+    end
+  end
+
+  -- The fields, then the data files' problems and the status lines (no
+  -- cursor stops). The sizes line exists only while a grid is connected.
+  -- Restored buffers are confirmed by the engine; missing files are
+  -- remembered paths not found on start
   function M.setup_rows()
     local rows = {}
     for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
     add_performance_rows(rows)
+    add_data_file_rows(rows)
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
       and string.format("running: high, %d s", S.performance.buffer_seconds) or "running: standard"})
     local running_note = S.lib.performance.running_note()
@@ -234,6 +280,28 @@ return function(S)
       {name = "scrolled to the end", setup = function() enc(2, 20) end},
       {name = "two grids scrolled to the end", setup = function(context)
         plug_grids(context); context.arc.plug(1); enc(2, 20)
+      end},
+      {name = "data files unreadable", setup = function()
+        S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak.2"
+        S.buffer_file.problem, S.buffer_file.backup = "unreadable", "/x/buffers.data.bak.9"
+        enc(2, 20)
+      end},
+      {name = "data files not saved", setup = function()
+        S.scene_file.problem, S.buffer_file.problem = "not saved", "unreadable"; enc(2, 20)
+      end},
+      {name = "load prompt", setup = function()
+        enc(2, 7)  -- load scenes
+        M.flash(SETUP_PAGE.load_texts.confirm, S.lib.scenes.SCENE_LOAD.confirm_seconds)
+      end},
+      {name = "data files unreadable, high setting with notes", setup = function()
+        norns.platform = 2
+        S.performance = {tier = "high", buffer_seconds = 120, max_grains = 128, history_seconds = 60,
+          reason = "high: setting"}
+        S.performance_setting = {performance = "high", buffer_seconds = 300}
+        S.performance_start_setting = {performance = "high", buffer_seconds = 300}
+        S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
+        S.buffer_file.problem = "not saved"
+        enc(2, 20)
       end},
       {name = "buffers missing", setup = function()
         S.buffers[1].missing_path = "/x/a.wav"; S.buffers[2].missing_path = "/x/b.wav"

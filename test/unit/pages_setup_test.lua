@@ -409,4 +409,129 @@ test("changing a SETUP field writes performance.data as key value lines", functi
   assert_true(not hint_text(context):find("K3", 1, true), "and its hints offer no K3")
 end)
 
+-- The data files on SETUP (#301)
+
+local function write_text(path, text)
+  local file = assert(io.open(path, "wb")); file:write(text); file:close()
+end
+
+-- The cursor on `label`'s field
+local function cursor_on(label)
+  local S = local_value("S")
+  enc(2, -20)
+  while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= label do enc(2, 1) end
+end
+
+-- The status rows' texts, joined by "|"
+local function status_texts()
+  local texts = {}
+  for _, row in ipairs(local_value("S").lib.pages_setup.setup_rows()) do
+    if row.selectable == false then texts[#texts + 1] = row.text end
+  end
+  return table.concat(texts, "|")
+end
+
+test("K3 on save scenes and load scenes says what it did on SETUP's hint row (#463)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local path = context.data_dir .. "strata/scenes.data"
+  show_page("SETUP")
+  cursor_on("load scenes"); tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "no scenes file")
+  next_frame(context)
+  assert_equal(hint_text(context), "no scenes file", "on the hint row")
+  cursor_on("save scenes"); tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes saved")
+  assert_true(util.file_exists(path))
+  cursor_on("load scenes"); tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes loaded")
+  write_text(path, "return {")
+  tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes unreadable")
+  -- a save that cannot write (its .part is a folder that holds a file)
+  os.execute("mkdir -p '" .. path .. ".part/inside'")
+  cursor_on("save scenes"); tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes not saved")
+  next_frame(context)
+  assert_screen_layout(context, "SETUP scenes not saved flash")
+  -- the flash is SETUP's: it does not show over another page's keys
+  show_page("MAIN")
+  assert_equal(S.lib.ui_flash.text("hints"), nil, "SETUP's flash is not shown on MAIN")
+end)
+
+test("SETUP asks for a second K3 before a load drops a scene that is not on disk (#328)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local path = context.data_dir .. "strata/scenes.data"
+  S.lib.scenes.save(1)
+  os.execute("mkdir -p '" .. path .. ".part/inside'")  -- the next write fails
+  S.lib.scenes.save(2)
+  assert_equal(S.lib.ui_flash.text("header"), "S2 not on disk")
+  show_page("SETUP")
+  cursor_on("load scenes")
+  tap(3)
+  assert_true(S.scenes[2].populated, "one K3 leaves the scene that is not on disk")
+  assert_equal(S.lib.ui_flash.text("hints"), "K3 again: drop unsaved")
+  next_frame(context)
+  assert_equal(hint_text(context), "K3 again: drop unsaved", "the prompt is on the hint row")
+  assert_screen_layout(context, "SETUP load prompt")
+  context.clock.run_for(1.9)
+  assert_equal(S.lib.ui_flash.text("hints"), "K3 again: drop unsaved", "for the 2 s the second K3 has")
+  tap(3)
+  assert_true(not S.scenes[2].populated, "the second K3 loads the file")
+  assert_true(S.scenes[1].populated, "with the scene it holds")
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes loaded")
+  -- nothing unsaved now: one K3 loads
+  context.clock.run_for(3)
+  tap(3)
+  assert_equal(S.lib.ui_flash.text("hints"), "scenes loaded")
+end)
+
+test("SETUP lists a data file it could not read or write, and where an unreadable one was kept (#463)", function()
+  local data_root = h.data_root
+  -- both files unreadable and kept: each names its backup
+  local subdir = "setup-unreadable-" .. math.random(1, 1e9)
+  local dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", "return {"); write_text(dir .. "scenes.data.bak", "an earlier backup")
+  write_text(dir .. "buffers.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  assert_true(status_texts():find("scenes unreadable, kept|as scenes.data.bak.2|buffers unreadable, kept|"
+    .. "as buffers.data.bak|", 1, true) ~= nil, status_texts())
+  show_page("SETUP"); enc(2, 20); redraw()
+  for _, text in ipairs({ "scenes unreadable, kept", "as scenes.data.bak.2", "buffers unreadable, kept",
+      "as buffers.data.bak" }) do
+    assert_true(screen_shows(context, text), "drawn at the end of the list: " .. text)
+  end
+  assert_screen_layout(context, "SETUP data files unreadable")
+  -- unreadable and not moved (every backup name taken): still in place, not saved over
+  subdir = "setup-in-place-" .. math.random(1, 1e9)
+  dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "scenes.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. dir .. "scenes.data.bak." .. number .. "'") end
+  write_text(dir .. "scenes.data", "return {")
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  assert_true(status_texts():find("scenes file unreadable|not saved over|", 1, true) ~= nil, status_texts())
+  S.lib.scenes.save(3)
+  assert_equal(S.lib.ui_flash.text("header"), "S3 not on disk", "the autosave is blocked")
+  -- a write that failed
+  subdir = "setup-not-saved-" .. math.random(1, 1e9)
+  dir = data_root .. subdir .. "/strata/"
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  S = local_value("S")
+  os.execute("mkdir -p '" .. dir .. "scenes.data.part/inside'")
+  os.execute("mkdir -p '" .. dir .. "buffers.data.part/inside'")
+  S.lib.scenes.save(1)
+  load_buffer(1, "/tmp/one.wav")
+  assert_true(status_texts():find("scenes file not saved|buffers file not saved|", 1, true) ~= nil, status_texts())
+  show_page("SETUP"); enc(2, 20); redraw()
+  assert_true(screen_shows(context, "scenes file not saved") and screen_shows(context, "buffers file not saved"))
+  -- the next writes that work clear both
+  os.remove(dir .. "scenes.data.part/inside"); os.remove(dir .. "scenes.data.part")
+  os.remove(dir .. "buffers.data.part/inside"); os.remove(dir .. "buffers.data.part")
+  S.lib.scenes.save(1); load_buffer(2, "/tmp/two.wav")
+  assert_true(not status_texts():find("not saved", 1, true), status_texts())
+end)
+
 end

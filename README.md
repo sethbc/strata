@@ -58,7 +58,7 @@ After installation with either method, restart norns or run `;restart` in maiden
 1. The script starts with the Resonator and FM voices active, on the MAIN page
 2. Use E2 to select a voice, and E3 to adjust its main parameter (K2 moves to grain size and grain density)
 3. Press K3 to start or stop the selected voice. Hold K1 for ALT: ALT+K2 randomizes the voice (again within 5 s to undo) and ALT+K3 locks it
-4. Turn E1 to reach the other pages: VOICE for every parameter of the voice, SEQ for the patterns, FX for master density and the effects, and SCENES to save and recall scenes
+4. Turn E1 to reach the other pages: VOICE for every parameter of the voice, SEQ for the patterns, FX for master density and the effects, and SCENES to save and recall scenes (a saved scene is written to disk at once)
 
 ## Documentation
 
