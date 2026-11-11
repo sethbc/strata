@@ -218,7 +218,7 @@
 
         SynthDef(\strataPulse, {
             arg out, gate=1, freq=120, width=0.5, cutoff=2000,
-            res=0.3, amp=0.3, pan=0,
+            res=0.8, amp=0.3, pan=0,
             modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0,
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
@@ -254,7 +254,13 @@
 
             // Dynamic filter with slow modulation
             cutoff = cutoff * LFNoise1.kr(0.2).range(0.5, 2);
-            sig = RLPF.ar(sig, cutoff.clip(100, 8000), res);
+            // res rises with resonance, as the voice filter's and the master
+            // filter's do (#314): 0.1 (flat) to 1 (sharpest) plays the
+            // filter's rq from 1 down to 0.1, rq = 1.1 - res (Lua's
+            // PULSE_RES.mirror, which mirrors older scenes and PSETs: the
+            // default 0.8 is rq 0.3, 3.2's default). The clip keeps a stray value
+            // from reaching the filter as an rq of 0 or less
+            sig = RLPF.ar(sig, cutoff.clip(100, 8000), 1.1 - res.clip(0.1, 1));
 
             sig = Balance2.ar(sig[0], sig[1], pan);
 

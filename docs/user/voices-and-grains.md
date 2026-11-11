@@ -8,7 +8,7 @@ The seven synthesis voices, each voice's granular processor and the per-voice pe
 2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
 3. **Folder** - Sine wave through wavefolder with dynamic folding amount
 4. **Sub** - Ultra-low frequency sine wave for grounding the mix
-5. **Pulse** - Pulse width modulation synthesis with resonant filtering for classic analog sounds
+5. **Pulse** - Pulse width modulation synthesis with resonant filtering for classic analog sounds. Its res (0.1-1, default 0.8) rises with resonance like every other res: turned up, the filter rings at its cutoff; at 0.1 it is flat. Before 3.3 it ran the other way; scenes and PSETs saved then sound the same and show the turned-around number (0.3 shows as 0.8), and a controller mapped to it or its grid fader now sharpens it as it goes up
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 

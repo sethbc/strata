@@ -5,7 +5,8 @@
 // its velocity, the Resonator's ceiling and level, the strataMod guard, the
 // controls the engine refuses as param names, what a voice param sends a
 // buffer voice's grain synth, commands to a stopped voice or a bad index,
-// and the FM and Ring voices' subsonic block.
+// the FM and Ring voices' subsonic block, and the direction of the Pulse
+// voice's res.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -328,6 +329,41 @@ var checkSubsonic = {
     h.stopAllVoices;
 };
 
+// The Pulse voice's res rises with resonance, as every other res does
+// (#314): at 250 Hz with its cutoff at 1000 the voice bus is at least
+// pulseResMinimumDb (1 dB) louder at res 1 than at res 0.1, each the RMS of
+// its left channel over 6 s, alternated 0.1, 1, 0.1, 1 so the cutoff's slow
+// wander (0.5 to 2 times, at 0.2 Hz) averages out (+3.2 to +4.4 dB measured;
+// -4.1 dB when res was the filter's rq). Every level is above 0.01.
+var checkPulseRes = {
+    var pulseResMinimumDb = 1;
+    var bus = Bus.control(server, 1), probe, levels, ratioDb;
+    SynthDef(\strataCheckPulseRms, { arg in, out, t_reset = 0;
+        var sig = In.ar(in, 2)[0], reset = T2A.ar(t_reset);
+        Out.kr(out, A2K.kr((Integrator.ar(sig.squared, 1 - reset) / Sweep.ar(reset, SampleRate.ir).max(1)).sqrt));
+    }).add;
+    command.(\setGrainSource, 4, 0);
+    server.sync;
+    command.(\voiceOn, 4, 250.0, 0.3, 0.0, 0.1, 20.0, 1.0);
+    command.(\setVoiceParam, 4, \cutoff, 1000.0);
+    command.(\setVoiceParam, 4, \width, 0.5);
+    server.sync; 3.0.wait;
+    probe = Synth(\strataCheckPulseRms, [\in, engine.granBuses[4], \out, bus.index], engine.voiceGroup, \addAfter);
+    levels = [0.1, 1.0, 0.1, 1.0].collect({ arg res;
+        command.(\setVoiceParam, 4, \res, res);
+        server.sync; 0.3.wait;
+        probe.set(\t_reset, 1); 6.0.wait;
+        readBus.(bus)[0] ? 0
+    });
+    ratioDb = ((levels[1] + levels[3]) / (levels[0] + levels[2]).max(1e-9)).ampdb;
+    check.((levels.minItem > 0.01) and: { ratioDb >= pulseResMinimumDb },
+        "voices: the Pulse voice's res rises with resonance (RMS at res 0.1, 1, 0.1, 1: %; res 1 over res 0.1: % dB)".format(
+            levels.round(0.0001), ratioDb.round(0.01)));
+    probe.free; server.sync; bus.free;
+    command.(\voiceOff, 4);
+    h.stopAllVoices;
+};
+
 // setGrainParam and setVoiceParam keep none of the controls the engine
 // sets itself (#458): kept, a value stayed in grainControls or
 // voiceControls for good and reached every synth the engine started for
@@ -559,5 +595,6 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
         "voiceOn 1.5 is voiceOn 1 (#504; voice 1 at % Hz, then %)".format(freqBefore, getControl.(engine.synths[\voice1], \freq)));
 }.value;
 checkSubsonic.value;
+checkPulseRes.value;
 h.stopAllVoices;
 }

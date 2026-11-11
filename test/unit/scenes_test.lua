@@ -1293,7 +1293,7 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 4, "scenes are saved as version 4")
+  assert_equal(saved.version, 5, "scenes are saved as version 5")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
 
@@ -1515,7 +1515,7 @@ test("LFO offsets in scenes: save and load, migration of older scenes, validatio
   assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
 end)
 
-test("scenes save as version 4 and a version 3 file loads unchanged", function()
+test("scenes save as version 5 and a version 4 file loads unchanged but for the pulse res, mirrored (#314)", function()
   local context = load_strata(); finish_startup(context)
   scramble_state(5)
   capture_scene(2)
@@ -1523,15 +1523,19 @@ test("scenes save as version 4 and a version 3 file loads unchanged", function()
   save_scenes_to_disk()
   local path = context.data_dir .. "strata/scenes.data"
   local saved = context.tab.load(path)
-  assert_equal(saved.version, 4, "scenes are saved as version 4")
-  saved.version = 3
-  context = load_strata({ data_subdir = "v3" })
+  assert_equal(saved.version, 5, "scenes are saved as version 5")
+  saved.version = 4
+  context = load_strata({ data_subdir = "v4" })
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
   context.tab.save(saved, context.data_dir .. "strata/scenes.data")
   load_scenes_from_disk()
   local loaded = local_value("scenes")[2]
-  assert_true(loaded.populated, "the version 3 scene loads")
-  -- the whole scene is unchanged (numbers to the file's precision)
+  assert_true(loaded.populated, "the version 4 scene loads")
+  -- a version 4 scene holds the pulse filter's rq as its res: mirrored, 1.1 - res
+  local pulse = 5
+  assert_equal(local_value("voices")[pulse].name, "pulse")
+  original.voices[pulse].params.res = 1.1 - original.voices[pulse].params.res
+  -- the whole scene is otherwise unchanged (numbers to the file's precision)
   local function assert_same(expected, actual, where)
     if type(expected) == "number" then
       assert_near(actual, expected, 1e-6, where)
@@ -1544,6 +1548,58 @@ test("scenes save as version 4 and a version 3 file loads unchanged", function()
     end
   end
   assert_same(original, loaded.data, "scene")
+end)
+
+-- #314: from format 5 the Pulse voice's res rises with resonance (the
+-- engine plays rq = 1.1 - res); a scene of format 1 to 4 holds the filter's
+-- rq itself, so its res is mirrored once, as the file loads, and sounds the
+-- same: 3.2's default 0.3 (rq 0.3) loads as 0.8, the new default
+test("a scene saved before format 5 loads the pulse voice's res mirrored, once (#314)", function()
+  local context = load_strata({ data_subdir = "pulse_res_scenes" }); finish_startup(context)
+  local S = local_value("S")
+  local pulse = 5
+  assert_equal(S.voices[pulse].name, "pulse")
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "the default plays rq 0.3, as 3.2's 0.3 did")
+  params:set("v5_res", 0.3)
+  if not S.voices[pulse].active then toggle_voice(pulse) end  -- the scene plays the pulse voice
+  capture_scene(1)
+  local scene = deep_copy(S.scenes[1])
+  local dir = context.data_dir .. "strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  local cases = {
+    { name = "format 4", file = { version = 4, scenes = { deep_copy(scene) } }, expected = 0.8 },
+    { name = "format 1", file = { version = 1, scenes = { deep_copy(scene) } }, expected = 0.8 },
+    { name = "the bare array before 2.1", file = { deep_copy(scene) }, expected = 0.8 },
+    { name = "format 5", file = { version = 5, scenes = { deep_copy(scene) } }, expected = 0.3 },
+  }
+  for _, case in ipairs(cases) do
+    tab.save(case.file, dir .. "scenes.data")
+    assert_equal(load_scenes_from_disk(), "loaded", case.name .. " loads")
+    assert_near(S.scenes[1].data.voices[pulse].params.res, case.expected, 1e-9, case.name .. ": the pulse res")
+    for i = 1, S.constants.NUM_VOICES do
+      if i ~= pulse then
+        assert_equal(S.scenes[1].data.voices[i].params.res, nil, case.name .. ": voice " .. i .. " gains no res")
+      end
+    end
+  end
+  -- a format 4 file recalls the mirrored value, saves as 5 (keeping the old
+  -- file as scenes.data.v4) and is never mirrored again
+  tab.save({ version = 4, scenes = { deep_copy(scene) } }, dir .. "scenes.data")
+  load_scenes_from_disk()
+  params:set("v5_res", 0.5)
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "the recall sets the mirrored value")
+  local sent
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == pulse - 1 and call.args[2] == "res" then sent = call.args[3] end
+  end
+  assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "the engine plays res 0.8 (sent: " .. tostring(sent) .. ")")
+  assert_true(save_scenes_to_disk(), "the migrated file saves")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 5, "as format 5")
+  assert_true(util.file_exists(dir .. "scenes.data.v4"), "the format 4 file is kept as scenes.data.v4")
+  load_scenes_from_disk()
+  assert_near(S.scenes[1].data.voices[pulse].params.res, 0.8, 1e-9, "a format 5 file read back is not mirrored again")
 end)
 
 test("S.lib.scenes.save captures and flashes; capture_scene stays silent", function()
@@ -1721,7 +1777,7 @@ test("an older format's scenes.data is kept as scenes.data.v<n> when it is first
   assert_equal(printed_count(context, "kept as " .. dir .. "scenes.data.v3"), 1,
     "the copy is named once, when it is made")
   assert_equal(file_text(dir .. "scenes.data.v3"), original, "the older file's bytes are kept")
-  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 4, "the file is this format now")
+  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 5, "the file is this format now")
   load_strata({ data_subdir = "scene_old" }); local_value("S").lib.scenes.save(2); cleanup()
   assert_true(not util.file_exists(dir .. "scenes.data.v3.2"), "no second copy")
   assert_equal(file_text(dir .. "scenes.data.v3"), original)
