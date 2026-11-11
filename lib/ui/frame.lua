@@ -1,7 +1,9 @@
 -- lib/ui/frame.lua
 -- Screen and arc redraw requests and the frame clock. The runtime fields
 -- (screen_dirty, arc_dirty, frame_clock, draw_errors) stay on the shared
--- S.constants.UI_PAGES table. The functions are global, as before.
+-- S.constants.UI_PAGES table. The functions are global, as before, but for
+-- contained_call, the error containment of every clock step, a field of
+-- this module's table (S.lib.ui_frame).
 
 return function(S)
   local M = {}
@@ -46,14 +48,25 @@ return function(S)
     return {message = key, traceback = debug.traceback(text, 2)}
   end
 
-  function draw_frame_part(part, draw)
-    local drawn, report = xpcall(draw, draw_error_report)
-    if drawn then
-      UI_PAGES.draw_errors[part] = nil
-    elseif report.message ~= UI_PAGES.draw_errors[part] then
-      UI_PAGES.draw_errors[part] = report.message
-      print("strata: frame draw failed: " .. report.traceback)
+  -- fn(...) under xpcall with draw_error_report, for every step a clock or
+  -- the lattice runs (a frame's draw, the playhead tick's parts, an LFO
+  -- step, a glide step, a mutation tick): a failure prints "strata: <label>
+  -- failed: " and the traceback once per distinct message for its key
+  -- (errors[key] holds the message last printed), a success forgets the
+  -- key's message. Returns whether fn ran without an error
+  function M.contained_call(errors, key, label, fn, ...)
+    local ran, report = xpcall(fn, draw_error_report, ...)
+    if ran then
+      errors[key] = nil
+    elseif report.message ~= errors[key] then
+      errors[key] = report.message
+      print("strata: " .. label .. " failed: " .. report.traceback)
     end
+    return ran
+  end
+
+  function draw_frame_part(part, draw)
+    M.contained_call(UI_PAGES.draw_errors, part, "frame draw", draw)
   end
 
   -- One frame. It calls the global redraw(), so norns' swaps apply: nothing

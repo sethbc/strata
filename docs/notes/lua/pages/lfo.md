@@ -32,7 +32,7 @@ The strip (`draw_strip`), at baseline `strip_y()` = `row_top(S.selected_lfo)` + 
 Input:
 - E2 moves `S.lfo_field` (1-7, clamped). E3: `enc_param_delta(3, field.param(S.selected_lfo), d)`; the on/off field turns the LFO on for d > 0, off for d < 0.
 - `alt_enc`: on the destination, ALT+E3 applies `lfo_dest_group_jump` once per detent and returns true; on any other field it returns false, so `enc` runs with ALT held (fine on the free period, whole steps on number and option params).
-- `lfo_dest_group_jump(index, d)`: the first start above `index` (d > 0) or the last start below it (d < 0); `index` itself when there is none. The built-in starts are 1, 2, 13, 21, ..., 61; 3.2's four registered destinations add 69 (`v1 hist`), 76 (`v1 vfilt`), 83 (`v1 dsend`) and 90 (`v1 rsend`), so the last voice's reverb send (96) is one jump and six detents from v7 main.
+- `lfo_dest_group_jump(index, d)`: the first start above `index` (d > 0) or the last start below it (d < 0); `index` itself when there is none. The built-in starts are 1, 2, 13, 21, ..., 61; 3.2's four registered destinations add 69 (`v1 hist`), 76 (`v1 vfilt`), 83 (`v1 dsend`) and 90 (`v1 rsend`), so from v7 main (61) the last voice's reverb send (96) is four jumps (69, 76, 83, 90) and six detents.
 - K2/K3: `select_lfo_by(-1|1)`, clamped to 1..`NUM_LFOS`.
 - `alt_key`: ALT+K2 sets the field's param to `param_default(id)` (depth 25, destination none, free period 4 s, offset 0, on/off off); ALT+K3 toggles the selected LFO. `arc_button` is the same toggle.
 - Hints: `K2/K3:lfo E3:<label>`; with ALT `K2:reset K3:on|off`, plus ` E3:group` on the destination field (`K2:reset K3:off E3:group`, 120 px by the stub's estimate, is the longest).

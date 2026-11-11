@@ -225,27 +225,18 @@ return function(S)
     set_scrub_rate(voice_idx, rate)
   end
 
-  -- A glide step under xpcall (#517): an error is printed with its
-  -- traceback, once per distinct message per voice (a good step forgets
-  -- it), as the frame clock does (draw_error_report, lib/ui/frame.lua), and
-  -- never ends the glide's clock: the glide runs on while its rate is not 0
+  -- Each glide step runs through the frame's contained_call (#517): an
+  -- error is printed with its traceback, once per distinct message per
+  -- voice (a good step forgets it), and never ends the glide's clock: the
+  -- glide runs on while its rate is not 0
   local glide_errors = {}  -- per voice: the error message its glide last printed
-  local function contained_glide_step(step, voice_idx)
-    local stepped, report = xpcall(step, draw_error_report, voice_idx)
-    if stepped then
-      glide_errors[voice_idx] = nil
-    elseif report.message ~= glide_errors[voice_idx] then
-      glide_errors[voice_idx] = report.message
-      print("strata: scrub glide failed: " .. report.traceback)
-    end
-  end
-
   local function glide(voice_idx)
+    local contained_call = S.lib.ui_frame.contained_call
     clock.sleep(SCRUB.release_seconds)
-    contained_glide_step(start_glide, voice_idx)
+    contained_call(glide_errors, voice_idx, "scrub glide", start_glide, voice_idx)
     while glide_rate[voice_idx] ~= 0 do
       clock.sleep(1 / PLAYHEADS.update_hz)
-      contained_glide_step(decay_glide, voice_idx)
+      contained_call(glide_errors, voice_idx, "scrub glide", decay_glide, voice_idx)
     end
     glide_clock[voice_idx] = nil
   end

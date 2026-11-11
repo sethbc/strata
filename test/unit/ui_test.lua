@@ -172,6 +172,39 @@ test("a draw that fails prints the error and the frame clock keeps drawing (#11)
   assert_equal(arc_hardware.refresh_count, arc_refreshes + 1, "and the arc")
 end)
 
+-- The one helper every contained clock step uses (frame, playheads, LFOs,
+-- glide, mutation): an xpcall with draw_error_report, a failure printed
+-- once per message for its key, a success forgetting it (#517)
+test("contained_call prints a failure once per message and key, and again after a success", function()
+  local context = load_strata()
+  local contained_call = local_value("S").lib.ui_frame.contained_call
+  local errors = {}
+  local function failing(message) error(message) end
+  local function reports(text)
+    local count = 0
+    for _, line in ipairs(context.printed) do
+      if line:find("strata: probe failed: ", 1, true) == 1 and line:find(text, 1, true) then count = count + 1 end
+    end
+    return count
+  end
+  context.printed = {}
+  assert_equal(contained_call(errors, "a", "probe", failing, "boom"), false, "a failure returns false")
+  assert_equal(contained_call(errors, "a", "probe", failing, "boom"), false)
+  assert_equal(reports("boom"), 1, "the same message prints once")
+  assert_true(context.printed[1]:find("stack traceback", 1, true), "with its traceback")
+  contained_call(errors, "b", "probe", failing, "boom")
+  assert_equal(reports("boom"), 2, "another key prints its own")
+  contained_call(errors, "a", "probe", failing, "bang")
+  assert_equal(reports("bang"), 1, "a new message prints at once")
+  local sum
+  assert_equal(contained_call(errors, "a", "probe", function(x, y) sum = x + y end, 2, 3), true, "a success returns true")
+  assert_equal(sum, 5, "the arguments reach the function")
+  assert_equal(errors.a, nil, "and the key's message is forgotten")
+  contained_call(errors, "a", "probe", failing, "bang")
+  assert_equal(reports("bang"), 2, "so the same message prints again")
+  assert_equal(errors.b ~= nil, true, "another key keeps its own")
+end)
+
 test("a draw that keeps failing prints its error once, until the error changes (#49)", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)

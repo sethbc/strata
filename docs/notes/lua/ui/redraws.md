@@ -14,7 +14,8 @@ Issue #11. Nothing in Strata calls `redraw()` or `arc_redraw()` directly.
 - On the LFO page while an LFO runs, and on SEQ while `S.pattern_playing`, `draw_frame` marks the screen dirty every frame (screen only, never the arc), through their records' `animates()`, so the dots and the playing column move. Neither page has a clock of its own.
 
 Draw errors:
-- Each draw runs through `draw_frame_part(part, draw)` (`part` is `"screen"` or `"arc"`): an `xpcall` with `draw_error_report`, which returns a key and the error with its traceback.
+- Each draw runs through `draw_frame_part(part, draw)` (`part` is `"screen"` or `"arc"`): `S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, part, "frame draw", draw)`, an `xpcall` with `draw_error_report`, which returns a key and the error with its traceback.
+- `contained_call(errors, key, label, fn, ...)` is the one containment every clock step uses (a frame's draw, the playhead tick's parts, an LFO step, a glide step, a mutation tick): `fn(...)` under that `xpcall`; a failure prints `strata: <label> failed: ` and the traceback once per distinct message for its key (`errors[key]` holds the message last printed), a success forgets it. It returns whether `fn` ran without an error.
 - The key: a string error is its own key; a table error (a new table each time) is keyed by its `message` field (also what is printed), or else by its type.
 - An error is printed to the console with its traceback and the clock keeps running. The flag was already cleared, so the failed draw is not retried; the next `request_redraw()` draws again.
 - `UI_PAGES.draw_errors[part]` holds the key last printed, so a draw that keeps failing with the same error (e.g. on the LFO page, which draws every frame) prints it once instead of 15 times a second.
