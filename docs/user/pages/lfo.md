@@ -10,7 +10,7 @@ Under the selected LFO's row, one line shows its settings, left to right: destin
 - **E3** - Change the setting under the cursor, both ways (the destination stops at none and at the end of the list, `v7 rsend`, after the voice destinations and the 28 registered ones). On the rate: ALT+E3 changes the free period in finer steps
 - **ALT+E3** on the destination - Jump a group (the ALT hint row shows `E3:group` there): none, the global destinations (density, drift, filter, delay, reverb), voice 1 ... voice 7 (each group starts at the voice's main parameter), then every voice's input history (`v1 hist` ... `v7 hist`), voice filter cutoff (`vfilt`), delay send (`dsend`) and reverb send (`rsend`), a group each, starting at voice 1
 - **K2** / **K3** - Select the previous / next LFO
-- **ALT+K2** - Reset the setting under the cursor to its default
+- **ALT+K2** - A quick press randomizes the selected LFO's shape and rate (a free period of 0.5-30 s, spread evenly across octaves, or for a clocked LFO a division from 1/4 to 16), leaving its destination, mode, depth, offset and on/off alone, so a running LFO keeps running. It acts when you let go of K2; within 5 seconds a quick ALT+K2 again undoes it, and editing the shape or rate ends the undo. Held for half a second (the hint turns to `K2:reset`), it resets the setting under the cursor to its default instead
 - **ALT+K3** - Turn the selected LFO on or off (the hint row shows `K3:on` or `K3:off`). The arc's button does the same on this page
 
 LFOs start at 25 % depth, so turning one on is audible straight away. A scene saved with another depth (0 included) recalls its own depth.
