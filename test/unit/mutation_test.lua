@@ -582,6 +582,26 @@ test("randomize records the old values and undo restores them (#557)", function(
   assert_equal(mutation.undo(), false, "nothing more to undo")
 end)
 
+-- A set's action may change a param drawn later: a loop start's cuts a
+-- length the new start leaves no room for. randomize holds every drawn
+-- param's value before its first set, so the undo restores the length as it
+-- was before the randomize, not as the start's action cut it
+test("randomize holds every old value before its first set, so undo restores a pair an action changed (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  params:set("v2_loop_start", 0); params:set("v2_loop_length", 1)
+  assert_true(mutation.randomize({ page = page_index("VOICE"), section = "probe", voice = 2, draws = {
+    { id = "v2_loop_start", draw = function() return 0.6 end },    -- its action cuts the length to 0.4
+    { id = "v2_loop_length", draw = function() return 0.25 end },
+  } }), "randomized")
+  assert_near(params:get("v2_loop_start"), 0.6, 1e-9, "the start is set")
+  assert_near(params:get("v2_loop_length"), 0.25, 1e-9, "the length is set")
+  assert_near(local_value("undo").values.v2_loop_length, 1, 1e-9, "the length held is the one before the randomize")
+  assert_true(mutation.undo(), "undo")
+  assert_near(params:get("v2_loop_start"), 0, 1e-9, "the start is back")
+  assert_near(params:get("v2_loop_length"), 1, 1e-9, "the length is back whole, not cut")
+end)
+
 test("a locked voice's spec changes nothing (#557)", function()
   local context = load_strata(); finish_startup(context)
   local mutation = local_value("S").lib.mutation

@@ -101,42 +101,58 @@ end
 -- The ranges VOICE's sections draw from (#557's plan), by param key; nil
 -- for a synthesis param (its whole controlspec, as MAIN's randomize) and for
 -- loop_length (0.05 to 1 - its new start, checked apart)
-local DRAW_RANGES = {
-  buf_pos = { 0, 1 }, buf_rate = { 0.5, 2 }, buf_scan = { -0.5, 0.5 }, loop_start = { 0, 0.75 },
-  history = { 0, 16 },                                                      -- the standard tier's history
-  grain_size = { 0.05, 0.35 }, grain_density = { 2, 40 }, grain_pitch = { 0.5, 2.5 }, grain_spread = { 0, 0.6 },
-  mod_speed = { 0.2, 10 }, pan = { -0.8, 0.8 },
-  reverse = { 0, 50 }, pitch_jitter = { 0, 6 }, pan_jitter = { 0, 0.5 }, size_jitter = { 0, 0.5 },
-  interval_prob = { 0, 100 },
-  filter_freq = { 100, 8000 }, filter_res = { 0, 0.7 }, delay_send = { 0, 0.6 }, reverb_send = { 0, 0.6 },
-}
-for slot = 1, 3 do
-  DRAW_RANGES["mod_amp_amt_" .. slot] = { -0.5, 0.5 }
-  DRAW_RANGES["mod_freq_amt_" .. slot] = { -0.5, 0.5 }
+local function draw_ranges(S)
+  local ranges = {
+    buf_pos = { 0, 1 }, buf_rate = { 0.5, 2 }, buf_scan = { -0.5, 0.5 }, loop_start = { 0, 0.75 },
+    history = { 0, S.lib.history.max_seconds() },                          -- the tier's history
+    grain_size = { 0.05, 0.35 }, grain_density = { 2, 40 }, grain_pitch = { 0.5, 2.5 }, grain_spread = { 0, 0.6 },
+    mod_speed = { 0.2, 10 }, pan = { -0.8, 0.8 },
+    reverse = { 0, 50 }, pitch_jitter = { 0, 6 }, pan_jitter = { 0, 0.5 }, size_jitter = { 0, 0.5 },
+    interval_prob = { 0, 100 },
+    filter_freq = { 100, 8000 }, filter_res = { 0, 0.7 }, delay_send = { 0, 0.6 }, reverb_send = { 0, 0.6 },
+  }
+  for slot = 1, S.constants.NUM_MOD_SLOTS do
+    ranges["mod_amp_amt_" .. slot] = { -0.5, 0.5 }
+    ranges["mod_freq_amt_" .. slot] = { -0.5, 0.5 }
+  end
+  for n = 1, S.constants.NUM_BOOKMARKS do ranges["bookmark_" .. n] = { 0, 1 } end
+  return ranges
 end
-for n = 1, 4 do DRAW_RANGES["bookmark_" .. n] = { 0, 1 } end
 
 -- Each section a press randomizes, on voice 1 (Resonator): the source, the
--- cursor's param and the keys drawn (every other param stays). Option keys
--- may draw their old option; every other drawn key changes
-local SECTION_CASES = {
-  { section = "synth", source = "synth", cursor = "freq", drawn = { "freq", "rq", "noise", "mod1", "mod2" } },
-  { section = "synth", source = "buffer", cursor = "buf_scan",
-    drawn = { "buf_pos", "buf_rate", "buf_scan", "loop_start", "loop_length" } },
-  { section = "input", source = "input", cursor = "history", drawn = { "history" } },
-  { section = "grain", source = "synth", cursor = "grain_mode",
-    drawn = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env" } },
-  { section = "crossmod", source = "synth", cursor = "mod_source_2",
-    drawn = { "mod_speed", "mod_amp_amt_1", "mod_freq_amt_1", "mod_amp_amt_2", "mod_freq_amt_2", "mod_amp_amt_3",
-      "mod_freq_amt_3" } },
-  { section = "mix", source = "synth", cursor = "amp", drawn = { "pan" } },
-  { section = "variation", source = "synth", cursor = "intervals",
-    drawn = { "reverse", "pitch_jitter", "pan_jitter", "size_jitter", "interval_prob" } },
-  { section = "filter & sends", source = "synth", cursor = "filter_mix",
-    drawn = { "filter_type", "filter_freq", "filter_res", "delay_send", "reverb_send" } },
-  { section = "bookmarks", source = "buffer", cursor = "bookmark_3",
-    drawn = { "bookmark_1", "bookmark_2", "bookmark_3", "bookmark_4" } },
-}
+-- cursor's param and the keys drawn (every other param stays); undo_section
+-- is the undo's section where it is not the rows' (a buffer voice's synth
+-- section holds an undo of its own). Option keys may draw their old option;
+-- every other drawn key changes
+local function section_cases(S)
+  local crossmod, bookmarks = { "mod_speed" }, {}
+  for slot = 1, S.constants.NUM_MOD_SLOTS do
+    crossmod[#crossmod + 1] = "mod_amp_amt_" .. slot
+    crossmod[#crossmod + 1] = "mod_freq_amt_" .. slot
+  end
+  for n = 1, S.constants.NUM_BOOKMARKS do bookmarks[n] = "bookmark_" .. n end
+  return {
+    { section = "synth", source = "synth", cursor = "freq", drawn = { "freq", "rq", "noise", "mod1", "mod2" } },
+    { section = "synth", undo_section = "synth (buffer)", source = "buffer", cursor = "buf_scan",
+      drawn = { "buf_pos", "buf_rate", "buf_scan", "loop_start", "loop_length" } },
+    { section = "input", source = "input", cursor = "history", drawn = { "history" } },
+    { section = "grain", source = "synth", cursor = "grain_mode",
+      drawn = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env" } },
+    { section = "crossmod", source = "synth", cursor = "mod_source_2", drawn = crossmod },
+    { section = "mix", source = "synth", cursor = "amp", drawn = { "pan" } },
+    { section = "variation", source = "synth", cursor = "intervals",
+      drawn = { "reverse", "pitch_jitter", "pan_jitter", "size_jitter", "interval_prob" } },
+    { section = "filter & sends", source = "synth", cursor = "filter_mix",
+      drawn = { "filter_type", "filter_freq", "filter_res", "delay_send", "reverb_send" } },
+    { section = "bookmarks", source = "buffer", cursor = "bookmark_3", drawn = bookmarks },
+  }
+end
+
+-- The cases, from a loaded script's constants
+local function loaded_section_cases()
+  load_strata()
+  return section_cases(local_value("S"))
+end
 
 local function case_source(S, source)
   if source == "buffer" then return S.constants.SOURCE_SYNTH + 1 end
@@ -603,9 +619,10 @@ test("VOICE's ALT+K2 hint: rand, undo, and reset while held (#557)", function()
 end)
 
 test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
-  for _, case in ipairs(SECTION_CASES) do
+  for _, case in ipairs(loaded_section_cases()) do
     local what = case.section .. " (" .. case.source .. ")"
     local context, S = started_voice_page()
+    local ranges = draw_ranges(S)
     params:set("v1_source", case_source(S, case.source))
     if case.section == "synth" and case.source == "buffer" then
       params:set("v1_loop_start", 0.9)                                    -- a loop length of 0.1 at most
@@ -627,7 +644,7 @@ test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
         if params:lookup_param(id).t ~= params.tOPTION then
           assert_true(value ~= before[id], what .. ": " .. id .. " is drawn")
         end
-        local range = DRAW_RANGES[key_name]
+        local range = ranges[key_name]
         if range then
           assert_true(value >= range[1] - 1e-9 and value <= range[2] + 1e-9,
             what .. ": " .. id .. " " .. value .. " within " .. range[1] .. "-" .. range[2])
@@ -639,7 +656,7 @@ test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
       assert_true(length >= 0.05 - 1e-9 and length <= 1 - start + 1e-9,
         what .. ": the loop length " .. length .. " fits its new start " .. start)
     end
-    assert_true(S.lib.mutation.undo_for(S.constants.UI_PAGES.index.VOICE, case.section, 1),
+    assert_true(S.lib.mutation.undo_for(S.constants.UI_PAGES.index.VOICE, case.undo_section or case.section, 1),
       what .. ": the undo is VOICE's, this section's and voice 1's")
     -- a quick press again undoes it all
     quick_alt_k2()
@@ -650,14 +667,15 @@ test("ALT+K2 on VOICE randomizes only the cursor's section (#557)", function()
 end)
 
 test("VOICE's sections draw from their ranges (#557)", function()
-  for _, case in ipairs(SECTION_CASES) do
+  for _, case in ipairs(loaded_section_cases()) do
     local what = case.section .. " (" .. case.source .. ")"
     local context, S = started_voice_page()
+    local ranges = draw_ranges(S)
     params:set("v1_source", case_source(S, case.source))
     put_cursor(S, "v1_" .. case.cursor)
     local spec = S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section()
     assert_equal(spec.page, S.constants.UI_PAGES.index.VOICE, what .. ": the spec's page")
-    assert_equal(spec.section, case.section, what .. ": the spec's section")
+    assert_equal(spec.section, case.undo_section or case.section, what .. ": the spec's section")
     assert_equal(spec.voice, 1, what .. ": the spec's voice")
     local ids = {}
     for _, entry in ipairs(spec.draws) do ids[#ids + 1] = entry.id end
@@ -667,7 +685,7 @@ test("VOICE's sections draw from their ranges (#557)", function()
     math.randomseed(7)
     for _, entry in ipairs(spec.draws) do
       local key_name = entry.id:match("^v1_(.+)$")
-      local range = DRAW_RANGES[key_name]
+      local range = ranges[key_name]
       local param = params:lookup_param(entry.id)
       local low, high, below_middle, draws = math.huge, -math.huge, 0, 400
       local seen = {}
@@ -741,7 +759,7 @@ end)
 test("ALT+K2 on a locked voice: K2:locked and nothing changes (#557)", function()
   local context, S = started_voice_page()
   toggle_lock(1)
-  for _, case in ipairs(SECTION_CASES) do
+  for _, case in ipairs(section_cases(S)) do
     params:set("v1_source", case_source(S, case.source))
     put_cursor(S, "v1_" .. case.cursor)
     key(1, 1); redraw()
@@ -822,6 +840,52 @@ test("the synth section's undo brings a buffer voice's loop back whole (#557)", 
   quick_alt_k2()
   assert_near(params:get("v1_loop_start"), 0, 1e-9, "undone: the start")
   assert_near(params:get("v1_loop_length"), 1, 1e-9, "undone: the length, as it was before the randomize")
+end)
+
+-- A synth voice's synth section and a buffer voice's (its buffer params and
+-- loop) hold separate undos: after a switch between them, a quick ALT+K2 in
+-- the synth section randomizes the rows it shows, never undoing rows it no
+-- longer shows
+local function ids_changed(before, ids)
+  local changed = {}
+  for _, id in ipairs(ids) do
+    if params:get(id) ~= before[id] then changed[#changed + 1] = id end
+  end
+  return table.concat(changed, ",")
+end
+local SYNTH_IDS = { "v1_freq", "v1_rq", "v1_noise", "v1_mod1", "v1_mod2" }
+local BUFFER_IDS = { "v1_buf_pos", "v1_buf_rate", "v1_buf_scan", "v1_loop_start", "v1_loop_length" }
+
+test("after a synth-source randomize and a switch to a buffer, the synth section offers K2:rand (#557)", function()
+  local context, S = started_voice_page()
+  put_cursor(S, "v1_freq")
+  math.randomseed(13)
+  quick_alt_k2()
+  local randomized = all_param_values()
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  put_cursor(S, "v1_buf_pos")
+  assert_equal(voice_page_rows(1)[S.cursors.voice].section, "synth", "the buffer rows are the synth section")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "nothing here to undo")
+  tap(2); key(1, 0)
+  assert_equal(ids_changed(randomized, BUFFER_IDS), table.concat(BUFFER_IDS, ","), "the press randomizes the buffer rows")
+  assert_equal(ids_changed(randomized, SYNTH_IDS), "", "the hidden synth params keep their randomized values")
+end)
+
+test("after a buffer-source randomize and a switch to the synth, the synth section offers K2:rand (#557)", function()
+  local context, S = started_voice_page()
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  put_cursor(S, "v1_buf_pos")
+  math.randomseed(14)
+  quick_alt_k2()
+  local randomized = all_param_values()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  put_cursor(S, "v1_freq")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:lock", "nothing here to undo")
+  tap(2); key(1, 0)
+  assert_equal(ids_changed(randomized, SYNTH_IDS), table.concat(SYNTH_IDS, ","), "the press randomizes the synth params")
+  assert_equal(ids_changed(randomized, BUFFER_IDS), "", "the hidden buffer params keep their randomized values")
 end)
 
 test("the arc button starts and stops the selected voice on VOICE", function()
