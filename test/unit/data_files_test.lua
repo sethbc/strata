@@ -8,17 +8,7 @@
 return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, data_root, tabutil_text = h.load_strata, h.local_value, h.data_root, h.tabutil_text
-
-local function write_text(path, text)
-  local file = assert(io.open(path, "wb")); file:write(text); file:close()
-end
-
-local function file_text(path)
-  local file = io.open(path, "rb")
-  if not file then return nil end
-  local text = file:read("*a"); file:close()
-  return text
-end
+local write_text, file_text, watch_writes = h.write_text, h.file_text, h.watch_writes
 
 -- nil when actual holds what expected holds (the same keys and values, NaN
 -- where expected has NaN, the same number subtype on Lua 5.3, and a table
@@ -326,43 +316,6 @@ test("encode writes tab.save's layout, the same bytes whatever order the keys we
   assert_equal(data_files.encode(assert(data_files.decode(tabutil_text(nested)))), text)
 end)
 
--- Wrap io.open so a file opened for writing whose name ends in `suffix`
--- fails as a full card does: `how` is "write" (file:write returns nil and
--- "No space left on device" past `limit` bytes), "flush" or "close" (that
--- call returns nil and the message, after the bytes were written). Returns
--- a function that puts io.open back and the names opened for writing
-local function fail_writes(suffix, how, limit)
-  local real_open, opened = io.open, {}
-  io.open = function(name, mode)
-    local file, problem = real_open(name, mode)
-    if not file or not tostring(mode):find("w") then return file, problem end
-    table.insert(opened, name)
-    if name:sub(-#suffix) ~= suffix then return file, problem end
-    local written, proxy = 0, {}
-    function proxy:write(text)
-      if how == "write" and written + #text > limit then
-        file:write(text:sub(1, limit - written)); written = limit
-        return nil, "No space left on device", 28
-      end
-      written = written + #text
-      file:write(text)
-      return self
-    end
-    function proxy:flush()
-      if how == "flush" then file:flush(); return nil, "No space left on device", 28 end
-      return file:flush()
-    end
-    function proxy:close()
-      if how == "close" then file:close(); return nil, "No space left on device", 28 end
-      return file:close()
-    end
-    function proxy:seek(...) return file:seek(...) end
-    function proxy:read(...) return file:read(...) end
-    return proxy
-  end
-  return function() io.open = real_open end, opened
-end
-
 test("write goes to a .part file and replaces the file only when every step worked", function()
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
@@ -372,14 +325,14 @@ test("write goes to a .part file and replaces the file only when every step work
   assert_equal(file_text(path), data_files.encode({ a = 1 }))
   local before = file_text(path)
   -- the same value again: nothing is opened for writing
-  local restore, opened = fail_writes(".part", "none")
+  local restore, opened = watch_writes(".part")
   saved, detail = data_files.write(path, { a = 1 })
   restore()
   assert_equal(saved, true); assert_equal(detail, "unchanged")
   assert_equal(#opened, 0, "an unchanged file is not rewritten")
   -- a write, a flush or a close that fails: the old bytes stay, the .part is gone
   for _, how in ipairs({ "write", "flush", "close" }) do
-    restore, opened = fail_writes(".part", how, 10)
+    restore, opened = watch_writes(".part", { at = how, after = 10 })
     saved, detail = data_files.write(path, { a = 2, b = "more than ten bytes" })
     restore()
     assert_equal(saved, false, how .. " fails: write says so")
@@ -411,8 +364,11 @@ test("a backup never replaces an earlier one; a copy is kept once per content", 
   assert_equal(file_text(path .. ".bak"), "first"); assert_equal(file_text(path .. ".bak.2"), "second")
   -- a copy: the file stays; the same bytes are copied once
   write_text(path, "third")
-  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3")
-  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3", "the same bytes are not copied twice")
+  local kept, how = data_files.keep_copy(path, ".v3")
+  assert_equal(kept, path .. ".v3"); assert_equal(how, "copied")
+  kept, how = data_files.keep_copy(path, ".v3")
+  assert_equal(kept, path .. ".v3", "the same bytes are not copied twice")
+  assert_equal(how, "found", "and keep_copy says it found them")
   write_text(path, "fourth")
   assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3.2", "other bytes get the next name")
   assert_equal(file_text(path), "fourth"); assert_equal(file_text(path .. ".v3"), "third")
@@ -424,7 +380,6 @@ test("a backup never replaces an earlier one; a copy is kept once per content", 
   local moved, problem = data_files.set_aside(path, ".bak")
   assert_equal(moved, nil); assert_equal(type(problem), "string"); assert_equal(file_text(path), "fifth")
   for number = 3, 9 do write_text(path .. ".v3." .. number, "x") end
-  local kept
   kept, problem = data_files.keep_copy(path, ".v3")
   assert_equal(kept, nil); assert_equal(type(problem), "string")
   for number = 1, 9 do

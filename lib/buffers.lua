@@ -637,7 +637,7 @@ return function(S)
     local saved, detail = true, nil
     if state.version then
       saved, detail = data_files.keep_copy(buffer_data_file(), ".v" .. state.version)
-      if type(saved) == "string" then print("buffers file of format " .. state.version .. " kept as " .. saved) end
+      if detail == "copied" then print("buffers file of format " .. state.version .. " kept as " .. saved) end
     end
     if saved then saved, detail = data_files.write(buffer_data_file(), value) end
     if not saved then

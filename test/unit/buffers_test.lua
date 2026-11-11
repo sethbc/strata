@@ -1461,40 +1461,7 @@ end)
 
 -- buffers.data on disk (#301)
 
-local function file_text(path)
-  local file = io.open(path, "rb")
-  if not file then return nil end
-  local text = file:read("*a"); file:close()
-  return text
-end
-
--- Wrap io.open: every name opened for writing is recorded, and a write to
--- a file whose name holds `part` fails past `limit` bytes as a full card
--- does (file:write returns nil and "No space left on device"); `limit` nil
--- fails nothing. Returns a function that puts io.open back, and the names
-local function watch_writes(part, limit)
-  local real_open, opened = io.open, {}
-  io.open = function(name, mode)
-    local file, problem = real_open(name, mode)
-    if not file or not tostring(mode):find("w") then return file, problem end
-    table.insert(opened, name)
-    if limit == nil or not name:find(part, 1, true) then return file, problem end
-    local written, proxy = 0, {}
-    function proxy:write(text)
-      if written + #text > limit then
-        file:write(text:sub(1, limit - written)); written = limit
-        return nil, "No space left on device", 28
-      end
-      written = written + #text
-      file:write(text)
-      return self
-    end
-    function proxy:flush() return file:flush() end
-    function proxy:close() return file:close() end
-    return proxy
-  end
-  return function() io.open = real_open end, opened
-end
+local file_text, write_text, watch_writes = h.file_text, h.write_text, h.watch_writes
 
 -- The names in `opened` that are buffers.data or a file beside it
 local function data_writes(opened)
@@ -1550,7 +1517,7 @@ test("a buffers write that fails keeps the old file and says so; the next change
   local good = file_text(path)
   assert_true(good ~= nil, "the first load is on disk")
   -- the card fills: every write to buffers.data (or a file beside it) stops at 40 bytes
-  local restore = watch_writes("buffers.data", 40)
+  local restore = watch_writes("buffers.data", { at = "write", after = 40 })
   load_buffer(2, "/tmp/two.wav")
   assert_equal(file_text(path), good, "the file is byte for byte the last good one")
   assert_equal(S.buffer_file.problem, "not saved")
@@ -1565,7 +1532,7 @@ test("a buffers write that fails keeps the old file and says so; the next change
   restore()
   context = load_strata({ data_subdir = subdir }); finish_startup(context)
   S = local_value("S")
-  restore = watch_writes("buffers.data", 40)
+  restore = watch_writes("buffers.data", { at = "write", after = 40 })
   load_buffer(4, "/tmp/four.wav")
   restore()
   assert_equal(S.buffer_file.problem, "not saved")
@@ -1581,7 +1548,7 @@ test("a version 1 buffers.data is kept as buffers.data.v1 when it is first repla
   local dir = data_root .. subdir .. "/strata/"
   os.execute("mkdir -p '" .. dir .. "'")
   local original = tabutil_text({ version = 1, paths = { "", "", "", "", "", "", "", "" } })
-  local file = assert(io.open(dir .. "buffers.data", "wb")); file:write(original); file:close()
+  write_text(dir .. "buffers.data", original)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
   assert_true(not util.file_exists(dir .. "buffers.data.v1"), "nothing is copied until the file is replaced")
   load_buffer(1, "/tmp/drone.wav")
@@ -1600,8 +1567,8 @@ test("an unreadable buffers.data is named on the hint row at start and kept unde
   local subdir = "buffers-start-flash-" .. math.random(1, 1e9)
   local dir = data_root .. subdir .. "/strata/"
   os.execute("mkdir -p '" .. dir .. "'")
-  local file = assert(io.open(dir .. "buffers.data", "wb")); file:write("return {"); file:close()
-  file = assert(io.open(dir .. "buffers.data.bak", "wb")); file:write("an earlier backup"); file:close()
+  write_text(dir .. "buffers.data", "return {")
+  write_text(dir .. "buffers.data.bak", "an earlier backup")
   local context = load_strata({ data_subdir = subdir })
   local S = local_value("S")
   assert_equal(S.lib.ui_flash.text("hints"), "buffers unreadable (SETUP)")

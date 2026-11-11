@@ -411,9 +411,7 @@ end)
 
 -- The data files on SETUP (#301)
 
-local function write_text(path, text)
-  local file = assert(io.open(path, "wb")); file:write(text); file:close()
-end
+local write_text = h.write_text
 
 -- The cursor on `label`'s field
 local function cursor_on(label)
