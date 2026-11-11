@@ -13,7 +13,7 @@
 `slotGrainPos(trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength, recHead)` returns the grain's start as a fraction of the valid region (`slotGrainReader` turns it into a fraction of the buffer):
 
 ```
-start = loopStart + ((bufPos + scan + spreadDraw) wrap 0..1) × loopLength
+start = loopStart + ((min(bufPos, lastLoopPosition) + scan + spreadDraw) wrap 0..1) × loopLength
 ```
 
 in frames, inside the starts that keep the grain in the region:
@@ -24,7 +24,7 @@ in frames, inside the starts that keep the grain in the region:
 | reverse (`rate < 0`) | `durFrames` | `validFrames - grainEndMargin` |
 
 The loop's first and last start (`loopStart × validFrames`, `(loopStart + loopLength) × validFrames`) are clipped to that range, the last never below the first, and the wrapped position moves between them. So:
-- `bufPos`, the scan and the spread are fractions of the loop and wrap inside it (a scan of 1 crosses the loop once a second, whatever its length).
+- `bufPos`, the scan and the spread are fractions of the loop and wrap inside it (a scan of 1 crosses the loop once a second, whatever its length). `bufPos` itself is held under 1 (`lastLoopPosition`, 0.999999) before the scan and the spread are added, so `bufPos` 1 (the encoder's end stop, a bookmark at 1.000, an LFO clamped at the top) is the loop's last start, not its first (#363); every position below that is unchanged.
 - A grain starts inside the loop and may play past its end (a reverse one past its start): short loops keep full-length grains.
 - A loop with no room left for a grain (at the region's end, or shorter than a grain near it) starts every grain at the nearest start that fits, which may be before the loop. A region shorter than a grain gets grains as long as the region, from its start (reverse: from its end).
 - The forward range always holds a start: `durFrames` is at most `validFrames - grainEndMargin`.
@@ -35,7 +35,7 @@ The loop's first and last start (`loopStart × validFrames`, `(loopStart + loopL
 ## The engine check
 
 `test/engine_check/loops.scd`:
-- A check-only def runs `slotGrainPos` alone (no buffer) and reports the lowest and highest start, the lowest and highest frame a grain reads, and the largest difference from 3.1's start, over the triggers since a reset. It checks the starts of a 0.25/0.25 loop, the wrap of `bufPos`, scan and spread inside the loop (`bufPos` 0.9 alone starts at 0.475), grains past a loop's end but inside the region, loops of 0.001 at either end of a region and in a region shorter than a grain (both rates), and 3.1's starts at loop 0/1 (within 1e-5 of the region).
+- A check-only def runs `slotGrainPos` alone (no buffer) and reports the lowest and highest start, the lowest and highest frame a grain reads, and the largest difference from 3.1's start, over the triggers since a reset. It checks the starts of a 0.25/0.25 loop, the wrap of `bufPos`, scan and spread inside the loop (`bufPos` 0.9 alone starts at 0.475; `bufPos` 1 alone at the loop's last start, both rates), grains past a loop's end but inside the region, loops of 0.001 at either end of a region and in a region shorter than a grain (both rates), and 3.1's starts at loop 0/1 (within 1e-5 of the region).
 - A second check-only def gives `slotGrainPos` a rate and frames that alternate per trigger (a `ToggleFF`: rate 1 then -1 at 9600 frames; 2400 then 19200 frames; rate 0.5 at 4800 then 2 at 19200): every grain reads inside the region. And no grain SynthDef holds a control-rate `Clip` with an audio-rate input.
 - A voice on a slot whose frames outside the region under test hold 1 (the rest 0) must be silent: grains with a 0.25/0.25 loop over a slot with 1 before 0.25 (the whole region is heard first, as the control), and loops at the region's end or shorter than a grain over a slot with 1 past its region (rates 1 and 2).
 - Grains with per-grain draws (`reverseProb` 0.5, `sizeJitter` 1, `pitchJitter` 12, each alone) on a 1 s region with 1 past it are silent, and heard over a slot of 1s.
