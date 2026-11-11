@@ -113,12 +113,12 @@ test("a finishing take settles from the last known seconds when no report comes"
   assert_equal(context.clock.pending_count(), 0, "cleanup cancels the fallback")
 end)
 
-test("record_buffer sends the eight-argument recordBuffer with neutral values", function()
+test("record_buffer sends the nine-argument recordBuffer with neutral values", function()
   local context = load_strata(); finish_startup(context)
   params:set("record_duration", 4); params:set("record_level", 0.8)
   record_buffer(2)
   local args = context.calls_named("recordBuffer")[1].args
-  assert_equal(#args, 8, "slot, seconds, level, feedback, source, threshold, loop, delay")
+  assert_equal(#args, 9, "slot, seconds, level, feedback, source, threshold, loop, delay, sent")
   assert_equal(args[1], 1, "slot 2")
   assert_near(args[2], 4, 1e-9, "4 s")
   assert_near(args[3], 0.8, 1e-9, "level 0.8")
@@ -710,6 +710,58 @@ test("a synced take at 90 BPM lasts record_beats x 60 / 90 s", function()
   context.clock.run_for(1)   -- once the clock reports the tempo
   context.clear_engine_calls(); record_buffer(1)
   assert_near(recording_calls(context)[1].args[2], 16 * 60 / 90, 1e-6, "16 beats at 90 BPM")
+end)
+
+-- #567: on the internal clock clock.get_tempo() reads the old tempo until
+-- the clock has ticked twice, so a take synced right after a tempo change
+-- got the old tempo's length and delay. The clock_tempo param is the tempo
+-- the clock runs from now on
+test("a synced take's length and delay follow a tempo change at once on the internal clock (#567)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 2); params:set("record_beats", 8)
+  context.set_time(1.8)               -- beat 3.6 at 120 BPM
+  params:set("clock_tempo", 60)       -- the beat stays 3.6; a beat is now 1 s
+  assert_equal(clock.get_tempo(), 120, "the clock has not ticked: it still reports 120")
+  context.clear_engine_calls(); record_buffer(1)
+  local args = recording_calls(context)[1].args
+  assert_near(args[2], 8.0, 1e-6, "8 beats of 1 s, not of 0.5 s")
+  -- the next beat at least the 0.25 s lead (0.25 beats) ahead of beat 3.6:
+  -- beat 4, 0.4 beats of 1 s away (at 0.5 s a beat it was beat 5, 0.7 s)
+  assert_near(args[8], 0.4, 1e-6, "the next beat at 60 BPM")
+end)
+
+-- Review focus 3: under MIDI or crow the clock_tempo param is updated only
+-- by norns' external tempo poll, so it lags the clock: there the clock's
+-- tempo is the one to read
+test("under MIDI or crow a take's length follows the clock's tempo, not the param", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("record_sync", 2); params:set("record_beats", 16)
+  for _, source in ipairs({2, 4}) do   -- midi, crow
+    params:set("clock_source", source)
+    assert_equal(params:get("clock_tempo"), 120, "the param stays at 120")
+    clock.tempo = 90                    -- the external source's tempo
+    clear_buffer(1); context.clear_engine_calls(); record_buffer(1)
+    assert_near(recording_calls(context)[1].args[2], 16 * 60 / 90, 1e-6,
+      params:string("clock_source") .. ": 16 beats at the clock's 90 BPM")
+    clock.tempo = 120
+  end
+end)
+
+-- #565: a delay that runs from when sclang handles the command starts late
+-- when the command waits behind a busy sclang. The command carries Lua's
+-- wall clock modulo 1000 s (a float32 keeps about 61 us there), from which
+-- the engine works out how long it waited
+test("recordBuffer carries the send time modulo 1000 (#565)", function()
+  local context = load_strata(); finish_startup(context)
+  context.set_time(1234.5)
+  context.clear_engine_calls(); record_buffer(1)
+  local args = recording_calls(context)[1].args
+  assert_equal(#args, 9, "slot, seconds, level, feedback, source, threshold, loop, delay, sent")
+  assert_equal(args[9], 234.5, "util.time() % 1000 at the send")
+  params:set("record_sync", 3)
+  context.set_time(2999.75)
+  clear_buffer(2); context.clear_engine_calls(); record_buffer(2)
+  assert_equal(recording_calls(context)[1].args[9], 999.75, "a synced take's too")
 end)
 
 end

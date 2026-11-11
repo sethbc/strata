@@ -75,20 +75,22 @@ return function(S)
   end
 
   -- The delay (s) to the next beat or bar, at least lead_seconds ahead
-  -- (design 1.6); 0 without sync
+  -- (design 1.6); 0 without sync. At the tempo the clock runs from now on,
+  -- also right after a change (beat_seconds_now, #567)
   local function sync_delay()
     local sync = params:get("record_sync")
     if sync == 1 then return 0 end
     local quantum = sync == 2 and 1 or S.constants.RECORD_SYNC.beats_per_bar
-    local beat_seconds = clock.get_beat_sec()
+    local beat_seconds = S.lib.params_setup.beat_seconds_now()
     local now = clock.get_beats()
     local lead = S.constants.RECORD_SYNC.lead_seconds / beat_seconds
     local target = math.ceil((now + lead) / quantum) * quantum
     return (target - now) * beat_seconds
   end
 
-  -- The length the next recording would have, at the tempo now: {seconds,
-  -- beats, capped}. Sync off: record_duration (beats nil). Sync on:
+  -- The length the next recording would have, at the tempo the clock runs
+  -- from now on (beat_seconds_now: a tempo just set counts at once, #567):
+  -- {seconds, beats, capped}. Sync off: record_duration (beats nil). Sync on:
   -- record_beats beats; when they need more than a slot holds, the whole
   -- beats that fit (capped true), so a loop recorded this way still wraps
   -- on the beat, or the whole slot when not one beat fits (beats 0).
@@ -101,7 +103,7 @@ return function(S)
       -- ends there; a value set before the range was known never passes it)
       return {seconds = math.min(params:get("record_duration"), slot_seconds)}
     end
-    local beat_seconds = clock.get_beat_sec()
+    local beat_seconds = S.lib.params_setup.beat_seconds_now()
     local beats = params:get("record_beats")
     local fit = math.floor(slot_seconds / beat_seconds + 1e-9)
     -- fit beats can pass the slot by a rounding error when a slot is a
@@ -175,8 +177,11 @@ return function(S)
       -- what a replace take replaces, put back if it is canceled before the
       -- engine prepares its slot (taken before anything below changes it)
       local previous = (not playable) and S.lib.buffers.state_before_take(slot) or nil
+      -- last, the wall clock modulo 1000 s at the send (a float32 keeps
+      -- about 61 us there): the engine starts a synced take delay after it,
+      -- however long the command waits for a busy sclang (#565)
       engine.recordBuffer(slot - 1, seconds, params:get("record_level"), feedback, params:get("record_source") - 1,
-        threshold, loop and 1 or 0, delay)
+        threshold, loop and 1 or 0, delay, util.time() % 1000)
       buffer.records_sent = buffer.records_sent + 1
       local armed = delay > 0 or threshold > 0
       takes[slot] = {number = buffer.records_sent, kind = playable and "playable" or "take",

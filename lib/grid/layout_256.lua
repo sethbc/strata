@@ -195,14 +195,11 @@ return function(S)
       pattern_toggle()
     elseif LAYOUT_256.tempo_steps[x] then
       -- Tempo -10, -1, +1, +10; the header shows the tempo it lands on
-      -- (#383): the param's on the internal clock and Link, which the param
-      -- sets (matron's internal clock reports a new tempo only from its
-      -- tick after next, so clock.get_tempo() still reads the old one); the
-      -- clock's under MIDI or crow, which ignore the param
+      -- (#383): the tempo the clock runs from now on (clock_tempo_now: the
+      -- param's on the internal clock and Link, the clock's under MIDI or
+      -- crow, which ignore the param)
       params:delta("tempo", LAYOUT_256.tempo_steps[x])
-      local source = params:string("clock_source")
-      local param_sets_tempo = source == "internal" or source == "link"
-      header_flash(string.format("tempo %d", param_sets_tempo and params:get("tempo") or util.round(clock.get_tempo())))
+      header_flash(string.format("tempo %d", util.round(S.lib.params_setup.clock_tempo_now())))
     end
   end
 

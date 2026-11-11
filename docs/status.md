@@ -62,8 +62,7 @@ CHANGELOG.md has every change. In short:
 
 ## Open items
 
-- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved). One enhancement is left for it: [#565](https://github.com/sethbc/strata/issues/565) (a synced `recordBuffer` queued behind a busy sclang starts late: send an absolute start time).
-- [#567](https://github.com/sethbc/strata/issues/567) **A synced take's length and BUFFER's `len` read the clock's tempo,** which lags a tempo change by up to two ticks.
+- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved).
 - [#211](https://github.com/sethbc/strata/issues/211) **A rarer sclang collector failure** in the waveform area's 300 s loads and saves (#131's family), seen on SuperCollider 3.13 and on 3.14.1, so it is not 3.13-only; a rerun passes.
 - **Not scheduled:** [#557](https://github.com/sethbc/strata/issues/557) (randomize on the VOICE, FX and LFO pages).
 - **Candidate:** a seconds-based scan mode. `bufScan` moves in valid-region lengths per second, so a 300 s slot scans 300 s per second at scan 1; loop regions are the answer until then.
