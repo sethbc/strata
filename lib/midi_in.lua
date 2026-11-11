@@ -25,6 +25,7 @@ return function(S)
     bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
     held = {},                -- per voice: set of notes held on it
     note_voice = {},          -- per channel: note -> the voice its note on played
+    started = {},             -- voice -> true: a MIDI note started it (a panic CC stops these)
   }
   for i = 1, NUM_VOICES do
     S.midi_state.bend[i] = 1
@@ -103,14 +104,20 @@ return function(S)
   local function release_held_notes(stop_all)
     local to_stop = {}
     for i = 1, NUM_VOICES do
-      if next(S.midi_state.held[i]) ~= nil and S.voices[i].active
-          and (stop_all or params:get("midi_note_off") == 2) then
+      local wanted = next(S.midi_state.held[i]) ~= nil
+      -- a panic also stops a voice a released key started and left running
+      if stop_all then wanted = wanted or S.midi_state.started[i] end
+      if wanted and S.voices[i].active and (stop_all or params:get("midi_note_off") == 2) then
         to_stop[#to_stop + 1] = i
       end
       S.midi_state.held[i] = {}
     end
     S.midi_state.note_voice = {}
-    for _, i in ipairs(to_stop) do toggle_voice(i) end
+    if stop_all then S.midi_state.started = {} end
+    for _, i in ipairs(to_stop) do
+      S.midi_state.started[i] = nil
+      toggle_voice(i)
+    end
   end
 
   -- Re-center every bent voice, and (unless `keep_notes`) release the held
@@ -129,7 +136,8 @@ return function(S)
   end
 
   -- All notes off (CC 123) and all sound off (CC 120): release every held
-  -- note and stop the voices they held, in either note off mode (#529)
+  -- note and stop every voice a MIDI note started and left running (held or
+  -- not), in either note off mode (#529)
   M.PANIC_CCS = { [120] = true, [123] = true }
 
   -- The voice a MIDI channel addresses, or nil
@@ -199,7 +207,10 @@ return function(S)
       local min_rate, max_rate = param_range(prefix .. "buf_rate")
       params:set(prefix .. "buf_rate", util.clamp(2 ^ ((note - M.MIDI.rate_root_note) / 12), min_rate, max_rate))
     end
-    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+    if not S.voices[voice_idx].active then
+      toggle_voice(voice_idx)
+      S.midi_state.started[voice_idx] = true
+    end
     engine.retrigger(voice_idx - 1, velocity / M.MIDI.velocity_max)
   end
 
@@ -209,6 +220,7 @@ return function(S)
   function midi_note_off_for(voice_idx)
     if params:get("midi_note_off") ~= 2 or not S.voices[voice_idx].active then return end
     if next(S.midi_state.held[voice_idx]) ~= nil then return end
+    S.midi_state.started[voice_idx] = nil
     toggle_voice(voice_idx)
   end
 
@@ -251,6 +263,11 @@ return function(S)
 
   -- A note is held on a voice exactly while some channel's note on maps it there
   S.register_invariant("midi notes", function()
+    for voice_idx, flag in pairs(S.midi_state.started) do
+      if flag ~= true or voice_idx < 1 or voice_idx > NUM_VOICES then
+        return "started has a bad entry for " .. tostring(voice_idx)
+      end
+    end
     local owned = {}
     for _, channel_notes in pairs(S.midi_state.note_voice) do
       for note, voice_idx in pairs(channel_notes) do

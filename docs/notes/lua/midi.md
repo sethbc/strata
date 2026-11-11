@@ -8,6 +8,7 @@
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
 - The selected vport's device is reconciled when the norns menu closes (`M.reconcile`, a `register_menu_close` hook). Only a change of device resets the held notes, never an ordinary menu visit: SYSTEM > DEVICES moves a device with `update_devices()` and calls neither `midi.add` nor `midi.remove`.
+- A panic (CC 123 or CC 120) stops every active voice that holds a note or is in `S.midi_state.started` (set when `midi_note_on` starts a stopped voice, cleared when a MIDI note off or a panic stops it), in either note off mode, never one the norns, grid or a pattern started. Known limit: a MIDI-started voice that is stopped and restarted from the norns keeps its flag until the next MIDI stop or panic (nothing hooks `toggle_voice`). The `midi notes` invariant checks `started`'s keys.
 - Strata's code handles no CC but 123 and 120 (all notes off and all sound off: `release_held_notes(true)`); norns' PARAMS > MAP maps any other CC to any param.
 - `midi.add` and `midi.remove` are assigned in the start step, never at include time: they read the `midi_device` param, which init adds (#469).
 - A channel mode change keeps `note_voice` and `held` (`reset_midi_input(true)`), so a note off reaches the voice its note on played; a port change or unplug releases them, and in voice off mode stops the voices they held.
@@ -30,7 +31,8 @@ Grouped in tables:
 - `S.midi_state` holds:
   - `bend[voice]`: the ratio, default 1 (transient: never a param, never in scenes);
   - `held[voice]`: the set of held notes;
-  - `note_voice[channel][note]`: the voice a note's note on played.
+  - `note_voice[channel][note]`: the voice a note's note on played;
+  - `started[voice]`: true while a MIDI note started the voice and nothing has stopped it through MIDI.
 - `local musicutil = require "musicutil"`.
 
 ## Params
@@ -58,7 +60,7 @@ Group `strata_midi`, 3 params:
 - `midi_target_voice(channel)`:
   - per voice: channel 1..`NUM_VOICES` addresses that voice, other channels nothing;
   - omni: every channel addresses `S.selected_voice`.
-- `midi_event(data)` parses with `midi.to_msg` and ignores everything but notes, pitchbend and CC 123 / CC 120 (`M.PANIC_CCS`: every held note is released and the voices holding them stop, in either note off mode).
+- `midi_event(data)` parses with `midi.to_msg` and ignores everything but notes, pitchbend and CC 123 / CC 120 (`M.PANIC_CCS`: every held note is released and every voice holding one or started by MIDI stops, in either note off mode).
 
 ## Notes
 
