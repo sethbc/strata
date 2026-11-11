@@ -201,10 +201,12 @@ return function(S)
   -- when the load fails and the take had emptied the slot, so the slot
   -- becomes empty, settled_empty "take" so that a take that had already
   -- completed is still adopted from the engine's report. A replace take
-  -- still armed may not have prepared its slot (a synced take keeps it
-  -- playing until just before its start), so the state is decided when the
-  -- failure is reported, by the length the engine sent after "canceled"
-  -- (resolve_previous): {after_cancel = true, kept = what the take replaced}.
+  -- still armed (also one K3 has stopped, finishing until its "canceled"
+  -- report: it never recorded) may not have prepared its slot (a synced take
+  -- keeps it playing until just before its start), so the state is decided
+  -- when the failure is reported, by the length the engine sent after
+  -- "canceled" (resolve_previous): {after_cancel = true, kept = what the
+  -- take replaced}.
   -- A playable recording (S.lib.record.state(slot).kind == "playable") keeps
   -- the slot's audio, so a failed load during one restores the slot as it was.
   function buffer_state_before_load(slot)
@@ -212,7 +214,7 @@ return function(S)
     local record_state = S.lib.record.state(slot)
     local playable = record_state ~= nil and record_state.kind == "playable"
     if (buffer.recording or buffer.finishing) and not playable then
-      if record_state and record_state.phase == "armed" and not buffer.finishing and record_state.previous then
+      if record_state and record_state.phase == "armed" and record_state.previous then
         return {after_cancel = true, kept = record_state.previous}
       end
       return empty_buffer_state("take")
