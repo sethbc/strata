@@ -1,6 +1,6 @@
 # Strata development status
 
-Last updated 2026-11-11, at the 3.3.1 release. This file is the hand-off between machines and sessions: what is still open, how to run the checks, and where the details live (the decisions are in `docs/decisions.md`). Update it at the end of each piece of work.
+Last updated 2026-11-11, at the 3.3.2 release. This file is the hand-off between machines and sessions: what is still open, how to run the checks, and where the details live (the decisions are in `docs/decisions.md`). Update it at the end of each piece of work.
 
 ## Where things are
 
@@ -12,6 +12,7 @@ Last updated 2026-11-11, at the 3.3.1 release. This file is the hand-off between
   - 3.2.0, the performance setting and one grain path (`docs/design/3.2-design.md`): Wave 0, the engine split, the check per area and the Lua registries; Wave 1, the performance setting and the grain path; Wave 2, freeze, variation, loop regions, the voice mix and long buffers, built in parallel; Wave 3, one issue and pull request per remaining finding, the docs restructure and the release.
   - 3.3.0, buffers as instruments (`docs/design/3.3-design.md`): Wave 0, the engine surface, the Lua scaffolding and the per-voice mix stage; Wave 1, recording, waveforms and files, and positions, engine and Lua, built in parallel; Wave 2, the BUFFER page, its arc rings and the four grid layouts' position pages, with the fixes #199, #207-#210, #217, #218 and #221 on the way. Then three rounds of fixes: the state machine fixes (#232-#258, #295) with the invariants harness (`S.register_invariant`, every module's state invariant checked after every unit test); the engine state fixes (#259-#262) and CI's job timeouts (#225); and the whole-project review's fixes (#300-#559, 29 reviewed packages landed in batches, one pull request per batch, then a final review and its fix wave). Wave 3, the release.
   - 3.3.1, a fix release: a clock-synced recording follows a tempo change and starts on time while the engine is busy (#565, #567; `recordBuffer` gains a ninth argument, `sent`, so one norns restart), `buffers.data` written once per burst of changes, 0.1 s after the first (#566), the engine check's freeze precondition and default timeout (#569, #570), and the design docs for 3.4 and 3.6 (#229, #555).
+  - 3.3.2, page randomize (#557): ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release, with one undo on the same key; SEQ's keys swapped, VOICE's and LFO's reset moved to ALT+K2 held. No engine file changed. Also #575's check tooling (the 3.13 image's python3, the record check's sender timeout).
 - **CI:** `.github/workflows/test.yml` runs `lua` and the engine check in seven parallel shards (`engine (<areas>)`, one runner each), gathered by one `engine` job that passes only when every shard passed. memory runs alone (#131), and waveform's 300 s high engine shares its shard only with record, which builds none (#211); the shards are balanced from the per-area times the check prints, measured on SuperCollider 3.13 at 3.3.0 (at most about 152 s of areas a shard, against about 930 s for all of them), and `test/unit/docs_test.lua` checks that every area is in exactly one. Every job has a timeout: 15 minutes for `lua`, 15 for each engine shard (its check runs under `timeout 600` with `ENGINE_CHECK_TIMEOUT=570`) and 5 for the gathering job, which the test "every CI job has a timeout" in `test/unit/docs_test.lua` pins (#225). A new push to a pull request cancels its older runs; runs on `main` are never canceled. `main` is protected:
   - every change goes through a pull request, with no approvals required;
   - both jobs must pass (since the review fixes' batch landings, a branch need not be up to date with `main`: a landing branch is built on it);
@@ -59,11 +60,11 @@ CHANGELOG.md has every change. In short:
 - **UI:** BUFFER's record fields, waveform and heads, its keys on release and new arc rings; a position page on every grid, a rotation per grid port; the arc's rings at half their old speed (#552).
 - **Data:** `scenes.data` written at once and `buffers.data` once per burst of changes, within 0.1 s of the first (3.3.1, #566), both through a checked `.part`, read by a parser (never run), with copies of unreadable and older files. Scenes are format 5 (the Pulse res turned the right way, #314), `buffers.data` version 2, and every PSET holds a hidden format line.
 - **Code:** the record, waveform and positions areas (three new engine files: one norns restart), the per-voice mix stage, a copy ring per voice for a frozen input, the real-time floors of 3 MB standard and 3.5 MB high, the state invariants checked after every unit test.
-- **Tests:** 1189 Lua tests at 3.3.0, 1199 at 3.3.1.
+- **Tests:** 1189 Lua tests at 3.3.0, 1199 at 3.3.1, 1253 at 3.3.2.
 
 ## Open items
 
-- **Next: 3.3.2**, page randomize for VOICE, FX and LFO ([#557](https://github.com/sethbc/strata/issues/557)), **then 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved).
+- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved).
 - [#211](https://github.com/sethbc/strata/issues/211) **A rarer sclang collector failure** in the waveform area's 300 s loads and saves (#131's family), seen on SuperCollider 3.13 and on 3.14.1, so it is not 3.13-only; a rerun passes.
 - **Candidate:** a seconds-based scan mode. `bufScan` moves in valid-region lengths per second, so a 300 s slot scans 300 s per second at scan 1; loop regions are the answer until then.
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on norns:** held until 4.0; it gates no 3.x release.

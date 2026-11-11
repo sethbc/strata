@@ -1,5 +1,42 @@
 # Strata Changelog
 
+## Version 3.3.2 - 2026-11-11
+
+Page randomize (#557). ALT+K2 randomizes on every page of parameters, the section under the cursor on VOICE, FX and LFO, and pressing it again within 5 seconds undoes it, on the same key. Results stay playable: ranges keep feedback, resonance and the effect mixes below runaway, and level, sources, bypasses and a locked voice's params are never touched. No engine file changed, so a script reload is enough. No param, scene or file format changes.
+
+### Upgrade Notes
+
+- **ALT+K2 acts when K2 is let go,** on MAIN too: a quick press (under half a second) randomizes, or undoes; a press held past half a second does the page's hold action, and letting go of a hold on a page with none cancels.
+- **SEQ's keys swapped:** ALT+K2 randomizes the pattern and ALT+K3 clears it.
+- **VOICE's and LFO's "reset to default" moved** from ALT+K2 to holding ALT+K2 for half a second.
+- No norns restart is needed: no engine file changed. A script reload is enough.
+
+### Added
+
+- **MAIN:** ALT+K2 randomizes the selected voice as before, now on release, and again within 5 seconds undoes it.
+- **VOICE:** ALT+K2 randomizes the section under the cursor, on a voice that is not locked (the hint shows `K2:locked` on a locked one), within ranges that keep it playable:
+  - synth (synth source): the synth's params, never the level;
+  - synth (buffer source): buffer position, rate and scan, and a loop region that fits together;
+  - input: the history;
+  - grain: size, density, pitch, spread and envelope, never the grain mode;
+  - crossmod: the speed and the three slots' amplitude and frequency amounts, never the sources;
+  - mix: the pan where the voice has one, never the source, level or freeze;
+  - variation: reverse, the jitters and the interval probability, never the interval set, the custom intervals or quantize;
+  - filter and sends: type, cutoff, res and the two sends, never the filter's mix;
+  - bookmarks: the four positions.
+- **SEQ:** ALT+K2 randomizes the selected voice's pattern (a locked voice's too, since lock covers params, not patterns), and again within 5 seconds brings the old pattern back; editing a step ends the undo.
+- **FX:** ALT+K2 randomizes the section under the cursor, never a bypass or the filter's mix:
+  - master: density and tape drift;
+  - filter: type, cutoff and res;
+  - delay: time, feedback and mix;
+  - reverb: mix, size and damp.
+- **LFO:** ALT+K2 randomizes the selected LFO's shape and rate (free period or clocked division), keeping its destination, mode, depth, offset and on/off.
+- **One undo for the whole script:** the last randomize, wherever it was. It ends on an edit of a param it holds (or of the voice's pattern on SEQ), a scene recall, a mutation of its voice and a new randomize. On VOICE and LFO the undo stays with its section, voice and, on LFO, the LFO and its mode: elsewhere, a quick ALT+K2 randomizes instead.
+- **Hints:** while ALT+K2 is held, the hint row names what letting go will do (`K2:rand`, `K2:undo`, `K2:locked`, `K2:reset`, or `K2:cancel` when nothing), changing at half a second; letting go of K1 first keeps K2's hint until K2 comes up.
+
+Development:
+- The 3.13 engine-check image names python3, the record check's sender gives up after 10 s without its go file, and `S.buffer_file` lists `save_clock` among its fields (#575).
+
 ## Version 3.3.1 - 2026-11-11
 
 A fix release after 3.3.0. Buffers recorded in time with the clock start on the beat even right after a tempo change or while the engine is busy, and the saved buffer paths no longer hold the script up on file writes. One engine file changed, so norns needs a restart after updating. No param, scene or file format changes.
