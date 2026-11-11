@@ -2,7 +2,9 @@
 
 - Never mutate `amp` or `pan`, the discrete grain keys (`DISCRETE_GRAIN_KEYS`: envelope shape and grain mode), the voice's `source`, or the crossmod sources and amounts. `randomize_voice` never touches `amp`.
 - Every grain key `gentle_mutate` changes is guarded by `not DISCRETE_GRAIN_KEYS[key]`, checked before the `math.random()` draw, so the random sequence stays the same.
-- Frozen voices are left alone: no drift, no mutation, and `randomize_voice` returns for them (buffer params included).
+- Frozen voices are left alone: no drift, no mutation, and `randomize_voice` returns for them (buffer params included). Stopped voices are too: the drift and mutations touch only running voices (`S.voices[i].active`).
+- A mutation step is a turn (#318): `set_mutated_param` sets the param inside `S.lib.ui_detent.as_turn`, so a quantized `freq` walks by scale tones however small each step is (as a set, a step under half a scale step would snap back to its tone; `docs/notes/lua/variation.md`).
+- While a grid shows page 2 (the 256's faders), each drift tick redraws it: that tick is what brings an E3, MIDI or PARAMS edit to the faders.
 - Randomize and mutate synth and buffer params in the controlspec's normalized 0-1 range (`spec:map`, `mutated_value`), so exponential params move evenly in octaves.
 - The drift writes only through `set_drifted_param`, which sets `S.drift_writing` around each write inside an `xpcall`, so the flag always clears and an error is raised again with its traceback.
 - `mean_reverting_step` draws exactly one `math.random()` per call.
@@ -117,7 +119,7 @@ One level, for `UNDO_SECONDS` (5 s, `lib/constants.lua`):
 - `clear_undo()` cancels the expiry clock, drops `S.undo` and requests a redraw.
 - `undo_clock` sleeps `UNDO_SECONDS` and clears the undo, which requests the redraw that puts MAIN's ALT hint back without input. Cleanup step 85 cancels it.
 - `note_param_edit(param_id)` is called from the actions of every param randomize sets. It clears the undo when `param_id` is stored, unless the drift (`S.drift_writing`) or randomize/undo (`undo_writing`) is writing. PARAMS edits, MIDI CC maps, pset loads, grid faders and arc rings all arrive through those actions.
-- `gentle_mutate` writes through `set_mutated_param(voice_idx, param_id, value)`, which clears the undo when the step changed a param of the undo's voice, stored or not (grain spread too).
+- `gentle_mutate` writes through `set_mutated_param(voice_idx, param_id, value)`, which marks the step a turn of the param (`S.lib.ui_detent.as_turn`, #318) and clears the undo when the step changed a param of the undo's voice, stored or not (grain spread too).
 - A scene recall clears it: `recall_scene` (after validation, before a fade starts) and `recall_scene_instant` (so a fade's end does too).
 
 ## Drift and the other systems

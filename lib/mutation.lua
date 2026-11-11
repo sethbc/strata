@@ -3,8 +3,9 @@
 -- walk of grain pitch and buffer position; not the global LFOs), randomize
 -- (randomize_voice, with one level of undo: S.undo, undo_randomize) and
 -- mutations (gentle_mutate, on S.mutation_metro).
--- The functions stay global. The metros are created by init in strata.lua;
--- this module registers their cleanup steps.
+-- The functions stay global. The metros are created by this module's start
+-- steps (S.register_start, at the end of this file) and stopped by its
+-- cleanup steps.
 -- S.grain_pitch_base and S.buf_pos_base (the walk's centers) are also set by
 -- the grain pitch and buffer position param actions, so they live on S, as
 -- does S.drift_writing, which those actions and redraw_on_param_changes read.
@@ -202,11 +203,13 @@ return function(S)
     return spec:map(util.clamp(spec:unmap(current) + delta, 0, 1))
   end
 
-  -- Set one of voice_idx's params as a mutation step. A step that changes a
-  -- param of the undo's voice (stored or not) clears the undo
+  -- Set one of voice_idx's params as a mutation step. A step moves the
+  -- param from its stored value: a turn (S.lib.ui_detent.as_turn), so a
+  -- quantized freq walks by scale tones (#318). A step that changes a param
+  -- of the undo's voice (stored or not) clears the undo
   local function set_mutated_param(voice_idx, param_id, value)
     local before = params:get(param_id)
-    params:set(param_id, value)
+    S.lib.ui_detent.as_turn(param_id, function() params:set(param_id, value) end)
     if S.undo and S.undo.voice == voice_idx and params:get(param_id) ~= before then clear_undo() end
   end
 

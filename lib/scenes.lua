@@ -87,18 +87,23 @@ return function(S)
   -- Per LFO: the library's shape, mode, clocked rate, free period, depth
   -- (percent) and offset (percent), Strata's destination, then the state, so
   -- an LFO starts with its settings in place. Depth, free period and offset
-  -- crossfade. The state switch re-bangs the library's baseline, which zeroes
-  -- the offset: lib/lfos.lua's lfo_<n> wrapper puts the recalled one back
-  -- (#103). range (optional) is the {min, max} validate_scene allows: the
-  -- offset's is the library's, -100..100 for every baseline (the param
-  -- clamps a recalled value to its current baseline's range)
+  -- crossfade (lfo = n: the LFO they belong to), except toward a scene that
+  -- stops the running LFO: its depth fades to stop_target (0) and the others
+  -- hold, the end setting the scene's values with the state (#408). The
+  -- state switch re-bangs the library's baseline, which zeroes the offset:
+  -- lib/lfos.lua's lfo_<n> wrapper puts the recalled one back (#103). range
+  -- (optional) is the {min, max} validate_scene allows: the offset's is the
+  -- library's, -100..100 for every baseline (the param clamps a recalled
+  -- value to its current baseline's range)
   for n = 1, NUM_LFOS do
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, default = S.lib.lfos.LFO_DEFAULT_PERIOD})
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, default = 0})
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_offset_" .. n, continuous = true, default = 0,
+    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, lfo = n,
+      default = S.lib.lfos.LFO_DEFAULT_PERIOD})
+    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, lfo = n, stop_target = 0,
+      default = 0})
+    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_offset_" .. n, continuous = true, lfo = n, default = 0,
       range = S.lib.lfos.LFO_OFFSET_RANGE})
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
     table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
@@ -180,6 +185,21 @@ return function(S)
   -- fade step applied last, set before its redraws: the target blinks by it,
   -- #254)
   S.SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
+
+  -- The library's lfo_<n> state options: 1 off, 2 on
+  local LFO_STATE = {off = 1, on = 2}
+
+  -- Set a param as a scene sets it: a binary through set_binary_param
+  -- (lib/ui/params.lua), so a controller mapped to it in PARAMS > MAP
+  -- follows (norns' Binary:set sends no CC, #538); any other through
+  -- params:set, whose own set sends the map's CC
+  local function set_scene_param(param_id, value)
+    if params:lookup_param(param_id).t == params.tBINARY then
+      set_binary_param(param_id, value)
+    else
+      params:set(param_id, value)
+    end
+  end
 
   -- a finite number: NaN, inf and -inf are refused (the data files' reader
   -- reads inf and nan as numbers, and tab.load read 1e999 as inf, #464)
@@ -374,9 +394,20 @@ return function(S)
       table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step})
     end
 
+    -- an LFO the fade stops (running now, off in the scene) fades its depth
+    -- out, never toward the scene's (a setting the scene never plays), and
+    -- keeps its period and offset: the end sets the scene's values with the
+    -- state (#408)
+    local function stops(n)
+      return params:get("lfo_" .. n) == LFO_STATE.on and scene_data["lfo_" .. n] == LFO_STATE.off
+    end
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
       if global.continuous then
-        add_target(global.id, scene_data[global.id])
+        if not (global.lfo and stops(global.lfo)) then
+          add_target(global.id, scene_data[global.id])
+        elseif global.stop_target ~= nil then
+          add_target(global.id, global.stop_target)
+        end
       end
     end
 
@@ -457,7 +488,7 @@ return function(S)
             for _, target in ipairs(targets) do
               local value = util.linlin(0, 1, target.start, target.target, mix)
               if target.step then value = util.round(value, target.step) end
-              params:set(target.id, value)
+              set_scene_param(target.id, value)
             end
             S.SCENE_TRANSITION.step = step  -- these redraws show its phase
             request_redraw()
@@ -505,7 +536,7 @@ return function(S)
     local recalled, recall_error = xpcall(function()
       -- Restore global parameters
       for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-        params:set(global.id, scene_data[global.id])
+        set_scene_param(global.id, scene_data[global.id])
       end
 
       -- Restore voice states
@@ -519,30 +550,31 @@ return function(S)
         if S.voices[i].active and not voice_data.active then toggle_voice(i) end
 
         local previous_source = S.voices[i].source
-        params:set(prefix .. "source", voice_data.source)
+        set_scene_param(prefix .. "source", voice_data.source)
         source_changed[i] = S.voices[i].source ~= previous_source
 
         for key, value in pairs(voice_data.params) do
-          params:set(prefix .. key, value)
+          set_scene_param(prefix .. key, value)
         end
 
         for key, value in pairs(voice_data.grain) do
-          params:set(prefix .. GRAIN_PARAM_IDS[key], value)
+          set_scene_param(prefix .. GRAIN_PARAM_IDS[key], value)
         end
 
         -- Restore crossmod slots
         for slot = 1, NUM_MOD_SLOTS do
           local slot_data = voice_data.crossmod["slot" .. slot]
-          params:set(prefix .. "mod_source_" .. slot, slot_data.source)
-          params:set(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-          params:set(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+          set_scene_param(prefix .. "mod_source_" .. slot, slot_data.source)
+          set_scene_param(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+          set_scene_param(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
         end
-        params:set(prefix .. "mod_speed", voice_data.crossmod.speed)
+        set_scene_param(prefix .. "mod_speed", voice_data.crossmod.speed)
 
         -- The registered voice params, after the source (a discrete one,
-        -- such as freeze, only now: a transition crossfades the others)
+        -- such as freeze, only now: a transition crossfades the others), in
+        -- key order (#531)
         for _, key in ipairs(sorted_keys(voice_data.extras)) do
-          params:set(prefix .. key, voice_data.extras[key])
+          set_scene_param(prefix .. key, voice_data.extras[key])
         end
 
         S.frozen[i] = scene_data.frozen[i]
@@ -603,6 +635,17 @@ return function(S)
     end
   end
 
+  -- The first slot from `from` (1..length) that holds a scene, going on
+  -- through the sequence and wrapping to 1 past its length; nil when none
+  -- of slots 1..length holds one
+  local function first_scene_from(from, length)
+    for offset = 0, length - 1 do
+      local slot = (from - 1 + offset) % length + 1
+      if S.scenes[slot] and S.scenes[slot].populated then return slot end
+    end
+    return nil
+  end
+
   function scene_sequencer_start()
     if S.scene_sequencer_clock then
       clock.cancel(S.scene_sequencer_clock)
@@ -613,6 +656,64 @@ return function(S)
     S.scene_sequencer_recall_due = true
     grid_redraw()  -- the scene page shows the sequencer on
 
+    -- One pass of the sequencer: recall the scene at the position, hold it,
+    -- advance
+    local function pass()
+      -- Defensive index guard: the position is always in range here (it
+      -- starts at 1 and the advance below wraps with the current length)
+      local length = params:get("scene_sequence_length")
+      if S.scene_sequencer_position > length then
+        S.scene_sequencer_position = 1
+      end
+
+      -- An empty slot is skipped at once (#513): the position moves on to
+      -- the next slot that holds a scene. With none in the sequence it
+      -- stays, and that empty slot is held for the duration like a scene
+      S.scene_sequencer_position = first_scene_from(S.scene_sequencer_position, length)
+        or S.scene_sequencer_position
+
+      -- Recall the scene. From here the slot it recalls next is the one
+      -- after the position, so the recall's redraws (or the hold's) light
+      -- that one
+      S.scene_sequencer_recall_due = false
+      local transition_time = 0
+      if S.scenes[S.scene_sequencer_position].populated then
+        transition_time = params:get("scene_transition_time")
+        -- An error in a param action (in the first fade step or an instant
+        -- recall) must not end this clock while the param shows the
+        -- sequencer on. The recall has cleared its transition and recall
+        -- flags, so the sequencer reports it and keeps going: the next
+        -- scene may well recall fine
+        local recalled, recall_error = xpcall(function()
+          recall_scene(S.scene_sequencer_position, transition_time)
+        end, with_traceback)
+        if not recalled then
+          print("scene sequencer: scene " .. S.scene_sequencer_position .. " failed: " .. tostring(recall_error))
+        end
+      else
+        print("scene sequencer: no scene in slots 1-" .. length .. "; holding slot " .. S.scene_sequencer_position)
+        grid_redraw()  -- the slot it recalls next moved on
+      end
+
+      -- Hold the scene for its duration, and at least until its transition
+      -- ends: the next recall would cancel the fade before it applies the
+      -- scene's discrete state (voices, sources, patterns, ...)
+      local held = math.max(params:get("scene_duration"), transition_time)
+      clock.sleep(held)
+      wait_for_scene_transition()
+
+      -- Advance, wrapping to scene 1 past the end of the sequence as it is
+      -- now (it may have been shortened during the wait)
+      S.scene_sequencer_position = S.scene_sequencer_position + 1
+      if S.scene_sequencer_position > params:get("scene_sequence_length") then
+        S.scene_sequencer_position = 1
+      end
+      S.scene_sequencer_recall_due = true
+
+      request_redraw()
+      grid_redraw()
+    end
+
     S.scene_sequencer_clock = clock.run(function()
       -- Begin on the next scheduler tick: a PSET load sets this param partway
       -- through its read, and the params it sets later (transition time,
@@ -620,52 +721,18 @@ return function(S)
       clock.sleep(0)
 
       while S.scene_sequencer_enabled do
-        -- Defensive index guard: the position is always in range here (it
-        -- starts at 1 and the advance below wraps with the current length)
-        if S.scene_sequencer_position > params:get("scene_sequence_length") then
-          S.scene_sequencer_position = 1
+        -- An error anywhere else in a pass (a param read, the wait, a
+        -- redraw) stops the sequencer through its param, as the pattern
+        -- clock does, so the screen, the grids and the state agree (#329):
+        -- forget this clock's id first, so the stop never cancels it from
+        -- inside itself, then raise the error again for maiden
+        local passed, pass_error = xpcall(pass, with_traceback)
+        if not passed then
+          S.scene_sequencer_clock = nil
+          if params.lookup["scene_sequencer_enabled"] then params:set("scene_sequencer_enabled", 0) end
+          if S.scene_sequencer_enabled then scene_sequencer_stop() end
+          error(pass_error, 0)
         end
-
-        -- Recall next scene in sequence (skip empty scenes). From here the
-        -- slot it recalls next is the one after the position, so the
-        -- recall's redraws (or the skip's) light that one
-        S.scene_sequencer_recall_due = false
-        local transition_time = 0
-        if S.scenes[S.scene_sequencer_position].populated then
-          transition_time = params:get("scene_transition_time")
-          -- An error in a param action (in the first fade step or an instant
-          -- recall) must not end this clock while the param shows the
-          -- sequencer on. The recall has cleared its transition and recall
-          -- flags, so the sequencer reports it and keeps going: the next
-          -- scene may well recall fine
-          local recalled, recall_error = xpcall(function()
-            recall_scene(S.scene_sequencer_position, transition_time)
-          end, with_traceback)
-          if not recalled then
-            print("scene sequencer: scene " .. S.scene_sequencer_position .. " failed: " .. tostring(recall_error))
-          end
-        else
-          print("skipping empty scene " .. S.scene_sequencer_position)
-          grid_redraw()  -- the slot it recalls next moved on
-        end
-
-        -- Hold the scene for its duration, and at least until its transition
-        -- ends: the next recall would cancel the fade before it applies the
-        -- scene's discrete state (voices, sources, patterns, ...)
-        local held = math.max(params:get("scene_duration"), transition_time)
-        clock.sleep(held)
-        wait_for_scene_transition()
-
-        -- Advance, wrapping to scene 1 past the end of the sequence as it is
-        -- now (it may have been shortened during the wait)
-        S.scene_sequencer_position = S.scene_sequencer_position + 1
-        if S.scene_sequencer_position > params:get("scene_sequence_length") then
-          S.scene_sequencer_position = 1
-        end
-        S.scene_sequencer_recall_due = true
-
-        request_redraw()
-        grid_redraw()
       end
     end)
   end
@@ -789,7 +856,8 @@ return function(S)
 
     local scene_table, file_version
     if loaded.version ~= nil then
-      -- Version 1 files are migrated; newer (or invalid) versions are rejected
+      -- Versions 1 to SCENE_DATA_VERSION load (the older ones are migrated
+      -- below); any other version is rejected
       if not is_integer_between(loaded.version, 1, SCENE_DATA_VERSION) then
         print("error: scenes file has version " .. tostring(loaded.version) ..
           ", expected 1 to " .. SCENE_DATA_VERSION)
@@ -1071,26 +1139,39 @@ return function(S)
   end
 
   -- The slot the running scene sequencer recalls next, else nil (#303).
-  -- Until it recalls (or skips) its position, after its start and after
-  -- each advance (S.scene_sequencer_recall_due), that is the position, as
+  -- Until it recalls its position, after its start and after each advance
+  -- (S.scene_sequencer_recall_due), the count starts at the position, as
   -- its loop's guard reads it (1 past the sequence length). From then on,
-  -- through the scene's hold, the position is the scene playing (or the
-  -- empty slot it waits on), and it is the one after it, wrapped to 1 past
-  -- the sequence length as it is now, as the advance does. The grids'
-  -- scene pages light it at 10
+  -- through the scene's hold, the position is the scene playing, and the
+  -- count starts at the one after it, wrapped to 1 past the sequence length
+  -- as it is now, as the advance does. Empty slots are skipped, as the loop
+  -- skips them (#513): it is the first slot from there that holds a scene,
+  -- or that slot itself when none of the sequence does. The grids' scene
+  -- pages light it at 10
   function M.sequencer_next_slot()
     if not S.scene_sequencer_enabled then return nil end
     local length = params:get("scene_sequence_length")
     local next_slot = S.scene_sequencer_position
     if not S.scene_sequencer_recall_due then next_slot = next_slot + 1 end
     if next_slot > length then next_slot = 1 end
-    return next_slot
+    return first_scene_from(next_slot, length) or next_slot
   end
 
-  -- A recall is due only while the sequencer runs
+  -- A recall is due only while the sequencer runs, and the sequencer runs
+  -- exactly while its clock lives (#329): an id is held, and norns'
+  -- clock.threads (which keeps a coroutine an error ended) does not show it
+  -- dead
   S.register_invariant("scene sequencer", function()
     if S.scene_sequencer_recall_due and not S.scene_sequencer_enabled then
       return "scene_sequencer_recall_due is true but the sequencer is off"
+    end
+    if S.scene_sequencer_enabled ~= (S.scene_sequencer_clock ~= nil) then
+      return "scene_sequencer_enabled is " .. tostring(S.scene_sequencer_enabled)
+        .. " but scene_sequencer_clock is " .. tostring(S.scene_sequencer_clock)
+    end
+    local thread = S.scene_sequencer_clock and clock.threads and clock.threads[S.scene_sequencer_clock]
+    if type(thread) == "thread" and coroutine.status(thread) == "dead" then
+      return "the scene sequencer is on but its clock " .. tostring(S.scene_sequencer_clock) .. " has ended"
     end
   end)
 

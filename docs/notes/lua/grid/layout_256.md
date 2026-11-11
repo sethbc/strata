@@ -60,7 +60,7 @@ LEDs:
 - Populated scenes: 8 (row 1) or 6 (row 2).
 - Current scene: 15 (in row 1).
 - Empty scenes: 2.
-- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the slot it recalls next (`S.lib.scenes.sequencer_next_slot()`: its position from its start until its first recall, then the one after its position, wrapped by the sequence length as it is now; an empty slot too) at 10 while it runs. The current scene's 15 wins when they are the same key (a sequence of one slot).
+- Active sequencer: row 5 column 1 at 15 (4 when stopped); row 1 lights the slot it recalls next (`S.lib.scenes.sequencer_next_slot()`: counted from its position from its start until its first recall, then from the one after its position, wrapped by the sequence length as it is now, and skipping empty slots as the sequencer does, #513) at 10 while it runs. The current scene's 15 wins when they are the same key (a sequence of one slot).
 - Sequence length: 8 for included scenes, 2 for excluded.
 
 It follows changes made anywhere (issue #49):

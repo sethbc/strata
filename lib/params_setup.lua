@@ -94,10 +94,30 @@ return function(S)
     restore_tempo_change_handler()
   end)
 
+  -- norns' number param adds a delta unrounded, and its PARAMS menu turns
+  -- a param by d / 20 while K3 is held (core/menu/params.lua's
+  -- delta_value), so a number param could come to hold a fraction (#534).
+  -- A number param gets a delta that steps whole numbers instead, as norns'
+  -- option param does: d rounded away from 0
+  local function step_whole(param)
+    local own_delta = param.delta
+    param.delta = function(self, d)
+      own_delta(self, d < 0 and math.floor(d) or math.ceil(d))
+    end
+  end
+
   -- Add one part of the PARAMS menu: init runs the records' add functions
-  -- in the order they are registered here, which is the menu's order
+  -- in the order they are registered here, which is the menu's order. Each
+  -- number param a record adds (Strata's own and the LFO library's, never
+  -- norns' system params) steps whole numbers (step_whole)
   local function register_params(name, add)
-    S.registry.params[#S.registry.params + 1] = {name = name, add = add}
+    S.registry.params[#S.registry.params + 1] = {name = name, add = function()
+      local before = #params.params
+      add()
+      for index = before + 1, #params.params do
+        if params.params[index].t == params.tNUMBER then step_whole(params.params[index]) end
+      end
+    end}
   end
 
   -- Run a registered record's add(...) and check it added exactly
@@ -528,16 +548,30 @@ return function(S)
   end
 
   -- A voice param's value through its key's registered filter
-  -- (S.registry.param_filters[key]), given the value stored before. A value
+  -- (S.registry.param_filters[key]), given the value stored before and
+  -- whether this set is a turn of the param (S.turning_param, #318). A value
   -- the filter changes is written back to the param silently, so the param
   -- shows what is stored. The filter's result is what is stored, exactly,
   -- so a filter can recognize it as the next call's previous
   local function filtered_value(voice_idx, key, param_id, value, previous)
     local filter = S.registry.param_filters[key]
     if not filter then return value end
-    local result = filter(voice_idx, value, previous)
+    local result = filter(voice_idx, value, previous, S.turning_param == param_id)
     if result ~= value then params:set(param_id, result, true) end
     return result
+  end
+
+  -- A filtered synthesis param's own delta is a turn: norns' PARAMS menu
+  -- turns E3 with the param object's delta (core/menu/params.lua's
+  -- delta_value), and params:delta calls it too, so neither passes
+  -- delta_with_detent, which marks every other turn (#318)
+  local function turn_on_own_delta(key, param_id)
+    if not S.registry.param_filters[key] then return end
+    local param = params:lookup_param(param_id)
+    local own_delta = param.delta
+    param.delta = function(self, d)
+      S.lib.ui_detent.as_turn(param_id, function() own_delta(self, d) end)
+    end
   end
 
   -- Per record name: the keys its add added through add_voice_extra (for
@@ -681,6 +715,7 @@ return function(S)
         end
       }
       add_sender(param_id, function(value) engine.setVoiceParam(engine_voice, key, value) end)
+      turn_on_own_delta(key, param_id)
     end
 
     -- Grain params

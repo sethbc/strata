@@ -45,7 +45,15 @@ return function(S)
   -- against this record (M.reconcile).
   local attached_device = nil
 
+  -- A port number as a vport index: rounded and kept to norns' ports, so a
+  -- fraction (a PSET written before the midi_device param stepped whole
+  -- numbers, #534) still names a port
+  local function vport_index(port)
+    return util.clamp(util.round(port), 1, #midi.vports)
+  end
+
   function attach_midi(port)
+    port = vport_index(port)
     if S.midi_device then S.midi_device.event = nil end
     S.midi_device = midi.connect(port)
     S.midi_device.event = midi_event
@@ -67,7 +75,7 @@ return function(S)
   end
 
   local function midi_removed(device)
-    if device.port == params:get("midi_device") then
+    if device.port == vport_index(params:get("midi_device")) then
       reset_midi_input()
       attached_device = nil
     end

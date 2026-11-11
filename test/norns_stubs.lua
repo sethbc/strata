@@ -941,6 +941,7 @@ local function make_params(util, controlspec)
   -- norns' ParamSet.group (groups cannot nest); last_group is that group,
   -- kept after its last param until the next param shows where it ended
   local paramset = setmetatable({ params = {}, lookup = {}, action_log = {}, open_group = 0 }, ParamSet)
+  local own_delta  -- a param object's delta (below, after ParamSet:set_raw)
 
   local bang
 
@@ -994,7 +995,10 @@ local function make_params(util, controlspec)
     param.set = function(_, value, silent) return ParamSet.set(paramset, param.id, value, silent) end
     param.bang = function() bang(param) end
     param.string = function() return ParamSet.string(paramset, param.id) end
-    param.delta = function(_, delta) return ParamSet.delta(paramset, param.id, delta) end
+    -- core/params/*.lua: the param's own delta does the work, and
+    -- ParamSet:delta calls it, as norns' PARAMS menu does (so a script can
+    -- replace one param's delta, #318)
+    param.delta = function(_, delta) return own_delta(paramset, param, delta) end
     return param
   end
 
@@ -1225,11 +1229,18 @@ local function make_params(util, controlspec)
     end
   end
 
+  -- core/paramset.lua: params:delta is the param object's own delta
   function ParamSet:delta(id, delta)
-    local param = self:lookup_param(id)
+    self:lookup_param(id):delta(delta)
+  end
+
+  -- Each type's delta in core/params/*.lua: a control's is
+  -- set_raw(raw + d * quantum), which wraps a wrapping spec (#478); a
+  -- number's set(value + d); an option's rounds d away from 0 first
+  own_delta = function(self, param, delta)
+    local id = param.id
     if param.t == tCONTROL then
-      local raw = util.clamp(param.raw + delta * param.controlspec.quantum, 0, 1)
-      if param.raw ~= raw then param.raw = raw; bang(param) end
+      self:set_raw(id, param.raw + delta * param.controlspec.quantum)
     elseif param.t == tNUMBER then
       self:set(id, param.value + delta)
     elseif param.t == tOPTION then

@@ -49,9 +49,11 @@ return function(S)
   end
 
   -- A scene recall or transition sets the registered fields in sorted key
-  -- order (lib/scenes.lua), loop_length before loop_start: the length's
-  -- clamp waits for the start, whose action clamps the length, so a recall
-  -- from (0.5, 0.5) to (0, 1) ends at (0, 1), not (0, 0.5)
+  -- order (lib/scenes.lua, #531), so loop_length comes before loop_start.
+  -- The length's filter stands down while a scene sets them (clamped to the
+  -- old start's room, a recall from (0.5, 0.5) to (0, 1) would end at
+  -- (0, 0.5)), and the start, set after it, has the last word: its action
+  -- cuts a length the new start leaves no room for
   local function scene_setting()
     return S.scene_recall_in_progress == true or S.scene_transition_active == true
   end

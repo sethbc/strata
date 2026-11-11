@@ -934,19 +934,17 @@ test("S.lib.scenes.sequencer_next_slot is the slot the running scene sequencer r
   params:set("scene_sequence_length", 4)
   assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "nil while the sequencer is off")
   local recalls = run_scene_sequencer(context, 0, 4, 1)          -- scene 1 at 0 s, held 4 s
-  -- at 1, 5, 9, 13 and 17 s: the slot it holds (slot 4 empty: it waits on it) and the next
-  local expected = { { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 }, { 1, 2 } }
+  -- at 1, 5, 9, 13 and 17 s: the slot it holds and the next (empty slot 4 is skipped, #513)
+  local expected = { { 1, 2 }, { 2, 3 }, { 3, 1 }, { 1, 2 }, { 2, 3 } }
   for index, slots in ipairs(expected) do
     if index > 1 then context.clock.run_for(4, 0.001) end
     local at = (index * 4 - 3) .. " s: "
     assert_equal(S.scene_sequencer_position, slots[1], at .. "the sequencer is on slot " .. slots[1])
     assert_equal(S.lib.scenes.sequencer_next_slot(), slots[2], at .. "it recalls slot " .. slots[2] .. " next")
   end
-  assert_equal(#recalls, 4, "scenes 1, 2, 3 and 1 recalled; empty slot 4 waited on")
-  assert_equal(recalls[4].scene, 1, "after slot 4 the sequencer wrapped to scene 1")
-  context.clock.run_for(4, 0.001)                                 -- 21 s: scene 2, slot 3 next
-  assert_equal(S.lib.scenes.sequencer_next_slot(), 3)
-  params:set("scene_sequence_length", 2)                          -- shortened during the hold
+  assert_equal(#recalls, 5, "scenes 1, 2, 3, 1 and 2 recalled; empty slot 4 skipped")
+  assert_equal(recalls[4].scene, 1, "after scene 3 the sequencer went past slot 4 to scene 1")
+  params:set("scene_sequence_length", 2)                          -- shortened during scene 2's hold
   assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "the length as it is now: slot 1 next")
   context.clock.run_for(4, 0.001)
   assert_equal(recalls[#recalls].scene, 1, "and the sequencer recalls scene 1 next")
@@ -1433,7 +1431,8 @@ test("scenes store the LFO offsets; the LFO on/off switch at a transition's end 
   recall_scene(1, 20)  -- 20 steps; the first runs immediately, the switch after the last
   for step = 1, 20 do
     local mix = step / 20
-    for n, fade in ipairs({ { from = -10, to = 30 }, { from = 40, to = -20 } }) do
+    -- LFO 2 stops at the end: its offset holds until then (#408)
+    for n, fade in ipairs({ { from = -10, to = 30 }, { from = 40, to = 40 } }) do
       local offset = params:get("lfo_offset_" .. n)
       assert_equal(offset, math.floor(offset), "LFO " .. n .. " offset is a whole percent at step " .. step)
       assert_near(offset, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " offset at step " .. step)
@@ -1767,6 +1766,342 @@ test("a load from disk keeps the current scene only when that slot's data is unc
   -- before the change it did
   recall_scene(3, 0); next_frame(context)
   assert_true(screen_shows(context, "S3"), "the header marks scene 3 while it is current")
+end)
+
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does), so
+-- a recall sets a binary param through set_binary_param (lib/ui/params.lua):
+-- a controller mapped to it in PARAMS > MAP follows. The maps are as
+-- lua/core/pmap.lua's pmap.new makes them, with echo on
+test("a recall and a fade's end echo a mapped binary param to its controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  local controller = context.midi.plug(1)
+  local cc_of = { v1_quantize = 21, mutation_enabled = 22 }
+  for param_id, cc in pairs(cc_of) do
+    norns.pmap.data[param_id] = { dev = 1, ch = 1, cc = cc, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+      echo = true, value = 0 }
+  end
+  local function echoes(cc)
+    local values = {}
+    for _, message in ipairs(controller.sent) do
+      if message[2] == cc then table.insert(values, message[3]) end
+    end
+    return values
+  end
+  params:set("v1_quantize", 1); params:set("mutation_enabled", 1)
+  capture_scene(1)
+  params:set("v1_quantize", 0); params:set("mutation_enabled", 0)
+  assert_equal(#controller.sent, 0, "params:set alone echoes nothing, as norns' Binary:set")
+  recall_scene(1, 0)
+  for param_id, cc in pairs(cc_of) do
+    assert_equal(params:get(param_id), 1, param_id .. " recalled")
+    assert_equal(table.concat(echoes(cc), ","), "127", "an instant recall echoes " .. param_id .. " once")
+    assert_equal(norns.pmap.data[param_id].value, 127, "its map keeps the value, as norns' does")
+  end
+  params:set("v1_quantize", 0); params:set("mutation_enabled", 0)
+  controller.sent = {}
+  recall_scene(1, 2)
+  context.clock.run_for(1.5, 0.001)
+  assert_equal(#echoes(21) + #echoes(22), 0, "a fade switches them only at its end")
+  context.clock.run_for(1, 0.001)
+  assert_equal(local_value("scene_transition_active"), false, "the fade landed")
+  for param_id, cc in pairs(cc_of) do
+    assert_equal(table.concat(echoes(cc), ","), "127", "the fade's end echoes " .. param_id .. " once")
+  end
+  params:set("mutation_enabled", 0)
+end)
+
+-- #513: the scene sequencer skips an empty slot at once, so the scene after
+-- it follows the last scene's hold; a sequence with no scene in it holds
+-- each empty slot for the scene duration (its clock never spins)
+test("the scene sequencer skips an empty slot at once (#513)", function()
+  local context = load_strata(); finish_startup(context)
+  capture_scene(1); capture_scene(3)                              -- slot 2 empty
+  params:set("scene_sequence_length", 3)
+  local recalls = run_scene_sequencer(context, 0, 4, 9)
+  local scenes, times = {}, {}
+  for index, recall in ipairs(recalls) do scenes[index] = recall.scene; times[index] = recall.time end
+  assert_equal(table.concat(scenes, " "), "1 3 1", "scene 3 follows scene 1, then scene 1 again")
+  assert_near(times[2], 4, 0.01, "scene 3 after scene 1's 4 s hold, not after another 4 s on slot 2")
+  assert_near(times[3], 8, 0.01, "scene 1 after scene 3's hold")
+  params:set("scene_sequencer_enabled", 0)
+  -- an empty first slot: the sequencer starts on the first scene that holds one
+  context = load_strata(); finish_startup(context)
+  capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  local S = local_value("S")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 2, "before its first recall it recalls slot 2 next")
+  context.clock.run_for(0.01, 0.001)
+  assert_equal(S.current_scene, 2, "it recalled scene 2 at once")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 3, "then scene 3")
+  context.clock.run_for(4, 0.001)
+  assert_equal(S.current_scene, 3)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 2, "after scene 3: scene 2, past empty slot 1")
+  params:set("scene_sequencer_enabled", 0)
+  -- no scene in the sequence: each slot is held for the duration
+  context = load_strata(); finish_startup(context)
+  params:set("scene_sequence_length", 3)
+  recalls = run_scene_sequencer(context, 0, 4, 9)
+  S = local_value("S")
+  assert_equal(#recalls, 0, "nothing to recall")
+  assert_equal(S.scene_sequencer_position, 3, "one slot every 4 s: slot 3 at 9 s")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 1, "then slot 1")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+-- #329: an error in a pass of the sequencer's loop outside its recall (which
+-- reports it and goes on) stops the sequencer through its param, so the
+-- screen, the grids and the state agree, and is raised again for maiden
+test("an error in the scene sequencer's advance stops it through its param (#329)", function()
+  local context = load_strata(); finish_startup(context)
+  capture_scene(1); capture_scene(2)
+  params:set("scene_sequence_length", 2)
+  local S = local_value("S")
+  local real_grid_redraw, raised = grid_redraw, false
+  grid_redraw = function(...)
+    if not raised and S.scene_sequencer_position == 2 then raised = true; error("grid redraw failed") end
+    return real_grid_redraw(...)
+  end
+  local recalls = run_scene_sequencer(context, 0, 4, 5)           -- the advance at 4 s raises
+  grid_redraw = real_grid_redraw
+  local errors = context.clock.take_errors()
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "the param shows the sequencer off")
+  assert_equal(S.scene_sequencer_enabled, false, "and it is off")
+  assert_equal(S.scene_sequencer_clock, nil, "its clock id is forgotten")
+  assert_equal(#errors, 1, "one clock error")
+  assert_true(errors[1]:find("grid redraw failed", 1, true), "the advance's error")
+  assert_true(errors[1]:find("stack traceback:", 1, true), "with its traceback")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), nil, "no next scene is lit")
+  context.clock.run_for(10, 0.001)
+  assert_equal(#recalls, 1, "nothing is recalled after the stop")
+  params:set("scene_sequencer_enabled", 1)                        -- one switch starts it again
+  context.clock.run_for(0.01, 0.001)
+  assert_equal(#recalls, 2, "from scene 1")
+  assert_equal(recalls[2].scene, 1)
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+-- #408: a fade to a scene that stops a running LFO fades its depth out,
+-- never toward the scene's depth (a setting the scene never plays), and
+-- leaves its period and offset; the end sets the scene's exact values with
+-- the state
+test("a fade that stops an LFO fades its depth out and holds its period and offset (#408)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("lfo_depth_1", 80); params:set("lfo_free_1", 30); params:set("lfo_offset_1", -40)
+  params:set("lfo_1", 1)                                          -- off in the scene
+  capture_scene(1)
+  params:set("lfo_depth_1", 10); params:set("lfo_free_1", 4); params:set("lfo_offset_1", 20)
+  params:set("lfo_1", 2)                                          -- on now
+  local period = params:get("lfo_free_1")
+  recall_scene(1, 20)                                             -- 20 steps of 1 s
+  local previous = 10
+  for step = 1, 20 do
+    local depth = params:get("lfo_depth_1")
+    assert_true(depth <= previous, "step " .. step .. ": the depth never rises (" .. previous .. " -> " .. depth .. ")")
+    assert_equal(depth, math.floor(depth), "step " .. step .. ": a whole percent")
+    assert_near(depth, 10 * (1 - step / 20), 0.5, "step " .. step .. ": the depth fades toward 0")
+    assert_equal(params:get("lfo_free_1"), period, "step " .. step .. ": the period holds")
+    assert_equal(params:get("lfo_offset_1"), 20, "step " .. step .. ": the offset holds")
+    assert_equal(params:string("lfo_1"), "on", "step " .. step .. ": the LFO runs until the end")
+    previous = depth
+    wake(context, "scene_transition_clock")
+  end
+  assert_equal(local_value("scene_transition_active"), false, "the fade landed")
+  assert_equal(params:string("lfo_1"), "off", "the LFO stops at the end")
+  assert_equal(params:get("lfo_depth_1"), 80, "with the scene's depth")
+  assert_near(params:get("lfo_free_1"), 30, 1e-9, "the scene's period")
+  assert_equal(params:get("lfo_offset_1"), -40, "and the scene's offset")
+end)
+
+-- #411: what the review's mutations of lib/scenes.lua survived
+test("recall_scene and capture_scene ignore a scene number outside 1..NUM_SCENES (#411)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  for _, scene_num in ipairs({ 0, S.constants.NUM_SCENES + 1 }) do
+    local recalled, recall_error = pcall(recall_scene, scene_num, 0)
+    assert_true(recalled, "recall_scene(" .. scene_num .. ") raises nothing: " .. tostring(recall_error))
+    local captured, capture_error = pcall(capture_scene, scene_num)
+    assert_true(captured, "capture_scene(" .. scene_num .. ") raises nothing: " .. tostring(capture_error))
+    assert_equal(S.scenes[scene_num], nil, "and adds no slot " .. scene_num)
+  end
+  assert_equal(S.current_scene, 0, "no scene was recalled")
+  assert_equal(#S.scenes, S.constants.NUM_SCENES, "still eight slots")
+end)
+
+test("validate_scene rejects a non-boolean active, an unknown grain key and crossmod amounts that are not numbers (#411)", function()
+  load_strata()
+  capture_scene(1)
+  local good = deep_copy(local_value("scenes")[1])
+  assert_true(validate_scene(good), "the captured scene validates")
+  local function rejects(mutator, message)
+    local candidate = deep_copy(good)
+    mutator(candidate.data)
+    assert_true(not validate_scene(candidate), "should reject: " .. message)
+  end
+  rejects(function(data) data.voices[3].active = 1 end, "an active flag that is not a boolean")
+  rejects(function(data) data.voices[3].active = nil end, "a missing active flag")
+  rejects(function(data) data.voices[2].grain.future_key = 0.5 end, "a grain key from a later version")
+  rejects(function(data) data.voices[5].crossmod.slot2.amp_amt = nil end, "a missing amp amount")
+  rejects(function(data) data.voices[5].crossmod.slot3.amp_amt = "deep" end, "an amp amount that is not a number")
+  rejects(function(data) data.voices[6].crossmod.slot1.freq_amt = nil end, "a missing freq amount")
+  rejects(function(data) data.voices[6].crossmod.slot2.freq_amt = 0 / 0 end, "a freq amount that is NaN")
+end)
+
+test("a fade holds tempo and the mutation settings until its end (#411)", function()
+  local context = load_strata(); finish_startup(context)
+  local ids = { "tempo", "mutation_enabled", "mutation_rate", "mutation_probability", "mutation_amount" }
+  params:set("tempo", 90); params:set("mutation_enabled", 1); params:set("mutation_rate", 8)
+  params:set("mutation_probability", 0.6); params:set("mutation_amount", 0.75)
+  capture_scene(1)
+  local saved = {}
+  for _, id in ipairs(ids) do saved[id] = params:get(id) end
+  params:set("tempo", 150); params:set("mutation_enabled", 0); params:set("mutation_rate", 1)
+  params:set("mutation_probability", 0.05); params:set("mutation_amount", 0.1)
+  local before = {}
+  for _, id in ipairs(ids) do before[id] = params:get(id) end
+  recall_scene(1, 20)
+  for step = 1, 20 do
+    for _, id in ipairs(ids) do
+      assert_equal(params:get(id), before[id], id .. " holds at step " .. step)
+    end
+    wake(context, "scene_transition_clock")
+  end
+  assert_equal(local_value("scene_transition_active"), false, "the fade landed")
+  for _, id in ipairs(ids) do assert_equal(params:get(id), saved[id], id .. " switches at the end") end
+  params:set("mutation_enabled", 0)
+end)
+
+test("a registered discrete binary or number scene field holds a whole value in its range (#411)", function()
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_fx_params({ name = "probe fields", count = 2, add = function()
+      params:add_binary("probe_flag", "probe flag", "toggle", 0)
+      params:add_number("probe_count", "probe count", 1, 4, 2)
+    end })
+    S.register_scene_field({ id = "probe_flag", default = 0, discrete = true })
+    S.register_scene_field({ id = "probe_count", default = 2, discrete = true })
+  end })
+  capture_scene(1)
+  local good = deep_copy(local_value("scenes")[1])
+  assert_true(validate_scene(good), "the captured scene validates")
+  for _, case in ipairs({ { id = "probe_flag", value = 0.5 }, { id = "probe_flag", value = 2 },
+    { id = "probe_flag", value = -1 }, { id = "probe_count", value = 2.5 }, { id = "probe_count", value = 0 },
+    { id = "probe_count", value = 5 } }) do
+    local candidate = deep_copy(good)
+    candidate.data[case.id] = case.value
+    assert_true(not validate_scene(candidate), "should reject " .. case.id .. " = " .. case.value)
+  end
+  local candidate = deep_copy(good)
+  candidate.data.probe_flag, candidate.data.probe_count = 1, 4
+  assert_true(validate_scene(candidate), "whole values in range validate")
+end)
+
+test("a recall that changes only the locks updates MAIN's voice list (#411)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  toggle_lock(4)
+  capture_scene(1)
+  toggle_lock(4)
+  assert_true(not S.voice_list.entries[4]:find("[L]", 1, true), "voice 4 shows unlocked")
+  recall_scene(1, 0)
+  assert_true(S.frozen[4], "the recall locked voice 4")
+  assert_true(S.voice_list.entries[4]:find("[L]", 1, true), "and MAIN's list marks it [L]")
+end)
+
+test("a restarted scene sequencer recalls scene 1 first (#411)", function()
+  local context = load_strata(); finish_startup(context)
+  for scene = 1, 3 do capture_scene(scene) end
+  params:set("scene_sequence_length", 3)
+  local recalls = run_scene_sequencer(context, 0, 4, 5)           -- scene 1, then scene 2 at 4 s
+  assert_equal(recalls[#recalls].scene, 2, "the sequencer is on scene 2")
+  params:set("scene_sequencer_enabled", 0)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(0.01, 0.001)
+  assert_equal(recalls[#recalls].scene, 1, "a restart begins at scene 1")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+-- SCENES marks the slot the sequencer is on with ">"; with no scene in the
+-- sequence nothing is recalled, so only the advance's redraw moves it
+test("the scene sequencer's advance redraws the screen (#411)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("SCENES")
+  params:set("scene_sequence_length", 3)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  local function mark_y()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == ">" then return entry.y end
+    end
+  end
+  context.clock.run_for(1, 0.001)
+  local first = mark_y()
+  assert_true(first ~= nil, "SCENES marks slot 1")
+  context.clock.run_for(4, 0.001)
+  assert_equal(local_value("scene_sequencer_position"), 2, "the sequencer moved to slot 2")
+  assert_true(mark_y() ~= nil and mark_y() > first, "and the screen moved the mark down to it")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("a good load after a blocked one lets the scenes save again (#411)", function()
+  local data_dir = data_root .. "unblocked/strata/"
+  -- every backup name is taken (by a folder): the bad file cannot be moved aside
+  os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. data_dir .. "scenes.data.bak." .. number .. "'") end
+  local file = assert(io.open(data_dir .. "scenes.data", "w"))
+  file:write(tabutil_text({ version = 99, scenes = {} }))
+  file:close()
+  load_strata({ data_subdir = "unblocked" })
+  local S = local_value("S")
+  assert_equal(S.scene_autosave_blocked, true, "the bad file blocks the autosave")
+  -- a good file takes its place (written from outside), and is loaded
+  assert_true(S.lib.data_files.write(data_dir .. "scenes.data",
+    { version = S.constants.SCENE_DATA_VERSION, scenes = S.scenes }), "a good file written")
+  assert_equal(load_scenes_from_disk(), "loaded")
+  assert_equal(S.scene_autosave_blocked, false, "the good load unblocks the autosave")
+  capture_scene(4)
+  cleanup()
+  load_strata({ data_subdir = "unblocked" })
+  assert_true(local_value("scenes")[4].populated, "the exit saved scene 4")
+end)
+
+-- #531: a recall and every fade step set a voice's registered fields in
+-- sorted key order (pairs' order changes from run to run and between Lua
+-- 5.3 and LuaJIT), so a recall sets and sends them the same way every time
+test("a recall and a fade set a voice's registered fields in sorted key order (#531)", function()
+  local keys = { "probe_h", "probe_c", "probe_f", "probe_a", "probe_g", "probe_d", "probe_b", "probe_e" }
+  local order = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    local defaults = {}
+    for _, key in ipairs(keys) do defaults[key] = 0 end
+    local record = { name = "probe order", count = #keys, scene_defaults = defaults, fader = false }
+    function record.add(voice_idx)
+      for _, key in ipairs(keys) do
+        S.lib.params_setup.add_voice_extra(voice_idx, record, key, { type = "control", name = key,
+          controlspec = controlspec.new(0, 1, "lin", 0, 0),
+          action = function() if voice_idx == 1 then table.insert(order, key) end end })
+      end
+    end
+    S.register_voice_params(record)
+  end })
+  finish_startup(context)
+  for _, key in ipairs(keys) do params:set("v1_" .. key, 0.5) end
+  capture_scene(1)
+  for _, key in ipairs(keys) do params:set("v1_" .. key, 0) end
+  local sorted = {}
+  for _, key in ipairs(keys) do sorted[#sorted + 1] = key end
+  table.sort(sorted)
+  order = {}
+  recall_scene(1, 0)
+  assert_equal(table.concat(order, " "), table.concat(sorted, " "), "an instant recall sets them in key order")
+  for _, key in ipairs(keys) do params:set("v1_" .. key, 0) end
+  order = {}
+  recall_scene(1, 2)                                              -- the first step runs at once
+  assert_equal(table.concat(order, " "), table.concat(sorted, " "), "a fade step sets them in key order")
+  context.clock.run_for(3, 0.001)
 end)
 
 end

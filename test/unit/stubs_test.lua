@@ -733,6 +733,35 @@ test("stub param strings and controlspec defaults follow core/params and core/co
   assert_near(level:map(level:unmap(0)), 0, 1e-9, "db warp round trip")
 end)
 
+-- core/paramset.lua: ParamSet:delta calls the param object's own delta, and
+-- norns' PARAMS menu turns E3 with that method too, so a script that
+-- replaces one param's delta changes both (#318). core/params/control.lua:
+-- a control's delta is set_raw(raw + d * quantum), which wraps a wrapping
+-- spec (#478): a 0-10 control at 9 with a quantum of 0.2 goes to 1
+test("stub params:delta runs the param's own delta, and a wrapping control's delta wraps (#318, #478)", function()
+  load_strata()
+  params:add_control("stub_wrap", "wrap", controlspec.new(0, 10, "lin", 0, 9, "", 0.2, true))
+  params:delta("stub_wrap", 1)
+  assert_near(params:get("stub_wrap"), 1, 1e-9, "params:delta wraps past the top")
+  params:lookup_param("stub_wrap"):delta(-1)
+  assert_near(params:get("stub_wrap"), 9, 1e-9, "the param's own delta wraps past the bottom")
+  params:add_control("stub_clamp", "clamp", controlspec.new(0, 10, "lin", 0, 9, "", 0.2))
+  params:delta("stub_clamp", 1)
+  assert_near(params:get("stub_clamp"), 10, 1e-9, "a control that does not wrap stops at its top")
+  params:add_number("stub_steps", "steps", 0, 10, 3)
+  local param = params:lookup_param("stub_steps")
+  local deltas = {}
+  local own_delta = param.delta
+  param.delta = function(self, d)
+    table.insert(deltas, d)
+    own_delta(self, d)
+  end
+  params:delta("stub_steps", 2)
+  assert_equal(#deltas, 1, "params:delta went through the replaced delta")
+  assert_equal(deltas[1], 2, "with its d")
+  assert_equal(params:get("stub_steps"), 5, "and the param's own delta did the work")
+end)
+
 test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()
   local context = load_strata()
   local LFO = require("lfo")
