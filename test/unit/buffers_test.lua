@@ -370,6 +370,33 @@ test("a failed load while a synced replace take waits puts back what the slot ho
   assert_equal(buffers[6].settled_empty, "take", "a take that had completed would still be adopted")
 end)
 
+-- The same after K3: Lua asked the engine to cancel the armed take, and the
+-- bad load is sent before the "canceled" report arrives. The take never
+-- recorded, so the length the engine reports after its cancel decides
+test("a failed load right after K3 cancels a synced take, before its canceled report, puts back what the slot holds", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers = local_value("buffers")
+  local S = local_value("S")
+  load_buffer(4, "/tmp/a.wav"); context.polls.fire("bufferState", 3008)
+  params:set("record_sync", 3)
+  record_buffer(4); context.polls.fire("recordState", 35)           -- armed (record 1, slot 4)
+  record_buffer(4)                                                  -- K3: the cancel is on its way
+  load_buffer(4, "/tmp/missing.wav")                                -- load 2, before the cancel's report
+  context.polls.fire("recordState", 59); context.polls.fire("bufferState", 3008)
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 2))
+  context.polls.fire("bufferState", 3008)                           -- the periodic report
+  assert_equal(buffers[4].name, "a.wav", "not take 4"); assert_equal(buffers[4].path, "/tmp/a.wav")
+  assert_true(buffers[4].loaded); assert_equal(S.lib.buffers.status(4), "loaded")
+  -- the engine had prepared the slot (0 s after the cancel): empty
+  load_buffer(6, "/tmp/b.wav"); context.polls.fire("bufferState", 5008)
+  record_buffer(6); context.polls.fire("recordState", 37)
+  context.polls.fire("bufferState", 5000)                           -- prepared
+  record_buffer(6); load_buffer(6, "/tmp/missing.wav")
+  context.polls.fire("recordState", 61); context.polls.fire("bufferState", 5000)
+  context.polls.fire("bufferLoadFailed", load_failed_value(6, 2))
+  assert_equal(buffers[6].name, "empty"); assert_equal(buffers[6].path, nil); assert_true(not buffers[6].loaded)
+end)
+
 test("a load whose server read failed leaves the slot empty, in either report order", function()
   local subdir = "failed-read-" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)

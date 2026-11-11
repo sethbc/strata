@@ -129,20 +129,24 @@
 
     addRecordCommands {
         var responder;
-        // msg: slot index, seconds, level, feedback, source, threshold, loop, delay
-        this.addCommand(\recordBuffer, "ifffifif", { arg msg;
-            this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8]);
-        });
+        // msg: slot index, seconds, level, feedback, source, threshold, loop,
+        // delay; time: the message's OSC time (nil when called without one)
+        var recordCommand = { arg msg, time;
+            this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], time);
+        };
+        this.addCommand(\recordBuffer, "ifffifif", recordCommand);
         // A synced take's delay runs from the command's arrival (#376), but
         // CroneEngine's command function gets the message only, and sclang
         // runs it when it gets to it (after a file's check, a chunk of a
         // write). The command's own OSCdef (the one CroneEngine frees at
-        // deinit) gets a function that passes the message's OSC time on too.
+        // deinit) calls the command function with the message's OSC time
+        // instead; without that OSCdef the delay runs from when sclang
+        // handles the command, as it did before, and says so.
         responder = this.commands.detect({ arg command; command.name == \recordBuffer }) !? { arg command; command.oscdef };
         if (responder.isKindOf(OSCdef)) {
-            OSCdef(responder.key, { arg msg, time;
-                this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], time);
-            }, responder.path);
+            OSCdef(responder.key, recordCommand, responder.path);
+        } {
+            postln("strata: recordBuffer's OSCdef not found; a synced take's delay runs from when sclang handles the command");
         };
 
         // End a recording now, with its fade, keeping what was captured;
@@ -336,8 +340,10 @@
 
         this.stopRecording(index);
         change = this.slotChanged(index);
-        // (a slot's rate describes its audio: an empty slot has none to
-        // clash with, and is at the server's rate anyway, #374)
+        // (a slot's rate describes its audio, so only a slot holding audio is
+        // judged by it, #374: every step that empties a slot sets the
+        // server's rate, but a load's last step takes the file's rate while
+        // the slot still reads 0 frames, until its peaks file is in place)
         playable = ((feedback > 0) or: { loop > 0 })
             and: { (bufferFrames[index] == 0) or: { bufferSampleRates[index] == server.sampleRate } };
         // delay after the command arrived, never after now

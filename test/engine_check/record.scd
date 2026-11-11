@@ -577,6 +577,30 @@ test.("record: a recording sent while a load is in flight is judged on the empty
     check.((kind == \playable) and: { loop == 1 } and: { rate == sampleRate },
         "record: a recording sent while a load is in flight is judged on the empty slot (kind %, loop %, rate %)".format(kind, loop, rate));
 });
+// ... also in the last step of a load taking effect: the reads are done and
+// the slot has the file's rate, its length still to come once its peaks
+// file is in place. The peaks mover, stopped, holds that step open (for up
+// to peaksMoverTimeout), so the recording lands in it
+test.("record: a recording sent while a load's peaks file is written is judged on the empty slot", {
+    var path = h.tempDir +/+ "cd-rate-peaks.wav", mover = engine.areaState[\waveform][\mover], take, kind, loop, rate, frames;
+    h.writeTestFile(path, 44100, 22050, [0.25, 0.25]);
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    h.command(\loadBuffer, 4, path, 0);
+    h.waitFor({ engine.bufferSampleRates[4] == 44100 }, 0.8);
+    rate = engine.bufferSampleRates[4];
+    frames = engine.bufferFrames[4];
+    record.(4, 0.2, 1.0, 0.5, 0, 0, 1);
+    take = state[\takes][4];
+    kind = take !? { take[\kind] };
+    loop = take !? { take[\loop] };
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    h.command(\stopRecord, 4);
+    waitDone.(4, 2);
+    h.waitFor({ mover[\pending] == 0 }, 3);
+    check.((rate == 44100) and: { frames == 0 } and: { kind == \playable } and: { loop == 1 },
+        "record: a recording sent while a load's peaks file is written is judged on the empty slot (rate %, % frames, kind %, loop %)".format(
+            rate, frames, kind, loop));
+});
 test.("record: a load sent during a synced take's wait drops its preparation", {
     var path = writeLevelFile.("slot.wav", 1, 0.3), nodes;
     h.command(\loadBuffer, 4, path, 0);
