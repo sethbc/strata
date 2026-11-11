@@ -51,9 +51,9 @@ jobs:
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
-  # Area times on 3.14.1 (s): buffers 98, record 71, mix 68, lifecycle 65, memory 57,
-  # freeze 49, variation 47, loops 45, effects 30, rings 30, files 29, waveform 22,
-  # grains 20, voices 16, positions 8, structure 3, performance 2: buffers alone, then at most about 177 s a shard (rebalanced at the release).
+  # Area times on 3.14.1 (s): buffers 98, effects 72, record 71, mix 68, lifecycle 65, memory 57,
+  # freeze 49, variation 47, loops 45, rings 30, files 29, waveform 22,
+  # grains 20, voices 16, positions 8, structure 3, performance 2: buffers alone, then at most about 219 s a shard (rebalanced at the release).
   engine-shard:
     name: engine (${{ matrix.areas }})
     # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
@@ -131,6 +131,44 @@ jobs:
           test "$status" -eq 1
           echo "$out" | grep -q "^ENGINE CHECK FAILED: no area nosucharea"
           if echo "$out" | grep -q "^ERROR"; then echo "an ERROR line follows the failure"; exit 1; fi
+
+      # A port that already has a server must fail the run at once, naming the
+      # port, and must leave that server running (#471). Waveform's shard is
+      # the shortest, so these two steps run there only.
+      - name: Engine check refuses a port that already has a server
+        if: matrix.areas == 'waveform'
+        run: |
+          scsynth -u 57391 > "$RUNNER_TEMP/scsynth-other.log" 2>&1 &
+          other=$!
+          sleep 3
+          status=0
+          out=$(STRATA_SC_PORT=57391 STRATA_ENGINE_CHECK_AREAS=structure SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=60 test/run_engine_check.sh "$NORNS_DIR" 2>&1) || status=$?
+          alive=0
+          kill -0 "$other" 2>/dev/null && alive=1
+          kill "$other" 2>/dev/null || true
+          echo "$out" | head -20
+          test "$status" -eq 1
+          echo "$out" | grep -q "^ENGINE CHECK FAILED: port 57391 already has a server"
+          test "$alive" -eq 1
+
+      # A server that cannot boot (the port held by a socket that never
+      # answers) must fail the run within seconds, naming the cause (#472)
+      - name: Engine check fails at once when scsynth cannot boot
+        if: matrix.areas == 'waveform'
+        run: |
+          python3 -c 'import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 57392)); time.sleep(120)' &
+          holder=$!
+          sleep 1
+          status=0
+          started=$(date +%s)
+          out=$(STRATA_SC_PORT=57392 STRATA_ENGINE_CHECK_AREAS=structure SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=100 test/run_engine_check.sh "$NORNS_DIR" 2>&1) || status=$?
+          took=$(( $(date +%s) - started ))
+          kill "$holder" 2>/dev/null || true
+          echo "$out" | head -20
+          echo "took $took s"
+          test "$status" -eq 1
+          echo "$out" | grep -q "^ENGINE CHECK FAILED: scsynth did not boot"
+          test "$took" -lt 40
 
   # The required status check: passes only when every shard passed (a
   # failed, canceled or skipped shard fails it), so branch protection keeps

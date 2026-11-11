@@ -19,4 +19,11 @@ if [ -z "$ready" ]; then
 fi
 
 cd /src
-SCLANG=/usr/bin/sclang exec test/run_engine_check.sh /norns
+status=0
+SCLANG=/usr/bin/sclang test/run_engine_check.sh /norns || status=$?
+# Did the container's memory cap kill a process (cgroup v2)? The host's
+# script reads this line to tell a capped run from a crash (#544)
+if [ -r /sys/fs/cgroup/memory.events ]; then
+  echo "strata cgroup oom_kill: $(awk '$1 == "oom_kill" { print $2 }' /sys/fs/cgroup/memory.events)"
+fi
+exit "$status"

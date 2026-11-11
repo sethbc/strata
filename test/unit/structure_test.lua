@@ -1386,7 +1386,8 @@ local function run_runner_without_tools(case, timeout)
   server:write("#!/bin/sh\ncount=0\nwhile [ $count -lt 60 ]; do sleep 1; count=$((count + 1)); done\n")
   server:close()
   os.execute("chmod +x " .. shell_quote(root .. "/scsynth"))
-  local lines = { "#!/bin/sh", shell_quote(root .. "/scsynth") .. " 60 &", "echo $! > " .. shell_quote(root .. "/fake.pid") }
+  local lines = { "#!/bin/sh", shell_quote(root .. "/scsynth") .. " 60 &", "echo $! > " .. shell_quote(root .. "/fake.pid"),
+    "echo $$ > " .. shell_quote(root .. "/sclang.pid") }
   if case == "warning" then
     -- a run that passes in every way but one WARNING line (#486)
     lines[#lines + 1] = 'echo "WARNING: Extension overwrites a method"'
@@ -1433,8 +1434,14 @@ local function run_runner_without_tools(case, timeout)
   local alive = pid ~= nil and pid:match("^%d+$") ~= nil and os.execute("kill -0 " .. pid .. " 2>/dev/null")
   alive = alive == true or alive == 0
   if alive then os.execute("kill " .. pid .. " 2>/dev/null") end
+  local sclang_file = io.open(root .. "/sclang.pid", "r")
+  local sclang_pid = sclang_file and sclang_file:read("*l")
+  if sclang_file then sclang_file:close() end
+  local sclang_alive = sclang_pid ~= nil and sclang_pid:match("^%d+$") ~= nil and os.execute("kill -0 " .. sclang_pid .. " 2>/dev/null")
+  sclang_alive = sclang_alive == true or sclang_alive == 0
+  if sclang_alive then os.execute("kill " .. sclang_pid .. " 2>/dev/null") end
   h.remove_tree(root)
-  return output, pid, alive, leftover_folders
+  return output, pid, alive, leftover_folders, sclang_alive
 end
 
 test("the engine check runner stops sclang's scsynth without pgrep or timeout (#152)", function()
@@ -1464,10 +1471,11 @@ end)
 
 -- #331: a signal to the runner stops sclang's tree, its server and its folder
 test("the engine check runner stops its sclang, scsynth and work folder when it is signaled (#331)", function()
-  local output, pid, alive, folders = run_runner_without_tools("signal")
+  local output, pid, alive, folders, sclang_alive = run_runner_without_tools("signal")
   assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
   assert_true(output:find("exit=130", 1, true) ~= nil, "the runner exits 130: " .. output)
   assert_true(not alive, "the server is stopped with the runner: " .. output)
+  assert_true(not sclang_alive, "the fake sclang is gone too: " .. output)
   assert_equal(folders, 0, "the work folder is removed")
 end)
 
@@ -1475,6 +1483,79 @@ end)
 test("the engine check runner fails a run that printed a WARNING line (#486)", function()
   local output = run_runner_without_tools("warning")
   assert_true(output:find("exit=1", 1, true) ~= nil, "a WARNING fails the run: " .. output)
+end)
+
+-- The 3.13 Docker script (#544, #545): every container carries a memory cap,
+-- and a run is classified by what its log holds, not by how sclang ended
+local function run_313_script(root, arguments, extra_path)
+  local shell_quote = h.shell_quote
+  local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(extra_path or "") .. (extra_path and ":" or "")
+    .. "$PATH TMPDIR=" .. shell_quote(root) .. " /bin/sh test/run_engine_check_313.sh " .. arguments .. " 2>&1; echo exit=$?")
+  local output = pipe:read("*a")
+  pipe:close()
+  return output
+end
+
+test("the 3.13 script's containers carry a memory cap (#544)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-cap"
+  os.execute("mkdir -p " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core") .. " " .. shell_quote(root .. "/logs"))
+  local fake = assert(io.open(root .. "/bin/docker", "w"))
+  fake:write("#!/bin/sh\ncase \"$1\" in\n  image) exit 1 ;;\n  build) exit 0 ;;\n  run) echo \"$@\" >> " .. shell_quote(root .. "/docker-run.txt")
+    .. "; exit 0 ;;\nesac\nexit 0\n")
+  fake:close()
+  os.execute("chmod +x " .. shell_quote(root .. "/bin/docker"))
+  local output = run_313_script(root, "-n 2 -j 1 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"), root .. "/bin")
+  local file = io.open(root .. "/docker-run.txt", "r")
+  local runs = file and file:read("*a") or ""
+  if file then file:close() end
+  local count = 0
+  for line in runs:gmatch("[^\n]+") do
+    count = count + 1
+    assert_true(line:find("%-%-memory=%d+[gGmM]") ~= nil, "docker run carries --memory: " .. line)
+    assert_true(line:find("%-%-memory%-swap=%d+[gGmM]") ~= nil, "docker run carries --memory-swap: " .. line)
+  end
+  assert_equal(count, 2, "both runs started a container: " .. output)
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script classifies a run by its log (#545, #544)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-classify"
+  os.execute("mkdir -p " .. shell_quote(root))
+  -- the collector's own line (sclang spells it with an e; split here for the US spelling check)
+  local COUNT_ERROR = "gr" .. "ey count error"
+  local fixtures = {
+    -- a FAIL line makes it failed, whatever ended it
+    { status = 1, log = "ok a check\nFAIL waveform: a 300 s load\nENGINE CHECK FAILED: sclang ended on signal 9 after 752 s; sclang stopped\n" },
+    -- a signal after count errors: the collector failure (#211)
+    { status = 1, log = COUNT_ERROR .. "\n" .. COUNT_ERROR .. "\nENGINE CHECK FAILED: sclang ended on signal 11 after 300 s; sclang stopped\n" },
+    -- a bare signal: #131
+    { status = 1, log = "ok a check\nENGINE CHECK FAILED: sclang ended on signal 6 after 90 s; sclang stopped\n" },
+    -- the memory cap's kill
+    { status = 1, log = COUNT_ERROR .. "\nENGINE CHECK FAILED: sclang ended on signal 9 after 400 s; sclang stopped\nstrata cgroup oom_kill: 3\n" },
+    -- ERROR and an invariant line are failures too
+    { status = 1, log = "ERROR: something\nENGINE CHECK FAILED: sclang ended on signal 9 after 4 s; sclang stopped\n" },
+    { status = 0, log = "ENGINE CHECK PASSED\nstrata cgroup oom_kill: 0\n" },
+  }
+  for index, fixture in ipairs(fixtures) do
+    local log = assert(io.open(root .. "/run-" .. index .. ".log", "w")); log:write(fixture.log); log:close()
+    local status = assert(io.open(root .. "/run-" .. index .. ".status", "w")); status:write(fixture.status .. "\n"); status:close()
+  end
+  local output = run_313_script(root, "-c -n " .. #fixtures .. " -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: failed (FAIL waveform", "run 2: collector failure (#211", "run 3: crashed (sclang ended on signal 6",
+      "run 4: capped (", "run 5: failed (ERROR: something", "run 6: passed", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  assert_true(output:find("passed 1 of 6; failed 2; capped 1 (#544); collector failure 1 (#211); crashed 1 (#131)", 1, true) ~= nil,
+    "the counts: " .. output)
+  -- a cap kill with no FAIL line is its own outcome
+  os.execute("rm -f -- " .. shell_quote(root .. "/run-1.log") .. " " .. shell_quote(root .. "/run-1.status"))
+  local capped = assert(io.open(root .. "/run-1.log", "w"))
+  capped:write("ok a check\nENGINE CHECK FAILED: sclang ended on signal 9 after 400 s; sclang stopped\nstrata cgroup oom_kill: 1\n")
+  capped:close()
+  local capped_status = assert(io.open(root .. "/run-1.status", "w")); capped_status:write("1\n"); capped_status:close()
+  output = run_313_script(root, "-c -n 1 -o " .. shell_quote(root))
+  assert_true(output:find("run 1: capped (", 1, true) ~= nil and output:find("capped 1 (#544)", 1, true) ~= nil, "a cap kill is capped: " .. output)
+  h.remove_tree(root)
 end)
 
 -- The workflow (#490, #533): read-only token, credentials not kept, norns
@@ -1493,10 +1574,13 @@ test("the workflow reads only, keeps no credentials and pins by full commit (#49
     assert_true(step:find("persist%-credentials: false") ~= nil, "a checkout keeps no credentials: " .. step)
   end
   assert_equal(checkouts, 2, "both checkouts")
+  local pins = 0
   for pin, version in workflow:gmatch("actions/checkout@(%S+)%s*#%s*v(%d+)") do
+    pins = pins + 1
     assert_true(pin:match("^%x+$") ~= nil and #pin == 40, "actions/checkout is pinned by its 40-character commit: " .. pin)
     assert_true(tonumber(version) >= 7, "actions/checkout is on the current major (v7 or later), not v" .. version)
   end
+  assert_equal(pins, 2, "both checkouts are pinned by commit with a version comment")
   local ref = workflow:match("NORNS_REF:%s*(%S+)")
   assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "NORNS_REF is a full 40-character commit: " .. tostring(ref))
 end)
