@@ -170,11 +170,11 @@ test("a quantized freq moves by scale tones on slow encoder and arc turns", func
   assert_near(params:get("v1_freq"), 440, 1e-6, "A4 is in C major")
   local low, high = param_range("v1_freq")
   local octaves = math.log(high / low) / math.log(2)
-  -- one detent moves the raw value one quantum, one arc tick 1/512
+  -- one detent moves the raw value one quantum, one arc tick 1/ARC_TICKS_PER_SWEEP
   local cases = {
     { name = "E3", step = params:lookup_param("v1_freq").controlspec.quantum * 12 * octaves, turns = 30,
       turn = function(d) enc_param_delta(3, "v1_freq", d) end },
-    { name = "arc", step = 12 * octaves / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, turns = 150,
+    { name = "arc", step = 12 * octaves / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, turns = 300,
       turn = function(d) arc_sweep_param("v1_freq", d) end },
   }
   for _, case in ipairs(cases) do

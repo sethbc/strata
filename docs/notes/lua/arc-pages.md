@@ -6,7 +6,7 @@
   - SEQ ring 2: `S.patterns[S.selected_voice][step] / MAX_STEP_LEVEL`;
   - SEQ ring 4: `(S.selected_voice - 1) / (NUM_VOICES - 1)`;
   - SCENES ring 1: `(S.cursors.scene - 1) / (NUM_SCENES + #SCENES_FIELDS - 1)`.
-- Every continuous ring sweeps its control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (512) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions step whole values through `arc_whole_steps(key, delta, ticks)` and then `delta_with_detent(id, steps)` (or move a cursor):
+- Every continuous ring sweeps its control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (1024) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions step whole values through `arc_whole_steps(key, delta, ticks)` and then `delta_with_detent(id, steps)` (or move a cursor):
   - LFO: depth 10 ticks per percent, clocked rate 20 ticks per rate (`"lfo:<ring>"`);
   - VOICE: option and number rows 20 ticks per step (`"voice:<ring>"`); a binary row (a registered param, kind `"binary"`) steps the same way as a two-value option, set with `set_binary_param` (a step up on, a step down off; it is `params:set` plus the MIDI-map feedback norns' `params:delta` sends, #519), and its ring is drawn with `arc_ring_fill` from its value (dark off, whole ring on);
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);

@@ -49,13 +49,14 @@ test("arc turns hold at zero for 24 ticks", function()
   arc_sweep_param("v1_pan", 6); assert_true(params:get("v1_pan") > 0, "the 25th tick on moves")
 end)
 
-test("arc ticks move the raw value by ticks / 512", function()
+test("arc ticks move the raw value by ticks / ARC_TICKS_PER_SWEEP", function()
   load_strata()
+  local sweep = local_value("UI_PAGES").ARC_TICKS_PER_SWEEP
   local r0 = params:get_raw("filter_res"); arc_sweep_param("filter_res", 64)
-  assert_near(params:get_raw("filter_res") - r0, 0.125, 1e-9, "64 ticks")
+  assert_near(params:get_raw("filter_res") - r0, 64 / sweep, 1e-9, "64 ticks")
   -- an exp param sweeps its raw value evenly too
   r0 = params:get_raw("filter_freq"); arc_sweep_param("filter_freq", -32)
-  assert_near(params:get_raw("filter_freq") - r0, -0.0625, 1e-9, "-32 ticks on an exp param")
+  assert_near(params:get_raw("filter_freq") - r0, -32 / sweep, 1e-9, "-32 ticks on an exp param")
 end)
 
 test("a hold ends when something else moves the value", function()
@@ -205,7 +206,7 @@ test("arc rings go through the sweep", function()
   -- FX ring 2 is the filter resonance
   local r0 = params:get_raw("filter_res")
   context.arc.turn(1, 2, 32)
-  assert_near(params:get_raw("filter_res") - r0, 32 / 512, 1e-9, "a ring moves the raw value ticks / 512")
+  assert_near(params:get_raw("filter_res") - r0, 32 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "a ring moves the raw value ticks / ARC_TICKS_PER_SWEEP")
 end)
 
 test("no page or ring calls params:delta", function()

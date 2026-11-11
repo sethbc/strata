@@ -190,7 +190,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   local density = params:lookup_param("master_density")
   local before = density.raw
   context.arc.turn(2, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "arc on port 2 works")
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "arc on port 2 works")
   context.arc.unplug(2)
   assert_equal(setup_text(context), "none", "removing it disconnects")
 
@@ -212,7 +212,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_equal(setup_text(context), "connected", "removing the other arc keeps Strata's")
   before = density.raw
   context.arc.turn(2, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "still handled on port 2")
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "still handled on port 2")
   context.arc.unplug(2)
   assert_equal(setup_text(context), "none", "removing Strata's arc disconnects")
 
@@ -238,7 +238,7 @@ test("Strata follows one arc: any port, the first one plugged, removal of that o
   assert_equal(context.arc.vports[1].delta, nil, "the removed arc's vport keeps none")
   before = density.raw
   context.arc.turn(3, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "turning the other arc works")
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "turning the other arc works")
   local refreshes = second_arc.refresh_count
   next_frame(context)
   assert_equal(second_arc.refresh_count, refreshes + 1, "its rings are drawn")
@@ -299,7 +299,7 @@ test("an arc moved to another port in SYSTEM > DEVICES is followed once the menu
   local before = density.raw
   show_page("MAIN")
   context.arc.turn(3, 1, 20)
-  assert_near(density.raw - before, 20 / 512, 1e-9, "a ring turn on port 3 moves its param")
+  assert_near(density.raw - before, 20 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "a ring turn on port 3 moves its param")
   -- the arc's vport emptied (its name given to a port with no device), with
   -- no other arc
   _menu.set_mode(true)
