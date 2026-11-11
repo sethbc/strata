@@ -253,6 +253,32 @@ test("a slot whose length changes forgets its old peaks at once (#401)", functio
   assert_true(math.abs(waveforms.peaks(1)[64] - 0.4) < 1e-3)
 end)
 
+-- ... and a load of a file as long as the one it replaces, whose length
+-- report changes nothing: the load itself forgets the overview; a load
+-- that fails gives the old one back
+test("a load over audio of the same length forgets the old overview until its own is read (#401)", function()
+  local context = load_strata(); finish_startup(context)
+  local waveforms = local_value("S").lib.waveforms
+  load_buffer(1, "/tmp/a.wav")
+  write_peaks(1, ramp(64, 0.9), { frames = 480000 })   -- 10 s
+  report(context, 1, 10); tick(context, 2)
+  assert_true(math.abs(waveforms.peaks(1)[64] - 0.9) < 1e-3, "a.wav's overview")
+  load_buffer(1, "/tmp/b.wav")
+  assert_equal(waveforms.peaks(1), nil, "nothing of a.wav once b.wav is sent")
+  tick(context, 3)
+  assert_equal(waveforms.peaks(1), nil, "a.wav's file is not read back while b.wav loads")
+  write_peaks(1, ramp(64, 0.2), { frames = 480000, generation = 2 })
+  report(context, 1, 10); tick(context, 2)
+  assert_true(waveforms.peaks(1) ~= nil and math.abs(waveforms.peaks(1)[64] - 0.2) < 1e-3, "then b.wav's")
+  -- a load that fails puts b.wav back, and its overview with it
+  load_buffer(1, "/tmp/missing.wav")
+  assert_equal(waveforms.peaks(1), nil)
+  context.polls.fire("bufferLoadFailed", (3 * 2) * 8.0 + 0)
+  tick(context, 2)
+  assert_equal(local_value("buffers")[1].name, "b.wav", "the failed load is undone")
+  assert_true(waveforms.peaks(1) ~= nil and math.abs(waveforms.peaks(1)[64] - 0.2) < 1e-3, "and b.wav's overview is back")
+end)
+
 test("a playable recording's rereads keep its overview between reads (#401)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
