@@ -562,6 +562,59 @@ test("ALT+K2 randomizes the selected LFO's shape and rate only, in both modes", 
   end
 end)
 
+test("each LFO holds its own randomize undo", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  math.randomseed(11)
+  with_alt(function() tap(2) end)  -- randomize LFO 1
+  local randomized = lfo_snapshot(1)
+  tap(3)  -- LFO 2
+  assert_equal(local_value("selected_lfo"), 2, "LFO 2 selected")
+  local before = lfo_snapshot(2)
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:on E3:group", "LFO 1's undo is not LFO 2's")
+  tap(2); key(1, 0)
+  for id, value in pairs(randomized) do
+    assert_equal(params:get(id), value, "LFO 1 keeps its randomized " .. id)
+  end
+  local now = lfo_snapshot(2)
+  assert_true(now.lfo_shape_2 ~= before.lfo_shape_2 or now.lfo_free_2 ~= before.lfo_free_2,
+    "the press randomizes LFO 2")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:on E3:group", "LFO 2 now holds the undo")
+  key(1, 0)
+end)
+
+test("a mode switch drops the undo of the rate no longer shown", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  math.randomseed(12)
+  with_alt(function() tap(2) end)  -- randomize LFO 1 in free mode
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:on E3:group", "free mode holds the undo")
+  key(1, 0)
+  params:set("lfo_mode_1", option_named_lfo("lfo_mode_1", "clocked"))
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:on E3:group", "clocked mode: the free rate's undo is not shown")
+  key(1, 0)
+end)
+
+-- K1 let go before K2: the release still randomizes or resets, so the hint
+-- row keeps K2's release hint, alone, until K2 comes up
+test("K2's release hint stays after K1 comes up first (#557)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("LFO")
+  context.screen.clear(); redraw()
+  local plain = hint_text(context)
+  key(1, 1); key(2, 1); key(1, 0)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
+  context.clock.run_for(0.5); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:reset", "held past the hold time: letting go resets")
+  key(2, 0); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+end)
+
 test("ALT+K2 held resets the field", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")

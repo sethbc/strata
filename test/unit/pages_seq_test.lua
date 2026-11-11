@@ -382,6 +382,21 @@ test("SEQ's hold of ALT+K2 cancels (#557)", function()
   for step = 1, 16 do assert_equal(S.patterns[1][step], 0, "nothing randomized") end
 end)
 
+-- K1 let go before K2: the release still randomizes or cancels, so the
+-- hint row keeps K2's release hint, alone, until K2 comes up
+test("K2's release hint stays after K1 comes up first (#557)", function()
+  local context = started_on_seq()
+  context.screen.clear(); redraw()
+  local plain = hint_text(context)
+  key(1, 1); key(2, 1); key(1, 0)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
+  context.clock.run_for(0.6); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:cancel", "held past the hold time: letting go cancels")
+  key(2, 0); context.screen.clear(); redraw()
+  assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+end)
+
 test("SEQ hints", function()
   local context, S = started_on_seq()
   assert_equal(hint_text(context), "K2:play K3:step E3:level", "stopped")

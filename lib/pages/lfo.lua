@@ -3,8 +3,10 @@
 -- under the selected LFO's row, a strip of its seven fields (destination,
 -- shape, mode, rate, depth, offset, on/off). E2 moves along the strip, E3
 -- edits the field (ALT+E3 on the destination jumps a group), K2/K3 select
--- the LFO, ALT+K2 resets the field, ALT+K3 and the arc button turn the LFO
--- on and off. Registers its S.registry.pages record. The strip's cursor is
+-- the LFO, ALT+K2 on release randomizes the selected LFO's shape and rate
+-- (again within 5 s to undo; held past the hold time, it resets the field),
+-- ALT+K3 and the arc button turn the LFO on and off. Registers its
+-- S.registry.pages record. The strip's cursor is
 -- S.lfo_field (an index into LFO_FIELDS). The functions that were global
 -- stay global, as do lfo_dest_group_starts and lfo_dest_group_jump;
 -- lfo_running (for the arc rings), row_top, strip_y and layout (LFO_PAGE,
@@ -268,13 +270,16 @@ return function(S)
     draw_strip()
   end
 
-  -- The hint row (redraw() draws it after the page)
+  -- The hint row (redraw() draws it after the page). K1 let go while
+  -- ALT+K2 is down: K2's hint alone, since its release still acts
   local function lfo_hints(alt_held)
+    local record = S.registry.pages[UI_PAGES.index.LFO]
     if alt_held then
       -- on the destination, ALT+E3 jumps a group
       local jump = S.lfo_field == DEST_FIELD and " E3:group" or ""
-      return S.lib.ui_alt.k2_hint(S.registry.pages[UI_PAGES.index.LFO]) .. " K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
+      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
     end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     return "K2/K3:lfo E3:" .. LFO_FIELDS[S.lfo_field].label
   end
 
@@ -330,17 +335,21 @@ return function(S)
   -- else (#557): the shape is any option; the rate follows the mode, a free
   -- period of 0.5-30 s even in octaves, or a clocked division from 1/4 to 16
   -- (norns' lfo_rates_as_strings positions 3-16), so a running LFO keeps
-  -- running with its destination, depth and offset
+  -- running with its destination, depth and offset. The section names the
+  -- LFO and its mode ("lfo 2 free"), so each LFO holds its own undo and a
+  -- mode switch drops the undo of the rate no longer shown; voice is nil,
+  -- so no voice's mutation ends it
   local CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST = 3, 16
   local FREE_RANDOM_MIN, FREE_RANDOM_MAX = 0.5, 30
   local function lfo_randomize_section()
     local n = S.selected_lfo
+    local mode = params:string("lfo_mode_" .. n)
     local draws = {
       {id = "lfo_shape_" .. n, draw = function()
         return math.random(#params:lookup_param("lfo_shape_" .. n).options)
       end}
     }
-    if params:string("lfo_mode_" .. n) == "clocked" then
+    if mode == "clocked" then
       draws[2] = {id = "lfo_clocked_" .. n, draw = function()
         return math.random(CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST)
       end}
@@ -349,7 +358,7 @@ return function(S)
         return FREE_RANDOM_MIN * (FREE_RANDOM_MAX / FREE_RANDOM_MIN) ^ math.random()
       end}
     end
-    return {page = UI_PAGES.index.LFO, section = "lfo", voice = nil, draws = draws}
+    return {page = UI_PAGES.index.LFO, section = "lfo " .. n .. " " .. mode, voice = nil, draws = draws}
   end
 
   -- ALT+K2 held ALT_HOLD_SECONDS resets the cursor's field to its default
@@ -421,6 +430,15 @@ return function(S)
   table.insert(layout_states, layout_state("free", 1, RATE_FIELD, function()
     params:set("lfo_free_1", 0.1)
   end))
+  -- ALT's widest hint: K2:reset K3:off E3:group (a running LFO, the cursor
+  -- on its destination)
+  table.insert(layout_states, {name = "ALT+K2 held past the hold time", setup = function(context)
+    S.selected_lfo = 1
+    S.lfo_field = DEST_FIELD
+    params:set("lfo_1", 2)
+    key(1, 1); key(2, 1)
+    context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+  end})
 
   -- Only a running LFO's dot moves, so the page draws every frame only
   -- while one runs (#423); every other change asks for a redraw (the param

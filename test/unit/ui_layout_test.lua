@@ -233,4 +233,37 @@ test("the SEQ notes place the header status and play mark where HEADER does (#42
   assert_equal(tonumber(play_x), HEADER.status_play_x, "the play mark's x")
 end)
 
+-- #557: every page whose ALT+K2 randomizes lists a layout state with ALT+K2
+-- held past the hold time, so the layout check (check_layout_states) draws
+-- its K2:cancel or K2:reset hint
+test("every randomizing page has a layout state with ALT+K2 held past the hold time (#557)", function()
+  load_strata()
+  local pages = {}
+  for index, record in ipairs(local_value("S").registry.pages) do
+    if record.randomize_section then
+      local held = {}
+      for state_index, state in ipairs(record.layout_states or {}) do
+        if state.name and state.name:find("ALT+K2 held past the hold time", 1, true) then held[#held + 1] = state_index end
+      end
+      pages[#pages + 1] = { index = index, name = record.name, held = held }
+    end
+  end
+  assert_equal(#pages, 5, "MAIN, VOICE, SEQ, FX and LFO randomize")
+  for _, page in ipairs(pages) do
+    assert_true(#page.held >= 1, page.name .. " lists a layout state with ALT+K2 held past the hold time")
+    for _, state_index in ipairs(page.held) do
+      local context = load_strata(); finish_startup(context)
+      show_page(page.index)
+      local state = local_value("S").registry.pages[page.index].layout_states[state_index]
+      state.setup(context)
+      context.screen.clear(); redraw()
+      local hint = h.hint_text(context) or ""
+      assert_true(hint:find("^K2:cancel") or hint:find("^K2:reset"),
+        page.name .. ", " .. state.name .. ": the hint is K2:cancel or K2:reset (" .. hint .. ")")
+      assert_screen_layout(context, page.name .. " state " .. state.name)
+      key(2, 0); key(1, 0)
+    end
+  end
+end)
+
 end
