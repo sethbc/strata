@@ -20,7 +20,7 @@ Drawing (`redraw_seq`, design §5):
 - Sixteen cells of 4×4 px, 6 px apart from x 10 (so x 10-103). A step at level L (1-15) is a filled rect at level L; an empty step a 4×4 outline at level 1.
 - The playing column (the sounding step, while the patterns play): outlines at level 4, filled cells at `min(15, L + 4)`.
 - The cursor: a 6×6 outline at level 15 around the selected voice's step (`S.cursors.seq_step`, clamped to 1..`PATTERN_LENGTH`).
-- `header_status()` returns `"<tempo> bpm"`; `draw_header` draws it at x 79 with the play mark at x 74 while the patterns play.
+- `header_status()` returns `"<tempo> bpm"`; `draw_header` draws it at x 79 with the play mark at x 73 while the patterns play (`HEADER.status_x`, `HEADER.status_play_x`; a test in `test/unit/ui_layout_test.lua` compares the two).
 - The renders stroke the cells' outlines on whole-pixel rects, as the other pages' lines do; on the OLED cairo centers a 1 px stroke on the path, which the 3.1 hardware check should look at.
 
 Keys:

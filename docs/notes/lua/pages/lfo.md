@@ -6,7 +6,7 @@
 - Every E3 edit goes through `enc_param_delta(3, id, d)` (center detents, ALT+E3 fine on a control param), except the on/off field and ALT+E3 on the destination.
 - Turning an LFO on or off from the page (ALT+K3, E3 on the on/off field, ALT+K2 on it, the arc button) goes through `set_lfo_running`, a plain `params:set("lfo_<n>", ...)`. The offset survives because `lib/lfos.lua`'s wrapper of the state action restores it (#103), not because of anything on the page.
 - `lfo_dest_group_starts()` is derived from `S.LFO_DESTINATIONS`, never hardcoded: none, the first global, each `v<i> main` (found by its label), then each registered destination's `v1 <label>` after `S.lib.lfos.BUILT_IN_DESTINATIONS` (found by its label), so each registration's seven voices are a group (#511). Groups only add jump targets: a registered destination never moves an index or a voice group's start.
-- The strip measures with `screen.text_extents`, so it fits whatever the real font draws; the layout tests use the stub's estimate (`stubs.text_width`), which is wider, so the device shows at least as many fields as the renders.
+- The strip measures with `screen.text_extents`, so it fits whatever the real font draws. The layout tests use the stub's estimate (`stubs.text_width`), which is no upper bound: it gives `m`, `w`, `%`, `/`, `&`, `#` and `@` 5 px where the font draws 6, so a strip whose texts are full of those can show fewer fields on the device than in the renders.
 - Rows and strip stay between y 10 and 56 (above the hint row's glyphs) for every selected LFO: `LFO_PAGE.row_first_y` 12, `row_spacing` 12, `strip_height` 8. The rows test in `test/unit/pages_lfo_test.lua` checks it.
 
 ## Owns

@@ -195,7 +195,7 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
     set_selected(voice_idx)
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
     if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
-    params:set("v" .. voice_idx .. "_grain_mode", 2)  -- MAIN shows [TRIG]
+    params:set("v" .. voice_idx .. "_grain_mode", 2)  -- MAIN shows [T]
     for page = 1, #PAGE_TITLES do
       show_page(page)
       assert_screen_layout(context, PAGE_TITLES[page] .. ", voice " .. voice_idx)
@@ -220,6 +220,17 @@ test("every page draws within 128x64 with a header and hint row", function()
       assert_true(left >= 0 and right <= 128 and entry.y <= 64, "text inside screen on page " .. page)
     end
   end
+end)
+
+-- The SEQ notes give the header status's positions as HEADER has them (#428)
+test("the SEQ notes place the header status and play mark where HEADER does (#428)", function()
+  load_strata()
+  local HEADER = local_value("HEADER")
+  local file = assert(io.open(h.repo_root .. "/docs/notes/lua/pages/seq.md"))
+  local text = file:read("*a"); file:close()
+  local status_x, play_x = text:match("`draw_header` draws it at x (%d+) with the play mark at x (%d+)")
+  assert_equal(tonumber(status_x), HEADER.status_x, "the status text's x")
+  assert_equal(tonumber(play_x), HEADER.status_play_x, "the play mark's x")
 end)
 
 end

@@ -3,8 +3,7 @@
 -- (S.key_press_page, read by key() in strata.lua), ALT
 -- (S.alt_held) and the keys held as ALT presses (S.key_press_alt; the ALT
 -- functions are in lib/ui/alt.lua), forgetting held keys (forget_held_keys,
--- global), and
--- ignore_page_input, select_voice_by and set_ui_page (which runs the page
+-- global), and select_voice_by and set_ui_page (which runs the page
 -- records' leave and enter), fields of this module's table (S.lib.ui_keys).
 
 return function(S)
@@ -41,11 +40,9 @@ return function(S)
     if was_held then S.lib.ui_alt.run_release_hooks() end
   end
 
-  local function ignore_page_input() end
-  M.ignore_page_input = ignore_page_input
-
-  -- E2 on MAIN and BUFFER: step the shared selected voice (an omni MIDI
-  -- pitchbend moves with it)
+  -- Step the shared selected voice (an omni MIDI pitchbend moves with it):
+  -- MAIN's E2, SEQ's ALT+E2 and the arc's SEQ ring 4 (BUFFER's E2 picks a
+  -- buffer)
   local function select_voice_by(d)
     local previous_voice = S.selected_voice
     S.selected_voice = util.clamp(S.selected_voice + d, 1, NUM_VOICES)

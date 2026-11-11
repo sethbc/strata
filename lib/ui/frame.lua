@@ -11,6 +11,15 @@ return function(S)
 
   S.ui_page = 1  -- index into UI_PAGES
 
+  -- False until init's first start step (START_ORDER.started). norns can
+  -- route keys, encoders and redraw() to the script before init (the menu
+  -- closed while the engine loads): redraw, key and enc in strata.lua do
+  -- nothing until it is set (#426)
+  S.started = false
+  S.register_start(S.constants.START_ORDER.started, function()
+    S.started = true
+  end)
+
   -- Screen and arc redraws. Anything that changes what they show calls
   -- request_redraw(); the frame clock (started by init, canceled by cleanup)
   -- then draws whichever is dirty, at most FRAMES_PER_SECOND times a second,
@@ -69,16 +78,31 @@ return function(S)
     M.contained_call(UI_PAGES.draw_errors, part, "frame draw", draw)
   end
 
+  -- Whether the shown page animates: its record's animates(), run through
+  -- contained_call (key "animates"), so an error there counts as false and
+  -- prints once instead of ending the frame clock (#320)
+  local animating = false  -- what read_animates found
+  local function read_animates(record)
+    animating = record.animates() and true or false
+  end
+  local function page_animates()
+    local record = S.registry.pages[S.ui_page]
+    if not (record and record.animates) then return false end
+    animating = false
+    return M.contained_call(UI_PAGES.draw_errors, "animates", "page animates", read_animates, record) and animating
+  end
+
   -- One frame. It calls the global redraw(), so norns' swaps apply: nothing
   -- while its menu is open (redraw is norns.none then; norns redraws as the
   -- menu closes), and the file list while the file selector is open (redraw()
   -- never draws the page then). A page whose record has animates()
   -- returning true draws every frame (LFO's dots move while an LFO runs,
-  -- SEQ's column while the patterns play). They mark the screen only: the arc shows nothing that moves with them.
-  -- Each flag clears before its draw, so a failed draw is not retried.
+  -- SEQ's column while the patterns play, BUFFER's heads and held-key hint,
+  -- SCENES' overwrite prompt until it lapses). They mark the screen only:
+  -- the arc shows nothing that moves with them. Each flag clears before its
+  -- draw, so a failed draw is not retried.
   function draw_frame()
-    local record = S.registry.pages[S.ui_page]
-    if record and record.animates and record.animates() then UI_PAGES.screen_dirty = true end
+    if page_animates() then UI_PAGES.screen_dirty = true end
     if UI_PAGES.screen_dirty then
       UI_PAGES.screen_dirty = false
       draw_frame_part("screen", redraw)
@@ -94,7 +118,9 @@ return function(S)
     UI_PAGES.frame_clock = clock.run(function()
       while true do
         clock.sleep(1 / UI_PAGES.FRAMES_PER_SECOND)
-        draw_frame()
+        -- the whole frame contained too (key "frame"): nothing in a frame
+        -- ends the clock (#320)
+        M.contained_call(UI_PAGES.draw_errors, "frame", "frame", draw_frame)
       end
     end)
   end
@@ -106,7 +132,8 @@ return function(S)
     end
   end
 
-  -- init's last start step: from here on the screen and arc draw at
+  -- From init's frame clock step on (START_ORDER.frame_clock; the peaks
+  -- loop and the playhead clock start after it) the screen and arc draw at
   -- FRAMES_PER_SECOND
   S.register_start(S.constants.START_ORDER.frame_clock, function()
     start_frame_clock()

@@ -51,6 +51,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 
 | Order | Step | Module |
 |-------|------|--------|
+| 5 | set `S.started`: from here on `redraw`, `key` and `enc` act (before it norns can route them to the script, #426) | `lib/ui/frame.lua` |
 | 10 | build MAIN's voice list (`update_voice_list`) | `lib/pages/main.lua` |
 | 15 | add every registered voice-param record's `layout_states` to VOICE's | `lib/pages/voice.lua` |
 | 20 | E1: acceleration off, `E1_TICKS_PER_PAGE` ticks per page | `strata.lua` |

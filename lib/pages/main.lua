@@ -72,7 +72,7 @@ return function(S)
     place_voice_list()
   end
 
-  -- init's first start step: the list MAIN draws
+  -- init's start step (START_ORDER.voice_list): the list MAIN draws
   S.register_start(S.constants.START_ORDER.voice_list, function()
     update_voice_list()
   end)
@@ -88,10 +88,6 @@ return function(S)
 
   function main_param_id(voice_idx)
     return "v" .. voice_idx .. "_" .. main_param_entry(voice_idx).key
-  end
-
-  function main_param_label(voice_idx)
-    return main_param_entry(voice_idx).label
   end
 
   -- The three param ids MAIN shows for a voice, in field order: the main

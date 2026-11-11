@@ -443,7 +443,7 @@ test("MAIN fields fit at their widest values for every voice and source", functi
   end
 end)
 
-test("main_param_id and main_param_label name each voice's E3 and arc ring 2 param", function()
+test("main_param_id and main_param_entry's label name each voice's E3 and arc ring 2 param", function()
   local context = load_strata()
   local device = context.arc.plug(1)
   local expected = { resonator = "freq", fm = "index", folder = "fold", sub = "drift",
@@ -454,7 +454,7 @@ test("main_param_id and main_param_label name each voice's E3 and arc ring 2 par
     local key_name = expected[voices[voice_idx].name]
     local param_id = "v" .. voice_idx .. "_" .. key_name
     assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
-    assert_equal(main_param_label(voice_idx), key_name, "main param label of voice " .. voice_idx)
+    assert_equal(main_param_entry(voice_idx).label, key_name, "main param label of voice " .. voice_idx)
     -- arc ring 2 adjusts it and shows it across its controlspec range,
     -- following the warp (param_fraction, as the FX and BUFFER rings)
     set_selected(voice_idx)

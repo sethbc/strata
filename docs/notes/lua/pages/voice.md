@@ -17,7 +17,7 @@
 ## The page
 
 Layout (`M.LAYOUT`):
-- y 16: the selected voice at x 0, level 10, as MAIN's list shows it (`<n><+|-> <list_name>`, ` [L]` when locked), cut with `fit_text` to end `line_gap` (6) px before the section text; the cursor's section and its position among the voice's sections (`grain 2/4`; an input voice has three) right-aligned at x 124, level 4.
+- y 16: the selected voice at x 0, level 10, as MAIN's list shows it (`<n><+|-> <list_name>`, ` [L]` when locked), cut with `fit_text` to end `line_gap` (6) px before the section text; the cursor's section and its position among the voice's sections (`grain 2/6`: a synth voice has six sections today, the four built-in ones and the registered `variation` and `filter & sends`; a buffer voice seven, with `bookmarks`; an input voice six, `input` in place of `synth`) right-aligned at x 124, level 4.
 - Rows through `S.lib.ui_field_list.draw`: 5 visible (`visible`) from y 24 (`first_y`), 7 px apart (`spacing`), so y 24-52; the view keeps one row above the cursor and the scroll marker is field_list's at x 127.
 - Section label rows at x 0, level 2. Field rows: the label at x 3 (`field_x`), the value right-aligned at x 124 (`value_right`); the cursor row at level 15, the others at 4.
 - While an arc is connected, each row of the cursor's ring group gets a 1×5 px filled rect at x 0 (`mark_x`), y - 4 .. y, level 8.

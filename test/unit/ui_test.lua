@@ -205,6 +205,228 @@ test("contained_call prints a failure once per message and key, and again after 
   assert_equal(errors.b ~= nil, true, "another key keeps its own")
 end)
 
+-- The lines context.printed holds that contain `text`
+local function lines_printed(context, text)
+  local count = 0
+  for _, line in ipairs(context.printed) do
+    if line:find(text, 1, true) then count = count + 1 end
+  end
+  return count
+end
+
+-- A page's animates() runs inside the frame's containment: an error there
+-- counts as false, prints once, and the frame clock keeps drawing (#320)
+test("an animates() that fails prints once, counts as false, and the frame clock keeps drawing (#320)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SEQ")
+  local record = S.registry.pages[S.ui_page]
+  local frame_clock = S.constants.UI_PAGES.frame_clock
+  local real_animates = record.animates
+  record.animates = function() error("animates boom") end
+  context.printed = {}
+  context.clock.run_for(0.2)
+  local counter = count_screen_draws()
+  context.clock.run_for(1)
+  assert_true(context.clock.threads[frame_clock] ~= nil, "the frame clock survives the failing animates()")
+  assert_equal(lines_printed(context, "animates boom"), 1, "the error prints once in a second of frames")
+  assert_equal(counter.screen, 0, "a failing animates() counts as false: nothing draws unasked")
+  request_redraw(); next_frame(context)
+  assert_equal(counter.screen, 1, "a request still draws")
+  record.animates = function() return true end
+  context.clock.run_for(0.1)  -- half a frame past the last one, so a second holds 15 whole frames
+  counter.screen = 0
+  context.clock.run_for(1)
+  counter.restore()
+  record.animates = real_animates
+  assert_equal(counter.screen, 15, "animates() true again draws every frame")
+end)
+
+-- The frame clock's body is contained too: nothing in a frame ends it (#320)
+test("a frame that fails outside its draws prints once and the frame clock keeps running (#320)", function()
+  local context = load_strata(); finish_startup(context)
+  local frame_clock = local_value("UI_PAGES").frame_clock
+  local real_draw_frame = draw_frame
+  draw_frame = function() error("frame boom") end
+  context.printed = {}
+  context.clock.run_for(1)
+  draw_frame = real_draw_frame
+  assert_true(context.clock.threads[frame_clock] ~= nil, "the frame clock survives")
+  assert_equal(lines_printed(context, "frame boom"), 1, "the error prints once in a second of frames")
+  local counter = count_screen_draws()
+  request_redraw(); next_frame(context)
+  counter.restore()
+  assert_equal(counter.screen, 1, "the next request draws")
+end)
+
+-- A page draw that fails still finishes the frame: the header of the page
+-- that is shown, "draw error" on the hint row, and screen.update(), so the
+-- keys never act on a page the screen does not show (#424)
+test("a page draw that fails still shows its page: the title, draw error on the hint row, an update (#424)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages = S.constants.UI_PAGES
+  show_page("FX")
+  next_frame(context)
+  local lfo = S.registry.pages[pages.index.LFO]
+  local real_draw = lfo.draw
+  lfo.draw = function()
+    screen.move(0, 30); screen.text("half drawn")
+    error("lfo draw failed")
+  end
+  local updates = 0
+  local real_update = context.screen.update
+  context.screen.update = function() updates = updates + 1 end
+  context.printed = {}
+  enc(1, 1)  -- FX to LFO
+  context.clock.run_for(1)
+  assert_equal(S.ui_page, pages.index.LFO, "the keys act on LFO")
+  assert_true(updates >= 1, "the frame is pushed to the screen")
+  local title
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == 8 then title = entry.text end
+  end
+  assert_equal(title, "LFO", "the header names the page that is shown")
+  assert_equal(h.hint_text(context), "draw error", "the hint row says the draw failed")
+  assert_true(not screen_shows(context, "half drawn"), "the half-drawn body is cleared")
+  h.assert_screen_layout(context, "LFO after a failed draw")
+  assert_equal(lines_printed(context, "lfo draw failed"), 1, "the error prints once")
+  assert_true(context.printed[1]:find("stack traceback", 1, true) ~= nil, "with its traceback")
+  -- the draw back, the page draws as before
+  lfo.draw = real_draw
+  request_redraw(); next_frame(context)
+  context.screen.update = real_update
+  assert_true(h.hint_text(context) ~= "draw error", "a good draw shows the page's hints again")
+end)
+
+-- The menu watch's wrapper (lib/ui/menu_watch.lua) never lets a failure
+-- stop the menu opening or the close hooks running (#425)
+test("the menu opening forgets held keys even with the forget_held_keys global gone (#425)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  key(2, 1); key(1, 1)
+  local real_forget = forget_held_keys
+  forget_held_keys = nil
+  local opened, open_error = pcall(_menu.set_mode, true)
+  forget_held_keys = real_forget
+  assert_true(opened, "the menu opens without raising: " .. tostring(open_error))
+  assert_equal(_menu.mode, true, "the menu is open")
+  assert_true(not S.alt_held, "ALT is forgotten")
+  assert_true(next(S.key_press_page) == nil, "and so is the held K2")
+  _menu.set_mode(false)
+end)
+
+test("a failing ALT-release hook does not stop the menu opening (#425)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.register_alt_release(function() error("alt release boom") end)
+  key(1, 1)
+  context.printed = {}
+  local opened, open_error = pcall(_menu.set_mode, true)
+  assert_true(opened, "the menu opens without raising: " .. tostring(open_error))
+  assert_equal(_menu.mode, true, "the menu is open")
+  assert_true(not S.alt_held, "ALT is forgotten")
+  assert_equal(lines_printed(context, "alt release boom"), 1, "the failure prints one line")
+  _menu.set_mode(false)
+end)
+
+test("a set_mode(false) that raises still runs the menu-close hooks, then raises (#425)", function()
+  local closes, fail_close = 0, false
+  local context = load_strata({ before_init = function()
+    local_value("S").register_menu_close(function() closes = closes + 1 end)
+    -- norns' set_mode(false) ends with the script's redraw(): one that raises
+    local norns_set_mode = _menu.set_mode
+    _menu.set_mode = function(mode)
+      norns_set_mode(mode)
+      if mode == false and fail_close then error("redraw failed as the menu closed") end
+    end
+  end })
+  finish_startup(context)
+  _menu.set_mode(true)
+  fail_close = true
+  local closed, close_error = pcall(_menu.set_mode, false)
+  fail_close = false
+  assert_true(not closed, "norns' error still reaches its caller")
+  assert_true(tostring(close_error):find("redraw failed as the menu closed", 1, true) ~= nil,
+    "the error is norns' own: " .. tostring(close_error))
+  assert_equal(_menu.mode, false, "the menu is closed")
+  assert_equal(closes, 1, "the close hooks ran")
+end)
+
+-- norns can route keys, encoders and redraw() to the script before init
+-- (a K1 tap while the engine loads): they do nothing until init's first
+-- start step sets S.started (#426)
+test("redraw, enc and key before init raise nothing and change nothing (#426)", function()
+  local failures, drawn = {}, nil
+  load_strata({ before_init = function(context)
+    local calls = {
+      { "redraw()", function() redraw() end },
+      { "enc(1, 1)", function() enc(1, 1) end },
+      { "enc(2, 1)", function() enc(2, 1) end },
+      { "enc(3, 1)", function() enc(3, 1) end },
+      { "key(1, 1)", function() key(1, 1) end },
+      { "key(3, 1)", function() key(3, 1) end },
+      { "key(3, 0)", function() key(3, 0) end },
+    }
+    for _, call in ipairs(calls) do
+      local ok, err = pcall(call[2])
+      if not ok then table.insert(failures, call[1] .. ": " .. tostring(err)) end
+    end
+    drawn = #context.screen.texts
+  end })
+  local S = local_value("S")
+  assert_equal(table.concat(failures, "; "), "", "nothing raised before init")
+  assert_equal(drawn, 0, "redraw() drew nothing before init")
+  assert_equal(S.selected_voice, 1, "E2 before init selected no voice")
+  assert_equal(S.ui_page, 1, "E1 before init changed no page")
+  assert_true(not S.alt_held, "K1 before init held no ALT")
+  assert_true(next(S.key_press_page) == nil, "no key is held")
+  assert_true(S.started, "init's first start step sets S.started")
+  enc(2, 1)
+  assert_equal(S.selected_voice, 2, "after init E2 selects a voice")
+end)
+
+-- fit_text cuts a character at a time and stops when a pass removed
+-- nothing, so a text it cannot shorten never loops (#514)
+test("fit_text stops when a pass removes nothing (#514)", function()
+  local context = load_strata()
+  local fit_text = local_value("S").lib.ui_text.fit_text
+  local real_extents = context.screen.text_extents
+  local measures = 0
+  context.screen.text_extents = function()
+    measures = measures + 1
+    if measures > 100 then error("fit_text kept measuring") end
+    return 1000, 8  -- never fits
+  end
+  local bytes_cut, only_continuation = pcall(fit_text, "\128\129\130", 10)
+  local bytes_measures = measures
+  measures = 0
+  local mixed_cut, mixed = pcall(fit_text, "\128\129ab", 10)
+  context.screen.text_extents = real_extents
+  assert_true(bytes_cut, "continuation bytes only: " .. tostring(only_continuation))
+  assert_equal(only_continuation, "\128\129\130", "a text it cannot shorten comes back as it is")
+  assert_true(bytes_measures <= 2, "measured " .. bytes_measures .. " times")
+  assert_true(mixed_cut, "continuation bytes, then characters: " .. tostring(mixed))
+  assert_equal(mixed, "\128\129", "the characters come off, then it stops")
+  assert_equal(fit_text("abcdef", 10), "ab", "a text that can fit is cut to fit, as before")
+end)
+
+-- alt-and-keys.md's list of the menu-close hooks names as many as are
+-- registered (#428)
+test("the alt-and-keys notes name every menu-close hook (#428)", function()
+  load_strata()
+  local S = local_value("S")
+  local file = assert(io.open(h.repo_root .. "/docs/notes/lua/ui/alt-and-keys.md"))
+  local text = file:read("*a"); file:close()
+  local named
+  for line in text:gmatch("[^\n]+") do
+    local rest = line:match("The hooks today(.*)$")
+    if rest then named = select(2, rest:gsub("`S%.lib%.[%w_]+%.[%w_]+`", "")) end
+  end
+  assert_true(named ~= nil, "the notes list the hooks")
+  assert_equal(named, #S.registry.menu_close, "every registered hook is named")
+end)
+
 test("a draw that keeps failing prints its error once, until the error changes (#49)", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)

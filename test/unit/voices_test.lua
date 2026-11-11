@@ -11,7 +11,7 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   local context = load_strata(); finish_startup(context)   -- voice 1 running
   local device = context.arc.plug(1)
   params:set("v1_source", 10)
-  assert_equal(main_param_id(1), "v1_grain_size"); assert_equal(main_param_label(1), "size")
+  assert_equal(main_param_id(1), "v1_grain_size"); assert_equal(main_param_entry(1).label, "size")
   assert_equal(fader_param_ids(1)[1], "v1_grain_size", "first grid fader")
   for _, id in ipairs(fader_param_ids(1)) do
     assert_true(not id:find("_buf_"), id .. ": no buffer faders for input")
