@@ -943,6 +943,29 @@ local function make_params(util, controlspec)
   local paramset = setmetatable({ params = {}, lookup = {}, action_log = {}, open_group = 0 }, ParamSet)
   local own_delta  -- a param object's delta (below, after ParamSet:set_raw)
 
+  -- lua/core/params/file.lua's File:loaddir, run at every set that changes
+  -- a file param's path to anything but "-": the path's folder is listed
+  -- (util.scandir, a blocking `ls` through matron on norns, so a test
+  -- counts listings by wrapping util.scandir), its files kept (never a
+  -- folder, which ls -p marks with "/") and the path's place among them. A
+  -- path with no folder lists nothing (#480). File.new lists too; the stub
+  -- leaves that listing out (it only sets dir): it is norns' own cost at a
+  -- param's creation, not one the script chooses, and Strata's eight file
+  -- params made at every load_strata were 23,000 listings a run, doubling
+  -- the suite's time
+  local function load_file_dir(param)
+    param.dir = param.path:match("(.*/)")
+    if param.dir == nil then return end
+    local name = param.path:match("[^/]*$")
+    param.dirfiles = {}
+    for _, file_name in ipairs(util.scandir(param.dir)) do
+      if not file_name:find("/", 1, true) then
+        param.dirfiles[#param.dirfiles + 1] = file_name
+        if file_name == name then param.dirpos = #param.dirfiles end
+      end
+    end
+  end
+
   local bang
 
   local function new_param(args)
@@ -981,6 +1004,7 @@ local function make_params(util, controlspec)
       param.behavior = args.behavior or "trigger"
     elseif args.type == "file" then
       param.path = args.path or "-"
+      param.dir = param.path:match("(.*/)")  -- File.new's listing is left out (load_file_dir)
     elseif args.type == "text" then
       param.text = args.text or ""
     elseif args.type == "group" then
@@ -1191,7 +1215,15 @@ local function make_params(util, controlspec)
       if type(value) ~= "string" then
         error("params:set(" .. id .. ") file param needs a path string, got " .. tostring(value), 2)
       end
-      if param.path ~= value then param.path = value; changed = true end
+      if param.path ~= value then
+        param.path = value
+        if value ~= "-" then
+          load_file_dir(param)
+        else
+          param.dir, param.dirfiles, param.dirpos = nil, nil, nil
+        end
+        changed = true
+      end
     elseif param.t == tTEXT then
       if param.text ~= value then param.text = value; changed = true end
     end

@@ -112,6 +112,23 @@ test("a peaks file with a wrong slot, version, count, range or length is ignored
   assert_equal(waveforms.peaks(2), nil, "the slot's length changed: the old file is not its waveform")
 end)
 
+-- #404 (1): the length tolerance is 0.01 s: a file 0.05 s off the slot's
+-- reported seconds is another take's, one 0.005 s off is this one's
+test("a peaks file 0.05 s off the slot's length is refused, 0.005 s off is taken", function()
+  local context = load_strata(); finish_startup(context)
+  local waveforms = local_value("S").lib.waveforms
+  report(context, 1, 12)
+  write_peaks(1, ramp(64), { frames = 576000 + 2400 })   -- 12.05 s
+  waveforms.stale(1); tick(context, 3)
+  assert_equal(waveforms.peaks(1), nil, "0.05 s off")
+  write_peaks(1, ramp(64), { frames = 576000 - 2400 })   -- 11.95 s
+  waveforms.stale(1); tick(context, 3)
+  assert_equal(waveforms.peaks(1), nil, "0.05 s short")
+  write_peaks(1, ramp(64), { frames = 576000 + 240 })    -- 12.005 s
+  waveforms.stale(1); tick(context, 3)
+  assert_equal(#waveforms.peaks(1), 64, "within 0.01 s")
+end)
+
 test("a peaks file of a 44.1 kHz slot validates against its reported seconds", function()
   local context = load_strata(); finish_startup(context)
   local waveforms = local_value("S").lib.waveforms

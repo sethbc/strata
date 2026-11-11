@@ -570,4 +570,104 @@ test("a loop recording downgraded by the sample rate is sent with loop 0", funct
   assert_equal(S_record_state(1).kind, "take"); assert_equal(S_record_state(1).loop, false)
 end)
 
+-- #400: a dub into an empty slot is take <n> once it has a length (its path
+-- comes at "ended"), so a failed load during it, which the engine answers
+-- by canceling the dub and keeping its audio (the state table's row 11),
+-- puts back a named slot, never a loaded one named "empty"
+test("a failed load during a dub over an empty slot leaves a named slot", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(1, 1, 1))
+  assert_equal(buffers[1].name, "empty", "nothing to name before the engine reports a length")
+  context.polls.fire("bufferState", 4)
+  assert_equal(buffers[1].name, "take 1", "the dub's audio is take 1 once it has a length")
+  assert_equal(buffers[1].path, nil, "its file comes at ended"); assert_equal(S.lib.buffers.status(1), "dub")
+  load_buffer(1, "/tmp/bad.wav")
+  context.polls.fire("recordState", record_state_value(1, 3, 1))   -- canceled by the load
+  context.polls.fire("bufferState", 4)                             -- the slot keeps its audio
+  context.polls.fire("bufferLoadFailed", (1 * 2) * 8 + 0)          -- load 1 failed
+  context.polls.fire("bufferState", 4)
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  assert_equal(buffers[1].name, "take 1", "named, not empty"); assert_true(not S.lib.buffers.is_free(1))
+  assert_equal(buffers[1].path, nil, "no file was written for it")
+  -- a dub over a file keeps the file's name until it ends
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1008)
+  record_buffer(2); context.polls.fire("recordState", record_state_value(1, 1, 2))
+  context.polls.fire("bufferState", 1012)
+  assert_equal(buffers[2].name, "drone.wav")
+end)
+
+-- #404 (3): K3 on a dub stops it in the engine and waits for its "ended"
+-- report: it never finishes as a replace take does
+test("K3 on a dub sends stopRecord and leaves it recording until its ended report", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", 8)
+  params:set("record_feedback", 50)
+  record_buffer(1); context.polls.fire("recordState", record_state_value(1, 1, 1))
+  context.clear_engine_calls()
+  record_buffer(1)
+  assert_equal(#context.calls_named("stopRecord"), 1)
+  assert_true(not buffers[1].finishing, "a dub never finishes"); assert_equal(buffers[1].confirm_since, nil)
+  assert_equal(S.lib.buffers.status(1), "dub")
+  context.clock.run_for(local_value("BUFFER_SETTLE").fallback_seconds + 1)
+  assert_true(buffers[1].recording, "no fallback settles it")
+  context.polls.fire("recordState", record_state_value(1, 2, 1))
+  assert_equal(buffers[1].name, "take 1"); assert_true(not buffers[1].recording)
+end)
+
+-- #404 (4): a recording forgets the slot's tracked loads, so a failure
+-- reported for a load sent before it changes nothing, also in a slot that
+-- held a file before that load
+test("a failed load's report after a recording into a slot that held a file changes nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)   -- load 1
+  load_buffer(1, "/tmp/b.wav")                                          -- load 2
+  record_buffer(1)                                                      -- a replace take supersedes it
+  local before = S.lib.buffers.shown_state(1)
+  context.polls.fire("bufferLoadFailed", (2 * 2) * 8 + 0)               -- load 2's late failure
+  local after = S.lib.buffers.shown_state(1)
+  for _, field in ipairs({ "name", "path", "file_param", "loaded", "confirm_since" }) do
+    assert_equal(after[field], before[field], field .. " is as the recording left it")
+  end
+  assert_true(buffers[1].recording); assert_equal(S.lib.buffers.status(1), "recording")
+end)
+
+-- #404 (9): a dub's "ended" report marks its peaks stale, so its waveform is
+-- read again although its length did not change
+test("a dub's ended report causes a peaks read", function()
+  local context = load_strata(); finish_startup(context)
+  local frame = 1 / local_value("UI_PAGES").FRAMES_PER_SECOND
+  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", 8)
+  context.clock.run_for(3 * frame)                  -- the load's own read
+  params:set("record_feedback", 50); params:set("record_duration", 4)
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(1, 1, 1))
+  context.polls.fire("bufferState", 8)              -- a 4 s dub over 8 s: the length stays 8 s
+  local reads = 0
+  local original_open = io.open
+  io.open = function(path, ...)
+    if tostring(path):match("buf1%.peaks$") then reads = reads + 1 end
+    return original_open(path, ...)
+  end
+  local ok, problem = pcall(function()
+    context.polls.fire("recordState", record_state_value(1, 2, 1))   -- ended
+    context.clock.run_for(2 * frame)
+  end)
+  io.open = original_open
+  assert_true(ok, tostring(problem))
+  assert_equal(reads, 1, "the ended take's peaks are read")
+end)
+
+-- #404 (11): a synced take lasts record_beats at the tempo
+test("a synced take at 90 BPM lasts record_beats x 60 / 90 s", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("clock_tempo", 90); params:set("record_sync", 2); params:set("record_beats", 16)
+  context.clear_engine_calls(); record_buffer(1)
+  assert_near(recording_calls(context)[1].args[2], 16 * 60 / 90, 1e-6, "16 beats at 90 BPM")
+end)
+
 end

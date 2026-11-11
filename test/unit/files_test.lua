@@ -198,4 +198,51 @@ test("fill_empty leaves a named load the engine has not reported yet", function(
   assert_equal(local_value("buffers")[2].path, "/elsewhere/slow.wav", "the unsettled load keeps its file")
 end)
 
+-- #512: one filled slot is one slot
+test("the fill's flash counts one slot and two slots", function()
+  local context = load_strata(); finish_startup(context)
+  local files = local_value("S").lib.files
+  local one = make_folder(context, "fill-one", { "a.wav" })
+  files.note_chosen(one .. "x.wav")
+  assert_equal(files.fill_empty(), 1)
+  assert_equal(flash_text(), "filled 1 slot")
+  local two = make_folder(context, "fill-two", { "b.wav", "c.wav" })
+  files.note_chosen(two .. "x.wav")
+  local_value("S").buffer_page.slot = 2   -- an empty slot: the last chosen folder
+  assert_equal(files.fill_empty(), 2)
+  assert_equal(flash_text(), "filled 2 slots")
+end)
+
+-- #404 (6): a recorded take's scratch folder is nobody's library: a slot
+-- holding a take takes its files from the last chosen folder
+test("folder_for a take n slot is the last chosen folder", function()
+  local context = load_strata(); finish_startup(context)
+  local files, buffers = local_value("S").lib.files, local_value("buffers")
+  files.note_chosen("/b/y.wav")
+  params:set("record_duration", 2)
+  record_buffer(2); h.wake_buffer_clock(context, 2); context.polls.fire("bufferState", 1002)
+  assert_equal(buffers[2].name, "take 2"); assert_equal(buffers[2].path, scratch_take_path(2))
+  assert_equal(files.folder_for(2), "/b/", "not the scratch folder")
+end)
+
+-- #404 (7): a remembered file missing on start leaves its slot free, so the
+-- fill gives it a file
+test("fill_empty fills a slot whose remembered file is missing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local folder = make_folder(context, "fill-missing", { "a.wav" })
+  S.lib.files.note_chosen(folder .. "x.wav")
+  for slot = 1, local_value("NUM_BUFFERS") do
+    if slot ~= 3 then load_buffer(slot, "/elsewhere/" .. slot .. ".wav") end
+  end
+  S.buffers[3].missing_path = "/gone/pad.wav"
+  assert_equal(S.lib.buffers.status(3), "missing")
+  context.clear_engine_calls()
+  S.buffer_page.slot = 3
+  assert_equal(S.lib.files.fill_empty(), 1)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1); assert_equal(loads[1].args[1], 2, "into slot 3")
+  assert_equal(loads[1].args[2], folder .. "a.wav")
+end)
+
 end

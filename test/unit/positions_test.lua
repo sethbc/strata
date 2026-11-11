@@ -79,6 +79,18 @@ test("set_loop sets the start, then the length, then jumps to the start", functi
   assert_equal(#grain_calls(context, "t_scanReset"), 1)
 end)
 
+-- #404 (2): the start goes first, so a loop that moves back and grows
+-- keeps its length (a length set first would be cut to what the old start
+-- leaves: (0.5, 0.5) would end at (0, 0.5)), as when a grid cell is held
+-- and a lower one pressed
+test("set_loop from a late loop to an earlier, longer one keeps the length", function()
+  local _, S = buffer_voices()
+  params:set("v1_loop_length", 0.5); params:set("v1_loop_start", 0.5)
+  S.lib.positions.set_loop(1, 0, 0.75)
+  local start, length = loop_of(1)
+  assert_near(start, 0, 1e-9); assert_near(length, 0.75, 1e-9)
+end)
+
 test("a two-key press sets the loop from the lower cell's start to the higher cell's end", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
@@ -254,6 +266,38 @@ test("a scene recall that switches a stopped voice's source forgets its last rec
   assert_true(not S.voices[1].active, "voice 1 is still stopped")
   assert_equal(S.lib.positions.last_recalled(1), nil, "the mark is forgotten")
   assert_equal(S.lib.positions.strip_level(1, 2), 0, "a voice on the synth has a dark strip (#445)")
+end)
+
+-- #404 (10): each hook forgets the mark on its own. A scene recall runs
+-- only the grain-restart hook (a running voice); a stopped voice's source
+-- param runs only the source-change hook. Either way, a voice whose source
+-- comes back shows no recalled mark (the source check alone would show it)
+test("a running voice whose source returns through scene recalls shows no recalled mark", function()
+  local _, S = buffer_voices()
+  params:set("v1_source", 1)
+  capture_scene(1)  -- voice 1 running, on the synth
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  capture_scene(2)  -- voice 1 running, on the buffer
+  S.lib.positions.recall_bookmark(1, 3)
+  assert_true(S.voices[1].active, "voice 1 runs")
+  recall_scene(1, 0)
+  assert_equal(S.voices[1].source, 1, "the first recall left the buffer")
+  recall_scene(2, 0)
+  assert_equal(S.voices[1].source, S.constants.SOURCE_SYNTH + 1, "the second came back")
+  assert_equal(S.lib.positions.last_recalled(1), nil, "the grain restart forgot it")
+  assert_equal(S.lib.positions.strip_level(1, 3) ~= 10, true, "no recalled level")
+end)
+
+test("a stopped voice whose source returns through its param shows no recalled mark", function()
+  local _, S = buffer_voices()
+  local buffer_source = S.constants.SOURCE_SYNTH + 1
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "voice 1 is stopped")
+  S.lib.positions.recall_bookmark(1, 2)
+  assert_equal(S.lib.positions.last_recalled(1), 2)
+  params:set("v1_source", buffer_source + 1)   -- another slot
+  params:set("v1_source", buffer_source)       -- and back
+  assert_equal(S.lib.positions.last_recalled(1), nil, "the source change forgot it")
 end)
 
 test("a stopped voice's recalled mark shows again when two scene recalls bring back the source it was recalled on", function()

@@ -10,12 +10,15 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local BUFFER_SETTLE = S.lib.buffers.BUFFER_SETTLE
 
-  -- per slot: clock that ends the recording state, then the finishing fallback
+  -- per slot: the clock that ends the recording state, then the finishing
+  -- fallback; lib/buffers.lua keeps a long load's check notice here too
+  -- (start_check_notice), so a load, clear, recording or cleanup cancels
+  -- whichever runs
   S.buffer_record_clocks = {}
   -- per slot, while a take records: what S.lib.record.state reports
   local takes = {}
 
-  -- Cancel the slot's recording timer or finishing fallback, if any
+  -- Cancel the slot's recording timer, finishing fallback or check notice, if any
   function M.cancel_timer(slot)
     if S.buffer_record_clocks[slot] then
       clock.cancel(S.buffer_record_clocks[slot])
@@ -100,7 +103,8 @@ return function(S)
   -- canceled). A replace take that has ended and waits for the engine
   -- (finishing) ignores the press.
   function record_buffer(slot)
-    if not S.lib.buffers.valid_buffer_slot(slot) then return end
+    slot = S.lib.buffers.slot_index(slot)  -- a whole number from 1 to NUM_BUFFERS (#402)
+    if not slot then return end
     local buffer = S.buffers[slot]
     if buffer.finishing then return end
     if buffer.recording then
@@ -200,12 +204,18 @@ return function(S)
   end
 
   -- A recording slot's bufferState report (lib/buffers.lua calls it): a
-  -- playable recording keeps its slot loaded once it has a length
+  -- playable recording keeps its slot loaded once it has a length, and a
+  -- dub into a slot with no file (an empty one) is take <n> from then on,
+  -- its path coming at "ended": a failed load during it puts back a named
+  -- slot, never a loaded one named "empty" (#400). True when it changed
+  -- the slot
   function M.slot_reported(slot, seconds)
     local state = takes[slot]
-    if state and state.kind == "playable" and seconds > 0 and not S.buffers[slot].loaded then
-      S.buffers[slot].loaded = true
-    end
+    local buffer = S.buffers[slot]
+    if not (state and state.kind == "playable" and seconds > 0 and not buffer.loaded) then return false end
+    buffer.loaded = true
+    if buffer.path == nil then buffer.name = "take " .. slot end
+    return true
   end
 
   -- recordState poll: value = ((record number * 4) + state) * NUM_BUFFERS +

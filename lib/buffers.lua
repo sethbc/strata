@@ -1,14 +1,18 @@
 -- lib/buffers.lua
 -- The sample buffers: what each slot holds (S.buffers), loading, clearing
 -- and saving them (recording is lib/record.lua's), the engine's bufferState, bufferLoadFailed and
--- bufferSaveResult polls (S.buffer_polls; init starts them), and the buffer paths kept in
+-- bufferSaveResult polls (S.buffer_polls), and the buffer paths kept in
 -- buffers.data. The functions that were global stay global;
--- valid_buffer_slot (for lib/grid/layout_256.lua), buffer_state_changed
--- (the bufferState poll's handler, which init sets), BUFFER_SETTLE (shared
--- with lib/record.lua), display_changed and recording_started (a hook
--- lib/record.lua calls) are fields of this module's table (S.lib.buffers).
--- Registers two cleanup steps (saving the buffer paths; the polls and
--- recording timers).
+-- valid_buffer_slot and slot_index (the one slot check, #402: lib/record.lua,
+-- lib/files.lua, lib/waveforms.lua and lib/playheads.lua use it),
+-- buffer_state_changed (the bufferState poll's handler), BUFFER_SETTLE
+-- (shared with lib/record.lua), display_changed and recording_started (a
+-- hook lib/record.lua calls) are fields of this module's table
+-- (S.lib.buffers). Registers two start steps (START_ORDER.buffer_polls: the
+-- polls; START_ORDER.buffers_load: the restore from buffers.data), three
+-- cleanup steps (CLEANUP_ORDER.buffer_paths_save: buffers.data;
+-- buffer_start_reload: the pending start reloads; buffer_polls: the polls
+-- and recording timers) and the "buffer slots" invariant.
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride by matching this line in the script's sources
@@ -47,8 +51,9 @@ return function(S)
   -- otherwise): until a report differs from it, the poll leaves the load
   -- unsettled and the BUFFER page shows "..." for the length. checking_load
   -- is that load's number; if no differing report comes within
-  -- BUFFER_SETTLE.check_fallback_seconds, the slot goes back to the state
-  -- the load replaced (start_check_fallback).
+  -- BUFFER_SETTLE.check_notice_seconds, the player is told once
+  -- (start_check_notice) and the load stays the slot's until the engine
+  -- answers (#317).
   -- kept_state is what a canceled replace take had replaced, from its
   -- "canceled" report until the engine's next report of the slot's length:
   -- audio means the take had not prepared the slot, which is as it was, so
@@ -76,34 +81,43 @@ return function(S)
   -- overlap; keeping only the newest 4 is still safe: the flash depends only
   -- on saves_sent, and dropping an older entry only loses that save's console
   -- line.
-  -- server_rate: the engine checks a file in a routine when it would read
-  -- more than its standard slot length at the server's rate
-  -- (loadCheckAtOnceFrames, lib/engine/StrataBuffers.sc). Lua cannot learn
-  -- that rate: performance_active.data and the bufferState poll carry
-  -- seconds only, never a rate. norns runs its audio server (JACK and
-  -- scsynth) at 48 kHz, so this is 48000; a misjudged file near the edge
-  -- only shows "..." until the engine's first report, or loads as before.
-  -- check_fallback_seconds: a long file's load the engine is checking goes
-  -- back to the state it replaced when no report ends the check this long
-  -- after it was sent (no bufferState poll, or a check that never ends). A
-  -- 300 s load (check and read) takes 0.4-0.65 s on a desktop
-  -- (docs/notes/engine/files.md); 30 s leaves a Pi's slower FLAC decoding
-  -- about 45 times that.
+  -- check_notice_seconds: when no report has ended a long file's check this
+  -- long after its load was sent, the console and BUFFER say the engine is
+  -- still checking; nothing else changes (#317). A 300 s load (check and
+  -- read) takes 0.4-0.65 s on a desktop (docs/notes/engine/files.md); 30 s
+  -- leaves a Pi's slower FLAC decoding about 45 times that.
+  -- The server's rate, which a slot's frames are at, is
+  -- S.constants.NORNS_SAMPLE_RATE (#516). Lua cannot learn the engine's:
+  -- performance_active.data and the bufferState poll carry seconds only,
+  -- never a rate. norns runs its audio server (JACK and scsynth) at 48 kHz;
+  -- a misjudged file near the check's edge only shows "..." until the
+  -- engine's first report, or loads as before.
   -- start: seconds into the slot's file the load began at (0 for a new file;
   -- sent with every load of the slot, kept in buffers.data; set_start moves it
   -- ahead of its reload); sent_start: the start of the load last sent, what a
   -- failed load puts back (#245); sample_rate and
   -- file_seconds: the loaded file's rate and length from audio.file_info, nil
   -- for a take, a clear or a file it cannot read (set_start
-  -- clamps the start to what the file leaves after a slot's length)
+  -- clamps the start to what the file leaves after the seconds a slot holds
+  -- of it, slot_file_seconds)
   local BUFFER_SETTLE = {confirm_seconds = 1, fallback_seconds = 5, tracked_loads = 4, tracked_saves = 4,
-    server_rate = 48000, check_fallback_seconds = 30}
+    check_notice_seconds = 30}
   S.buffers_restored = 0  -- restored slots the engine confirmed holding audio (SETUP page)
   local buffer_audio_dir = _path.audio .. "strata/"
   local buffer_scratch_dir = buffer_audio_dir .. "scratch/"  -- engine scratchDir
 
+  -- The one slot check (#402): a whole number from 1 to NUM_BUFFERS. A whole
+  -- float is a slot (matron hands poll values over as floats, so 3.0 is
+  -- slot 3): slot == math.floor(slot), never math.type, which LuaJIT lacks
   local function valid_buffer_slot(slot)
-    return slot >= 1 and slot <= NUM_BUFFERS
+    return type(slot) == "number" and slot >= 1 and slot <= NUM_BUFFERS and slot == math.floor(slot)
+  end
+
+  -- The slot as the index the names and params use (3.0 is 3, so a param
+  -- is buf3_file, never buf3.0_file, #300), or nil when it is not a slot
+  local function slot_index(slot)
+    if not valid_buffer_slot(slot) then return nil end
+    return math.floor(slot)
   end
 
   -- Buffer state is shown on the BUFFER page and the 256 grid's page 4, and
@@ -182,8 +196,23 @@ return function(S)
   -- norns' file param runs the action only when the path changes, so a
   -- record or clear puts it back at its starting folder (_path.audio, which
   -- loads nothing): picking the same file again then loads it.
+  -- Each new path makes norns list its folder (File:loaddir: util.scandir,
+  -- a blocking ls with the folder between double quotes, #480). A file's
+  -- folder is listed, since PARAMETERS' E3 steps through it from the file.
+  -- A folder itself (the audio folder: a clear, a take, a dub's end) names
+  -- no file to step from, and a folder the shell still reads inside double
+  -- quotes ($, `, \ or ") would run what its name says (#465): both are
+  -- shown as File:set would leave them, without the listing (the folder
+  -- PARAMETERS' file selector opens in, nothing for E3 to step through)
   function set_buffer_file_param(slot, path)
-    params:set("buf" .. slot .. "_file", path, true)
+    local id = "buf" .. slot .. "_file"
+    local folder = type(path) == "string" and path:match("^(.*/)") or nil
+    if folder ~= nil and (folder == path or folder:find('["$`\\]')) then
+      local param = params:lookup_param(id)
+      param.path, param.dir, param.dirfiles, param.dirpos = path, folder, nil, nil
+      return
+    end
+    params:set(id, path, true)
   end
 
   -- An empty slot's shown state and file param, for buffer_load_failed.
@@ -263,7 +292,7 @@ return function(S)
   end
 
   -- Give the slot a state from buffer_state_before_load or
-  -- empty_buffer_state (a failed load, or a check that never ended),
+  -- empty_buffer_state (a failed load, or what a canceled take replaced),
   -- including its file param, silently
   local function apply_buffer_state(slot, state)
     local buffer = S.buffers[slot]
@@ -282,50 +311,55 @@ return function(S)
     set_buffer_file_param(slot, state.file_param)
   end
 
-  -- The fallback for a load the engine is checking (checking_load =
-  -- load_number): if no report has ended the check after
-  -- check_fallback_seconds, the slot goes back to the state the load
-  -- replaced, so its row never stays at "..." (that load is then forgotten:
-  -- a later report of its failure changes nothing). It runs in
-  -- buffer_record_clocks[slot], which a load, clear, recording and cleanup
-  -- cancel; the end of the check cancels it too
-  local function start_check_fallback(slot, load_number)
+  -- The notice for a load the engine is still checking (checking_load =
+  -- load_number) check_notice_seconds after it was sent: one console line
+  -- and a flash on BUFFER. Nothing else changes: the load stays the slot's
+  -- (its row at "..."), because only the engine knows how its check ends. A
+  -- slow check (a Pi decoding several long files at once) still takes
+  -- effect and is then settled as any load; a failed one is reported
+  -- (bufferLoadFailed) and undone; a clear, a recording or another load
+  -- ends the wait. Giving the load up here (3.2 put back what the slot held
+  -- before) left Lua showing the old file while the engine played the new
+  -- one (#317). It runs in buffer_record_clocks[slot], which a load, clear,
+  -- recording and cleanup cancel; the end of the check cancels it too
+  local function start_check_notice(slot, load_number)
     cancel_buffer_recording_timer(slot)
     S.buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(BUFFER_SETTLE.check_fallback_seconds)
+      clock.sleep(BUFFER_SETTLE.check_notice_seconds)
       S.buffer_record_clocks[slot] = nil
       local buffer = S.buffers[slot]
       if buffer.checking_from == nil or buffer.checking_load ~= load_number then return end
-      local previous = empty_buffer_state(false)
-      for index, load in ipairs(buffer.pending_loads) do
-        if load.number == load_number then
-          previous = resolve_previous(slot, table.remove(buffer.pending_loads, index).previous)
-          break
-        end
-      end
-      apply_buffer_state(slot, previous)
-      -- the state put back may be an earlier check, whose fallback this load canceled
-      buffer.checking_from, buffer.checking_load = nil, nil
-      print("buffer " .. slot .. ": no length from the engine " .. BUFFER_SETTLE.check_fallback_seconds
-        .. " s after loading " .. tostring(buffer.path or "a file") .. "; showing what it held before")
-      buffer_display_changed()
+      print("buffer " .. slot .. ": the engine is still checking " .. tostring(buffer.path or "a file") .. " "
+        .. BUFFER_SETTLE.check_notice_seconds .. " s after the load; the buffer keeps what it held until the engine"
+        .. " answers (load or clear it to stop waiting)")
+      buffer_page_flash("buf " .. slot .. " still checking")
     end)
   end
 
   -- Whether the engine checks the file in a routine before the load takes
   -- effect (loadSlot): on a tier whose slots hold more than the standard
-  -- length, a file of more frames than that at the server rate, counting
-  -- only what the slot reads (at most buffer_seconds at the file's rate and
-  -- at the server's). norns' audio.file_info gives its frames and rate; a
-  -- file it cannot open (0 frames) is rejected at once, unchecked
-  local function checked_before_load(path)
+  -- length, a load that reads more frames than that at the server rate.
+  -- What it reads is loadSlot's: from the start (start x the file's rate;
+  -- a start past the end reads the slot's length of its last frames), at
+  -- most buffer_seconds at the file's rate and at the server's (#317's
+  -- note: the start counts, so both sides agree). norns' audio.file_info
+  -- gives its frames and rate; a file it cannot open (0 frames) is rejected
+  -- at once, unchecked
+  local function checked_before_load(path, start)
     local standard_seconds = S.constants.STANDARD_BUFFER_SECONDS
     local seconds = S.performance.buffer_seconds
     if seconds <= standard_seconds or not (audio and audio.file_info) then return false end
     local inspected, _, frames, rate = pcall(audio.file_info, path)
     if not inspected or type(frames) ~= "number" or type(rate) ~= "number" or rate <= 0 then return false end
-    local read = math.min(frames, rate * seconds, BUFFER_SETTLE.server_rate * seconds)
-    return read > BUFFER_SETTLE.server_rate * standard_seconds
+    local server_rate = S.constants.NORNS_SAMPLE_RATE
+    local slot_frames = math.min(math.floor(rate * seconds), server_rate * seconds)
+    local start_frame = start * rate
+    if start_frame >= frames then
+      start_frame = math.max(frames - slot_frames, 0)
+    else
+      start_frame = math.floor(start_frame)
+    end
+    return math.min(frames - start_frame, slot_frames) > server_rate * standard_seconds
   end
 
   -- A file's sample rate and length in seconds (audio.file_info), or nil, nil
@@ -338,6 +372,26 @@ return function(S)
     end
     return rate, frames / rate
   end
+
+  -- The seconds of a file at sample_rate a slot holds: buffer_seconds, or
+  -- fewer above the server rate. The engine's slot is buffer_seconds of
+  -- frames at the server rate (loadSlot's slotFrames), so a 96 kHz file
+  -- keeps half as many seconds (#326). nil (a file whose rate is unknown)
+  -- counts as the server rate
+  local function slot_file_seconds(sample_rate)
+    local seconds = S.performance.buffer_seconds
+    local server_rate = S.constants.NORNS_SAMPLE_RATE
+    if type(sample_rate) == "number" and sample_rate > server_rate then return seconds * server_rate / sample_rate end
+    return seconds
+  end
+  M.slot_file_seconds = slot_file_seconds
+
+  -- The largest start (seconds into the file) that still leaves the slot
+  -- full: 0 for a file the slot holds whole
+  local function longest_start(file_seconds, sample_rate)
+    return math.max(0, file_seconds - slot_file_seconds(sample_rate))
+  end
+  M.longest_start = longest_start
 
   -- per slot: the clock that reloads the slot's file at a new start
   local start_reload_clocks = {}
@@ -352,7 +406,8 @@ return function(S)
 
   -- Load path into the slot from start seconds into the file (default 0)
   function load_buffer(slot, path, start)
-    if not valid_buffer_slot(slot) or not is_sound_file_path(path) then return end
+    slot = slot_index(slot)
+    if not slot or not is_sound_file_path(path) then return end
     start = (type(start) == "number" and start == start and start > 0 and start < math.huge) and start or 0
     local buffer = S.buffers[slot]
     -- remembered (with what it replaces) until a clear or recording, or
@@ -380,14 +435,16 @@ return function(S)
     buffer.missing_path = nil
     buffer.start, buffer.sent_start = start, start
     buffer.sample_rate, buffer.file_seconds = file_length(path)
-    buffer.checking_from = checked_before_load(path) and buffer.seconds or nil
+    -- (without the bufferState poll no report could ever end a check)
+    buffer.checking_from = (S.buffer_polls.state ~= nil and checked_before_load(path, start)) and buffer.seconds or nil
     buffer.checking_load = buffer.checking_from ~= nil and buffer.loads_sent or nil
-    if buffer.checking_load then start_check_fallback(slot, buffer.checking_load) end
+    if buffer.checking_load then start_check_notice(slot, buffer.checking_load) end
     buffer_display_changed()
   end
 
   function clear_buffer(slot)
-    if not valid_buffer_slot(slot) then return end
+    slot = slot_index(slot)
+    if not slot then return end
     cancel_buffer_recording_timer(slot)
     cancel_start_reload(slot)
     engine.clearBuffer(slot - 1)
@@ -451,6 +508,7 @@ return function(S)
   -- moment later, or not at all (a full disk). Whoever asks (the save param,
   -- the page), no save goes while the slot records.
   function save_buffer(slot)
+    slot = slot_index(slot)
     local refusal = save_refusal(slot)
     if refusal then return false, refusal end
     util.make_dir(buffer_audio_dir)
@@ -485,6 +543,7 @@ return function(S)
   -- when the save was sent (its result flashes "saved buf <n> loop"), else
   -- false and why, as save_buffer says
   function save_buffer_loop(slot)
+    slot = slot_index(slot)
     local refusal = save_refusal(slot)
     if refusal then return false, refusal end
     local start, length = loop_region(slot)
@@ -574,7 +633,7 @@ return function(S)
         changed = true
       end
     end
-    if buffer.recording then S.lib.record.slot_reported(slot, seconds) end
+    if buffer.recording and S.lib.record.slot_reported(slot, seconds) then changed = true end
     -- the engine wrote the slot's peaks before reporting its length
     if changed and has_audio then S.lib.waveforms.stale(slot) end
     if buffer.checking_from ~= nil then
@@ -583,9 +642,18 @@ return function(S)
         return
       end
       buffer.checking_from, buffer.checking_load = nil, nil
-      cancel_buffer_recording_timer(slot)  -- the check's fallback
+      cancel_buffer_recording_timer(slot)  -- the check's notice
       buffer.confirm_since = util.time()
       changed = true
+      -- a later load's snapshot of this check says it is over too: if that
+      -- load fails, the slot comes back as a load awaiting its read, never
+      -- as a check no report will end (#399)
+      for _, load in ipairs(buffer.pending_loads) do
+        if load.previous.checking_from ~= nil then
+          load.previous.checking_from, load.previous.checking_load = nil, nil
+          load.previous.confirm_since = buffer.confirm_since
+        end
+      end
     end
     -- a take stopped while still armed has recorded nothing: no length
     -- settles it (a synced take's slot still reports its old audio), only
@@ -649,8 +717,8 @@ return function(S)
     else
       -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
       apply_buffer_state(slot, left)
-      -- an earlier load still being checked: its fallback starts again
-      if buffer.checking_load then start_check_fallback(slot, buffer.checking_load) end
+      -- an earlier load still being checked: its notice starts again
+      if buffer.checking_load then start_check_notice(slot, buffer.checking_load) end
     end
     print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
       .. (emptied and "; the buffer is now empty" or ""))
@@ -789,9 +857,9 @@ return function(S)
         -- take was never written
         if util.file_exists(path) then
           -- a file replaced by a shorter one since: the start stays inside it
-          local _, file_seconds = file_length(path)
+          local sample_rate, file_seconds = file_length(path)
           if file_seconds then
-            start = util.clamp(start, 0, math.max(0, file_seconds - S.performance.buffer_seconds))
+            start = util.clamp(start, 0, longest_start(file_seconds, sample_rate))
           end
           load_buffer(slot, path, start)
           S.buffers[slot].restoring = true
@@ -923,7 +991,8 @@ return function(S)
   -- found on start), "empty". nil for a slot out of range. The fill, the
   -- BUFFER page and the grid read it, through is_free
   function M.status(slot)
-    if type(slot) ~= "number" or not S.buffers[slot] then return nil end
+    slot = slot_index(slot)
+    if not slot then return nil end
     local buffer = S.buffers[slot]
     local take = S.lib.record.state(slot)
     if buffer.finishing then return "finishing" end
@@ -947,6 +1016,7 @@ return function(S)
   end
 
   M.valid_buffer_slot = valid_buffer_slot
+  M.slot_index = slot_index
   M.buffer_state_changed = buffer_state_changed
   M.BUFFER_SETTLE = BUFFER_SETTLE
   M.display_changed = buffer_display_changed
@@ -958,7 +1028,8 @@ return function(S)
   -- recording keeps the slot's audio, so it keeps all three until it ends
   -- (lib/record.lua's "ended" report) or is canceled (it keeps them).
   function M.recording_started(slot, playable)
-    if not valid_buffer_slot(slot) then return end
+    slot = slot_index(slot)
+    if not slot then return end
     cancel_start_reload(slot)
     local buffer = S.buffers[slot]
     if not playable then
@@ -975,10 +1046,11 @@ return function(S)
   -- Does nothing for a slot with no file length (a take, a clear, a file that
   -- did not open) and while the slot records.
   function M.set_start(slot, seconds)
-    if not valid_buffer_slot(slot) or type(seconds) ~= "number" or seconds ~= seconds then return end
+    slot = slot_index(slot)
+    if not slot or type(seconds) ~= "number" or seconds ~= seconds then return end
     local buffer = S.buffers[slot]
     if S.lib.record.state(slot) ~= nil or not buffer.file_seconds or not buffer.path then return end
-    local longest = math.max(0, buffer.file_seconds - S.performance.buffer_seconds)
+    local longest = longest_start(buffer.file_seconds, buffer.sample_rate)
     if longest <= 0 then return end  -- the file fits the slot: nothing to move
     local clamped = util.clamp(seconds, 0, longest)
     if clamped == buffer.start and not start_reload_clocks[slot] then return end
