@@ -645,4 +645,147 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
     posBus.free;
     File.delete(path);
 }.value;
+
+// A start's first grain plays the start's own grain values (#325). Lua
+// sends a start as the source and every grain value, then voiceOn, then the
+// voice-level values (S.lib.engine_sync.start_voice); the engine keeps a
+// stopped voice's grain values and builds (or re-gates) its grain synth with
+// them inside voiceOn's bundle. A slot whose first half is +0.5 and second
+// half -0.5, and a buffer voice whose kept position is 0.75 (its last run's,
+// in the negative half), started at 0.25: its path never goes below -0.05.
+// Sent the old way (voiceOn first, the rest 30 ms later, a sync arriving
+// late) the first grains read 0.75 (about -0.31). The same with triggered
+// mode chosen while stopped and no retrigger: the path stays silent. And a
+// releasing voice: grain values sent during its release never reach the
+// releasing synth, and voiceOn re-gates that node with them
+{
+    var voice = 2, slot = 5, minMaxBus = Bus.control(server, 2), probe, frames, half;
+    var path = h.tempDir +/+ "lifecycle-start-order.wav", saved = engine.grainControls[voice].copy;
+    var period = server.options.blockSize / server.sampleRate;
+    var window, grainValues, voiceValues, startInLuaOrder, trial, results, node, running, releasing, regated;
+    SynthDef(\strataCheckStartOrder, { arg in, out, t_reset = 0;
+        var signal = In.ar(in, 2)[0], reset = T2A.ar(t_reset);
+        Out.kr(out, [A2K.kr(RunningMin.ar(signal, reset)), A2K.kr(RunningMax.ar(signal, reset))]);
+    }).add;
+    server.sync;
+    h.writeTestFile(path, server.sampleRate, (2 * server.sampleRate).round.asInteger, [0, 0]);
+    command.(\loadBuffer, slot, path, 0);
+    h.waitFor({ engine.bufferFrames[slot] > 0 }, 3);
+    0.1.wait; server.sync;
+    frames = engine.bufferFrames[slot];
+    half = frames div: 2;
+    [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer;
+        buffer.fill(0, half, 0.5);
+        buffer.fill(half, frames - half, -0.5);
+    });
+    server.sync;
+    [\panSpread, 0, \panJitter, 0, \loopStart, 0, \loopLength, 1, \scrubRate, 0, \scanHold, 0].pairsDo({ arg name, value;
+        command.(\setGrainParam, voice, name, value)
+    });
+    command.(\setGrainSource, voice, slot + 1);
+    server.sync;
+    // the voice's other path, ahead of its stage
+    command.(\voiceOn, voice, 60.0, 0.3, 0.0, 0.1, 20.0, 1.0);
+    server.sync;
+    probe = Synth.before(engine.synths[engine.voiceMixKey(voice)], \strataCheckStartOrder,
+        [\in, engine.voicePathBus(voice, 1).index, \out, minMaxBus.index]);
+    server.sync;
+    command.(\voiceOff, voice);
+    2.6.wait;
+
+    // [min, max] of the voice's path over the next seconds
+    window = { arg seconds;
+        probe.set(\t_reset, 1); server.sync;
+        seconds.wait;
+        h.readBus(minMaxBus).round(0.01)
+    };
+    grainValues = { arg bufPos, mode;
+        [[\setGrainSource, voice, slot + 1],
+            [\setGrainParam, voice, \grainSize, 0.1], [\setGrainParam, voice, \grainDensity, 20.0],
+            [\setGrainParam, voice, \pitchShift, 1.0], [\setGrainParam, voice, \posSpread, 0.0],
+            [\setGrainParam, voice, \envShape, 0.0], [\setGrainParam, voice, \grainMode, mode],
+            [\setGrainParam, voice, \bufPos, bufPos], [\setGrainParam, voice, \bufRate, 1.0],
+            [\setGrainParam, voice, \bufScan, 0.0]]
+    };
+    voiceValues = [[\setVoiceParam, voice, \freq, 60.0], [\setVoiceParam, voice, \fold, 1.0],
+        [\setVoiceParam, voice, \mod, 0.2], [\setVoiceParam, voice, \amp, 0.3], [\setVoiceParam, voice, \pan, 0.0],
+        [\setModSpeed, voice, 10.0], [\setVoiceParam, voice, \bend, 1.0]];
+    // A start as Lua sends it: the source and the grain values, voiceOn,
+    // then the voice-level values, here 30 ms late (a sync arriving late)
+    startInLuaOrder = { arg bufPos, mode;
+        (grainValues.(bufPos, mode) ++ [[\voiceOn, voice, 60.0, 0.3, 0.0, 0.1, 20.0, 1.0]] ++ voiceValues)
+            .do({ arg message;
+                command.(*message);
+                if (message[0] == \voiceOn) { 0.03.wait };
+            });
+    };
+    // One start of the stopped voice, whose kept position and mode are its
+    // last run's (0.75, continuous): [min, max] over its first 0.4 s
+    trial = { arg bufPos, mode;
+        var result;
+        command.(\setGrainParam, voice, \bufPos, 0.75);
+        command.(\setGrainParam, voice, \grainMode, 0);
+        server.sync;
+        probe.set(\t_reset, 1); server.sync;
+        (0.03 + period.rand).wait;     // anywhere in a control block
+        startInLuaOrder.(bufPos, mode);
+        0.4.wait;
+        result = h.readBus(minMaxBus).round(0.01);
+        command.(\voiceOff, voice);
+        2.6.wait;                      // the grain synth's release ends: the next start builds a new one
+        result
+    };
+
+    results = 3.collect({ trial.(0.25, 0) });
+    check.(results.every({ arg result; (result[0] >= -0.05) and: { result[1] > 0.2 } }),
+        "lifecycle: a start sent as Lua sends it plays no grain from the last run's position ([min, max] per start: %)"
+            .format(results));
+    results = 2.collect({ trial.(0.25, 1) });
+    // and a retrigger then plays one, so the silence is the mode's
+    startInLuaOrder.(0.25, 1);
+    0.2.wait;
+    probe.set(\t_reset, 1); server.sync;
+    command.(\retrigger, voice, 1.0);
+    0.2.wait;
+    regated = h.readBus(minMaxBus).round(0.01);
+    command.(\voiceOff, voice);
+    2.6.wait;
+    check.(results.every({ arg result; (result[0] >= -0.05) and: { result[1] <= 0.05 } }) and: { regated[1] > 0.2 },
+        "lifecycle: a start in triggered mode chosen while stopped plays no grain before a retrigger ([min, max] per start: %; after a retrigger %)"
+            .format(results, regated));
+
+    // the releasing voice: running at 0.75, stopped, the new grain values
+    // 0.3 s into its release, then voiceOn 0.3 s later
+    command.(\setGrainParam, voice, \bufPos, 0.75);
+    command.(\setGrainParam, voice, \grainMode, 0);
+    command.(\voiceOn, voice, 60.0, 0.3, 0.0, 0.1, 20.0, 1.0);
+    0.5.wait;
+    running = window.(0.3);
+    node = engine.synths[engine.grainKey(voice)].nodeID;
+    command.(\voiceOff, voice);
+    0.3.wait;
+    grainValues.(0.25, 0).do({ arg message; command.(*message) });
+    server.sync;
+    releasing = window.(0.3);
+    command.(\voiceOn, voice, 60.0, 0.3, 0.0, 0.1, 20.0, 1.0);
+    voiceValues.do({ arg message; command.(*message) });
+    server.sync;
+    check.(engine.synths[engine.grainKey(voice)].notNil and: { engine.synths[engine.grainKey(voice)].nodeID == node },
+        "lifecycle: voiceOn re-gates the releasing grain synth (no new node)");
+    0.25.wait;                         // the grains in flight (0.1 s) end
+    regated = window.(0.3);
+    check.((running[1] < -0.2) and: { releasing[1] < 0.05 } and: { regated[0] > 0 },
+        "lifecycle: grain values sent during a release wait for the re-gate, which takes them (running %, releasing %, re-gated %)"
+            .format(running, releasing, regated));
+
+    probe.free;
+    command.(\voiceOff, voice);
+    h.stopAllVoices;
+    command.(\setGrainSource, voice, 0);
+    command.(\clearBuffer, slot);
+    engine.grainControls[voice] = saved;
+    server.sync;
+    minMaxBus.free;
+    File.delete(path);
+}.value;
 }

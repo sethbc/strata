@@ -226,8 +226,9 @@ return function(S)
 
   -- Pitchbend over +/-2 semitones as a frequency (or buffer rate) ratio. The
   -- engine applies it to the voice synth and to strataGrainBuf; a stopped
-  -- voice gets it when it starts (sync_voice_values_to_engine). Nothing on
-  -- the screen or arc shows the bend, so it asks for no redraw.
+  -- voice gets it when it starts, with the voice-level values that follow
+  -- voiceOn (S.lib.engine_sync.start_voice). Nothing on the screen or arc
+  -- shows the bend, so it asks for no redraw.
   function midi_pitchbend(voice_idx, value)
     midi_set_bend(voice_idx, 2 ^ (((value - M.MIDI.bend_center) / M.MIDI.bend_center) * M.MIDI.bend_semitones / 12))
   end

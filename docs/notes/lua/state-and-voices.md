@@ -69,7 +69,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
 | 140 | start the peaks read loop (`S.lib.waveforms.read_clock`, one tick per frame) | `lib/waveforms.lua` |
 | 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
-| 160 | follow the clock's transport: install `clock.transport.start` and `stop`, keeping the handlers found (#530) | `lib/sequencer.lua` |
+| 160 | follow an external clock's transport: install `clock.transport.start` and `stop`, which act only when `clock_source` is not internal, keeping the handlers found (#530) | `lib/sequencer.lua` |
 
 Adding a step:
 - A new resource gets its start in the module that owns it, at a free order at its place in this sequence (the orders are spaced by 10), next to its cleanup step.

@@ -371,13 +371,17 @@ test("a step whose second start fails shows the first voice running and the seco
   assert_equal(engine_running, false, "the engine's voice 4 is stopped too")
 end)
 
+-- The clock_source param's options, as norns' clock.add_params has them
+local CLOCK_SOURCE = { internal = 1, midi = 2, link = 3, crow = 4 }
+
 -- norns calls clock.transport.start and stop when the clock source starts
--- or stops (a MIDI start or stop, a Link start or stop with start/stop sync,
--- PARAMETERS > CLOCK > reset): the patterns follow (#530)
+-- or stops (a MIDI start or stop, a Link start or stop with start/stop sync):
+-- the patterns follow an external source's (#530)
 test("the pattern clock follows the clock's transport start and stop (#530)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local UI_PAGES = local_value("UI_PAGES")
+  params:set("clock_source", CLOCK_SOURCE.midi)
   assert_equal(type(clock.transport.start), "function", "a transport start handler")
   assert_equal(type(clock.transport.stop), "function", "a transport stop handler")
   UI_PAGES.screen_dirty = false
@@ -400,6 +404,35 @@ test("the pattern clock follows the clock's transport start and stop (#530)", fu
   assert_equal(S.pattern_playing, false, "a stop while stopped changes nothing")
 end)
 
+-- On the internal clock norns posts a transport start for PARAMETERS >
+-- CLOCK > reset: a reset must never start a stopped pattern, so the
+-- patterns follow the transport only when the clock source is external
+-- (MIDI, Link or crow) (#530)
+test("on the internal clock a transport start or stop leaves the patterns alone (#530)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(params:get("clock_source"), CLOCK_SOURCE.internal, "norns' default source")
+  clock.transport.start()  -- PARAMETERS > CLOCK > reset
+  assert_equal(S.pattern_playing, false, "a reset leaves a stopped pattern stopped")
+  assert_equal(S.pattern_clock, nil, "with no clock")
+  pattern_toggle()
+  for _ = 1, 2 do wake(context, "pattern_clock") end
+  clock.transport.start()
+  assert_equal(S.lib.sequencer.sounding_step(), 3, "a reset leaves a playing pattern where it is")
+  clock.transport.stop()
+  assert_equal(S.pattern_playing, true, "and a stop leaves it playing")
+  pattern_toggle()
+  -- every external source is followed
+  for _, source in ipairs({ CLOCK_SOURCE.midi, CLOCK_SOURCE.link, CLOCK_SOURCE.crow }) do
+    params:set("clock_source", source)
+    clock.transport.start()
+    assert_equal(S.pattern_playing, true, "source " .. source .. ": a start plays the patterns")
+    assert_equal(S.lib.sequencer.sounding_step(), 1, "source " .. source .. ": from step 1")
+    clock.transport.stop()
+    assert_equal(S.pattern_playing, false, "source " .. source .. ": a stop stops them")
+  end
+end)
+
 test("the transport handlers call the ones found at init and give them back at cleanup (#530)", function()
   local calls = {}
   local function previous_start() table.insert(calls, "start") end
@@ -410,11 +443,15 @@ test("the transport handlers call the ones found at init and give them back at c
   finish_startup(context)
   local S = local_value("S")
   assert_true(clock.transport.start ~= previous_start, "the script's start handler is installed")
+  -- on the internal clock the patterns stay, and the found handlers still run
+  clock.transport.start(); clock.transport.stop()
+  assert_equal(S.pattern_playing, false, "the internal clock's transport starts nothing")
+  params:set("clock_source", CLOCK_SOURCE.midi)
   clock.transport.start()
   assert_equal(S.pattern_playing, true, "the patterns play")
   clock.transport.stop()
   assert_equal(S.pattern_playing, false, "and stop")
-  assert_equal(table.concat(calls, " "), "start stop", "the handlers found at init still run")
+  assert_equal(table.concat(calls, " "), "start stop start stop", "the handlers found at init still run")
   cleanup()
   assert_equal(clock.transport.start, previous_start, "cleanup gives the start handler back")
   assert_equal(clock.transport.stop, previous_stop, "and the stop handler")

@@ -1,5 +1,5 @@
 ### Added
-- The patterns follow the clock's transport: a start from the clock source (a MIDI start, a Link start with start/stop sync on, or PARAMETERS > CLOCK > reset) plays them from step 1 on its first beat, and a stop stops them (#530).
+- The patterns follow an external clock's transport: with the clock source on MIDI or Link, a start from it (a MIDI start, or a Link start with start/stop sync on) plays them from step 1 on its first beat, and a stop stops them. On the internal clock, PARAMETERS > CLOCK > reset leaves them as they are (#530).
 
 ### Fixed
 - A started voice's first grain plays its new position, loop, envelope and grain mode: the source and every grain value now reach the engine before the voice starts, so no stray grain from the last run is heard, and a voice switched to triggered mode while stopped no longer plays an unasked grain when it starts (#325).

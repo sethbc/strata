@@ -170,23 +170,35 @@ return function(S)
 
   -- The clock's transport (#530): norns calls clock.transport.start and
   -- stop when the clock source starts or stops (a MIDI start or stop, a
-  -- Link start or stop with start/stop sync on, PARAMETERS > CLOCK > reset).
-  -- A start plays the patterns from step 1 at once, on the source's first
+  -- Link start or stop with start/stop sync on; on the internal clock,
+  -- PARAMETERS > CLOCK > reset). The patterns follow only an external
+  -- source's (MIDI, Link or crow), so a reset never starts a stopped
+  -- pattern. A start plays them from step 1 at once, on the source's first
   -- beat, whether they played or not; a stop stops them. Both redraw the
   -- screen (the header's play mark, SEQ). The handlers found at install
-  -- still run after the script's, and cleanup gives them back unless a
-  -- handler installed later has replaced the script's
-  local transport = {previous_start = nil, previous_stop = nil}
+  -- still run after the script's, whatever the source, and cleanup gives
+  -- them back unless a handler installed later has replaced the script's.
+  -- internal_source: the clock_source param's "internal" (the first of
+  -- clock.add_params' options: internal, midi, link, crow)
+  local transport = {previous_start = nil, previous_stop = nil, internal_source = 1}
+
+  local function external_clock()
+    return params:get("clock_source") ~= transport.internal_source
+  end
 
   function transport.start()
-    pattern_clock_start()
-    request_redraw()
+    if external_clock() then
+      pattern_clock_start()
+      request_redraw()
+    end
     if transport.previous_start then transport.previous_start() end
   end
 
   function transport.stop()
-    pattern_clock_stop()
-    request_redraw()
+    if external_clock() then
+      pattern_clock_stop()
+      request_redraw()
+    end
     if transport.previous_stop then transport.previous_stop() end
   end
 
