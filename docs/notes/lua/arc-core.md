@@ -70,7 +70,7 @@ The arc follows the screen page (`S.ui_page`):
 
 ## Input
 
-- `arc_sweep_param(param_id, delta)` sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (1024) ticks: `delta_with_detent(id, nil, {arc_ticks = delta})` (`lib/ui/detent.lua`) moves the 0-1 raw value by `delta / 512` through `params:set_raw`, and holds a range through 0 at 0 for `DETENT.arc_ticks` (24) ticks (center detents, `docs/notes/lua/ui-core.md`). The arc has no fine mode.
+- `arc_sweep_param(param_id, delta)` sweeps the control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (1024) ticks: `delta_with_detent(id, nil, {arc_ticks = delta})` (`lib/ui/detent.lua`) moves the 0-1 raw value by `delta / ARC_TICKS_PER_SWEEP` (1024) through `params:set_raw`, and holds a range through 0 at 0 for `DETENT.arc_ticks` (24) ticks (center detents, `docs/notes/lua/ui-core.md`). The arc has no fine mode.
 - Moving the raw value, the sweep follows the warp (256 ticks reach `spec:map(0.5)`, e.g. 200 Hz on the 20-2000 Hz exp freq). The step only quantizes the value read back; raw keeps the remainder.
 - 1024 is a full revolution (512 was half a turn and too fast, #552): the arc reports 1024 ticks per revolution (monome arc docs: "high resolution knobs, 1024 ticks per revolution", every edition; matron passes libmonome's deltas through unscaled, `device_monome.cc`).
 - `arc_whole_steps(key, delta, ticks_per_step)` adds `delta` to `S.arc_ticks[key]` and returns the whole steps in it, keeping the remainder; `forget_arc_ticks(key)` clears one key, `forget_arc_ticks()` all of them. Whole-step rings pass the steps to `delta_with_detent(id, steps)`.
