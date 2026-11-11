@@ -1429,6 +1429,10 @@ local function make_clock(util)
 
   -- lua/core/clock.lua: static callback run when clock_tempo is set
   clock.tempo_change_handler = nil
+  -- lua/core/clock.lua: the transport's static callbacks, nil until a script
+  -- sets them; norns calls them (_norns.clock.start and stop) when the clock
+  -- source starts or stops, and a test calls them as norns does
+  clock.transport = { start = nil, stop = nil }
 
   -- the internal clock source (the clock_tempo param's action sets its tempo)
   clock.internal = {}

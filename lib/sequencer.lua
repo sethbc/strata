@@ -5,13 +5,17 @@
 -- change through M.replace_pattern), the sounding step
 -- (M.sounding_step, the playhead every grid layout and SEQ draw) and the
 -- step LED levels. Steps accent running voices with engine.retrigger and
--- never create nodes. The functions stay global.
+-- never create nodes. The pattern clock follows the clock's transport
+-- (clock.transport.start and stop, installed by a start step). The
+-- functions stay global.
 
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
+  -- A random step's lowest level: half the top level, rounded up (8 of 15)
+  local RANDOM_STEP_FLOOR = math.ceil(MAX_STEP_LEVEL / 2)
 
   -- Pattern sequencer
   S.patterns = {}
@@ -34,7 +38,7 @@ return function(S)
     if step < 1 or step > PATTERN_LENGTH then return end
 
     if S.patterns[voice_idx][step] == 0 then
-      S.patterns[voice_idx][step] = 15  -- Full brightness
+      S.patterns[voice_idx][step] = MAX_STEP_LEVEL  -- full brightness
     else
       S.patterns[voice_idx][step] = 0
     end
@@ -72,7 +76,7 @@ return function(S)
     local steps = {}
     for step = 1, PATTERN_LENGTH do
       if math.random() > 0.5 then
-        steps[step] = math.random(8, 15)
+        steps[step] = math.random(RANDOM_STEP_FLOOR, MAX_STEP_LEVEL)
       else
         steps[step] = 0
       end
@@ -99,10 +103,11 @@ return function(S)
 
     local function play_step()
       -- This step sounds from now on: every grid redraw until the next
-      -- step (the one below, a voice it starts, a key press) shows it
+      -- step (the one below, a key press) shows it
       S.pattern_sounding_step = S.pattern_position
 
       -- Trigger voices that have active steps
+      local started = false
       for voice_idx = 1, NUM_VOICES do
         if S.patterns[voice_idx][S.pattern_position] > 0 then
           if S.voices[voice_idx].active then
@@ -112,13 +117,20 @@ return function(S)
             -- through their long release tails).
             engine.retrigger(voice_idx - 1, S.patterns[voice_idx][S.pattern_position] / MAX_STEP_LEVEL)
           else
-            -- Voice is off - turn it on
-            toggle_voice(voice_idx)
+            -- Voice is off: start it, without the redraws toggle_voice
+            -- makes, so the step shows all it started at once (#527)
+            S.lib.engine_sync.start_voice(voice_idx)
+            started = true
           end
         end
       end
 
-      -- Show the step that just played, then advance to the next one
+      -- Show the step that just played (and the voices it started), once,
+      -- then advance to the next one
+      if started then
+        update_voice_list()
+        request_redraw()
+      end
       grid_redraw()
       S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
     end
@@ -129,10 +141,12 @@ return function(S)
         if not played then
           -- Forget our own id first, so the stop never cancels this clock
           -- from inside itself, then show the pattern stopped (the grid, and
-          -- the header's play mark and SEQ on the screen) and raise the
-          -- error again for maiden
+          -- the header's play mark and SEQ on the screen) with the voices
+          -- the step started before it failed, and raise the error again
+          -- for maiden
           S.pattern_clock = nil
           pattern_clock_stop()
+          update_voice_list()
           request_redraw()
           -- level 0: the message already carries its traceback
           error(step_error, 0)
@@ -153,6 +167,39 @@ return function(S)
     end
     grid_redraw()
   end
+
+  -- The clock's transport (#530): norns calls clock.transport.start and
+  -- stop when the clock source starts or stops (a MIDI start or stop, a
+  -- Link start or stop with start/stop sync on, PARAMETERS > CLOCK > reset).
+  -- A start plays the patterns from step 1 at once, on the source's first
+  -- beat, whether they played or not; a stop stops them. Both redraw the
+  -- screen (the header's play mark, SEQ). The handlers found at install
+  -- still run after the script's, and cleanup gives them back unless a
+  -- handler installed later has replaced the script's
+  local transport = {previous_start = nil, previous_stop = nil}
+
+  function transport.start()
+    pattern_clock_start()
+    request_redraw()
+    if transport.previous_start then transport.previous_start() end
+  end
+
+  function transport.stop()
+    pattern_clock_stop()
+    request_redraw()
+    if transport.previous_stop then transport.previous_stop() end
+  end
+
+  -- Installing them again (init run twice) changes nothing: the script's
+  -- handlers never chain to themselves
+  S.register_start(S.constants.START_ORDER.pattern_transport, function()
+    if clock.transport.start ~= transport.start then
+      transport.previous_start, clock.transport.start = clock.transport.start, transport.start
+    end
+    if clock.transport.stop ~= transport.stop then
+      transport.previous_stop, clock.transport.stop = clock.transport.stop, transport.stop
+    end
+  end)
 
   -- The step sounding now: the one the pattern clock played last, so
   -- between steps it is the position before S.pattern_position (which the
@@ -175,8 +222,15 @@ return function(S)
     return level
   end
 
+  -- Stop the pattern clock and give the clock its transport handlers back
   S.register_cleanup(S.constants.CLEANUP_ORDER.pattern_clock, function()
     pattern_clock_stop()
+    if clock.transport.start == transport.start then
+      clock.transport.start, transport.previous_start = transport.previous_start, nil
+    end
+    if clock.transport.stop == transport.stop then
+      clock.transport.stop, transport.previous_stop = transport.previous_stop, nil
+    end
   end)
 
   -- The patterns play exactly while their clock runs

@@ -2,13 +2,16 @@
 -- Param -> engine: send_param_to_engine and the engine senders
 -- (S.engine_senders), the values the engine last got (S.engine_param_values),
 -- the LFO offsets they add (S.lfo_last_dest, S.lfo_scaled), and starting,
--- stopping, freezing and syncing a voice (the registered voice params'
+-- stopping, locking and syncing a voice (the registered voice params'
 -- grain keys and syncs included). The functions that were global stay
 -- global, as does engine_param_value; engine_mod_source, with_lfo_offsets,
 -- send_engine_value and grain_key_message are fields of this module's table
 -- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
 -- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
--- (apply_lfo). Registers the cleanup step that turns the voices off.
+-- (apply_lfo); start_voice for the pattern clock (lib/sequencer.lua).
+-- Registers the cleanup step that sends a voiceOff for every running voice
+-- (norns has freed the engine by then, so none arrives: the voices stopped
+-- with it).
 
 return function(S)
   local M = {}
@@ -153,22 +156,9 @@ return function(S)
       engine.voiceOff(voice_idx - 1)
       voice.active = false
     else
-      engine.voiceOn(
-        voice_idx - 1,
-        voice.params.freq,
-        voice.params.amp,
-        voice.params.pan or 0,
-        voice.grain.size,
-        -- the values the engine has (as the grain density sender sends them)
-        engine_param_value("v" .. voice_idx .. "_grain_density") * engine_param_value("master_density"),
-        voice.grain.pitch
-      )
-      -- voiceOn builds the synths for the source the engine has recorded
-      run_grain_restart_hooks(voice_idx)
-      sync_voice_to_engine(voice_idx)
-      voice.active = true
+      M.start_voice(voice_idx)
     end
-    
+
     update_voice_list()
     request_redraw()
     grid_redraw()
@@ -209,32 +199,17 @@ return function(S)
     end
   end
 
-  -- Push the complete Lua-side state of a voice to its freshly started engine
-  -- synths. voiceOn only carries the initial freq/amp/pan and grain values, and
-  -- param actions only reach the engine while a voice is active, so without this
-  -- edits made while a voice was off (and scene recalls) would be lost. The
-  -- source goes first (the engine ignores it when unchanged).
-  function sync_voice_to_engine(voice_idx)
-    M.send_grain_source(voice_idx)
-    sync_voice_values_to_engine(voice_idx)
-  end
-
-  -- Everything sync_voice_to_engine sends after the source: synthesis, grain
-  -- (including the buffer params) and crossmod values
-  function sync_voice_values_to_engine(voice_idx)
+  -- The parts of a voice's state, as the engine takes them. The grain params
+  -- (the buffer params included) and the registered voice params
+  -- (send_registered_voice_values) are setGrainParam messages, which the
+  -- engine keeps for a stopped voice too: a start sends them before voiceOn
+  -- (M.start_voice). The synth params, crossmod and bend are voice-level
+  -- controls, which voiceOn resets: a start sends them after it
+  local function send_grain_params(voice_idx)
     local voice = S.voices[voice_idx]
     local engine_voice = voice_idx - 1
-    local engine_master_density = engine_param_value("master_density")
-    -- the engine now gets this voice's stored values (LFOs re-apply theirs
-    -- on their next step)
-    forget_sent_voice_values(voice_idx)
-
-    for key, value in pairs(voice.params) do
-      engine.setVoiceParam(engine_voice, key, value)
-    end
-
     engine.setGrainParam(engine_voice, "grainSize", voice.grain.size)
-    engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * engine_master_density)
+    engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * engine_param_value("master_density"))
     engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
     engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
     engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
@@ -242,23 +217,92 @@ return function(S)
     engine.setGrainParam(engine_voice, "bufPos", voice.grain.buf_pos)
     engine.setGrainParam(engine_voice, "bufRate", voice.grain.buf_rate)
     engine.setGrainParam(engine_voice, "bufScan", voice.grain.buf_scan)
+  end
 
+  local function send_synth_params(voice_idx)
+    for key, value in pairs(S.voices[voice_idx].params) do
+      engine.setVoiceParam(voice_idx - 1, key, value)
+    end
+  end
+
+  local function send_crossmod_and_bend(voice_idx)
+    local voice = S.voices[voice_idx]
+    local engine_voice = voice_idx - 1
     for slot = 1, NUM_MOD_SLOTS do
       local slot_state = voice.crossmod["slot" .. slot]
       engine.setModSource(engine_voice, slot, engine_mod_source(slot_state.source))
       engine.setModAmpAmt(engine_voice, slot, slot_state.amp_amt)
       engine.setModFreqAmt(engine_voice, slot, slot_state.freq_amt)
     end
-
     engine.setModSpeed(engine_voice, voice.crossmod.speed)
     -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
     engine.setVoiceParam(engine_voice, "bend", S.midi_state.bend[voice_idx])
+  end
 
+  -- Push the complete Lua-side state of a running voice to the engine: the
+  -- source first (the engine ignores it when unchanged), then the rest
+  -- (sync_voice_values_to_engine). A start sends the same in its own order
+  -- (M.start_voice)
+  function sync_voice_to_engine(voice_idx)
+    M.send_grain_source(voice_idx)
+    sync_voice_values_to_engine(voice_idx)
+  end
+
+  -- Everything sync_voice_to_engine sends after the source, for a running
+  -- voice (a source switch, a scene recall): synthesis, grain (including the
+  -- buffer params) and crossmod values, then the registered voice params
+  function sync_voice_values_to_engine(voice_idx)
+    -- the engine now gets this voice's stored values (LFOs re-apply theirs
+    -- on their next step)
+    forget_sent_voice_values(voice_idx)
+    send_synth_params(voice_idx)
+    send_grain_params(voice_idx)
+    send_crossmod_and_bend(voice_idx)
     send_registered_voice_values(voice_idx)
   end
 
-  -- Turn off every running voice (after MIDI is detached, so no note can
-  -- start one again)
+  -- Start a stopped voice and mark it running, redrawing nothing:
+  -- toggle_voice redraws after it, and a pattern step once for all the
+  -- voices it starts (#527). A voice outside 1..NUM_VOICES, or one already
+  -- running, is left alone.
+  -- The source and every grain value go first: the engine keeps a stopped
+  -- voice's and builds or re-gates its grain synth with them inside voiceOn's
+  -- own bundle, so the first grain plays this start's values, never the last
+  -- run's (#325). voiceOn carries the grain values just sent, and the
+  -- voice-level values follow it. The grain-restart hooks run after voiceOn,
+  -- before the voice is marked running (lib/midi_in.lua's relies on it).
+  -- A send that raises before voiceOn has started nothing; once voiceOn is
+  -- sent, a hook or a send that raises sends voiceOff and raises the error
+  -- again, so the engine and voice.active always agree (#382)
+  function M.start_voice(voice_idx)
+    if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then return end
+    local voice = S.voices[voice_idx]
+    if voice.active then return end
+    forget_sent_voice_values(voice_idx)
+    -- not running yet, so no restart hook runs here
+    M.send_grain_source(voice_idx)
+    send_grain_params(voice_idx)
+    send_registered_voice_values(voice_idx)
+    engine.voiceOn(voice_idx - 1, voice.params.freq, voice.params.amp, voice.params.pan or 0,
+      voice.grain.size, voice.grain.density * engine_param_value("master_density"), voice.grain.pitch)
+    local started, start_error = xpcall(function()
+      -- voiceOn built the synths for the source the engine has recorded
+      run_grain_restart_hooks(voice_idx)
+      send_synth_params(voice_idx)
+      send_crossmod_and_bend(voice_idx)
+    end, with_traceback)
+    if not started then
+      engine.voiceOff(voice_idx - 1)
+      -- level 0: the message already carries its traceback
+      error(start_error, 0)
+    end
+    voice.active = true
+  end
+
+  -- A voiceOff for every running voice (after MIDI is detached, so no note
+  -- can start one again). norns frees the engine before it calls cleanup()
+  -- (Script.clear), so none of these arrives: the voices stopped at once with
+  -- the engine, without a release
   S.register_cleanup(S.constants.CLEANUP_ORDER.voices_off, function()
     for i = 1, NUM_VOICES do
       if S.voices[i].active then

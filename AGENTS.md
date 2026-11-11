@@ -128,7 +128,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 
-**The `voices` table is the only source of values.** The engine holds no per-voice defaults. `toggle_voice` calls `engine.voiceOn` and then `sync_voice_to_engine`, which sends `setGrainSource` first, then every synth, grain and crossmod value. Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
+**The `voices` table is the only source of values.** The engine holds no per-voice defaults. `toggle_voice` sends `setGrainSource` and every grain value, then `engine.voiceOn`, then the synth and crossmod values (`S.lib.engine_sync.start_voice`, #325). Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
 
 ### Invariants that are easy to break
 

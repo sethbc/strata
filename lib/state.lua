@@ -143,6 +143,8 @@ return function()
   --   grain_keys: {key = "<engine name>" | {name, value = fn(x)}}, sent with
   --     setGrainParam by the param's sender and the voice sync;
   --   sync: optional fn(voice_idx), the voice sync's sends after grain_keys;
+  --     a start runs it before voiceOn, so it sends grain params only
+  --     (setGrainParam): voiceOn resets the voice-level ones (#325);
   --   scene_defaults: {key = default} (each its param's default): the keys
   --     scenes capture into voices[i].extras and migration fills;
   --   discrete: {key = {min, max}} (whole values): set at a transition's
