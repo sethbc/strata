@@ -342,4 +342,25 @@ test("with the menu open the arc's own turns and the grid stay live, and the rin
   end
 end)
 
+-- #437: a device norns gave no vport is on no vport at all
+test("an arc with no port is neither followed nor taken for port 1's", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local printed = {}
+  local real_print = print
+  print = function(...) printed[#printed + 1] = table.concat({...}, " ") end
+  arc.add({port = nil})
+  print = real_print
+  assert_equal(#printed, 0, "arc.add of a portless device prints nothing")
+  assert_true(not S.arc_connected, "and attaches nothing")
+  context.arc.plug(1)
+  assert_true(S.arc_connected, "an arc on port 1 is followed")
+  print = function(...) printed[#printed + 1] = table.concat({...}, " ") end
+  arc.remove({port = nil})
+  print = real_print
+  assert_true(S.arc_connected, "removing a portless device leaves the followed arc")
+  assert_equal(#printed, 0, "and prints nothing")
+  h.check_invariants()
+end)
+
 end

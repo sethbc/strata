@@ -15,9 +15,10 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
   -- rings drawn (with at least one segment) on each page: SETUP none,
-  -- SCENES two (rings 3-4 dark); BUFFER's scan ring (bipolar, at 0) lights
-  -- one LED without a segment
-  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 4, FX = 4, LFO = 4, BUFFER = 3, SCENES = 2, SETUP = 0 }
+  -- SCENES one (ring 1 at its first slot lights an LED, not a segment; rings
+  -- 3-4 dark); SEQ's rings 1, 2 and 4 at their first position likewise;
+  -- BUFFER's scan ring (bipolar, at 0) lights one LED without a segment
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, BUFFER = 3, SCENES = 1, SETUP = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -490,8 +491,12 @@ local function lit(device, ring)
 end
 
 -- A ring drawn from 0 to fraction of a turn (arc_ring_fill)
-local function assert_ring_fraction(device, ring, fraction, where)
-  if fraction >= 1 then
+-- position: a whole-step position ring, whose first position lights LED 1
+local function assert_ring_fraction(device, ring, fraction, where, position)
+  if fraction <= 0 and position then
+    assert_equal(lit(device, ring), 1, where .. ": only LED 1 at the first position")
+    assert_true(device:get_led(ring, 1) > 0, where .. ": LED 1 lit")
+  elseif fraction >= 1 then
     assert_equal(lit(device, ring), 64, where .. ": all 64 LEDs at fraction 1")
   elseif fraction <= 0 then
     assert_equal(lit(device, ring), 0, where .. ": no LED at fraction 0")
@@ -826,7 +831,7 @@ test("SEQ and SCENES rings draw their position fractions", function()
   assert_ring_fraction(device, 1, 1, "SEQ ring 1 at the last step")
   assert_ring_fraction(device, 2, 1, "SEQ ring 2 at level 15")
   assert_ring_fraction(device, 3, param_fraction("tempo"), "SEQ ring 3 tempo")
-  assert_ring_fraction(device, 4, 0, "SEQ ring 4 at voice 1")
+  assert_ring_fraction(device, 4, 0, "SEQ ring 4 at voice 1", true)
   S.cursors.seq_step = 9
   S.selected_voice = 4
   S.patterns[4][9] = 5
@@ -847,7 +852,7 @@ test("SEQ and SCENES rings draw their position fractions", function()
   assert_ring_fraction(device, 1, 3 / (stops - 1), "SCENES ring 1 at slot 4")
   S.cursors.scene = 1
   arc_redraw()
-  assert_ring_fraction(device, 1, 0, "SCENES ring 1 at slot 1")
+  assert_ring_fraction(device, 1, 0, "SCENES ring 1 at slot 1", true)
 end)
 
 test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
@@ -929,6 +934,113 @@ test("page and arc files keep to their record fields", function()
       assert_equal(type(record[field]), wanted and "function" or "nil", name .. "." .. field)
     end
   end
+end)
+
+-- #439: the LED level of every ring in each state the notes list
+test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO and BUFFER draw the levels the notes give", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local function levels() local out = {} for n = 1, 4 do out[n] = device.segments[n] and device.segments[n].level end return out end
+  local function assert_levels(expected, where)
+    local got = levels()
+    for n = 1, 4 do assert_equal(got[n], expected[n], where .. " ring " .. n) end
+  end
+  S.selected_voice = 1
+  -- MAIN: running 15/15/12/12, stopped 15/4/3/3; ALT 12 running, 3 stopped
+  show_page("MAIN")
+  S.voices[1].active = true; arc_redraw()
+  assert_levels({15, 15, 12, 12}, "MAIN running")
+  S.voices[1].active = false; arc_redraw()
+  assert_levels({15, 4, 3, 3}, "MAIN stopped")
+  params:set("v1_pan", 0.5)  -- at 0 the pan ring is one dim LED, not a segment
+  key(1, 1)
+  S.voices[1].active = true; arc_redraw()
+  assert_levels({12, 12, 12, 12}, "MAIN ALT running")
+  S.voices[1].active = false; arc_redraw()
+  assert_levels({3, 3, 3, 3}, "MAIN ALT stopped")
+  key(1, 0)
+  -- VOICE: the cursor row's ring 15, the others 12
+  show_page("VOICE"); arc_redraw()
+  local cursor_ring
+  for n = 1, 4 do if device.segments[n] and device.segments[n].level == 15 then cursor_ring = n end end
+  assert_true(cursor_ring ~= nil, "VOICE has a ring at 15")
+  for n = 1, 4 do
+    if device.segments[n] then assert_equal(device.segments[n].level, n == cursor_ring and 15 or 12, "VOICE ring " .. n) end
+  end
+  -- SEQ, SCENES, FX
+  show_page("SEQ")
+  S.cursors.seq_step = 2; S.patterns[2][2] = 3; S.selected_voice = 2
+  arc_redraw()
+  assert_levels({15, 15, 12, 12}, "SEQ")
+  S.selected_voice = 1
+  show_page("SCENES"); S.cursors.scene = 2; arc_redraw()
+  assert_levels({12, 12, nil, nil}, "SCENES")
+  show_page("FX"); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "FX")
+  -- LFO: depth rings 15 while running, 4 off; ring 4 at 12
+  show_page("LFO")
+  params:set("lfo_1", 2); params:set("lfo_2", 1); params:set("lfo_3", 1)
+  arc_redraw()
+  assert_levels({15, 4, 4, 12}, "LFO")
+  -- BUFFER: 15 for a buffer source, 4 otherwise; ALT ring 4 always 12, ALT ring 3 follows the voice
+  show_page("BUFFER")
+  params:set_raw("v1_buf_scan", 1)  -- at 0 the scan ring is one dim LED, not a segment
+  params:set("v1_source", 2); arc_redraw()
+  assert_levels({15, 15, 15, 15}, "BUFFER buffer source")
+  key(1, 1); arc_redraw()
+  assert_levels({15, 15, 15, 12}, "BUFFER ALT buffer source")
+  key(1, 0)
+  params:set("v1_source", 1); arc_redraw()
+  assert_levels({4, 4, 4, 4}, "BUFFER synth source")
+  key(1, 1); arc_redraw()
+  assert_levels({4, 4, 4, 12}, "BUFFER ALT synth source")
+  key(1, 0)
+end)
+
+-- #439: reconcile's redraw
+test("the menu closing after an arc moved draws its rings on the next frame", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  show_page("MAIN"); next_frame(context)
+  _menu.set_mode(true)
+  context.arc.reassign(1, 3)
+  next_frame(context)  -- nothing but reconcile (the menu's close hook) may ask for the next draw
+  local moved = context.arc.vports[3].device
+  local refreshes = moved.refresh_count
+  next_frame(context)
+  assert_equal(moved.refresh_count, refreshes, "nothing draws before the hook runs")
+  local_value("S").lib.arc_core.reconcile()
+  next_frame(context)
+  assert_equal(moved.refresh_count, refreshes + 1, "the moved arc's rings draw on the next frame")
+  assert_true(moved.segments[1] ~= nil, "ring 1 is drawn")
+  _menu.set_mode(false)
+end)
+
+-- #510: a position at its first stop is not a ring that is off
+test("a whole-step position ring at its first position lights at least one LED", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local function lit(ring)
+    local count = 0
+    for x = 1, 64 do if device:get_led(ring, x) > 0 then count = count + 1 end end
+    return count
+  end
+  S.selected_voice = 1
+  show_page("SEQ")
+  S.cursors.seq_step = 1
+  S.patterns[1][1] = 0
+  arc_redraw()
+  assert_true(lit(1) >= 1, "SEQ ring 1 at step 1")
+  assert_true(lit(2) >= 1, "SEQ ring 2 at level 0")
+  assert_true(lit(4) >= 1, "SEQ ring 4 at voice 1", true)
+  S.patterns[1][1] = 5; S.cursors.seq_step = 2; arc_redraw()
+  assert_true(lit(1) > lit(4), "later positions still light more")
+  show_page("SCENES")
+  S.cursors.scene = 1
+  arc_redraw()
+  assert_true(lit(1) >= 1, "SCENES ring 1 at slot 1", true)
 end)
 
 end

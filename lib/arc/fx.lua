@@ -14,6 +14,8 @@ return function(S)
     {param_id = "delay_mix"}
   }
 
+  local ARC_FX_LEVEL = 12
+
   local function arc_fx_delta(n, delta)
     local ring = ARC_FX_RINGS[n]
     if ring then
@@ -25,7 +27,7 @@ return function(S)
   -- so exp params such as filter freq and delay time sweep evenly)
   local function arc_fx_redraw(arc_port)
     for n, ring in ipairs(ARC_FX_RINGS) do
-      arc_ring_fill(arc_port, n, param_fraction(ring.param_id), 12)
+      arc_ring_fill(arc_port, n, param_fraction(ring.param_id), ARC_FX_LEVEL)
     end
   end
 

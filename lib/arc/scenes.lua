@@ -31,7 +31,7 @@ return function(S)
   -- Ring 1 shows the cursor's position (exactly this fraction), ring 2 its param
   local function arc_scenes_redraw(arc_port)
     local last_stop = NUM_SCENES + #SCENES_FIELDS
-    arc_ring_fill(arc_port, 1, (S.cursors.scene - 1) / (last_stop - 1), ARC_SCENES.level)
+    arc_ring_fill_position(arc_port, 1, (S.cursors.scene - 1) / (last_stop - 1), ARC_SCENES.level)
     arc_ring_fill_param(arc_port, 2, "scene_transition_time", ARC_SCENES.level)
   end
 
