@@ -16,10 +16,10 @@
 ## Owns
 
 `lib/scenes.lua` (`S.lib.scenes`) holds the whole scene system:
-- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`);
+- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_sequencer_recall_due`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`);
 - `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target`, `previous` and `step`);
 - `S.lib.scenes.fading_to()` (the scene a running fade goes to, else nil) and `S.lib.scenes.shows_current(slot)` (whether the displays light the slot as the current scene);
-- `S.lib.scenes.sequencer_next_slot()` (#303): the slot the running sequencer recalls next, else nil: its position + 1, wrapped to 1 past `scene_sequence_length` as it is now, as the sequencer's advance does. Through a hold the position is the scene playing (or the empty slot it waits on), so the grids' scene pages light this one at 10, never the position;
+- `S.lib.scenes.sequencer_next_slot()` (#303): the slot the running sequencer recalls next, else nil. While `S.scene_sequencer_recall_due` (set by `scene_sequencer_start` and each advance, cleared by the loop just before it recalls or skips the position, and by `scene_sequencer_stop`) it is the position (1 past `scene_sequence_length`, as the loop's guard); otherwise the position + 1, wrapped to 1 past the length as it is now, as the advance does. Through a hold the position is the scene playing (or the empty slot it waits on), so the grids' scene pages light this one at 10, never the position. The skip of an empty slot redraws the grids, so the light moves on there too. The "scene sequencer" invariant: no recall is due while the sequencer is off;
 - capture, recall, transitions, the scene sequencer, migration, validation and scenes.data;
 - the global `with_traceback` error handler;
 - `S.lib.scenes.scene_data_dir` and `S.lib.scenes.move_aside_unloadable_file`, used by `lib/buffers.lua`;

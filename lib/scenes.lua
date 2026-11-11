@@ -31,6 +31,10 @@ return function(S)
   S.current_scene = 0  -- 0 = no scene loaded
   S.scene_sequencer_position = 1
   S.scene_sequencer_enabled = false
+  -- True from the sequencer's start and from each advance until it recalls
+  -- (or skips) the scene at its position: until then that position is the
+  -- slot it recalls next (S.lib.scenes.sequencer_next_slot, #303)
+  S.scene_sequencer_recall_due = false
   S.scene_sequencer_clock = nil
   S.scene_transition_active = false
   -- true while recall_scene_instant sets params: the source action then leaves
@@ -602,6 +606,7 @@ return function(S)
 
     S.scene_sequencer_enabled = true
     S.scene_sequencer_position = 1
+    S.scene_sequencer_recall_due = true
     grid_redraw()  -- the scene page shows the sequencer on
 
     S.scene_sequencer_clock = clock.run(function()
@@ -617,7 +622,10 @@ return function(S)
           S.scene_sequencer_position = 1
         end
 
-        -- Recall next scene in sequence (skip empty scenes)
+        -- Recall next scene in sequence (skip empty scenes). From here the
+        -- slot it recalls next is the one after the position, so the
+        -- recall's redraws (or the skip's) light that one
+        S.scene_sequencer_recall_due = false
         local transition_time = 0
         if S.scenes[S.scene_sequencer_position].populated then
           transition_time = params:get("scene_transition_time")
@@ -634,6 +642,7 @@ return function(S)
           end
         else
           print("skipping empty scene " .. S.scene_sequencer_position)
+          grid_redraw()  -- the slot it recalls next moved on
         end
 
         -- Hold the scene for its duration, and at least until its transition
@@ -649,6 +658,7 @@ return function(S)
         if S.scene_sequencer_position > params:get("scene_sequence_length") then
           S.scene_sequencer_position = 1
         end
+        S.scene_sequencer_recall_due = true
 
         request_redraw()
         grid_redraw()
@@ -658,6 +668,7 @@ return function(S)
 
   function scene_sequencer_stop()
     S.scene_sequencer_enabled = false
+    S.scene_sequencer_recall_due = false
     if S.scene_sequencer_clock then
       clock.cancel(S.scene_sequencer_clock)
       S.scene_sequencer_clock = nil
@@ -970,17 +981,29 @@ return function(S)
     return step == nil or step % 2 == 1
   end
 
-  -- The slot the running scene sequencer recalls next, else nil (#303): the
-  -- one after its position, wrapped to 1 past the sequence length as it is
-  -- now, as its advance does. Through a scene's hold the position is the
-  -- scene playing (or the empty slot it waits on), so this is the next one.
-  -- The grids' scene pages light it at 10
+  -- The slot the running scene sequencer recalls next, else nil (#303).
+  -- Until it recalls (or skips) its position, after its start and after
+  -- each advance (S.scene_sequencer_recall_due), that is the position, as
+  -- its loop's guard reads it (1 past the sequence length). From then on,
+  -- through the scene's hold, the position is the scene playing (or the
+  -- empty slot it waits on), and it is the one after it, wrapped to 1 past
+  -- the sequence length as it is now, as the advance does. The grids'
+  -- scene pages light it at 10
   function M.sequencer_next_slot()
     if not S.scene_sequencer_enabled then return nil end
-    local next_slot = S.scene_sequencer_position + 1
-    if next_slot > params:get("scene_sequence_length") then next_slot = 1 end
+    local length = params:get("scene_sequence_length")
+    local next_slot = S.scene_sequencer_position
+    if not S.scene_sequencer_recall_due then next_slot = next_slot + 1 end
+    if next_slot > length then next_slot = 1 end
     return next_slot
   end
+
+  -- A recall is due only while the sequencer runs
+  S.register_invariant("scene sequencer", function()
+    if S.scene_sequencer_recall_due and not S.scene_sequencer_enabled then
+      return "scene_sequencer_recall_due is true but the sequencer is off"
+    end
+  end)
 
   M.scene_data_dir = scene_data_dir
   M.move_aside_unloadable_file = move_aside_unloadable_file
