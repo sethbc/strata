@@ -62,7 +62,7 @@ CHANGELOG.md has every change. In short:
 
 ## Open items
 
-- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved). Two enhancements are left for it: [#565](https://github.com/sethbc/strata/issues/565) (a synced `recordBuffer` queued behind a busy sclang starts late: send an absolute start time) and [#566](https://github.com/sethbc/strata/issues/566) (coalesce `buffers.data` writes out of poll callbacks, one per frame, flushed at cleanup).
+- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved). One enhancement is left for it: [#565](https://github.com/sethbc/strata/issues/565) (a synced `recordBuffer` queued behind a busy sclang starts late: send an absolute start time).
 - [#567](https://github.com/sethbc/strata/issues/567) **A synced take's length and BUFFER's `len` read the clock's tempo,** which lags a tempo change by up to two ticks.
 - [#569](https://github.com/sethbc/strata/issues/569) **The engine check's freeze area** ("voiceOff inside the copy's wait") fails when the copy lands before its read, on a slow CI runner; a rerun passes.
 - [#570](https://github.com/sethbc/strata/issues/570) **A full local engine check** (about 16 minutes) has only about 4 minutes of headroom under the 1200 s default timeout.

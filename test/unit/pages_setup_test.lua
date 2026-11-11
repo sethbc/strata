@@ -589,6 +589,7 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   os.execute("mkdir -p '" .. dir .. "buffers.data.part/inside'")
   S.lib.scenes.save(1)
   load_buffer(1, "/tmp/one.wav")
+  context.clock.run_for(0.11)   -- buffers.data is written 0.1 s after the change (#566)
   assert_true(status_texts():find("scenes file not saved|buffers file not saved", 1, true) ~= nil, status_texts())
   show_page("SETUP"); enc(2, 60); redraw()
   assert_true(screen_shows(context, "scenes file not saved") and screen_shows(context, "buffers file not saved"))
@@ -596,6 +597,7 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   os.remove(dir .. "scenes.data.part/inside"); os.remove(dir .. "scenes.data.part")
   os.remove(dir .. "buffers.data.part/inside"); os.remove(dir .. "buffers.data.part")
   S.lib.scenes.save(1); load_buffer(2, "/tmp/two.wav")
+  context.clock.run_for(0.11)
   assert_true(not status_texts():find("not saved", 1, true), status_texts())
 end)
 
