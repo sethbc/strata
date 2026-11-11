@@ -297,4 +297,41 @@ test("randomize and mutation never touch freeze", function()
   end
 end)
 
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does),
+-- so a freeze the player sets from the script goes through set_binary_param
+-- (lib/ui/params.lua) and a controller mapped to v<i>_freeze in PARAMS >
+-- MAP follows. The map is as lua/core/pmap.lua's pmap.new makes it, echo on
+local function map_freeze(context, voice_idx, cc)
+  local controller = context.midi.plug(1)
+  norns.pmap.data["v" .. voice_idx .. "_freeze"] = { dev = 1, ch = 1, cc = cc, in_lo = 0, in_hi = 127,
+    out_lo = 0, out_hi = 1, echo = true, value = 0 }
+  return function()
+    local values = {}
+    for _, message in ipairs(controller.sent) do
+      if message[2] == cc then table.insert(values, message[3]) end
+    end
+    return table.concat(values, ",")
+  end
+end
+
+test("a freeze toggle echoes v<i>_freeze to a MIDI-mapped controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local echoes = map_freeze(context, 1, 30)
+  S.lib.freeze.toggle(1)
+  assert_equal(params:get("v1_freeze"), 1, "frozen")
+  assert_equal(echoes(), "127", "the controller hears the freeze")
+  S.lib.freeze.toggle(1)
+  assert_equal(echoes(), "127,0", "and the unfreeze")
+end)
+
+test("a source switch's unfreeze echoes v<i>_freeze to a MIDI-mapped controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_freeze", 1)
+  local echoes = map_freeze(context, 1, 31)
+  params:set("v1_source", 2)
+  assert_equal(params:get("v1_freeze"), 0, "the switch unfroze voice 1")
+  assert_equal(echoes(), "0", "the controller hears the unfreeze")
+end)
+
 end

@@ -1,7 +1,7 @@
 ## Must not break
 
 - E3 edits through `enc_param_delta` (never `params:delta`), so ALT+E3 is fine and the center detents apply.
-- K3 on a delay or reverb row toggles that effect's bypass param (`delay_bypass`, `reverb_bypass`, `S.lib.voice_mix.BYPASS`) through `params:set` and never touches its mix; only that param frees the engine node. K3 on a filter row keeps 3.1's mix toggle (the filter is never freed).
+- K3 on a delay or reverb row toggles that effect's bypass param (`delay_bypass`, `reverb_bypass`, `S.lib.voice_mix.BYPASS`) through `set_binary_param`, so a controller mapped to it follows (norns' `Binary:set` sends no MIDI-map CC, #538), and never touches its mix; only that param frees the engine node. K3 on a filter row keeps 3.1's mix toggle (the filter is never freed).
 - The filter's restore value is `S.fx_last_mix.filter`, written only in `lib/params_setup.lua`: `filter_mix`'s action sets it when the mix rises above the mix before (E3, PARAMS, scenes, PSET), and `S.lib.params_setup.toggle_filter_mix()` sets it to the mix at the press before turning a mix above 0 to 0. Never write it from the page. K3 on a filter row calls `toggle_filter_mix` and nothing else (#235). The delay and reverb have no restore mix: their bypass params keep it.
 - Section labels (`selectable = false` rows) take no cursor stop: always move through `S.lib.ui_field_list` (`move`, `clamp`), and clamp `S.fx_row` before use. Select a row by its param id (the layout states use `row_of`), never by a hard-coded index (#114).
 - K3 acts on the effect of the row under the cursor (`row.effect`); master rows (density, drift) do nothing, and their hint is `E3:value`.

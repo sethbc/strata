@@ -129,7 +129,7 @@ return function(S)
     elseif y == 5 and x == 1 then
       -- Toggle scene sequencer
       local enabled = params:get("scene_sequencer_enabled")
-      params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
+      set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
     end
   end
 

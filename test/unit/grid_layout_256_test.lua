@@ -1057,4 +1057,30 @@ test("256 row 13 past the voice's last fader page leaves the page", function()
   assert_equal(device:get_led(2, 13), 15, "row 13 still shows page 2")
 end)
 
+-- The values a controller got on cc, in order, comma-joined
+local function cc_echoes(controller, cc)
+  local values = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == cc then table.insert(values, message[3]) end
+  end
+  return table.concat(values, ",")
+end
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does),
+-- so the sequencer key sets its binary param through set_binary_param
+-- (lib/ui/params.lua), and a controller mapped to it in PARAMS > MAP
+-- follows. The map is as lua/core/pmap.lua's pmap.new makes it, echo on
+test("256 page 3: the sequencer key echoes to a MIDI-mapped controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 16, 16)
+  local controller = context.midi.plug(1)
+  norns.pmap.data.scene_sequencer_enabled = { dev = 1, ch = 1, cc = 40, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  tap(context, 15, 8)   -- page 3, scenes
+  tap(context, 1, 5)
+  assert_equal(params:get("scene_sequencer_enabled"), 1, "(1,5) turns the sequencer on")
+  tap(context, 1, 5)
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "and off")
+  assert_equal(cc_echoes(controller, 40), "127,0", "the controller hears both")
+end)
+
 end

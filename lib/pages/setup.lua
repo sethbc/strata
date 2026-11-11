@@ -306,7 +306,9 @@ return function(S)
         step_performance_field(field, d)
       elseif field and field.kind == "param" then
         if field.param_id == "mutation_enabled" then
-          params:set(field.param_id, d > 0 and 1 or 0)  -- a binary has no range for enc_param_delta
+          -- a binary has no range for enc_param_delta; set_binary_param
+          -- echoes it to a MIDI map (#538)
+          set_binary_param(field.param_id, d > 0 and 1 or 0)
         else
           enc_param_delta(n, field.param_id, d)
         end

@@ -379,4 +379,38 @@ test("a PSET load sets the restore value when it raises the mix; a lower loaded 
   key(3, 1); assert_near(params:get("filter_mix"), 0.6, 1e-6, "K3 restores 0.6")
 end)
 
+-- The values a controller got on cc, in order, comma-joined
+local function cc_echoes(controller, cc)
+  local values = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == cc then table.insert(values, message[3]) end
+  end
+  return table.concat(values, ",")
+end
+-- #538: norns' Binary:set sends no MIDI-map CC (only ParamSet:delta does),
+-- so K3 on the delay's and reverb's rows sets its binary param through set_binary_param
+-- (lib/ui/params.lua), and a controller mapped to it in PARAMS > MAP
+-- follows. The map is as lua/core/pmap.lua's pmap.new makes it, echo on
+test("K3 on FX's delay and reverb bypass echoes to a MIDI-mapped controller (#538)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local controller = context.midi.plug(1)
+  norns.pmap.data.delay_bypass = { dev = 1, ch = 1, cc = 45, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  norns.pmap.data.reverb_bypass = { dev = 1, ch = 1, cc = 46, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  show_page("FX")
+  for _, case in ipairs({ { row = "delay_time", id = "delay_bypass", cc = 45 },
+    { row = "reverb_size", id = "reverb_bypass", cc = 46 } }) do
+    for index, row in ipairs(S.FX_PAGE.rows) do
+      if row.param_id == case.row then S.fx_row = index end
+    end
+    key(3, 1); key(3, 0)
+    assert_equal(params:get(case.id), 1, "K3 bypasses: " .. case.id)
+    key(3, 1); key(3, 0)
+    assert_equal(params:get(case.id), 0, "and lifts it: " .. case.id)
+    assert_equal(cc_echoes(controller, case.cc), "127,0", "the controller hears both: " .. case.id)
+  end
+end)
+
 end

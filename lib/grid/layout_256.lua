@@ -123,7 +123,7 @@ return function(S)
         if x == 1 then
           -- Toggle sequencer
           local enabled = params:get("scene_sequencer_enabled")
-          params:set("scene_sequencer_enabled", enabled == 1 and 0 or 1)
+          set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
         elseif x >= 3 and x <= 2 + NUM_SCENES then
           -- Set sequence length
           params:set("scene_sequence_length", x - 2)
