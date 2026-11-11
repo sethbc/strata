@@ -43,7 +43,7 @@ Ports:
 
 Setup:
 - Needs SuperCollider: sclang is `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app path.
-- The record area needs `python3` on `PATH`: its #565 check sends two `recordBuffer` messages from outside sclang while it holds sclang, through a short python3 script it writes to its folder. CI's runner has python3, and the 3.13 image has it through `jackd2` (which depends on `python3`).
+- The record area needs `python3` on `PATH`: its #565 check sends two `recordBuffer` messages from outside sclang while it holds sclang, through a short python3 script it writes to its folder. CI's runner has python3, and the 3.13 image installs it explicitly (`test/docker/sc313/Dockerfile`). The script exits after 10 s if its go file never appears, so a check that dies early leaves no sender waiting.
 - On Linux scsynth also needs a running JACK server. CI and local runs use a dummy driver: `jackd --no-realtime -d dummy -r 48000 -p 1024 &` (check with `jack_lsp`). `QT_QPA_PLATFORM=offscreen` keeps sclang headless.
 
 ### The engine check on SuperCollider 3.13 (Docker)

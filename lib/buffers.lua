@@ -856,8 +856,9 @@ return function(S)
   -- problem, nil, "unreadable" or "not saved"; backup, the name an
   -- unreadable file was kept under (nil: still in place); text, the bytes
   -- last written or found unchanged, which remember compares with, so a
-  -- report that changes no path or start costs no file read
-  S.buffer_file = {version = nil, problem = nil, backup = nil, text = nil}
+  -- report that changes no path or start costs no file read; save_clock, the
+  -- clock of the one pending deferred write (nil when none)
+  S.buffer_file = {version = nil, problem = nil, backup = nil, text = nil, save_clock = nil}
 
   -- What buffers.data holds: per slot the loaded file or scratch take (a
   -- remembered file that was missing on start is kept: it may be on a drive

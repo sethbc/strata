@@ -550,7 +550,7 @@ test.("record: an idle engine's synced take starts delay after its send", {
 // commands queue behind the hold whatever the scheduling. Both takes start
 // delay after their own send, measured on the server: each records a
 // timecode started just after the hold. The sender is killed at the end,
-// so a late one never sends into a later check
+// so a late one never sends into a later check; it also exits by itself after 10 s without the go file, so a check that died before creating it leaves no sender waiting
 test.("record: a synced take queued behind a busy sclang starts delay after its send (#565)", {
     var delay = 0.8, holdLimit = 5, frame = 2000, slots = #[4, 5], timecode = server.nextNodeID;
     var script = h.tempDir +/+ "send-565.py", go = h.tempDir +/+ "send-565.go", sentPath = h.tempDir +/+ "send-565.sent";
@@ -560,7 +560,10 @@ test.("record: a synced take queued behind a busy sclang starts delay after its 
         "def pad(data):",
         "    return data + bytes(4 - len(data) % 4)",
         "sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
+        "giveup = time.time() + 10",
         "while not os.path.exists(go):",
+        "    if time.time() > giveup:",
+        "        sys.exit(1)",
         "    time.sleep(0.001)",
         "start, sent = time.time(), []",
         "for at in range(0, len(specs), 3):",
