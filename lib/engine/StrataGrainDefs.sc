@@ -9,6 +9,14 @@
     // and the bound the rings' lookback (docs/notes/engine/rings.md) relies on
     grainMaxSeconds { ^0.5 }
 
+    // The shortest time between two grain starts (s): a trigger sooner after
+    // the last start starts no grain, so at most 125 grains of
+    // grainMaxSeconds sound at once, under GrainBuf's maxGrains - 1 (past it
+    // GrainBuf drops grains and prints "Too many grains"). Only a flood of
+    // retriggers comes this close (more than 250 a second: a MIDI flood);
+    // continuous grains come at most 200 a second (density 100 x master 2)
+    grainTriggerSeconds { ^0.004 }
+
     // The grains area (order 30)
     strataAreaGrains {
         ^(
@@ -150,7 +158,8 @@
     // start (pos, 0-1 of the buffer) each GrainBuf latches per grain, and an
     // output level (level).
     //   1. The trigger: grainDensity grains per second (grainMode 0) or one
-    //      per t_trig (1: retrigger, pattern steps, MIDI notes).
+    //      per t_trig (1: retrigger, pattern steps, MIDI notes), never two
+    //      within grainTriggerSeconds.
     //   2. Rate and duration: grainRate and grainDur (StrataVariation.sc);
     //      pitchShift is the rate (an exact transposition). bend and the
     //      frequency crossmod enter it scaled by rateLevel: 0 for the synth
@@ -182,7 +191,9 @@
         // enumeration from "grainMode.round.clip(0, 1)")
         grainMode = c[\grainMode];
         mode = grainMode.round.clip(0, 1);
-        trig = Select.ar(mode, [Impulse.ar(c[\grainDensity]), T2A.ar(c[\t_trig])]);
+        // (Trig1 holds the trigger high for grainTriggerSeconds and ignores
+        // any other meanwhile: every grain input reads its rising edge)
+        trig = Trig1.ar(Select.ar(mode, [Impulse.ar(c[\grainDensity]), T2A.ar(c[\t_trig])]), this.grainTriggerSeconds);
 
         vary = (
             reverseProb: c[\reverseProb], pitchJitter: c[\pitchJitter], intervals: c[\intervals],
