@@ -290,7 +290,6 @@ return function(S)
       layout_state("all locked, running, triggered, frozen, field 3", 1),
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),
       layout_state("resonator, input source", 1, S.constants.SOURCE_INPUT),
-      -- the widest ALT+K2 hint: K2:cancel K3:unlock
       -- the list's m and s marks: voice 1 muted, voice 2 soloed (3 and 4 are m too)
       {name = "voice list marks m and s", setup = function()
         for i = 1, NUM_VOICES do
@@ -301,6 +300,7 @@ return function(S)
         S.selected_voice = 2
         update_voice_list()
       end},
+      -- the widest ALT+K2 hint: K2:cancel K3:unlock
       {name = "ALT+K2 held past the hold time, voice locked", setup = function(context)
         toggle_lock(S.selected_voice)
         key(1, 1); key(2, 1)
