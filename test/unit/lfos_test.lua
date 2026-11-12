@@ -44,6 +44,16 @@ local function hold_lfo(n, label, depth, low)
   params:set(lfo_id(n), 1)
 end
 
+-- A round-robin key standing in for a real send: it has an engine sender
+-- (that sends nothing), so it reaches the engine and takes a slot (a key
+-- with no sender takes none, #646)
+local function probe_key(k)
+  local key = "probe " .. k
+  local senders = local_value("S").engine_senders
+  if senders[key] == nil then senders[key] = function() end end
+  return key
+end
+
 -- The calls named `name` whose first argument is `first`
 local function calls_with(context, name, first)
   local found = {}
@@ -216,7 +226,8 @@ test("at most 12 sends a step, round robin, and every due key within two steps",
   end
   lfos.on_step(function()
     for k = 1, 14 do
-      lfos.mark_due("probe " .. k, function() table.insert(sent, "probe " .. k) end)
+      local key = probe_key(k)
+      lfos.mark_due(key, function() table.insert(sent, key) end)
     end
   end)
   local steps = {}
@@ -537,7 +548,7 @@ test("a tempo change resends every clocked engine LFO's rate in its step, ahead 
   end
   -- 12 keys due every step: the round robin is full
   lfos.on_step(function()
-    for k = 1, 12 do lfos.mark_due("probe " .. k, function() end) end
+    for k = 1, 12 do lfos.mark_due(probe_key(k), function() end) end
   end)
   lfo_step(context, 3)
   context.clear_engine_calls()
@@ -566,7 +577,7 @@ test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step
   -- 12 keys due every step: the round robin is full
   local probes = 0
   lfos.on_step(function()
-    for k = 1, 12 do lfos.mark_due("probe " .. k, function() probes = probes + 1 end) end
+    for k = 1, 12 do lfos.mark_due(probe_key(k), function() probes = probes + 1 end) end
   end)
   -- every engine LFO call, and whether the budget counted it (made by an
   -- engine sender, which only send_engine_value's delivery runs)
