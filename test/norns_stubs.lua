@@ -39,22 +39,21 @@
 --     as on norns. Each coroutine holds one of matron's 100 event slots
 --     (the lowest free one when it first waits, until it is canceled or
 --     ends; all 100 in use is an error, where matron would never wake the
---     coroutine): events due at the same time fire in slot order, a sleep
---     before a sync (matron fires a sleep when the time reaches it, a sync
---     once the beat is past it, so a stub step at a sleep's time leaves a
---     sync due then to the next step, at the same time). util.time() moves
---     with the clocks: clock.advance() is one scheduler step, a matron tick
---     (util.time() moves to the next wake-up, and the events due then are
---     fixed and resume in slot order, not wake order, as matron's tick
---     posts them); clock.advance_until(id) runs it instant by instant
---     until coroutine id wakes once, and fails at once if id is not
---     waiting or is canceled first; clock.run_for(seconds[, latency]) runs the
---     scheduler for `seconds`, each coroutine `latency` (default 0) after
---     its wake-up, so a clock that sleeps many short steps falls behind one
---     that sleeps once. All three post every resume due at an instant before
---     they deliver any, and deliver every posted one, also to a coroutine
---     canceled since (which raises, as on norns; #588). An error raised in
---     a scheduler resume is not raised:
+--     coroutine). The stub's instant is matron's tick, every 1 ms
+--     (MATRON_TICK_SECONDS): the events due within a tick of an instant's
+--     first one are posted together (a sleep and a sync due at one time
+--     too) and fire in slot order, not wake order, at the tick's time (its
+--     latest wake-up). util.time() moves with the clocks: clock.advance()
+--     is one scheduler step, one tick (util.time() moves to it);
+--     clock.advance_until(id) runs them tick by tick until coroutine id
+--     wakes once, and fails at once if id is not waiting or is canceled
+--     first; clock.run_for(seconds[, latency]) runs them for `seconds`, each
+--     coroutine `latency` (default 0) after its wake-up, so a clock that
+--     sleeps many short steps falls behind one that sleeps once, and every
+--     tick due by a delivery is posted before it. All three post a tick's
+--     resumes before they deliver any, and deliver every posted one, also
+--     to a coroutine canceled since (which raises, as on norns; #588). An
+--     error raised in a scheduler resume is not raised:
 --     as norns prints it and keeps the other clocks running, the stub keeps
 --     it until the test claims it (clock.take_errors()), and the harness
 --     fails any test that leaves one behind (stubs.take_clock_errors())
@@ -1469,6 +1468,11 @@ local SCHEDULE_SLEEP, SCHEDULE_SYNC = 0, 1
 -- matron's scheduler has NUM_CLOCK_SCHEDULER_EVENTS (clock_scheduler.h) event slots
 local SCHEDULER_SLOTS = 100
 
+-- matron's scheduler tick: clock_scheduler_tick_thread_run posts the events
+-- due, then sleeps usleep(1000) (clocks/clock_scheduler.cc), so a tick comes
+-- every 1 ms and two wake-ups less than a tick apart can be posted by one
+local MATRON_TICK_SECONDS = 0.001
+
 -- Errors raised while the scheduler resumed a coroutine. On norns
 -- w_handle_clock_resume reports them on the console (l_report) and every
 -- other clock keeps running, so the stub does not raise them either: it
@@ -1707,27 +1711,21 @@ local function make_clock(util)
     return math.max(due, event.scheduled_at)
   end
 
-  -- At its fire time a sleep is due (clock_time >= sleep time), but a sync
-  -- only once the beat is past its beat (clock_beat > sync beat), so at an
-  -- equal time a sync comes after a sleep: rank 1. A sync whose beat had
-  -- already passed when it was scheduled is due at once: rank 0
-  local function fire_rank(event)
-    return (event.type == SCHEDULE_SYNC and event.sync_beat >= event.scheduled_beat) and 1 or 0
-  end
-
-  -- the ready events in the order the scheduler fires them: by fire time,
-  -- a sleep before a sync at the same time, then by event slot
+  -- the ready events by fire time, then by event slot. A sleep is due once
+  -- clock_time reaches its time and a sync once clock_beat is past its beat
+  -- (clock_scheduler.cc), so a sleep and a sync due at one time are both
+  -- posted by any tick after it: one tick, as for every two wake-ups less
+  -- than a tick apart (tick_at)
   local function ready_events()
     local list = {}
     for coro_id, event in pairs(clock.events) do
       if event.ready then
         table.insert(list, { id = coro_id, event = event, order = event.order, time = fire_time(event),
-          rank = fire_rank(event), slot = event.slot })
+          slot = event.slot })
       end
     end
     table.sort(list, function(left, right)
       if left.time ~= right.time then return left.time < right.time end
-      if left.rank ~= right.rank then return left.rank < right.rank end
       return left.slot < right.slot
     end)
     return list
@@ -1745,10 +1743,11 @@ local function make_clock(util)
   -- before any coroutine runs (clock_scheduler_tick_thread_run). advance()
   -- passes its step's `tick` ({time, beat}, sampled at the step's start, so
   -- a tempo change by an earlier resume in the step cannot move it).
-  -- run_for and advance_until fire each event at its own wake-up, so their
-  -- tick is the event's: the time or beat it waited for, or the one it was
-  -- scheduled at if that was later (taken from the event, not from a fire
-  -- time worked out earlier). An error is reported, not raised
+  -- run_for and advance_until resume each event with its own wake-up (it
+  -- may run up to a tick later, at its tick's time), so their tick is the
+  -- event's: the time or beat it waited for, or the one it was scheduled at
+  -- if that was later (taken from the event, not from a fire time worked
+  -- out earlier). An error is reported, not raised
   local function fire(entry, tick)
     local event = entry.event
     event.ready = false
@@ -1767,69 +1766,90 @@ local function make_clock(util)
   clock.take_errors = stubs.take_clock_errors
 
   -- The resumes matron posted that Lua has not delivered yet, in the order
-  -- posted (norns' event queue, as far as the clock goes): { entry, tick },
-  -- tick nil for an event resumed with its own time or beat (fire). Only
-  -- advance_until leaves any between helper calls (the resumes posted at
-  -- its coroutine's instant after its own), and every helper delivers them
-  -- first
+  -- posted (norns' event queue, as far as the clock goes): { entry,
+  -- tick_time, first_wake, tick }, tick_time the time of the tick that
+  -- posted it (never delivered before), first_wake its tick's first
+  -- wake-up, tick nil for an event resumed with its own time or beat
+  -- (fire). Only advance_until and run_for leave any between helper calls
+  -- (the rest of a tick, or what a latency posted ahead), and every helper
+  -- delivers them first
   local posted = {}
 
-  -- One matron tick at step_time, the three helpers' one mechanism
-  -- (clock_scheduler_tick_thread_run): it posts every ready event due then,
-  -- each one whose fire time has passed and those at step_time of rank
-  -- rank_limit or lower (a sleep at the tick's time leaves a sync at that
-  -- time to the next tick, at the same time), in slot order, clearing each
-  -- one's ready as it posts it, all before Lua delivers any. Every posted
-  -- resume is delivered (deliver_next), one whose coroutine was canceled
-  -- since the post too, as norns delivers every EVENT_CLOCK_RESUME matron
-  -- posted (w_handle_clock_resume): clock.resume finds no coroutine and
-  -- raises, recorded as every resume's error is. So a reset, a jump or a
-  -- cancel made by an earlier delivery leaves a later posted event as it
-  -- was. Events scheduled during the deliveries wait for the next tick
-  local function post_tick(step_time, rank_limit, tick)
-    local due = {}
+  -- One matron tick (clock_scheduler_tick_thread_run), the instant whose
+  -- first event is due at `anchor` (or every event overdue by then): the
+  -- ready events due before anchor + MATRON_TICK_SECONDS, which one tick
+  -- can post before Lua delivers any (two wake-ups less than a tick apart
+  -- can share a tick on a device: the stub's instant is matron's tick,
+  -- ruling 92), in slot order as the tick posts them, and the tick's time:
+  -- the latest of their fire times (a tick posts an event only once it is
+  -- due)
+  local function tick_at(anchor)
+    local due, latest = {}, anchor
     for _, entry in ipairs(ready_events()) do
-      if entry.time < step_time or (entry.time == step_time and entry.rank <= rank_limit) then
-        table.insert(due, entry)
-      end
+      if entry.time >= anchor + MATRON_TICK_SECONDS then break end
+      table.insert(due, entry)
+      latest = math.max(latest, entry.time)
     end
     table.sort(due, function(left, right) return left.slot < right.slot end)
+    return due, latest, anchor
+  end
+
+  -- The tick posts its events: each one's ready is cleared as matron
+  -- clears it when it posts, and its resume waits in `posted`. Every
+  -- posted resume is delivered (deliver_next), one whose coroutine was
+  -- canceled since the post too, as norns delivers every EVENT_CLOCK_RESUME
+  -- matron posted (w_handle_clock_resume): clock.resume finds no coroutine
+  -- and raises, recorded as every resume's error is. So a reset, a jump or
+  -- a cancel made by an earlier delivery leaves a later posted event as it
+  -- was
+  local function post(due, tick_time, first_wake, tick)
     for _, entry in ipairs(due) do
       entry.event.ready = false  -- posted
-      table.insert(posted, { entry = entry, tick = tick })
+      table.insert(posted, { entry = entry, tick_time = tick_time, first_wake = first_wake, tick = tick })
     end
   end
 
-  -- run_for's and advance_until's tick: the one at the first pending
-  -- event's own fire time, which posts the events due at that instant (an
-  -- overdue one waits for its own instant, so they run in fire order).
-  -- util.time() moves to the instant (never back). The first pending
-  -- event, or nil when nothing is pending
-  local function post_instant()
-    local first = ready_events()[1]
-    if first then
-      util.stub_now = math.max(util.time(), first.time)
-      post_tick(first.time, first.rank)
+  -- run_for's and advance_until's ticks, in time order: every tick due by
+  -- `time` (its own time not after it), as matron has posted them by the
+  -- time Lua delivers at `time` (with a latency, Lua runs behind its
+  -- ticks). A tick due later posts nothing yet
+  local function post_ticks_by(time)
+    while true do
+      local first = ready_events()[1]
+      if not first then return end
+      local due, tick_time, first_wake = tick_at(first.time)
+      if tick_time > time then return end
+      post(due, tick_time, first_wake)
     end
-    return first
   end
 
-  -- Lua delivers the first posted resume, `latency` seconds after its
-  -- instant and never before util.time(), with util.time() at that moment.
-  -- The delivered event's entry
-  local function deliver_next(latency)
-    local item = table.remove(posted, 1)
-    util.stub_now = math.max(util.time(), item.entry.time + latency)
+  -- When Lua delivers a posted resume: `latency` seconds after its wake-up,
+  -- never before its tick or util.time()
+  local function delivery_time(item, latency)
+    return math.max(util.time(), item.tick_time, item.entry.time + latency)
+  end
+
+  -- Lua delivers the first posted resume (delivery_time), with util.time()
+  -- at that moment; with post_due, every tick due by then is posted first
+  -- (post_ticks_by), so a cancel this delivery makes never stops one of
+  -- theirs. The delivered event's entry
+  local function deliver_next(latency, post_due)
+    local item = posted[1]
+    local at = delivery_time(item, latency)
+    if post_due then post_ticks_by(at) end
+    table.remove(posted, 1)
+    util.stub_now = at
     fire(item.entry, item.tick)
     return item.entry
   end
 
-  -- Test helper: one scheduler step, a matron tick at the first pending
-  -- event's fire time, once the resumes advance_until left posted are
-  -- delivered. util.time() moves there (never back); the tick posts every
-  -- event due then (post_tick: every one whose fire time has passed too)
-  -- with the time and beat it sampled (an overdue event resumes with the
-  -- step's, not its own), and every one is delivered, in slot order.
+  -- Test helper: one scheduler step, the matron tick of the first pending
+  -- event's instant (tick_at, at util.time() if that is later: every
+  -- overdue event too), once the resumes another helper left posted are
+  -- delivered. util.time() moves to the tick's time (never back); the tick
+  -- posts its events with the time and beat it sampled (an event resumes
+  -- with the step's, not its own), and every one is delivered, in slot
+  -- order. Events scheduled during the step wait for the next one.
   -- before_delivery (optional) runs once the step's events are posted and
   -- before the first is delivered, as a reset, a jump or another event Lua
   -- handles first can fall between a tick's posts and its deliveries
@@ -1837,25 +1857,27 @@ local function make_clock(util)
     while posted[1] do deliver_next(0) end
     local first = ready_events()[1]
     if not first then return end
-    local step_time = math.max(util.time(), first.time)
+    local due, latest, first_wake = tick_at(math.max(util.time(), first.time))
+    local step_time = math.max(util.time(), latest)
     util.stub_now = step_time
-    post_tick(step_time, first.time == step_time and first.rank or 0, { time = step_time, beat = beats_at(step_time) })
+    post(due, step_time, first_wake, { time = step_time, beat = beats_at(step_time) })
     if before_delivery then before_delivery() end
     while posted[1] do deliver_next(0) end
   end
 
-  -- Test helper: run the scheduler, instant by instant in firing order
-  -- (post_instant: each instant's events posted before any is delivered),
-  -- until coroutine coro_id's resume has been delivered once (every clock
-  -- due before it runs first, as on norns), and stop there: the resumes
-  -- posted at its instant after its own stay posted, and the next helper
-  -- call delivers them first. It must be waiting, or have its resume
-  -- posted; it stops with an error as soon as another clock cancels it
-  -- before its resume is posted. A cancel after the post (by an earlier
-  -- resume of its instant) does not stop its delivery, which raises as on
-  -- norns. before_delivery (optional) runs once coro_id's resume is posted
-  -- (its event no longer ready) and before it is delivered, as a reset, a
-  -- jump or another event Lua handles first can fall between the two
+  -- Test helper: run the scheduler, tick by tick in time order (tick_at,
+  -- each tick's events posted before any is delivered, and every tick due
+  -- by a delivery posted before it), until coroutine coro_id's resume has
+  -- been delivered once (every clock due before it runs first, as on
+  -- norns), and stop there: the resumes posted with it after its own stay
+  -- posted, and the next helper call delivers them first. It must be
+  -- waiting, or have its resume posted; it stops with an error as soon as
+  -- another clock cancels it before its resume is posted. A cancel after
+  -- the post (by an earlier resume of its tick) does not stop its
+  -- delivery, which raises as on norns. before_delivery (optional) runs
+  -- once coro_id's resume is posted (its event no longer ready) and before
+  -- it is delivered, with util.time() at its delivery, as a reset, a jump
+  -- or another event Lua handles first can fall between the two
   function clock.advance_until(coro_id, before_delivery)
     local function failure(why) error("clock.advance_until: coroutine " .. tostring(coro_id) .. " " .. why, 3) end
     local target = clock.events[coro_id]
@@ -1874,9 +1896,14 @@ local function make_clock(util)
       return false
     end
     for _ = 1, 1e6 do
-      if not posted[1] then post_instant() end
-      if before_delivery and is_target(posted[1].entry) then before_delivery() end
-      if is_target(deliver_next(0)) then return end
+      if not posted[1] then post(tick_at(ready_events()[1].time)) end
+      if before_delivery and is_target(posted[1].entry) then
+        local at = delivery_time(posted[1], 0)
+        post_ticks_by(at)
+        util.stub_now = at
+        before_delivery()
+      end
+      if is_target(deliver_next(0, true)) then return end
       if not target_posted() and not still_waiting(waiting) then
         failure("was canceled (or rescheduled) before it woke")
       end
@@ -1884,15 +1911,20 @@ local function make_clock(util)
     failure("never woke")
   end
 
-  -- Test helper: run the scheduler for `seconds`, instant by instant in
-  -- firing order (post_instant: each instant's events posted before any is
-  -- delivered), once the resumes advance_until left posted are delivered.
-  -- Each posted resume is delivered `latency` seconds after its instant
-  -- (default 0; never before util.time(), as one coroutine runs at a time),
-  -- with util.time() at that moment, so a clock that sleeps many short
-  -- steps falls behind one that sleeps once, as on norns. Coroutines
-  -- started or rescheduled meanwhile join in. util.time() ends at the
-  -- start time plus `seconds`
+  -- Test helper: run the scheduler for `seconds`, tick by tick in time
+  -- order (tick_at: each tick's events posted before any is delivered),
+  -- once the resumes another helper left posted are delivered. Each posted
+  -- resume is delivered `latency` seconds after its wake-up (default 0;
+  -- never before its tick or util.time(), as one coroutine runs at a
+  -- time), with util.time() at that moment, so a clock that sleeps many
+  -- short steps falls behind one that sleeps once, as on norns, and every
+  -- tick due by then is posted before it (post_ticks_by: Lua runs behind
+  -- its ticks). Coroutines started or rescheduled meanwhile join in. Every
+  -- tick whose first wake-up is due in the run (`latency` after it, too)
+  -- is delivered whole; a later one waits, posted or not, for the next
+  -- helper call. util.time() ends at the start time plus `seconds`, or at
+  -- the last delivery when the run's last tick straddles its end (less
+  -- than a tick, plus the latency, past it)
   function clock.run_for(seconds, latency)
     latency = latency or 0
     local end_time = util.time() + seconds
@@ -1901,14 +1933,14 @@ local function make_clock(util)
       if not posted[1] then
         local first = ready_events()[1]
         if not first or math.max(util.time(), first.time + latency) > end_time then break end
-        post_instant()
+        post(tick_at(first.time))
       end
-      if math.max(util.time(), posted[1].entry.time + latency) > end_time then break end
+      if posted[1].first_wake + latency > end_time then break end
       resumes = resumes + 1
       if resumes > 1e6 then error("clock.run_for: a coroutine never sleeps", 2) end
-      deliver_next(latency)
+      deliver_next(latency, true)
     end
-    util.stub_now = end_time
+    util.stub_now = math.max(util.time(), end_time)
   end
 
   function clock.pending_count()

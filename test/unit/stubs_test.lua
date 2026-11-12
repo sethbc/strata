@@ -366,7 +366,11 @@ test("stub clock.run_for resumes sleeps and syncs in wake-time order and moves u
     "sync@0.125 sync@0.250 short@0.300 sync@0.375 short@0.600 short@0.900 long@1.000",
     "wake-time order")
   assert_near(util.time(), start + 1, 1e-12, "util.time() ends at the start plus the run time")
-  -- a scheduling delay on every wake-up: twenty short sleeps fall behind one long one
+  -- a scheduling delay on every wake-up: twenty short sleeps fall behind one
+  -- long one (the script's clocks stopped: one of theirs waking less than a
+  -- tick after a short sleep would share its tick and could deliver first)
+  stop_frame_clock(); local_value("S").lib.waveforms.stop()
+  clock.cancel(local_value("S").lib.playheads.clock_id()); local_value("S").lib.lfos.stop_clock()
   events = {}
   clock.run(function() for _ = 1, 20 do clock.sleep(0.5) end; log("steps") end)
   clock.run(function() clock.sleep(10); log("once") end)
@@ -664,8 +668,9 @@ end)
 -- matron's scheduler keeps one event slot per coroutine (the lowest free one
 -- when it first waits, kept until it is canceled or ends) and every tick
 -- posts the due events in slot order; a sleep is due once the time reaches it
--- (>=), a sync once the beat is past it (>)
-test("stub clock ties: equal wake times fire in event-slot order, a sync after a sleep (#51)", function()
+-- (>=), a sync once the beat is past it (>), so any tick after a sleep and a
+-- sync due at one time posts both; a tick comes every 1 ms (ruling 92)
+test("stub clock ties: wake-ups within a tick fire in event-slot order, a sleep and a sync due at one time too (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock(); local_value("S").lib.waveforms.stop()
   clock.cancel(local_value("S").lib.playheads.clock_id()); local_value("S").lib.lfos.stop_clock()
@@ -686,7 +691,8 @@ test("stub clock ties: equal wake times fire in event-slot order, a sync after a
   start_tied_pair()
   context.clock.advance()
   assert_equal(table.concat(events, " "), "D@2.50 B@2.50", "one step: both, in slot order")
-  -- a sync (lower slot) and a sleep due at the same instant: the sleep first
+  -- a sync (lower slot) and a sleep due at the same time: one tick posts
+  -- both, in slot order
   assert_near(clock.get_beats() % 1, 0, 1e-12, "on a beat")
   local function start_sync_and_sleep()
     clock.run(function() clock.sync(1); log("sync") end)
@@ -695,13 +701,33 @@ test("stub clock ties: equal wake times fire in event-slot order, a sync after a
   events = {}
   start_sync_and_sleep()
   context.clock.advance()
-  assert_equal(table.concat(events, " "), "sleep@3.00", "the step at the tie fires the sleep only")
-  context.clock.advance()
-  assert_equal(table.concat(events, " "), "sleep@3.00 sync@3.00", "the next step, at the same time, the sync")
+  assert_equal(table.concat(events, " "), "sync@3.00 sleep@3.00", "one step: both, in slot order")
   events = {}
   start_sync_and_sleep()
   context.clock.run_for(1)
-  assert_equal(table.concat(events, " "), "sleep@3.50 sync@3.50", "event by event: the sleep first too")
+  assert_equal(table.concat(events, " "), "sync@3.50 sleep@3.50", "tick by tick: both in one tick too")
+  -- wake-ups under a tick apart share one, in slot order: the one that wakes
+  -- later, in the lower slot, first; a tick or more apart, in wake order
+  for _, case in ipairs({ { gap = 0.0005, order = "late early" }, { gap = 0.0015, order = "early late" } }) do
+    for _, helper in ipairs({ "advance", "run_for" }) do
+      events = {}
+      local start = util.time()
+      local function log_name(name) table.insert(events, name) end
+      local placeholder = clock.run(function() clock.sleep(100) end)
+      clock.run(function() clock.sleep(0.25); log_name("early") end)
+      clock.cancel(placeholder)
+      clock.run(function() clock.sleep(0.25 + case.gap); log_name("late") end)
+      if helper == "advance" then
+        context.clock.advance()
+        assert_near(util.time(), start + 0.25 + (case.gap < 0.001 and case.gap or 0), 1e-12,
+          helper .. ", " .. case.gap .. " s apart: the step is at the tick's latest wake-up")
+        context.clock.advance()
+      else
+        context.clock.run_for(1)
+      end
+      assert_equal(table.concat(events, " "), case.order, helper .. ", " .. case.gap .. " s apart")
+    end
+  end
 end)
 
 -- matron's tick samples clock_time and clock_beat once and posts every due
@@ -1729,6 +1755,70 @@ test("stub clock: the resumes posted at advance_until's instant after its own ar
     if next_call == "run_for" then assert_near(util.time(), before, 1e-12, what .. ": delivered at once") end
     clock.cancel(first)
   end
+end)
+
+-- The script's own clocks stopped, so the clocks a test starts are the only
+-- ones that wake
+local function quiet_clocks()
+  stop_frame_clock(); local_value("S").lib.waveforms.stop()
+  clock.cancel(local_value("S").lib.playheads.clock_id()); local_value("S").lib.lfos.stop_clock()
+end
+
+-- Two coroutines that sleep 0.25 s and 0.25 s + gap: the first (the lower
+-- event slot) cancels the second when it wakes. Returns their ids and the
+-- names of the deliveries that ran
+local function start_near_cancel(gap)
+  local woke, second = {}, nil
+  local first = clock.run(function()
+    clock.sleep(0.25); table.insert(woke, "first")
+    if second then clock.cancel(second); second = nil end
+  end)
+  second = clock.run(function() clock.sleep(0.25 + gap); table.insert(woke, "second") end)
+  return first, second, woke
+end
+
+-- matron's tick comes every 1 ms (clock_scheduler.cc's usleep(1000)), so two
+-- wake-ups less than a tick apart can be posted by one tick before either is
+-- delivered: a cancel by the first never stops the second's delivery, through
+-- any helper (ruling 92), whether they differ by rounding or by half a tick
+test("stub clock: wake-ups less than matron's 1 ms tick apart share a tick, so a cancel between them raises through every helper (#588)", function()
+  for _, gap in ipairs({ 1e-10, 0.0005 }) do
+    for _, helper in ipairs({ "advance", "run_for", "advance_until first", "advance_until second" }) do
+      local what = helper .. ", " .. gap .. " s apart"
+      local context = load_strata(); finish_startup(context); quiet_clocks()
+      local first, second, woke = start_near_cancel(gap)
+      if helper == "advance" then
+        repeat context.clock.advance() until #woke > 0
+      elseif helper == "run_for" then
+        context.clock.run_for(1)
+      elseif helper == "advance_until first" then
+        context.clock.advance_until(first)
+        context.clock.run_for(0)  -- the second's posted resume, delivered next
+      else
+        local ok, message = pcall(context.clock.advance_until, second)
+        assert_true(ok, what .. ": its own coroutine, posted before the cancel, is no failure: " .. tostring(message))
+      end
+      assert_equal(table.concat(woke, " "), "first", what .. ": the canceled coroutine never ran")
+      assert_canceled_resume_raised(context, what)
+    end
+  end
+end)
+
+-- With a latency, Lua delivers each resume after its wake-up: every tick due
+-- by then has posted its resumes, so a cancel made then never stops one of
+-- those deliveries; a clock due after the delivery is canceled cleanly
+test("stub clock: with a latency, run_for posts every tick due by a delivery before it, so a cancel then raises (#588)", function()
+  local context = load_strata(); finish_startup(context); quiet_clocks()
+  local _, _, woke = start_near_cancel(0.005)  -- the second due 5 ms after the first
+  context.clock.run_for(1, 0.01)                -- the first delivered 10 ms after its wake-up
+  assert_equal(table.concat(woke, " "), "first", "the canceled coroutine never ran")
+  assert_canceled_resume_raised(context, "a clock due before the delivery")
+
+  context = load_strata(); finish_startup(context); quiet_clocks()
+  _, _, woke = start_near_cancel(0.02)          -- the second due 20 ms after the first
+  context.clock.run_for(1, 0.01)
+  assert_equal(table.concat(woke, " "), "first", "the canceled coroutine never ran")
+  assert_equal(#context.clock.take_errors(), 0, "a clock due after the delivery was never posted: its cancel raises nothing")
 end)
 
 -- matron's clock_set_source (and crow's input division) reschedule every
