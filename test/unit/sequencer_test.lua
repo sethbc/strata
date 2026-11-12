@@ -656,6 +656,15 @@ test("probability draws once per step", function()
   end
 end)
 
+-- A hit's time after the start: its scheduled time, or up to one of
+-- matron's ticks later, never earlier. A hit that shares a tick with another
+-- clock's later wake-up runs at the tick's time, as on a norns (#588)
+local function assert_hit_time(actual, scheduled, what)
+  local tick = h.stubs.MATRON_TICK_SECONDS
+  assert_true(actual >= scheduled - 1e-9 and actual <= scheduled + tick + 1e-9,
+    string.format("%s: at %.9f s, not %.9f s or up to a tick (%g s) after", what, actual, scheduled, tick))
+end
+
 test("ratchets repeat the hit inside the step, never closer than 20 ms", function()
   local context, S = setup()
   local seq = S.lib.sequencer
@@ -673,7 +682,7 @@ test("ratchets repeat the hit inside the step, never closer than 20 ms", functio
   local hits = voice_events(events, 1)
   assert_equal(#hits, 4, "four events")
   for index, event in ipairs(hits) do
-    assert_near(event.time - started_at, (index - 1) * 0.03125, 1e-9, "hit " .. index .. " 31.25 ms after the last")
+    assert_hit_time(event.time - started_at, (index - 1) * 0.03125, "hit " .. index .. " 31.25 ms after the last")
     assert_equal(event.hit, index, "hit " .. index)
     assert_equal(event.hits, 4, "of 4")
     assert_equal(event.first, index == 1, "first only on hit 1")
@@ -687,7 +696,7 @@ test("ratchets repeat the hit inside the step, never closer than 20 ms", functio
   pattern_clock_stop()
   hits = voice_events(events, 1)
   assert_equal(#hits, 2, "300 BPM, 1/16: two hits")
-  assert_near(hits[2].time - started_at, 0.025, 1e-9, "25 ms apart")
+  assert_hit_time(hits[2].time - started_at, 0.025, "25 ms apart")
   assert_equal(hits[1].hits, 2, "the event says 2")
   -- 1/32 at 300 BPM: 25 ms, one hit
   params:set("v1_seq_division", 1)
@@ -1575,7 +1584,9 @@ test("a swung step's ratchets fit its own length", function()
   for _, event in ipairs(voice_events(events, 1)) do
     if event.step == 2 then table.insert(step_2, event.time - started_at) end
   end
-  assert_list_near(step_2, {0.165, 0.2075}, 1e-9, "half of the 0.085 s left, none after 0.25 s")
+  assert_equal(#step_2, 2, "half of the 0.085 s left, none after 0.25 s: two hits")
+  assert_hit_time(step_2[1], 0.165, "the swung step's first hit")
+  assert_hit_time(step_2[2], 0.2075, "half of the 0.085 s left")
 end)
 
 -- Review findings (fix round 1) ----------------------------------------
