@@ -101,7 +101,8 @@ return function(S)
   local ENGINE_BUDGET = S.constants.ENGINE_BUDGET
   S.deferrable_write = false
   S.engine_budget_clock = nil
-  local budget = {window = -math.huge, sent = 0, pending = {}, order = {}}
+  -- failed: the ids whose sender raised on a waiting value (reported once)
+  local budget = {window = -math.huge, sent = 0, pending = {}, order = {}, failed = {}}
 
   -- Record the value as sent, count it and run the param's engine call
   -- (none when the value already went in a start's own messages)
@@ -128,13 +129,21 @@ return function(S)
     end
   end
 
-  -- The waiting values, oldest first, as far as the window's budget goes
+  -- The waiting values, oldest first, as far as the window's budget goes.
+  -- Each goes on its own: a sender that raises is reported once per param
+  -- ("strata: engine send <id> failed: <error>") and the rest still go, so
+  -- the flush clock never dies with values waiting and the send that
+  -- opened the window never carries another param's error (#637)
   local function flush_pending()
     while #budget.order > 0 and budget.sent < ENGINE_BUDGET.messages_per_window do
       local param_id = table.remove(budget.order, 1)
       local value = budget.pending[param_id]
       budget.pending[param_id] = nil
-      deliver(param_id, value)
+      local sent, failure = xpcall(function() deliver(param_id, value) end, with_traceback)
+      if not sent and not budget.failed[param_id] then
+        budget.failed[param_id] = true
+        print("strata: engine send " .. param_id .. " failed: " .. tostring(failure))
+      end
     end
   end
 
