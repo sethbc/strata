@@ -1404,6 +1404,34 @@ test("a step on a stopped gated voice starts it and then retriggers it", functio
   pattern_clock_stop()
 end)
 
+-- A MIDI note is no step: on a gated voice it opens the voice's own gate
+-- length, never the length the last step sent (its own gate, a ratchet's
+-- share), which the stage would otherwise keep (#639)
+test("a MIDI note on a running gated voice opens the voice's own gate length, not a step's", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  params:set("v1_seq_gate", 2)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "gate", 2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  pattern_clock_stop()
+  assert_list_near(grain_values(context, 0, "gateSeconds"), {0.25}, 1e-9, "the step sent its own gate of 2 steps")
+  context.clear_engine_calls()
+  midi_note_on(1, 60, 127)
+  local order = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.args[1] == 0 and call.name == "retrigger" then table.insert(order, "retrigger") end
+    if call.args[1] == 0 and call.name == "setGrainParam" and call.args[2] == "gateSeconds" then
+      table.insert(order, string.format("gateSeconds %.4f", call.args[3]))
+    end
+  end
+  assert_equal(table.concat(order, ", "), "gateSeconds 0.0625, retrigger", "the voice's own half step, then the note")
+  context.clear_engine_calls()
+  midi_note_on(1, 62, 127)
+  assert_equal(#grain_values(context, 0, "gateSeconds"), 0, "a second note sends no gate length: it has not changed")
+end)
+
 test("an ungated voice sends nothing per hit beyond its retrigger", function()
   local context, S = setup()
   local seq = S.lib.sequencer
