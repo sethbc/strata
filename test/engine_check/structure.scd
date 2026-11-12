@@ -306,16 +306,17 @@ if (engine.respondsTo(\voiceMixKey).not) {
 check.(names.copyRange(names.size - 4, names.size - 1).asArray == chainDefs,
     "xg ends filter -> delay -> reverb -> master (got %)".format(names.copyRange(names.size - 4, names.size - 1)));
 // xg's own nodes, in order (#525: the flat list above leaves out the tap
-// group): the voice and process groups, the effects chain, the master, then
-// the record area's tap group, last, with strataTapPreMaster at its head
+// group): the modulation area's fastModGroup (3.4), the voice and process
+// groups, the effects chain, the master, then the record area's tap group,
+// last, with strataTapPreMaster at its head
 {
     var tapGroup = engine.areaState[\record][\tapGroup], children = childrenOf.(context.xg);
-    var expected = [engine.voiceGroup.nodeID, engine.processGroup.nodeID]
+    var expected = [engine.areaState[\modulation][\fastModGroup].nodeID, engine.voiceGroup.nodeID, engine.processGroup.nodeID]
         ++ engine.effectChainKeys.collect({ arg key; engine.synths[key].nodeID }) ++ [tapGroup.nodeID];
     var tapHead = childrenOf.(tapGroup).first;
     check.((children.collect(_[0]) == expected) and: { children.last[1].isNil }
         and: { tapHead.notNil } and: { tapHead[1] == \strataTapPreMaster },
-        "structure: xg runs voiceGroup, processGroup, filter x3, delay, reverb, master, then the tap group, last, strataTapPreMaster at its head (#525; got %)".format(
+        "structure: xg runs fastModGroup, voiceGroup, processGroup, filter x3, delay, reverb, master, then the tap group, last, strataTapPreMaster at its head (#525; got %)".format(
             children.collect({ arg child; child[1] ? \group })));
 }.value;
 check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");

@@ -207,14 +207,36 @@ function sync_check.sc_commands(sc_source)
   return stubs.engine_signatures_from_source(sc_source)
 end
 
+-- Commands the engine has before the script calls them: 3.4's Wave 0 adds
+-- five that Wave 1's packages call (1b the three LFO commands, 1e
+-- setScatter, 1h setFastOffset). A pending command may go uncalled; one a
+-- script file calls fails the check, as does a name the engine does not
+-- have, so the list never outlives its use. One name per line: each package
+-- removes its own when its call lands.
+sync_check.PENDING_COMMANDS = {
+  "setFastLfo",
+  "stopFastLfo",
+  "syncFastLfo",
+  "setScatter",
+  "setFastOffset",
+}
+
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },
 -- the script's Lua files. Problems name the file and line (<path>:<line>);
--- a command counts as called when any of the files calls it
-function sync_check.check_sources(lua_sources, sc_source)
+-- a command counts as called when any of the files calls it. pending: the
+-- commands not called yet (default PENDING_COMMANDS)
+function sync_check.check_sources(lua_sources, sc_source, pending)
   local commands = sync_check.sc_commands(sc_source)
   local problems = {}
   local lua_names = {}
   local call_count = 0
+  local pending_names = {}
+  for _, name in ipairs(pending or sync_check.PENDING_COMMANDS) do
+    pending_names[name] = true
+    if not commands[name] then
+      table.insert(problems, "engine." .. name .. " is pending but the engine has no such command: remove it from PENDING_COMMANDS")
+    end
+  end
 
   for _, source in ipairs(lua_sources) do
     for _, reference in ipairs(sync_check.lua_reference_problems(source.text)) do
@@ -232,20 +254,26 @@ function sync_check.check_sources(lua_sources, sc_source)
         table.insert(problems, string.format("%s:%d engine.%s passes %d args, signature \"%s\" takes %d",
           source.path, call.line, call.name, call.arg_count, signature, #signature))
       end
+      if pending_names[call.name] then
+        table.insert(problems, string.format("%s:%d engine.%s is called but still pending: remove it from PENDING_COMMANDS",
+          source.path, call.line, call.name))
+      end
     end
   end
 
-  local command_names = {}
+  local command_names, pending_count = {}, 0
   for name in pairs(commands) do table.insert(command_names, name) end
   table.sort(command_names)
   for _, name in ipairs(command_names) do
-    if not lua_names[name] then
+    if pending_names[name] then
+      pending_count = pending_count + 1
+    elseif not lua_names[name] then
       table.insert(problems, "engine command \\" .. name .. " is never called from the script's Lua files")
     end
   end
 
-  local summary = string.format("%d engine.* call sites in %d Lua files, %d engine commands",
-    call_count, #lua_sources, #command_names)
+  local summary = string.format("%d engine.* call sites in %d Lua files, %d engine commands (%d pending)",
+    call_count, #lua_sources, #command_names, pending_count)
   return #problems == 0, problems, summary
 end
 

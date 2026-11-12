@@ -55,10 +55,6 @@
         ^(amp * (1 + modSig) * (1 + accent)).clip(0, 2)
     }
 
-    // A neutral hook: 3.4's fast modulation fills it (StrataModulation.sc).
-    // Takes the Event of the stage's controls and returns it.
-    voiceMixMod { arg controls; ^controls }
-
     // Keep the value with the voice's grain controls and set it on the stage
     setStageParam { arg voice, param, value;
         grainControls[voice][param] = value;
@@ -138,8 +134,10 @@
     // bad (its raw outputs read NaN or inf: codes 1 and 2 of
     // CheckBadValues, never code 3, a denormal) is replaced in place
     // (replaceBadVoiceMix). The mirror is the other path only, filtered and
-    // after the level; the tap the whole output, before the sends. 3.4's
-    // fast modulation fills voiceMixMod.
+    // after the level; the tap the whole output, before the sends.
+    // voiceMixMod (the modulation area's, StrataModulation.sc) declares the
+    // stage's fastModIn, gate and mute controls and gives the level lines
+    // their amp offset and gate.
     addVoiceMixDef {
         SynthDef(\strataVoiceMix, {
             arg synthIn, otherIn, out, mirrorOut, amp=1, modBus1=0, modBus2=0, modBus3=0,
@@ -162,8 +160,11 @@
             var filtered = guard.(raw);
             var modSig = this.crossmodAmp(c[\modBuses].collect({ arg bus; In.kr(bus, 1) }), c[\modAmpAmts]);
             var accent = this.voiceAccent(c[\t_trig], c[\velocity]);
-            var other = filtered.drop(2) * this.voiceLevel(c[\amp], modSig, accent);
-            var sig = filtered.keep(2) + other;
+            // (3.4's amp offset on both paths, and its gate and mute on the
+            // whole output but the mirror: voiceMixMod's ampOffset 0 and
+            // voiceGate 1 fold both lines to 3.3's)
+            var other = filtered.drop(2) * this.voiceLevel(c[\amp], modSig + c[\ampOffset], accent);
+            var sig = ((filtered.keep(2) * this.voiceLevel(1, c[\ampOffset], 0)) + other) * c[\voiceGate];
             SendReply.ar(bad, '/strataVoiceMixBad', voice);
             this.voiceOutput(sig, c[\out], c[\delaySend], c[\reverbSend]);
             Out.ar(c[\mirrorOut], other);

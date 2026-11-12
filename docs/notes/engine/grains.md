@@ -57,5 +57,9 @@ Each is a method in its own area file, registered as an area with no state, defs
 | `freezeVoice(voice)`, `unfreezeVoice(voice)` | `StrataFreeze.sc` | nothing (`replaceGrainSynth` calls `unfreezeVoice` first) |
 | `voiceFilter(sig, filterType, filterFreq, filterRes, filterMix)` → sig (the stage) | `StrataMix.sc` (mix, 120) | `sig` |
 | `voiceOutput(sig, out, delaySend, reverbSend)` (the stage) | `StrataMix.sc` | `Out.ar(out, sig)` |
+| `fastModRead(fastModIn)` → the five offsets of the voice's fast-modulation block (both grain defs, into the Event's `fastMod`) | `StrataModulation.sc` (modulation, 160) | five zeros, no UGen |
+| `fastMod(controls)` → controls, pitch and size offset (first in `grainSignal`) | `StrataModulation.sc` | `controls` |
+| `fastModPosition(bufPos, m)` → bufPos, offset (`\strataGrainBuf`, before `slotGrainReader`) | `StrataModulation.sc` | `bufPos` |
+| `voiceMixMod(controls)` → controls (the stage) | `StrataModulation.sc` | declares the stage's `fastModIn`, gate and mute controls; `ampOffset` 0, `voiceGate` 1 |
 
-The mix area fills `voiceFilter` and `voiceOutput` (`docs/notes/engine/mix.md`): both now run in the voice's stage, not in each grain synth.
+The mix area fills `voiceFilter` and `voiceOutput` (`docs/notes/engine/mix.md`): both now run in the voice's stage, not in each grain synth. The modulation area's four hooks are neutral until 3.4's package 1a fills them (`docs/notes/engine/modulation.md`). Both grain defs also declare 3.4's `fastModIn` (a named control, default the silent fast bus), which every grain synth starts with its voice's block, from `grainControls`.
