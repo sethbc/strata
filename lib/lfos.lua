@@ -464,6 +464,7 @@ return function(S)
   local function engine_playing(n)
     return is_on(n) and M.is_engine_run(n) and params:get(param_id(n, "depth")) > 0
   end
+  M.engine_playing = engine_playing  -- MAIN's ~ (lib/pages/main.lua) reads this one answer
 
   local function engine_want(n)
     local st, fast = state[n], destination_of(n).fast

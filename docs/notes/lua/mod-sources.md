@@ -10,6 +10,7 @@
 `lib/mod_sources.lua` (`S.lib.mod_sources`, 3.4, package 0a, design §10.1), over `S.registry.mod_sources`:
 - `get(key)`: the source registered under `key`, or nil.
 - `list(section)`: the visible sources of `section` (a source without `visible`, or whose `visible()` is true), in registration order; every section's when `section` is nil.
+- `registered(section)` (3.4, package 2a, ruling 77): every source of `section`, visible or not, in registration order; every section's when `section` is nil. MOD's routing view offers these (all sixteen macros, whatever bank shows), so a stored source always has its place among the choices; MOD's list shows `list`'s.
 - `sections()`: the section names, in the order their first source registered (hidden sources count).
 - `fraction(key)`: `(value - min) / (max - min)` clamped to 0..1. A value that is not a finite number reads as no modulation: 0.5 for a bipolar source, 0 for a unipolar one; an unknown key reads 0.
 - `normalized(key)`: `2 × fraction - 1` (−1..1) for a bipolar source (`range[1] < 0`) and the fraction (0..1) for a unipolar one (design §10.2, Question 37), so an asymmetric bipolar range's middle is 0; 0 for a value that is not finite or an unknown key.

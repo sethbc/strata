@@ -795,6 +795,14 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
     if mark then
       local _, name_right = text_span(name)
       assert_equal(mark.x, name_right, where .. ": the mark right after the name")
+      local source
+      for _, entry in ipairs(texts_on_row(context, 18)) do
+        if entry.x == 127 and entry.align == "right" then source = entry end
+      end
+      local _, mark_right = text_span(mark)
+      local source_left = text_span(source)
+      assert_true(mark_right + 2 <= source_left, where .. ": 2 px from the mark to the source (" .. mark_right
+        .. " and " .. source_left .. ")")
       assert_screen_layout(context, where)
     end
     return mark ~= nil
@@ -835,6 +843,27 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
   params:set("matrix_2", 1)
   params:set("v1_source", S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS)
   assert_true(marked("the widest source"), "the mark with buf 8")
+end)
+
+-- The engine-run test is the LFO module's own (S.lib.lfos.engine_playing),
+-- so MAIN's mark and the LFOs' engine sends cannot disagree
+test("MAIN's mark reads whether an LFO plays in the engine from the LFO module", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  select_voice(1)
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.label == "v1 pitch" then params:set("strata_lfo2_dest", index) end
+  end
+  assert_equal(type(S.lib.lfos.engine_playing), "function", "the LFO module answers it")
+  assert_true(not S.lib.lfos.engine_playing(2), "LFO 2 is off")
+  local real = S.lib.lfos.engine_playing
+  S.lib.lfos.engine_playing = function(n) return n == 2 end
+  redraw()
+  assert_true(screen_shows(context, "~"), "the mark follows the module's answer")
+  S.lib.lfos.engine_playing = real
+  redraw()
+  assert_true(not screen_shows(context, "~"))
 end)
 
 end

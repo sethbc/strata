@@ -46,6 +46,22 @@ test("list keeps registration order and leaves out invisible sources", function(
   assert_equal(sources.get("zz"), nil, "and nil for an unknown key")
 end)
 
+-- 3.4 (package 2a, ruling 77): MOD's routing view offers every source,
+-- hidden ones too (the macros of a bank not shown)
+test("registered lists every source of a section, visible or not, in registration order", function()
+  local S, sources = fresh_sources()
+  local zero = function() return 0 end
+  local hidden = function() return false end
+  S.register_mod_source(source("a1", "alpha", zero))
+  S.register_mod_source(source("b1", "beta", zero, nil, hidden))
+  S.register_mod_source(source("a2", "alpha", zero, nil, hidden))
+  S.register_mod_source(source("a3", "alpha", zero))
+  assert_equal(keys(sources.registered("alpha")), "a1 a2 a3", "a hidden source too")
+  assert_equal(keys(sources.registered()), "a1 b1 a2 a3", "every section, in registration order")
+  assert_equal(keys(sources.registered("gamma")), "", "a section with none")
+  assert_equal(keys(sources.list()), "a1 a3", "list still leaves the hidden ones out")
+end)
+
 test("fraction and normalized map a value through its range", function()
   local S, sources = fresh_sources()
   local values = { bipolar = 0, unipolar = 0.25, offset = 0.5 }

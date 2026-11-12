@@ -14,6 +14,9 @@
 --   K3 bypass/on
 -- LFO: K2/K3 select, E2 setting,
 --   E3 value, ALT+K3 on/off
+-- MOD: E2 row, E3 value,
+--   K2 next section, K3 targets,
+--   routing, record or LFO page
 -- BUFFER: E2 buffer, E3 field,
 --   K2 load, K3 record/stop
 -- SCENES: E2 slot, K2 fade,

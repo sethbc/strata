@@ -24,7 +24,7 @@
 `lib/lfos.lua` (`S.lib.lfos`):
 - `S.LFO_DESTINATIONS`, `S.selected_lfo`, `S.lfo_clock`;
 - the globals `lfo_destination_id`, `restore_lfo_destination`, `add_lfo_params`;
-- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`;
+- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`;
 - `SCENE_FIELDS`, `transition_stops`, the scene migration `lfos` and the PSET hook `lfos`;
 - the modulation sources `lfo1`..`lfo6`;
 - the start step `lfo_clock`, the cleanup step `lfos` and the invariant `lfo clock`.
@@ -66,7 +66,7 @@ The percents' quantum is one percent a detent. A division of value r is a period
 - then, built at init by `add_lfo_params` (`lfo_destination_labels`), the registered ones, in registration order: for each `S.register_lfo_destination(label, suffix)`, `v1 <label>` ... `v7 <label>`; for each global record (`S.register_lfo_global_destination(label, param_id)`), one destination. A label that repeats one is an error naming the register function.
 - 3.4's list: 69-75 `v<i> hist`, 76-82 `vfilt`, 83-89 `dsend`, 90-96 `rsend`, 97-103 `amp`, then the globals (`macro 1` .. `macro 16`, 104-119, from package 1e).
 - `group` is what ALT+E3 jumps by (#511, #580): `none`, `global`, `v<i>`, `registered <k>` per per-voice record and `registered globals` for every global one.
-- `fast` (`{voice, destination}`) marks an entry whose fixed param is fast: `v<i> size`, `pitch`, `pos`, `vfilt` and `amp`. `is_engine_run(n)` is LFO n's entry having it, whether or not the LFO is on: a reader that means "moves the voice now" also reads `is_on(n)`, so MAIN's `~` (design §2.6, while the LFO is on; package 2a) is `is_on(n) and is_engine_run(n)` for an LFO on the selected voice.
+- `fast` (`{voice, destination}`) marks an entry whose fixed param is fast: `v<i> size`, `pitch`, `pos`, `vfilt` and `amp`. `is_engine_run(n)` is LFO n's entry having it, whether or not the LFO is on: a reader that means "moves the voice now" reads `engine_playing(n)` (on, `is_engine_run`, depth above 0: the same answer the engine sends follow), so MAIN's `~` (design §2.6, while the LFO is on; package 2a) is `engine_playing(n)` for an LFO on the selected voice.
 
 ## The clock and a step
 

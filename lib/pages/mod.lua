@@ -116,9 +116,9 @@ return function(S)
     return order
   end
 
-  -- Every row, built from the registry now: per section with any row, its
+  -- Every row, built from the registry: per section with any row, its
   -- label (no cursor stop), MOD's own rows, then its visible sources
-  local function build_rows()
+  local function rows_from_registry()
     local rows = {}
     for _, section in ipairs(section_order()) do
       local own = OWN_ROWS[section] or {}
@@ -133,6 +133,26 @@ return function(S)
       end
     end
     return rows
+  end
+
+  -- The rows, built once and kept until what they are built from changes:
+  -- the registry (a source registered) and each source's visible() (the
+  -- macros follow the shown bank), one flag a source in the key. So a frame
+  -- (animates, the draw, the hints, the held hint) builds them once at most
+  local rows_cache = {key = nil, rows = nil, flags = {}}
+  local function build_rows()
+    local flags = rows_cache.flags
+    local registry = S.registry.mod_sources
+    for index, record in ipairs(registry) do
+      flags[index] = (record.visible == nil or record.visible()) and "1" or "0"
+    end
+    for index = #registry + 1, #flags do flags[index] = nil end
+    local key = table.concat(flags)
+    if rows_cache.key ~= key then
+      rows_cache.rows = rows_from_registry()
+      rows_cache.key = key
+    end
+    return rows_cache.rows
   end
 
   -- The rows and the list cursor's index: the row with the cursor's id
@@ -289,10 +309,13 @@ return function(S)
     return index
   end
 
-  -- A list's entries ("" first, for none) and each one's group
+  -- A list's entries ("" first, for none) and each one's group. The
+  -- routing view's sources are every registered one, visible or not
+  -- (ruling 77): the list shows the shown bank's macros, a routing may
+  -- come from any of the sixteen
   local function source_choices()
     local keys, groups = {""}, {"none"}
-    for _, record in ipairs(S.lib.mod_sources.list()) do
+    for _, record in ipairs(S.lib.mod_sources.registered()) do
       keys[#keys + 1] = record.key
       groups[#groups + 1] = record.section
     end
@@ -545,19 +568,39 @@ return function(S)
     if n == 2 then S.lib.ui_alt.k2_up(page_record()) end
   end
 
-  -- ALT+K2 held 0.5 s: what clears under the cursor (a target row with an
-  -- id, a routing, a source's alt_press(2): a recorder), or nil
+  -- Whether routing k holds anything a clear would change: a part, a
+  -- depth other than 0, or off
+  local function routing_holds(k)
+    local routing = S.lib.matrix.routing(k)
+    return routing.source ~= "" or routing.dest ~= "" or routing.depth ~= 0 or not routing.on
+  end
+
+  -- Whether a source row's alt_press(2) would clear something: a recorder
+  -- that is not empty; any other source with alt_press is taken at its word
+  local function source_holds(row)
+    local recorder = tonumber(row.source.key:match("^gesture(%d+)$"))
+    if recorder then return S.lib.gestures.state(recorder) ~= "empty" end
+    return true
+  end
+
+  -- ALT+K2 held 0.5 s: what it clears under the cursor (a target row with
+  -- an id, a routing that holds something, a source's alt_press(2): a
+  -- recorder that is not empty), or nil when it would clear nothing
   local function hold_action()
     local state = S.mod_page
     if state.view == "targets" then
       if target().id == "" then return nil end
       return function() S.lib.macros.set_target(state.macro, state.target_row, "") end
     elseif state.view == "routing" then
+      if not routing_holds(state.routing) then return nil end
       return function() S.lib.matrix.clear(state.routing) end
     end
     local row = cursor_row()
-    if row.kind == "routing" then return function() S.lib.matrix.clear(row.k) end end
-    if row.kind == "source" and row.source.row and row.source.row.alt_press then
+    if row.kind == "routing" then
+      if not routing_holds(row.k) then return nil end
+      return function() S.lib.matrix.clear(row.k) end
+    end
+    if row.kind == "source" and row.source.row and row.source.row.alt_press and source_holds(row) then
       return function() row.source.row.alt_press(2) end
     end
     return nil
@@ -811,10 +854,33 @@ return function(S)
     return ""
   end
 
-  -- With ALT: K2's hint, then ALT+K3's (a routing's on/off, a source's
+  -- The K2 part of the ALT hint (ruling 76): what ALT+K2 does under the
+  -- cursor. Where the section randomizes, the shared hint (K2:rand, K2:undo
+  -- while its undo is held; once held 0.5 s, K2:clear where the hold
+  -- clears, else K2:cancel); where only the hold acts and would clear
+  -- something, K2:clear from the start; nil where ALT+K2 does nothing
+  local function k2_part()
+    if mod_randomize_section() then return S.lib.ui_alt.k2_hint(page_record()) end
+    if hold_action() then return "K2:clear" end
+    return nil
+  end
+
+  -- Hint parts joined by a space, the nil ones left out
+  local function joined(...)
+    local parts = {}
+    for index = 1, select("#", ...) do
+      local part = select(index, ...)
+      if part and part ~= "" then parts[#parts + 1] = part end
+    end
+    return table.concat(parts, " ")
+  end
+
+  -- With ALT: K2's part, then ALT+K3's (a routing's on/off, a source's
   -- own when it has alt_press), E2:bank on a macro row, E3:fine
   local function list_alt_hint(row)
-    local parts = {S.lib.ui_alt.k2_hint(page_record())}
+    local parts = {}
+    local k2 = k2_part()
+    if k2 then parts[1] = k2 end
     if row.kind == "routing" then
       parts[#parts + 1] = "K3:" .. (params:get(on_id(row.k)) == 1 and "off" or "on")
     elseif row.kind == "source" and row.source.row and row.source.row.alt_press and row.source.row.hints then
@@ -828,26 +894,23 @@ return function(S)
 
   local function view_hint(alt_held)
     local state = S.mod_page
-    local record = page_record()
     if state.view == "targets" then
       local column = MOD_PAGE.columns[state.target_column]
-      if alt_held then
-        return S.lib.ui_alt.k2_hint(record) .. " K3:learn " .. (column == "target" and "E3:group" or "E3:fine")
-      end
+      if alt_held then return joined(k2_part(), "K3:learn", column == "target" and "E3:group" or "E3:fine") end
       return "K2:back K3:col E3:" .. column
     end
     local row = MOD_PAGE.routing_rows[state.routing_row]
     if alt_held then
-      local extra = {dest = " K3:learn E3:group", source = " E3:section", depth = " E3:fine"}
-      return S.lib.ui_alt.k2_hint(record) .. (extra[row] or "")
+      local extra = {dest = "K3:learn E3:group", source = "E3:section", depth = "E3:fine"}
+      return joined(k2_part(), extra[row])
     end
     return "K2:back K3:" .. (params:get(on_id(state.routing)) == 1 and "off" or "on") .. " E3:" .. row
   end
 
   -- The hint row (redraw() draws it). K1 let go while ALT+K2 is down: K2's
-  -- hint alone, since its release still acts
+  -- part alone, since its release still acts
   local function mod_hints(alt_held)
-    if not alt_held and S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(page_record()) end
+    if not alt_held and S.lib.ui_alt.k2_held() then return k2_part() or "" end
     if S.mod_page.view ~= "list" then return view_hint(alt_held) end
     local row = cursor_row()
     if alt_held then return list_alt_hint(row) end
@@ -922,9 +985,13 @@ return function(S)
     state.target_row = util.clamp(state.target_row + steps, 1, MACRO_TARGETS)
   end
 
+  -- Ring 4 of the routing view: another routing, and learn armed for the
+  -- one it leaves (no longer on the screen) canceled
   function M.move_routing(steps)
     local state = S.mod_page
-    state.routing = util.clamp(state.routing + steps, 1, MATRIX_SLOTS)
+    local routing = util.clamp(state.routing + steps, 1, MATRIX_SLOTS)
+    if routing ~= state.routing and S.lib.matrix.learning() == state.routing then S.lib.matrix.cancel_learn() end
+    state.routing = routing
   end
 
   function M.step_source(steps)
@@ -1064,9 +1131,10 @@ return function(S)
     end),
     state("morph at 100%", "morph", function() params:set("morph", 1) end),
     state("scatter on", "scatter", function() params:set("scatter", 1) end),
-    state("scatter amp, depth and rate at the top", "scatter_amp", function()
+    state("scatter rate, depth and rate at the top", "scatter_rate", function()
       params:set("scatter_depth", 100); params:set("scatter_rate", 1)
     end),
+    state("scatter amp, the last row", "scatter_amp", function() params:set("scatter_amp", 1) end),
     state("G1, every recorder state", "source:gesture1", every_recorder_state),
     state("G4 recording", "source:gesture4", every_recorder_state),
     state("L1, six LFOs engine-run and modulated", "source:lfo1", engine_lfos),
@@ -1083,10 +1151,11 @@ return function(S)
       S.register_mod_source({key = "layout probe", name = "WWWW", section = "a section of a later release",
         range = {-1, 1}, value = function() return 0 end, describe = function() return string.rep("W", 30) end})
     end),
-    -- ALT's widest hints: K2:cancel E2:bank E3:fine, and a held K2 on a
-    -- playing recorder (K2:clear K3:dub)
+    -- ALT+K2 held on a row that randomizes (K2:cancel E3:fine), on a
+    -- playing recorder (K2:clear K3:dub); ALT's widest list hint, with
+    -- the shown bank's macros (E2:bank E3:fine), is drawn by every state
     {name = "ALT+K2 held past the hold time", setup = function(context)
-      M.place("source:macro1")
+      M.place("scatter_depth")
       key(1, 1); key(2, 1)
       context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
     end},
