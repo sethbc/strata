@@ -617,7 +617,6 @@ local RESERVED_CLEANUP_ORDERS = {
   "scatter",
 }
 local RESERVED_START_ORDERS = {
-  "input_level",
   "macros_load",
   "matrix_load",
   "lfo_clock",
@@ -651,7 +650,7 @@ test("cleanup runs every registered step in today's order", function()
   buffer_page_flash("flash")
   randomize_voice(1)  -- after the recall, which clears the undo: its expiry clock runs
   header_flash("flash")
-  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.BUFFER)  -- its input meter polls run
+  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.BUFFER)
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
   S.lib.positions.hold_scan(1, true)  -- a scan hold for cleanup to end
   S.lib.engine_sync.deferrable(function()  -- a send past the budget waits: the flush clock runs
@@ -726,7 +725,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.buffer_polls.state, "stop", "buffer polls and timers")
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
   watch_method(context.polls.polls.recordState, "stop", "record poll")
-  for _, input_poll in pairs(S.lib.pages_buffer.meter.polls) do watch_method(input_poll, "stop", "input meter") end
+  for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
   watch_field(S.midi_device, "event", "midi handler")
   local real_voice_off = engine.voiceOff
   engine.voiceOff = function(...) observe("voices off"); return real_voice_off(...) end
@@ -797,6 +796,8 @@ local function start_steps()
     { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
       "poll started bufferLoadFailed", "poll set bufferSaveResult", "poll started bufferSaveResult",
       "poll set takeWriteFailed", "poll started takeWriteFailed" } },
+    { "input level polls", { "poll set amp_in_l", "poll started amp_in_l", "poll set amp_in_r",
+      "poll started amp_in_r" } },
     { "record poll", { "poll set recordState", "poll started recordState" } },
     { "arc", { "arc connected" } },
     { "grids", { "file read grids.data", "grid connected", "print grid 1 connected: 16x16", "grid connected",

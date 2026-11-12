@@ -76,7 +76,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 
 | Order | Step | Module |
 |-------|------|--------|
-| 62 | the input level polls (`START_ORDER.input_level`) | lib/input_level.lua (new in 1i) |
+| 62 | the input level polls (`START_ORDER.input_level`) | `lib/input_level.lua` |
 | 105 | load macros.data (`macros_load`) | lib/macros.lua (new in 1e) |
 | 108 | load matrix.data (`matrix_load`) | lib/matrix.lua (new in 1h) |
 | 125 | the LFO clock (`lfo_clock`) | `lib/lfos.lua` (1b) |
@@ -134,7 +134,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 128 | cancel each slot's pending start reload of a long file | `lib/buffers.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
-| 135 | stop the BUFFER page's `amp_in_l` and `amp_in_r` input meter polls (`stop_input_meter`) | `lib/pages/buffer.lua` |
+| 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 150 | detach the MIDI handler, before the voices go off, and set `midi.add`/`midi.remove` to no-ops | `lib/midi_in.lua` |
 | 160 | `engine.voiceOff` for every running voice (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
@@ -223,6 +223,7 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `arc connection` | `lib/arc/core.lua` | `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)` |
   | `key presses` | `lib/ui/keys.lua` | every `S.key_press_alt[n]` has an `S.key_press_page[n]` |
   | `buffer slots` | `lib/buffers.lua` | for every slot of `S.buffers`: `finishing` implies `recording`, `checking_from ~= nil` implies `confirm_since ~= nil`, and `settled_empty` and `loaded` are never both set; a name `take <number>` is the slot's own `take <n>`, and a scratch path `buf*.wav` is `buf<whole number>.wav` (#300); `start == sent_start` unless a start reload is pending (`start_reload_clocks[slot]`, #245) |
+  | `input level` | `lib/input_level.lua` | from the start step to cleanup, both input polls run (`amp_in_l`, `amp_in_r`; a poll a norns lacks is skipped) |
   | `flash slots` | `lib/ui/flash.lua` | a flash slot with a text has a clock |
   | `param turn` | `lib/ui/detent.lua` | `S.turning_param` is nil between events (a turn marks its param only while it sets it, #318) |
   | `engine budget` | `lib/engine_sync.lua` | values wait for the send budget exactly while its flush clock runs (`S.engine_budget_clock`), and every waiting id has a value (3.4) |

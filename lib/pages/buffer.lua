@@ -9,9 +9,9 @@
 -- records into the cursor slot (or stops); K2 and ALT+K2/ALT+K3 act on
 -- release, by how long they were held (hold_seconds): K2 opens the file
 -- selector or loads a random file, ALT+K2 clears or fills the empty slots,
--- ALT+K3 saves the slot or its loop region. The input meter's polls run
--- only while the page shows. Registers its S.registry.pages record and a
--- cleanup step; INPUT_METER, input_meter_segments and the meter state are
+-- ALT+K3 saves the slot or its loop region. The input meter reads
+-- S.lib.input_level (which owns the polls). Registers its
+-- S.registry.pages record; INPUT_METER, input_meter_segments and the meter state are
 -- fields of this module's table (S.lib.pages_buffer). The functions that
 -- were global stay global.
 
@@ -565,21 +565,19 @@ return function(S)
   end
 
   ---------------------------------------------------------------------------
-  -- The input meter: norns' amp_in_l and amp_in_r polls, running only while
-  -- BUFFER shows (enter starts them, leave and cleanup stop them). It shows
-  -- the louder channel in segments of db_per_segment dB from floor_db, and
+  -- The input meter: the levels of S.lib.input_level (3.4: its polls run on
+  -- every page; this meter acts only while BUFFER shows). It shows the
+  -- louder channel in segments of db_per_segment dB from floor_db, and
   -- holds the highest segment for peak_hold_seconds
   ---------------------------------------------------------------------------
 
-  M.INPUT_METER = {poll_seconds = 0.05, segments = 8, floor_db = -48, db_per_segment = 6, peak_hold_seconds = 1}
+  M.INPUT_METER = {segments = 8, floor_db = -48, db_per_segment = 6, peak_hold_seconds = 1}
   local INPUT_METER = M.INPUT_METER
-  local INPUT_POLLS = {"amp_in_l", "amp_in_r"}
 
-  -- amps: the latest value per poll; peak and peak_at: the held segment and
-  -- when it was last reached (util.time()); shown: what the screen last
-  -- drew (a poll asks for a redraw only when it changes); polls: the
-  -- running poll objects, per name
-  M.meter = {amps = {}, peak = 0, peak_at = 0, shown = nil, polls = {}}
+  -- peak and peak_at: the held segment and when it was last reached
+  -- (util.time()); shown: what the screen last drew (a poll asks for a
+  -- redraw only when it changes)
+  M.meter = {peak = 0, peak_at = 0, shown = nil}
   local meter = M.meter
 
   -- Segments lit for an amplitude (0-1 full scale): 0 at or below floor_db
@@ -592,9 +590,8 @@ return function(S)
   end
 
   local function meter_level()
-    local louder = 0
-    for _, name in ipairs(INPUT_POLLS) do louder = math.max(louder, meter.amps[name] or 0) end
-    return M.input_meter_segments(louder)
+    local left, right = S.lib.input_level.levels()
+    return M.input_meter_segments(math.max(left, right))
   end
 
   -- The held peak segment, or 0 once peak_hold_seconds have passed
@@ -603,14 +600,14 @@ return function(S)
     return 0
   end
 
-  -- A poll's value: the peak follows the level up (and is held from the
-  -- moment the level last reached it); a redraw only when the level or the
-  -- held peak changed, of the screen alone (no arc ring shows the meter,
-  -- #434), and none while the file selector covers the page (#435: the
-  -- selector's close asks for the redraw that shows the meter again)
-  local function meter_input(name, value)
-    if type(value) ~= "number" or value ~= value then value = 0 end
-    meter.amps[name] = value
+  -- After each poll value, while BUFFER shows: the peak follows the level up
+  -- (and is held from the moment the level last reached it); a redraw only
+  -- when the level or the held peak changed, of the screen alone (no arc
+  -- ring shows the meter, #434), and none while the file selector covers
+  -- the page (#435: the selector's close asks for the redraw that shows the
+  -- meter again)
+  local function meter_input()
+    if S.ui_page ~= UI_PAGES.index.BUFFER then return end
     local level, now = meter_level(), util.time()
     if level >= held_peak(now) then
       meter.peak, meter.peak_at = level, now
@@ -621,35 +618,11 @@ return function(S)
       if not PAGE.file_selector_open then S.lib.ui_frame.request_screen_redraw() end
     end
   end
+  S.lib.input_level.on_level(meter_input)
 
-  local function reset_meter()
-    for _, name in ipairs(INPUT_POLLS) do meter.amps[name] = 0 end
-    meter.peak, meter.peak_at, meter.shown = 0, 0, nil
-  end
-
-  -- The polls are looked up at each start: norns replaces its poll objects
-  -- whenever it re-registers the polls (an engine load). A norns without
-  -- them leaves the meter dark
+  -- A visit starts with no held peak
   local function start_input_meter()
-    reset_meter()
-    for _, name in ipairs(INPUT_POLLS) do
-      local input_poll = poll.set(name, function(value) meter_input(name, value) end)
-      meter.polls[name] = input_poll
-      if input_poll then
-        input_poll.time = INPUT_METER.poll_seconds
-        input_poll:start()
-      end
-    end
-  end
-
-  local function stop_input_meter()
-    for _, name in ipairs(INPUT_POLLS) do
-      local input_poll = meter.polls[name]
-      if input_poll then
-        input_poll:stop()
-        input_poll.callback = nil  -- a value already on its way after leave asks for no redraw
-      end
-    end
+    meter.peak, meter.peak_at, meter.shown = 0, 0, nil
   end
 
   local function draw_input_meter()
@@ -1102,12 +1075,8 @@ return function(S)
   S.registry.pages[BUFFER_INDEX] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, alt_enc = buffer_alt_enc, key = buffer_key, key_release = buffer_key_release,
     alt_key = buffer_alt_key, alt_key_release = buffer_alt_key_release, enter = start_input_meter,
-    leave = stop_input_meter, animates = buffer_animates,
+    animates = buffer_animates,
     arc_button = record_cursor_slot, layout_states = layout_states}
-
-  S.register_cleanup(S.constants.CLEANUP_ORDER.input_meter, function()
-    stop_input_meter()
-  end)
 
   return M
 end
