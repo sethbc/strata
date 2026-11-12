@@ -274,8 +274,8 @@ names = synthNames.(context.xg).reject({ arg name; [\strataTapPreMaster, \strata
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;
-check.(names.size == (((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + engine.numVoices + 6),
-    "xg holds % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, the stages, filter x3, delay, reverb and master (got %)".format(
+check.(names.size == (1 + ((engine.numVoices - 1) * 3) + 2 + 1 + (engine.numVoices + 1) + engine.numVoices + 6),
+    "xg holds the offset node, % voice trios, 1 buffer voice (grain + mod), the input synth, the ring writers, the stages, filter x3, delay, reverb and master (got %)".format(
         engine.numVoices - 1, names.size));
 check.(names.indexOf(\strataInput) < firstGrain, "the input synth runs before grain synths");
 check.(names.indexOf(voiceNames.last) < firstGrain, "voices run before grain/mod synths");
@@ -318,6 +318,16 @@ check.(names.copyRange(names.size - 4, names.size - 1).asArray == chainDefs,
         and: { tapHead.notNil } and: { tapHead[1] == \strataTapPreMaster },
         "structure: xg runs fastModGroup, voiceGroup, processGroup, filter x3, delay, reverb, master, then the tap group, last, strataTapPreMaster at its head (#525; got %)".format(
             children.collect({ arg child; child[1] ? \group })));
+}.value;
+// 3.4's fastModGroup heads the engine's group, with the offset node first
+// in it, so the offsets are written before anything reads them in a block
+{
+    var children = childrenOf.(context.xg), group = engine.areaState[\modulation][\fastModGroup];
+    var inside = group !? { childrenOf.(group) } ? [];
+    check.(group.notNil and: { children.notEmpty } and: { children[0][0] == group.nodeID } and: { children[0][1].isNil }
+        and: { inside.notEmpty } and: { inside[0][1] == \strataFastOffsets },
+        "structure: fastModGroup is the first node of the engine's group (xg's first node %, fastModGroup %, its first node %)".format(
+            children.first, group !? _.nodeID, inside.first));
 }.value;
 check.(synthNames.(context.og).includes(\strataMaster).not, "master is not placed after og (M5)");
 h.stopAllVoices;

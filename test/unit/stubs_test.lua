@@ -1425,6 +1425,23 @@ test("the stub accepts the gate and mute params", function()
   assert_equal(context.engine_calls[#context.engine_calls].args[2], "voiceMute")
 end)
 
+-- The stage's gate and mute switches are 0 or 1: the engine rounds and
+-- clips them (seqGate.round.clip(0, 1), voiceMute.round.clip(0, 1) in
+-- StrataModulation.sc), which the stub reads as their enumerations
+test("the stub rejects seqGate 2 and voiceMute 2", function()
+  local context = load_strata()
+  assert_stub_refuses("seqGate 2 is outside 0..1", "setGrainParam", 0, "seqGate", 2)
+  assert_stub_refuses("voiceMute 2 is outside 0..1", "setGrainParam", 0, "voiceMute", 2)
+  assert_stub_refuses("seqGate 0.5 must be a whole number", "setGrainParam", 0, "seqGate", 0.5)
+  assert_stub_refuses("voiceMute -1 is outside 0..1", "setGrainParam", 0, "voiceMute", -1)
+  local calls = #context.engine_calls
+  engine.setGrainParam(0, "seqGate", 1)
+  engine.setGrainParam(0, "voiceMute", 0)
+  assert_equal(#context.engine_calls, calls + 2, "0 and 1 are taken")
+  assert_equal(engine_spec.enumerations.seqGate[2], 1, "seqGate's enumeration, from the engine source")
+  assert_equal(engine_spec.enumerations.voiceMute[2], 1, "voiceMute's enumeration, from the engine source")
+end)
+
 -- test/sync_check.lua's PENDING_COMMANDS: a command the engine has before
 -- the script calls it (3.4's five, until the Wave 1 package that calls each)
 test("the sync check accepts a pending command that is not called and fails one that is", function()
