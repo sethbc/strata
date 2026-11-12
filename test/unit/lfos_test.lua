@@ -743,6 +743,37 @@ test("a silent PSET read that turns an engine-run LFO off stops it at the next s
   assert_equal(#context.calls_named("stopFastLfo") + #context.calls_named("setFastLfo"), 0, "once")
 end)
 
+-- #634: a silent read reaches a running engine LFO's offset and phase too
+test("a silent PSET read reaches a running engine LFO's offset and phase at the next step, once (#634)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "offset.pset"
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  params:set(lfo_id(2, "offset"), 30); params:set(lfo_id(2, "phase"), 40)
+  params:set(lfo_id(2), 1)
+  params:write(path)
+  params:set(lfo_id(2, "offset"), -10); params:set(lfo_id(2, "phase"), 0)
+  lfo_step(context)
+  assert_near(calls_with(context, "setFastLfo", 1)[#calls_with(context, "setFastLfo", 1)].args[7], -0.2, 1e-9,
+    "the engine plays offset -10 %")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get(lfo_id(2, "offset")), 30, "offset 30 %, silently")
+  assert_equal(params:get(lfo_id(2, "phase")), 40, "phase 40 %, silently")
+  assert_equal(#context.calls_named("setFastLfo") + #context.calls_named("syncFastLfo"), 0, "nothing sent by the silent read")
+  lfo_step(context)
+  local sets = calls_with(context, "setFastLfo", 1)
+  assert_equal(#sets, 1, "the next step sends the new offset")
+  assert_near(sets[1].args[7], 0.6, 1e-9, "2 x 30 / 100 half ranges")
+  local syncs = calls_with(context, "syncFastLfo", 1)
+  assert_equal(#syncs, 1, "and syncs the new phase")
+  assert_near(syncs[1].args[2], lfos.phase(2), 1e-6, "to the phase with the PSET's 40 %")
+  context.clear_engine_calls()
+  lfo_step(context, 5)
+  assert_equal(#calls_with(context, "setFastLfo", 1) + #calls_with(context, "syncFastLfo", 1), 0, "once")
+end)
+
 test("a format 5 scene's LFO fields migrate, and LFOs 4-6 default to off", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

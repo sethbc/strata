@@ -209,12 +209,14 @@ return function(S)
   -- it (engine: {voice, destination, shape, rate, depth, offset}, nil
   -- without a node), whether a hand edit or a phase move waits for the
   -- next step (edited, sync_due) or an edit by a deferrable source for the
-  -- round robin (deferred, deferred_sync), and the bar it was last synced in
+  -- round robin (deferred), the phase param the engine was last synced to
+  -- or will be (phase_seen: a phase set without its action, a silent read,
+  -- is caught by it), and the bar it was last synced in
   local state = {}
   for n = 1, NUM_LFOS do
     state[n] = {position = 0, last_time = nil, clocked_offset = 0, last_beats = nil, phase = 0, value = 0,
       stepped = false, from = 0.5, to = 0.5, rate = LFO.defaults.rate, depth = LFO.defaults.depth, engine = nil,
-      edited = false, sync_due = false, deferred = false, deferred_sync = false, bar = nil}
+      edited = false, sync_due = false, deferred = false, phase_seen = nil, bar = nil}
   end
 
   -- A deterministic shape's u (0..1) at phase (0..1), design §2.2
@@ -518,15 +520,17 @@ return function(S)
   -- destination or shape, a hand edit (edited) or a clocked LFO's new tempo
   -- at once, outside the round robin (at most one send per LFO a step); an
   -- edit by a deferrable source (deferred: a macro, morph, gesture playback,
-  -- a fade), a modulated rate past engine_rate_threshold or depth past
-  -- send_threshold through the round robin and the send budget; then the
+  -- a fade), a modulated rate past engine_rate_threshold, a depth past
+  -- send_threshold and an offset that moved (a silent read sets it without
+  -- its action, #634) through the round robin and the send budget; then the
   -- sync a start, a restart, a shape or phase change or a bar asked for, at
-  -- once, or through the round robin for a deferrable phase edit
+  -- once, or through the round robin for a phase param that moved without a
+  -- hand edit (a deferrable source's, a silent read's)
   local function reconcile_engine(n)
     local st = state[n]
     if not engine_playing(n) then
       if st.engine then engine.stopFastLfo(n - 1) end
-      st.engine, st.edited, st.sync_due, st.deferred, st.deferred_sync = nil, false, false, false, false
+      st.engine, st.edited, st.sync_due, st.deferred, st.phase_seen = nil, false, false, false, nil
       queue.due[engine_key(n)], queue.due[sync_key(n)] = nil, nil
       return
     end
@@ -537,18 +541,20 @@ return function(S)
       send_fast_lfo(n, want)
       st.edited, st.deferred = false, false
     elseif st.deferred or math.abs(want.rate - sent.rate) > sent.rate * LFO.engine_rate_threshold
-      or math.abs(want.depth - sent.depth) > LFO.send_threshold then
+      or math.abs(want.depth - sent.depth) > LFO.send_threshold
+      or math.abs(want.offset - sent.offset) > LFO.send_threshold then
       st.deferred = false
       M.mark_due(engine_key(n), engine_sends[n])
     end
+    local phase_param = params:get(param_id(n, "phase"))
     if st.sync_due then
-      st.sync_due, st.deferred_sync = false, false
+      st.sync_due = false
       queue.due[sync_key(n)] = nil
       engine.syncFastLfo(n - 1, M.phase(n))
-    elseif st.deferred_sync then
-      st.deferred_sync = false
+    elseif phase_param ~= st.phase_seen then
       M.mark_due(sync_key(n), sync_sends[n])
     end
+    st.phase_seen = phase_param
   end
 
   ---------------------------------------------------------------------------
@@ -733,11 +739,12 @@ return function(S)
   -- next step sends it (a control param's action never calls the engine),
   -- at once for a hand edit; an edit made while S.deferrable_write is set
   -- (a macro apply, morph, gesture playback, a fade) through the round robin
-  -- and the send budget, a phase edit as a sync alone (#633)
+  -- and the send budget (#633), a phase edit as a sync alone (its param
+  -- moved from phase_seen: reconcile_engine)
   local function edited(n, sync)
     local st = state[n]
     if S.deferrable_write then
-      if sync then st.deferred_sync = true else st.deferred = true end
+      if not sync then st.deferred = true end
       return
     end
     st.edited = true
