@@ -27,7 +27,10 @@
 #   -l  prints the shards a sharded run would use, one a line, and starts
 #       nothing
 #   -c  classifies the runs already in the -o folder (i = 1..n, either
-#       layout; a run with shard logs is read as sharded) and starts nothing
+#       layout; a run with shard logs is read as sharded, against the
+#       workflow's list: its shards in the list's order, then any shard log
+#       the list no longer names, by file name; a run lacking a listed
+#       shard's log is incomplete) and starts nothing
 #   path/to/norns defaults to $NORNS_DIR, else ~/src/norns.
 #   STRATA_ENGINE_CHECK_AREAS, set and not empty, runs those areas in one
 #   container per run, as before #581. It, ENGINE_CHECK_TIMEOUT (which
@@ -53,10 +56,13 @@
 # collector failure of #211; sclang spells the word with an e, so the
 # pattern is written gr[e]y for the US spelling check); or crashed (a
 # signal with none of those: #131). A sharded run that did not pass takes
-# the class of its worst shard (the first in that order, after passed), and
-# the summary names that shard, then any other shard that did not pass. The
-# summary gives the counts of runs by class, and for sharded runs the
-# slowest shard; the exit status is 0 only when every run passed.
+# the class of its worst shard (the first in that order, after passed; of
+# two alike, the first in the run's order), and the summary names that
+# shard, then any other shard that did not pass; a run -c finds incomplete
+# says which shards have no log. The summary counts runs by class (and the
+# incomplete ones), then for sharded runs their shards by class (and the
+# missing ones: a run's other shards show only there) and names the slowest
+# shard; the exit status is 0 only when every run passed.
 set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
@@ -195,15 +201,20 @@ trap 'stop_containers; exit 130' INT TERM
 
 # Start a container once fewer than -j are running: $1 the suffix of its
 # name and log (the run, then for a shard its file name), $2 the areas it
-# runs (empty: the caller's STRATA_ENGINE_CHECK_AREAS, if any)
+# runs (empty: the caller's STRATA_ENGINE_CHECK_AREAS, if any). A job's
+# status file is emptied before it starts and written as it ends, so a job
+# is running while its status is empty: that cannot be fooled by a PID the
+# system has given to another process since. Its PID is asked only for a
+# job that ended without writing one (killed first), whose slot then frees
+# when the PID is gone.
 running=
 start_container() {
   while :; do
     still=
     count=0
-    for pid in $running; do
-      if kill -0 "$pid" 2> /dev/null; then
-        still="$still $pid"
+    for job in $running; do
+      if [ ! -s "$log_dir/run-${job%:*}.status" ] && kill -0 "${job##*:}" 2> /dev/null; then
+        still="$still $job"
         count=$((count + 1))
       fi
     done
@@ -212,8 +223,9 @@ start_container() {
     sleep 0.2 2> /dev/null || sleep 1
   done
   started_names="$started_names $1"
+  : > "$log_dir/run-$1.status"
   run_one "$1" "$2" &
-  running="$running $!"
+  running="$running $1:$!"
 }
 
 run_one() {
@@ -248,6 +260,16 @@ fi
 echo "logs: $log_dir"
 
 [ -n "$classify_only" ] || launch_runs
+
+# -c judges a folder that holds shard logs against the workflow's list: a
+# run lacking some of its shards is incomplete, and a run's shards are read
+# in the list's order
+if [ -n "$classify_only" ]; then
+  for log in "$log_dir"/run-*-*.log; do
+    if [ -e "$log" ]; then shards=$(read_shards) || exit 2; fi
+    break
+  done
+fi
 
 # classify <log> <status file>: sets class (failed, capped, killed,
 # collector, crashed or passed), rank (its place in that order: a sharded
@@ -286,54 +308,66 @@ classify() {
   [ "$class" != collector ] || label="collector failure"
 }
 
-# The log stems of run $1's shards: the workflow's, in its order, when this
-# start ran them; for -c, those the folder holds. None: a run in one
-# container (run-<i>.log)
-shard_stems() {
+# run_shards <run>: sets stems, the log stems of the run's shards (the
+# workflow's, in its order; for -c, those with a log, then any other shard
+# log the folder holds, by name), and missing, for -c, the workflow's shards
+# with no log, joined by commas. stems empty: a run in one container
+# (run-<i>.log), never incomplete
+run_shards() {
+  stems=
+  missing=
   if [ -n "$sharded" ]; then
-    for shard in $shards; do echo "$1-$(file_name "$shard")"; done
-  elif [ -n "$classify_only" ]; then
-    for log in "$log_dir/run-$1-"*.log; do
-      [ -e "$log" ] || continue
-      stem=${log##*/run-}
-      echo "${stem%.log}"
-    done
+    for shard in $shards; do stems="$stems $1-$(file_name "$shard")"; done
+    return 0
   fi
+  [ -n "$classify_only" ] || return 0
+  found=
+  for log in "$log_dir/run-$1-"*.log; do
+    [ -e "$log" ] || continue
+    stem=${log##*/run-}
+    found="$found ${stem%.log}"
+  done
+  [ -n "$found" ] || return 0
+  for shard in $shards; do
+    stem=$1-$(file_name "$shard")
+    if [ -e "$log_dir/run-$stem.log" ]; then stems="$stems $stem"; else missing="$missing,$shard"; fi
+  done
+  for stem in $found; do
+    case " $stems " in
+      *" $stem "*) ;;
+      *) stems="$stems $stem" ;;
+    esac
+  done
+  missing=${missing#,}
 }
 
-passed=0
-failed=0
-collector=0
-crashed=0
-capped=0
-killed=0
+# The counts: runs, and for sharded runs their shards (a run takes one class,
+# so its other shards' classes show only here)
+for kind in run shard; do
+  for name in passed failed capped killed collector crashed incomplete missing total; do
+    eval "${kind}_$name=0"
+  done
+done
+count() { eval "$1_$2=\$((\$1_$2 + 1))"; }
 slowest=
 slowest_seconds=-1
 newline='
 '
-count_run() {
-  case $1 in
-    passed) passed=$((passed + 1)) ;;
-    failed) failed=$((failed + 1)) ;;
-    capped) capped=$((capped + 1)) ;;
-    killed) killed=$((killed + 1)) ;;
-    collector) collector=$((collector + 1)) ;;
-    crashed) crashed=$((crashed + 1)) ;;
-  esac
-}
 run=1
 while [ "$run" -le "$runs" ]; do
-  stems=$(shard_stems "$run")
+  run_shards "$run"
   if [ -z "$stems" ]; then
     log=$log_dir/run-$run.log
     classify "$log" "$log_dir/run-$run.status"
-    count_run "$class"
+    count run "$class"
     if [ "$class" = passed ]; then echo "run $run: passed"; else echo "run $run: $label ($detail), $log"; fi
   else
-    worst_rank=7
-    worst_class=passed
+    # the worst shard: of those that did not pass, the first in the run's
+    # order of the lowest rank
+    worst_rank=6
+    worst_stem=
+    worst_class=
     worst=
-    others=
     for stem in $stems; do
       log=$log_dir/run-$stem.log
       shard=$(echo "${stem#*-}" | tr _ ,)
@@ -343,22 +377,42 @@ while [ "$run" -le "$runs" ]; do
         slowest="$shard in run $run"
       fi
       classify "$log" "$log_dir/run-$stem.status"
-      [ "$class" != passed ] || continue
-      line="$label in $shard ($detail), $log"
+      count shard total
+      count shard "$class"
       if [ "$rank" -lt "$worst_rank" ]; then
-        [ -z "$worst" ] || others="$others$newline  and $worst"
         worst_rank=$rank
+        worst_stem=$stem
         worst_class=$class
-        worst=$line
-      else
-        others="$others$newline  and $line"
+        worst="$label in $shard ($detail), $log"
       fi
     done
-    count_run "$worst_class"
-    if [ "$worst_class" = passed ]; then echo "run $run: passed"; else echo "run $run: $worst$others"; fi
+    # every other shard that did not pass, in the run's order
+    others=
+    for stem in $stems; do
+      [ "$stem" != "$worst_stem" ] || continue
+      classify "$log_dir/run-$stem.log" "$log_dir/run-$stem.status"
+      [ "$class" != passed ] || continue
+      others="$others$newline  and $label in $(echo "${stem#*-}" | tr _ ,) ($detail), $log_dir/run-$stem.log"
+    done
+    if [ -n "$missing" ]; then
+      for shard in $(echo "$missing" | tr , ' '); do
+        count shard total
+        count shard missing
+      done
+      count run incomplete
+      [ -z "$worst_stem" ] || others="$newline  and $worst$others"
+      echo "run $run: incomplete (no log for $missing)$others"
+    elif [ -n "$worst_stem" ]; then
+      count run "$worst_class"
+      echo "run $run: $worst$others"
+    else
+      count run passed
+      echo "run $run: passed"
+    fi
   fi
   run=$((run + 1))
 done
 [ -z "$slowest" ] || echo "slowest shard: $slowest, $slowest_seconds s"
-echo "passed $passed of $runs; failed $failed; capped $capped (#544); killed $killed; collector failure $collector (#211); crashed $crashed (#131)"
-[ "$passed" -eq "$runs" ]
+echo "passed $run_passed of $runs; failed $run_failed; capped $run_capped (#544); killed $run_killed; collector failure $run_collector (#211); crashed $run_crashed (#131); incomplete $run_incomplete"
+[ "$shard_total" -eq 0 ] || echo "shards: passed $shard_passed of $shard_total; failed $shard_failed; capped $shard_capped (#544); killed $shard_killed; collector failure $shard_collector (#211); crashed $shard_crashed (#131); missing $shard_missing"
+[ "$run_passed" -eq "$runs" ]
