@@ -1596,7 +1596,10 @@ local function make_clock(util)
     if sync_beat <= 0 then error(string.format("invalid sync beat: %f", sync_beat), 0) end
     local previous = clock.events[coro_id]
     local from = (previous and previous.type == SCHEDULE_SYNC) and previous.sync_beat or beats_at(util.time())
-    ready_event(coro_id, SCHEDULE_SYNC).sync_beat = next_clock_beat(from, sync_beat, offset)
+    local event = ready_event(coro_id, SCHEDULE_SYNC)
+    -- its beats and offset, as matron keeps them for a reschedule (set_beat)
+    event.sync_period, event.sync_offset = sync_beat, offset
+    event.sync_beat = next_clock_beat(from, sync_beat, offset)
   end
 
   -- lua/core/clock.lua's clock.resume. A coroutine canceled from inside that
@@ -1762,8 +1765,13 @@ local function make_clock(util)
   -- the step's, not its own), and fire in slot order: every one whose fire
   -- time has passed, and those at the step's time of the first one's rank (a sleep at the step's
   -- time leaves a sync at that time to the next step, at the same time).
-  -- Events scheduled during the step wait for the next one; one canceled or
-  -- rescheduled by an earlier one in the step is skipped
+  -- The tick posts them all before Lua delivers any (each event's ready is
+  -- cleared at the step's start, as matron clears it when it posts), so a
+  -- reset or a jump made by an earlier resume in the step leaves a later
+  -- posted event as it was: its next sync counts on from its own beat.
+  -- Events scheduled during the step wait for the next one; one canceled by
+  -- an earlier one in the step is skipped (norns would resume a coroutine it
+  -- no longer has and report the error)
   function clock.advance()
     local pending = ready_events()
     local first = pending[1]
@@ -1779,16 +1787,20 @@ local function make_clock(util)
     end
     table.sort(due, function(left, right) return left.slot < right.slot end)
     local tick = { time = step_time, beat = beats_at(step_time) }
+    for _, entry in ipairs(due) do entry.event.ready = false end  -- posted
     for _, entry in ipairs(due) do
-      if still_waiting(entry) then fire(entry, tick) end
+      if clock.events[entry.id] == entry.event and entry.event.order == entry.order then fire(entry, tick) end
     end
   end
 
   -- Test helper: run the scheduler, one event at a time in firing order,
   -- until the coroutine coro_id has been resumed once (every clock due
   -- before it runs first, as on norns). It must be waiting; it stops with
-  -- an error as soon as another clock cancels it
-  function clock.advance_until(coro_id)
+  -- an error as soon as another clock cancels it. before_delivery
+  -- (optional) runs once coro_id's resume is posted (its event no longer
+  -- ready) and before it is delivered, as a reset, a jump or another event
+  -- Lua handles first can fall between the two on norns
+  function clock.advance_until(coro_id, before_delivery)
     local function failure(why) error("clock.advance_until: coroutine " .. tostring(coro_id) .. " " .. why, 3) end
     local target = clock.events[coro_id]
     if not (target and target.ready) then
@@ -1798,6 +1810,10 @@ local function make_clock(util)
     for _ = 1, 1e6 do
       local entry = ready_events()[1]
       util.stub_now = math.max(util.time(), entry.time)
+      if before_delivery and entry.id == coro_id and entry.order == waiting.order then
+        entry.event.ready = false  -- posted
+        before_delivery()
+      end
       fire(entry)
       if entry.id == coro_id and entry.order == waiting.order then return end
       if not still_waiting(waiting) then failure("was canceled (or rescheduled) before it woke") end
@@ -1854,6 +1870,24 @@ local function make_clock(util)
 
   function clock.transport_stop()
     if clock.transport.stop ~= nil then clock.transport.stop() end
+  end
+
+  -- Test helper: the clock source's beat jumps to beat now, with no
+  -- transport start, as matron's clock_set_source does (a new clock source;
+  -- crow's input division too, clock_reschedule_sync_events_from_source):
+  -- every waiting sync is rescheduled from the new beat
+  -- (clock_scheduler_reschedule_sync_events: the next multiple of its beats
+  -- after it, plus its offset), so its coroutine wakes there and counts its
+  -- next sync on from that beat
+  function clock.set_beat(beat)
+    beat = check_number(beat, 1, "set_beat")
+    beat_reference.beat, beat_reference.time = beat, util.time()
+    for _, event in pairs(clock.events) do
+      if event.ready and event.type == SCHEDULE_SYNC then
+        event.sync_beat = next_clock_beat(beat, event.sync_period, event.sync_offset)
+        event.scheduled_at, event.scheduled_beat = util.time(), beat
+      end
+    end
   end
 
   return clock

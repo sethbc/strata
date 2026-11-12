@@ -1569,6 +1569,131 @@ test("a pattern start after an unfollowed reset counts from the clock again", fu
   pattern_clock_stop()
 end)
 
+-- Ruling 54 (fix round 2): what a clock does at each wake. Voice 1 at 1/16
+-- and voice 2 at a bar, every step set, playing; returns the probe's events
+local function in_step_setup(context, S)
+  for step = 1, 16 do S.patterns[1][step] = 15; S.patterns[2][step] = 15 end
+  params:set("v2_seq_division", 8)  -- 1 bar
+  local events = record_output(S, "probe")
+  pattern_clock_start()
+  return events
+end
+
+-- Run seconds in 10 ms steps: each time voice 2 moves on, voice 1 is at its
+-- step 1 and the transport at its bar. Returns how many times it moved on
+local function count_in_step(context, S, seconds, what)
+  local seq = S.lib.sequencer
+  local last_step, changes = seq.sounding_step(2), 0
+  for _ = 1, math.floor(seconds / 0.01 + 0.5) do
+    context.clock.run_for(0.01)
+    if seq.sounding_step(2) ~= last_step then
+      changes, last_step = changes + 1, seq.sounding_step(2)
+      assert_equal(seq.sounding_step(1), 1, what .. ": voice 1 is at its step 1 as voice 2 moves on")
+      assert_equal(seq.sounding_step(), 1, what .. ": and the transport at its bar")
+    end
+  end
+  return changes
+end
+
+-- Rule 4: no voice's gap between two of its steps is longer than its
+-- division plus one 16th (a beat is 0.5 s), and its steps follow one
+-- another, none twice and none skipped
+local function assert_gaps_bounded(events, divisions, what)
+  for voice_idx, division in pairs(divisions) do
+    local steps = voice_events(events, voice_idx, true)
+    for index = 2, #steps do
+      local gap = steps[index].time - steps[index - 1].time
+      assert_true(gap <= (division + 0.25) * 0.5 + 1e-9,
+        string.format("%s: voice %d's gap before its step event %d is %.4f s", what, voice_idx, index, gap))
+      assert_equal(steps[index].step, steps[index - 1].step % 16 + 1, what .. ": voice " .. voice_idx .. ", event " .. index)
+    end
+  end
+end
+
+local DIVISIONS = {[1] = 0.25, [2] = 4}  -- in beats: voice 1 at 1/16, voice 2 at a bar
+
+test("a wake that reads its beat a little low plays on time and keeps every voice in step", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(0.6)
+  -- one late tick: voice 1's next wake, and the beat read during it, 1e-4 beats low
+  local voice_1 = context.clock.threads[S.pattern_clocks[1]]
+  local real_sync, real_get_beats = clock.sync, clock.get_beats
+  local armed, low = true, false
+  clock.sync = function(...)
+    low = false
+    local beat = real_sync(...)
+    if armed and coroutine.running() == voice_1 then
+      armed, low = false, true
+      return beat - 1e-4
+    end
+    return beat
+  end
+  clock.get_beats = function() return real_get_beats() - (low and 1e-4 or 0) end
+  local ran, changes = pcall(count_in_step, context, S, 7.0, "a late tick")
+  clock.sync, clock.get_beats = real_sync, real_get_beats
+  if not ran then error(changes, 0) end
+  assert_true(not armed, "voice 1 woke once reading low")
+  assert_equal(changes, 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "a late tick")
+  pattern_clock_stop()
+end)
+
+test("the beat set back with no transport start keeps every voice in step, with no long gap", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1: the count about 20
+  context.clock.set_beat(5)     -- a new clock source, 15 beats behind the count
+  assert_equal(S.pattern_playing, true, "the patterns play on")
+  assert_equal(count_in_step(context, S, 6.3, "set back"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "set back")
+  assert_true(S.lib.sequencer.count_offset() ~= 0, "the clocks keep the count")
+  pattern_clock_stop()
+end)
+
+test("a reset Strata's transport handler never sees keeps every voice in step, with no long gap", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)
+  clock.transport.start = function() end  -- another script's, which never calls Strata's
+  context.clock.transport_start()          -- the internal clock's reset
+  assert_equal(S.pattern_playing, true, "the patterns play on")
+  assert_equal(count_in_step(context, S, 6.3, "an unseen reset"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "an unseen reset")
+  assert_true(S.lib.sequencer.count_offset() ~= 0, "the clocks kept the count themselves")
+  pattern_clock_stop()
+end)
+
+test("a resume posted before a reset and delivered after it plays on time, and its voice stays in step", function()
+  local context, S = setup()
+  params:set("v1_seq_swing", 66)
+  local events = in_step_setup(context, S)
+  context.clock.run_for(0.6)  -- beat 2.2: voice 1's next step, a swung one, is due at 2.33
+  context.clock.advance_until(S.pattern_clocks[1])  -- its hop onto the clock's 16th at 2.25
+  local posted_at
+  context.clock.advance_until(S.pattern_clocks[1], function()
+    posted_at = util.time()
+    context.clock.transport_start()  -- the internal clock's reset, between the post and the delivery
+  end)
+  local played = voice_events(events, 1, true)
+  assert_near(played[#played].time, posted_at, 1e-9, "voice 1 played its step when it was posted")
+  assert_equal(count_in_step(context, S, 6.3, "posted before the reset"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "posted before the reset")
+  pattern_clock_stop()
+end)
+
+-- A jump forward is noticed the same way (a wake later than its beat by more
+-- than the tolerance) and handled as an unannounced jump
+test("the beat set forward keeps every voice in step and plays each late step once", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(4.05)   -- beat 9.1
+  context.clock.set_beat(30.3)  -- 21 beats ahead of the count
+  assert_equal(count_in_step(context, S, 6.3, "set forward"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "set forward")
+  pattern_clock_stop()
+end)
+
 test("a gated voice's event falls back to the default gate length", function()
   local _, S = setup()
   local events = record_output(S, "probe")
