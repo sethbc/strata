@@ -214,7 +214,6 @@ end
 -- have, so the list never outlives its use. One name per line: each package
 -- removes its own when its call lands.
 sync_check.PENDING_COMMANDS = {
-  "setScatter",
   "setFastOffset",
 }
 

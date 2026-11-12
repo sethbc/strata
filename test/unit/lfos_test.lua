@@ -458,12 +458,13 @@ test("the destination list keeps its indices", function()
   end })
   local destinations = local_value("LFO_DESTINATIONS")
   local expected = { [1] = "none", [2] = "density", [68] = "v7 scan", [69] = "v1 hist", [76] = "v1 vfilt",
-    [83] = "v1 dsend", [90] = "v1 rsend", [97] = "v1 amp", [103] = "v7 amp", [104] = "probe" }
+    [83] = "v1 dsend", [90] = "v1 rsend", [97] = "v1 amp", [103] = "v7 amp", [104] = "macro 1", [119] = "macro 16",
+    [120] = "probe" }
   for index, label in pairs(expected) do assert_equal(destinations[index].label, label, "destination " .. index) end
-  assert_equal(#destinations, 104)
+  assert_equal(#destinations, 120)
   assert_equal(destinations[97].resolve(), "v1_amp")
-  assert_equal(destinations[104].resolve(), "delay_time")
-  assert_equal(params:lookup_param(lfo_id(6, "dest")).count, 104, "every LFO offers them")
+  assert_equal(destinations[120].resolve(), "delay_time")
+  assert_equal(params:lookup_param(lfo_id(6, "dest")).count, 120, "every LFO offers them")
   -- every destination is a control param whose label (with ~ when it
   -- runs in the engine) fits the page's right column
   for index, destination in ipairs(destinations) do
@@ -1082,7 +1083,9 @@ test("every control param with a sender sends its LFO-offset value; one without 
   end
   local checked = 0
   for _, param in ipairs(params.params) do
-    if param.t == params.tCONTROL and param.id:sub(1, 6) ~= "strata" then
+    -- a macro's sender takes an LFO's value for its targets' round robin
+    -- sends (lib/macros.lua, macros_test.lua), never an engine call
+    if param.t == params.tCONTROL and param.id:sub(1, 6) ~= "strata" and not param.id:match("^macro_%d+$") then
       local sender = S.engine_senders[param.id]
       local value = other_value(param)
       if sender then

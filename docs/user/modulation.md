@@ -1,6 +1,6 @@
 # Modulation
 
-Cross-modulation between voices, probability-based mutations and the global LFOs. Back to the [README](../../README.md).
+Cross-modulation between voices, probability-based mutations, the global LFOs, the macros and scatter. Back to the [README](../../README.md).
 
 ## Cross-Modulation
 
@@ -38,3 +38,22 @@ Six LFOs can each modulate one parameter:
 **Where an LFO runs.** An LFO on one of a voice's five fast destinations, its grain pitch, buffer position, grain size, voice filter cutoff (`vfilt`) or level (`amp`), runs in the engine, smoothly and at up to 50 Hz; the LFO page marks its destination with `~` (`v3 pitch~`). Its depth on the cutoff moves the filter by up to five octaves either way at 100 %, and on the level from silence to double. Every other LFO runs in the script, at up to 10 Hz (a faster rate plays at 10 Hz, and the page shows `max`): it updates 48 times a second, whatever the tempo, and only sends a new value when it has moved by at least 1/1000 of the destination's range, so slow LFOs cost very little. On a frequency or another range that the encoder moves in octaves, that is 1/1000 of its octaves (8 cents on a voice's frequency), so a slow LFO glides as evenly at the low end as at the top. A clocked LFO in the engine is lined up with the clock once a bar and whenever the clock starts again. The random shapes draw their own values in the engine, so the screen's dot shows values of the same kind, not the same ones. The grid has no LFO controls: use the LFO page, the arc or PARAMETERS.
 
 **From 3.3.** The LFO parameters have new names in 3.4. A PSET saved with 3.3 loads its LFO settings (the console prints `imported 3.3 LFO settings`, and the settings 3.3 did not have go to their defaults, LFOs 4-6 off), and so do 3.3's scenes; 3.3's random shape becomes s&h at twice the rate, so it changes value as often as it did. LFOs 4-6 start off.
+
+## Macros
+
+Sixteen macros (PARAMETERS > macros, `macro 1` ... `macro 16`) each turn up to eight settings at once with one control:
+- **Targets** - each target moves between two ends of its own as the macro goes from 0 to 100 % (put the first end above the second to turn it around), along the setting's own scale, so a frequency moves in octaves. A target is any setting an LFO can move (a voice's main parameter follows its source, as for an LFO), or an LFO's rate or depth; never another macro or the morph, so a macro can never move itself
+- **Moving a macro** - turn it, map a controller to it in PARAMETERS > MAP, record it with a gesture recorder, or load a PSET. It moves its targets up to 30 times a second, so a fast knob sweep never floods the engine; you see the targets' values change as it moves, and scenes store them
+- **Scenes and the morph** - a scene stores each macro's value and its targets. A recall, a fade and the morph set the macro's value without moving its targets: the scene holds the targets' own values, so a setting you changed by hand after moving the macro comes back as you left it
+- **An LFO on a macro** (the destinations `macro 1` ... `macro 16`) moves the macro's targets around their values, never the macro or the targets' settings themselves. It leaves a target that is an LFO's rate or depth alone (it would modulate itself); those follow the macro's own value only
+- **Banks** - the macros come in four banks of four (1-4, 5-8, 9-12, 13-16); the MOD page, its arc rings and the grids show one bank at a time, the same one everywhere
+- **Saving** - the targets are saved with each PSET (in a file beside it, `<pset>.macros.data`) and between sessions. A PSET saved before 3.4 loads with no targets. A target this version does not know (from another release) is kept and saved again as it was, does nothing, and the console names it as it loads
+
+## Scatter
+
+Scatter (PARAMETERS > scatter) gives every unlocked voice slow, smooth random movement, each voice and each setting on its own:
+- **Settings** - grain pitch and buffer position (on by default), grain size, the voice filter's cutoff and the level (off), each switched on and off on its own
+- **Depth** - 0-100 % (default 10 %): at 100 % a setting wanders up to half its range either side of its value (the cutoff up to five octaves, the level from silence to double)
+- **Rate** - 0.01-1 Hz (default 0.1 Hz): how fast it wanders
+- **Lock** - a locked voice is left alone, as by the drift and the mutations
+- Scatter runs in the engine, smoothly, and sends nothing while it plays. Scenes store its eight settings: the depth and the rate fade, the switches change at the end of a fade

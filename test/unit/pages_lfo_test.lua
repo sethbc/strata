@@ -128,7 +128,7 @@ end)
 
 test("group starts come from the destinations list", function()
   load_strata()
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 69 76 83 90 97")
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 69 76 83 90 97 104")
   local destinations = local_value("LFO_DESTINATIONS")
   for start, label in pairs({ [69] = "v1 hist", [76] = "v1 vfilt", [83] = "v1 dsend", [90] = "v1 rsend", [97] = "v1 amp" }) do
     assert_equal(destinations[start].label, label, "a registered group starts at voice 1")
@@ -137,7 +137,7 @@ test("group starts come from the destinations list", function()
   assert_equal(lfo_dest_group_jump(5, 1), 13, "next start above")
   assert_equal(lfo_dest_group_jump(5, -1), 2, "last start below")
   assert_equal(lfo_dest_group_jump(68, -1), 61, "from v7 scan back to v7 main")
-  assert_equal(lfo_dest_group_jump(103, 1), 103, "clamped at the last destination")
+  assert_equal(lfo_dest_group_jump(104, 1), 104, "clamped at the last group (the macros' global destinations)")
 end)
 
 -- #580: the global destinations (3.4's macro 1 .. macro 16) are a group of
@@ -162,12 +162,12 @@ test("ALT+E3 lands on each registered group's first voice, both ways (#511)", fu
   local function alt_e3(d) with_alt(function() enc(3, d) end) end
   params:set(lfo_id(1, "dest"), 61)   -- v7 main
   local labels = {}
-  for _ = 1, 6 do
+  for _ = 1, 7 do
     alt_e3(1)
     table.insert(labels, local_value("LFO_DESTINATIONS")[params:get(lfo_id(1, "dest"))].label)
   end
-  assert_equal(table.concat(labels, ", "), "v1 hist, v1 vfilt, v1 dsend, v1 rsend, v1 amp, v1 amp", "then clamped")
-  params:set(lfo_id(1, "dest"), 103)   -- v7 amp, the last destination
+  assert_equal(table.concat(labels, ", "), "v1 hist, v1 vfilt, v1 dsend, v1 rsend, v1 amp, macro 1, macro 1", "then clamped")
+  params:set(lfo_id(1, "dest"), 103)   -- v7 amp, the last per-voice destination
   alt_e3(-1); assert_equal(params:get(lfo_id(1, "dest")), 97, "back to v1 amp")
   alt_e3(-2); assert_equal(params:get(lfo_id(1, "dest")), 83, "two groups back: v1 dsend")
   params:set(lfo_id(1, "dest"), 70)   -- v2 hist

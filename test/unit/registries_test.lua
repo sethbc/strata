@@ -338,8 +338,10 @@ test("built-in LFO destinations keep their indices", function()
   local labels = built_in_lfo_labels()
   load_strata()
   local destinations = local_value("LFO_DESTINATIONS")
-  -- the script's own registrations (lib/history.lua's) follow 3.1's list
-  local own = 7 * #local_value("S").registry.lfo_destinations
+  -- the script's own registrations (lib/history.lua's) follow 3.1's list:
+  -- seven per per-voice record, one per global (lib/macros.lua's)
+  local own = 0
+  for _, entry in ipairs(local_value("S").registry.lfo_destinations) do own = own + (entry.global and 1 or 7) end
   assert_equal(#destinations, #labels + own, "3.1's list exactly, then the script's registered ones")
   for index, label in ipairs(labels) do assert_equal(destinations[index].label, label, "index " .. index) end
   -- two registered destinations go after every built-in one: by
@@ -381,8 +383,17 @@ test("the LFO page's ALT+E3 groups keep each voice and add the registered destin
   local built_in = #built_in_lfo_labels()
   assert_equal(S.lib.lfos.BUILT_IN_DESTINATIONS, built_in)
   -- each registered destination is a group from its v1 (#511): the script's own, then the probe
-  local registered_starts = {}
-  for k = 0, #S.registry.lfo_destinations - 1 do table.insert(registered_starts, built_in + 1 + k * 7) end
+  -- (the global ones, lib/macros.lua's, are one group of one each)
+  local registered_starts, next_index, globals_start = {}, built_in + 1, nil
+  for _, entry in ipairs(S.registry.lfo_destinations) do
+    if not entry.global then
+      table.insert(registered_starts, next_index)
+    elseif not globals_start then
+      globals_start = next_index
+      table.insert(registered_starts, next_index)
+    end
+    next_index = next_index + (entry.global and 1 or 7)
+  end
   assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 " .. table.concat(registered_starts, " "))
   assert_equal(S.LFO_DESTINATIONS[registered_starts[#registered_starts]].label, "v1 probe")
   -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the registered group
