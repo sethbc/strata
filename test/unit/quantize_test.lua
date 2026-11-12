@@ -1,10 +1,10 @@
 -- test/unit/quantize_test.lua
 -- The quantized-action scheduler (lib/quantize.lua, S.lib.quantize): the
 -- quantize_actions param (off, beat, bar), an action waiting for the next
--- beat or bar, a waiting action replaced by its key's next, the header's
+-- beat or bar, a waiting action replaced by its key's next or dropped
+-- (cancel), its clock never canceled with its resume posted, the header's
 -- flash while it waits, the cleanup that cancels every waiting action, and
--- the strata_seq group the param sits in (alone, or as the sequencer's
--- fifth param)
+-- the strata_seq group the param sits in (the sequencer's fifth param)
 -- Run alone: lua test/run.lua quantize
 
 return function(h)
@@ -276,24 +276,6 @@ test("quantize_actions is one option, the fifth of the seven params in the seque
   assert_equal(group.t, params.tGROUP, "strata_seq is a group")
   assert_equal(table.concat(ids, " "), "seq_chain seq_chain_from seq_chain_scenes seq_chain_bars quantize_actions "
     .. "seq_division_reset seq_follow_transport", "the sequencer's seven, quantize_actions fifth")
-end)
-
-test("the sequencer's strata_seq holds quantize_actions as its fifth of seven", function()
-  load_strata({ before_init = function()
-    local S = local_value("S")
-    -- 1d's add_params, as the plan gives it: the group sized 6 +
-    -- PARAM_COUNT, quantize's params called for in fifth place
-    S.lib.sequencer.add_params = function()
-      params:add_group("strata_seq", "sequencer", 6 + S.lib.quantize.PARAM_COUNT)
-      for n = 1, 4 do params:add_binary("seq_double_" .. n, "seq double " .. n, "toggle", 0) end
-      S.lib.quantize.add_params()
-      for n = 5, 6 do params:add_binary("seq_double_" .. n, "seq double " .. n, "toggle", 0) end
-    end
-  end })
-  local group, ids = group_ids(index_of("strata_seq"))
-  assert_equal(group.n, 7, "seven params")
-  assert_equal(ids[5], "quantize_actions", "quantize_actions is the fifth")
-  assert_equal(#ids, 7)
 end)
 
 end
