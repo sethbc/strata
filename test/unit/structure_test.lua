@@ -620,25 +620,24 @@ end)
 -- are saved before anything stops, the LFOs give their destinations back
 -- before the voices go off, MIDI is detached before the voices go off, and
 -- the controllers go dark last
-local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "gestures saved", "buffer paths saved",
+local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "gestures saved",
+  "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
-  "morph clock", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget", "buffer start reload",
-  "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+  "morph clock", "macro clock", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget",
+  "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
+  "voices off", "grids dark", "arc dark" }
 
 -- 3.4's orders, in CLEANUP_ORDER and START_ORDER ahead of the modules that
 -- register their steps (package 0a): each package moves its names from here
 -- to the step lists as its step lands
 -- One name per line: Wave 1's packages each remove their own in parallel
 local RESERVED_CLEANUP_ORDERS = {
-  "macros_save",
   "matrix_save",
-  "macros",
   "matrix",
   "scatter",
 }
 local RESERVED_START_ORDERS = {
-  "macros_load",
   "matrix_load",
 }
 
@@ -677,6 +676,7 @@ test("cleanup runs every registered step in today's order", function()
     for _ = 1, S.constants.ENGINE_BUDGET.messages_per_window + 1 do send_param_to_engine("drift_amount", 0) end
   end)
   params:set("morph", 0.5)  -- the morph clock waits to apply it
+  params:set("macro_1", 0.5)  -- the macro clock waits to apply it
   params:set("gesture_2_quantize", 3)  -- recorder 1 plays a free loop (its metro), 2 a bar loop (its clock)
   for k = 1, 2 do S.lib.gestures.press(k); enc_param_delta(3, "reverb_mix", 1); S.lib.gestures.press(k) end
   params:set("quantize_actions", 2); S.lib.quantize.schedule("scene", function() end)  -- an action waits
@@ -710,7 +710,7 @@ test("cleanup runs every registered step in today's order", function()
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
     { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
-    { "morph clock", S.morph_clock },
+    { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
     { "lfos", S.lfo_clock } }
   local clock_steps = {}
@@ -720,7 +720,7 @@ test("cleanup runs every registered step in today's order", function()
   end
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
-    ["gestures.data"] = "gestures saved" }
+    ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved" }
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
@@ -824,6 +824,7 @@ local function start_steps()
     { "midi", { "midi connected" } },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
+    { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
     { "gestures load", { "file read gestures.data", "redraw requested", "grid redrawn" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },

@@ -2337,7 +2337,13 @@ local function reference_recall(S, scene_data)
         set_scene_param(prefix .. key, voice_data.extras[key])
       end
 
+      -- 3.4 (0b) adds the lock hooks to a recall: a lock that changes runs
+      -- them (scatter's voice mask, lib/scatter.lua, sends setScatter)
+      local was_locked = S.frozen[i]
       S.frozen[i] = scene_data.frozen[i]
+      if (not was_locked) ~= (not S.frozen[i]) then
+        for _, hook in ipairs(S.registry.lock_change) do hook(i, S.frozen[i]) end
+      end
 
       -- Start voices last: toggle_voice syncs the restored state
       if voice_data.active and not S.voices[i].active then

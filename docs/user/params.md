@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **morph**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -25,6 +25,14 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 ## LFOs
 - **LFO 1** ... **LFO 6** (a group each) - on (off by default), destination (none), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). See [Modulation](modulation.md#global-lfos)
 - An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth. norns' own LFO library is no longer used, so its min, max, baseline and reset parameters are gone; a PSET saved with 3.3 loads its LFO settings into the new parameters (the console prints `imported 3.3 LFO settings`), with LFOs 4-6 off and every setting 3.3 did not have at its default, so it plays as it did
+
+## Macros (group)
+- Macro 1-16 (0-100 %, default 0): each moves up to eight targets at once, each between two ends of its own (where the macro's 0 % and 100 % put it; a first end above the second turns it around), along the target's own scale (a frequency in octaves). A target is any setting an LFO can move, or an LFO's rate or depth, never another macro or the morph. See [Modulation](modulation.md#macros)
+- The targets are not parameters: they are saved with each PSET (in a file beside it, `<pset>.macros.data`), in scenes and between sessions. A scene recall, a fade and the morph set a macro's value without moving its targets, since the scene holds their own values
+
+## Scatter (group)
+- Scatter (off by default), depth (0-100 %, default 10 %), rate (0.01-1 Hz, default 0.1 Hz), and the settings it moves: pitch and position (on by default), size, cutoff and amp (off). See [Modulation](modulation.md#scatter)
+- Scenes store all eight: the depth and the rate fade, the switches change at the end of a fade
 
 ## Input (group)
 - Input follow gain (1-30, default 4): scales the live input's level, the modulation source `IN` on the MOD page and in the matrix, so a line-level input moves a destination. It does not change what you hear or the BUFFER page's meter

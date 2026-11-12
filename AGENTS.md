@@ -64,6 +64,8 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/ui/modal.lua` | `ui_modal` | `docs/notes/lua/ui/pages-and-dispatch.md` | ui_modal_test.lua |
 | `lib/quantize.lua` | `quantize` | `docs/notes/lua/quantize.md` | quantize_test.lua |
 | `lib/mod_sources.lua` | `mod_sources` | `docs/notes/lua/mod-sources.md` | mod_sources_test.lua |
+| `lib/macros.lua` | `macros` | `docs/notes/lua/macros.md` | macros_test.lua |
+| `lib/scatter.lua` | `scatter` | `docs/notes/lua/scatter.md` | scatter_test.lua |
 | `lib/morph.lua` | `morph` | `docs/notes/lua/morph.md` | morph_test.lua |
 | `lib/gestures.lua` | `gestures` | `docs/notes/lua/gestures.md` | gestures_test.lua |
 | `lib/input_level.lua` | `input_level` | `docs/notes/lua/input-level.md` | input_level_test.lua |
@@ -210,6 +212,7 @@ The Lua side's, across modules:
 - **The playhead restarts where the engine's scan does**: a `voiceOn` and a running voice's source switch (`S.register_grain_restart`) and a jump reset it; a new place that restarts a voice's scan resets the playhead too, and anything that changes the hold or the glide's rate calls `S.lib.playheads.advance(v)` first. `docs/notes/lua/playheads.md`
 - **Jumps and recalls** enter through `S.lib.positions.jump` and `recall_bookmark` (the grid, the arc and BUFFER alike), which send `t_scanReset` only while the voice runs (only buffer voices respond); the scan hold (a set of holders per voice, #238), the glide and the last recalled bookmark are transient (never params, scenes or PSETs), and a held grid position key lives in `S.lib.grid_core.port_state(port).positions` only. `docs/notes/lua/positions.md`
 - **Bookmarks, 3.4's interface**: `S.lib.bookmarks.recall(v, n)` and `is_set(v, n)` keep their names and behavior and never create a node (a pattern lock fires them). `docs/notes/lua/bookmarks.md`
+- **Macros** (3.4, `lib/macros.lua`): a macro never targets a macro or the morph (`S.lib.macros.target_ids()` is the only list of targets; `set_target` and learn refuse any other id); scenes, a transition and morph set a macro silently (its scene field's `set`, `set_silently`), so its targets keep the scene's own values; every apply's fan-out is deferrable (one `deferrable` per apply, from the one clock `S.macro_clock`, at most 30 applies a second per macro); an LFO on a macro moves its targets' engine values (extra offsets, the matrix's fast extras, each through `S.lib.lfos.mark_due`), never a param, and skips LFO-param and matrix-depth targets. `docs/notes/lua/macros.md`
 - **Morph writes params and never recalls**: it never calls `recall_scene` or `recall_scene_instant`, never starts a transition and never clears the undo itself; each continuous value goes through `S.lib.scenes.set_value` (a transition step's setter, no recall flag, so a quantized freq snaps), a voice's loop pair together, start first, and the crossing's discrete entries through `apply_entries(entries, {only = "discrete"})`, inside `S.lib.engine_sync.deferrable`, at most 10 applies a second and 120 values an apply, from the one clock `S.morph_clock`; a recall or fade after a pending move wins (the move is dropped), and a PSET load never applies it. `docs/notes/lua/morph.md`
 
 ## Working in parallel
