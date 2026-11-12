@@ -1442,6 +1442,36 @@ test("the stub rejects seqGate 2 and voiceMute 2", function()
   assert_equal(engine_spec.enumerations.voiceMute[2], 1, "voiceMute's enumeration, from the engine source")
 end)
 
+-- lua/core/pmap.lua and the MIDI handler of lua/core/menu/params.lua (#602)
+test("the stub's MIDI map is norns' pmap, and the menu's CC handler sets a mapped param by its type", function()
+  load_strata()
+  local pmap = norns.pmap
+  local function cc(number, value) norns.menu_midi_event({ 0xb2, number, value }, 2) end  -- channel 3, port 2
+  pmap.new("master_density"); pmap.assign("master_density", 2, 3, 10)
+  pmap.new("tempo"); pmap.data.tempo.out_lo, pmap.data.tempo.out_hi = 60, 120
+  pmap.assign("tempo", 2, 3, 10)
+  assert_equal(pmap.data.master_density, nil, "a CC assigned to a second param leaves the first")
+  assert_equal(pmap.rev[2][3][10], "tempo")
+  cc(10, 127); assert_equal(params:get("tempo"), 120, "a number: the output range, rounded")
+  pmap.new("reverb_mix"); pmap.assign("reverb_mix", 2, 3, 11)
+  cc(11, 0); assert_near(params:get("reverb_mix"), 0, 1e-9, "a control: its raw value")
+  cc(11, 127); assert_near(params:get("reverb_mix"), 1, 1e-9)
+  pmap.new("delay_bypass"); pmap.assign("delay_bypass", 2, 3, 12)
+  cc(12, 127); assert_equal(params:get("delay_bypass"), 1, "a toggle binary toggles")
+  cc(12, 0); assert_equal(params:get("delay_bypass"), 1, "and a 0 leaves it")
+  norns.menu_midi_event({ 0x92, 10, 0 }, 2)  -- a note on: no CC
+  assert_equal(params:get("tempo"), 120)
+  pmap.write(); pmap.clear()
+  assert_equal(pmap.rev[2][3][10], nil, "cleared")
+  pmap.read()
+  assert_equal(pmap.rev[2][3][10], "tempo", "read back from strata.pmap")
+  assert_equal(pmap.data.tempo.out_hi, 120); assert_equal(pmap.data.tempo.echo, false)
+  pmap.new("no_such_param"); pmap.assign("no_such_param", 2, 3, 13)
+  local ok, problem = pcall(cc, 13, 1)
+  assert_true(not ok and tostring(problem):find("invalid paramset index", 1, true) ~= nil,
+    "a map on an id that is no param raises, as on norns: " .. tostring(problem))
+end)
+
 -- test/sync_check.lua's PENDING_COMMANDS: a command the engine has before
 -- the script calls it (3.4's five, until the Wave 1 package that calls each)
 test("the sync check accepts a pending command that is not called and fails one that is", function()

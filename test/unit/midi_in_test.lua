@@ -686,6 +686,72 @@ test("two MIDI devices swapped in SYSTEM > DEVICES give up the held notes", func
   assert_true(shown, "SETUP shows the other device's name")
 end)
 
+-- #602: 3.3's LFOs were norns' LFO library (lfo_depth_1, ...), 3.4's are
+-- strata_lfo<n>_*. A MIDI map left on a 3.3 id makes norns' CC handler
+-- (menu_midi_event) raise "invalid paramset index" on every CC it maps,
+-- and the MAP menu cannot show it. norns reads strata.pmap before init;
+-- at start Strata moves a map to the 3.4 param of the same meaning or
+-- removes it, and writes the map back
+test("a MIDI map on a param this script has not moves to its 3.4 param or goes at start, so no CC raises (#602)", function()
+  local maps = {
+    -- 3.3 id, cc, out range (3.3's number params mapped in value units)
+    { "lfo_depth_1", 20, 20, 80 }, { "lfo_offset_2", 21, -100, 100 }, { "lfo_phase_3", 22, 0, 100 },
+    { "lfo_clocked_1", 23, 1, 22 },
+    { "lfo_shape_1", 24, 1, 6 }, { "lfo_1", 25, 1, 2 }, { "lfo_free_2", 26, 0, 1 }, { "lfo_mode_3", 27, 1, 2 },
+    { "v1_gone", 28, 0, 1 },
+    { "strata_lfo2_phase", 30, 0, 1 }, { "lfo_phase_2", 31, 0, 100 },  -- the 3.4 param has a map of its own
+    { "master_density", 32, 0, 1 },
+  }
+  local context = load_strata({ before_init = function()
+    -- a map saved in 3.3, read as norns' Script.run reads it before init
+    for _, map in ipairs(maps) do
+      norns.pmap.new(map[1])
+      norns.pmap.assign(map[1], 1, 1, map[2])
+      norns.pmap.data[map[1]].out_lo, norns.pmap.data[map[1]].out_hi = map[3], map[4]
+    end
+    norns.pmap.write()
+    norns.pmap.clear()
+    norns.pmap.read()
+  end })
+  finish_startup(context)
+  local function cc(number, value)
+    return pcall(norns.menu_midi_event, { 0xb0, number, value }, 1)
+  end
+  for _, map in ipairs(maps) do
+    local ok, problem = cc(map[2], 64)
+    assert_true(ok, "CC " .. map[2] .. " (" .. map[1] .. "): " .. tostring(problem))
+  end
+  -- moved, the range kept in the 3.4 param's units
+  cc(20, 127); assert_equal(params:get("strata_lfo1_depth"), 80, "depth's map keeps its 20-80 range")
+  cc(20, 0); assert_equal(params:get("strata_lfo1_depth"), 20)
+  cc(21, 0); assert_equal(params:get("strata_lfo2_offset"), -100, "offset")
+  cc(21, 127); assert_equal(params:get("strata_lfo2_offset"), 100)
+  cc(22, 127); assert_equal(params:get("strata_lfo3_phase"), 100, "phase")
+  cc(23, 127); assert_equal(params:get("strata_lfo1_division"), 22, "clocked rate to division")
+  cc(23, 0); assert_equal(params:get("strata_lfo1_division"), 1)
+  -- gone: the 3.3 ids whose meaning changed, an id of no version, and a 3.3
+  -- map on a param that has its own 3.4 map
+  for _, id in ipairs({ "lfo_shape_1", "lfo_1", "lfo_free_2", "lfo_mode_3", "v1_gone", "lfo_phase_2",
+      "lfo_depth_1", "lfo_offset_2", "lfo_phase_3", "lfo_clocked_1" }) do
+    assert_equal(norns.pmap.data[id], nil, id .. " has no map")
+  end
+  assert_equal(norns.pmap.rev[1][1][31], nil, "lfo_phase_2's CC maps nothing")
+  assert_equal(norns.pmap.rev[1][1][30], "strata_lfo2_phase", "the 3.4 map stays")
+  assert_equal(norns.pmap.rev[1][1][32], "master_density", "a map on a param of this script stays")
+  assert_equal(norns.pmap.data.master_density.out_hi, 1)
+  local said = 0
+  for _, line in ipairs(context.printed) do
+    if line:find("^midi map: ") then said = said + 1 end
+  end
+  assert_equal(said, 10, "one console line per map moved or removed")
+  -- written back: the file norns reads at the next start holds the repair
+  norns.pmap.clear()
+  norns.pmap.read()
+  assert_equal(norns.pmap.rev[1][1][20], "strata_lfo1_depth", "the moved map is in strata.pmap")
+  assert_equal(norns.pmap.data.lfo_shape_1, nil, "a removed map is not")
+  assert_equal(norns.pmap.rev[1][1][32], "master_density")
+end)
+
 test("an unplug of the selected port's device, then a menu visit, resets once", function()
   local context = load_strata(); finish_startup(context)
   params:set("midi_note_off", 2)

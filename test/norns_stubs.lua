@@ -1178,6 +1178,11 @@ local function make_params(util, controlspec)
     return param
   end
 
+  -- a param's type code; an id that is no param raises, through lookup_param
+  function ParamSet:t(id)
+    return self:lookup_param(id).t
+  end
+
   function ParamSet:set_action(id, func)
     self:lookup_param(id).action = func
   end
@@ -2776,6 +2781,121 @@ end
 
 -- Installs fresh stubs as globals. Returns a context table with handles to
 -- the recorders and helpers.
+-- lua/core/pmap.lua, the script's MIDI map (PARAMS > MAP), ported:
+-- data[param id] = {cc, ch, dev, in_lo, in_hi, out_lo, out_hi, accum,
+-- echo, value}, rev[dev][ch][cc] = the id mapped there (16 devices x 16
+-- channels), new, remove, assign, refresh, clear, and write and read of
+-- norns.state.data .. norns.state.shortname .. ".pmap" in norns' text.
+-- norns writes through io.output and has the data folder from the script's
+-- load; the stub writes through the file's handle and makes the folder.
+-- Script.clear clears the map before every script and Script.run reads the
+-- file before init (a test does that in before_init); norns writes it
+-- when the MAP menu changes a map and when the PSET menu saves
+local function make_pmap(util)
+  local pmap = { data = {}, rev = {} }
+
+  function pmap.new(id)
+    pmap.data[id] = { cc = 100, ch = 1, dev = 1, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1, accum = false,
+      echo = false, value = 0 }
+  end
+
+  function pmap.remove(id)
+    local p = pmap.data[id]
+    if p then pmap.rev[p.dev][p.ch][p.cc] = nil end
+    pmap.data[id] = nil
+  end
+
+  function pmap.assign(id, dev, ch, cc)
+    local prev = pmap.rev[dev][ch][cc]
+    if prev and prev ~= id then pmap.remove(prev) end
+    local p = pmap.data[id]
+    pmap.rev[p.dev][p.ch][p.cc] = nil
+    p.dev, p.ch, p.cc = dev, ch, cc
+    pmap.rev[dev][ch][cc] = id
+  end
+
+  function pmap.refresh()
+    for k, v in pairs(pmap.data) do pmap.rev[v.dev][v.ch][v.cc] = k end
+  end
+
+  function pmap.clear()
+    pmap.data = {}
+    pmap.rev = {}
+    for i = 1, 16 do
+      pmap.rev[i] = {}
+      for n = 1, 16 do pmap.rev[i][n] = {} end
+    end
+  end
+
+  local function path() return norns.state.data .. norns.state.shortname .. ".pmap" end
+
+  function pmap.write()
+    local function quote(s) return '"' .. s:gsub('"', '\\"') .. '"' end
+    util.make_dir(norns.state.data)
+    local fd = assert(io.open(path(), "w+"))
+    for k, v in pairs(pmap.data) do
+      local line = string.format('%s:"{', quote(tostring(k)))
+      for x, y in pairs(v) do line = line .. x .. "=" .. tostring(y) .. ", " end
+      fd:write(line:sub(1, -3) .. '}"\n')
+    end
+    fd:close()
+  end
+
+  function pmap.read()
+    local function unquote(s) return s:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"') end
+    local fd = io.open(path(), "r")
+    if not fd then return end
+    fd:close()
+    for line in io.lines(path()) do
+      local name, value = string.match(line, "(\".-\")%s*:%s*(.*)")
+      if name and value and tonumber(value) == nil then
+        pmap.data[unquote(name)] = load("return " .. unquote(value))()
+        if pmap.data[unquote(name)].echo == nil then pmap.data[unquote(name)].echo = false end
+      end
+    end
+    pmap.refresh()
+  end
+
+  pmap.clear()
+  return pmap
+end
+
+-- lua/core/menu/params.lua's norns.menu_midi_event(data, dev), which
+-- _norns.midi.event calls after the vport's event for every message from a
+-- device on a port ("send all midi to menu for param-cc-map"): a CC on a
+-- mapped device, channel and number sets its param as norns does. The
+-- MAP menu's learn is not modeled; the stub's midi.send does not call it,
+-- so a test delivers a CC to it itself
+local function make_menu_midi_event(util)
+  return function(data, dev)
+    local ch = data[1] - 175
+    local cc = data[2]
+    local v = data[3]
+    if ch > 0 and ch < 17 then
+      local r = norns.pmap.rev[dev][ch][cc]
+      if r then
+        local d = norns.pmap.data[r]
+        local t = params:t(r)
+        if d.accum then
+          v = (v > 64) and 1 or -1
+          d.value = util.clamp(d.value + v, d.in_lo, d.in_hi)
+          v = d.value
+        end
+        local s = util.clamp(v, d.in_lo, d.in_hi)
+        s = util.linlin(d.in_lo, d.in_hi, d.out_lo, d.out_hi, s)
+        if t == params.tCONTROL or t == params.tTAPER then
+          params:set_raw(r, s)
+        elseif t == params.tNUMBER or t == params.tOPTION then
+          s = util.round(s)
+          params:set(r, s)
+        elseif t == params.tBINARY then
+          params:delta(r, s)
+        end
+      end
+    end
+  end
+end
+
 function stubs.install(options)
   local util = make_util()
   local controlspec = make_controlspec(util)
@@ -2964,9 +3084,10 @@ function stubs.install(options)
   -- sets them (lua/core/state.lua), for numbered PSETs (params:write(1))
   _G.norns = { state = { data = options.data_dir .. "strata/", shortname = "strata" }, platform = 0, none = none,
     blank = blank, script = { redraw = blank, refresh = none },
-    -- lua/core/pmap.lua: pmap.data[param id] = {dev, ch, cc, in_lo, in_hi,
-    -- out_lo, out_hi, echo, value}, empty until a test maps a param
-    pmap = { data = {}, rev = {} }, enc = context.encoders.api, encoders = { callback = nil },
+    -- lua/core/pmap.lua (make_pmap), cleared as Script.clear does: empty
+    -- until a test maps a param or reads the file
+    pmap = make_pmap(util), menu_midi_event = make_menu_midi_event(util),
+    enc = context.encoders.api, encoders = { callback = nil },
     -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
     -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
     menu = { status = function() return context.menu.mode end,
