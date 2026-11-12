@@ -328,13 +328,13 @@ local function wake_buffer_clock(context, slot)
 end
 
 -- 3.4's step editor (2b's S.lib.pages_seq), as a double for the grid
--- tests: the five functions the grid calls, shaped as 2b gives them
+-- tests: the four functions the grid calls, shaped as 2b gives them
 -- (open_step_editor(voice, step, port) returns true, close_step_editor(port),
--- step_editor() returns {voice, step, port} or nil, step_editor_edited() and
--- step_editor_replacing() booleans, false unless a test sets editor.edited
--- or editor.replacing). Open pushes a modal owner and close pops it, as the
--- real editor does; editor.calls records each open and close. Install it
--- after load_strata
+-- step_editor() returns {voice, step, port} or nil, step_editor_replacing()
+-- a boolean, false unless a test sets editor.replacing; editor.edited is a
+-- test's note of an edit, which nothing reads). Open pushes a modal owner
+-- and close pops it, as the real editor does; editor.calls records each
+-- open and close. Install it after load_strata
 local function step_editor_double()
   local S = local_value("S")
   local editor = {open = nil, edited = false, replacing = false, calls = {}}
@@ -355,7 +355,6 @@ local function step_editor_double()
     end
   end
   function seq.step_editor() return editor.open end
-  function seq.step_editor_edited() return editor.edited end
   function seq.step_editor_replacing() return editor.replacing end
   return editor
 end
