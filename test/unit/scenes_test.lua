@@ -2856,4 +2856,93 @@ test("a recall's lock states run the lock hooks for the voices whose lock change
   assert_equal(table.concat(calls, ", "), "2 locked, 3 unlocked", "its end runs them")
 end)
 
+-- 0b's review findings
+test("apply_entries refuses an unknown only value", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("reverb_mix", 0.7); params:set("filter_type", 3); toggle_lock(4)
+  capture_scene(1)
+  params:set("reverb_mix", 0.2); params:set("filter_type", 1); toggle_lock(4)
+  local entries = S.lib.scenes.scene_entries(S.scenes[1].data)
+  context.clear_engine_calls()
+  for _, only in ipairs({ "block", "discret" }) do
+    local ok, problem = pcall(S.lib.scenes.apply_entries, entries, { only = only })
+    assert_true(not ok, "only = " .. only .. " raises")
+    assert_true(tostring(problem):find(only, 1, true) ~= nil, "the error names the value: " .. tostring(problem))
+  end
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "no continuous value is applied")
+  assert_equal(params:get("filter_type"), 1, "no discrete one")
+  assert_true(not S.frozen[4], "no lock")
+  assert_equal(#context.engine_calls, 0, "nothing reaches the engine")
+  assert_equal(S.scene_recall_in_progress, false, "the recall flag is never left set")
+end)
+
+test("per-voice param entries carry their voice and global ones do not", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  local globals = {}
+  for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do globals[global.id] = true end
+  local per_voice, global_count = {}, 0
+  for _, entry in ipairs(S.lib.scenes.scene_entries(S.scenes[1].data)) do
+    if entry.id and globals[entry.id] then
+      global_count = global_count + 1
+      assert_equal(entry.voice, nil, entry.id .. " (global) has no voice")
+    elseif entry.id then
+      local voice = tonumber(entry.id:match("^v(%d)_"))
+      assert_equal(entry.voice, voice, entry.id .. " carries its voice")
+      per_voice[voice] = (per_voice[voice] or 0) + 1
+    end
+  end
+  assert_equal(global_count, #S.SCENE_GLOBAL_PARAMS, "every global is listed")
+  for voice = 1, 7 do assert_true((per_voice[voice] or 0) > 10, "voice " .. voice .. "'s params are listed") end
+end)
+
+test("a global entry whose id starts with v1_ is not treated as voice 1's", function()
+  local running_at_set = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_fx_params({ name = "probe v1 global", count = 1, add = function()
+      params:add_control("v1_probe", "v1 probe", controlspec.new(0, 1, "lin", 0, 0))
+      params:set_action("v1_probe", function() table.insert(running_at_set, local_value("S").voices[1].active) end)
+    end })
+  end })
+  finish_startup(context)                                         -- voices 1 and 2 running
+  local S = local_value("S")
+  toggle_voice(1)                                                 -- voice 1 stopped
+  -- voice 1's active entry, then a global entry: voice 1 starts after its
+  -- own last entry, before the global is set
+  S.lib.scenes.apply_entries({
+    { kind = "discrete", key = "active", voice = 1, value = true },
+    { kind = "continuous", id = "v1_probe", value = 0.6 },
+  })
+  assert_equal(#running_at_set, 1, "the global is set")
+  assert_equal(running_at_set[1], true, "voice 1 was started before it: the global is not voice 1's entry")
+  assert_true(S.voices[1].active, "voice 1 runs")
+end)
+
+test("a block's apply cannot change the saved scene", function()
+  local received = {}
+  local context = load_strata({ before_init = function()
+    add_scene_block(local_value("S"), { key = "tb", default = function() return {} end,
+      capture = function() return { level = 7, inner = { depth = 3 } } end,
+      validate = function(value) return type(value) == "table" end,
+      apply = function(value)
+        table.insert(received, value.level)
+        value.level, value.added, value.inner.depth = 99, true, 0
+      end, discrete = true })
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  recall_scene(1, 0)
+  assert_equal(received[1], 7, "apply gets the scene's value")
+  assert_same(S.scenes[1].data.tb, { level = 7, inner = { depth = 3 } }, "an instant recall leaves the slot's data as it was")
+  recall_scene(1, 2)
+  context.clock.run_for(3, 0.001)
+  assert_equal(#received, 2, "a fade's end applies it too")
+  assert_equal(received[2], 7, "with the scene's value")
+  assert_same(S.scenes[1].data.tb, { level = 7, inner = { depth = 3 } }, "and leaves the slot's data as it was")
+end)
+
 end

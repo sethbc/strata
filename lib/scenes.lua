@@ -215,7 +215,9 @@ return function(S)
   -- The registered scene blocks (S.registry.scene_blocks, 3.4's 0a: {key,
   -- default = fn(), capture = fn(), validate = fn(value), apply =
   -- fn(value), discrete = true, through_zero = fn(from_value, to_value)}),
-  -- read at each use, after init; a block is data[key] of a scene
+  -- read at each use, after init; a block is data[key] of a scene. apply
+  -- gets a copy of it; validate and through_zero get the stored value and
+  -- must not modify it
   local function scene_blocks()
     return S.registry.scene_blocks or {}
   end
@@ -488,13 +490,15 @@ return function(S)
   -- {kind = "block", key, value}, {kind = "continuous", id, value} (a param
   -- a transition fades), {kind = "discrete", id, value} (a param set at a
   -- transition's end) or {kind = "discrete", key = "active" | "lock" |
-  -- "pattern", voice, value}. A voice's synth and grain params are listed
-  -- in pairs order: one table gives one order, so two lists of one scene
-  -- agree
+  -- "pattern", voice, value}; a per-voice param's entry (continuous or
+  -- discrete) carries its voice too, a global's none. A voice's synth and
+  -- grain params are listed in pairs order: one table gives one order, so
+  -- two lists of one scene agree
   function M.scene_entries(scene_data)
     local entries = {}
-    local function add_param(continuous, param_id, value)
-      table.insert(entries, {kind = continuous and "continuous" or "discrete", id = param_id, value = value})
+    local function add_param(continuous, param_id, value, voice_idx)
+      table.insert(entries, {kind = continuous and "continuous" or "discrete", id = param_id, value = value,
+        voice = voice_idx})
     end
     local function add_voice_state(key, voice_idx, value)
       table.insert(entries, {kind = "discrete", key = key, voice = voice_idx, value = value})
@@ -510,22 +514,22 @@ return function(S)
       local voice_data = scene_data.voices[i]
       local prefix = "v" .. i .. "_"
       add_voice_state("active", i, voice_data.active)
-      add_param(false, prefix .. "source", voice_data.source)
-      for key, value in pairs(voice_data.params) do add_param(true, prefix .. key, value) end
+      add_param(false, prefix .. "source", voice_data.source, i)
+      for key, value in pairs(voice_data.params) do add_param(true, prefix .. key, value, i) end
       -- the discrete grain keys (envelope shape, grain mode) switch at the end
       for key, value in pairs(voice_data.grain) do
-        add_param(not DISCRETE_GRAIN_KEYS[key], prefix .. GRAIN_PARAM_IDS[key], value)
+        add_param(not DISCRETE_GRAIN_KEYS[key], prefix .. GRAIN_PARAM_IDS[key], value, i)
       end
       for slot = 1, NUM_MOD_SLOTS do
         local slot_data = voice_data.crossmod["slot" .. slot]
-        add_param(false, prefix .. "mod_source_" .. slot, slot_data.source)
-        add_param(true, prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-        add_param(true, prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+        add_param(false, prefix .. "mod_source_" .. slot, slot_data.source, i)
+        add_param(true, prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt, i)
+        add_param(true, prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt, i)
       end
-      add_param(true, prefix .. "mod_speed", voice_data.crossmod.speed)
+      add_param(true, prefix .. "mod_speed", voice_data.crossmod.speed, i)
       -- a registered voice param's discrete keys switch at the end
       for _, key in ipairs(sorted_keys(voice_data.extras)) do
-        add_param(not extra_keys[key].range, prefix .. key, voice_data.extras[key])
+        add_param(not extra_keys[key].range, prefix .. key, voice_data.extras[key], i)
       end
       add_voice_state("lock", i, scene_data.frozen[i])
     end
@@ -533,22 +537,25 @@ return function(S)
     return entries
   end
 
-  -- The voice an entry belongs to: its voice field (active, lock, pattern),
-  -- or a per-voice param's v<i>_ id; nil for a block or a global
+  -- The voice an entry belongs to: its voice field (a voice state, a
+  -- per-voice param), never read from an id; nil for a block, a global or
+  -- a number that is no voice
   local function entry_voice(entry)
-    local voice_idx = entry.voice or (entry.id and tonumber(entry.id:match("^v(%d+)_")))
-    if voice_idx and voice_idx >= 1 and voice_idx <= NUM_VOICES then return voice_idx end
+    local voice_idx = entry.voice
+    if is_integer_between(voice_idx, 1, NUM_VOICES) then return voice_idx end
     return nil
   end
 
   -- Apply one entry of apply_entries' list. state holds the list's blocks by
-  -- key, the voices whose source changed and the voices due to start
+  -- key, the voices whose source changed and the voices due to start. A
+  -- block's apply gets a copy of the scene's value, so a module that
+  -- changes its argument never changes a saved scene
   local function apply_entry(entry, state)
     local voice_idx = entry_voice(entry)
-    if entry.voice ~= nil and not voice_idx then return end  -- a voice state for no voice
+    if entry.voice ~= nil and not voice_idx then return end  -- an entry for no voice
     if entry.kind == "block" then
       local record = state.blocks[entry.key]
-      if record then record.apply(entry.value) end
+      if record then record.apply(copy_scene_default(entry.value)) end
     elseif entry.key == "active" then
       -- a voice the scene stops is stopped first, so the engine only records
       -- its source switch instead of building a grain synth to release at
@@ -590,9 +597,13 @@ return function(S)
   -- sync_voice_values_to_engine, even after an error in an action: the flag
   -- is cleared, the syncs run, and the error is raised again with its
   -- traceback. opts.only = "discrete" (the blocks and discrete entries) or
-  -- "continuous" applies only those. Redraws are the caller's
+  -- "continuous" applies only those; any other only raises before anything
+  -- is applied. Redraws are the caller's
   function M.apply_entries(entries, opts)
     local only = opts and opts.only
+    if only ~= nil and only ~= "discrete" and only ~= "continuous" then
+      error("apply_entries: only is nil, \"discrete\" or \"continuous\", not " .. tostring(only), 2)
+    end
     local list = {}
     for _, entry in ipairs(entries) do
       if only == nil or (only == "continuous") == (entry.kind == "continuous") then table.insert(list, entry) end

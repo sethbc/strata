@@ -137,17 +137,20 @@ return function(S)
     for index, destination in ipairs(S.LFO_DESTINATIONS) do labels[index] = destination.label end
     local taken = {}
     for _, label in ipairs(labels) do taken[label] = true end
-    local function add(label, param_id)
-      if taken[label] then error("register_lfo_destination: the label " .. label .. " is taken", 0) end
+    -- kind: the register function the record came from, which a taken label names
+    local function add(kind, label, param_id)
+      if taken[label] then error(kind .. ": the label " .. label .. " is taken", 0) end
       taken[label] = true
       table.insert(S.LFO_DESTINATIONS, fixed_destination(label, param_id))
       table.insert(labels, label)
     end
     for _, entry in ipairs(S.registry.lfo_destinations) do
       if entry.global then
-        add(entry.label, entry.param_id)
+        add("register_lfo_global_destination", entry.label, entry.param_id)
       else
-        for i = 1, NUM_VOICES do add("v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix) end
+        for i = 1, NUM_VOICES do
+          add("register_lfo_destination", "v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix)
+        end
       end
     end
     return labels

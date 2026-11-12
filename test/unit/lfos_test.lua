@@ -652,4 +652,23 @@ test("a global destination record adds one destination after the per-voice ones 
   assert_equal(params:string("strata_lfo1_dest"), "probe glob")
 end)
 
+test("a global destination whose label is taken names its own register function", function()
+  for _, case in ipairs({ { label = "rev mix", why = "a built-in label" }, { label = "v3 hist", why = "a per-voice label" } }) do
+    local ok, problem = pcall(load_strata, { before_init = function()
+      table.insert(local_value("S").registry.lfo_destinations,
+        { label = case.label, param_id = "delay_time", global = true })
+    end })
+    assert_true(not ok, case.why .. " is refused")
+    assert_true(tostring(problem):find("register_lfo_global_destination: the label " .. case.label .. " is taken", 1, true),
+      case.why .. ": the error names register_lfo_global_destination: " .. tostring(problem))
+  end
+  -- a per-voice record's taken label (v1 main is built in) still names register_lfo_destination
+  local ok, problem = pcall(load_strata, { before_init = function()
+    local_value("S").register_lfo_destination("main", "grain_size")
+  end })
+  assert_true(not ok and tostring(problem):find("register_lfo_destination: the label v1 main is taken", 1, true),
+    "a per-voice label: register_lfo_destination: " .. tostring(problem))
+  load_strata()                                                   -- a sound script for the invariant check
+end)
+
 end
