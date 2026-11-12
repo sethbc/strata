@@ -142,4 +142,41 @@ test("push needs an owner with a draw function, once", function()
   assert_equal(modal.top(), nil, "one pop empties it")
 end)
 
+-- #592: the frame clock reads a pushed owner's animates() as it reads a
+-- page's, so an owner's hint or playhead moves over a page that does not
+-- animate; an owner without one leaves the page's as it was
+test("an owner's animates draws every frame over a page that does not; one without changes nothing (#592)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local modal = S.lib.ui_modal
+  local function frames_drawn(count)
+    h.next_frame(context)  -- whatever was asked for before
+    local counter = h.count_screen_draws()
+    for _ = 1, count do h.next_frame(context) end
+    counter.restore()
+    return counter.screen
+  end
+  show_page("MAIN")  -- its record has no animates
+  assert_equal(frames_drawn(3), 0, "MAIN alone draws no frame unasked")
+  local animating = true
+  local owner = { draw = function() end, animates = function() return animating end }
+  modal.push(owner)
+  assert_equal(frames_drawn(3), 3, "an owner that animates: every frame draws")
+  animating = false
+  assert_equal(frames_drawn(3), 0, "once it stops, no frame draws unasked")
+  modal.pop(owner)
+  local plain = { draw = function() end }
+  modal.push(plain)
+  assert_equal(frames_drawn(3), 0, "an owner without animates over MAIN: no frame draws")
+  modal.pop(plain)
+  show_page("SEQ")
+  pattern_toggle()
+  modal.push(plain)
+  assert_equal(frames_drawn(3), 3, "over SEQ playing, the page's animates still draws every frame")
+  modal.pop(plain)
+  pattern_toggle()
+  local ok = pcall(modal.push, { draw = function() end, animates = true })
+  assert_true(not ok, "an owner's animates is a function")
+end)
+
 end

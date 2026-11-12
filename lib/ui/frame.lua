@@ -87,16 +87,20 @@ return function(S)
 
   -- Whether the shown page animates: its record's animates(), run through
   -- contained_call (key "animates"), so an error there counts as false and
-  -- prints once instead of ending the frame clock (#320)
+  -- prints once instead of ending the frame clock (#320). While a modal
+  -- owner is pushed (lib/ui/modal.lua), its own optional animates() counts
+  -- too, read the same way (#592): its body covers the page's
   local animating = false  -- what read_animates found
   local function read_animates(record)
     animating = record.animates() and true or false
   end
-  local function page_animates()
-    local record = S.registry.pages[S.ui_page]
+  local function animates(record)
     if not (record and record.animates) then return false end
     animating = false
     return M.contained_call(UI_PAGES.draw_errors, "animates", "page animates", read_animates, record) and animating
+  end
+  local function page_animates()
+    return animates(S.lib.ui_modal.top()) or animates(S.registry.pages[S.ui_page])
   end
 
   -- One frame. It calls the global redraw(), so norns' swaps apply: nothing
