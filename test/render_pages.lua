@@ -32,7 +32,7 @@ M.STATES = {
   { page = "MAIN", name = "buffer", setup = function(context)
     params:set("v1_source", 3)                      -- voice 1 reads buf 2
     load_buffer(2, "/tmp/strata-render-pad.wav")
-    context.polls.fire("bufferState", 106)          -- buf 2 holds 6 s
+    context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))  -- buf 2 holds 6 s (its load 1)
   end },
   { page = "MAIN", name = "input", setup = function() params:set("v1_source", 10) end },
   { page = "MAIN", name = "alt", setup = function() key(1, 1) end },
