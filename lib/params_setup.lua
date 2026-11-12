@@ -134,10 +134,11 @@ return function(S)
     end
   end
 
-  -- The PSET read hook's state (#314, #554): number_params, every number
-  -- param the records add (Strata's own and the LFO library's, never norns'
-  -- system params), in menu order, filled at init
-  local pset = {number_params = {}}
+  -- The PSET read hook's state (#314, #554, #628), filled at init, in menu
+  -- order: record_params, the id of every param the records add (Strata's
+  -- own, never norns' system params), and number_params, those of them that
+  -- are number params
+  local pset = {number_params = {}, record_params = {}}
 
   -- A number param's value made whole in its action, before it is stored
   -- or reaches the engine (#554): norns' params:read sets each PSET line
@@ -153,15 +154,18 @@ return function(S)
 
   -- Add one part of the PARAMS menu: init runs the records' add functions
   -- in the order they are registered here, which is the menu's order. Each
-  -- number param a record adds (Strata's own and the LFO library's, never
-  -- norns' system params) steps whole numbers (step_whole) and joins
-  -- pset.number_params, which a PSET read rounds (#554)
+  -- param a record adds (Strata's own, never norns' system params) joins
+  -- pset.record_params, which a PSET read gives a default when the file has
+  -- no line for it (#628); each number param steps whole numbers
+  -- (step_whole) and joins pset.number_params, which a PSET read rounds
+  -- (#554)
   local function register_params(name, add)
     S.registry.params[#S.registry.params + 1] = {name = name, add = function()
       local before = #params.params
       add()
       for index = before + 1, #params.params do
         local param = params.params[index]
+        pset.record_params[#pset.record_params + 1] = param.id
         if param.t == params.tNUMBER then
           step_whole(param)
           pset.number_params[#pset.number_params + 1] = param.id
@@ -176,10 +180,48 @@ return function(S)
     return text:match('"' .. id .. '"%s*:%s*([^\n]*)')
   end
 
+  -- The ids a PSET file's text has a line for, found as norns' params:read
+  -- finds them (lua/core/paramset.lua): a line not starting "--" whose
+  -- first quoted string is followed by a colon, unquoted
+  function pset.named_ids(text)
+    local named = {}
+    for line in text:gmatch("[^\n]+") do
+      if line:sub(1, 2) ~= "--" then
+        local quoted = line:match('(".-")%s*:%s*')
+        if quoted then named[(quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"'))] = true end
+      end
+    end
+    return named
+  end
+
+  -- The value a param loads when a PSET has no line for it (#628): its
+  -- default, as norns' set_default gives it, for the types that have one
+  -- (control, number, option, taper, a binary that is not a trigger; a
+  -- control made without a default, the value it starts at); nil for a
+  -- param norns never saves (save off, a trigger, a separator or a group)
+  -- and for a file or text param, which has none
+  function pset.default(param)
+    if param.save == false then return nil end
+    if param.t == params.tCONTROL then
+      local spec = param.controlspec
+      if spec.default ~= nil then return spec.default end
+      return spec:map(0)
+    end
+    if param.t == params.tNUMBER or param.t == params.tOPTION or param.t == params.tTAPER then return param.default end
+    if param.t == params.tBINARY and param.behavior ~= "trigger" then return param.default end
+    return nil
+  end
+
   -- norns' params.action_read, run after every params:read (PARAMS > PSET,
   -- a script's read), with the file's path and the read's silent flag;
   -- every change goes through params:set, so the voices table, the engine
   -- and the screen follow, and honors silent.
+  -- 0. Every param of Strata's records that norns saves and the file has no
+  --    line for goes to its default (#628): a PSET saved before the param
+  --    existed (3.3's has none of 3.4's) plays as it did, never with the
+  --    session's value. norns writes a line for every saved param, so a
+  --    PSET saved now is untouched. Before the PSET hooks, which set what
+  --    they convert (the LFOs' import of 3.3's LFOs) after it.
   -- 1. A PSET saved before format PULSE_RES.pset_format (one without a
   --    strata_pset_format line is format 1, saved before 3.3) holds the
   --    Pulse voice's res as the filter's rq: a res the file sets is
@@ -196,6 +238,19 @@ return function(S)
     local text = file and file:read("*a")
     if file then file:close() end
     local format = text and (tonumber(pset_line(text, "strata_pset_format")) or 1)
+    if text then
+      local named, defaulted = pset.named_ids(text), 0
+      for _, id in ipairs(pset.record_params) do
+        local default = not named[id] and pset.default(params:lookup_param(id))
+        if default then
+          params:set(id, default, silent)
+          defaulted = defaulted + 1
+        end
+      end
+      if defaulted > 0 then
+        print("pset: " .. defaulted .. " params it has no line for (saved before they existed) set to their defaults")
+      end
+    end
     if format and format < S.constants.PULSE_RES.pset_format then
       for voice_idx = 1, NUM_VOICES do
         local id = "v" .. voice_idx .. "_res"
