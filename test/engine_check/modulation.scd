@@ -30,7 +30,7 @@ var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfo
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
 var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
-var checkScatterGlides;
+var checkScatterGlides, checkGateLag;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -255,6 +255,13 @@ addCheckDefs = {
     SynthDef(\strataCheckBusStep, { arg in, out, t_reset = 0;
         var x = In.kr(in, state[\fastModBus].numChannels), step = (x - Delay1.kr(x)).abs;
         Out.kr(out, [Peak.kr(step.reduce(\max), t_reset), Peak.kr(x.abs.reduce(\max), t_reset)]);
+    }).add;
+    // the ratio of two audio buses' left channels, block by block (each
+    // block's first sample), and its largest step from one block to the
+    // next since t_reset
+    SynthDef(\strataCheckRatioStep, { arg a, b, out, t_reset = 0;
+        var ratio = A2K.kr(In.ar(a, 1)) / A2K.kr(In.ar(b, 1)).abs.max(1e-9);
+        Out.kr(out, [ratio, Peak.kr((ratio - Delay1.kr(ratio)).abs, t_reset)]);
     }).add;
     server.sync;
 };
@@ -1209,6 +1216,40 @@ checkGates = {
     ([synthIn, otherIn, silentIn, trackBus, track2Bus, peaks] ++ outs).do(_.free);
 };
 
+// seqGate glides (#614): switched on a running voice, or at a recall's end,
+// the gate closes (no trigger: its envelope is at 0) and opens again over
+// the mute's 20 ms lag, never within one block. Two check stages of the
+// real def fed by one DC source, G's seqGate switched, U ungated: the ratio
+// of their taps, block by block, never steps by more than 0.6 (the lag's
+// first block moves it 37 % of the way, 1 - e^(-6.9 / 15); a switch in one
+// block steps it about 0.98), and it is closed (under 0.001) or open
+// (within 0.001 of 1) 0.15 s after each switch
+checkGateLag = {
+    var group = Group.after(engine.processGroup), synthIn = Bus.audio(server, 2), silentIn = Bus.audio(server, 2);
+    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 2), source, stages, track, results;
+    source = Synth(\strataCheckDC, [\out, synthIn, \level, 0.5], group, \addToHead);
+    track = Synth(\strataCheckRatioStep, [\a, outs[0].index + 8, \b, outs[1].index + 8, \out, trackBus], group, \addToTail);
+    server.makeBundle(nil, { stages = [
+        Synth(\strataVoiceMix, stageArgs.(outs[0], synthIn.index, silentIn.index, [\seqGate, 0, \gateSeconds, 0.1, \gateRelease, 0.05]), track, \addBefore),
+        Synth(\strataVoiceMix, stageArgs.(outs[1], synthIn.index, silentIn.index), track, \addBefore)
+    ] });
+    server.sync; 0.3.wait;
+    results = [1, 0].collect({ arg gate;
+        var read;
+        track.set(\t_reset, 1);
+        server.sync; 0.02.wait;
+        stages[0].set(\seqGate, gate);
+        server.sync; 0.15.wait;
+        read = h.readBus(trackBus);
+        [gate, read[0], read[1]]
+    });
+    check.((results[0][1].abs < 0.001) and: { (results[1][1] - 1).abs < 0.001 } and: { results.every({ arg each; each[2] < 0.6 }) },
+        "modulation: seqGate switched on a running voice glides over 20 ms (seqGate, the tap over the ungated tap 0.15 s after, its largest step a block: %)".format(
+            results.collect({ arg each; "% % %".format(each[0], each[1].round(0.0001), each[2].round(0.0001)) }).join(", ")));
+    group.free;
+    ([synthIn, silentIn, trackBus] ++ outs).do(_.free);
+};
+
 // Mute (design §8.14) on two check stages of the real def, both paths fed:
 // voiceMute 1 silences the tap within 0.1 s whether ungated, gated open or
 // gated closed (a trigger then opens nothing), voiceMute 0 brings it back,
@@ -1562,6 +1603,7 @@ if (area.isNil or: { state.isNil }) {
     checkStageAmp.value;
     checkEqual33.value;
     checkGates.value;
+    checkGateLag.value;
     checkMute.value;
     checkGateEngine.value;
     checkGateKept.value;
