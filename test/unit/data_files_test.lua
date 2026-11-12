@@ -215,7 +215,7 @@ test("read says a file is missing, too large or damaged; read_text gives a file'
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
   local max_bytes = data_files.DATA_FILES.max_bytes
-  assert_equal(max_bytes, 4 * 1024 * 1024, "4 MB (eight full scenes are about 100 KB)")
+  assert_equal(max_bytes, 4 * 1024 * 1024, "4 MB (16 full scenes are at most about 1.1 MB)")
   local path = context.data_dir .. "read.data"
   local value, outcome, why = data_files.read(context.data_dir .. "no_such.data")
   assert_equal(value, nil); assert_equal(outcome, "missing"); assert_equal(why, nil)
