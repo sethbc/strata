@@ -274,19 +274,15 @@ test("the destination shows ~ in the engine, the rate max above 10 Hz in Lua and
   params:set(lfo_id(1, "rate"), 8); redraw()
   params:set(lfo_id(1, "dest"), destination_index("rev mix")); redraw()
   assert_equal(bright_strip_text(context), "8Hz", "below 10 Hz no mark")
-  -- S.lib.matrix (package 1h) routing an LFO marks its depth
+  -- a playing routing of the matrix from an LFO marks its depth
   local S = local_value("S")
-  assert_true(row_has(2, "off 25%") and not row_has(2, " R"), "no matrix: no mark")
-  local asked = {}
-  S.lib.matrix = { uses_source = function(key) table.insert(asked, key); return key == "lfo2" end }
-  local ok, problem = pcall(function()
-    assert_true(row_has(2, "off 25% R"), "LFO 2 is routed")
-    assert_true(row_has(1, "on 25%") and not row_has(1, " R"), "LFO 1 is not")
-    assert_true(#asked >= 2, "the page asked the matrix")
-    assert_screen_layout(context, "a routed LFO")
-  end)
-  S.lib.matrix = nil
-  if not ok then error(problem, 0) end
+  assert_true(row_has(2, "off 25%") and not row_has(2, " R"), "no routing: no mark")
+  S.lib.matrix.set_routing(1, "lfo2", "reverb_mix"); params:set("matrix_1_depth", 40)
+  assert_true(row_has(2, "off 25% R"), "LFO 2 is routed")
+  assert_true(row_has(1, "on 25%") and not row_has(1, " R"), "LFO 1 is not")
+  assert_screen_layout(context, "a routed LFO")
+  params:set("matrix_1", 0)
+  assert_true(row_has(2, "off 25%") and not row_has(2, " R"), "a routing that is off plays nothing: no mark")
 end)
 
 test("ALT+E3 on the destination jumps a group; elsewhere it is fine on the rate and whole steps on a percent", function()

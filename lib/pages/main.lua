@@ -126,19 +126,14 @@ return function(S)
   -- (S.lib.lfos.engine_playing: on, on a fast destination, at a depth above
   -- 0) on one of the voice's fast destinations, scatter
   -- (S.lib.scatter.affects) or a routing of the matrix
-  -- (S.lib.matrix.affects). The scatter and the matrix are read
-  -- defensively, as the LFO page reads the matrix: a test may load
-  -- without them
+  -- (S.lib.matrix.affects)
   local function engine_modulated(voice_idx)
     local lfos = S.lib.lfos
     for n = 1, S.constants.NUM_LFOS do
       local fast = lfos.destination(n).fast
       if fast and fast.voice == voice_idx and lfos.engine_playing(n) then return true end
     end
-    for _, module in ipairs({S.lib.scatter, S.lib.matrix}) do
-      if module and module.affects and module.affects(voice_idx) then return true end
-    end
-    return false
+    return S.lib.scatter.affects(voice_idx) or S.lib.matrix.affects(voice_idx)
   end
   M.engine_modulated = engine_modulated
 

@@ -11,7 +11,7 @@
 - Rows and strip stay between y 10 and 56 (above the hint row's glyphs) for every selected LFO: `LFO_PAGE.row_first_y` 11, `row_spacing` 13, `strip_height` 8.
 - Rows are 13 px apart so the right-hand column keeps a blank pixel row between its strings: a destination (baseline top + 4) sits 6 px under the row above's `on|off` text, and 7 px over its own, which its descender clears (#422).
 - The wave ends at x 63 (`wave_x` 12, `wave_width` 52) so the window mark (`mark_x` 66, the first row's lower line) ends before the widest state text (`off 100% R`, from x 82).
-- The routed mark reads `S.lib.matrix` defensively (`S.lib.matrix and S.lib.matrix.uses_source("lfo" .. n)`): the matrix (package 1h) may not be loaded.
+- The routed mark is `S.lib.matrix.uses_source("lfo" .. n)` (a playing routing reads the LFO), read directly: the matrix is always loaded.
 
 ## Owns
 
