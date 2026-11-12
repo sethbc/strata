@@ -80,12 +80,12 @@ test("the frame clock draws the screen and arc at 15 fps, only when asked (#11)"
   counter.restore()
   assert_equal(counter.screen, 0, "an idle frame leaves the screen alone")
   assert_equal(arc_hardware.refresh_count, arc_refreshes, "and the arc")
-  -- steps of a running LFO (the library writes its scaled and raw text
-  -- params) and the drift of a synth voice's grain pitch show nowhere
-  params:set("lfo_depth_1", 50); params:set("lfo_1", 2)
+  -- steps of a running LFO and the drift of a synth voice's grain pitch
+  -- show nowhere
+  params:set("strata_lfo1_depth", 50); params:set("strata_lfo1", 1)
   next_frame(context)
   counter = count_screen_draws()
-  context.lfo.tick(local_value("lfos")[1], 0.7)
+  context.clock.advance_until(local_value("S").lfo_clock)
   local drift_metro = local_value("drift_metro")
   drift_metro.event()
   next_frame(context)
@@ -663,9 +663,9 @@ test("LFO animates while an LFO runs and SEQ while the patterns play", function(
     return counter.screen
   end
   assert_equal(draws_in_a_second(pages.LFO), 0, "LFO with none running draws nothing (#423)")
-  params:set("lfo_1", 2)
+  params:set("strata_lfo1", 1)
   assert_equal(draws_in_a_second(pages.LFO), 15, "LFO draws every frame while an LFO runs")
-  params:set("lfo_1", 1)
+  params:set("strata_lfo1", 0)
   S.pattern_playing = false
   assert_equal(draws_in_a_second(pages.SEQ), 0, "SEQ stopped draws nothing")
   S.pattern_playing = true

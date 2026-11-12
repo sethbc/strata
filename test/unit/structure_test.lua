@@ -212,8 +212,7 @@ local MODULE_HOMES = {
     "clear_buffer", "buffer_save_path", "save_buffer", "buffer_load_failed", "buffer_save_result",
     "save_buffers_to_disk", "load_buffers_from_disk", "save_buffer_loop" },
   ["lib/record.lua"] = { "record_buffer" },
-  ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "apply_lfo", "lfo_phase_estimate",
-    "add_lfo_params" },
+  ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "add_lfo_params" },
   ["lib/mutation.lua"] = { "randomize_voice", "gentle_mutate", "drift_update", "mean_reverting_step",
     "set_drifted_param", "mutated_value", "clear_undo", "undo_available", "undo_randomize", "note_param_edit" },
   ["lib/scenes.lua"] = { "capture_scene", "recall_scene", "recall_scene_instant", "migrate_scene",
@@ -235,7 +234,7 @@ local MODULE_HOMES = {
   ["lib/ui/menu_watch.lua"] = { "forget_keys_held_through_menu", "watch_menu_opening", "unwatch_menu_opening" },
   ["lib/pages/main.lua"] = { "update_voice_list", "main_param_entry", "main_param_id", "redraw_main" },
   ["lib/pages/fx.lua"] = { "redraw_fx" },
-  ["lib/pages/lfo.lua"] = { "lfo_shape_value", "redraw_lfo" },
+  ["lib/pages/lfo.lua"] = { "lfo_wave_value", "redraw_lfo" },
   ["lib/pages/buffer.lua"] = { "buffer_page_flash", "redraw_buffer",
     "close_buffer_file_selector", "release_superseded_file_selector" },
   ["lib/pages/setup.lua"] = { "redraw_setup", "setup_enc" },
@@ -619,7 +618,6 @@ local RESERVED_CLEANUP_ORDERS = {
 local RESERVED_START_ORDERS = {
   "macros_load",
   "matrix_load",
-  "lfo_clock",
 }
 
 -- No step is registered at a reserved order
@@ -642,7 +640,7 @@ test("cleanup runs every registered step in today's order", function()
   params:set("mutation_enabled", 1)
   pattern_toggle()
   recall_scene(1, 5)
-  params:set("lfo_1", 2)
+  params:set("strata_lfo1", 1)
   record_buffer(1)
   context.audio.register("/tmp/long.wav", { channels = 2, frames = 48000 * 60, rate = 48000 })
   load_buffer(2, "/tmp/long.wav"); S.lib.buffers.set_start(2, 5)  -- a start reload waits
@@ -691,14 +689,14 @@ test("cleanup runs every registered step in today's order", function()
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
     { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
     { "morph clock", S.morph_clock },
-    { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock } }
+    { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
+    { "lfos", S.lfo_clock } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")
     clock_steps[entry[2]] = entry[1]
   end
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
-  for n = 1, local_value("NUM_LFOS") do param_steps["lfo_" .. n] = "lfos" end
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
     ["gestures.data"] = "gestures saved" }
 
@@ -721,7 +719,6 @@ test("cleanup runs every registered step in today's order", function()
     if param_steps[id] then observe(param_steps[id]) end
     return real_set(self, id, ...)
   end
-  for n = 1, local_value("NUM_LFOS") do watch_method(S.lfos[n], "stop", "lfos") end
   watch_method(S.buffer_polls.state, "stop", "buffer polls and timers")
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
   watch_method(context.polls.polls.recordState, "stop", "record poll")
@@ -809,6 +806,7 @@ local function start_steps()
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },
+    { "lfo clock", { "clock started" } },
     { "frame clock", { "clock started" } },
     { "waveform loop", { "clock started" } },
     { "playheads", { "clock started" } },

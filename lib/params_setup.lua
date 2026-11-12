@@ -115,8 +115,8 @@ return function(S)
   -- once, while clock.get_tempo() reads the old tempo until the clock has
   -- ticked twice. On Link, MIDI and crow 60 / clock.get_tempo(): there the
   -- param is a whole BPM that norns refreshes from the clock once a second,
-  -- so a fractional Link session or a peer's change would be off. (lib/lfos.lua
-  -- keeps clock.get_beat_sec(): it mirrors norns' LFO library.)
+  -- so a fractional Link session or a peer's change would be off. A clocked
+  -- LFO's rate (lib/lfos.lua) reads it too.
   function M.beat_seconds_now()
     if params:string("clock_source") == "internal" then return 60 / params:get("clock_tempo") end
     return 60 / clock.get_tempo()

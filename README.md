@@ -4,7 +4,7 @@ An ambient granular soundscape generator for monome norns.
 
 ## Overview
 
-Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. The buffers are instruments of their own: record, overdub and loop into them while they play, and jump, loop, bookmark and scrub through them. A filter, delay and reverb, three global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
+Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. The buffers are instruments of their own: record, overdub and loop into them while they play, and jump, loop, bookmark and scrub through them. A filter, delay and reverb, six global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
 This is version 3.3.2. Version 3.0 added buffers and live input, filter and delay, grain envelopes and triggered grains, LFOs, MIDI and a paged screen; 3.0.1 and 3.0.2 are fix releases. Version 3.1 makes everything playable from the norns alone: new VOICE, SEQ and SCENES pages, K1 held as ALT, lock and randomize undo, fine adjustment, arc rings on every page but SETUP and fuller layouts for the smaller grids. Version 3.2 adds a performance setting (a high tier on the Pi 4, with buffers up to 300 s), per-voice freeze, grain variation and scale quantize, loop regions for buffers, input history and a filter and effect sends per voice; every voice now transposes by grain rate. Version 3.3 makes the buffers instruments: overdub and loop recordings that keep playing while they record, record sources, takes armed by level or started on the clock, random loads, a long file's start point, saving a loop region, waveforms and playheads on the BUFFER page, position jumps and bookmarks, arc scrubbing with friction and a position page on every grid. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -16,7 +16,7 @@ This is version 3.3.2. Version 3.0 added buffers and live input, filter and dela
 - Random files from a folder, a start point anywhere in a long file, and saving a buffer or just its loop region
 - Waveforms and playheads on the BUFFER page; position jumps, loops and four bookmarks per voice on every grid (and bookmark recalls on the BUFFER page); arc scrubbing that glides on with a set friction
 - Per-voice freeze, grain variation (reverse, jitter, intervals), scale quantize and loop regions
-- Cross-modulation between voices, three global LFOs and probability-based mutations
+- Cross-modulation between voices, six global LFOs and probability-based mutations
 - A filter and delay and reverb sends per voice; filter, delay, reverb and a limiter on the master output
 - Eight scenes with smooth recall and a scene sequencer
 - An eight-page screen UI that reaches every parameter, the patterns and the scenes without a grid or arc

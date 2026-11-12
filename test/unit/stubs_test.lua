@@ -1,5 +1,5 @@
 -- test/unit/stubs_test.lua
--- The harness: the norns stubs (params, clock, lfo, midi, arc, tabutil,
+-- The harness: the norns stubs (params, clock, midi, arc, tabutil,
 -- fileselect, ...), load_strata's data directories and the runner
 -- Run alone: lua test/run.lua stubs
 
@@ -304,21 +304,21 @@ end)
 test("stub params:write and params:read follow lua/core/paramset.lua", function()
   local context = load_strata()
   local pset_path = context.data_dir .. "stub.pset"
-  params:set("reverb_mix", 0.25); params:set("filter_type", 2); params:set("lfo_depth_1", 40)
+  params:set("reverb_mix", 0.25); params:set("filter_type", 2); params:set("strata_lfo1_depth", 40)
   params:write(pset_path, "my pset")
   local file = assert(io.open(pset_path, "r")); local text = file:read("*a"); file:close()
   assert_true(text:find('^%-%- my pset\n'), "the name line comes first")
   assert_true(text:find('"filter_type": 2\n', 1, true), "params are written as \"id\": value")
   assert_true(not text:find('"save_scenes"', 1, true), "triggers are not written")
   assert_true(not text:find('"strata_scenes"', 1, true), "separators are not written")
-  params:set("reverb_mix", 0.5); params:set("filter_type", 1); params:set("lfo_depth_1", 0)
+  params:set("reverb_mix", 0.5); params:set("filter_type", 1); params:set("strata_lfo1_depth", 0)
   local order, read_called = {}, nil
   params:set_action("filter_type", function() table.insert(order, "filter_type") end)
   params:set_action("reverb_mix", function() table.insert(order, "reverb_mix") end)
   params.action_read = function(filename, silent) read_called = { filename = filename, silent = silent } end
   params:read(pset_path)
   assert_equal(params:get("filter_type"), 2); assert_near(params:get("reverb_mix"), 0.25, 1e-9)
-  assert_equal(params:get("lfo_depth_1"), 40)
+  assert_equal(params:get("strata_lfo1_depth"), 40)
   assert_equal(table.concat(order, ","), "filter_type,reverb_mix", "actions fire in file order, on a change")
   assert_equal(read_called and read_called.filename, pset_path, "action_read runs after the read")
   assert_equal(params.name, "my pset")
@@ -384,7 +384,7 @@ end)
 test("stub clock.advance is one time-ordered scheduler step and moves util.time (#27)", function()
   local context = load_strata()                  -- init's start-up clock sleeps STARTUP.voice_delay_seconds
   stop_frame_clock(); local_value("S").lib.waveforms.stop()                           -- (its 1/15 s ticks would come first)
-  clock.cancel(local_value("S").lib.playheads.clock_id())
+  clock.cancel(local_value("S").lib.playheads.clock_id()); clock.cancel(local_value("S").lfo_clock)
   assert_true(STARTUP.voice_delay_seconds < 1, "this test needs the start-up clock to wake before the 1 s sleeps")
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
@@ -644,7 +644,7 @@ end)
 test("stub clock.advance_until fails at once when its coroutine is canceled or nothing is pending (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock(); local_value("S").lib.waveforms.stop()
-  clock.cancel(local_value("S").lib.playheads.clock_id())
+  clock.cancel(local_value("S").lib.playheads.clock_id()); clock.cancel(local_value("S").lfo_clock)
   local ticker = clock.run(function() while true do clock.sleep(0.1) end end)
   local target = clock.run(function() clock.sleep(1) end)
   clock.run(function() clock.sleep(0.45); clock.cancel(target) end)
@@ -668,7 +668,7 @@ end)
 test("stub clock ties: equal wake times fire in event-slot order, a sync after a sleep (#51)", function()
   local context = load_strata(); finish_startup(context)
   stop_frame_clock(); local_value("S").lib.waveforms.stop()
-  clock.cancel(local_value("S").lib.playheads.clock_id())
+  clock.cancel(local_value("S").lib.playheads.clock_id()); clock.cancel(local_value("S").lfo_clock)
   local events = {}
   local function log(name) table.insert(events, string.format("%s@%.2f", name, util.time())) end
   -- a placeholder takes the lowest free slot and B the next; once the
@@ -853,89 +853,6 @@ test("stub params:delta runs the param's own delta, and a wrapping control's del
   assert_equal(#deltas, 1, "params:delta went through the replaced delta")
   assert_equal(deltas[1], 2, "with its d")
   assert_equal(params:get("stub_steps"), 5, "and the param's own delta did the work")
-end)
-
-test("stub lfo mirrors lib/lfo params and calls the action with scaled and raw", function()
-  local context = load_strata()
-  local LFO = require("lfo")
-  local got
-  local instance = LFO:add{ shape = "sine", min = -1, max = 1, depth = 0.5, mode = "free", period = 1,
-    baseline = "center", action = function(scaled, raw) got = { scaled, raw } end }
-  instance:add_params("stubtest", nil, "stub")
-  -- the library's params, types and ranges (lua/lib/lfo.lua add_params)
-  assert_equal(params:lookup_param("lfo_group_stubtest").n, 15, "group holds the library's 15 params")
-  local expected_types = {
-    lfo_stubtest = "option", lfo_shape_stubtest = "option", lfo_depth_stubtest = "number",
-    lfo_phase_stubtest = "number", lfo_offset_stubtest = "number", lfo_scaled_stubtest = "text",
-    lfo_raw_stubtest = "text", lfo_min_stubtest = "control", lfo_max_stubtest = "control",
-    lfo_baseline_stubtest = "option", lfo_mode_stubtest = "option", lfo_clocked_stubtest = "option",
-    lfo_free_stubtest = "control", lfo_reset_stubtest = "trigger", lfo_reset_target_stubtest = "option",
-  }
-  for param_id, param_type in pairs(expected_types) do
-    assert_equal(params:lookup_param(param_id).t, params["t" .. param_type:upper()], param_id .. " type")
-  end
-  local depth_param = params:lookup_param("lfo_depth_stubtest")
-  assert_equal(depth_param.min, 0); assert_equal(depth_param.max, 100)
-  assert_equal(params:get("lfo_depth_stubtest"), 50, "depth is a percentage")
-  assert_equal(params:lookup_param("lfo_shape_stubtest").count, 6)
-  assert_equal(params:string("lfo_mode_stubtest"), "free")
-  assert_equal(params:string("lfo_baseline_stubtest"), "from center")
-  local free_spec = params:lookup_param("lfo_free_stubtest").controlspec
-  assert_equal(free_spec.minval, 0.1); assert_equal(free_spec.maxval, 300)
-  assert_near(params:get("lfo_free_stubtest"), 1, 1e-9, "free period")
-  assert_equal(params:string("lfo_stubtest"), "off")
-  assert_equal(instance:get("enabled"), 0)
-
-  context.lfo.tick(instance, 1.0)
-  assert_equal(got, nil, "disabled LFO never fires")
-  params:set("lfo_stubtest", 2)
-  assert_equal(instance:get("enabled"), 1, "state on enables the LFO")
-  context.lfo.tick(instance, 1.0); assert_near(got[1], 0.5, 1e-9); assert_near(got[2], 1.0, 1e-9)
-  context.lfo.tick(instance, 0.0); assert_near(got[1], -0.5, 1e-9, "center baseline is symmetric")
-  assert_equal(params:get("lfo_scaled_stubtest"), -0.5, "scaled value is shown in the text param")
-  params:set("lfo_depth_stubtest", 25)
-  context.lfo.tick(instance, 1.0); assert_near(got[1], 0.25, 1e-9, "depth 25% scales to +-0.25")
-  params:set("lfo_depth_stubtest", 0); got = nil
-  context.lfo.tick(instance, 1.0); assert_equal(got, nil, "depth 0 never fires")
-  params:set("lfo_depth_stubtest", 50); params:set("lfo_stubtest", 1); got = nil
-  context.lfo.tick(instance, 1.0); assert_equal(got, nil, "state off stops the LFO")
-  assert_equal(instance:get("enabled"), 0)
-end)
-
--- lib/lfo.lua's reset_phase and change_period, line by line
-test("stub lfo resets and rescales the phase counter as lib/lfo.lua does (#51)", function()
-  load_strata()
-  local LFO = require("lfo")
-  local beat_sec = clock.get_beat_sec()
-  local clocked = LFO:add{ mode = "clocked", period = 4 }
-  local expected_clocked = { floor = 0.75 * 4, ceiling = 0.25 * 4, ["mid: falling"] = 0.5 * 4, ["mid: rising"] = 4 }
-  for target, counter in pairs(expected_clocked) do
-    clocked:set("reset_target", target); clocked:reset_phase()
-    assert_near(clocked.phase_counter, counter, 1e-12, "clocked reset to " .. target)
-  end
-  local free = LFO:add{ mode = "free", period = 2 }
-  local baseline = beat_sec / 2
-  local expected_free = { floor = 0.75 / baseline, ceiling = 0.25 / baseline, ["mid: falling"] = 0.5 / baseline,
-    ["mid: rising"] = baseline }
-  for target, counter in pairs(expected_free) do
-    free:set("reset_target", target); free:reset_phase()
-    assert_near(free.phase_counter, counter, 1e-12, "free reset to " .. target)
-  end
-  -- a new period keeps the phase: the counter is rescaled (change_period)
-  clocked:set("reset_target", "floor"); clocked:reset_phase()
-  local ppqn = clocked:get("ppqn")
-  clocked:set("period", 8)
-  assert_equal(clocked:get("period"), 8)
-  assert_near(clocked.phase_counter, ((3 + 1 / ppqn) / 4) * 8 - 1 / ppqn, 1e-12, "clocked counter rescaled")
-  free:set("reset_target", "floor"); free:reset_phase()
-  local counter = free.phase_counter
-  free:set("period", 6)
-  local phase = (counter + 1 / ppqn) * beat_sec / 2
-  assert_near(free.phase_counter, (phase * 6 / beat_sec) - 1 / ppqn, 1e-12, "free counter rescaled")
-  -- starting an LFO resets its phase first, as LFO:start does
-  local started = LFO:add{ mode = "clocked", period = 2 }
-  started:start()
-  assert_near(started.phase_counter, 0.75 * 2, 1e-12, "start resets to the floor")
 end)
 
 test("stub midi delivers note_on, cc and pitchbend messages", function()

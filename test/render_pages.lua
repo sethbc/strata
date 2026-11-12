@@ -46,7 +46,7 @@ M.STATES = {
   end },
   { page = "FX", name = "default" },
   { page = "LFO", name = "default", setup = function(context)
-    params:set("lfo_1", 2)
+    params:set("strata_lfo1", 1)
     context.clock.run_for(0.5)
   end },
   { page = "BUFFER", name = "default", setup = function(context)
