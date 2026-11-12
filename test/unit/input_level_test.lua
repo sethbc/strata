@@ -136,4 +136,17 @@ test("a listener that raises stops no other listener and the levels are stored",
   assert_true(printed[1]:find("listener boom", 1, true) ~= nil)
 end)
 
+test("refresh does nothing after cleanup or before the start step", function()
+  local context = load_strata(); finish_startup(context)
+  local level = local_value("S").lib.input_level
+  cleanup()
+  local left, right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
+  level.refresh()
+  assert_true(not left.running and not right.running, "refresh starts no poll after cleanup")
+  assert_equal(left.callback, nil, "and sets no callback"); assert_equal(right.callback, nil)
+  show_page("BUFFER")
+  assert_true(not left.running and not right.running, "nor does a BUFFER visit")
+  assert_equal(left.callback, nil); assert_equal(right.callback, nil)
+end)
+
 end

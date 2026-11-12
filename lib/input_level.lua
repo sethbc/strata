@@ -57,8 +57,10 @@ return function(S)
   -- and rate and start them, stopping an object held before when it is a
   -- different one: norns replaces its poll objects whenever it re-registers
   -- the polls (an engine load), so the start step and each BUFFER visit call
-  -- this (#438). A norns without the polls leaves the level at 0
+  -- this (#438), and it does nothing outside the start step and cleanup. A
+  -- norns without the polls leaves the level at 0
   function M.refresh()
+    if not state.started then return end  -- only between the start step and cleanup
     for _, name in ipairs(INPUT_LEVEL.polls) do
       local input_poll = poll.set(name, function(value) polled(name, value) end)
       local old = state.polls[name]
