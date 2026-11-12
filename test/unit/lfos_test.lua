@@ -536,7 +536,7 @@ test("a tempo change resends a clocked engine LFO's rate", function()
   assert_near(calls[1].args[5], 0.25, 1e-9, "at 60 BPM: 0.25 Hz")
 end)
 
--- Review Focus 1: a tempo change reaches every clocked engine LFO in the
+-- A tempo change reaches every clocked engine LFO in the
 -- step that sees it, whatever waits in the round robin
 test("a tempo change resends every clocked engine LFO's rate in its step, ahead of a full round robin", function()
   local context = load_strata(); finish_startup(context)

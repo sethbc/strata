@@ -291,7 +291,7 @@ test("an empty corner's weight is shared among the others; fewer than two valid 
   assert_equal(S.current_scene, 1, "the current scene stays")
 end)
 
--- 3a fix round 1, the far edges: where every valid corner weighs 0 the
+-- The far edges (the XY morph's review): where every valid corner weighs 0 the
 -- weights are the limit from inside the square, so along a far edge they
 -- follow the position (equal shares only at a diagonal corner point)
 test("on a far edge whose corners are empty the weights still follow the position", function()
