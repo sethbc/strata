@@ -33,10 +33,16 @@ return function(S)
   -- skipped (the applies at rest set every value that moved at all);
   -- corners: in the order ties go to; min_corners: the valid corners the
   -- morph needs; row_partner and column_partner: the corner beside each on
-  -- its row (the same y) and its column (the same x)
+  -- its row (the same y) and its column (the same x); crossing_seconds:
+  -- a crossing's discrete switch is applied at most once in this time
+  -- (#653, ruling 94: the heaviest sustained case, every crossing starting
+  -- all seven voices, 417 messages, and the way back stopping them, 7, is
+  -- 424 messages per 0.6 s, about 707 a second, under the send budget's
+  -- 1500; a crossing of 417 each way would be 1390)
   local MORPH = {apply_hz = 10, hysteresis = 0.02, max_values_per_apply = 120, send_threshold = 1 / 1000,
     epsilon = 1e-9, param_count = 6, corners = {"a", "b", "c", "d"}, min_corners = 2,
-    row_partner = {a = "b", b = "a", c = "d", d = "c"}, column_partner = {a = "c", b = "d", c = "a", d = "b"}}
+    row_partner = {a = "b", b = "a", c = "d", d = "c"}, column_partner = {a = "c", b = "d", c = "a", d = "b"},
+    crossing_seconds = 0.3}
   M.MORPH = MORPH
 
   S.morph_clock = nil
@@ -52,12 +58,17 @@ return function(S)
   -- after the move wins over it); pending: the last apply left values for
   -- the next one; flashed: the plan's empty corner has flashed; clock: the
   -- running clock's own token (a clock whose token is gone was retired: it
-  -- ends at its next wake and applies nothing)
+  -- ends at its next wake and applies nothing); crossed_at: when the last
+  -- crossing's discrete switch was applied (util.time()); crossing_waits:
+  -- the last apply found a crossing it could not apply yet (#653)
   local state = {plan = nil, applied = {values = {}, owned = {}, cursor = 1}, moved = false, move_held = false,
-    move_scene = 0, move_takeovers = 0, pending = false, flashed = false, clock = nil}
+    move_scene = 0, move_takeovers = 0, pending = false, flashed = false, clock = nil, crossed_at = nil,
+    crossing_waits = false}
 
+  -- (a waiting crossing is one from the applied corner: it goes with it)
   local function forget_applied()
     state.applied = {corner = nil, values = {}, owned = {}, cursor = 1}
+    state.crossing_waits = false
   end
 
   -- An entry's identity in every scene's list: a param by id, a block by
@@ -325,11 +336,28 @@ return function(S)
     return current, false
   end
 
+  -- Whether a crossing's discrete switch may be applied now: none was
+  -- within crossing_seconds (#653)
+  local function crossing_allowed()
+    return state.crossed_at == nil or util.time() - state.crossed_at >= MORPH.crossing_seconds - MORPH.epsilon
+  end
+
+  -- The corner an apply takes now, whether it is a crossing, and whether a
+  -- crossing waits: corner_at's, but a crossing within crossing_seconds of
+  -- the last one waits and the applied corner stays (ruling 94). When the
+  -- wait ends, corner_at's answer then is the corner (the newest wins; a
+  -- crossing there and back inside the wait is none)
+  local function corner_now(plan, weights)
+    local corner, crossed = corner_at(plan, weights)
+    if crossed and not crossing_allowed() then return state.applied.corner, false, true end
+    return corner, crossed, false
+  end
+
   -- The current discrete corner, "a" to "d": the one the morph applied, or
   -- the next apply takes at the position now ("a" with no valid corner)
   function M.corner()
     local plan = current_plan()
-    return corner_at(plan, weights_of(plan)) or state.applied.corner or MORPH.corners[1]
+    return (corner_now(plan, weights_of(plan))) or state.applied.corner or MORPH.corners[1]
   end
 
   -- The corners that count at these weights (ruling 87), in MORPH.corners'
@@ -558,9 +586,13 @@ return function(S)
   -- Write the plan at these weights: at a crossing the ramps whose routing
   -- changes go to 0 and switch; the discrete entries that join switch
   -- (recall order, apply_entries); then the continuous values that join.
-  -- Returns whether values are left
+  -- A crossing within crossing_seconds of the last waits (corner_now):
+  -- the corner stays, the continuous values still move. Returns whether
+  -- values are left
   local function write_position(plan, weights, exact)
-    local corner, crossed = corner_at(plan, weights)
+    local corner, crossed, waits = corner_now(plan, weights)
+    state.crossing_waits = waits
+    if crossed then state.crossed_at = util.time() end
     local from = state.applied.corner
     local counting = counting_corners(plan, weights, corner)
     if crossed then cross(plan, from, corner, counting) end
@@ -623,17 +655,20 @@ return function(S)
   local function stop_clock(cancel)
     if cancel and S.morph_clock then clock.cancel(S.morph_clock) end
     S.morph_clock, state.clock = nil, nil
-    state.moved, state.pending = false, false
+    state.moved, state.pending, state.crossing_waits = false, false, false
   end
 
   -- What the clock does at a tick: "move" (apply the latest position), or,
   -- with no move waiting (a move a recall or fade overtook is dropped),
-  -- "rest" while values are left or off their exact blend and nothing took
-  -- over, else nil (the clock stops)
+  -- "rest" while values are left or off their exact blend, or a crossing
+  -- waits, and nothing took over, else nil (the clock stops). A recall or
+  -- a fade since the last apply drops a waiting crossing, as it drops a
+  -- pending move
   local function next_apply()
     if state.moved and move_overtaken() then state.moved = false end
+    if taken_over() then state.crossing_waits = false end
     if state.moved then return "move" end
-    if not taken_over() and (state.pending or rest_due()) then return "rest" end
+    if not taken_over() and (state.pending or state.crossing_waits or rest_due()) then return "rest" end
     return nil
   end
 
@@ -711,12 +746,12 @@ return function(S)
     stop_clock(true)
   end)
 
-  -- A move or values left always have a clock to apply them, and the
-  -- clock is a live coroutine
+  -- A move, values left or a waiting crossing always have a clock to apply
+  -- them, and the clock is a live coroutine
   S.register_invariant("morph clock", function()
-    if (state.moved or state.pending) and S.morph_clock == nil then
+    if (state.moved or state.pending or state.crossing_waits) and S.morph_clock == nil then
       return "a morph apply waits (moved " .. tostring(state.moved) .. ", pending " .. tostring(state.pending)
-        .. ") but no clock runs"
+        .. ", crossing " .. tostring(state.crossing_waits) .. ") but no clock runs"
     end
     local thread = S.morph_clock and clock.threads and clock.threads[S.morph_clock]
     if S.morph_clock and type(thread) == "thread" and coroutine.status(thread) == "dead" then
