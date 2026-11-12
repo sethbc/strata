@@ -24,7 +24,7 @@ The patterns step on norns' clock (PARAMETERS > CLOCK), so with the clock's sour
 ALT+K2 held opens it on the selected voice and the step under the cursor. The line under the header shows them (`v3 step 5`) and the voice's sixteen steps, the one being edited outlined. Below it, a list in three sections:
 
 - **voice** - `length` (1-16 steps), `division` (`1/32` to `1 bar`), `swing` (50-75 %), `gate` (off or on), `gate len` (the gate's length in steps, `0.50 st`), `gate rel` (its release, `0.10 s`), `euclid` (a Euclidean fill: `5/12 +2` is 5 hits over the voice's 12 steps, turned by 2) and `clear` (K3 clears the pattern)
-- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `note` (a scale degree from the voice's pitch, `+3`, or `off`), the step locks `pos` (`0.42`), `pitch` (`1.50`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
+- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `note` (a scale degree from the voice's pitch, `+3`, or `off`), the step locks `pos` (`0.42`), `pitch` (`1.50x`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
 - **chain** - `chain` (off or on), `from`, `scenes` and `bars`, and `quantize` (quantized actions: off, beat or bar), the settings every voice shares
 
 - **E2** - Move through the list

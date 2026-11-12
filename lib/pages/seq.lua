@@ -94,10 +94,10 @@ return function(S)
     {row = "quantize", label = "quantize", param_id = "quantize_actions"},
   }
 
-  -- How a step attribute reads, and the param a step's gate moves on (the
-  -- voice's gate length's range). The step locks' params are the
-  -- sequencer's (SEQ.lock_params: lock_param_name)
-  local ATTR_FORMATS = {pos = "%.2f", pitch = "%.2f", size = "%.2f s", gate = "%.2f st"}
+  -- How a step attribute reads (pitch a ratio, as MAIN's pitch), and the
+  -- param a step's gate moves on (the voice's gate length's range). The
+  -- step locks' params are the sequencer's (SEQ.lock_params: lock_param_name)
+  local ATTR_FORMATS = {pos = "%.2f", pitch = "%.2fx", size = "%.2f s", gate = "%.2f st"}
   local STEP_GATE_PARAM = "seq_gate_length"
 
   -- The step under the cursor, on the selected voice's row
