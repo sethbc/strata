@@ -298,6 +298,55 @@ test("a quantized loop waiting for its next pass starts on a transport start's b
   assert_near(params:get("reverb_mix"), 0.31, 1e-9, "and the pass after it a bar later")
 end)
 
+-- A bar-quantized scene recall (SCENES' K3 with quantize actions on bar)
+-- lands on the bar a bar loop's pass starts on: one tick posts both
+-- resumes, and norns delivers the recall's first (its clock holds the lower
+-- event slot), which stops the loop. The loop's clock, its resume posted,
+-- is never canceled: it ends at that resume. A stop while its wait is far
+-- off cancels it at once. context.clock.advance delivers every posted
+-- resume, as norns does (#626, #588)
+test("a quantized recall at the bar that stops a bar loop raises nothing; a stop mid-wait cancels at once (#626)", function()
+  local context, S, gestures = loaded()
+  params:set("gesture_1_quantize", BAR)
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1.9)  -- one bar
+  gestures.press(1)                                            -- stopped
+  capture_scene(1)                                             -- scene 1: recorder 1 stopped
+  run_to_beat(context, 4 * math.ceil(clock.get_beats() / 4) + 1.5)
+  params:set("quantize_actions", 3)                            -- bar
+  S.lib.quantize.schedule("scene", function() recall_scene(1, 0) end, "S1")
+  gestures.press(1)                                            -- plays from the same bar
+  local loop_clock = S.gestures[1].clock
+  while S.lib.quantize.waiting("scene") do context.clock.advance() end
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a coroutine norns no longer has" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_equal(gestures.state(1), "stopped", "the recall stopped the loop")
+  assert_true(context.clock.threads[loop_clock] == nil, "its clock ended at its resume")
+  gestures.press(1)                                            -- plays again from the next bar
+  loop_clock = S.gestures[1].clock
+  context.clock.run_for(0.5)
+  gestures.press(1)                                            -- stopped a bar's most before its sync lands
+  assert_true(context.clock.threads[loop_clock] == nil, "a stop mid-wait cancels the clock at once")
+  -- a later pass's sync, which matron counts from the last pass's beat: a
+  -- stop between the tick that posts its resume and the delivery
+  gestures.press(1)
+  loop_clock = S.gestures[1].clock
+  run_to_beat(context, 4 * math.ceil(clock.get_beats() / 4) + 1)  -- its first pass has played
+  local done = false
+  repeat
+    context.clock.advance(function()
+      local event = context.clock.events[loop_clock]
+      if not done and event and not event.ready then
+        done = true
+        gestures.press(1)
+      end
+    end)
+  until done
+  errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "a stop as the next pass's resume is posted raises nothing" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_true(context.clock.threads[loop_clock] == nil, "and its clock ended at that resume")
+  assert_equal(gestures.state(1), "stopped")
+end)
+
 test("a failed playback stops its recorder and leaves the others playing", function()
   local context, S, gestures = loaded()
   params:set("gesture_2_quantize", BAR)

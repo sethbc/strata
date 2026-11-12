@@ -32,6 +32,13 @@ return function(S)
     -- before the count counts as moved (a MIDI Start, PARAMETERS > CLOCK >
     -- reset): the pass ends and the loop starts again on the new count
     beat_tolerance = 0.25,
+    -- how near its end a quantized loop's wait may have its resume posted
+    -- (stop_playback, #626): a sync within a tick's jitter of its beat (as
+    -- the sequencer's SEQ.wake_tolerance), a sleep within 10 ms of its end
+    -- (matron's scheduler ticks every 1 ms, on a clock of its own)
+    post_beats = 1 / 32,
+    post_seconds = 0.01,
+    flt_epsilon = 2 ^ -23,  -- matron's FLT_EPSILON (clock_scheduler_next_clock_beat)
     unit_names = {beat = {"beat", "beats"}, bar = {"bar", "bars"}},
     data_version = 1,
     live_file = "gestures.data",       -- in data/strata/
@@ -56,7 +63,8 @@ return function(S)
   -- time list), state ("empty", "recording", "playing", "stopped"), quantize
   -- (a GESTURES.modes name), and for a quantized loop offsets (each
   -- event's beats from the loop's start) and length_beats, clock (its
-  -- coroutine while it plays), loop_start (the beat its current loop began)
+  -- coroutine while it plays) and run (that coroutine's run: its clock and
+  -- the wait it is in), loop_start (the beat its current loop began)
   -- and next_index (the event it plays next); length_seconds (a free
   -- loop's), loop_started_at (util.time() its current pass began),
   -- first_event_at, limit_clock (the 10-minute stop while it records) and
@@ -104,6 +112,10 @@ return function(S)
   -- A playback whose set raised stops its recorder (below): its metro or
   -- clock ends, the error prints once, the other recorders play on
   local fail
+
+  -- The quantized loops' clocks a stop retired (stop_playback): [id] =
+  -- true until each ends at its resume, playing nothing (#626)
+  local retired_clocks = {}
 
   -- A free loop's events play through pattern_time's process; its metro's
   -- callback is pattern_time's next_event, then the failure check (a
@@ -180,12 +192,41 @@ return function(S)
   -- starts again on the next multiple of its length on the new count: at
   -- once when the beat is on one (a transport start wakes the pass-start
   -- sync on its beat 0, #624). A set that raises ends the coroutine and
-  -- stops the recorder
-  local function play_quantized(recorder, k)
+  -- stops the recorder. run is this coroutine's {clock, the wait it is
+  -- in}: a stop (stop_playback) takes the recorder's run away, and the
+  -- coroutine, finding it gone after a wait or a played event, ends there
+  local function play_quantized(recorder, k, run)
     local unit, tolerance = GESTURES.unit_beats[recorder.quantize], GESTURES.beat_tolerance
     local pattern = recorder.pattern
     local function on_grid(beat, step, phase) return phase + step * math.floor((beat - phase) / step + 0.5) end
-    clock.sync(unit)
+    local function stopped()
+      if recorder.run == run then return false end
+      retired_clocks[run.clock] = nil
+      return true
+    end
+    -- Each wait is noted for resume_may_be_posted: a sync's beat as matron
+    -- finds it (counted from the last sync's beat when the last wait was a
+    -- sync, else from now: clock_scheduler.cc), a sleep's end. Each returns
+    -- whether the loop still plays
+    local function sync(beats, offset)
+      local now, epsilon = clock.get_beats(), GESTURES.flt_epsilon
+      local from = run.sync_from or now
+      local landing = math.ceil((from + epsilon) / beats) * beats + (offset or 0)
+      while landing < from + epsilon do landing = landing + beats end
+      run.waiting, run.sync_beat, run.landing = "sync", now, math.max(landing, 0)
+      local woke = clock.sync(beats, offset) or clock.get_beats()
+      -- matron counts the next sync from this one's beat, or from the one a
+      -- reset or a new clock source woke it on
+      run.waiting, run.sync_from = nil, math.min(run.landing, woke)
+      return not stopped()
+    end
+    local function sleep(seconds)
+      run.waiting, run.wake_at, run.sync_from = "sleep", util.time() + seconds, nil
+      clock.sleep(seconds)
+      run.waiting = nil
+      return not stopped()
+    end
+    if not sync(unit) then return end
     local start = on_grid(clock.get_beats(), unit, 0)
     local phase = start % recorder.length_beats
     while true do
@@ -199,19 +240,21 @@ return function(S)
           break
         end
         local wait = start + recorder.offsets[recorder.next_index] - now
-        if wait > 0 then clock.sleep(wait * clock.get_beat_sec()) end
+        if wait > 0 and not sleep(wait * clock.get_beat_sec()) then return end
         local index = recorder.next_index  -- an overdub meanwhile moved it past its own event
         recorder.next_index = index + 1
         local played, failure = apply_event(pattern.event[index])
         if not played then
-          recorder.clock = nil  -- this coroutine ends here: nothing cancels it
+          -- this coroutine ends here: nothing cancels or retires it
+          if recorder.run == run then recorder.run, recorder.clock = nil, nil else retired_clocks[run.clock] = nil end
           fail(k, failure)
           return
         end
+        if stopped() then return end  -- the event's own set stopped the loop
       end
       if not moved then
         local due = start + length
-        clock.sync(length, phase - length)
+        if not sync(length, phase - length) then return end
         local beat = clock.get_beats()
         moved = beat < due - tolerance  -- woken before its beat: the count went back meanwhile
         start = on_grid(beat, length, phase)  -- a late wake (a skipped pass) stays on the loop's grid
@@ -220,7 +263,7 @@ return function(S)
         phase = 0
         local beat = clock.get_beats()
         if math.abs(beat - on_grid(beat, length, 0)) > tolerance then
-          clock.sync(length)
+          if not sync(length) then return end
           beat = clock.get_beats()
         end
         start = on_grid(beat, length, 0)
@@ -234,7 +277,10 @@ return function(S)
     recorder.state = "playing"
     if recorder.offsets then
       recorder.loop_start = nil
-      recorder.clock = clock.run(play_quantized, recorder, k)
+      local run = {}
+      recorder.run = run
+      run.clock = clock.run(play_quantized, recorder, k, run)
+      recorder.clock = run.clock
     else
       recorder.loop_started_at = util.time()
       recorder.pattern:start()  -- plays the first event at once
@@ -242,13 +288,38 @@ return function(S)
     end
   end
 
-  -- Stop recorder k's playback (its metro or clock) and its overdub
+  -- Whether matron may have posted the resume of a quantized loop's clock
+  -- (run: its run) and norns not delivered it yet: a sync whose beat is near
+  -- or passed, or below the beat it synced at (a reset or a new clock
+  -- source has moved it); a sleep near or past its end; and a clock that
+  -- runs now (a stop from its own playback), which never cancels itself
+  local function resume_may_be_posted(run)
+    if run.waiting == "sync" then
+      local now = clock.get_beats()
+      return now < run.sync_beat or run.landing - now <= GESTURES.post_beats
+    elseif run.waiting == "sleep" then
+      return util.time() >= run.wake_at - GESTURES.post_seconds
+    end
+    return true
+  end
+
+  -- Stop recorder k's playback (its metro or clock) and its overdub. A
+  -- quantized loop's clock is never canceled while its resume may be posted:
+  -- norns would deliver that resume to a coroutine it no longer has
+  -- (clock.resume raises, maiden prints the error, #626). Such a clock is
+  -- retired (retired_clocks) and ends at that resume, playing nothing; any
+  -- other is canceled at once
   local function stop_playback(k)
     local recorder = S.gestures[k]
     if recorder.pattern.play == 1 then recorder.pattern:stop() end
-    if recorder.clock then
-      clock.cancel(recorder.clock)
-      recorder.clock = nil
+    local run = recorder.run
+    if run then
+      recorder.run, recorder.clock = nil, nil
+      if resume_may_be_posted(run) then
+        retired_clocks[run.clock] = true
+      else
+        clock.cancel(run.clock)
+      end
     end
     recorder.overdubbing, recorder.loop_start = false, nil
     recorder.pattern:set_overdub(0)
@@ -694,9 +765,15 @@ return function(S)
     write_file(live_dir .. GESTURES.live_file)
   end)
 
-  -- Cleanup stops every recorder's metro and clock (and ends a recording)
+  -- Cleanup stops every recorder's metro and clock (and ends a recording),
+  -- and cancels every retired clock (norns cancels every coroutine right
+  -- after cleanup anyway)
   S.register_cleanup(S.constants.CLEANUP_ORDER.gestures, function()
     stop_all()
+    for id in pairs(retired_clocks) do
+      retired_clocks[id] = nil
+      clock.cancel(id)
+    end
   end)
 
   -- The modulation sources (design §10.1): each recorder's loop phase, and
@@ -726,9 +803,19 @@ return function(S)
   end
 
   -- At most one recorder records; a recorder's clock or metro runs exactly
-  -- while it plays; its 10-minute clock runs exactly while it records an
-  -- event or more; its play param is 1 exactly while it plays
+  -- while it plays, its run with it; its 10-minute clock runs exactly while
+  -- it records an event or more; its play param is 1 exactly while it
+  -- plays; a retired clock runs until its resume and is no recorder's
   S.register_invariant("gesture recorders", function()
+    for id in pairs(retired_clocks) do
+      local thread = clock.threads and clock.threads[id]
+      if clock.threads and (thread == nil or coroutine.status(thread) == "dead") then
+        return "retired clock " .. id .. " has gone but is kept"
+      end
+      for k, recorder in ipairs(S.gestures) do
+        if recorder.clock == id then return "G" .. k .. " plays on retired clock " .. id end
+      end
+    end
     local recording = 0
     for k, recorder in ipairs(S.gestures) do
       local pattern, playing = recorder.pattern, recorder.state == "playing"
@@ -744,6 +831,9 @@ return function(S)
         return "G" .. k .. "'s clock " .. recorder.clock .. " no longer runs"
       end
       if pattern.play == 1 and not metro_live then return "G" .. k .. " plays with its metro stopped" end
+      if (recorder.run ~= nil) ~= (recorder.clock ~= nil) or (recorder.run and recorder.run.clock ~= recorder.clock) then
+        return "G" .. k .. "'s run and clock are out of step"
+      end
       local metro_runs, clock_runs = pattern.play == 1, recorder.clock ~= nil
       if metro_runs and clock_runs then return "G" .. k .. " plays on its metro and its clock" end
       if (metro_runs or clock_runs) ~= playing then return "G" .. k .. " is " .. recorder.state .. " but its playback runs: "

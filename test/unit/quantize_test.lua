@@ -158,6 +158,55 @@ test("cancel drops a key's waiting action and its flash, and says whether one wa
   assert_equal(runs.freeze, 1, "another key's action runs")
 end)
 
+-- Run the clocks a scheduler step at a time up to the step that posts clock
+-- id's resume, and run action there, after the step's posts and before any
+-- delivery (a key's handler can fall there on norns). context.clock.advance
+-- delivers every resume the step posted, as norns does; run_for could not
+-- show a cancel in between (#588)
+local function while_posted(context, id, action)
+  local done = false
+  repeat
+    context.clock.advance(function()
+      local event = context.clock.events[id]
+      if not done and event and not event.ready then
+        done = true
+        action()
+      end
+    end)
+  until done
+end
+
+test("an action dropped with its resume posted ends at its wake doing nothing; any other is canceled at once (#626)", function()
+  local context = load_strata()
+  local quantize = local_value("S").lib.quantize
+  local runs = {}
+  run_to_beat(context, 1.5)
+  params:set("quantize_actions", BAR)
+  quantize.schedule("scene", counter(runs, "first"))
+  quantize.schedule("freeze1", counter(runs, "freeze"))
+  local first, freeze = quantize.actions.scene.clock, quantize.actions.freeze1.clock
+  while_posted(context, first, function()
+    quantize.schedule("scene", counter(runs, "second"))  -- the replacement of a waiting action
+    quantize.cancel("freeze1")                           -- a toggle taken back
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a coroutine norns no longer has" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_equal(runs.first, nil, "the replaced action ran nothing at its wake")
+  assert_equal(runs.freeze, nil, "nor the one taken back")
+  assert_true(context.clock.threads[first] == nil and context.clock.threads[freeze] == nil, "both clocks have ended")
+  run_to_beat(context, 8.02)
+  assert_equal(runs.second, 1, "the replacement runs at its own bar")
+  -- mid-bar no resume can be posted: the replaced action's clock goes at once
+  quantize.schedule("scene", counter(runs, "third"))
+  local third = quantize.actions.scene.clock
+  run_to_beat(context, 9.5)
+  quantize.schedule("scene", counter(runs, "fourth"))
+  assert_true(context.clock.threads[third] == nil, "canceled at once")
+  run_to_beat(context, 12.02)
+  assert_equal(runs.third, nil, "and never runs")
+  assert_equal(runs.fourth, 1)
+end)
+
 test("an action that fails at its beat prints a line and leaves nothing waiting", function()
   local context = load_strata()
   local quantize = local_value("S").lib.quantize

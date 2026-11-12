@@ -15,17 +15,24 @@
 return function(S)
   local M = {}
 
-  -- The scheduler's own tunables: its one param, the modes in option order
-  -- and the beats a mode waits for (clock.sync's quantum)
+  -- The scheduler's own tunables: its one param, the modes in option order,
+  -- the beats a mode waits for (clock.sync's quantum), how near its beat a
+  -- clock's resume may be posted (a tick's jitter, as the sequencer's
+  -- SEQ.wake_tolerance) and matron's FLT_EPSILON, with which its scheduler
+  -- finds a sync's beat (clock_scheduler_next_clock_beat)
   local QUANTIZE = {param_count = 1, param_id = "quantize_actions", modes = {"off", "beat", "bar"},
-    beats = {beat = 1, bar = 4}}
+    beats = {beat = 1, bar = 4}, wake_tolerance = 1 / 32, flt_epsilon = 2 ^ -23}
   M.QUANTIZE = QUANTIZE
   M.PARAM_COUNT = QUANTIZE.param_count  -- the params add_params adds
 
   -- The waiting actions, by key: {clock = the coroutine that waits, flash =
-  -- the header text it shows, or nil, token = its number}. Tests read the
-  -- clocks here
+  -- the header text it shows, or nil, token = its number, sync_beat = the
+  -- beat it synced at, landing = the beat its sync lands on}. Tests read
+  -- the clocks here
   M.actions = {}
+  -- The clocks of dropped actions whose resume matron may have posted,
+  -- [id] = true: each ends at that resume, doing nothing (#626)
+  M.retired = {}
   local last_token = 0  -- each waiting action's own number, never reused
 
   -- The mode the param names ("off" before the params exist)
@@ -39,14 +46,30 @@ return function(S)
     if action.flash and S.lib.ui_flash.text("header") == action.flash then S.lib.ui_flash.start("header", nil) end
   end
 
-  -- Drop the action of this key that waits, if one does: its clock is
-  -- canceled and, unless keep_flash, its flash ends. Returns whether one
-  -- waited
+  -- Whether matron may have posted the resume of a waiting action's clock
+  -- and norns not delivered it yet: its sync's beat is near or passed, or
+  -- the beat is below the one it synced at (a reset or a new clock source
+  -- has moved its sync since)
+  local function resume_may_be_posted(action)
+    local now = clock.get_beats()
+    return now < action.sync_beat or action.landing - now <= QUANTIZE.wake_tolerance
+  end
+
+  -- Drop the action of this key that waits, if one does, and, unless
+  -- keep_flash, end its flash. Its clock is never canceled while its resume
+  -- may be posted: norns would deliver that resume to a coroutine it no
+  -- longer has (clock.resume raises, maiden prints the error, #626). Such a
+  -- clock is retired (M.retired) and ends at that resume, doing nothing;
+  -- any other is canceled at once. Returns whether one waited
   local function cancel(key, keep_flash)
     local action = M.actions[key]
     if not action then return false end
     M.actions[key] = nil
-    clock.cancel(action.clock)
+    if resume_may_be_posted(action) then
+      M.retired[action.clock] = true
+    else
+      clock.cancel(action.clock)
+    end
     if not keep_flash then end_flash(action) end
     return true
   end
@@ -78,10 +101,17 @@ return function(S)
     end
     local beats = QUANTIZE.beats[waits]
     last_token = last_token + 1
-    local action = {flash = label and (tostring(label) .. " at " .. waits) or nil, token = last_token}
+    -- the clock's first wait is this sync, so matron counts it from now
+    local now = clock.get_beats()
+    local action = {flash = label and (tostring(label) .. " at " .. waits) or nil, token = last_token,
+      sync_beat = now, landing = math.ceil((now + QUANTIZE.flt_epsilon) / beats) * beats}
     action.clock = clock.run(function()
       clock.sync(beats)
-      if M.actions[key] == action then M.actions[key] = nil end
+      if M.actions[key] ~= action then
+        M.retired[action.clock] = nil  -- dropped meanwhile (cancel): it ends here
+        return
+      end
+      M.actions[key] = nil
       end_flash(action)
       local ran, failure = xpcall(fn, with_traceback)
       if not ran then print("strata: quantized " .. key .. " failed: " .. tostring(failure)) end
@@ -103,20 +133,33 @@ return function(S)
     params:add_option(QUANTIZE.param_id, "quantize actions", QUANTIZE.modes, 1)
   end
 
-  -- An action waits exactly while its clock runs
+  -- An action waits exactly while its clock runs, and a retired clock runs
+  -- until its resume (it is forgotten then)
   S.register_invariant("quantize", function()
     for key, action in pairs(M.actions) do
       if type(action.clock) ~= "number" then return key .. " waits with no clock" end
       if clock.threads and clock.threads[action.clock] == nil then
         return key .. " waits on clock " .. action.clock .. ", which no longer runs"
       end
+      if M.retired[action.clock] then return key .. " waits on clock " .. action.clock .. ", which was retired" end
+    end
+    for id in pairs(M.retired) do
+      if clock.threads and clock.threads[id] == nil then return "retired clock " .. id .. " has gone but is kept" end
     end
   end)
 
-  -- Cleanup cancels every waiting action (the flashes' own step ends the
-  -- header's flash)
+  -- Cleanup cancels every waiting action's clock and every retired one
+  -- (norns cancels every coroutine right after cleanup anyway); the flashes'
+  -- own step ends the header's flash
   S.register_cleanup(S.constants.CLEANUP_ORDER.quantize, function()
-    for key in pairs(M.actions) do cancel(key, true) end
+    for key, action in pairs(M.actions) do
+      M.actions[key] = nil
+      clock.cancel(action.clock)
+    end
+    for id in pairs(M.retired) do
+      M.retired[id] = nil
+      clock.cancel(id)
+    end
   end)
 
   return M
