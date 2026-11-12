@@ -1821,6 +1821,72 @@ test("stub clock: with a latency, run_for posts every tick due by a delivery bef
   assert_equal(#context.clock.take_errors(), 0, "a clock due after the delivery was never posted: its cancel raises nothing")
 end)
 
+-- A clock that sleeps math.huge (a waiting quantized action's flash,
+-- lib/quantize.lua) is never due: matron's tick never finds clock_time >=
+-- infinity. No helper takes it as the next event, posts it or moves time to
+-- it: time stops at the last finite event or at the requested end (#650).
+-- Returns its id and whether it woke
+local function start_forever_sleeper()
+  local state = { woke = false }
+  state.id = clock.run(function() clock.sleep(math.huge); state.woke = true end)
+  return state
+end
+
+test("stub clock: advance never moves time to a clock that sleeps forever (#650)", function()
+  local context = load_strata(); finish_startup(context); quiet_clocks()
+  local forever = start_forever_sleeper()
+  local start = util.time()
+  context.clock.advance()
+  assert_equal(util.time(), start, "alone: nothing is due, and time stays")
+  assert_true(not forever.woke and context.clock.events[forever.id].ready, "it still waits, never posted")
+  local woke = false
+  clock.run(function() clock.sleep(0.25); woke = true end)
+  context.clock.advance()
+  assert_true(woke, "beside a finite sleeper: the finite one wakes")
+  assert_near(util.time(), start + 0.25, 1e-12, "at its own wake-up")
+  context.clock.advance()
+  assert_near(util.time(), start + 0.25, 1e-12, "then nothing is due: time stops at the last finite event")
+  assert_true(not forever.woke and context.clock.events[forever.id].ready, "the forever sleeper still waits")
+  clock.cancel(forever.id)
+end)
+
+test("stub clock: run_for never moves time to a clock that sleeps forever, and ends at its end (#650)", function()
+  for _, latency in ipairs({ 0, 0.01 }) do
+    local what = "latency " .. latency
+    local context = load_strata(); finish_startup(context); quiet_clocks()
+    local forever = start_forever_sleeper()
+    local start = util.time()
+    context.clock.run_for(1, latency)
+    assert_near(util.time(), start + 1, 1e-12, what .. ", alone: time ends at the requested end")
+    local woke = false
+    clock.run(function() clock.sleep(0.25); woke = true end)
+    context.clock.run_for(1, latency)
+    assert_true(woke, what .. ", beside a finite sleeper: the finite one wakes")
+    assert_near(util.time(), start + 2, 1e-12, what .. ": and time ends at the requested end")
+    assert_true(not forever.woke and context.clock.events[forever.id].ready, what .. ": the forever sleeper still waits")
+    clock.cancel(forever.id)
+  end
+end)
+
+test("stub clock: advance_until fails at once for a clock that sleeps forever, and runs past it to a finite one (#650)", function()
+  local context = load_strata(); finish_startup(context); quiet_clocks()
+  local forever = start_forever_sleeper()
+  local start = util.time()
+  local ok, message = pcall(context.clock.advance_until, forever.id)
+  assert_true(not ok and tostring(message):find("never wakes", 1, true), "alone: it never wakes: " .. tostring(message))
+  assert_equal(util.time(), start, "and time stays")
+  local woke = false
+  local finite = clock.run(function() while true do clock.sleep(0.25); woke = true end end)
+  ok, message = pcall(context.clock.advance_until, forever.id)
+  assert_true(not ok and tostring(message):find("never wakes", 1, true), "beside a finite sleeper: at once: " .. tostring(message))
+  assert_true(not woke and util.time() == start, "running nothing, time staying")
+  context.clock.advance_until(finite)
+  assert_true(woke, "the finite sleeper wakes")
+  assert_near(util.time(), start + 0.25, 1e-12, "at its own wake-up, past the forever sleeper")
+  assert_true(not forever.woke and context.clock.events[forever.id].ready, "the forever sleeper still waits")
+  clock.cancel(forever.id); clock.cancel(finite)
+end)
+
 -- matron's clock_set_source (and crow's input division) reschedule every
 -- waiting sync from the new source's beat (clock_scheduler_reschedule_sync_events:
 -- the next multiple of its beats after the new beat, plus its offset), with

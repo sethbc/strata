@@ -2,6 +2,7 @@
 
 - A clock error the stub records must be claimed (`context.clock.take_errors()`), or the test that left it fails: an error never passes silently. So must an error the script catches itself and prints (`context.take_script_errors()`, below, #473).
 - Every helper that runs the scheduler (`advance`, `advance_until`, `run_for`) posts every resume of a tick before it delivers any, and delivers every posted one, also to a coroutine canceled since the post (which raises, as on norns). Never deliver one event at a time: a cancel by an earlier resume of the same tick would then hide the error norns raises (#588).
+- A wait whose wake is not finite (`clock.sleep(math.huge)`) is never due: no helper takes it as the next event, posts it or moves `util.time()` to it; time stops at the last finite event or at the requested end (#650).
 - The stub's instant is matron's tick (ruling 92): every event due within `MATRON_TICK_SECONDS` (1 ms, `clock_scheduler.cc`'s `usleep(1000)`) of a tick's first wake-up is posted with it, and before Lua delivers at a time, every tick due by then is posted. Never group by exact equality alone: wake-ups that coincide by design differ by rounding (1e-16 s to 1e-10 s), and a tick shared on a device would then hide a cancel between them.
 
 ## Time and the clock
@@ -13,7 +14,7 @@ Time:
 
 Waits:
 - `clock.run` resumes the coroutine at once, so an error in its first part reaches the caller.
-- `clock.sleep(s)` wakes at `util.time() + s` (negative counts as 0, a non-number raises).
+- `clock.sleep(s)` wakes at `util.time() + s` (negative counts as 0, a non-number raises). A wait whose wake is not finite (`clock.sleep(math.huge)`, as a waiting quantized action's flash does in `lib/quantize.lua`) is never due, as matron's tick never finds `clock_time` at infinity: no helper takes it as the next event, posts it or moves time to it (#650). `advance` with nothing else pending leaves the time as it is, `run_for` ends at its end, and `advance_until` on it fails at once ("never wakes"), running nothing; it still waits in `clock.events` until it is canceled.
 - `clock.sync(beats, offset)` wakes at the next multiple of `beats` plus `offset` on the beat timeline (`clock.get_beats()`, one beat per `clock.get_beat_sec()` = 60 / `clock.get_tempo()`), with matron's `FLT_EPSILON` (2^-23). It counts from the coroutine's previous sync beat when its last wait was a sync, so a coroutine resumed a whole period late never skips a beat. `beats <= 0` raises.
 - `clock.cancel` needs an integer id.
 
