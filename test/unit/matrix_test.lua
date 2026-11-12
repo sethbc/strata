@@ -860,6 +860,80 @@ test("matrix: learn sets the destination from the next hand-touched param", func
   assert_equal(matrix.learn(17), false, "no routing 17")
 end)
 
+-- #626: learn's timeout clock is retired, never canceled, so learn ending
+-- (K2, a touch, a new learn) as its 10 s resume is posted raises nothing
+-- and the old clock ends nothing a newer learn armed
+test("matrix: learn ending as its timeout's resume is posted retires the clock, never cancels it (#626)", function()
+  local context, S, matrix = loaded()
+  local function at_timeout(fn)
+    context.clock.advance_until(S.matrix_learn_clock, fn)
+    local errors = context.clock.take_errors()
+    assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  end
+  matrix.learn(1)
+  at_timeout(function() matrix.cancel_learn() end)                       -- K2
+  assert_equal(matrix.learning(), nil)
+  matrix.learn(2)
+  at_timeout(function() enc_param_delta(3, "reverb_mix", 1) end)          -- a touch
+  assert_equal(matrix.routing(2).dest, "reverb_mix", "the touch learned")
+  matrix.learn(3)
+  at_timeout(function() matrix.learn(4) end)                             -- a new learn
+  assert_equal(matrix.learning(), 4, "the new learn still waits")
+  assert_true(S.matrix_learn_clock ~= nil, "on its own clock")
+  context.clock.run_for(10.1)
+  assert_equal(matrix.learning(), nil, "and times out 10 s after it was armed")
+  -- long before its wake no resume can be posted: the clock is canceled,
+  -- so a burst of learns holds no clock slots
+  matrix.learn(5)
+  local early = S.matrix_learn_clock
+  matrix.cancel_learn()
+  assert_equal(clock.threads[early], nil, "an early end cancels the clock")
+  -- cleanup cancels a retired clock still waiting
+  matrix.learn(5)
+  local retired = S.matrix_learn_clock
+  context.clock.run_for(9.95)
+  matrix.cancel_learn()
+  assert_true(clock.threads[retired] ~= nil, "near its wake the clock is retired, and waits for its wake")
+  cleanup()
+  assert_equal(clock.threads[retired], nil, "cleanup cancels it")
+end)
+
+-- Every flash learn raises fits the header's flash room
+-- (S.constants.HEADER.flash_width) whole: the refusal, and a learned
+-- destination for the widest routing number and the widest label
+test("matrix: every flash of learn fits the header's flash room", function()
+  local context, S, matrix = loaded()
+  local room, flash = S.constants.HEADER.flash_width, S.lib.ui_flash
+  local function touched(id)
+    local voice = id:match("^v(%d+)_main$")
+    return voice and main_param_id(tonumber(voice)) or id
+  end
+  local function learned(k, id)
+    matrix.learn(k)
+    enc_param_delta(3, touched(id), 1)
+    return flash.text("header")
+  end
+  local widest_k
+  for k = 1, 16 do
+    if not widest_k or h.text_width("R" .. k) > h.text_width("R" .. widest_k) then widest_k = k end
+  end
+  local flashes, widest_id, widest = {}, nil, -1
+  for _, id in ipairs(matrix.destination_ids()) do
+    local text = learned(widest_k, id)
+    table.insert(flashes, text)
+    if h.text_width(text) > widest then widest_id, widest = id, h.text_width(text) end
+  end
+  for k = 1, 16 do table.insert(flashes, learned(k, widest_id)) end
+  matrix.learn(1)
+  enc_param_delta(3, "macro_2", 1)
+  table.insert(flashes, flash.text("header"))
+  matrix.cancel_learn()
+  for _, text in ipairs(flashes) do
+    assert_true(h.text_width(text) <= room, text .. " (" .. h.text_width(text) .. " px) fits the header's " .. room .. " px")
+  end
+  context.clock.run_for(2)
+end)
+
 test("matrix: unknown source keys and destination ids are kept verbatim through a load and a save, with a console line", function()
   local context, S, matrix = loaded()
   params:set("macro_1", 1)
