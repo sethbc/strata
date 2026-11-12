@@ -57,7 +57,7 @@ var addSplitReferences = {
             intervals: (1..8).collect({ arg index; ("interval" ++ index).asSymbol.kr(0) }),
             intervalCount: \intervalCount.kr(0), intervalProb: \intervalProb.kr(1), quantize: \quantize.kr(0), scaleNote: \scaleNote.kr(60),
             filterType: \filterType.kr(0), filterFreq: \filterFreq.kr(5000), filterRes: \filterRes.kr(0.5), filterMix: \filterMix.kr(0),
-            delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1)
+            delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1), fastMod: 0 ! 5
         )
     };
     SynthDef(\strataCheckGrainRing32Split, {

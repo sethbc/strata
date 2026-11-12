@@ -32,6 +32,9 @@ var awaitReply = { arg condition, timeout = 5; h.awaitReply(condition, timeout) 
 var grainDefs = h.grainDefs;
 var floodCount = 640;   // more small probes than the whole pool holds
 var reserveBus = Bus.control(server, 1);
+// 3.4's modulation nodes at each probe of the worst cases, both tiers:
+// [tier, case, [engine LFO nodes, scatter nodes, offset nodes]]
+var modulationRunning = List.new;
 
 // Send the flood of small probes now (in processGroup, at the tail), with
 // error reports off for that bundle. Returns their bus and node IDs; read
@@ -131,10 +134,21 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (the buffer def pays for the head guard: about 8 KB of its 16 KB saving)
-    check.((sizes.size == 2) and: { (sizes[0] - sizes32[0]) <= -12 } and: { (sizes[1] - sizes32[1]) <= -6 },
-        "memory: each grain synth is under 3.2's (at least 12 KB for the ring, 6 KB for the buffer def with its head guard) (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
-    // the stage's size (design 3.3 §0c.6; it fails above 40 KB, the budget 3.4 keeps)
+    // (the buffer def pays for the head guard: about 8 KB of its 16 KB
+    // saving. 3.4's fast modulation then adds to both defs, the block's
+    // In.kr and the pitch and size offsets, and to the buffer def the
+    // position offset: 0.9 KB to the ring, 1.7 KB to the buffer def. So the
+    // margins are 10 and 4 KB since 3.4, where 3.3's were 12 and 6: 11.0 and
+    // 5.1 KB measured in a full run in one sclang (11.8 and 5.1 with the
+    // memory area alone, which reads each def a probe's 0.85 KB lower), each
+    // margin about a KB under its figure; 88 KB above is the limit)
+    check.((sizes.size == 2) and: { (sizes[0] - sizes32[0]) <= -10 } and: { (sizes[1] - sizes32[1]) <= -4 },
+        "memory: each grain synth is under 3.2's (at least 10 KB for the ring, 4 KB for the buffer def with its head guard, with 3.4's offsets) (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
+    // the stage's size (design 3.3 §0c.6): under 42 KB since 3.4, where 3.3
+    // kept 40. 3.4's cutoff and amp offsets, step gate and mute take it from
+    // 35.4 to 40.4 KB (41.3 in a full run in one sclang, which reads every
+    // def a probe's 0.85 KB higher), and every floor still holds with them (the tightest
+    // case keeps 536-556 KB above its floor: docs/notes/engine/memory.md)
     stageKB = if (SynthDescLib.global.at(\strataVoiceMix).isNil) { 0 } {
         var before = floodFit.value, synths, after;
         synths = count.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
@@ -145,7 +159,7 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     };
-    check.((stageKB > 0) and: { stageKB < 40 }, "memory: a voice's mix stage takes under 40 KB of the pool (% KB; estimate 35-37)".format(stageKB.round(0.1)));
+    check.((stageKB > 0) and: { stageKB < 42 }, "memory: a voice's mix stage takes under 42 KB of the pool (% KB; 40.4 measured at 3.4)".format(stageKB.round(0.1)));
     group.free; privateBus.free;
 };
 
@@ -188,6 +202,30 @@ var checkRecordSizes = {
         "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it)".format(
             (guardKB - plainKB).round(0.1), guardKB.round(0.1), plainKB.round(0.1)));
     group.free; privateBus.free; controlBus.free;
+};
+
+// What each node of 3.4's modulation area takes of the pool (design §3.6):
+// the eight engine LFO defs, scatter and the offset node, twenty of each
+// writing a private control bus
+var checkModulationSizes = {
+    var group = Group.after(engine.processGroup), controlBus = Bus.control(server, 40);
+    var shapes = [\Sine, \Tri, \Square, \Up, \Down, \Sah, \Smooth, \Drunk];
+    var defNames = shapes.collect({ arg name; ("strataFastLfo" ++ name).asSymbol }) ++ [\strataScatter, \strataFastOffsets];
+    var missing = defNames.select({ arg name; SynthDescLib.global.at(name).isNil });
+    var sizes = if (missing.notEmpty) { [] } {
+        defNames.collect({ arg name;
+            sizeOf.({ arg index;
+                Synth(name, [\out, controlBus.index + (if (name == \strataFastOffsets or: { name == \strataScatter }) { 0 } { index }),
+                    \rate, 10, \depth, 0.5], group)
+            })
+        })
+    };
+    var ugens = (defNames ++ grainDefs ++ [\strataVoiceMix]).collect({ arg name;
+        SynthDescLib.global.at(name) !? { arg desc; "% %".format(name, desc.def.children.size) } });
+    check.(missing.isEmpty and: { sizes.every({ arg size; size > 0 }) },
+        "memory: the modulation area's nodes take % of the pool (by allocation probes; missing defs %; UGens: %)".format(
+            [defNames, sizes.round(0.1)].flop.collect({ arg pair; "% % KB".format(*pair) }).join(", "), missing, ugens.join(", ")));
+    group.free; controlBus.free;
 };
 
 // A scenario that errors while the groups are paused still leaves them
@@ -270,6 +308,22 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var slotOf = { arg voice, step; ((voice + step) % target.numBuffers) + 1 };
     var probeBus = Bus.control(server, probeCount), figures = List.new;
     var recordingProbes = 12, recordingsStarted;
+    // six engine LFOs on six voices (smooth and drunk, the shapes with the
+    // most UGens, at 20 Hz) and scatter on every voice and destination,
+    // running through every scenario (3.4: design §3.6, §13)
+    var startModulation = {
+        6.do({ arg lfo; command.(\setFastLfo, lfo, lfo, lfo % 5, [7, 6][lfo % 2], 20.0, 0.5, 0.0) });
+        command.(\setScatter, 1.0, 1.0, 31, 127);
+    };
+    var stopModulation = {
+        6.do({ arg lfo; command.(\stopFastLfo, lfo) });
+        command.(\setScatter, 0.0, 1.0, 31, 127);
+    };
+    var modulationNodes = {
+        var names = target.areaState[\modulation][\fastModGroup] !? { arg group; h.synthNames(group) } ? [];
+        [names.count({ arg name; name.asString.beginsWith("strataFastLfo") }), names.count(_ == \strataScatter),
+            names.count(_ == \strataFastOffsets)]
+    };
     // the eight recordings, one per source kind: input, pre-master,
     // post-master, voices 1-5 (recordBuffer's source: 0, 1, 2, 3-7)
     var recordingSources = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -354,6 +408,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         values = h.readBus(probeBus).keep(count);
         fits = (values.size == count) and: { values.every({ arg value; value > 0.5 }) };
         figures.add(freeKB.round(1));
+        modulationRunning.add([target.tier, label, modulationNodes.value]);
         check.(wasHeld and: { cutting.size > 0 } and: { present == cutting.size },
             "memory: the cutting synths are still there when the probes start, held in their fade (%: % of %%)".format(
                 label, present, cutting.size, if (wasHeld) { "" } { ", but the scenario never held the voices" }));
@@ -385,6 +440,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     // every scenario runs guarded: an error in one still resumes the groups and frees the holds (#218)
     guardedHold.value(engineGroups, pendingHolds, {
         probeBus.setAll(0); server.sync;
+        startModulation.value;
+        server.sync; 0.1.wait;
         startAll.value;
         server.sync; 0.2.wait;
         sourceSteps.do({ arg sourceOf, step;
@@ -498,6 +555,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
             });
         target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
         h.stopAllVoices(target);
+        stopModulation.value;
+        server.sync; 0.6.wait;
         probeBus.free;
     });
     figures
@@ -565,12 +624,16 @@ idleFreeKB = (floodFit.value * probeKB) + reserveKB;
 checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
 checkRecordSizes.value;
+checkModulationSizes.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
     "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
         idleFreeKB.round(10), probeKB.round(0.1)));
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
+check.((modulationRunning.size == 16) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1] }) },
+    "memory: six engine LFOs and scatter on every voice and destination run through every worst case on both tiers (% probes; cases without them: %)".format(
+        modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
     "memory: 3 MB free on both tiers with eight recordings running (%)".format(
         recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));

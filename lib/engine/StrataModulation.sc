@@ -2,13 +2,14 @@
 // The modulation area: 3.4's fast modulation. Five destinations per voice
 // (pitch, position, size, cutoff, amp) take an offset from a control bus,
 // fastModBus, indexed by (voice, note slot, destination) through
-// fastModChannel only; the engine LFOs, scatter and the matrix's offset
-// node write it from fastModGroup, before voiceGroup. Lua owns every base
-// value: the buses hold offsets only. As 3.4's Wave 0 leaves it, the area
-// holds the buses, the group, the five commands (checked, recorded, no
-// node) and the neutral hooks the grain SynthDefs and the mix stage call
-// (fastModRead, fastMod, fastModPosition, voiceMixMod), so every bus at 0
-// plays exactly as 3.3. See docs/notes/engine/modulation.md.
+// fastModChannel only. The writers run in fastModGroup, before voiceGroup:
+// the offset node (\strataFastOffsets, the values Lua's matrix computes) at
+// its head, then the engine LFOs (one node per LFO, one SynthDef per shape)
+// and scatter. The grain SynthDefs (pitch, position, size) and the per-voice
+// mix stage (cutoff, amp) add the offsets to what Lua sent, which they never
+// store: Lua owns every base value, the buses hold offsets only. The stage's
+// step gate and mute are this area's too (voiceMixMod). See
+// docs/notes/engine/modulation.md.
 
 + Engine_Strata {
     // Fast destinations per voice: 0 pitch, 1 position, 2 size, 3 cutoff,
@@ -25,15 +26,51 @@
     numFastLfos { ^6 }
     numFastLfoShapes { ^8 }
 
+    // An offset m is in half ranges: pitch, position and size move by m x
+    // these (half of the Lua specs' ranges of grain_pitch 0.25-4, buf_pos
+    // 0-1 and grain_size 0.01-0.5; a docs test compares them), the cutoff
+    // by fastModCutoffFactor ^ m (31.62 squared is filter_freq's 20-20000:
+    // m = 1 is half its ten octaves)
+    fastModHalfRanges { ^[1.875, 0.5, 0.245] }
+    fastModCutoffFactor { ^31.62 }
+
+    // The engine LFO SynthDefs, one per shape, in shape order
+    fastLfoShapeNames { ^[\Sine, \Tri, \Square, \Up, \Down, \Sah, \Smooth, \Drunk] }
+    fastLfoDefName { arg shape; ^("strataFastLfo" ++ this.fastLfoShapeNames[shape]).asSymbol }
+
+    // The envelopes' attack and release (s): an engine LFO's (and its depth
+    // lag), scatter's
+    fastLfoFadeSeconds { ^0.02 }
+    scatterFadeSeconds { ^0.5 }
+
+    // The offset node's key in synths (one of effectKeys: it never ends on
+    // its own, so messages to it go plainly)
+    fastOffsetsKey { ^\fastOffsets }
+
+    // The step gate's attack (s, design 3.4 §8.12), as the stage's
+    // control-rate envelope runs it: whole control blocks, at least 5 ms (4
+    // blocks, 5.33 ms, at 48 kHz). EnvGen.kr ends a segment on its whole
+    // blocks without reaching its level (5 ms, 3.75 blocks, stopped at 0.8),
+    // and the next segment starts there: the hold would climb from 0.8 to 1
+    // over gateSeconds. A hundredth of a block over the whole number keeps
+    // the float product from rounding down a block; the attack reaches
+    // 4 / 4.01 of the level and the hold the rest.
+    gateAttackSeconds {
+        var server = context.server, blockSeconds = server.options.blockSize / (server.sampleRate ? 48000);
+        ^((0.005 / blockSeconds).ceil + 0.01) * blockSeconds
+    }
+
     // The modulation area (order 160)
     strataAreaModulation {
         ^(
             order: 160,
             allocState: { this.allocFastModulation },
+            addDefs: { this.addFastModDefs; [] },
             addCommands: { this.addFastModCommands },
-            start: { areaState[\modulation][\fastModGroup] = Group.before(voiceGroup) },
-            stop: { areaState[\modulation][\fastModGroup] !? { arg group; group.free } },
+            start: { this.startFastModulation },
+            stop: { this.stopFastModulation },
             free: { this.freeFastModBuses },
+            effectKeys: [this.fastOffsetsKey],
             // The stage's gate and mute (design 3.4 §8.12, §8.14), as the mix
             // area's filter and send params: kept with the voice's grain
             // controls (a replaced stage restarts with them) and sent to the
@@ -51,12 +88,14 @@
     // fastModNoteSlots x numFastDestinations channels: 35), silentFastModBus
     // (numFastDestinations channels, always 0: the default fastModIn of the
     // grain SynthDefs and the stage, never control bus 0, norns' input
-    // follower), lfos (one place per engine LFO for its node), scatter (its
-    // node), received (what each command last took, for the engine check)
-    // and fastModGroup (made in start). Every voice's grain synths and stage
-    // read its note slot 0 block: fastModIn in grainControls (every grain
-    // synth, replacements and restarts included, starts with it) and in the
-    // mix area's stageControls (made by then: order 120)
+    // follower), lfos (one place per engine LFO: an Event of its node and
+    // settings, or nil), scatter (its place), nodeChannels (each LFO node ->
+    // the channel it writes), received (what each command last took, for the
+    // engine check), stopped and fastModGroup (made in start). Every voice's
+    // grain synths and stage read its note slot 0 block: fastModIn in
+    // grainControls (every grain synth, replacements and restarts included,
+    // starts with it) and in the mix area's stageControls (made by then:
+    // order 120)
     allocFastModulation {
         var state = areaState[\modulation], server = context.server;
         state[\fastModBus] = Bus.control(server, numVoices * this.fastModNoteSlots * this.numFastDestinations);
@@ -65,7 +104,9 @@
         state[\silentFastModBus].setAll(0);
         state[\lfos] = Array.newClear(this.numFastLfos);
         state[\scatter] = nil;
+        state[\nodeChannels] = IdentityDictionary.new;
         state[\received] = IdentityDictionary.new;
+        state[\stopped] = true;
         numVoices.do({ arg voice;
             var block = this.fastModBlock(voice, 0);
             grainControls[voice][\fastModIn] = block;
@@ -77,6 +118,27 @@
     freeFastModBuses {
         var state = areaState[\modulation];
         [\fastModBus, \silentFastModBus].do({ arg name; state[name] !? { arg bus; bus.free } });
+    }
+
+    // fastModGroup, at the head of xg (before voiceGroup, so the offsets are
+    // written before any grain synth or stage reads them in a block), with
+    // the offset node at its head, from start to stop
+    startFastModulation {
+        var state = areaState[\modulation];
+        state[\stopped] = false;
+        state[\fastModGroup] = Group.before(voiceGroup);
+        synths[this.fastOffsetsKey] = Synth(\strataFastOffsets, [\out, this.fastModBlock(0, 0)], state[\fastModGroup], \addToHead);
+    }
+
+    // Every node goes with the group. The places are forgotten first, so no
+    // node's end starts another or zeroes a channel
+    stopFastModulation {
+        var state = areaState[\modulation];
+        state[\stopped] = true;
+        state[\lfos] = Array.newClear(this.numFastLfos);
+        state[\scatter] = nil;
+        synths.removeAt(this.fastOffsetsKey);
+        state[\fastModGroup] !? { arg group; group.free };
     }
 
     // The channel of voice v's note slot n, destination d: index + (v x
@@ -92,41 +154,296 @@
     }
 
     // A block's first channel (destination 0): what a grain synth or stage
-    // reads its numFastDestinations channels from
+    // reads its numFastDestinations channels from. fastModBlock(0, 0) is the
+    // bus's first channel, which the whole-bus writers (the offset node,
+    // scatter) write from
     fastModBlock { arg voice, noteSlot;
         ^this.fastModChannel(voice, noteSlot, 0)
     }
 
-    // The hooks, neutral in Wave 0 (no UGen; package 1a fills them).
-    // fastModRead: the block's offsets, one per destination (both grain
-    // SynthDefs, before their controls Event and reader).
-    fastModRead { arg fastModIn; ^0 ! this.numFastDestinations }
+    // Zero count channels from first (/c_fill): a writer that ended leaves
+    // its last value on a control bus
+    zeroFastModChannels { arg first, count;
+        context.server.sendMsg('/c_fill', first, count, 0);
+    }
+
+    // The hooks. fastModRead: the block's offsets, one per destination, in
+    // one In.kr (both grain SynthDefs, before their controls Event and
+    // reader; the stage, in voiceMixMod).
+    fastModRead { arg fastModIn; ^In.kr(fastModIn, this.numFastDestinations) }
 
     // fastMod: the grain controls Event with pitch and size offset (called
-    // first in grainSignal; the offsets are the Event's fastMod).
-    fastMod { arg controls; ^controls }
+    // first in grainSignal, before grainRate, grainDur and the readers; the
+    // offsets are the Event's fastMod), clipped to the Lua specs' ranges.
+    // The cutoff and amp channels are read and unused: the stage applies
+    // them (3.5's per-note amp becomes a gain here).
+    fastMod { arg controls;
+        var c = controls.copy, m = controls[\fastMod], half = this.fastModHalfRanges;
+        c[\pitchShift] = (c[\pitchShift] + (half[0] * m[0])).clip(0.25, 4);
+        c[\grainSize] = (c[\grainSize] + (half[2] * m[2])).clip(0.01, 0.5);
+        ^c
+    }
 
     // fastModPosition: a buffer grain's bufPos with its position offset
-    // (strataGrainBuf, before slotGrainReader).
-    fastModPosition { arg bufPos, m; ^bufPos }
+    // (strataGrainBuf, before slotGrainReader, so slotScanPhase and
+    // slotHeadGuard see it), clipped to 0-1
+    fastModPosition { arg bufPos, m; ^(bufPos + (this.fastModHalfRanges[1] * m[1])).clip(0, 1) }
 
     // voiceMixMod: the stage's controls Event (\strataVoiceMix, before both
     // filter banks and voiceLevel). Declares the stage's fastModIn (its
     // voice's block, from stageControls; default the silent bus) and the gate
-    // and mute controls (design 3.4 §8.12, §8.14), and sets the two values the
-    // stage's level lines read: ampOffset 0 (the amp channel's offset, through
-    // voiceLevel on both paths) and voiceGate 1 (the factor on the stage's
-    // whole output, after the mirror's tap of the other path). At those
-    // values the stage's graph is 3.3's.
+    // and mute controls (design 3.4 §8.12, §8.14), reads the block, and sets
+    // what the stage reads: filterFreq x fastModCutoffFactor ^ m3 (clipped to
+    // 20-20000, before both banks and their 0.05 s lag), ampOffset m4
+    // (through voiceLevel on both paths) and voiceGate, the factor on the
+    // stage's whole output after the mirror's tap of the other path:
+    //   (1 - gate x (1 - env)) x (1 - mute lagged 20 ms)
+    // env is gateAttackSeconds up (5 ms in whole control blocks),
+    // gateSeconds held, gateRelease down, started by the
+    // stage's t_trig (retrigger's, the accent's) and restarted from its level
+    // by a new one; velocity never reaches it. With every channel at 0,
+    // seqGate 0 and voiceMute 0 the stage plays 3.3's graph's values.
     voiceMixMod { arg controls;
-        controls[\fastModIn] = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
-        controls[\seqGate] = \seqGate.kr(0);
-        controls[\gateSeconds] = \gateSeconds.kr(0.1);
-        controls[\gateRelease] = \gateRelease.kr(0.1);
-        controls[\voiceMute] = \voiceMute.kr(0);
-        controls[\ampOffset] = 0;
-        controls[\voiceGate] = 1;
+        var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index), m = this.fastModRead(fastModIn);
+        var seqGate = \seqGate.kr(0), gateSeconds = \gateSeconds.kr(0.1), gateRelease = \gateRelease.kr(0.1);
+        var voiceMute = \voiceMute.kr(0), gate, mute, env;
+        // (written on the controls' own names: the Lua stub reads the
+        // enumerations from "seqGate.round.clip(0, 1)" and
+        // "voiceMute.round.clip(0, 1)")
+        gate = seqGate.round.clip(0, 1);
+        mute = voiceMute.round.clip(0, 1);
+        env = EnvGen.kr(Env([0, 1, 1, 0], [this.gateAttackSeconds, gateSeconds.clip(0.005, 120), gateRelease.clip(0.005, 4)]),
+            controls[\t_trig]);
+        controls[\fastModIn] = fastModIn;
+        controls[\seqGate] = seqGate;
+        controls[\gateSeconds] = gateSeconds;
+        controls[\gateRelease] = gateRelease;
+        controls[\voiceMute] = voiceMute;
+        controls[\filterFreq] = (controls[\filterFreq] * (this.fastModCutoffFactor ** m[3])).clip(20, 20000);
+        controls[\ampOffset] = m[4];
+        controls[\voiceGate] = (1 - (gate * (1 - env))) * (1 - mute.lag(0.02));
         ^controls
+    }
+
+    // The area's SynthDefs, all control rate: the eight engine LFOs (one
+    // function, one def per shape), scatter and the offset node
+    addFastModDefs {
+        var state = areaState[\modulation], numChannels = state[\fastModBus].numChannels, fade = this.fastLfoFadeSeconds, offsets;
+        // An engine LFO: a phase over 0-1 at rate Hz (one step per control
+        // block), reset by t_sync to syncPhase; the shape's u (0-1) of it;
+        // ((2u - 1) x depth + offset) on one channel, depth lagged and the
+        // whole through a 20 ms ASR that frees the node at its release's end
+        this.fastLfoShapeNames.do({ arg name, shape;
+            SynthDef(this.fastLfoDefName(shape), { arg out, rate = 0.25, depth = 0, offset = 0, t_sync = 0, syncPhase = 0, gate = 1;
+                var phase = Phasor.kr(t_sync, rate * ControlDur.ir, 0, 1, syncPhase);
+                var u = this.fastLfoShape(shape, phase);
+                var env = EnvGen.kr(Env.asr(fade, 1, fade), this.openedGate(gate), doneAction: 2);
+                Out.kr(out, ((((2 * u) - 1) * depth.lag(fade)) + offset) * env);
+            }).add;
+        });
+        // Scatter: slow smooth noise on every channel, each at rate x its own
+        // spread (drawn here, at build: voices and destinations never move
+        // together) times its gain (depth x the channel's voice and
+        // destination bits), through a 0.5 s ASR; one Out over the whole bus
+        SynthDef(\strataScatter, { arg out, rate = 0.1, gate = 1;
+            var gains = \gains.kr(0 ! numChannels), spread = { rrand(0.8, 1.2) } ! numChannels;
+            var env = EnvGen.kr(Env.asr(this.scatterFadeSeconds, 1, this.scatterFadeSeconds), this.openedGate(gate), doneAction: 2);
+            Out.kr(out, LFDNoise3.kr(rate * spread) * gains * env);
+        }).add;
+        // The offset node: Lua's offsets (the matrix's sums, half ranges),
+        // lagged, on the whole bus
+        offsets = SynthDef(\strataFastOffsets, { arg out, lag = 0.05;
+            Out.kr(out, Lag.kr(\offsets.kr(0 ! numChannels), lag));
+        }).add;
+        // (setFastOffset sets one of its values by control index)
+        state[\offsetsIndex] = offsets.allControlNames.detect({ arg control; control.name == \offsets }).index;
+    }
+
+    // An engine LFO's u (0-1) at phase (§2.2): sine, tri, square, up, down;
+    // s&h a new uniform value at each cycle start, held; smooth linear from
+    // the last s&h value to the next over the cycle; drunk a random walk of
+    // uniform steps of ±0.2, reflected at 0 and 1, linear between, like smooth
+    fastLfoShape { arg shape, phase;
+        var draws;
+        ^switch (shape)
+        { 0 } { ((phase * 2pi).sin * 0.5) + 0.5 }
+        { 1 } { 1 - ((phase * 2) - 1).abs }
+        { 2 } { phase < 0.5 }
+        { 3 } { phase }
+        { 4 } { 1 - phase }
+        { 5 } { this.fastLfoDraws(phase, Dwhite(0, 1, inf))[\next] }
+        { 6 } { draws = this.fastLfoDraws(phase, Dwhite(0, 1, inf)); draws[\prev] + ((draws[\next] - draws[\prev]) * phase) }
+        { 7 } { draws = this.fastLfoDraws(phase, Dbrown(0, 1, 0.2, inf)); draws[\prev] + ((draws[\next] - draws[\prev]) * phase) }
+    }
+
+    // A demand sequence's value drawn at the LFO's start and at each cycle
+    // start (the phase falls: a wrap, or a sync back), and the value before
+    // it (the start's own at the start: a first cycle from a value to itself)
+    fastLfoDraws { arg phase, values;
+        var start = Impulse.kr(0) > 0, wrap = (HPZ1.kr(phase) < 0) + start;
+        var next = Demand.kr(wrap, 0, values);
+        ^(next: next, prev: Latch.kr(Select.kr(start, [Delay1.kr(next), next]), wrap))
+    }
+
+    // An engine LFO's node from its place (shape, channel, controls), at the
+    // tail of fastModGroup, watched until it ends
+    startFastLfo { arg lfo, place;
+        var synth = Synth(this.fastLfoDefName(place[\shape]), place[\controls], areaState[\modulation][\fastModGroup], \addToTail);
+        ^this.watchFastLfo(lfo, synth, place[\channel])
+    }
+
+    watchFastLfo { arg lfo, synth, channel;
+        areaState[\modulation][\nodeChannels][synth] = channel;
+        synth.onFree({ this.fastLfoEnded(lfo, synth) });
+        ^synth
+    }
+
+    // An LFO's node ended. Still its place's and running: its release ended
+    // just as setFastLfo re-gated it, so it starts again (an LFO is never
+    // left without its node). Its place's, released: the LFO has none now and
+    // its channel goes to 0. Another's (replaced, or freed for a new node):
+    // its channel goes to 0 unless the LFO's node writes it now. Other
+    // writers on that channel write it again in the next block.
+    fastLfoEnded { arg lfo, synth;
+        var state = areaState[\modulation], channel = state[\nodeChannels].removeAt(synth), place;
+        if (state[\stopped]) { ^this };
+        place = state[\lfos][lfo];
+        if (place.notNil and: { place[\synth] === synth }) {
+            if (place[\running]) { place[\synth] = this.startFastLfo(lfo, place) } {
+                state[\lfos][lfo] = nil;
+                channel !? { this.zeroFastModChannels(channel, 1) };
+            };
+        } {
+            if (channel.notNil and: { place.isNil or: { place[\channel] != channel } }) { this.zeroFastModChannels(channel, 1) };
+        };
+    }
+
+    // setFastLfo: the LFO's node made if it has none; else set (a releasing
+    // one re-gated), replaced in the same server step on a new shape
+    // (Synth.replace; a releasing one is freed and a new one started in its
+    // place), moved on a new voice or destination, its old channel zeroed in
+    // the same bundle. Never more than one node per LFO
+    setFastLfo { arg lfo, voice, destination, shape, rate, depth, offset;
+        var state = areaState[\modulation], place = state[\lfos][lfo], channel = this.fastModChannel(voice, 0, destination);
+        var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old;
+        if (state[\stopped]) { ^this };
+        if (place.isNil) {
+            place = (shape: shape, channel: channel, controls: controls, running: true);
+            state[\lfos][lfo] = place;
+            place[\synth] = this.startFastLfo(lfo, place);
+            ^this
+        };
+        oldChannel = place[\channel];
+        place[\channel] = channel;
+        place[\controls] = controls;
+        if (shape != place[\shape]) {
+            place[\shape] = shape;
+            old = place[\synth];
+            place[\synth] = if (place[\running]) {
+                this.watchFastLfo(lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
+            } {
+                this.sendToSynth(old.freeMsg);
+                this.startFastLfo(lfo, place)
+            };
+            place[\running] = true;
+            if (oldChannel != channel) { this.zeroFastModChannels(oldChannel, 1) };
+        } {
+            place[\running] = true;
+            state[\nodeChannels][place[\synth]] = channel;
+            this.sendToSynth(*([place[\synth].setMsg(\gate, 1, *controls)]
+                ++ (if (oldChannel != channel) { [['/c_fill', oldChannel, 1, 0]] } { [] })));
+        };
+    }
+
+    // stopFastLfo: release the LFO's node (20 ms); its channel is zeroed
+    // when it ends (fastLfoEnded). No-op without a running node
+    stopFastLfo { arg lfo;
+        var place = areaState[\modulation][\lfos][lfo];
+        if (place.notNil and: { place[\running] }) {
+            place[\running] = false;
+            this.sendToSynth(place[\synth].setMsg(\gate, 0));
+        };
+    }
+
+    // syncFastLfo: the LFO's phase now (a releasing node too). No-op without
+    // a node
+    syncFastLfo { arg lfo, phase;
+        areaState[\modulation][\lfos][lfo] !? { arg place; this.sendToSynth(place[\synth].setMsg(\syncPhase, phase, \t_sync, 1)) };
+    }
+
+    // Scatter's gains, a channel's index from fastModBlock(0, 0): depth on
+    // every channel whose voice and destination bits are set, else 0
+    scatterGains { arg depth, destinations, voices;
+        var first = this.fastModBlock(0, 0), gains = 0 ! areaState[\modulation][\fastModBus].numChannels;
+        numVoices.do({ arg voice;
+            if (voices.bitTest(voice)) {
+                this.numFastDestinations.do({ arg destination;
+                    if (destinations.bitTest(destination)) { gains[this.fastModChannel(voice, 0, destination) - first] = depth };
+                });
+            };
+        });
+        ^gains
+    }
+
+    // setScatter: depth above 0 makes the node (or sets it, a releasing one
+    // re-gated); depth 0 releases it (0.5 s), keeping its gains to fade from
+    setScatter { arg depth, rate, destinations, voices;
+        var state = areaState[\modulation], place = state[\scatter], gains;
+        if (state[\stopped]) { ^this };
+        if (depth > 0) {
+            gains = this.scatterGains(depth, destinations, voices);
+            if (place.isNil) {
+                place = (rate: rate, gains: gains, running: true);
+                state[\scatter] = place;
+                place[\synth] = this.startScatter(place);
+            } {
+                place[\rate] = rate;
+                place[\gains] = gains;
+                place[\running] = true;
+                this.sendToSynth(place[\synth].setMsg(\gate, 1, \rate, rate), place[\synth].setnMsg(\gains, gains));
+            };
+        } {
+            if (place.notNil) {
+                place[\rate] = rate;
+                this.sendToSynth(*([place[\synth].setMsg(\rate, rate)] ++ (if (place[\running]) { [place[\synth].setMsg(\gate, 0)] } { [] })));
+                place[\running] = false;
+            };
+        };
+    }
+
+    // Scatter's node from its place, its gains set in the same bundle, at the
+    // tail of fastModGroup, watched until it ends
+    startScatter { arg place;
+        var synth;
+        context.server.makeBundle(nil, {
+            synth = Synth(\strataScatter, [\out, this.fastModBlock(0, 0), \rate, place[\rate]], areaState[\modulation][\fastModGroup], \addToTail);
+            synth.setn(\gains, place[\gains]);
+        });
+        synth.onFree({ this.scatterEnded(synth) });
+        ^synth
+    }
+
+    // Scatter's node ended: started again if its release ended just as
+    // setScatter re-gated it; else scatter has none and every channel goes
+    // to 0 (the LFOs and the offset node write theirs again in the next block)
+    scatterEnded { arg synth;
+        var state = areaState[\modulation], place = state[\scatter];
+        if (state[\stopped]) { ^this };
+        if (place.notNil and: { place[\synth] === synth } and: { place[\running] }) {
+            place[\synth] = this.startScatter(place);
+        } {
+            if (place.notNil and: { place[\synth] === synth }) { state[\scatter] = nil };
+            if (state[\scatter].isNil) { this.zeroFastModChannels(this.fastModBlock(0, 0), state[\fastModBus].numChannels) };
+        };
+    }
+
+    // setFastOffset: one value of the offset node's offsets (a plain set: it
+    // never ends on its own)
+    setFastOffset { arg voice, noteSlot, destination, offset;
+        var state = areaState[\modulation];
+        if (state[\stopped]) { ^this };
+        this.setSynth(this.fastOffsetsKey,
+            state[\offsetsIndex] + (this.fastModChannel(voice, noteSlot, destination) - this.fastModBlock(0, 0)), offset);
     }
 
     // An ignored command's line: posted, or given to the function in
@@ -161,14 +478,14 @@
         areaState[\modulation][\received][command] = values;
     }
 
-    // The five commands (design 3.4 §3.4, §10.2). Wave 0 checks their
-    // indices and then every continuous argument's finiteness (a bad one of
-    // either is ignored with one line, and the command does nothing), clips
-    // the continuous arguments only then, records what they took and creates
-    // no node. The Lua engine stub reads the clips (name = msg[i].clip(...))
-    // as its limits (and its index limits from the four numbers above); a
-    // setFastOffset offset is clipped on its own name, so the stub checks
-    // only that it is finite (Lua's matrix sends a sum the engine clamps)
+    // The five commands (design 3.4 §3.4, §10.2). Each checks its indices,
+    // then every continuous argument's finiteness (a bad one of either is
+    // ignored with one line, and the command does nothing), clips the
+    // continuous arguments only then, records what it took and acts. The Lua
+    // engine stub reads the clips (name = msg[i].clip(...)) as its limits
+    // (and its index limits from the four numbers above); a setFastOffset
+    // offset is clipped on its own name, so the stub checks only that it is
+    // finite (Lua's matrix sends a sum the engine clamps)
     addFastModCommands {
         var lastLfo = this.numFastLfos - 1, lastVoice = numVoices - 1, lastDestination = this.numFastDestinations - 1;
         var lastShape = this.numFastLfoShapes - 1, lastNoteSlot = this.fastModNoteSlots - 1;
@@ -183,13 +500,17 @@
                 and: { this.fastModValuesFinite(\setFastLfo, [[\rate, msg[5]], [\depth, msg[6]], [\offset, msg[7]]]) }) {
                 rate = msg[5].clip(0.003, 50); depth = msg[6].clip(0, 1); offset = msg[7].clip(-2, 2);
                 this.receiveFastMod(\setFastLfo, [lfo, voice, destination, shape, rate, depth, offset]);
+                this.setFastLfo(lfo, voice, destination, shape, rate, depth, offset);
             };
         });
 
         // Release an engine LFO's node
         this.addCommand(\stopFastLfo, "i", { arg msg;
             var lfo = msg[1];
-            if (this.fastModIndicesValid(\stopFastLfo, [[\lfo, lfo, lastLfo]])) { this.receiveFastMod(\stopFastLfo, [lfo]) };
+            if (this.fastModIndicesValid(\stopFastLfo, [[\lfo, lfo, lastLfo]])) {
+                this.receiveFastMod(\stopFastLfo, [lfo]);
+                this.stopFastLfo(lfo);
+            };
         });
 
         // Set an engine LFO's phase (0-1) now
@@ -199,6 +520,7 @@
                 and: { this.fastModValuesFinite(\syncFastLfo, [[\phase, msg[2]]]) }) {
                 phase = msg[2].clip(0, 1);
                 this.receiveFastMod(\syncFastLfo, [lfo, phase]);
+                this.syncFastLfo(lfo, phase);
             };
         });
 
@@ -210,6 +532,7 @@
                 and: { this.fastModValuesFinite(\setScatter, [[\depth, msg[1]], [\rate, msg[2]]]) }) {
                 depth = msg[1].clip(0, 1); rate = msg[2].clip(0.01, 1);
                 this.receiveFastMod(\setScatter, [depth, rate, destinations, voices]);
+                this.setScatter(depth, rate, destinations, voices);
             };
         });
 
@@ -220,7 +543,9 @@
             if (this.fastModIndicesValid(\setFastOffset, [[\voice, voice, lastVoice], [\noteSlot, noteSlot, lastNoteSlot],
                 [\destination, destination, lastDestination]])
                 and: { this.fastModValuesFinite(\setFastOffset, [[\offset, offset]]) }) {
-                this.receiveFastMod(\setFastOffset, [voice, noteSlot, destination, offset.clip(-2, 2)]);
+                offset = offset.clip(-2, 2);
+                this.receiveFastMod(\setFastOffset, [voice, noteSlot, destination, offset]);
+                this.setFastOffset(voice, noteSlot, destination, offset);
             };
         });
     }

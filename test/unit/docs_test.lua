@@ -1884,4 +1884,27 @@ test("the engine's numFastLfos equals NUM_LFOS", function()
   assert_equal(engine_spec.num_fast_lfos, local_value("NUM_LFOS"), "numFastLfos = NUM_LFOS")
 end)
 
+-- 3.4's fast modulation (design §3.3): an offset m moves pitch, position
+-- and size by m half ranges, the half of each Lua param's range, and the
+-- cutoff by fastModCutoffFactor ^ m, ± half of filter_freq's ten octaves
+-- at m = ±1: the factor squared is its max over its min
+test("the engine's fast-modulation half ranges equal the Lua specs", function()
+  load_strata()
+  local source = stubs.strip_sc_comments(engine_sources())
+  local list = source:match("fastModHalfRanges%s*{%s*%^%s*%[([^%]]*)%]%s*}")
+  assert_true(list ~= nil, "fastModHalfRanges { ^[pitch, position, size] } (StrataModulation.sc)")
+  local halves = {}
+  for number in list:gmatch("%-?[%d%.]+") do halves[#halves + 1] = tonumber(number) end
+  assert_equal(#halves, 3, "three half ranges: pitch, position, size")
+  for index, id in ipairs({"v1_grain_pitch", "v1_buf_pos", "v1_grain_size"}) do
+    local spec = params:lookup_param(id).controlspec
+    assert_near(halves[index], (spec.maxval - spec.minval) / 2, 1e-9, id .. "'s half range")
+  end
+  local factor = tonumber(source:match("fastModCutoffFactor%s*{%s*%^%s*([%d%.]+)%s*}"))
+  assert_true(factor ~= nil, "fastModCutoffFactor { ^N } (StrataModulation.sc)")
+  local cutoff = params:lookup_param("v1_filter_freq").controlspec
+  assert_near(factor * factor / (cutoff.maxval / cutoff.minval), 1, 0.001,
+    "fastModCutoffFactor squared against v1_filter_freq's max over min")
+end)
+
 end
