@@ -40,36 +40,8 @@ local function key_count(keys)
   return count
 end
 
--- 2b's step editor (S.lib.pages_seq), as a double until it lands: the four
--- functions the grid calls, shaped as 2b gives them (open_step_editor(voice,
--- step, port) returns true, close_step_editor(port), step_editor() returns
--- {voice, step, port} or nil, step_editor_edited() a boolean). Open pushes
--- a modal owner and close pops it, as the real editor does; editor.calls
--- records each call. Install it after load_strata, in every test that holds
--- a step key 0.3 s
-local function step_editor_double()
-  local S = local_value("S")
-  local editor = {open = nil, edited = false, calls = {}}
-  local owner = {draw = function() end}
-  local seq = S.lib.pages_seq
-  function seq.open_step_editor(voice, step, port)
-    table.insert(editor.calls, "open " .. voice .. " " .. step .. " " .. port)
-    if editor.open then S.lib.ui_modal.pop(owner) end
-    editor.open, editor.edited = {voice = voice, step = step, port = port}, false
-    S.lib.ui_modal.push(owner)
-    return true
-  end
-  function seq.close_step_editor(port)
-    table.insert(editor.calls, "close " .. port)
-    if editor.open and editor.open.port == port then
-      editor.open = nil
-      S.lib.ui_modal.pop(owner)
-    end
-  end
-  function seq.step_editor() return editor.open end
-  function seq.step_editor_edited() return editor.edited end
-  return editor
-end
+-- 2b's step editor's five functions, as a double (test/helpers.lua)
+local step_editor_double = h.step_editor_double
 
 
 test("every 64 grid key runs without error", function()

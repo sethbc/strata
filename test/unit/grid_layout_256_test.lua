@@ -1152,9 +1152,10 @@ test("page 1's row 9 presses and clears the recorders and picks the macro bank",
   local gestures = S.lib.gestures
   assert_equal(row_levels(device, 9):sub(1, 7), "2 2 2 2", "four empty recorders at 2")
   context.grid.press(1, 2, 9, 1)
-  assert_equal(gestures.state(2), "recording", "a press starts recorder 2 at once")
-  assert_equal(device:get_led(2, 9), 15, "recording: 15")
+  assert_equal(gestures.state(2), "empty", "a press alone does nothing (ruling 73)")
   context.grid.press(1, 2, 9, 0)
+  assert_equal(gestures.state(2), "recording", "its release starts recorder 2")
+  assert_equal(device:get_led(2, 9), 15, "recording: 15")
   tap(context, 8, 10)  -- a macro fader: an event for the recording
   tap(context, 2, 9)
   assert_equal(gestures.state(2), "playing", "a press plays what it recorded")

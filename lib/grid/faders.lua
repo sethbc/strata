@@ -236,6 +236,25 @@ return function(S)
     return MACRO_PAGE.levels[S.lib.macros.bank() + 1] or MACRO_PAGE.levels[1]
   end
 
+  -- The four param ids a 16x8's or 8x16's faders page shows on the port,
+  -- fader 1 first (nil where the voice has no fader there): the shown
+  -- bank's macros while the port shows a bank, else the grid voice's fader
+  -- page S.param_page. Its keys and its redraw both read it
+  function M.shown_fader_ids(port)
+    if M.shows_macros(port) then return M.shown_macro_ids() end
+    local ids, shown = fader_param_ids(S.grid_voice_select), {}
+    for row = 1, GRID_LAYOUT.fader_rows do shown[row] = ids[(S.param_page - 1) * GRID_LAYOUT.fader_rows + row] end
+    return shown
+  end
+
+  -- The 16x8's and 8x16's layout records' shows_modulation: their scenes
+  -- page (the morph) and their faders page while it shows a bank
+  function M.shows_modulation(port)
+    local page = S.lib.grid_core.page(port)
+    local pages = S.constants.GRID_PAGES
+    return page == pages.scenes or (page == pages.faders and M.shows_macros(port))
+  end
+
   -- A fader page's key (the 256's row 13, the 16x8's row 5, the 8x16's
   -- column 5): the page shown picked, the others not (the core's levels)
   function M.fader_page_level(page)

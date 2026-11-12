@@ -165,13 +165,20 @@ return function(S)
   -- (S.lib.pages_seq.close_step_editor), so no editor outlives its key
   local step_editor = {key = nil}
 
-  -- Close the step editor if the key at (x, y) on the port opened it
-  local function close_step_editor_of(port, x, y)
+  -- Whether the key at (x, y) on the port opened the step editor
+  local function opened_step_editor(port, x, y)
     local key = step_editor.key
-    if key and key.port == port and key.x == x and key.y == y then
-      step_editor.key = nil
-      S.lib.pages_seq.close_step_editor(port)
-    end
+    return key ~= nil and key.port == port and key.x == x and key.y == y
+  end
+
+  -- Close the step editor if the key at (x, y) on the port opened it and
+  -- it is still open for that port (S.lib.pages_seq.step_editor()), so a
+  -- stale key never closes an editor opened elsewhere since
+  local function close_step_editor_of(port, x, y)
+    if not opened_step_editor(port, x, y) then return end
+    step_editor.key = nil
+    local open = S.lib.pages_seq.step_editor()
+    if open and open.port == port then S.lib.pages_seq.close_step_editor(port) end
   end
 
   -- End the step gesture of the key at (x, y) on the port: its pending
@@ -295,12 +302,18 @@ return function(S)
   -- step held from before never takes a level in the new pattern, never
   -- toggles at its release and closes a step editor it opened (its pending
   -- hold is canceled). The keys stay held; the next step key of the voice
-  -- is a held step of its own
+  -- is a held step of its own. Ruling 71: a replacement the open step
+  -- editor makes itself (S.lib.pages_seq.step_editor_replacing(): its
+  -- euclid and clear rows, its randomize and undo) keeps the key that
+  -- opened it, so the editor stays open and the key's release closes it;
+  -- every other key of the voice ends as above
   function M.end_step_gestures(voice_idx)
     for port, columns in pairs(step_keys) do
       for key_x, rows in pairs(columns) do
         for key_y, entry in pairs(rows) do
-          if entry.voice == voice_idx then drop_step_key(port, key_x, key_y) end
+          local editor_keeps = opened_step_editor(port, key_x, key_y)
+            and S.lib.pages_seq.step_editor_replacing()
+          if entry.voice == voice_idx and not editor_keeps then drop_step_key(port, key_x, key_y) end
         end
       end
     end
@@ -351,15 +364,25 @@ return function(S)
     return S.lib.voice_mix.silenced(voice_idx) and SHARED_KEYS.voice_silenced or LEVELS.voice_running
   end
 
-  -- Gesture recorder k's key (3.4, design §7.2): a press is
-  -- S.lib.gestures.press(k) at once (empty -> recording -> playing ->
-  -- stopped -> playing, so a loop ends where the key goes down); held
-  -- SHARED_KEYS.gesture_clear_seconds (on_hold) the recorder is cleared.
-  -- A recorder outside 1..NUM_GESTURES does nothing
+  -- Gesture recorder k's key (3.4, design §7.2, ruling 73), acting at its
+  -- release as the 64's play key and the 256's mute keys do: a release
+  -- before SHARED_KEYS.gesture_clear_seconds is S.lib.gestures.press(k)
+  -- (empty -> recording -> playing -> stopped -> playing); the hold
+  -- (on_hold) clears the recorder and consumes the key, so its release
+  -- does nothing and a clear never plays, records or ends another
+  -- recorder's recording first. Layouts pass the key's release on. A
+  -- release the core never saw pressed, and a recorder outside
+  -- 1..NUM_GESTURES, do nothing
   function M.gesture_key(port, x, y, z, k)
-    if z ~= 1 or not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return end
-    S.lib.gestures.press(k)
-    M.on_hold(port, x, y, SHARED_KEYS.gesture_clear_seconds, function() S.lib.gestures.clear(k) end)
+    if not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return end
+    if z == 1 then
+      M.on_hold(port, x, y, SHARED_KEYS.gesture_clear_seconds, function()
+        S.lib.gestures.clear(k)
+        M.consume(port, x, y)
+      end)
+    elseif M.held(port, x, y) ~= nil then
+      S.lib.gestures.press(k)
+    end
   end
 
   -- Its LED: empty 2, stopped 5, playing 10, recording 15 (0 for no recorder)
