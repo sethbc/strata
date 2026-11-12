@@ -145,21 +145,24 @@ var checkGrainSynthSizes = {
     check.((sizes.size == 2) and: { (sizes[0] - sizes32[0]) <= -10 } and: { (sizes[1] - sizes32[1]) <= -4 },
         "memory: each grain synth is under 3.2's (at least 10 KB for the ring, 4 KB for the buffer def with its head guard, with 3.4's offsets) (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
     // the stage's size (design 3.3 §0c.6): under 42 KB since 3.4, where 3.3
-    // kept 40. 3.4's cutoff and amp offsets, step gate and mute take it from
-    // 35.4 to 40.4 KB (41.3 in a full run in one sclang, which reads every
-    // def a probe's 0.85 KB higher), and every floor still holds with them (the tightest
-    // case keeps 536-556 KB above its floor: docs/notes/engine/memory.md)
+    // kept 40. 3.4's cutoff and amp offsets, step gate and mute take it past
+    // 40 KB, and every floor still holds with them
+    // (docs/notes/engine/memory.md). Forty stages are measured, so a reading
+    // moves in steps of one small probe (16.9 KB) over forty, about 0.42 KB,
+    // half the grain defs' 0.85 KB (the readings, alone and in a full run, are
+    // in the notes)
     stageKB = if (SynthDescLib.global.at(\strataVoiceMix).isNil) { 0 } {
-        var before = floodFit.value, synths, after;
-        synths = count.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
+        var before = floodFit.value, synths, after, stages = 40;
+        synths = stages.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
             \mirrorOut, privateBus, \tapOut, privateBus, \delaySendOut, privateBus.index, \reverbSendOut, privateBus.index,
             \fxMixIn, engine.mixBus(\fxMix).index, \modBus1, engine.silentBus, \modBus2, engine.silentBus, \modBus3, engine.silentBus], group) });
         server.sync; 0.1.wait;
         after = floodFit.value;
         synths.do(_.free); server.sync;
-        (before - after) * probeKB / count
+        (before - after) * probeKB / stages
     };
-    check.((stageKB > 0) and: { stageKB < 42 }, "memory: a voice's mix stage takes under 42 KB of the pool (% KB; 40.4 measured at 3.4)".format(stageKB.round(0.1)));
+    check.((stageKB > 0) and: { stageKB < 42 }, "memory: a voice's mix stage takes under 42 KB of the pool (% KB, forty stages measured: steps of % KB)".format(
+        stageKB.round(0.01), (probeKB / 40).round(0.01)));
     group.free; privateBus.free;
 };
 
