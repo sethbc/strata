@@ -108,19 +108,37 @@ return function(S)
     voice_gates[param_id] = {voice = voice_idx, sender = sender}
   end
 
-  -- Whether a send of the id reaches the engine now: every one does but a
-  -- stopped voice's param's, whose gated sender sends nothing
-  local function reaches_engine(param_id)
+  -- The master density's sender (below): one grainDensity per running voice
+  local send_master_density_to_engine
+
+  -- How many engine messages a send of the id makes now (what the budget
+  -- counts): 0 for a stopped voice's param, whose gated sender sends
+  -- nothing; one per running voice for the master density (#645); else 1
+  local function engine_messages(param_id)
+    local sender = S.engine_senders[param_id]
     local gate = voice_gates[param_id]
-    if gate == nil or S.engine_senders[param_id] ~= gate.sender then return true end
-    return S.voices[gate.voice].active
+    if gate ~= nil and sender == gate.sender then return S.voices[gate.voice].active and 1 or 0 end
+    if sender ~= nil and sender == send_master_density_to_engine then
+      local running = 0
+      for i = 1, NUM_VOICES do
+        if S.voices[i].active then running = running + 1 end
+      end
+      return running
+    end
+    return 1
   end
 
-  -- The send budget (Question 23): every send_engine_value that reaches the
-  -- engine counts against the current window, math.floor(util.time() /
-  -- window_seconds), which never goes back. A send made while
-  -- S.deferrable_write is set (the Lua LFOs, morph, gesture playback, the
-  -- macros: deferrable(fn)) beyond messages_per_window waits as its id's
+  -- Whether a send of the id reaches the engine now
+  local function reaches_engine(param_id)
+    return engine_messages(param_id) > 0
+  end
+
+  -- The send budget (Question 23): every send_engine_value counts the
+  -- engine messages it makes (engine_messages) against the current window,
+  -- math.floor(util.time() / window_seconds), which never goes back. A
+  -- send made while S.deferrable_write is set (the Lua LFOs, morph, gesture
+  -- playback, the macros: deferrable(fn)) whose messages the window has no
+  -- room left for (messages_per_window) waits as its id's
   -- pending value, the newest winning, and goes first in the next window,
   -- in the order the ids first waited: from S.engine_budget_clock, which
   -- runs only while something waits, or from the first send of that
@@ -134,15 +152,16 @@ return function(S)
   -- failed: the ids whose sender raised on a waiting value (reported once)
   local budget = {window = -math.huge, sent = 0, pending = {}, order = {}, failed = {}}
 
-  -- Record the value as sent, and when it reaches the engine count it and
-  -- run the param's engine call (none when the value already went in a
-  -- start's own messages)
+  -- Record the value as sent, and when it reaches the engine count its
+  -- messages and run the param's engine call (none when the value already
+  -- went in a start's own messages)
   local function deliver(param_id, value, already_sent)
-    if not reaches_engine(param_id) then
+    local messages = engine_messages(param_id)
+    if messages == 0 then
       S.engine_param_values[param_id] = value
       return
     end
-    budget.sent = budget.sent + 1
+    budget.sent = budget.sent + messages
     S.engine_param_values[param_id] = value
     local sender = S.engine_senders[param_id]
     if sender and not already_sent then sender(value) end
@@ -164,13 +183,19 @@ return function(S)
     end
   end
 
-  -- The waiting values, oldest first, as far as the window's budget goes.
+  -- Whether the window has room for a send of messages more
+  local function window_has_room(messages)
+    return budget.sent + messages <= ENGINE_BUDGET.messages_per_window
+  end
+
+  -- The waiting values, oldest first, as far as the window's budget goes
+  -- (one whose messages do not fit stops the flush: the order is kept).
   -- Each goes on its own: a sender that raises is reported once per param
   -- ("strata: engine send <id> failed: <error>") and the rest still go, so
   -- the flush clock never dies with values waiting and the send that
   -- opened the window never carries another param's error (#637)
   local function flush_pending()
-    while #budget.order > 0 and budget.sent < ENGINE_BUDGET.messages_per_window do
+    while #budget.order > 0 and window_has_room(engine_messages(budget.order[1])) do
       local param_id = table.remove(budget.order, 1)
       local value = budget.pending[param_id]
       budget.pending[param_id] = nil
@@ -221,9 +246,10 @@ return function(S)
   -- Send a param's value to the engine (one path for every value), within
   -- the budget (a send that reaches no engine goes at once, uncounted)
   local function send_engine_value(param_id, value)
-    if S.deferrable_write and reaches_engine(param_id) then
+    local messages = S.deferrable_write and engine_messages(param_id) or 0
+    if messages > 0 then
       enter_window(current_window())
-      if budget.sent >= ENGINE_BUDGET.messages_per_window then
+      if not window_has_room(messages) then
         if budget.pending[param_id] == nil then table.insert(budget.order, param_id) end
         budget.pending[param_id] = value
         start_budget_clock()
@@ -416,8 +442,10 @@ return function(S)
       engine_param_value("reverb_damp"))
   end
 
-  -- Master density scales every running voice's grain density
-  local function send_master_density_to_engine(density)
+  -- Master density scales every running voice's grain density: one
+  -- message per running voice, as the budget counts it (engine_messages,
+  -- which declares this local)
+  function send_master_density_to_engine(density)
     for i = 1, NUM_VOICES do
       if S.voices[i].active then
         engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)

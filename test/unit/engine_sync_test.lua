@@ -799,6 +799,79 @@ test("a value that waited for a voice stopped since reaches no engine and counts
   assert_equal(#grain_sends(context, 2, "posSpread"), 0, "and nothing follows it")
 end)
 
+-- #645: the master density's sender sends one grainDensity per running
+-- voice, so a send of it counts one per running voice (0 when none runs,
+-- and then it never waits), and waits when the window has less room
+
+-- Every voice running (true) or stopped (false), the drift's sends off
+local function every_voice(S, running)
+  S.drift_metro:stop()
+  for v = 1, S.constants.NUM_VOICES do
+    if S.voices[v].active ~= running then toggle_voice(v) end
+  end
+end
+
+local function density_sends(context)
+  local count = 0
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "grainDensity" then count = count + 1 end
+  end
+  return count
+end
+
+test("an LFO on the master density at the budget's edge: seven running voices cost seven (#645)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  every_voice(S, true)
+  local destination, square
+  for index, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "density" then destination = index end
+  end
+  for index, option in ipairs(params:lookup_param("strata_lfo1_shape").options) do
+    if option == "square" then square = index end
+  end
+  params:set("strata_lfo1_dest", destination)
+  params:set("strata_lfo1_shape", square)
+  params:set("strata_lfo1_rate", 0.003)
+  params:set("strata_lfo1_phase", 0)
+  params:set("strata_lfo1_depth", 50)
+  mid_window(context)
+  for _ = 1, 143 do send_param_to_engine("reverb_mix", 0.25) end
+  context.clear_engine_calls()
+  params:set("strata_lfo1", 1)
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(density_sends(context), 7, "the LFO's send reaches all seven voices")
+  assert_equal(sync.budget_state().sent, 150, "and costs seven of the window")
+  -- the next window: one fewer slot than voices, so a density send waits
+  context.set_time(util.time() + 0.1)
+  for _ = 1, 144 do send_param_to_engine("reverb_mix", 0.25) end
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine("master_density", 1.2) end)
+  assert_equal(density_sends(context), 0, "six slots left for seven messages: it waits")
+  assert_equal(sync.budget_state().pending, 1)
+  context.set_time(util.time() + 0.1)
+  send_param_to_engine("reverb_mix", 0.3)
+  assert_equal(density_sends(context), 7, "it goes first in the window after")
+  assert_equal(sync.budget_state().sent, 8, "seven for the density, one for the reverb")
+  params:set("strata_lfo1", 0)
+end)
+
+test("with no voice running a master density send counts nothing and never waits (#645)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  every_voice(S, false)
+  mid_window(context)
+  context.clear_engine_calls()
+  send_param_to_engine("master_density", 1.1)
+  assert_equal(sync.budget_state().sent, 0, "it reaches no voice, so it counts nothing")
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("master_density", 1.2) end)
+  assert_equal(sync.budget_state().pending, 0, "past the budget it does not wait")
+  assert_equal(sync.budget_state().sent, 150)
+  assert_equal(density_sends(context), 0, "and nothing reached the engine")
+  assert_equal(engine_param_value("master_density"), 1.2, "its value is recorded, for the next start")
+end)
+
 test("a base override is a finite number; anything else raises naming the param", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
