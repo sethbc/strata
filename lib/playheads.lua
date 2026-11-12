@@ -175,6 +175,7 @@ return function(S)
   local TICK_PARTS = {
     {key = "scan", run = follow_scans},
     {key = "holds", run = end_stale_holds},
+    {key = "blink", run = function() S.lib.positions.advance_blink() end},
     {key = "redraw", run = redraw_position_grids},
   }
 

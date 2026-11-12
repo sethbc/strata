@@ -50,7 +50,7 @@ What the cells show, brightest first:
 - a voice that reads no buffer, or whose buffer is empty, has a dark row
 
 What the strip shows (all of it dark for a voice that reads no buffer):
-- a bookmark key at 6, the bookmark last recalled at 10 (until the voice changes its source), and 15 while you store it
+- a bookmark key at 6, the bookmark last recalled at 10 (until the voice changes its source), and 15 while you store it; a bookmark that waits for its beat or bar (quantize actions) blinks between 15 and 2 until it lands
 - the store key at 15 while it is held, 4 otherwise
 - the hold key at 15 while the voice's scan is held (by any grid or the arc), 4 otherwise
 - the whole key at 15 while the loop is the whole buffer, 4 otherwise
