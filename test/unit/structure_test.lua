@@ -1569,7 +1569,7 @@ test("the 3.13 script's containers carry a memory cap (#544)", function()
     .. "; exit 0 ;;\nesac\nexit 0\n")
   fake:close()
   os.execute("chmod +x " .. shell_quote(root .. "/bin/docker"))
-  local output = run_313_script(root, "-n 2 -j 1 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"), root .. "/bin")
+  local output = run_313_script(root, "-n 2 -j 4 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"), root .. "/bin")
   local file = io.open(root .. "/docker-run.txt", "r")
   local runs = file and file:read("*a") or ""
   if file then file:close() end
@@ -1579,8 +1579,201 @@ test("the 3.13 script's containers carry a memory cap (#544)", function()
     assert_true(line:find("%-%-memory=%d+[gGmM]") ~= nil, "docker run carries --memory: " .. line)
     assert_true(line:find("%-%-memory%-swap=%d+[gGmM]") ~= nil, "docker run carries --memory-swap: " .. line)
   end
-  assert_equal(count, 2, "both runs started a container: " .. output)
+  -- a full run is one container per shard of the workflow's (#581)
+  local workflow = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r"))
+  local block = workflow:read("*a"):match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  workflow:close()
+  local shards = 0
+  for _ in block:gmatch("%-%s*([%w,]+)") do shards = shards + 1 end
+  assert_equal(count, 2 * shards, "every shard of both runs started a container: " .. output)
   h.remove_tree(root)
+end)
+
+-- #581: the 3.13 script's full run is the workflow's shards, each in a
+-- container (a fresh sclang) of its own. These tests run a copy of the
+-- script in a folder of its own, beside a workflow listing the given shards,
+-- the image's sources and a fake docker whose run branch is the given text
+local function fake_313_checkout(root, shards, docker_run)
+  local shell_quote = h.shell_quote
+  os.execute("mkdir -p " .. shell_quote(root .. "/test/docker/sc313") .. " " .. shell_quote(root .. "/.github/workflows") .. " "
+    .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
+  for _, path in ipairs({ "test/run_engine_check_313.sh", "test/docker/sc313/Dockerfile", "test/docker/sc313/check.sh" }) do
+    os.execute("cp " .. shell_quote(repo_root .. "/" .. path) .. " " .. shell_quote(root .. "/" .. path))
+  end
+  local lines = { "jobs:", "  engine-shard:", "    strategy:", "      fail-fast: false", "      matrix:", "        areas:" }
+  for _, shard in ipairs(shards) do lines[#lines + 1] = "          - " .. shard end
+  lines[#lines + 1] = "    env:\n      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}\n"
+  local workflow = assert(io.open(root .. "/.github/workflows/test.yml", "w"))
+  workflow:write(table.concat(lines, "\n"))
+  workflow:close()
+  local fake = assert(io.open(root .. "/bin/docker", "w"))
+  fake:write("#!/bin/sh\ncase \"$1\" in\n  image) exit 1 ;;\n  build) exit 0 ;;\n  run)\n"
+    .. "    echo \"areas=${STRATA_ENGINE_CHECK_AREAS-unset} $*\" >> " .. shell_quote(root .. "/docker-run.txt") .. "\n"
+    .. docker_run .. "\n    ;;\nesac\nexit 0\n")
+  fake:close()
+  os.execute("chmod +x " .. shell_quote(root .. "/bin/docker"))
+end
+
+-- environment: assignments for the script's own command (the caller's
+-- STRATA_ENGINE_CHECK_AREAS is always cleared first)
+local function run_fake_313(root, arguments, environment)
+  local shell_quote = h.shell_quote
+  local pipe = io.popen("cd " .. shell_quote(root) .. " && unset STRATA_ENGINE_CHECK_AREAS && " .. (environment or "")
+    .. " PATH=" .. shell_quote(root .. "/bin") .. ":$PATH TMPDIR=" .. shell_quote(root)
+    .. " /bin/sh test/run_engine_check_313.sh " .. arguments .. " 2>&1; echo exit=$?")
+  local output = pipe:read("*a")
+  pipe:close()
+  return output
+end
+
+local function read_lines(path)
+  local file, lines = io.open(path, "r"), {}
+  if not file then return lines end
+  for line in file:lines() do lines[#lines + 1] = line end
+  file:close()
+  return lines
+end
+
+local function file_exists(path)
+  local file = io.open(path, "r")
+  if file then file:close() end
+  return file ~= nil
+end
+
+test("the 3.13 script runs a full run as the workflow's shards, each in a container of its own (#581)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-shards"
+  -- run 2's second shard crashes; every other shard passes
+  fake_313_checkout(root, { "alpha", "beta,gamma", "delta" }, table.concat({
+    "    case \"$*\" in",
+    "      *-2-beta_gamma\\ *) echo \"ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\"; exit 1 ;;",
+    "    esac",
+    "    echo \"ENGINE CHECK PASSED\"; exit 0",
+  }, "\n"))
+  local logs = root .. "/logs"
+  local output = run_fake_313(root, "-n 2 -j 8 -o " .. shell_quote(logs) .. " " .. shell_quote(root .. "/norns"))
+  local runs = read_lines(root .. "/docker-run.txt")
+  assert_equal(#runs, 6, "one container per shard of each run: " .. output)
+  for run = 1, 2 do
+    for _, shard in ipairs({ "alpha", "beta,gamma", "delta" }) do
+      local stem = run .. "-" .. shard:gsub(",", "_")
+      local found = 0
+      for _, line in ipairs(runs) do
+        if line:find("%-%-name strata%-sc313%-%d+%-" .. stem:gsub("%-", "%%-") .. " ") and line:find(" -e STRATA_ENGINE_CHECK_AREAS=" .. shard .. " ", 1, true) then
+          found = found + 1
+        end
+      end
+      assert_equal(found, 1, "run " .. run .. " runs " .. shard .. " alone in its container: " .. table.concat(runs, "\n"))
+      assert_true(file_exists(logs .. "/run-" .. stem .. ".log") and file_exists(logs .. "/run-" .. stem .. ".status"),
+        "run-" .. stem .. ".log and .status are written")
+    end
+  end
+  for _, expected in ipairs({ "run 1: passed\n", "run 2: crashed in beta,gamma (sclang ended on signal 11 after 9 s), " .. logs .. "/run-2-beta_gamma.log",
+      "passed 1 of 2; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  -- -c reads the same folder to the same verdict
+  local classified = run_fake_313(root, "-c -n 2 -o " .. shell_quote(logs))
+  for _, expected in ipairs({ "run 1: passed\n", "run 2: crashed in beta,gamma (sclang ended on signal 11 after 9 s)", "passed 1 of 2;", "exit=1" }) do
+    assert_true(classified:find(expected, 1, true) ~= nil, "-c's summary holds \"" .. expected .. "\": " .. classified)
+  end
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script's -j counts containers, shards of one run and of different runs alike (#581)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-parallel"
+  -- each fake container notes how many are running as it starts
+  local active = shell_quote(root .. "/active")
+  fake_313_checkout(root, { "alpha", "beta", "gamma" }, table.concat({
+    "    mkdir -p " .. active .. "; : > " .. active .. "/$$",
+    "    ls " .. active .. " | wc -l >> " .. shell_quote(root .. "/counts.txt"),
+    "    sleep 0.3; rm -f -- " .. active .. "/$$",
+    "    echo \"ENGINE CHECK PASSED\"; exit 0",
+  }, "\n"))
+  local output = run_fake_313(root, "-n 2 -j 2 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"))
+  local counts, most = read_lines(root .. "/counts.txt"), 0
+  for _, count in ipairs(counts) do most = math.max(most, tonumber(count)) end
+  assert_equal(#counts, 6, "every shard of both runs ran: " .. output)
+  assert_equal(most, 2, "never more than -j containers at once, and the pool fills: " .. output)
+  assert_true(output:find("passed 2 of 2;", 1, true) ~= nil and output:find("exit=0", 1, true) ~= nil, "both runs passed: " .. output)
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script's -1 and STRATA_ENGINE_CHECK_AREAS run one container per run, as before (#581)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-single"
+  fake_313_checkout(root, { "alpha", "beta" }, "    echo \"ENGINE CHECK PASSED\"; exit 0")
+  local norns = shell_quote(root .. "/norns")
+  local output = run_fake_313(root, "-1 -n 2 -j 2 -o " .. shell_quote(root .. "/one") .. " " .. norns)
+  output = output .. run_fake_313(root, "-n 2 -j 2 -o " .. shell_quote(root .. "/named") .. " " .. norns, "STRATA_ENGINE_CHECK_AREAS=beta")
+  local runs = read_lines(root .. "/docker-run.txt")
+  assert_equal(#runs, 4, "one container per run: " .. output)
+  local unset, named = 0, 0
+  for _, line in ipairs(runs) do
+    assert_true(line:find("%-%-name strata%-sc313%-%d+%-[12] ") ~= nil, "a run's container is named by the run alone: " .. line)
+    assert_true(line:find(" -e STRATA_ENGINE_CHECK_AREAS ", 1, true) ~= nil, "the caller's areas pass through: " .. line)
+    if line:find("^areas=unset ") then unset = unset + 1 elseif line:find("^areas=beta ") then named = named + 1 end
+  end
+  assert_equal(unset, 2, "-1 runs every area in one process: " .. output)
+  assert_equal(named, 2, "STRATA_ENGINE_CHECK_AREAS runs those areas: " .. output)
+  for _, folder in ipairs({ "one", "named" }) do
+    for run = 1, 2 do
+      assert_true(file_exists(root .. "/" .. folder .. "/run-" .. run .. ".log"), folder .. "/run-" .. run .. ".log is written")
+    end
+  end
+  assert_true(select(2, output:gsub("passed 2 of 2;", "")) == 2, "both invocations passed: " .. output)
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script reads its shards from the workflow at each start, and refuses a list it cannot read (#581)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-list"
+  fake_313_checkout(root, { "alpha", "beta,gamma" }, "    exit 0")
+  assert_equal(run_fake_313(root, "-l"), "alpha\nbeta,gamma\nexit=0\n", "-l prints this checkout's shards")
+  -- a workflow with no shard list, or an item it cannot read, starts nothing
+  for _, shards in ipairs({ {}, { "alpha", "'beta,gamma'" } }) do
+    h.remove_tree(root)
+    fake_313_checkout(root, shards, "    exit 0")
+    local listed = run_fake_313(root, "-l")
+    assert_true(listed:find("exit=2", 1, true) ~= nil and listed:find(".github/workflows/test.yml", 1, true) ~= nil,
+      "-l refuses, naming the workflow: " .. listed)
+    local output = run_fake_313(root, "-n 1 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"))
+    assert_true(output:find("exit=2", 1, true) ~= nil, "a run refuses: " .. output)
+    assert_true(not file_exists(root .. "/docker-run.txt"), "no container starts: " .. output)
+  end
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script classifies a sharded run by its worst shard, naming it (#581)", function()
+  local shell_quote, checkout = h.shell_quote, data_root .. "sc313-classify-shards"
+  fake_313_checkout(checkout, { "alpha", "beta,gamma" }, "    exit 0")
+  local root = checkout .. "/logs"
+  os.execute("mkdir -p " .. shell_quote(root))
+  local crash = "ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\n"
+  local fixtures = {
+    -- every shard passed
+    ["1-alpha"] = { 0, "ENGINE CHECK PASSED\nstrata container seconds: 40\n" },
+    ["1-beta_gamma"] = { 0, "ENGINE CHECK PASSED\nstrata container seconds: 60\n" },
+    -- one shard crashed
+    ["2-alpha"] = { 0, "ENGINE CHECK PASSED\nstrata container seconds: 41\n" },
+    ["2-beta_gamma"] = { 1, crash .. "strata container seconds: 120\n" },
+    -- a failed check outranks a crash in another shard; both are named
+    ["3-alpha"] = { 1, "FAIL alpha: a check\n" .. crash },
+    ["3-beta_gamma"] = { 1, crash },
+  }
+  for stem, fixture in pairs(fixtures) do
+    local log = assert(io.open(root .. "/run-" .. stem .. ".log", "w")); log:write(fixture[2]); log:close()
+    local status = assert(io.open(root .. "/run-" .. stem .. ".status", "w")); status:write(fixture[1] .. "\n"); status:close()
+  end
+  -- run 4 is a run in one process, in the same folder
+  local log = assert(io.open(root .. "/run-4.log", "w")); log:write("ENGINE CHECK PASSED\n"); log:close()
+  local status = assert(io.open(root .. "/run-4.status", "w")); status:write("0\n"); status:close()
+  local output = run_fake_313(checkout, "-c -n 4 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: passed\n", "run 2: crashed in beta,gamma (sclang ended on signal 11 after 9 s), " .. root .. "/run-2-beta_gamma.log",
+      "run 3: failed in alpha (FAIL alpha: a check), " .. root .. "/run-3-alpha.log",
+      "  and crashed in beta,gamma (sclang ended on signal 11 after 9 s), " .. root .. "/run-3-beta_gamma.log", "run 4: passed\n",
+      "slowest shard: beta,gamma in run 2, 120 s",
+      "passed 2 of 4; failed 1; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  h.remove_tree(checkout)
 end)
 
 test("the 3.13 script classifies a run by its log (#545, #544)", function()
