@@ -209,11 +209,18 @@ var checkRecordSizes = {
 
 // What each node of 3.4's modulation area takes of the pool (design §3.6):
 // the eight engine LFO defs, scatter and the offset node, twenty of each
-// writing a private control bus
+// writing a private control bus, each under its kind's limit (#615):
+// 2.3-2.9 KB, about three of the probes' 0.85 KB steps, over the kind's
+// largest reading (6.7, 42.1 and 11.0 KB; one def can read a step higher
+// from one run to the next), so a def that grows by more than about two
+// steps fails here, where only the worst cases' floors guarded it before
+// (docs/notes/engine/memory.md)
+var modulationLimitsKB = (lfo: 9, strataScatter: 45, strataFastOffsets: 13.5);
 var checkModulationSizes = {
     var group = Group.after(engine.processGroup), controlBus = Bus.control(server, 40);
     var shapes = [\Sine, \Tri, \Square, \Up, \Down, \Sah, \Smooth, \Drunk];
     var defNames = shapes.collect({ arg name; ("strataFastLfo" ++ name).asSymbol }) ++ [\strataScatter, \strataFastOffsets];
+    var limitOf = { arg name; modulationLimitsKB[name] ? modulationLimitsKB[\lfo] };
     var missing = defNames.select({ arg name; SynthDescLib.global.at(name).isNil });
     var sizes = if (missing.notEmpty) { [] } {
         defNames.collect({ arg name;
@@ -225,9 +232,11 @@ var checkModulationSizes = {
     };
     var ugens = (defNames ++ grainDefs ++ [\strataVoiceMix]).collect({ arg name;
         SynthDescLib.global.at(name) !? { arg desc; "% %".format(name, desc.def.children.size) } });
-    check.(missing.isEmpty and: { sizes.every({ arg size; size > 0 }) },
-        "memory: the modulation area's nodes take % of the pool (by allocation probes; missing defs %; UGens: %)".format(
-            [defNames, sizes.round(0.1)].flop.collect({ arg pair; "% % KB".format(*pair) }).join(", "), missing, ugens.join(", ")));
+    check.(missing.isEmpty and: { sizes.size == defNames.size }
+        and: { [defNames, sizes].flop.every({ arg pair; (pair[1] > 0) and: { pair[1] < limitOf.(pair[0]) } }) },
+        "memory: the modulation area's nodes take % of the pool, each under its kind's limit (an engine LFO % KB, scatter % KB, the offset node % KB; by allocation probes; missing defs %; UGens: %)".format(
+            [defNames, sizes.round(0.1)].flop.collect({ arg pair; "% % KB".format(*pair) }).join(", "),
+            modulationLimitsKB[\lfo], modulationLimitsKB[\strataScatter], modulationLimitsKB[\strataFastOffsets], missing, ugens.join(", ")));
     group.free; controlBus.free;
 };
 
