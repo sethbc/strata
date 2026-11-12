@@ -403,41 +403,34 @@ return function(S)
     return item_active(item, counting) or #ramp_groups(plan, item.id, counting) > 1
   end
 
-  -- A group's total weight and its weighted mean (a member that holds the
-  -- whole weight gives its own value exactly)
-  local function group_mean(item, group, weights)
-    local total = 0
-    for _, corner in ipairs(group) do total = total + weights[corner] end
-    if total <= 0 then return 0, 0 end
-    local base = item.values[group[1]]
-    local value = base
-    for _, corner in ipairs(group) do
-      if weights[corner] == total then return item.values[corner], total end
-      if corner ~= group[1] then value = value + weights[corner] / total * (item.values[corner] - base) end
-    end
-    return value, total
-  end
-
-  -- A ramp through 0 (ruling 88): the weighted mean of the current
-  -- corner's group times the group's lead over the largest other group's
-  -- weight, max(0, W - W'). Two corners that differ: the current one's
-  -- value times its lead (at y = 0, A x (1 - 2x) on A's side and
-  -- B x (2x - 1) on B's); corners that agree never ramp between them; one
-  -- group of every counting corner: the plain weighted mean
+  -- A ramp through 0 (ruling 88a): with G the current corner's group, m
+  -- the largest weight among G's corners and w' the largest among the
+  -- counting corners outside G, (sum over G of w x v) x max(0, m - w') / m.
+  -- It measures the lead corner against corner, as the corner rule does:
+  -- the corner rule leaves G only for the heaviest other corner, which
+  -- then outweighs every corner of G, so the value is already 0 wherever G
+  -- can be left, and the new group starts at its value times the
+  -- hysteresis's lead. It does not depend on which corner of G is the
+  -- current one. Two corners that differ: the current one's value times
+  -- its lead (at y = 0, A x (1 - 2x) on A's side and B x (2x - 1) on
+  -- B's); a group of every counting corner: the plain weighted mean
   local function ramp_value(plan, item, corner, weights, counting)
-    local own, own_total, other = nil, 0, 0
+    local sum, lead, other = 0, 0, 0
     for _, group in ipairs(ramp_groups(plan, item.id, counting)) do
       local member = false
       for _, each in ipairs(group) do member = member or each == corner end
-      local mean, total = group_mean(item, group, weights)
-      if member then
-        own, own_total = mean, total
-      elseif total > other then
-        other = total
+      for _, each in ipairs(group) do
+        local weight = weights[each]
+        if member then
+          sum = sum + weight * item.values[each]
+          if weight > lead then lead = weight end
+        elseif weight > other then
+          other = weight
+        end
       end
     end
-    if own == nil then return rounded(item, 0) end
-    return rounded(item, own * math.max(0, own_total - other))
+    if lead <= 0 then return rounded(item, 0) end
+    return rounded(item, sum * math.max(0, lead - other) / lead)
   end
 
   -- Whether a value is due: never set by this plan, or moved since morph
