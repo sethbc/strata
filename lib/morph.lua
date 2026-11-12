@@ -37,8 +37,9 @@ return function(S)
   -- a crossing's discrete switch is applied at most once in this time
   -- (#653, ruling 94: the heaviest sustained case, every crossing starting
   -- all seven voices, 417 messages, and the way back stopping them, 7, is
-  -- 424 messages per 0.6 s, about 707 a second, under the send budget's
-  -- 1500; a crossing of 417 each way would be 1390)
+  -- 424 messages per 0.6 s, about 707 a second; a crossing of 417 each way
+  -- would be 1390. They are uncounted, so they come on top of the send
+  -- budget's counted 1500: docs/notes/lua/morph.md)
   local MORPH = {apply_hz = 10, hysteresis = 0.02, max_values_per_apply = 120, send_threshold = 1 / 1000,
     epsilon = 1e-9, param_count = 6, corners = {"a", "b", "c", "d"}, min_corners = 2,
     row_partner = {a = "b", b = "a", c = "d", d = "c"}, column_partner = {a = "c", b = "d", c = "a", d = "b"},
