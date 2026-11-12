@@ -856,6 +856,35 @@ test("an LFO on the master density at the budget's edge: seven running voices co
   params:set("strata_lfo1", 0)
 end)
 
+-- A send larger than the whole window must not block the flush: it goes
+-- when the window is empty, and what waits behind it follows (#645's
+-- review). The window is shrunk to 5 for this load, so seven running
+-- voices' master density is such a send
+test("a send larger than the window goes at the next window's start; what waits behind it follows (#645)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  every_voice(S, true)
+  local budget = S.constants.ENGINE_BUDGET
+  budget.messages_per_window = 5
+  mid_window(context)
+  for _ = 1, 5 do send_param_to_engine("reverb_mix", 0.25) end
+  context.clear_engine_calls()
+  sync.deferrable(function()
+    send_param_to_engine("master_density", 1.2)   -- seven messages
+    send_param_to_engine("filter_freq", 1000)
+  end)
+  assert_equal(sync.budget_state().pending, 2, "both wait in a full window")
+  context.clock.run_for(0.1)
+  assert_equal(density_sends(context), 7, "the density goes at the next window's start")
+  assert_equal(#context.calls_named("setFilter"), 0, "the filter waits behind it")
+  assert_equal(sync.budget_state().sent, 7, "the density took the whole window")
+  context.clock.run_for(0.1)
+  assert_equal(#context.calls_named("setFilter"), 1, "and goes in the window after")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "and the flush clock has ended")
+  budget.messages_per_window = 150
+end)
+
 test("with no voice running a master density send counts nothing and never waits (#645)", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
