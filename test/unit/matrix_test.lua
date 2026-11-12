@@ -500,6 +500,32 @@ test("matrix: a Lua sum back at the delivered value while another waits sends it
   assert_near(S.engine_param_values.reverb_mix, 0.4, 1e-9, "the engine ends on the newest value")
 end)
 
+test("matrix: a Lua sum back at its handed value while another writer's waits sends it, never the waiting one (#647)", function()
+  local context, S, matrix = loaded()
+  params:set("reverb_mix", 0.3)
+  params:set("macro_1", 0.5)
+  route(S, 1, "macro1", "reverb_mix", 40)         -- the stored value + 0.2 x the macro
+  context.clock.run_for(0.05)
+  local arm, window = full_window(context, S)
+  assert_near(sent_reverb(context), 0.4, 1e-9, "0.4 delivered")
+  params:set("macro_1", 1)                        -- the matrix hands 0.5 to a full window
+  arm(true); context.clear_engine_calls(); lfo_step(context); arm(false)
+  assert_equal(S.lib.engine_sync.budget_state().pending, 1, "0.5 waits")
+  -- a deferrable writer (a macro apply, morph, a gesture's playback) sets the
+  -- stored value: its action's 0.4 + 0.2 waits in the matrix's place
+  S.lib.engine_sync.deferrable(function() params:set("reverb_mix", 0.4) end)
+  assert_equal(S.lib.engine_sync.budget_state().pending, 1, "0.6 waits for the key")
+  params:set("macro_1", 0.5)                      -- 0.4 + 0.1: back at the 0.5 the matrix handed
+  lfo_step(context)
+  assert_equal(math.floor(util.time() / S.constants.ENGINE_BUDGET.window_seconds), window, "one window")
+  h.wake(context, "engine_budget_clock")
+  lfo_step(context, 3)
+  for _, call in ipairs(context.calls_named("setReverb")) do
+    assert_true(math.abs(call.args[1] - 0.6) > 1e-9, "the waiting 0.6 never reaches the engine")
+  end
+  assert_near(S.engine_param_values.reverb_mix, 0.5, 1e-9, "the engine ends on the newest value")
+end)
+
 test("matrix: a scene's unknown part prints once a session", function()
   local context, S, matrix = loaded()
   local function lines_with(text)

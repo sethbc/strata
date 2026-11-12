@@ -198,15 +198,12 @@ return function(S)
 
   -- What the matrix holds: lua[id], the extra offset it set on a Lua
   -- destination (param units); fast[id], true while a fast destination is
-  -- tracked (its sum, the value last handed to the budget or the engine's
-  -- value is not 0); fast_want[id], what its next send carries (the clamped
-  -- sum, half ranges); fast_handed[id], the value last handed to the
-  -- budget (it may still wait there); fast_extras[id][source_key], the
-  -- macros' LFO extras (half ranges)
-  -- lua_handed[id] and lua_handed_over[id], the value a Lua destination's
-  -- send last handed to the budget and what the engine had then
-  local held = {lua = {}, lua_handed = {}, lua_handed_over = {}, fast = {}, fast_want = {}, fast_handed = {},
-    fast_extras = {}}
+  -- tracked (its sum or the value its channel has or will have is not 0);
+  -- fast_want[id], what its next send carries (the clamped sum, half
+  -- ranges); fast_extras[id][source_key], the macros' LFO extras (half
+  -- ranges). What was handed to the send budget is the budget's own answer,
+  -- S.lib.engine_sync.expected_value (#647)
+  local held = {lua = {}, fast = {}, fast_want = {}, fast_extras = {}}
 
   -- A fast channel (voice, destination) is one deferrable id of the send
   -- budget (ruling 65): its key, which no param id can be (it holds
@@ -231,9 +228,7 @@ return function(S)
     local voice, destination = S.lib.lfos.fast_destination(id)
     local key = "matrix fast " .. voice .. " " .. destination
     known = {key = key, send = function()
-      local value = held.fast_want[id] or 0
-      held.fast_handed[id] = value
-      S.lib.engine_sync.send_engine_value(key, value)
+      S.lib.engine_sync.send_engine_value(key, held.fast_want[id] or 0)
     end}
     channels[id] = known
     return known
@@ -254,21 +249,11 @@ return function(S)
     return unstepped:unmap(value)
   end
 
-  -- What the engine had (false for nothing) when a value was handed over
-  local function engine_seen(id)
-    local value = S.engine_param_values[id]
-    if value == nil then return false end
-    return value
-  end
-
   -- A Lua destination's send: the value is handed to the budget, which may
-  -- keep it waiting; lua_handed[id] remembers it, with what the engine had
-  -- then (lua_handed_over[id]), until something else reaches the engine
+  -- keep it waiting
   local function send_lua(id)
     local sync = S.lib.engine_sync
-    local value = sync.with_lfo_offsets(id, params:get(id))
-    held.lua_handed[id], held.lua_handed_over[id] = value, engine_seen(id)
-    sync.send_engine_value(id, value)
+    sync.send_engine_value(id, sync.with_lfo_offsets(id, params:get(id)))
   end
 
   -- A Lua destination is sent in the round robin under its own id (the
@@ -285,22 +270,13 @@ return function(S)
   end
 
   -- Whether a Lua destination's value now moved past the LFOs' threshold
-  -- from what the engine last got (S.engine_param_values: a voice sync
-  -- forgets it, so the next step sends again), or the engine got nothing
-  -- The reference is the value last handed to the budget while the engine
-  -- still has what it had then (that value, or a newer one, may wait in
-  -- the budget: a sum back at the delivered value must replace it); once
-  -- the engine's value changed (the handed one delivered, a hand edit, a
-  -- sync), it is what the engine has
+  -- from what the engine has or will have (expected_value: the value
+  -- waiting in the send budget, whoever handed it, so a sum back at the
+  -- delivered value replaces it; else what the engine last got, which a
+  -- voice sync forgets, so the next step sends again), or the engine has
+  -- nothing
   local function lua_moved(id)
-    local last = S.engine_param_values[id]
-    if held.lua_handed[id] ~= nil then
-      if engine_seen(id) == held.lua_handed_over[id] then
-        last = held.lua_handed[id]
-      else
-        held.lua_handed[id], held.lua_handed_over[id] = nil, nil
-      end
-    end
+    local last = S.lib.engine_sync.expected_value(id)
     if last == nil then return true end
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
     return math.abs(position(id, value) - position(id, last)) >= S.lib.lfos.LFO.send_threshold
@@ -370,26 +346,20 @@ return function(S)
   end
 
   -- A fast destination's clamped sum is sent when it moved by the
-  -- threshold from the value the engine last got (its channel's
-  -- S.engine_param_values), and once more when it returns to 0 while the
-  -- engine, or the budget, holds another; it is tracked until all three
-  -- are 0
+  -- threshold from the value its channel has or will have (expected_value
+  -- of its key: the value waiting in the budget, else the one the engine
+  -- last got, 0 before any), and once more when it returns to 0 while that
+  -- value is another; it is tracked until both are 0
   local function update_fast(id)
     local entry = channel(id)
     local want = util.clamp(scratch.fast_sums[id] or 0, -MATRIX.fast_limit, MATRIX.fast_limit)
-    local engine_has = S.engine_param_values[entry.key] or 0
-    -- only this send hands the channel's key to the budget, so the value
-    -- last handed is what the engine has or will have
-    local handed = held.fast_handed[id]
-    local reference = handed or engine_has
-    handed = handed or 0
+    local expected = S.lib.engine_sync.expected_value(entry.key) or 0
     held.fast_want[id] = want
-    if math.abs(want - reference) >= S.lib.lfos.LFO.send_threshold
-        or (want == 0 and (engine_has ~= 0 or handed ~= 0)) then
+    if math.abs(want - expected) >= S.lib.lfos.LFO.send_threshold or (want == 0 and expected ~= 0) then
       held.fast[id] = true
       S.lib.lfos.mark_due(entry.key, entry.send)
     else
-      held.fast[id] = (want ~= 0 or engine_has ~= 0 or handed ~= 0) or nil
+      held.fast[id] = (want ~= 0 or expected ~= 0) or nil
     end
   end
 
@@ -820,7 +790,7 @@ return function(S)
     for id in pairs(learn_clock.retired) do clock.cancel(id) end
     learn_clock.retired = {}
     for id in pairs(held.lua) do S.lib.engine_sync.set_extra_offset(MATRIX.extra_key, id, nil) end
-    for _, part in ipairs({"lua", "lua_handed", "lua_handed_over", "fast", "fast_want", "fast_handed", "fast_extras"}) do
+    for _, part in ipairs({"lua", "fast", "fast_want", "fast_extras"}) do
       held[part] = {}
     end
   end)
