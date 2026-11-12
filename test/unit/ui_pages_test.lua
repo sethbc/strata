@@ -1,5 +1,5 @@
 -- test/unit/ui_pages_test.lua
--- The eight screen pages and their records (S.registry.pages): the page
+-- The nine screen pages and their records (S.registry.pages): the page
 -- order, E1, enter/leave, the hint row from the record, and who sets
 -- which record field (lib/pages/ vs lib/arc/)
 -- Run alone: lua test/run.lua ui_pages
@@ -15,22 +15,22 @@ local ARC_FIELDS = { arc_delta = true, arc_redraw = true, arc_alt_delta = true, 
 local PAGE_FIELDS = { "name", "draw", "hints", "enc", "key", "alt_enc", "alt_key", "key_release",
   "alt_key_release", "enter", "leave", "arc_button", "header_status", "layout_states" }
 
-test("there are eight pages in the 3.1 order", function()
+test("there are nine pages: the 3.1 order with 3.4's MOD after LFO", function()
   load_strata()
   local C = local_value("S").constants
-  assert_equal(table.concat(C.UI_PAGES, " "), "MAIN VOICE SEQ FX LFO BUFFER SCENES SETUP")
-  assert_equal(C.NUM_UI_PAGES, 8)
+  assert_equal(table.concat(C.UI_PAGES, " "), "MAIN VOICE SEQ FX LFO MOD BUFFER SCENES SETUP")
+  assert_equal(C.NUM_UI_PAGES, 9)
   assert_equal(C.UI_PAGES.index.MAIN, 1, "MAIN stays page 1")
   assert_equal(C.UI_PAGES.MAIN_PAGE, nil, "the unused MAIN_PAGE constant is gone (#393)")
   for index, name in ipairs(C.UI_PAGES) do
     assert_equal(C.UI_PAGES.index[name], index, "UI_PAGES.index." .. name)
   end
-  assert_equal(C.UI_PAGES.index.SCENES, 7)
+  assert_equal(C.UI_PAGES.index.SCENES, 8)
 end)
 
 test("E1 stops at MAIN and SETUP", function()
   load_strata(); enc(1, -3); assert_equal(local_value("ui_page"), 1)
-  enc(1, 20); assert_equal(local_value("ui_page"), 8)
+  enc(1, 20); assert_equal(local_value("ui_page"), 9)
   assert_equal(local_value("UI_PAGES")[local_value("ui_page")], "SETUP")
 end)
 
@@ -118,8 +118,8 @@ test("page files never set arc fields and arc files set nothing else", function(
       end
     end
   end
-  assert_equal(page_files, 8, "eight page files")
-  assert_equal(arc_files, 7, "seven page ring files (SETUP has none)")
+  assert_equal(page_files, 9, "nine page files")
+  assert_equal(arc_files, 8, "eight page ring files (SETUP has none)")
 end)
 
 -- Each record field's value, per page index (a shallow copy)
@@ -172,8 +172,8 @@ test("as they load, page files set no arc field and each arc file sets only its 
     end
   end })
   assert_equal(table.concat(problems, "\n"), "", "record fields set by the wrong file")
-  assert_equal(loaded.pages, 8, "eight page files loaded")
-  assert_equal(loaded.arcs, 7, "seven page ring files loaded")
+  assert_equal(loaded.pages, 9, "nine page files loaded")
+  assert_equal(loaded.arcs, 8, "eight page ring files loaded")
 end)
 
 test("strata.lua includes every page file, then every arc file", function()
@@ -196,7 +196,7 @@ test("strata.lua includes every page file, then every arc file", function()
 end)
 
 -- #419: with ALT held, no page's hint names a key whose ALT press does nothing.
--- Covers all eight pages: a page with no alt_key (FX, SETUP) names no K2 or K3;
+-- Covers all nine pages: a page with no alt_key (FX, SETUP) names no K2 or K3;
 -- every other page that names K3 changes some state when ALT+K3 is pressed at
 -- that cursor (BUFFER's ALT keys act on release, so only the first part applies)
 test("with ALT held no page's hint names a key that does nothing (#419)", function()

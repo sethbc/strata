@@ -12,10 +12,11 @@
 - A locked voice's fields are drawn at the same levels as an unlocked one's (the selected field 15, the others 4); `[L]` is drawn at 15.
 - The status row (y 26) holds `OFF [L] [T] [F]` at its widest, ending by x 127 (fixed x: 65, 84, 99, 113). `[F]` comes from `S.lib.freeze.is_frozen` (3.2's audio freeze, `docs/notes/lua/freeze.md`), never from `S.frozen` (the lock); the voice list has no room for it.
 - The name on y 18 is cut with `fit_text` to end `LAYOUT.name_gap` px before the right-aligned source, so the two never overlap. Under the harness estimate RESONATOR and KARPLUS are cut; with the norns font only RESONATOR is (`RESONAT`).
+- 3.4's mark (`LAYOUT.modulated_mark`, `~`) follows the name on y 18, never the status row (y 26 is full: plan item 15), while `engine_modulated(voice)` holds: an LFO that is on, at a depth above 0, on one of the voice's five fast destinations (`S.lib.lfos.destination(n).fast`; design §2.6: an LFO that is off or on a Lua destination moves nothing in the engine), `S.lib.scatter.affects(voice)` (on, depth above 0, a destination on, the voice unlocked) or `S.lib.matrix.affects(voice)` (a routing that plays on one of its params). The name is cut by the mark's width as well, so name, mark and source never overlap. Scatter and the matrix are read defensively (a test may load without them or with a stand-in), as the LFO page reads the matrix. Every change the mark follows already asks for a redraw (the params' actions, `toggle_lock`, the matrix's routing changes).
 
 ## Owns
 
-- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `alt_key_release`, `randomize_section`, `animates`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_alt_key_release`, `main_randomize_section`, `main_animates`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_fields`.
+- `lib/pages/main.lua` (`S.lib.pages_main`): the MAIN record (`S.registry.pages[UI_PAGES.index.MAIN]`, with `alt_key`, `alt_key_release`, `randomize_section`, `animates`, `arc_button` and `layout_states`), `redraw_main`, `main_enc`, `main_key`, `main_alt_key`, `main_alt_key_release`, `main_randomize_section`, `main_animates`, `main_hints`, `start_stop_selected_voice` (also `S.lib.pages_main.start_stop_selected_voice`), `engine_modulated` (also `S.lib.pages_main.engine_modulated`), `S.lib.pages_main.LAYOUT`; the state `S.voice_list` and `S.main_field`; the globals `update_voice_list`, `main_param_id`, `main_param_entry`, `main_fields`.
 - Its unit tests: `test/unit/pages_main_test.lua`. Its rings: `lib/arc/main.lua` (`docs/notes/lua/arc-pages.md`).
 
 ## Keys
@@ -54,12 +55,12 @@ Two columns under the header (`draw_header()`, the same on every page: `docs/not
 - **Left column** (0-60 px): the voice list.
 - **Divider** (x=62, y 10-52): a subtle vertical line.
 - **Right column** (65-127 px), the selected voice:
-  - y=18: the full name (level 15, cut to fit) and the source right-aligned at 127 (`voice_source_label`: `synth`, `buf 1`-`buf 8`, `input`; level 4);
+  - y=18: the full name (level 15, cut to fit), `~` right after it (level 15) while the engine's modulation moves the voice, and the source right-aligned at 127 (`voice_source_label`: `synth`, `buf 1`-`buf 8`, `input`; level 4);
   - y=26: `ON`/`OFF` (level 4) at x=65, `[L]` at x=84 (level 15) when locked, `[T]` at x=99 (level 8) in triggered grain mode, `[F]` at x=113 (level 15) while frozen (`S.lib.freeze.is_frozen`). Fixed x, so nothing shifts as they come and go;
   - y=34, 42, 50: the three fields: the cursor `>` at x=65 on the selected one, the label at x=71, the value with its unit right-aligned at 127. The selected field is at 15, the others at 4, locked or not.
 - `mod:` (crossmod sources) is not on MAIN; the VOICE page shows them.
 - **Hint row** (y=62): see Keys.
 
-`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked, triggered and frozen with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; voice 1 on the input; and voice 1 locked with ALT+K2 held `ALT_HOLD_SECONDS`, for the widest ALT hint, `K2:cancel K3:unlock`.
+`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked, triggered and frozen with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; voice 1 on the input; the voice list's m and s marks; `~` after RESONATOR on buffer 8 (scatter on); and voice 1 locked with ALT+K2 held `ALT_HOLD_SECONDS`, for the widest ALT hint, `K2:cancel K3:unlock`.
 
 Layout tests: `test/unit/pages_main_test.lua` draws the list for every voice, selection and running/locked state, MAIN for buffer- and input-sourced voices, and the fields at their minimum and maximum values for every voice, source and cursor position; `test/unit/ui_layout_test.lua` draws MAIN with every voice, source, ALT state and flash, and the layout states.

@@ -248,7 +248,7 @@ test("every randomizing page has a layout state with ALT+K2 held past the hold t
       pages[#pages + 1] = { index = index, name = record.name, held = held }
     end
   end
-  assert_equal(#pages, 5, "MAIN, VOICE, SEQ, FX and LFO randomize")
+  assert_equal(#pages, 6, "MAIN, VOICE, SEQ, FX, LFO and MOD randomize")
   for _, page in ipairs(pages) do
     assert_true(#page.held >= 1, page.name .. " lists a layout state with ALT+K2 held past the hold time")
     for _, state_index in ipairs(page.held) do

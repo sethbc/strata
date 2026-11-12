@@ -73,8 +73,8 @@ SOURCE_OPTIONS[SOURCE_INPUT] = "input"
 
 -- The screen pages in E1 order. Each lib/pages/<page>.lua registers its
 -- record at S.registry.pages[UI_PAGES.index.<PAGE>]
-local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP"}
-local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (8)
+local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP"}
+local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (9)
 UI_PAGES.index = {}  -- page name -> its index (UI_PAGES.index.FX == 4)
 for index, name in ipairs(UI_PAGES) do UI_PAGES.index[name] = index end
 -- Arc pages follow the screen pages. Every continuous arc ring sweeps its

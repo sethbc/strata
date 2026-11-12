@@ -15,10 +15,10 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   local device = context.arc.plug(1)
   context.arc.turn(1, 1, 20); assert_true(params:get("master_density") > 1.0, "ring 1 density on MAIN")
   -- rings drawn (with at least one segment) on each page: SETUP none,
-  -- SCENES one (ring 1 at its first slot lights an LED, not a segment; rings
-  -- 3-4 dark); SEQ's rings 1, 2 and 4 at their first position likewise;
-  -- BUFFER's scan ring (bipolar, at 0) lights one LED without a segment
-  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, BUFFER = 3, SCENES = 1, SETUP = 0 }
+  -- SCENES three (ring 1 at its first slot lights an LED, not a segment);
+  -- SEQ's rings 1, 2 and 4 at their first position likewise; BUFFER's scan
+  -- ring (bipolar, at 0) lights one LED without a segment; MOD's four macros
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, MOD = 4, BUFFER = 3, SCENES = 3, SETUP = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -944,8 +944,8 @@ test("SEQ and SCENES rings draw their position fractions", function()
   arc_redraw()
   assert_ring_fraction(device, 1, 1, "SCENES ring 1 at the last field")
   assert_ring_fraction(device, 2, param_fraction("scene_transition_time"), "SCENES ring 2 transition time")
-  assert_ring_dark(device, 3, "SCENES ring 3")
-  assert_ring_dark(device, 4, "SCENES ring 4")
+  assert_ring_fraction(device, 3, param_fraction("morph"), "SCENES ring 3 the morph")
+  assert_ring_fraction(device, 4, param_fraction("morph_b"), "SCENES ring 4 morph B")
   S.cursors.scene = 4
   arc_redraw()
   assert_ring_fraction(device, 1, 3 / (stops - 1), "SCENES ring 1 at slot 4")
@@ -976,8 +976,8 @@ test("SCENES ring 1 moves the cursor and ring 2 the transition time", function()
   assert_true(params:get("scene_transition_time") > transition, "ring 2 raises the transition time")
   local before = params:get("scene_transition_time")
   for _, ring in ipairs({ 3, 4 }) do context.arc.turn(1, ring, 100) end
-  assert_equal(params:get("scene_transition_time"), before, "rings 3-4 do nothing")
-  assert_equal(S.cursors.scene, 1)
+  assert_equal(params:get("scene_transition_time"), before, "rings 3-4 leave the transition time")
+  assert_equal(S.cursors.scene, 1, "and the cursor")
   -- a cursor move disarms an overwrite confirmation, as E2 does
   S.scenes_page.armed_slot = 1
   S.scenes_page.armed_until = util.time() + 10
@@ -1102,7 +1102,7 @@ test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO and BUFFER draw the lev
   assert_levels({15, 15, 12, 12}, "SEQ")
   S.selected_voice = 1
   show_page("SCENES"); S.cursors.scene = 2; arc_redraw()
-  assert_levels({12, 12, nil, nil}, "SCENES")
+  assert_levels({12, 12, 12, 12}, "SCENES")
   show_page("FX"); arc_redraw()
   assert_levels({12, 12, 12, 12}, "FX")
   -- LFO: depth rings 15 while running, 4 off; ring 4 at 12
@@ -1292,6 +1292,182 @@ test("the edit view on SEQ keeps SEQ's rings", function()
   assert_equal(S.patterns[1][2], 3, "ring 2 its level")
   context.screen.clear(); redraw()
   assert_true(h.screen_shows(context, "v1 step 2"), "the edit view follows the step")
+end)
+
+-- 3.4 (package 2a): MOD's rings (lib/arc/mod.lua) and SCENES rings 3-4
+---------------------------------------------------------------------------
+
+local tap = h.tap
+
+-- A fresh script on MOD with an arc, the cursor on the list row `id`
+local function mod_with_arc(id)
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("MOD")
+  if id then assert_true(S.lib.pages_mod.place(id), "MOD has a row " .. id) end
+  return context, device, S
+end
+
+test("MOD's rings follow the shown bank, the section and the view", function()
+  local context, device, S = mod_with_arc("bank")
+  local macros = S.lib.macros
+  -- the list view: the shown bank's four macros
+  for ring = 1, 4 do
+    context.arc.turn(1, ring, 512)
+    assert_near(params:get("macro_" .. ring), 0.5, 1e-6, "ring " .. ring .. ": macro " .. ring .. " in bank 1")
+  end
+  arc_redraw()
+  assert_ring_fraction(device, 1, param_fraction("macro_1"), "ring 1 shows macro 1")
+  macros.set_bank(4)
+  context.arc.turn(1, 1, 256)
+  assert_near(params:get("macro_13"), 0.25, 1e-6, "bank 4: ring 1 is macro 13")
+  context.arc.turn(1, 4, 1024)
+  assert_near(params:get("macro_16"), 1, 1e-6, "ring 4 is macro 16")
+  -- ALT: morph, scatter depth and rate, morph B in whole steps
+  key(1, 1)
+  context.arc.turn(1, 1, 512)
+  assert_near(params:get("morph"), 0.5, 1e-6, "ALT ring 1 the morph")
+  context.arc.turn(1, 2, 1024)
+  assert_equal(params:get("scatter_depth"), 100, "ALT ring 2 the scatter depth")
+  local rate = params:get("scatter_rate")
+  context.arc.turn(1, 3, 100)
+  assert_true(params:get("scatter_rate") > rate, "ALT ring 3 the scatter rate")
+  context.arc.turn(1, 4, 19)
+  assert_equal(params:get("morph_b"), 2, "19 ticks keep morph B")
+  context.arc.turn(1, 4, 1)
+  assert_equal(params:get("morph_b"), 3, "20 ticks a scene")
+  arc_redraw()
+  assert_ring_fraction(device, 1, param_fraction("morph"), "ALT ring 1 shows the morph")
+  key(1, 0)
+  -- the matrix section: the four routings around the cursor's depths
+  S.lib.pages_mod.place("routing:6")
+  context.arc.turn(1, 1, 256)
+  assert_equal(params:get("matrix_5_depth"), 50, "ring 1 R5's depth (R5-R8)")
+  context.arc.turn(1, 4, -256)
+  assert_equal(params:get("matrix_8_depth"), -50, "ring 4 R8's")
+  arc_redraw()
+  assert_true(device.segments[4].from > math.pi, "a negative depth fills from the top, counter-clockwise")
+  -- the button there toggles the cursor's routing
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(params:get("matrix_6"), 0, "the button turns R6 off")
+  -- elsewhere it toggles scatter, presses a recorder, shows the next bank
+  S.lib.pages_mod.place("scatter_rate")
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(params:get("scatter"), 1, "the button toggles scatter")
+  S.lib.pages_mod.place("source:gesture2")
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(S.lib.gestures.state(2), "recording", "on a gesture row it presses the recorder")
+  S.lib.gestures.clear(2)
+  S.lib.pages_mod.place("bank")
+  macros.set_bank(4)
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(macros.bank(), 1, "on the bank row it shows the next bank, 4 wrapping to 1")
+  S.lib.pages_mod.place("source:macro3")
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(macros.bank(), 2, "and on a macro row")
+  -- the target view: min, max, the macro and the row
+  macros.set_bank(1)
+  S.lib.pages_mod.place("source:macro1")
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  tap(3)
+  context.arc.turn(1, 1, 256)
+  assert_near(S.macros[1].targets[1].min, 0.25, 1e-9, "ring 1 the row's min, 1024 ticks for 0-1")
+  context.arc.turn(1, 2, -512)
+  assert_near(S.macros[1].targets[1].max, 0.5, 1e-9, "ring 2 its max")
+  arc_redraw()
+  assert_ring_fraction(device, 1, 0.25, "ring 1 shows the min itself")
+  assert_ring_fraction(device, 2, 0.5, "ring 2 the max")
+  local macro = params:get("macro_1")
+  context.arc.turn(1, 3, 100)
+  assert_true(params:get("macro_1") > macro, "ring 3 the macro")
+  context.arc.turn(1, 4, 40)
+  context.arc.turn(1, 1, 102)
+  assert_equal(S.macros[1].targets[1].min, 0.25, "ring 4 moved the row: row 1 is left alone")
+  assert_equal(S.macros[1].targets[3].id, "", "an empty row takes no bound")
+  tap(2)
+  -- the routing view: depth, source, destination, the routing
+  local matrix = S.lib.matrix
+  S.lib.pages_mod.place("routing:2")
+  tap(3)
+  context.arc.turn(1, 1, 256)
+  assert_equal(params:get("matrix_2_depth"), 50, "ring 1 the depth")
+  context.arc.turn(1, 2, 20)
+  assert_equal(matrix.routing(2).source, S.lib.mod_sources.list()[1].key, "ring 2 steps the source")
+  context.arc.turn(1, 3, 40)
+  assert_equal(matrix.routing(2).dest, matrix.destination_ids()[2], "ring 3 steps the destination")
+  context.arc.turn(1, 4, 20)
+  assert_equal(S.lib.pages_mod.routing(), 3, "ring 4 steps the routing")
+  arc_redraw()
+  assert_ring_fraction(device, 4, 2 / 15, "ring 4 at R3", true)
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(params:get("matrix_3"), 0, "the button toggles the routing shown")
+end)
+
+test("MOD's whole-step rings carry their ticks and forget them on a row, view or bank change", function()
+  local context, device, S = mod_with_arc("scatter")
+  -- ALT ring 4 (morph B): the carry, then a bank change forgets it
+  key(1, 1)
+  context.arc.turn(1, 4, 15); context.arc.turn(1, 4, 5)
+  assert_equal(params:get("morph_b"), 3, "15 + 5 ticks: one scene")
+  context.arc.turn(1, 4, 15)
+  S.lib.macros.set_bank(2)
+  context.arc.turn(1, 4, 5)
+  assert_equal(params:get("morph_b"), 3, "a bank change forgot the 15")
+  S.lib.pages_mod.place("source:gesture1")
+  context.arc.turn(1, 4, 15)
+  assert_equal(params:get("morph_b"), 3, "a section change forgot the 5 left")
+  context.arc.turn(1, 4, 5)
+  assert_equal(params:get("morph_b"), 4, "kept ticks step it")
+  key(1, 0)
+  -- the routing view: ring 2's carry belongs to its routing and its view
+  S.lib.pages_mod.place("routing:1")
+  tap(3)
+  local matrix = S.lib.matrix
+  context.arc.turn(1, 2, 15)
+  context.arc.turn(1, 4, 20)                   -- R2
+  context.arc.turn(1, 2, 5)
+  assert_equal(matrix.routing(2).source, "", "a routing change forgot ring 2's ticks")
+  assert_equal(matrix.routing(1).source, "", "and they stepped nothing")
+  context.arc.turn(1, 3, 15)
+  tap(2); tap(3)                               -- out of the view and back
+  context.arc.turn(1, 3, 5)
+  assert_equal(matrix.routing(2).dest, "", "a view change forgot ring 3's ticks")
+  context.arc.turn(1, 3, 15); context.arc.turn(1, 3, 5)
+  assert_equal(matrix.routing(2).dest, matrix.destination_ids()[1], "kept ticks step it")
+  -- the target view: ring 4 (the row) forgets on a view change
+  tap(2)
+  S.lib.pages_mod.place("source:macro1")
+  tap(3)
+  context.arc.turn(1, 4, 15)
+  tap(2); tap(3)
+  context.arc.turn(1, 4, 5)
+  assert_equal(S.lib.pages_mod.target_row(), 1, "the row ring's carry is gone")
+  assert_true(device ~= nil)
+end)
+
+test("SCENES ring 3 sweeps morph and ring 4 steps morph_b", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  show_page("SCENES")
+  context.arc.turn(1, 3, 512)
+  assert_near(params:get("morph"), 0.5, 1e-6, "half a turn of ring 3: morph 50 %")
+  context.arc.turn(1, 3, 512)
+  assert_near(params:get("morph"), 1, 1e-6, "a full turn: 100 %")
+  context.arc.turn(1, 4, 19)
+  assert_equal(params:get("morph_b"), 2, "19 ticks keep morph B")
+  context.arc.turn(1, 4, 21)
+  assert_equal(params:get("morph_b"), 4, "40 ticks: two scenes")
+  context.arc.turn(1, 4, 1000)
+  assert_equal(params:get("morph_b"), local_value("S").constants.NUM_SCENES, "stops at the last scene")
+  params:set("morph", 0.25); params:set("morph_b", 5); arc_redraw()
+  assert_ring_fraction(device, 3, param_fraction("morph"), "ring 3 shows the morph")
+  assert_ring_fraction(device, 4, param_fraction("morph_b"), "ring 4 morph B")
+  -- a page change forgets ring 4's ticks
+  context.arc.turn(1, 4, 15)
+  show_page("FX"); show_page("SCENES")
+  context.arc.turn(1, 4, 5)
+  assert_equal(params:get("morph_b"), 5, "the carry is gone")
 end)
 
 end

@@ -638,7 +638,7 @@ local function text_span(entry)
 end
 
 -- The screen pages in E1 order (S.constants.UI_PAGES)
-local PAGE_TITLES = { "MAIN", "VOICE", "SEQ", "FX", "LFO", "BUFFER", "SCENES", "SETUP" }
+local PAGE_TITLES = { "MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP" }
 
 local HINT_ROW_Y = 62
 
@@ -682,8 +682,8 @@ local function hint_text(context)
   end
 end
 
--- The header's page dots (lib/ui/header.lua): eight 2x2 rects from x 36,
--- 4 px apart
+-- The header's page dots (lib/ui/header.lua): one 2x2 rect per page (nine
+-- since 3.4) from x 36, 4 px apart
 local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 36, 4, 2
 
 local HEADER_FLASH_X = 40
@@ -755,7 +755,7 @@ local function assert_screen_layout(context, where)
     assert_true(flash_drawn, "the header flash drawn at " .. HEADER_FLASH_X .. ",8 (" .. where .. ")")
     assert_equal(#dots, 0, "no page dots under the header flash (" .. where .. ")")
   else
-    assert_equal(#dots, 8, "eight page dots (" .. where .. ")")
+    assert_equal(#dots, #PAGE_TITLES, "a page dot per page (" .. where .. ")")
     table.sort(dots, function(a, b) return a.x < b.x end)
     for index, dot in ipairs(dots) do
       assert_equal(dot.x, HEADER_DOTS_X + (index - 1) * HEADER_DOT_SPACING, "page dot " .. index .. " (" .. where .. ")")
