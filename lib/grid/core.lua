@@ -739,16 +739,17 @@ return function(S)
       cancel_hold(port, x, y)
       if layout and not M.consumed(port, x, y) then layout.key(port, x, y, 0) end
       release_step_key(port, x, y)
-      release_key(port, x, y)
     end
   end
 
   -- Presses and releases. A press is held (S.grid_held) before the layout
   -- sees it. A release cancels the key's hold, reaches the layout unless the
   -- key was consumed, toggles a held step key's step (release_step_key),
-  -- then forgets the key. Layouts get key(port, x, y, z) and return on
-  -- z == 0 unless they handle releases. One repaint per key, also when the
-  -- handler fails (its error is raised after the repaint)
+  -- then forgets the key (release_key), also when the layout or the toggle
+  -- raised (#620), so no key stays held. Layouts get key(port, x, y, z)
+  -- and return on z == 0 unless they handle releases. One repaint per key,
+  -- also when the handler fails (its error, the first one, is raised once,
+  -- after the repaint)
   function grid_key(port, x, y, z)
     local grid_port = S.grids[port]
     if not grid_port then return end
@@ -757,6 +758,10 @@ return function(S)
 
     key_repaint.handling = true
     local handled, key_error = xpcall(handle_key, debug.traceback, port, grid_port, x, y, z)
+    if z ~= 1 then
+      local released, release_error = xpcall(release_key, debug.traceback, port, x, y)
+      if handled and not released then handled, key_error = false, release_error end
+    end
     key_repaint.handling = false
 
     grid_redraw()

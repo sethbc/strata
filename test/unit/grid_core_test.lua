@@ -649,6 +649,50 @@ test("a key handler that fails still repaints, and later redraws work", function
   assert_equal(device.refresh_count - before, 2, "a redraw after it paints")
 end)
 
+-- #620: a release whose layout handler or step toggle raises still
+-- forgets its key (the error is raised once, after the repaint), so the
+-- key is not left held: the voice's next step key is a tap of its own and
+-- never a level key for the stale one
+test("a release that raises still forgets its key", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  local function count(text, word)
+    local found = 0
+    for _ in tostring(text):gmatch(word) do found = found + 1 end
+    return found
+  end
+  -- the layout's release handler raises
+  local layout = S.registry.grid_layouts["256"]
+  local real_key = layout.key
+  layout.key = function(port, x, y, z)
+    if z == 0 then error("broken release") end
+    return real_key(port, x, y, z)
+  end
+  context.grid.press(1, 5, 3, 1)
+  local ok, message = pcall(context.grid.press, 1, 5, 3, 0)
+  layout.key = real_key
+  assert_true(not ok, "the layout's error reaches the caller")
+  assert_equal(count(message, "broken release"), 1, "once")
+  assert_equal(grid_core().held(1, 5, 3), nil, "the key is no longer held")
+  tap(context, 1, 9, 3)
+  assert_equal(patterns[3][9], 15, "the voice's next tap toggles its own step")
+  assert_equal(patterns[3][5], 0, "and sets no level on the stale one")
+  -- the step toggle raises
+  local real_toggle = toggle_pattern_step
+  toggle_pattern_step = function() error("broken toggle") end
+  context.grid.press(1, 6, 4, 1)
+  ok, message = pcall(context.grid.press, 1, 6, 4, 0)
+  toggle_pattern_step = real_toggle
+  assert_true(not ok, "the toggle's error reaches the caller")
+  assert_equal(count(message, "broken toggle"), 1, "once")
+  assert_equal(grid_core().held(1, 6, 4), nil, "the key is no longer held")
+  tap(context, 1, 11, 4)
+  assert_equal(patterns[4][11], 15, "the voice's next tap toggles its own step")
+  assert_equal(patterns[4][6], 0, "and sets no level on the stale one")
+end)
+
 test("an FX change redraws the grids only while one shows the FX faders", function()
   local context = load_strata(); finish_startup(context)
   local core = grid_core()
