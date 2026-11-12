@@ -334,9 +334,13 @@ local function snapshot(device)
   return table.concat(cells, ",")
 end
 
--- Tick by tick until `done()`: the key's LED after each tick and the repaints
--- that tick made (each tick is one clock step of 1 / 15 s)
-local function trace(context, device, voice_idx, n, done)
+-- Tick by tick until the key's LED leaves the waiting levels: the landing's
+-- repaint, in whichever call delivers it (the playheads clock can share the
+-- bar's tick, #588). After each tick: the key's LED, the repaints that tick
+-- made and whether the bookmark still waits (each tick is one clock step of
+-- 1 / 15 s)
+local function trace(context, S, device, voice_idx, n)
+  local LEVELS = S.lib.positions.LEVELS
   local steps = {}
   local last, count = key_led(device, voice_idx, n), device.refresh_count
   for _ = 1, 60 do
@@ -344,15 +348,12 @@ local function trace(context, device, voice_idx, n, done)
     local led = key_led(device, voice_idx, n)
     -- a step that ends before the clock's next tick has seen nothing yet
     if #steps > 0 or led ~= last or device.refresh_count ~= count then
-      steps[#steps + 1] = {led = led, changed = led ~= last, repaints = device.refresh_count - count}
+      steps[#steps + 1] = {led = led, changed = led ~= last, repaints = device.refresh_count - count,
+        waiting = S.lib.positions.waiting_bookmark(voice_idx) ~= nil}
     end
     last, count = led, device.refresh_count
-    if done() then break end
+    if #steps > 0 and led ~= LEVELS.waiting_high and led ~= LEVELS.waiting_low then break end
   end
-  -- the tick after the landing repaints it
-  context.clock.run_for(1 / 15)
-  local led = key_led(device, voice_idx, n)
-  steps[#steps + 1] = {led = led, changed = led ~= last, repaints = device.refresh_count - count}
   return steps
 end
 
@@ -362,7 +363,7 @@ test("a waiting bookmark's key blinks on the grid's LED and repaints once per ph
   local steady = key_led(device, 1, 2)
   assert_equal(steady, LEVELS.bookmark, "set, not waiting: the bookmark level")
   S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
-  local steps = trace(context, device, 1, 2, function() return S.lib.positions.waiting_bookmark(1) == nil end)
+  local steps = trace(context, S, device, 1, 2)
   local highs, lows, changes = 0, 0, 0
   for index, step in ipairs(steps) do
     local landed = index == #steps
@@ -370,8 +371,11 @@ test("a waiting bookmark's key blinks on the grid's LED and repaints once per ph
     if landed then
       assert_equal(step.led, LEVELS.recalled, "the recall landed: the recalled level")
       assert_true(step.changed, "and the landing repainted")
+      assert_true(not step.waiting, "the bookmark no longer waits")
     else
       assert_true(step.led == LEVELS.waiting_high or step.led == LEVELS.waiting_low, "waiting: a waiting level, got " .. step.led)
+      -- the landing repaints in the tick that delivers it or in the next
+      assert_true(step.waiting or index == #steps - 1, "tick " .. index .. ": waiting until the tick before the repaint at the latest")
       if step.led == LEVELS.waiting_high then highs = highs + 1 else lows = lows + 1 end
       if step.changed then changes = changes + 1 end
     end

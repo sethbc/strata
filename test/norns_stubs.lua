@@ -1470,8 +1470,10 @@ local SCHEDULER_SLOTS = 100
 
 -- matron's scheduler tick: clock_scheduler_tick_thread_run posts the events
 -- due, then sleeps usleep(1000) (clocks/clock_scheduler.cc), so a tick comes
--- every 1 ms and two wake-ups less than a tick apart can be posted by one
+-- every 1 ms and two wake-ups less than a tick apart can be posted by one.
+-- Exported for the tests that allow a clock its tick (h.stubs)
 local MATRON_TICK_SECONDS = 0.001
+stubs.MATRON_TICK_SECONDS = MATRON_TICK_SECONDS
 
 -- Errors raised while the scheduler resumed a coroutine. On norns
 -- w_handle_clock_resume reports them on the console (l_report) and every
