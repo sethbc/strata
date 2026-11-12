@@ -580,4 +580,76 @@ test("an edit of the LFO shape, free period or clocked rate ends the randomize u
   end
 end)
 
+-- 3.4 (0b): the LFOs' scene fields live in lib/lfos.lua, so the LFO rewrite
+-- (1b) changes them without editing lib/scenes.lua
+test("the LFO scene fields live in S.lib.lfos.SCENE_FIELDS and scenes read them in place", function()
+  load_strata()
+  local S = local_value("S")
+  -- per LFO, as lib/scenes.lua listed them on main at 3.3.2
+  local function lfo_fields(n)
+    return {
+      { id = "lfo_shape_" .. n, continuous = false, default = 1 },
+      { id = "lfo_mode_" .. n, continuous = false, default = 2 },
+      { id = "lfo_clocked_" .. n, continuous = false, default = 13 },
+      { id = "lfo_free_" .. n, continuous = true, lfo = n, default = 4 },
+      { id = "lfo_depth_" .. n, continuous = true, lfo = n, stop_target = 0, default = 0 },
+      { id = "lfo_offset_" .. n, continuous = true, lfo = n, default = 0, range = { -100, 100 } },
+      { id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1 },
+      { id = "lfo_" .. n, continuous = false, default = 1 },
+    }
+  end
+  local expected = {}
+  for n = 1, 3 do
+    for _, field in ipairs(lfo_fields(n)) do table.insert(expected, field) end
+  end
+  local fields = S.lib.lfos.SCENE_FIELDS
+  assert_equal(type(fields), "table", "S.lib.lfos.SCENE_FIELDS is a list")
+  assert_equal(#fields, #expected, "eight fields per LFO")
+  for index, field in ipairs(expected) do
+    local actual, where = fields[index], "field " .. index .. " (" .. field.id .. ")"
+    for _, key in ipairs({ "id", "continuous", "lfo", "stop_target", "default" }) do
+      assert_equal(actual[key], field[key], where .. ": " .. key)
+    end
+    assert_equal(actual.range and actual.range[1], field.range and field.range[1], where .. ": range min")
+    assert_equal(actual.range and actual.range[2], field.range and field.range[2], where .. ": range max")
+  end
+  -- S.SCENE_GLOBAL_PARAMS on main at 3.3.2: the built-in globals, the LFO
+  -- fields, then the registered scale and root
+  local ids = { "master_density", "tempo", "mutation_enabled", "mutation_rate", "mutation_probability",
+    "mutation_amount", "filter_type", "filter_freq", "filter_res", "filter_mix", "delay_time", "delay_feedback",
+    "delay_mix", "reverb_mix", "reverb_size", "reverb_damp", "drift_amount" }
+  local built_in = #ids
+  for _, field in ipairs(expected) do table.insert(ids, field.id) end
+  table.insert(ids, "scale"); table.insert(ids, "root")
+  local globals = S.SCENE_GLOBAL_PARAMS
+  assert_equal(#globals, #ids, "as many scene globals as on main")
+  for index, id in ipairs(ids) do assert_equal(globals[index].id, id, "global " .. index) end
+  for index = 1, #fields do
+    assert_true(rawequal(globals[built_in + index], fields[index]),
+      "global " .. (built_in + index) .. " is the LFO field itself")
+  end
+end)
+
+test("a global destination record adds one destination after the per-voice ones before it", function()
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    -- 0a's S.register_lfo_global_destination does not exist on this branch:
+    -- its record goes straight into the registry, as 0a's will
+    table.insert(S.registry.lfo_destinations, { label = "probe glob", param_id = "delay_time", global = true })
+    S.register_lfo_destination("probe", "grain_size")
+  end })
+  local destinations = local_value("LFO_DESTINATIONS")
+  -- 68 built-in, then hist, vfilt, dsend and rsend (69-96), the global, then v1-v7 probe
+  assert_equal(#destinations, 68 + 4 * 7 + 1 + 7, "one destination for the global record")
+  assert_equal(destinations[96].label, "v7 rsend", "the per-voice ones registered before it")
+  assert_equal(destinations[97].label, "probe glob", "then the global, under its own label")
+  assert_equal(destinations[97].resolve(), "delay_time", "modulating its param")
+  assert_equal(destinations[98].label, "v1 probe", "then the per-voice ones registered after it")
+  assert_equal(destinations[104].resolve(), "v7_grain_size")
+  assert_equal(params:lookup_param("strata_lfo1_dest").count, 104, "every LFO offers it")
+  params:set("strata_lfo1_dest", 97)
+  assert_equal(lfo_destination_id(1), "delay_time", "an LFO set to it modulates the param")
+  assert_equal(params:string("strata_lfo1_dest"), "probe glob")
+end)
+
 end
