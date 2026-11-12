@@ -44,7 +44,7 @@ Elsewhere: the MOD page and its rings (package 2a) draw and edit the macros thro
 
 ## Learn
 
-`learn(m, k)` (MOD's ALT+K3 in the target view, package 2a) arms row k; the next param a hand touches (the `param_touch` registry: an encoder, an arc ring, a grid fader) that is a target becomes the row's id with min 0 and max 1, and the header flashes `M<m> > <label>` (`M12 > v3 pitch`). A touched voice's main param that is no target itself learns `v<i>_main`. Any other touched param flashes `not a macro target`, and learn waits on. `cancel_learn()` (MOD's K2 and page change), a new `learn` or 10 s without a touch ends it.
+`learn(m, k)` (MOD's ALT+K3 in the target view, package 2a) arms row k; the next param a hand touches (the `param_touch` registry: an encoder, an arc ring, a grid fader) that is a target becomes the row's id with min 0 and max 1, and the header flashes `M<m> > <label>` (`M12 > v3 pitch`). A touched voice's main param that is no target itself learns `v<i>_main`. Any other touched param flashes `not a macro target`, and learn waits on. `cancel_learn()` (MOD's K2 in its view), a new `learn` or 10 s without a touch ends it; a page change does not (ruling 80: the touch is made on another page).
 
 ## Banks
 
