@@ -872,6 +872,30 @@ test("with no voice running a master density send counts nothing and never waits
   assert_equal(engine_param_value("master_density"), 1.2, "its value is recorded, for the next start")
 end)
 
+-- #646: a param with no engine sender reaches no engine, so its sends
+-- count nothing and never wait (its value is still recorded)
+test("a param with no engine sender counts nothing and never waits (#646)", function()
+  local context, S = buffer_voice()   -- voice 1 running
+  local sync = S.lib.engine_sync
+  local id = "v1_seq_gate_length"
+  assert_equal(S.engine_senders[id], nil, "it has no sender")
+  local value = params:get(id)
+  mid_window(context)
+  context.clear_engine_calls()
+  send_param_to_engine(id, value)
+  sync.deferrable(function() send_param_to_engine(id, value) end)
+  assert_equal(sync.budget_state().sent, 0, "neither send counts, deferrable or not")
+  spend_budget(S)
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine(id, value) end)
+  assert_equal(sync.budget_state().pending, 0, "past the budget it does not wait")
+  assert_equal(S.engine_budget_clock, nil, "and starts no flush clock")
+  assert_equal(sync.budget_state().sent, 150, "nor counts")
+  assert_equal(#context.engine_calls, 0, "nor calls the engine")
+  assert_equal(sync.expected_value(id), value, "its value is recorded")
+  assert_true(not sync.reaches_engine(id), "the round robin gives it no slot")
+end)
+
 test("a base override is a finite number; anything else raises naming the param", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync

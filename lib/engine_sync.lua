@@ -112,13 +112,15 @@ return function(S)
   local send_master_density_to_engine
 
   -- How many engine messages a send of the id makes now (what the budget
-  -- counts): 0 for a stopped voice's param, whose gated sender sends
-  -- nothing; one per running voice for the master density (#645); else 1
+  -- counts): 0 for an id with no sender (#646) and for a stopped voice's
+  -- param, whose gated sender sends nothing; one per running voice for the
+  -- master density (#645); else 1
   local function engine_messages(param_id)
     local sender = S.engine_senders[param_id]
+    if sender == nil then return 0 end
     local gate = voice_gates[param_id]
     if gate ~= nil and sender == gate.sender then return S.voices[gate.voice].active and 1 or 0 end
-    if sender ~= nil and sender == send_master_density_to_engine then
+    if sender == send_master_density_to_engine then
       local running = 0
       for i = 1, NUM_VOICES do
         if S.voices[i].active then running = running + 1 end
