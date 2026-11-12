@@ -7,9 +7,11 @@
 -- (add_lfo_params, which lib/params_setup.lua's lfos record calls).
 -- S.selected_lfo is the LFO the LFO page and arc ring 4 work on. The
 -- functions that were global stay global;
--- LFO_DEFAULT_PERIOD, LFO_OFFSET_RANGE and BUILT_IN_DESTINATIONS (the LFO
--- page's groups) are fields of this module's table (S.lib.lfos); the period
--- and the offset range for the scene defaults and validation in lib/scenes.lua. Registers the LFOs' cleanup step.
+-- LFO_DEFAULT_PERIOD, LFO_OFFSET_RANGE, SCENE_FIELDS (the LFOs' scene
+-- fields, which lib/scenes.lua appends to S.SCENE_GLOBAL_PARAMS),
+-- transition_stops (whether a fade stops an LFO) and BUILT_IN_DESTINATIONS
+-- (the LFO page's groups) are fields of this module's table (S.lib.lfos).
+-- Registers the LFOs' cleanup step.
 
 return function(S)
   local M = {}
@@ -37,6 +39,42 @@ return function(S)
   -- The library's lfo_offset_<n> range in percent, for every baseline (from
   -- center narrows it to -50..50): what a scene's offset may hold
   local LFO_OFFSET_RANGE = {-100, 100}
+  -- The library's lfo_<n> state options: 1 off, 2 on
+  local LFO_STATE = {off = 1, on = 2}
+
+  -- The LFOs' scene fields, which lib/scenes.lua appends to
+  -- S.SCENE_GLOBAL_PARAMS after its built-in globals (the same records, in
+  -- this order). Per LFO: the library's shape, mode, clocked rate, free
+  -- period, depth (percent) and offset (percent), Strata's destination,
+  -- then the state, so an LFO starts with its settings in place. Depth,
+  -- free period and offset crossfade (lfo = n: the LFO they belong to),
+  -- except toward a scene that stops the running LFO (M.transition_stops):
+  -- its depth fades to stop_target (0) and the others hold, the end setting
+  -- the scene's values with the state (#408). The state switch re-bangs the
+  -- library's baseline, which zeroes the offset: the lfo_<n> wrapper below
+  -- puts the recalled one back (#103). range (optional) is the {min, max}
+  -- validate_scene allows: the offset's is the library's, -100..100 for
+  -- every baseline (the param clamps a recalled value to its current
+  -- baseline's range). default is what a scene without the field loads
+  local SCENE_FIELDS = {}
+  for n = 1, NUM_LFOS do
+    table.insert(SCENE_FIELDS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
+    table.insert(SCENE_FIELDS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
+    table.insert(SCENE_FIELDS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
+    table.insert(SCENE_FIELDS, {id = "lfo_free_" .. n, continuous = true, lfo = n, default = LFO_DEFAULT_PERIOD})
+    table.insert(SCENE_FIELDS, {id = "lfo_depth_" .. n, continuous = true, lfo = n, stop_target = 0, default = 0})
+    table.insert(SCENE_FIELDS, {id = "lfo_offset_" .. n, continuous = true, lfo = n, default = 0,
+      range = LFO_OFFSET_RANGE})
+    table.insert(SCENE_FIELDS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
+    table.insert(SCENE_FIELDS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
+  end
+
+  -- Whether a smooth transition to scene_data stops LFO n: it runs now and
+  -- is off in the scene (lib/scenes.lua's scene_transition_targets)
+  function M.transition_stops(n, scene_data)
+    return params:get("lfo_" .. n) == LFO_STATE.on and scene_data["lfo_" .. n] == LFO_STATE.off
+  end
+
   -- Library steps per beat (its default is 96): the action, and so an engine
   -- message, runs on every step, so this bounds the message rate (96/s per LFO
   -- at 120 BPM) while a 10 Hz LFO still gets several steps per cycle
@@ -90,20 +128,26 @@ return function(S)
   local BUILT_IN_LFO_DESTINATIONS = #S.LFO_DESTINATIONS
 
   -- At init (add_lfo_params): the registered destinations after the
-  -- built-in ones, and the option labels of the whole list
+  -- built-in ones, and the option labels of the whole list. A per-voice
+  -- record ({label, suffix}) adds v1 <label> ... v7 <label>; a global one
+  -- ({label, param_id, global = true}) adds one destination, <label>
   local function lfo_destination_labels()
     for index = #S.LFO_DESTINATIONS, BUILT_IN_LFO_DESTINATIONS + 1, -1 do S.LFO_DESTINATIONS[index] = nil end
     local labels = {}
     for index, destination in ipairs(S.LFO_DESTINATIONS) do labels[index] = destination.label end
     local taken = {}
     for _, label in ipairs(labels) do taken[label] = true end
+    local function add(label, param_id)
+      if taken[label] then error("register_lfo_destination: the label " .. label .. " is taken", 0) end
+      taken[label] = true
+      table.insert(S.LFO_DESTINATIONS, fixed_destination(label, param_id))
+      table.insert(labels, label)
+    end
     for _, entry in ipairs(S.registry.lfo_destinations) do
-      for i = 1, NUM_VOICES do
-        local label = "v" .. i .. " " .. entry.label
-        if taken[label] then error("register_lfo_destination: the label " .. label .. " is taken", 0) end
-        taken[label] = true
-        table.insert(S.LFO_DESTINATIONS, fixed_destination(label, "v" .. i .. "_" .. entry.suffix))
-        table.insert(labels, label)
+      if entry.global then
+        add(entry.label, entry.param_id)
+      else
+        for i = 1, NUM_VOICES do add("v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix) end
       end
     end
     return labels
@@ -329,6 +373,7 @@ return function(S)
 
   M.LFO_DEFAULT_PERIOD = LFO_DEFAULT_PERIOD
   M.LFO_OFFSET_RANGE = LFO_OFFSET_RANGE
+  M.SCENE_FIELDS = SCENE_FIELDS
   M.BUILT_IN_DESTINATIONS = BUILT_IN_LFO_DESTINATIONS  -- the LFO page's last voice group ends here
   return M
 end

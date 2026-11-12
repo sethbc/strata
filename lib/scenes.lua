@@ -5,12 +5,17 @@
 -- (S.scene_sequencer_clock), migration of older scene formats, validation,
 -- and scenes.data on disk (written through lib/data_files.lua at every
 -- scene save and at exit, read at start and on request; S.scene_file), with
--- the registered voice params (voices[i].extras)
--- and scene fields (S.registry.scene_fields). The functions stay global. The tables tests and
+-- the registered voice params (voices[i].extras), scene fields
+-- (S.registry.scene_fields), scene blocks (S.registry.scene_blocks),
+-- migrations (S.registry.scene_migrations) and lock hooks
+-- (S.registry.lock_change). A recall is the list scene_entries builds,
+-- applied by apply_entries (both fields of S.lib.scenes, which morph uses
+-- too). The functions stay global. The tables tests and
 -- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir, move_aside_unloadable_file and SCENE_LOAD are fields of
--- this module's table (S.lib.scenes) for lib/buffers.lua. Registers its three
+-- this module's table (S.lib.scenes) for lib/buffers.lua, and revision(slot)
+-- for morph. Registers its three
 -- cleanup steps (saving the scenes, the sequencer, the transition) and the
 -- transition's invariant.
 
@@ -22,7 +27,6 @@ return function(S)
   local SCENE_DATA_VERSION = S.constants.SCENE_DATA_VERSION
   local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
   local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
-  local NUM_LFOS = S.constants.NUM_LFOS
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
   local DISCRETE_GRAIN_KEYS = S.constants.DISCRETE_GRAIN_KEYS
@@ -44,18 +48,26 @@ return function(S)
   S.scene_recall_in_progress = false
   S.scene_transition_clock = nil  -- Track transition clock for cancellation
 
-  -- Initialize scenes
-  local function empty_scene(scene_num)
+  -- Initialize scenes. A slot's name is the player's ("" for none; 3.3
+  -- named every slot "scene <i>", which loads as "")
+  local function empty_scene()
     return {
-      name = "scene " .. scene_num,
+      name = "",
       populated = false,
       data = {}
     }
   end
 
   for i = 1, NUM_SCENES do
-    S.scenes[i] = empty_scene(i)
+    S.scenes[i] = empty_scene()
   end
+
+  -- Per slot, a count that rises whenever the slot's data changes (a
+  -- capture, a load from disk): S.lib.scenes.revision(slot), 0 until then
+  -- (and for a number that is no slot), so morph knows when to rebuild
+  local revisions = {}
+  local function raise_revision(slot) revisions[slot] = (revisions[slot] or 0) + 1 end
+  function M.revision(slot) return revisions[slot] or 0 end
 
   -- Scene management functions
 
@@ -84,29 +96,14 @@ return function(S)
     {id = "drift_amount", continuous = true, default = 0.01}
   }
 
-  -- Per LFO: the library's shape, mode, clocked rate, free period, depth
-  -- (percent) and offset (percent), Strata's destination, then the state, so
-  -- an LFO starts with its settings in place. Depth, free period and offset
-  -- crossfade (lfo = n: the LFO they belong to), except toward a scene that
-  -- stops the running LFO: its depth fades to stop_target (0) and the others
-  -- hold, the end setting the scene's values with the state (#408). The
-  -- state switch re-bangs the library's baseline, which zeroes the offset:
-  -- lib/lfos.lua's lfo_<n> wrapper puts the recalled one back (#103). range
-  -- (optional) is the {min, max} validate_scene allows: the offset's is the
-  -- library's, -100..100 for every baseline (the param clamps a recalled
-  -- value to its current baseline's range)
-  for n = 1, NUM_LFOS do
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_shape_" .. n, continuous = false, default = 1})    -- sine
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_mode_" .. n, continuous = false, default = 2})     -- free
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_clocked_" .. n, continuous = false, default = 13}) -- "4" (the library's index for a period of 4)
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_free_" .. n, continuous = true, lfo = n,
-      default = S.lib.lfos.LFO_DEFAULT_PERIOD})
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_depth_" .. n, continuous = true, lfo = n, stop_target = 0,
-      default = 0})
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_offset_" .. n, continuous = true, lfo = n, default = 0,
-      range = S.lib.lfos.LFO_OFFSET_RANGE})
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "strata_lfo" .. n .. "_dest", continuous = false, default = 1}) -- none
-    table.insert(S.SCENE_GLOBAL_PARAMS, {id = "lfo_" .. n, continuous = false, default = 1})          -- off
+  -- Then the LFOs' fields (lib/lfos.lua's S.lib.lfos.SCENE_FIELDS, the
+  -- records themselves, in their order): per LFO its settings, then its
+  -- state, so an LFO starts with its settings in place. An entry with lfo =
+  -- n belongs to LFO n: a fade that stops it (S.lib.lfos.transition_stops)
+  -- moves its stop_target entries there and holds the others (#408). range
+  -- (optional) is the {min, max} validate_scene allows
+  for _, field in ipairs(S.lib.lfos.SCENE_FIELDS) do
+    table.insert(S.SCENE_GLOBAL_PARAMS, field)
   end
 
   -- Per-voice scene fields added after format 1, filled by migrate_scene in
@@ -145,6 +142,11 @@ return function(S)
     return keys
   end
 
+  -- A registered field's own setter (its record's optional set =
+  -- fn(value), 3.4: a macro sets itself silently), by param id: a recall,
+  -- a fade step and apply_entries call it in place of set_scene_param
+  local field_setters = {}
+
   -- The registered scene fields (S.registry.scene_fields) join
   -- S.SCENE_GLOBAL_PARAMS after its own entries, at init (the scenes load's
   -- start step, before the file is read): read like the built-in ones,
@@ -163,6 +165,7 @@ return function(S)
         local global = {id = field.id, continuous = not field.discrete, default = field.default, registered = true}
         table.insert(S.SCENE_GLOBAL_PARAMS, global)
         listed[field.id] = global
+        field_setters[field.id] = field.set
       end
     end
   end
@@ -186,9 +189,6 @@ return function(S)
   -- #254)
   S.SCENE_TRANSITION = {steps = 20, settle_seconds = 0.01, overrun_seconds = 1}
 
-  -- The library's lfo_<n> state options: 1 off, 2 on
-  local LFO_STATE = {off = 1, on = 2}
-
   -- Set a param as a scene sets it: a binary through set_binary_param
   -- (lib/ui/params.lua), so a controller mapped to it in PARAMS > MAP
   -- follows (norns' Binary:set sends no CC, #538); any other through
@@ -199,6 +199,25 @@ return function(S)
     else
       params:set(param_id, value)
     end
+  end
+
+  -- What a recall, a fade step and apply_entries set a param through: its
+  -- registered field's own set when it has one, else set_scene_param
+  local function set_scene_value(param_id, value)
+    local set = field_setters[param_id]
+    if set then
+      set(value)
+    else
+      set_scene_param(param_id, value)
+    end
+  end
+
+  -- The registered scene blocks (S.registry.scene_blocks, 3.4's 0a: {key,
+  -- default = fn(), capture = fn(), validate = fn(value), apply =
+  -- fn(value), discrete = true, through_zero = fn(from_value, to_value)}),
+  -- read at each use, after init; a block is data[key] of a scene
+  local function scene_blocks()
+    return S.registry.scene_blocks or {}
   end
 
   -- a finite number: NaN, inf and -inf are refused (the data files' reader
@@ -267,9 +286,30 @@ return function(S)
     end
   end
 
-  -- Bring a loaded scene up to the current format by filling every field it
-  -- lacks with its default: globals (SCENE_GLOBAL_PARAMS), top-level blocks
-  -- (SCENE_BLOCK_DEFAULTS) and per-voice fields (VOICE_SCENE_DEFAULTS).
+  -- The registered migrations (S.registry.scene_migrations, 3.4's 0a:
+  -- {name, before_version, migrate = fn(scene)}) a scene of from_version
+  -- needs: those whose before_version is above it, by before_version, then
+  -- in registration order
+  local function due_migrations(from_version)
+    local due = {}
+    for index, record in ipairs(S.registry.scene_migrations or {}) do
+      if record.before_version > from_version then table.insert(due, {record = record, index = index}) end
+    end
+    table.sort(due, function(a, b)
+      if a.record.before_version ~= b.record.before_version then
+        return a.record.before_version < b.record.before_version
+      end
+      return a.index < b.index
+    end)
+    return due
+  end
+
+  -- Bring a loaded scene up to the current format. First the registered
+  -- migrations it needs (due_migrations) convert what they find in an old
+  -- form; then every field it lacks is filled with its default: globals
+  -- (SCENE_GLOBAL_PARAMS), top-level blocks (SCENE_BLOCK_DEFAULTS, then
+  -- each registered block's default()) and per-voice fields
+  -- (VOICE_SCENE_DEFAULTS).
   -- Filling only adds what is missing, so it runs for every file version;
   -- from_version is there for changes that must convert a particular format
   -- (a scene older than format 5 gets its Pulse res mirrored, #314, and the
@@ -281,7 +321,9 @@ return function(S)
   -- validate_scene to reject.
   function migrate_scene(scene, from_version)
     if type(scene) ~= "table" or scene.populated ~= true or type(scene.data) ~= "table" then return end
+    for _, due in ipairs(due_migrations(from_version)) do due.record.migrate(scene) end
     local data = scene.data
+    if type(data) ~= "table" then return end
 
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
       fill_scene_default(data, {global.id}, global.default)
@@ -289,6 +331,9 @@ return function(S)
 
     for _, block in ipairs(S.SCENE_BLOCK_DEFAULTS) do
       fill_scene_default(data, {block.key}, block.default)
+    end
+    for _, record in ipairs(scene_blocks()) do
+      if data[record.key] == nil then data[record.key] = record.default() end
     end
 
     if type(data.voices) ~= "table" then return end
@@ -330,6 +375,11 @@ return function(S)
       frozen = {},
       patterns = {}
     }
+
+    -- each registered block's own capture, under its key
+    for _, record in ipairs(scene_blocks()) do
+      scene_data[record.key] = record.capture()
+    end
 
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
       scene_data[global.id] = params:get(global.id)
@@ -381,6 +431,7 @@ return function(S)
 
     S.scenes[scene_num].data = scene_data
     S.scenes[scene_num].populated = true
+    raise_revision(scene_num)
     print("captured scene " .. scene_num)
   end
 
@@ -428,11 +479,167 @@ return function(S)
     end_scene_transition("canceled")
   end
 
-  -- Snapshot {id, start, target, step} for every continuous param a smooth
-  -- transition crossfades. Start values are read once, before the fade, so
-  -- the fade moves linearly from start to target over the whole transition.
-  -- Grain sources, mod sources, discrete grain params (envelope shape, grain
-  -- mode), freeze and active states switch at the end instead.
+  -- The ordered list a recall applies (apply_entries), from scene_data
+  -- (which passed validate_scene): every registered block in registration
+  -- order; the globals in S.SCENE_GLOBAL_PARAMS order; then per voice its
+  -- active state, source, synth params, grain params, crossmod (per slot
+  -- its source and amounts, then the speed), registered extras in sorted
+  -- key order (#531) and lock; then the patterns. An entry is
+  -- {kind = "block", key, value}, {kind = "continuous", id, value} (a param
+  -- a transition fades), {kind = "discrete", id, value} (a param set at a
+  -- transition's end) or {kind = "discrete", key = "active" | "lock" |
+  -- "pattern", voice, value}. A voice's synth and grain params are listed
+  -- in pairs order: one table gives one order, so two lists of one scene
+  -- agree
+  function M.scene_entries(scene_data)
+    local entries = {}
+    local function add_param(continuous, param_id, value)
+      table.insert(entries, {kind = continuous and "continuous" or "discrete", id = param_id, value = value})
+    end
+    local function add_voice_state(key, voice_idx, value)
+      table.insert(entries, {kind = "discrete", key = key, voice = voice_idx, value = value})
+    end
+    for _, record in ipairs(scene_blocks()) do
+      table.insert(entries, {kind = "block", key = record.key, value = scene_data[record.key]})
+    end
+    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
+      add_param(global.continuous, global.id, scene_data[global.id])
+    end
+    local extra_keys = registered_voice_scene_keys()
+    for i = 1, NUM_VOICES do
+      local voice_data = scene_data.voices[i]
+      local prefix = "v" .. i .. "_"
+      add_voice_state("active", i, voice_data.active)
+      add_param(false, prefix .. "source", voice_data.source)
+      for key, value in pairs(voice_data.params) do add_param(true, prefix .. key, value) end
+      -- the discrete grain keys (envelope shape, grain mode) switch at the end
+      for key, value in pairs(voice_data.grain) do
+        add_param(not DISCRETE_GRAIN_KEYS[key], prefix .. GRAIN_PARAM_IDS[key], value)
+      end
+      for slot = 1, NUM_MOD_SLOTS do
+        local slot_data = voice_data.crossmod["slot" .. slot]
+        add_param(false, prefix .. "mod_source_" .. slot, slot_data.source)
+        add_param(true, prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+        add_param(true, prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+      end
+      add_param(true, prefix .. "mod_speed", voice_data.crossmod.speed)
+      -- a registered voice param's discrete keys switch at the end
+      for _, key in ipairs(sorted_keys(voice_data.extras)) do
+        add_param(not extra_keys[key].range, prefix .. key, voice_data.extras[key])
+      end
+      add_voice_state("lock", i, scene_data.frozen[i])
+    end
+    for i = 1, NUM_VOICES do add_voice_state("pattern", i, scene_data.patterns[i]) end
+    return entries
+  end
+
+  -- The voice an entry belongs to: its voice field (active, lock, pattern),
+  -- or a per-voice param's v<i>_ id; nil for a block or a global
+  local function entry_voice(entry)
+    local voice_idx = entry.voice or (entry.id and tonumber(entry.id:match("^v(%d+)_")))
+    if voice_idx and voice_idx >= 1 and voice_idx <= NUM_VOICES then return voice_idx end
+    return nil
+  end
+
+  -- Apply one entry of apply_entries' list. state holds the list's blocks by
+  -- key, the voices whose source changed and the voices due to start
+  local function apply_entry(entry, state)
+    local voice_idx = entry_voice(entry)
+    if entry.voice ~= nil and not voice_idx then return end  -- a voice state for no voice
+    if entry.kind == "block" then
+      local record = state.blocks[entry.key]
+      if record then record.apply(entry.value) end
+    elseif entry.key == "active" then
+      -- a voice the scene stops is stopped first, so the engine only records
+      -- its source switch instead of building a grain synth to release at
+      -- once, and its release tail keeps the outgoing scene's values; one
+      -- it starts is started after its last entry (apply_entries)
+      if entry.value then
+        state.start_due[voice_idx] = true
+      elseif S.voices[voice_idx].active then
+        toggle_voice(voice_idx)
+      end
+    elseif entry.key == "lock" then
+      local was_locked = S.frozen[voice_idx]
+      S.frozen[voice_idx] = entry.value
+      if (not was_locked) ~= (not entry.value) then
+        for _, hook in ipairs(S.registry.lock_change or {}) do hook(voice_idx, entry.value) end
+      end
+    elseif entry.key == "pattern" then
+      S.lib.sequencer.replace_pattern(voice_idx, entry.value)
+    elseif voice_idx and entry.id == "v" .. voice_idx .. "_source" then
+      local previous_source = S.voices[voice_idx].source
+      set_scene_value(entry.id, entry.value)
+      state.source_changed[voice_idx] = S.voices[voice_idx].source ~= previous_source
+    else
+      set_scene_value(entry.id, entry.value)
+    end
+  end
+
+  -- Apply entries (any subset of scene_entries' output, in its order) as a
+  -- recall does, with S.scene_recall_in_progress set throughout (the
+  -- v<i>_source action then leaves the full sync to the end): a param
+  -- through set_scene_value, a block through its record's apply, a lock
+  -- that changes runs the lock_change hooks (S.registry.lock_change,
+  -- fn(voice_idx, locked)), a pattern through
+  -- S.lib.sequencer.replace_pattern. A voice whose active entry stops it is
+  -- stopped there; one it starts is started after its last entry in the
+  -- list (its pattern aside, which follows every voice's entries), so
+  -- toggle_voice syncs what was applied. Then each running voice whose
+  -- source changed, and that the list did not start, gets one
+  -- sync_voice_values_to_engine, even after an error in an action: the flag
+  -- is cleared, the syncs run, and the error is raised again with its
+  -- traceback. opts.only = "discrete" (the blocks and discrete entries) or
+  -- "continuous" applies only those. Redraws are the caller's
+  function M.apply_entries(entries, opts)
+    local only = opts and opts.only
+    local list = {}
+    for _, entry in ipairs(entries) do
+      if only == nil or (only == "continuous") == (entry.kind == "continuous") then table.insert(list, entry) end
+    end
+    local last_entry = {}  -- per voice, the index of its last entry but its pattern
+    for index, entry in ipairs(list) do
+      local voice_idx = entry_voice(entry)
+      if voice_idx and entry.key ~= "pattern" then last_entry[voice_idx] = index end
+    end
+    local state = {blocks = {}, source_changed = {}, start_due = {}}
+    for _, record in ipairs(scene_blocks()) do state.blocks[record.key] = record end
+
+    S.scene_recall_in_progress = true
+    -- the flag must not outlive an error in a param action: clear it, then
+    -- raise the error again, with its traceback
+    local applied, apply_error = xpcall(function()
+      for index, entry in ipairs(list) do
+        apply_entry(entry, state)
+        local voice_idx = entry_voice(entry)
+        -- start the voice last: toggle_voice syncs the restored state
+        if voice_idx and last_entry[voice_idx] == index and state.start_due[voice_idx] then
+          state.start_due[voice_idx] = nil
+          if not S.voices[voice_idx].active then
+            toggle_voice(voice_idx)
+            state.source_changed[voice_idx] = false
+          end
+        end
+      end
+    end, with_traceback)
+    S.scene_recall_in_progress = false
+
+    -- even after an error: a running voice whose source switched gets its sync
+    -- (of whatever was applied), so the engine never lags the Lua state
+    for i = 1, NUM_VOICES do
+      if state.source_changed[i] and S.voices[i].active then
+        sync_voice_values_to_engine(i)
+      end
+    end
+    if not applied then error(apply_error, 0) end
+  end
+
+  -- Snapshot {id, start, target, step} for every continuous entry of the
+  -- scene (scene_entries), the params a smooth transition crossfades. Start
+  -- values are read once, before the fade, so the fade moves linearly from
+  -- start to target over the whole transition. Grain sources, mod sources,
+  -- discrete grain params (envelope shape, grain mode), freeze, lock and
+  -- active states switch at the end instead.
   function scene_transition_targets(scene_data)
     local targets = {}
     local function add_target(param_id, target_value)
@@ -446,44 +653,55 @@ return function(S)
     -- out, never toward the scene's (a setting the scene never plays), and
     -- keeps its period and offset: the end sets the scene's values with the
     -- state (#408)
-    local function stops(n)
-      return params:get("lfo_" .. n) == LFO_STATE.on and scene_data["lfo_" .. n] == LFO_STATE.off
-    end
-    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-      if global.continuous then
-        if not (global.lfo and stops(global.lfo)) then
-          add_target(global.id, scene_data[global.id])
+    local globals = {}
+    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do globals[global.id] = global end
+    for _, entry in ipairs(M.scene_entries(scene_data)) do
+      if entry.kind == "continuous" then
+        local global = globals[entry.id]
+        if not (global and global.lfo and S.lib.lfos.transition_stops(global.lfo, scene_data)) then
+          add_target(entry.id, entry.value)
         elseif global.stop_target ~= nil then
-          add_target(global.id, global.stop_target)
+          add_target(entry.id, global.stop_target)
         end
-      end
-    end
-
-    local extra_keys = registered_voice_scene_keys()
-    for i = 1, NUM_VOICES do
-      local voice_data = scene_data.voices[i]
-      local prefix = "v" .. i .. "_"
-      for key, target_value in pairs(voice_data.params) do
-        add_target(prefix .. key, target_value)
-      end
-      for key, target_value in pairs(voice_data.grain) do
-        if not DISCRETE_GRAIN_KEYS[key] then
-          add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
-        end
-      end
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_data = voice_data.crossmod["slot" .. slot]
-        add_target(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-        add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-      end
-      add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
-      -- the registered voice params that crossfade (discrete ones switch at the end)
-      for _, key in ipairs(sorted_keys(voice_data.extras)) do
-        if not extra_keys[key].range then add_target(prefix .. key, voice_data.extras[key]) end
       end
     end
 
     return targets
+  end
+
+  -- A transition's ramps through 0, asked once at its start: each
+  -- registered block with through_zero gets its capture now and the
+  -- scene's value, and returns {{id, switch = fn()}, ...}. Each id's target
+  -- is marked (step_value then fades it start x (1 - 2f) below f = 0.5 and
+  -- target x (2f - 1) from it); the switches are returned, to run once at
+  -- the first step with f >= 0.5. An id that is no target only switches
+  local function through_zero_switches(scene_data, targets)
+    local by_id = {}
+    for _, target in ipairs(targets) do by_id[target.id] = target end
+    local switches = {}
+    for _, record in ipairs(scene_blocks()) do
+      if record.through_zero then
+        for _, ramp in ipairs(record.through_zero(record.capture(), scene_data[record.key]) or {}) do
+          if by_id[ramp.id] then by_id[ramp.id].through_zero = true end
+          if ramp.switch then table.insert(switches, ramp.switch) end
+        end
+      end
+    end
+    return switches
+  end
+
+  -- A target's value at fraction mix of a fade, rounded to its step
+  local function step_value(target, mix)
+    local value
+    if not target.through_zero then
+      value = util.linlin(0, 1, target.start, target.target, mix)
+    elseif mix < 0.5 then
+      value = target.start * (1 - 2 * mix)
+    else
+      value = target.target * (2 * mix - 1)
+    end
+    if target.step then value = util.round(value, target.step) end
+    return value
   end
 
   function recall_scene(scene_num, transition_time)
@@ -513,6 +731,8 @@ return function(S)
       -- this slot during the fade stores a new table and leaves this one be
       local scene_data = S.scenes[scene_num].data
       local targets = scene_transition_targets(scene_data)
+      local switches = through_zero_switches(scene_data, targets)
+      local switched = false
 
       -- scene_transition_active, SCENE_TRANSITION.next_step_due, target and
       -- previous are always set together here (step by each step) and
@@ -535,9 +755,12 @@ return function(S)
           -- is current again), then raise the error again, with its traceback
           local stepped, step_error = xpcall(function()
             for _, target in ipairs(targets) do
-              local value = util.linlin(0, 1, target.start, target.target, mix)
-              if target.step then value = util.round(value, target.step) end
-              set_scene_param(target.id, value)
+              set_scene_value(target.id, step_value(target, mix))
+            end
+            -- the through-zero switches, once, at the first step from the midpoint
+            if mix >= 0.5 and not switched then
+              switched = true
+              for _, switch in ipairs(switches) do switch() end
             end
             S.SCENE_TRANSITION.step = step  -- these redraws show its phase
             request_redraw()
@@ -555,8 +778,8 @@ return function(S)
         -- target stays current while recall_scene_instant applies it (no
         -- redraw inside it shows the previous scene); only if that fails
         -- is the previous scene current again. current_if_failed covers an
-        -- error in the recall's param block only: one raised after it
-        -- (replace_pattern, update_voice_list) leaves the target current
+        -- error in the recall's apply_entries only: one raised after it
+        -- (update_voice_list) leaves the target current
         recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"))
       end)
       -- its first step has run and drawn the target as current
@@ -567,83 +790,22 @@ return function(S)
   end
 
   -- Apply a scene immediately: scene_data, or the slot's data when nil. The
-  -- scene must have passed validate_scene.
+  -- scene must have passed validate_scene. It is the whole of
+  -- scene_entries, through apply_entries: the blocks, the globals, each
+  -- voice (a voice the recall stops is stopped before its source and
+  -- params are set, one it starts is started after them, its lock set),
+  -- then the patterns; a block's through_zero plays no part.
   -- A voice whose source changes gets one full sync after all its params are
   -- set (not the source action's, which would send the old values first); a
-  -- voice the recall starts is synced by toggle_voice instead. A voice the
-  -- recall stops is stopped before its params are set, and one it starts is
-  -- started after them.
+  -- voice the recall starts is synced by toggle_voice instead.
   -- current_if_failed (a fade's landing passes its previous scene) is the
   -- scene current if the recall fails; nil leaves the current scene as it is.
   function recall_scene_instant(scene_num, scene_data, current_if_failed)
     scene_data = scene_data or S.scenes[scene_num].data
     clear_undo()  -- a recall ends the randomize undo (a fade's end too)
-    local source_changed = {}
-    S.scene_recall_in_progress = true
-    -- the flag must not outlive an error in a param action: clear it, then
-    -- raise the error again, with its traceback
     local recalled, recall_error = xpcall(function()
-      -- Restore global parameters
-      for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-        set_scene_param(global.id, scene_data[global.id])
-      end
-
-      -- Restore voice states
-      for i = 1, NUM_VOICES do
-        local voice_data = scene_data.voices[i]
-        local prefix = "v" .. i .. "_"
-
-        -- A voice the scene stops is stopped first, so the engine only records
-        -- its source switch instead of building a grain synth to release at
-        -- once, and its release tail keeps the outgoing scene's values
-        if S.voices[i].active and not voice_data.active then toggle_voice(i) end
-
-        local previous_source = S.voices[i].source
-        set_scene_param(prefix .. "source", voice_data.source)
-        source_changed[i] = S.voices[i].source ~= previous_source
-
-        for key, value in pairs(voice_data.params) do
-          set_scene_param(prefix .. key, value)
-        end
-
-        for key, value in pairs(voice_data.grain) do
-          set_scene_param(prefix .. GRAIN_PARAM_IDS[key], value)
-        end
-
-        -- Restore crossmod slots
-        for slot = 1, NUM_MOD_SLOTS do
-          local slot_data = voice_data.crossmod["slot" .. slot]
-          set_scene_param(prefix .. "mod_source_" .. slot, slot_data.source)
-          set_scene_param(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-          set_scene_param(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-        end
-        set_scene_param(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-        -- The registered voice params, after the source (a discrete one,
-        -- such as freeze, only now: a transition crossfades the others), in
-        -- key order (#531)
-        for _, key in ipairs(sorted_keys(voice_data.extras)) do
-          set_scene_param(prefix .. key, voice_data.extras[key])
-        end
-
-        S.frozen[i] = scene_data.frozen[i]
-
-        -- Start voices last: toggle_voice syncs the restored state
-        if voice_data.active and not S.voices[i].active then
-          toggle_voice(i)
-          source_changed[i] = false
-        end
-      end
+      M.apply_entries(M.scene_entries(scene_data))
     end, with_traceback)
-    S.scene_recall_in_progress = false
-
-    -- even after an error: a running voice whose source switched gets its sync
-    -- (of whatever was applied), so the engine never lags the Lua state
-    for i = 1, NUM_VOICES do
-      if source_changed[i] and S.voices[i].active then
-        sync_voice_values_to_engine(i)
-      end
-    end
     -- a failed recall never makes its scene current: a fade's landing puts
     -- its previous scene back (current_if_failed); otherwise the current
     -- scene stays (the last that landed, when this recall superseded a
@@ -653,11 +815,6 @@ return function(S)
       request_redraw()
       grid_redraw()
       error(recall_error, 0)
-    end
-
-    -- Restore patterns
-    for i = 1, NUM_VOICES do
-      S.lib.sequencer.replace_pattern(i, scene_data.patterns[i])
     end
 
     -- the scene is applied: the grid's scene page lights it in this redraw
@@ -933,10 +1090,13 @@ return function(S)
       return preserve_unloadable_scene_file()
     end
 
-    -- Make sure every slot exists, filling gaps with empty scenes
+    -- Make sure every slot exists, filling gaps with empty scenes. 3.3
+    -- named every slot "scene <i>": a slot's own old default loads as no
+    -- name (another slot's is a name the player gave it)
     local loaded_scenes = {}
     for i = 1, NUM_SCENES do
-      loaded_scenes[i] = scene_table[i] or empty_scene(i)
+      loaded_scenes[i] = scene_table[i] or empty_scene()
+      if loaded_scenes[i].name == "scene " .. i then loaded_scenes[i].name = "" end
     end
     -- a running transition ends by applying its slot: after the load that
     -- would be the file's data for the slot, or nothing if it is now empty
@@ -950,6 +1110,7 @@ return function(S)
       S.current_scene = 0
     end
     S.scenes = loaded_scenes
+    for i = 1, NUM_SCENES do raise_revision(i) end  -- every slot holds the file's data now
     S.scene_autosave_blocked = false
     S.scene_file.version = file_version < SCENE_DATA_VERSION and file_version or nil
     S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
@@ -1026,6 +1187,19 @@ return function(S)
         if param.t == params.tNUMBER then minval, maxval = param.min, param.max end
         if not is_integer_between(data[global.id], minval, maxval) then return false end
       end
+      -- a registered continuous field lies inside its param's range (a
+      -- control's controlspec, a number's min and max)
+      if global.registered and global.continuous then
+        local minval, maxval = param_range(global.id)
+        if is_number(minval) and is_number(maxval) and (data[global.id] < math.min(minval, maxval)
+          or data[global.id] > math.max(minval, maxval)) then
+          return false
+        end
+      end
+    end
+    -- every registered block passes its own validate
+    for _, record in ipairs(scene_blocks()) do
+      if not record.validate(data[record.key]) then return false end
     end
     local extra_keys = registered_voice_scene_keys()
 

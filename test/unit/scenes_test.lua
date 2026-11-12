@@ -2254,4 +2254,606 @@ test("a recall and a fade set a voice's registered fields in sorted key order (#
   context.clock.run_for(3, 0.001)
 end)
 
+---------------------------------------------------------------------------
+-- 3.4 (0b): recall through scene_entries and apply_entries, scene blocks,
+-- migrations, revisions and slot names
+---------------------------------------------------------------------------
+
+-- The merged recall_scene_instant (lib/scenes.lua at 3.3.2), from its flag
+-- to its pattern restore, copied verbatim, with the two local helpers it
+-- calls (set_scene_param, sorted_keys). Its clear_undo, current scene and
+-- redraws send nothing to the engine and are left out
+local function reference_recall(S, scene_data)
+  local NUM_VOICES, NUM_MOD_SLOTS = S.constants.NUM_VOICES, S.constants.NUM_MOD_SLOTS
+  local GRAIN_PARAM_IDS = S.constants.GRAIN_PARAM_IDS
+  local function set_scene_param(param_id, value)
+    if params:lookup_param(param_id).t == params.tBINARY then
+      set_binary_param(param_id, value)
+    else
+      params:set(param_id, value)
+    end
+  end
+  local function sorted_keys(entries)
+    local keys = {}
+    for key in pairs(entries) do table.insert(keys, key) end
+    table.sort(keys)
+    return keys
+  end
+
+  local source_changed = {}
+  S.scene_recall_in_progress = true
+  -- the flag must not outlive an error in a param action: clear it, then
+  -- raise the error again, with its traceback
+  local recalled, recall_error = xpcall(function()
+    -- Restore global parameters
+    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
+      set_scene_param(global.id, scene_data[global.id])
+    end
+
+    -- Restore voice states
+    for i = 1, NUM_VOICES do
+      local voice_data = scene_data.voices[i]
+      local prefix = "v" .. i .. "_"
+
+      -- A voice the scene stops is stopped first, so the engine only records
+      -- its source switch instead of building a grain synth to release at
+      -- once, and its release tail keeps the outgoing scene's values
+      if S.voices[i].active and not voice_data.active then toggle_voice(i) end
+
+      local previous_source = S.voices[i].source
+      set_scene_param(prefix .. "source", voice_data.source)
+      source_changed[i] = S.voices[i].source ~= previous_source
+
+      for key, value in pairs(voice_data.params) do
+        set_scene_param(prefix .. key, value)
+      end
+
+      for key, value in pairs(voice_data.grain) do
+        set_scene_param(prefix .. GRAIN_PARAM_IDS[key], value)
+      end
+
+      -- Restore crossmod slots
+      for slot = 1, NUM_MOD_SLOTS do
+        local slot_data = voice_data.crossmod["slot" .. slot]
+        set_scene_param(prefix .. "mod_source_" .. slot, slot_data.source)
+        set_scene_param(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+        set_scene_param(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+      end
+      set_scene_param(prefix .. "mod_speed", voice_data.crossmod.speed)
+
+      -- The registered voice params, after the source (a discrete one,
+      -- such as freeze, only now: a transition crossfades the others), in
+      -- key order (#531)
+      for _, key in ipairs(sorted_keys(voice_data.extras)) do
+        set_scene_param(prefix .. key, voice_data.extras[key])
+      end
+
+      S.frozen[i] = scene_data.frozen[i]
+
+      -- Start voices last: toggle_voice syncs the restored state
+      if voice_data.active and not S.voices[i].active then
+        toggle_voice(i)
+        source_changed[i] = false
+      end
+    end
+  end, with_traceback)
+  S.scene_recall_in_progress = false
+
+  -- even after an error: a running voice whose source switched gets its sync
+  -- (of whatever was applied), so the engine never lags the Lua state
+  for i = 1, NUM_VOICES do
+    if source_changed[i] and S.voices[i].active then
+      sync_voice_values_to_engine(i)
+    end
+  end
+  if not recalled then error(recall_error, 0) end
+
+  -- Restore patterns
+  for i = 1, NUM_VOICES do
+    S.lib.sequencer.replace_pattern(i, scene_data.patterns[i])
+  end
+end
+
+-- The merged scene_transition_targets (lib/scenes.lua at 3.3.2), copied
+-- verbatim, with the local helpers it calls (LFO_STATE,
+-- registered_voice_scene_keys, sorted_keys)
+local function reference_targets(S, scene_data)
+  local NUM_VOICES, NUM_MOD_SLOTS = S.constants.NUM_VOICES, S.constants.NUM_MOD_SLOTS
+  local GRAIN_PARAM_IDS, DISCRETE_GRAIN_KEYS = S.constants.GRAIN_PARAM_IDS, S.constants.DISCRETE_GRAIN_KEYS
+  local LFO_STATE = {off = 1, on = 2}
+  local function registered_voice_scene_keys()
+    local keys = {}
+    for _, record in ipairs(S.registry.voice_params) do
+      for key, default in pairs(record.scene_defaults or {}) do
+        keys[key] = {default = default, range = record.discrete and record.discrete[key],
+          limits = record.scene_ranges and record.scene_ranges[key]}
+      end
+    end
+    return keys
+  end
+  local function sorted_keys(entries)
+    local keys = {}
+    for key in pairs(entries) do table.insert(keys, key) end
+    table.sort(keys)
+    return keys
+  end
+
+  local targets = {}
+  local function add_target(param_id, target_value)
+    -- number params (the LFO depths) step in whole numbers: the fade rounds
+    -- to them (the end applies the scene's exact value)
+    local step = params:lookup_param(param_id).t == params.tNUMBER and 1 or nil
+    table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step})
+  end
+
+  -- an LFO the fade stops (running now, off in the scene) fades its depth
+  -- out, never toward the scene's (a setting the scene never plays), and
+  -- keeps its period and offset: the end sets the scene's values with the
+  -- state (#408)
+  local function stops(n)
+    return params:get("lfo_" .. n) == LFO_STATE.on and scene_data["lfo_" .. n] == LFO_STATE.off
+  end
+  for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
+    if global.continuous then
+      if not (global.lfo and stops(global.lfo)) then
+        add_target(global.id, scene_data[global.id])
+      elseif global.stop_target ~= nil then
+        add_target(global.id, global.stop_target)
+      end
+    end
+  end
+
+  local extra_keys = registered_voice_scene_keys()
+  for i = 1, NUM_VOICES do
+    local voice_data = scene_data.voices[i]
+    local prefix = "v" .. i .. "_"
+    for key, target_value in pairs(voice_data.params) do
+      add_target(prefix .. key, target_value)
+    end
+    for key, target_value in pairs(voice_data.grain) do
+      if not DISCRETE_GRAIN_KEYS[key] then
+        add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
+      end
+    end
+    for slot = 1, NUM_MOD_SLOTS do
+      local slot_data = voice_data.crossmod["slot" .. slot]
+      add_target(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
+      add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
+    end
+    add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
+    -- the registered voice params that crossfade (discrete ones switch at the end)
+    for _, key in ipairs(sorted_keys(voice_data.extras)) do
+      if not extra_keys[key].range then add_target(prefix .. key, voice_data.extras[key]) end
+    end
+  end
+
+  return targets
+end
+
+-- Raise unless actual and expected hold the same plain data (functions
+-- count as equal to functions: two loads never share one)
+local function assert_same(actual, expected, where)
+  if type(actual) == "function" and type(expected) == "function" then return end
+  if type(actual) ~= "table" or type(expected) ~= "table" then
+    if actual ~= expected then
+      error(string.format("%s: expected %s, got %s", where, tostring(expected), tostring(actual)), 2)
+    end
+    return
+  end
+  for key, value in pairs(expected) do assert_same(actual[key], value, where .. "." .. tostring(key)) end
+  for key in pairs(actual) do
+    if expected[key] == nil then error(where .. "." .. tostring(key) .. ": unexpected " .. tostring(actual[key]), 2) end
+  end
+end
+
+-- Every value param's value, by id
+local function param_values()
+  local values = {}
+  for _, param in ipairs(params.params) do
+    local kind = param.t
+    if param.id and (kind == params.tCONTROL or kind == params.tNUMBER or kind == params.tOPTION
+        or kind == params.tBINARY) then
+      values[param.id] = params:get(param.id)
+    end
+  end
+  return values
+end
+
+-- Voice states for the equivalence test: combination c (0-23) of running
+-- now x running in the scene x the scene's source (synth, buffer 2, input)
+-- x the source now (the scene's, or another kind)
+local RECALL_SOURCES = { 1, 3, 10 }
+local function recall_combination(c)
+  local kind = math.floor(c / 4) % 3
+  local same = math.floor(c / 12) % 2 == 0
+  return { now_active = c % 2 == 1, scene_active = math.floor(c / 2) % 2 == 1,
+    scene_source = RECALL_SOURCES[kind + 1], now_source = RECALL_SOURCES[(same and kind or (kind + 1) % 3) + 1] }
+end
+
+-- A fresh load set up for run `run` of the equivalence test: scene 1
+-- captured from one state, then another state; returns the context, S and
+-- the captured scene data
+local function prepare_recall_run(run)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function set_active(voice, active)
+    if S.voices[voice].active ~= active then toggle_voice(voice) end
+  end
+  scramble_state(100 + run)
+  params:set("reverb_mix", 0.62); params:set("filter_type", 2); params:set("lfo_1", 1)
+  for voice = 1, 7 do
+    local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
+    params:set("v" .. voice .. "_source", plan.scene_source)
+    set_active(voice, plan.scene_active)
+    if voice % 2 == 1 then toggle_lock(voice) end
+    toggle_pattern_step(voice, voice)
+  end
+  capture_scene(1)
+  scramble_state(200 + run)
+  params:set("reverb_mix", 0.15); params:set("filter_type", 1); params:set("lfo_1", 2)
+  for voice = 1, 7 do
+    local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
+    params:set("v" .. voice .. "_source", plan.now_source)
+    set_active(voice, plan.now_active)
+    if voice <= 2 then toggle_lock(voice) end
+    toggle_pattern_step(voice, 16 - voice)
+  end
+  context.clear_engine_calls()
+  return context, S, S.scenes[1].data
+end
+
+test("apply_entries of scene_entries sends what today's recall sends, for every voice state and source", function()
+  for run = 1, 4 do
+    -- three loads from equal starting states, each recalling run 1's scene
+    -- data (one table, so pairs walks it in one order)
+    local outcomes, scene_data = {}, nil
+    for _, way in ipairs({ "reference", "entries", "instant" }) do
+      local context, S, captured = prepare_recall_run(run)
+      if scene_data then
+        assert_same(captured, scene_data, "run " .. run .. ": " .. way .. "'s load captured the same scene")
+      else
+        scene_data = captured
+      end
+      if way == "reference" then
+        reference_recall(S, scene_data)
+      elseif way == "entries" then
+        S.lib.scenes.apply_entries(S.lib.scenes.scene_entries(scene_data))
+      else
+        recall_scene_instant(1, scene_data)
+      end
+      outcomes[way] = { calls = deep_copy(context.engine_calls), params = param_values(),
+        voices = deep_copy(S.voices), frozen = deep_copy(S.frozen), patterns = deep_copy(S.patterns),
+        in_progress = S.scene_recall_in_progress }
+    end
+    local reference = outcomes.reference
+    assert_true(#reference.calls > 50, "run " .. run .. ": the recall sends (" .. #reference.calls .. " calls)")
+    for _, way in ipairs({ "entries", "instant" }) do
+      local outcome, where = outcomes[way], "run " .. run .. " (" .. way .. ")"
+      assert_equal(#outcome.calls, #reference.calls, where .. ": as many engine calls")
+      for index, call in ipairs(reference.calls) do
+        assert_same(outcome.calls[index], call, where .. ": engine call " .. index .. " (" .. call.name .. ")")
+      end
+      assert_same(outcome.params, reference.params, where .. ": params")
+      assert_same(outcome.voices, reference.voices, where .. ": S.voices")
+      assert_same(outcome.frozen, reference.frozen, where .. ": S.frozen")
+      assert_same(outcome.patterns, reference.patterns, where .. ": S.patterns")
+      assert_equal(outcome.in_progress, false, where .. ": the recall flag is cleared")
+    end
+  end
+end)
+
+test("scene_transition_targets lists the same targets as before the rewrite", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  scramble_state(31)
+  params:set("reverb_mix", 0.7)
+  params:set("lfo_depth_1", 80); params:set("lfo_free_1", 30); params:set("lfo_offset_1", -40)
+  params:set("lfo_1", 1)                                          -- LFO 1 off in the scene
+  params:set("lfo_depth_2", 60); params:set("lfo_2", 2)          -- LFO 2 on in both
+  capture_scene(1)
+  scramble_state(32)
+  params:set("reverb_mix", 0.2)
+  params:set("lfo_depth_1", 10); params:set("lfo_free_1", 4); params:set("lfo_offset_1", 20)
+  params:set("lfo_1", 2)                                          -- on now: the fade stops it
+  params:set("lfo_depth_2", 20)
+  local scene_data = S.scenes[1].data
+  local expected = reference_targets(S, scene_data)
+  local targets = scene_transition_targets(scene_data)
+  assert_equal(#targets, #expected, "as many targets")
+  for index, target in ipairs(expected) do
+    local where = "target " .. index .. " (" .. target.id .. ")"
+    assert_equal(targets[index].id, target.id, where .. ": id")
+    assert_equal(targets[index].start, target.start, where .. ": start")
+    assert_equal(targets[index].target, target.target, where .. ": target")
+    assert_equal(targets[index].step, target.step, where .. ": step")
+  end
+  local by_id = {}
+  for _, target in ipairs(targets) do by_id[target.id] = target end
+  assert_near(by_id.reverb_mix.target, 0.7, 1e-9, "reverb mix fades to the scene's")
+  assert_equal(by_id.lfo_depth_1.target, 0, "the stopped LFO's depth fades to 0")
+  assert_equal(by_id.lfo_free_1, nil, "and its period holds")
+  assert_equal(by_id.lfo_offset_1, nil, "and its offset holds")
+  assert_equal(by_id.lfo_depth_2.target, 60, "a running LFO the scene keeps fades to the scene's depth")
+  assert_equal(by_id.filter_type, nil, "a discrete global is no target")
+end)
+
+test("apply_entries with only = discrete sets no continuous param", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  scramble_state(41)
+  params:set("reverb_mix", 0.7); params:set("filter_type", 3); params:set("tempo", 96)
+  toggle_lock(4); toggle_voice(5)                                 -- voice 5 runs in the scene
+  capture_scene(1)
+  scramble_state(42)
+  params:set("reverb_mix", 0.2); params:set("filter_type", 1); params:set("tempo", 130)
+  toggle_lock(4); toggle_voice(5)
+  local scene_data = S.scenes[1].data
+  local entries = S.lib.scenes.scene_entries(scene_data)
+  local before = param_values()
+  S.lib.scenes.apply_entries(entries, { only = "discrete" })
+  local continuous = 0
+  for _, entry in ipairs(entries) do
+    if entry.kind == "continuous" and before[entry.id] ~= entry.value then
+      continuous = continuous + 1
+      assert_equal(params:get(entry.id), before[entry.id], entry.id .. " (continuous) is not set")
+    end
+  end
+  assert_true(continuous > 50, "the scene's continuous values differ from now's (" .. continuous .. ")")
+  assert_equal(params:get("filter_type"), 3, "a discrete global is set")
+  assert_equal(params:get("tempo"), 96, "tempo too")
+  assert_true(S.frozen[4], "a lock is set")
+  assert_true(S.voices[5].active, "a voice the scene runs is started")
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "reverb mix stays")
+  -- only = continuous: the continuous values, and no discrete one
+  params:set("filter_type", 1); toggle_lock(4); toggle_voice(5)
+  S.lib.scenes.apply_entries(entries, { only = "continuous" })
+  assert_near(params:get("reverb_mix"), 0.7, 1e-9, "only = continuous sets reverb mix")
+  assert_equal(params:get("filter_type"), 1, "and no discrete global")
+  assert_true(not S.frozen[4], "no lock")
+  assert_true(not S.voices[5].active, "and starts no voice")
+end)
+
+-- A scene block record (0a's S.register_scene_block does not exist on this
+-- branch: the record goes straight into the registry, as 0a's will)
+local function add_scene_block(S, record)
+  S.registry.scene_blocks = S.registry.scene_blocks or {}
+  table.insert(S.registry.scene_blocks, record)
+end
+
+test("a registered block is captured, migrated, validated and applied first", function()
+  local order, applied = {}, {}
+  local level = 7
+  local data_subdir = "scene_block"
+  local function register_block()
+    local S = local_value("S")
+    add_scene_block(S, { key = "tb", default = function() return {} end,
+      capture = function() return { level = level } end,
+      validate = function(value) return type(value) == "table" end,
+      apply = function(value) table.insert(order, "apply"); table.insert(applied, value) end, discrete = true })
+  end
+  local context = load_strata({ data_subdir = data_subdir, before_init = register_block }); finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  assert_same(S.scenes[1].data.tb, { level = 7 }, "capture stores the block's capture under its key")
+  local invalid = deep_copy(S.scenes[1])
+  invalid.data.tb = 3
+  assert_true(not validate_scene(invalid), "a block that fails its validate fails the scene")
+  assert_true(validate_scene(S.scenes[1]), "the captured scene validates")
+  -- a recall applies the block before the first global (master_density;
+  -- norns runs its action only when the value changes)
+  params:set("master_density", 0.5)
+  local density_action = params:lookup_param("master_density").action
+  params:set_action("master_density", function(x) table.insert(order, "master_density"); density_action(x) end)
+  recall_scene(1, 0)
+  assert_equal(order[1], "apply", "the block is applied first")
+  assert_equal(order[2], "master_density", "then the first global")
+  assert_same(applied[1], { level = 7 }, "with the scene's value")
+  -- a scene written without the block gets the default on load
+  S.scenes[2] = deep_copy(S.scenes[1]); S.scenes[2].data.tb = nil
+  assert_true(save_scenes_to_disk(), "saved")
+  assert_equal(load_scenes_from_disk(), "loaded")
+  assert_same(local_value("S").scenes[2].data.tb, {}, "a scene without the block gets its default")
+  assert_same(local_value("S").scenes[1].data.tb, { level = 7 }, "a scene with it keeps its value")
+end)
+
+test("a block's through_zero ramps its ids through 0 and switches once at the midpoint", function()
+  local asked, switches = {}, {}
+  local context = load_strata({ before_init = function()
+    add_scene_block(local_value("S"), { key = "tz", default = function() return 0 end,
+      capture = function() return 5 end, validate = function(value) return type(value) == "number" end,
+      apply = function() end, discrete = true,
+      through_zero = function(from_value, to_value)
+        table.insert(asked, { from_value, to_value })
+        return { { id = "reverb_mix", switch = function() table.insert(switches, params:get("reverb_mix")) end } }
+      end })
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("reverb_mix", 0.8); capture_scene(1)
+  S.scenes[1].data.tz = 9                                         -- the scene's value differs from the capture's
+  params:set("reverb_mix", 0.4)
+  recall_scene(1, 2)                                              -- 20 steps of 0.1 s; step 1 runs at once
+  assert_equal(#asked, 1, "through_zero is asked once, at the start")
+  assert_equal(asked[1][1], 5, "with the block's capture now")
+  assert_equal(asked[1][2], 9, "and the scene's value")
+  local expected = { [5] = 0.2, [9] = 0.4 * (1 - 2 * 0.45), [10] = 0, [11] = 0.8 * (2 * 0.55 - 1), [15] = 0.4 }
+  for step = 1, 20 do
+    if expected[step] then
+      assert_near(params:get("reverb_mix"), expected[step], 1e-6, "step " .. step)
+    end
+    assert_equal(#switches, step >= 10 and 1 or 0, "step " .. step .. ": the switch runs once, at f = 0.5")
+    if step < 20 then wake(context, "scene_transition_clock") end
+  end
+  assert_equal(switches[1], 0, "the switch runs once the id is at 0")
+  wake(context, "scene_transition_clock")                         -- the end
+  assert_equal(S.scene_transition_active, false, "the fade landed")
+  assert_near(params:get("reverb_mix"), 0.8, 1e-9, "the end sets the scene's value")
+  assert_equal(#switches, 1, "the switch ran once")
+  -- an instant recall ignores through_zero
+  params:set("reverb_mix", 0.4)
+  recall_scene(1, 0)
+  assert_equal(#asked, 1, "an instant recall asks nothing")
+  assert_equal(#switches, 1, "and switches nothing")
+  assert_near(params:get("reverb_mix"), 0.8, 1e-9, "it sets the scene's value")
+end)
+
+test("registered migrations run by before_version, then registration, before the defaults fill", function()
+  local ran = {}
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.registry.scene_migrations = S.registry.scene_migrations or {}
+    for _, record in ipairs({ { name = "m6a", before_version = 6 }, { name = "m5", before_version = 5 },
+      { name = "m6b", before_version = 6 }, { name = "m3", before_version = 3 } }) do
+      record.migrate = function(scene)
+        table.insert(ran, record.name .. (scene.data.reverb_size == nil and " unfilled" or " filled"))
+      end
+      table.insert(S.registry.scene_migrations, record)
+    end
+  end })
+  local S = local_value("S")
+  capture_scene(1)
+  local scene = deep_copy(S.scenes[1]); scene.data.reverb_size = nil
+  migrate_scene(scene, 4)
+  assert_equal(table.concat(ran, ", "), "m5 unfilled, m6a unfilled, m6b unfilled",
+    "a format 4 scene: the migrations above 4, by before_version then registration, before the fill")
+  assert_near(scene.data.reverb_size, 0.8, 1e-9, "then the defaults fill")
+  ran = {}
+  scene = deep_copy(S.scenes[1])
+  migrate_scene(scene, 5)
+  assert_equal(table.concat(ran, ", "), "m6a filled, m6b filled", "a format 5 scene: those before 6")
+  ran = {}
+  migrate_scene(deep_copy(S.scenes[2]), 1)
+  assert_equal(#ran, 0, "an empty slot is not migrated")
+end)
+
+test("a registered continuous field outside its param's range fails validation", function()
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_fx_params({ name = "probe range", count = 2, add = function()
+      params:add_control("probe_level", "probe level", controlspec.new(0, 1, "lin", 0, 0.5))
+      params:add_number("probe_steps", "probe steps", 1, 4, 2)
+    end })
+    S.register_scene_field({ id = "probe_level", default = 0.5 })
+    S.register_scene_field({ id = "probe_steps", default = 2 })
+  end })
+  capture_scene(1)
+  local good = deep_copy(local_value("scenes")[1])
+  assert_true(validate_scene(good), "the captured scene validates")
+  for _, case in ipairs({ { id = "probe_level", value = 1.5, valid = false }, { id = "probe_level", value = -0.1, valid = false },
+    { id = "probe_level", value = 1, valid = true }, { id = "probe_level", value = 0, valid = true },
+    { id = "probe_steps", value = 4.5, valid = false }, { id = "probe_steps", value = 0.5, valid = false },
+    { id = "probe_steps", value = 2.5, valid = true } }) do
+    local candidate = deep_copy(good)
+    candidate.data[case.id] = case.value
+    assert_equal(validate_scene(candidate), case.valid, case.id .. " = " .. case.value)
+  end
+end)
+
+test("a field's set function replaces params:set in a recall, a transition step and apply_entries", function()
+  local sets, actions = {}, 0
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_fx_params({ name = "probe set", count = 1, add = function()
+      params:add_control("probe_level", "probe level", controlspec.new(0, 1, "lin", 0, 0.5))
+      params:set_action("probe_level", function() actions = actions + 1 end)
+    end })
+    -- 0a's register_scene_field takes set; on this branch the record goes straight in
+    table.insert(S.registry.scene_fields, { id = "probe_level", default = 0.5, discrete = false,
+      set = function(value) table.insert(sets, value) end })
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("probe_level", 0.8); capture_scene(1); params:set("probe_level", 0.2)
+  actions = 0
+  recall_scene(1, 0)
+  assert_equal(#sets, 1, "an instant recall calls the field's set once")
+  assert_near(sets[1], 0.8, 1e-9, "with the scene's value")
+  assert_equal(actions, 0, "and never params:set")
+  assert_near(params:get("probe_level"), 0.2, 1e-9, "the param is as it was")
+  sets = {}
+  recall_scene(1, 2)                                              -- step 1 runs at once
+  assert_equal(#sets, 1, "a fade step calls the field's set")
+  assert_near(sets[1], 0.2 + (0.8 - 0.2) / 20, 1e-9, "with the step's value")
+  context.clock.run_for(3, 0.001)
+  assert_equal(#sets, 21, "every step, then the end")
+  assert_near(sets[21], 0.8, 1e-9, "the end sets the scene's value")
+  assert_equal(actions, 0, "never params:set")
+  sets = {}
+  S.lib.scenes.apply_entries(S.lib.scenes.scene_entries(S.scenes[1].data))
+  assert_equal(#sets, 1, "apply_entries calls it once")
+  assert_near(sets[1], 0.8, 1e-9, "with the scene's value")
+  assert_equal(actions, 0, "never params:set")
+end)
+
+test("an old default slot name loads empty", function()
+  local context = load_strata({ data_subdir = "scene_names" })
+  local S = local_value("S")
+  for slot = 1, S.constants.NUM_SCENES do
+    assert_equal(S.scenes[slot].name, "", "slot " .. slot .. " starts with an empty name")
+  end
+  capture_scene(3); capture_scene(4); capture_scene(5)
+  S.scenes[3].name, S.scenes[4].name, S.scenes[5].name = "scene 3", "dusk", "scene 3"
+  S.scenes[6].name = "scene 6"                                    -- an empty slot as 3.3 wrote it
+  assert_true(save_scenes_to_disk(), "saved")
+  context = load_strata({ data_subdir = "scene_names" })
+  S = local_value("S")
+  assert_true(S.scenes[3].populated, "the file loaded")
+  assert_equal(S.scenes[3].name, "", "slot 3's old default name loads empty")
+  assert_equal(S.scenes[4].name, "dusk", "a name of the player's stays")
+  assert_equal(S.scenes[5].name, "scene 3", "another slot's default is a name of the player's")
+  assert_equal(S.scenes[6].name, "", "an empty slot's old default loads empty")
+  assert_equal(S.scenes[7].name, "", "an empty slot is named empty")
+end)
+
+test("revision rises on a capture and on a load", function()
+  local context = load_strata({ data_subdir = "scene_revisions" })
+  local S = local_value("S")
+  local scenes = S.lib.scenes
+  for slot = 1, S.constants.NUM_SCENES do assert_equal(scenes.revision(slot), 0, "slot " .. slot .. " starts at 0") end
+  capture_scene(1)
+  local first = scenes.revision(1)
+  assert_true(first > 0, "a capture raises its slot's revision")
+  capture_scene(1)
+  assert_true(scenes.revision(1) > first, "each capture does")
+  assert_equal(scenes.revision(2), 0, "another slot's stays")
+  assert_equal(scenes.revision(S.constants.NUM_SCENES + 1), 0, "a slot outside 1..NUM_SCENES is 0")
+  capture_scene(S.constants.NUM_SCENES + 1)
+  assert_equal(scenes.revision(S.constants.NUM_SCENES + 1), 0, "and a capture there changes nothing")
+  local before = {}
+  for slot = 1, S.constants.NUM_SCENES do before[slot] = scenes.revision(slot) end
+  assert_equal(load_scenes_from_disk(), "missing")
+  for slot = 1, S.constants.NUM_SCENES do
+    assert_equal(scenes.revision(slot), before[slot], "slot " .. slot .. ": a load that finds no file changes nothing")
+  end
+  assert_true(save_scenes_to_disk(), "saved")
+  assert_equal(load_scenes_from_disk(), "loaded")
+  for slot = 1, S.constants.NUM_SCENES do
+    assert_true(scenes.revision(slot) > before[slot], "slot " .. slot .. ": a load raises its revision")
+  end
+end)
+
+test("a recall's lock states run the lock hooks for the voices whose lock changed", function()
+  local calls = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.registry.lock_change = S.registry.lock_change or {}
+    table.insert(S.registry.lock_change, function(voice_idx, locked)
+      table.insert(calls, voice_idx .. (locked and " locked" or " unlocked")
+        .. (local_value("S").frozen[voice_idx] == locked and "" or " (before the state)"))
+    end)
+  end })
+  finish_startup(context)
+  toggle_lock(2); toggle_lock(5); capture_scene(1)                -- the scene locks 2 and 5
+  toggle_lock(2); toggle_lock(3)                                  -- now 3 and 5
+  calls = {}
+  recall_scene(1, 0)
+  assert_equal(table.concat(calls, ", "), "2 locked, 3 unlocked", "an instant recall: the voices whose lock changed")
+  toggle_lock(2); toggle_lock(3)
+  calls = {}
+  recall_scene(1, 2)
+  assert_equal(#calls, 0, "a fade sets no lock before its end")
+  context.clock.run_for(3, 0.001)
+  assert_equal(table.concat(calls, ", "), "2 locked, 3 unlocked", "its end runs them")
+end)
+
 end
