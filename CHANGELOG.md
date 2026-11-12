@@ -85,6 +85,7 @@ Modulation and sequencing: six LFOs, the fast ones running in the engine at up t
 - **MOD's ALT hint names only what acts on the row** (`K2:rand` in scatter and the matrix, `K2:clear` where only the hold clears something), and a routing's source choices are every modulation source, all sixteen macros included, whatever bank the list shows.
 - **MAIN's `~` follows the voice's name**, which it shortens, since the row after `[F]` is full.
 - **SCENES' name entry is norns' own text entry,** opened when ALT+K2 is let go.
+- **Only the grids' freeze keys wait for the beat or bar** under quantize actions: VOICE's freeze row and a mapped CC act at once, as every param edit does, where the design had every freeze toggle wait.
 - **SEQ's edit view says `K2:cancel`** for ALT+K2 held on its `euclid` and `clear` rows, which have nothing to reset (#596), and a step's probability has no `off`: its ring stops at its ends.
 - **The XY morph counts a corner only while its weight is above 0,** so on an edge it is exactly that edge's two-scene morph, and a routing that corners agree on blends its depth between them instead of fading to 0.
 
