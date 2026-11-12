@@ -175,7 +175,7 @@ test("K3 records into the slot under the cursor whatever the voices use", functi
   assert_equal(#context.calls_named("stopRecord"), 1, "K3 again stops early")
   -- a voice reading another slot changes nothing
   params:set("v1_source", 6)  -- buf 5
-  context.polls.fire("bufferState", 2005)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 5))
   enc(2, 3); context.clear_engine_calls(); tap(3)
   assert_equal(context.calls_named("recordBuffer")[1].args[1], 5, "slot 6, the cursor's, not the voice's 5")
   -- the arc's button records or stops the cursor slot, as K3 does
@@ -288,7 +288,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
   assert_equal(hint_text(context), "buf 4 busy", "still busy while finishing")
   -- once the engine reports the take, ALT+K3 saves it
-  context.polls.fire("bufferState", 3005)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 5))
   assert_true(not buffers[4].finishing, "the take settled")
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
@@ -598,7 +598,7 @@ test("BUFFER hints", function()
   assert_equal(hint_text(context), "K2:ld/rnd K3:...")
   -- the same whatever the selected voice's source
   for _, source in ipairs({ 1, 4, 10 }) do
-    params:set("v1_source", source); context.polls.fire("bufferState", 2003); redraw()
+    params:set("v1_source", source); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 3)); redraw()
     assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "source " .. source)
   end
 end)
@@ -688,7 +688,7 @@ test("Strata's page never draws over the open file selector; redraws draw the se
   -- Strata's own redraws (a buffer report, page turns, a load) while it is
   -- open: the frame clock's redraw() draws the selector
   selector.redraws = 0
-  context.polls.fire("bufferState", 3005)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 5))
   enc(1, -1); enc(1, 1)
   load_buffer(5, "/tmp/other.wav")
   next_frame(context)
@@ -1496,7 +1496,7 @@ test("a loaded file named empty shows its name; a slot with nothing shows -", fu
   record_buffer(2); context.polls.fire("recordState", (1 * 4 + 1) * 8 + 1)
   redraw()
   assert_equal(slot_row_text(context, rows[2]), "2 - DUB", "nothing to name yet")
-  context.polls.fire("bufferState", 1004); redraw()
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 0, 4)); redraw()
   assert_equal(slot_row_text(context, rows[2]), "2 take 2 DUB")
 end)
 

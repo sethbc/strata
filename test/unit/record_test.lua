@@ -18,7 +18,7 @@ test("recording again stops early; clear and load cancel the timer", function()
   assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
   assert_equal(context.calls_named("stopRecord")[1].args[1], 1)
   assert_equal(#context.calls_named("recordBuffer"), 0, "and does not start a new one")
-  context.polls.fire("bufferState", 1001)  -- the engine reports what was captured
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 0, 1))  -- the engine reports what was captured
   assert_true(not buffers[2].recording); assert_true(buffers[2].loaded); assert_equal(buffers[2].name, "take 2")
   local pending = context.clock.pending_count()
   record_buffer(2); assert_equal(context.clock.pending_count(), pending + 1, "new recording timer")
@@ -46,23 +46,23 @@ test("a take settled empty adopts audio the engine reports later; a clear wins",
   local buffers = local_value("buffers")
   params:set("record_duration", 2)
   record_buffer(3); wake_buffer_clock(context, 3)     -- the timer ends; the engine is slow
-  context.set_time(5); context.polls.fire("bufferState", 2000)
+  context.set_time(5); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 0))
   assert_equal(buffers[3].name, "empty", "a periodic 0 after the settle time empties the slot")
-  context.polls.fire("bufferState", 2002)        -- the take completes late
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 2))  -- the take completes late
   assert_true(buffers[3].loaded, "the late take is adopted"); assert_equal(buffers[3].name, "take 3")
   assert_equal(buffers[3].path, scratch_take_path(3), "with the scratch take path")
-  context.polls.fire("bufferState", 2002); context.polls.fire("bufferState", 2003)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 2)); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 3))
   assert_equal(buffers[3].name, "take 3", "later reports leave it a take")
   -- a slot cleared after an empty take is not brought back by a report
   record_buffer(4); record_buffer(4)
-  context.set_time(10); context.polls.fire("bufferState", 3000)
+  context.set_time(10); context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 0))
   assert_equal(buffers[4].name, "empty")
-  clear_buffer(4); context.polls.fire("bufferState", 3002)
+  clear_buffer(4); context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 2))
   assert_true(not buffers[4].loaded, "clear wins"); assert_equal(buffers[4].path, nil)
   -- nor is a slot whose last event was a load or a new recording
   record_buffer(5); record_buffer(5)
-  context.set_time(15); context.polls.fire("bufferState", 4000)
-  record_buffer(5); context.polls.fire("bufferState", 4001)
+  context.set_time(15); context.polls.fire("bufferState", context.polls.buffer_state_value(5, 0, 0))
+  record_buffer(5); context.polls.fire("bufferState", context.polls.buffer_state_value(5, 0, 1))
   assert_true(buffers[5].recording, "a new recording is not adopted as the old take")
   assert_true(not buffers[5].finishing)
 end)
@@ -102,7 +102,7 @@ test("a finishing take settles from the last known seconds when no report comes"
   local pending = context.clock.pending_count()
   record_buffer(4); record_buffer(4)
   assert_equal(context.clock.pending_count(), pending + 1, "fallback pending")
-  context.polls.fire("bufferState", 3001)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 1))
   assert_equal(context.clock.pending_count(), pending, "a report settles it and cancels the fallback")
   record_buffer(5); record_buffer(5); load_buffer(5, "/tmp/x.wav")
   assert_equal(context.clock.pending_count(), pending, "load cancels the fallback")
@@ -155,7 +155,7 @@ test("S.lib.record.state is nil when idle and a take while a slot records", func
   assert_equal(S.lib.record.state(2), nil, "another slot is idle")
   wake_buffer_clock(context, 1)                   -- the 4 s timer passes (confirm_since is set only then)
   assert_true(S.lib.record.state(1) ~= nil, "still a take until the engine reports it")
-  context.polls.fire("bufferState", 4.0)          -- slot 1 holds 4 s: the take settles
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 0, 4))  -- slot 1 holds 4 s: the take settles
   assert_equal(S.lib.record.state(1), nil, "idle again")
 end)
 
@@ -165,7 +165,7 @@ test("records_sent counts a slot's recordBuffer commands", function()
   params:set("record_duration", 4)
   record_buffer(3)                                -- the record
   record_buffer(3)                                -- the stop
-  context.polls.fire("bufferState", 2001)          -- the stopped take settles
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 1))  -- the stopped take settles
   record_buffer(3)                                -- records again
   assert_equal(S.buffers[3].records_sent, 2, "two recordings on slot 3")
   assert_equal(S.buffers[1].records_sent, 0, "none on slot 1")
@@ -178,10 +178,10 @@ test("a recording slot's bufferState reports reach S.lib.record.slot_reported", 
   local original = S.lib.record.slot_reported
   S.lib.record.slot_reported = function(slot, seconds) table.insert(calls, {slot, seconds}) end
   record_buffer(2)
-  context.polls.fire("bufferState", 1000)          -- slot 2, 0 s
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 0, 0))  -- slot 2, 0 s
   assert_equal(#calls, 1, "one report for the recording slot")
   assert_equal(calls[1][1], 2); assert_equal(calls[1][2], 0)
-  context.polls.fire("bufferState", 3005)          -- slot 4, idle
+  context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 5))  -- slot 4, idle
   assert_equal(#calls, 1, "none for an idle slot")
   S.lib.record.slot_reported = original
 end)
@@ -491,7 +491,7 @@ test("a take whose ended report beats its timer settles at once", function()
   local pending = context.clock.pending_count()
   record_buffer(1)
   context.polls.fire("recordState", record_state_value(1, 0, 1)); context.polls.fire("recordState", record_state_value(1, 1, 1))
-  context.polls.fire("bufferState", 4); context.polls.fire("recordState", record_state_value(1, 2, 1))
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 0, 4)); context.polls.fire("recordState", record_state_value(1, 2, 1))
   assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "take 1")
   assert_equal(buffers[1].path, scratch_take_path(1)); assert_true(not buffers[1].recording)
   context.clock.run_for(0.11)   -- buffers.data's coalesced write (#566) has run
@@ -499,7 +499,7 @@ test("a take whose ended report beats its timer settles at once", function()
   -- the timer between the length and "ended": "ended" settles it too
   record_buffer(2)
   context.polls.fire("recordState", record_state_value(1, 0, 2)); context.polls.fire("recordState", record_state_value(1, 1, 2))
-  context.polls.fire("bufferState", 1004)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 0, 4))
   wake_buffer_clock(context, 2)                   -- the take's timer: finishing
   assert_equal(S.lib.buffers.status(2), "finishing")
   context.polls.fire("recordState", record_state_value(1, 2, 2))
@@ -624,7 +624,7 @@ test("a failed load during a dub over an empty slot leaves a named slot", functi
   record_buffer(1)
   context.polls.fire("recordState", record_state_value(1, 1, 1))
   assert_equal(buffers[1].name, "empty", "nothing to name before the engine reports a length")
-  context.polls.fire("bufferState", 4)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 0, 4))
   assert_equal(buffers[1].name, "take 1", "the dub's audio is take 1 once it has a length")
   assert_equal(buffers[1].path, nil, "its file comes at ended"); assert_equal(S.lib.buffers.status(1), "dub")
   load_buffer(1, "/tmp/bad.wav")

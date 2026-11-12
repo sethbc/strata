@@ -95,8 +95,13 @@ test("buffer triggers call the engine and track recording state", function()
   state_report(context, 3, 1, 1.5); assert_near(local_value("buffers")[3].seconds, 1.5, 1e-9)
   state_report(context, 8, 0, 16); assert_near(local_value("buffers")[8].seconds, 16, 1e-9)
   state_report(context, 1, 0, 0); assert_near(local_value("buffers")[1].seconds, 0, 1e-9)
-  -- load number 7 (never sent: numbers run 0..6) and a negative value: ignored
-  context.polls.fire("bufferState", (7 * 9 + 0) * 1000 + 50); context.polls.fire("bufferState", -1)
+  -- slot 1 with load number bufferStateLoads (never sent: the numbers run
+  -- 0 .. bufferStateLoads - 1), built from the stub's engine spec, and a
+  -- negative value: ignored
+  local spec = h.engine_spec
+  local never_sent = (spec.buffer_state_loads * (spec.num_buffers + 1) + 0) * spec.buffer_state_stride + 50
+  for _, value in ipairs({ never_sent, -1 }) do context.polls.fire("bufferState", value) end
+  assert_near(local_value("buffers")[1].seconds, 0, 1e-9, "slot 1 keeps its 0 s")
   -- an empty path or norns' "-" (no file chosen) loads nothing
   context.clear_engine_calls()
   params:set("buf4_file", ""); params:set("buf4_file", "-"); params:set("buf4_file", _path.audio)
@@ -1067,7 +1072,7 @@ test("bufferState poll ignores NaN, infinities and out-of-range slots", function
   local buffers = local_value("buffers")
   state_report(context, 4, 0, 4)   -- slot 4 holds 4 s
   local before = deep_copy(buffers)
-  for _, value in ipairs({ 0 / 0, math.huge, -math.huge, -1, 8000 }) do
+  for _, value in ipairs({ 0 / 0, math.huge, -math.huge, -1, context.polls.buffer_state_value(9, 0, 0) }) do
     local ok, message = pcall(context.polls.fire, "bufferState", value)
     assert_true(ok, "poll value " .. tostring(value) .. " raises no error: " .. tostring(message))
     for slot = 1, 8 do
@@ -1183,7 +1188,11 @@ test("the slot length report names no load (#578)", function()
   local context = load_strata(); h.finish_startup(context)
   local S = local_value("S")
   load_buffer(1, "/tmp/a.wav"); load_buffer(1, "/tmp/b.wav")
-  context.polls.fire("bufferState", 17060)  -- index 8 with a load number: the engine never sends it
+  -- the slots' length (index numBuffers) with load number 1, built from the
+  -- stub's engine spec: the engine never sends it
+  local spec = h.engine_spec
+  local named = (1 * (spec.num_buffers + 1) + spec.num_buffers) * spec.buffer_state_stride + 60
+  context.polls.fire("bufferState", named)
   assert_equal(S.performance.buffer_seconds, 300, "ignored")
   context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 60))
   assert_equal(S.performance.buffer_seconds, 60, "the slots' length caps the tier's, whatever a slot's loads")
@@ -1231,7 +1240,9 @@ local function float32(value)
   return math.floor(value / ulp + 0.5) * ulp
 end
 
-test("a bufferState value keeps its slot, load number and hundredths in a 32-bit float (#578)", function()
+-- The one test that pins the layout with literal values (the engine check
+-- pins the same): every other test builds its values with the helper
+test("the bufferState layout, pinned: a value keeps its slot, load number and hundredths in a 32-bit float (#578)", function()
   local context = load_strata(); finish_startup(context)
   local S, buffers = local_value("S"), local_value("buffers")
   -- the layout, as literals the engine check pins too: (load % 7 * 9 + slot index) * 1000 + seconds
@@ -1299,6 +1310,8 @@ test("a long file's load waits for the engine's check before it settles", functi
   assert_true(buffers[1].loaded); assert_equal(buffers[1].checking_from, nil, "a file with no info is not checked")
   load_buffer(1, "/tmp/long.wav")
   assert_equal(buffers[1].checking_from, 8, "checking, from the 8 s shown before")
+  -- periodic reports of the old audio that name load 2, the newest (the
+  -- engine counted it at its command): only the check rule holds them (#578)
   context.set_time(5); state_report(context, 1, 2, 8); state_report(context, 1, 2, 8)
   assert_equal(buffers[1].checking_from, 8, "the old length's reports do not end the check")
   assert_true(buffers[1].confirm_since ~= nil, "nor settle the load")
