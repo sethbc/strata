@@ -20,6 +20,10 @@ return function(S)
   M.LEVELS = {
     outside = 1, outside_range = 2, inside = 4, inside_range = 4, held = 11, record_head = 13, playhead = 15,
     bookmark = 6, recalled = 10, stored = 15, key_down = 15, key_up = 4, whole = 15,
+    -- a bookmark that waits for its beat or bar (#593) blinks between these,
+    -- each for waiting_ticks of the playhead clock's ticks (no steady level
+    -- stands clear of 6, 10 and 15 on a varibright grid)
+    waiting_high = 15, waiting_low = 2, waiting_ticks = 4,
   }
   local LEVELS = M.LEVELS
   -- a position a rounding away from a cell's fraction still counts as inside
@@ -193,6 +197,10 @@ return function(S)
       "v" .. voice_idx .. " bm " .. n)
     waiting_recalls[voice_idx] = token and {n = n, token = token} or nil
   end
+
+  -- The playhead clock's tick count, which times the waiting blink (#593)
+  local blink_ticks = 0
+  function M.advance_blink() blink_ticks = blink_ticks + 1 end
 
   function M.waiting_bookmark(voice_idx)
     local recall = valid_voice(voice_idx) and waiting_recalls[voice_idx]
@@ -555,6 +563,9 @@ return function(S)
     if valid_bookmark(key) then
       if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
         return LEVELS.stored
+      end
+      if M.waiting_bookmark(voice_idx) == key then
+        return math.floor(blink_ticks / LEVELS.waiting_ticks) % 2 == 0 and LEVELS.waiting_high or LEVELS.waiting_low
       end
       if M.last_recalled(voice_idx) == key then return LEVELS.recalled end
       return LEVELS.bookmark
