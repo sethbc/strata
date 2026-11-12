@@ -130,7 +130,7 @@ test("target ids leave out macros, morph and discrete params", function()
     end
   end
   -- every LFO destination but none and the macros, in their order; then
-  -- each LFO's rate and depth; no matrix depths while the matrix has none
+  -- each LFO's rate and depth; then each matrix routing's depth (1h)
   assert_equal(ids[1], "master_density", "the LFO destinations first, without none")
   assert_equal(ids[11], "reverb_damp")
   assert_equal(ids[12], "v1_main", "a voice's main entry")
@@ -139,8 +139,8 @@ test("target ids leave out macros, morph and discrete params", function()
   assert_equal(ids[103], "strata_lfo1_rate", "then the LFOs' rates and depths")
   assert_equal(ids[104], "strata_lfo1_depth")
   assert_equal(ids[114], "strata_lfo6_depth")
-  assert_equal(#ids, 114, "and nothing after them")
-  for k = 1, 16 do assert_equal(listed["matrix_" .. k .. "_depth"], nil, "no matrix depth without its param") end
+  for k = 1, 16 do assert_equal(listed["matrix_" .. k .. "_depth"], 114 + k, "then routing " .. k .. "'s depth") end
+  assert_equal(#ids, 130, "and nothing after them")
   -- set_target takes only these ids
   assert_equal(macros.set_target(1, 1, "macro_2", 0, 1), false, "a macro is no target")
   assert_equal(macros.set_target(1, 1, "morph", 0, 1), false, "nor the morph")
@@ -224,6 +224,7 @@ test("every apply's sends are deferrable, and 16 full macros moving stay inside 
   for _, count in pairs(per_window) do busiest = math.max(busiest, count) end
   assert_true(busiest <= S.constants.ENGINE_BUDGET.messages_per_window, "a window sent " .. busiest)
   assert_equal(S.lib.engine_sync.budget_state().pending, 0, "nothing waits at the end")
+  while #ids > 16 * 8 do table.remove(ids) end  -- the ids the 128 rows took (the last matrix depths took none)
   for _, target_id in ipairs(ids) do
     local voice = target_id:match("^v(%d+)_main$")
     local id = voice and main_param_id(tonumber(voice)) or target_id

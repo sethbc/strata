@@ -849,9 +849,10 @@ test("the menu records for 3.4's groups follow lfos in order: a landed module ad
   local menu = table.concat(names, " ")
   assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
     "the seven records follow lfos: " .. menu)
-  -- landed: the gestures' group of eight, the macros' sixteen and scatter's eight
+  -- landed: the gestures' group of eight, the macros' sixteen, scatter's eight and the matrix's 32
   local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES,
-    macros = 1 + S.constants.NUM_MACROS, scatter = 1 + 8 }
+    macros = 1 + S.constants.NUM_MACROS, scatter = 1 + 8,
+    matrix = 1 + 2 * S.constants.MATRIX_SLOTS }
   for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures" }) do
     assert_equal(added[name], landed[name] or 0, name .. (landed[name] and " adds its group" or " adds nothing without its module"))
   end

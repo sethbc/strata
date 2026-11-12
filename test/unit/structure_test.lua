@@ -621,10 +621,11 @@ end)
 -- before the voices go off, MIDI is detached before the voices go off, and
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "gestures saved",
+  "matrix saved",
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
-  "morph clock", "macro clock", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget",
+  "morph clock", "macro clock", "matrix learn", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
   "voices off", "grids dark", "arc dark" }
 
@@ -633,11 +634,8 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
 -- to the step lists as its step lands
 -- One name per line: Wave 1's packages each remove their own in parallel
 local RESERVED_CLEANUP_ORDERS = {
-  "matrix_save",
-  "matrix",
 }
 local RESERVED_START_ORDERS = {
-  "matrix_load",
 }
 
 -- No step is registered at a reserved order
@@ -679,6 +677,7 @@ test("cleanup runs every registered step in today's order", function()
   params:set("gesture_2_quantize", 3)  -- recorder 1 plays a free loop (its metro), 2 a bar loop (its clock)
   for k = 1, 2 do S.lib.gestures.press(k); enc_param_delta(3, "reverb_mix", 1); S.lib.gestures.press(k) end
   params:set("quantize_actions", 2); S.lib.quantize.schedule("scene", function() end)  -- an action waits
+  S.lib.matrix.learn(1)  -- matrix learn's timeout clock runs
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -711,6 +710,7 @@ test("cleanup runs every registered step in today's order", function()
     { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
     { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
+    { "matrix learn", S.matrix_learn_clock },
     { "lfos", S.lfo_clock } }
   for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end
   local clock_steps = {}
@@ -720,7 +720,7 @@ test("cleanup runs every registered step in today's order", function()
   end
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
-    ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved" }
+    ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved", ["matrix.data"] = "matrix saved" }
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
@@ -826,6 +826,7 @@ local function start_steps()
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
     { "gestures load", { "file read gestures.data", "redraw requested", "grid redrawn" } },
+    { "matrix load", { "file read matrix.data", "redraw requested" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },

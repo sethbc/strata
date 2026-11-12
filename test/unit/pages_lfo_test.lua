@@ -506,7 +506,7 @@ test("LFO rows keep a blank pixel row between each destination and the row above
   show_page("LFO")
   for n = 1, 6 do params:set(lfo_id(n, "dest"), destination_index("density")) end
   local S = local_value("S")
-  if not S.lib.matrix then S.lib.matrix = { uses_source = function() return true end } end
+  for n = 1, 6 do S.lib.matrix.set_routing(n, "lfo" .. n, "reverb_mix"); params:set("matrix_" .. n .. "_depth", 25) end
   local ok, problem = pcall(function()
     for selected = 1, 6 do
       select_lfo(selected)
@@ -525,9 +525,11 @@ test("LFO rows keep a blank pixel row between each destination and the row above
       end
       assert_true(column[#column].y <= HINT_ROW_Y - TEXT_HEIGHT, "the last row clears the hint row")
       assert_screen_layout(context, "LFO " .. selected .. " selected, density, routed")
+      local marked = false
+      for _, entry in ipairs(column) do marked = marked or entry.text:find(" R", 1, true) ~= nil end
+      assert_true(marked, "LFO " .. selected .. " selected: the routed mark is drawn")
     end
   end)
-  S.lib.matrix = nil
   if not ok then error(problem, 0) end
 end)
 
