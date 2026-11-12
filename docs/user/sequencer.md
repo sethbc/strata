@@ -16,14 +16,16 @@ Each row of the grid shows its own voice's playing step. All the voices start to
 ## What a step holds
 
 A set step plays its voice at its level: a running voice gets an accent (Karplus re-plucks its string, a voice in triggered grain mode fires one grain), a stopped one is started. Beyond its level, a step can hold:
-- **probability** (0-100 %, 100 when not set): the chance the step plays each time round, drawn once for the whole step
+- **probability** (0-100 %, 100 when not set): the chance the step plays each time around, drawn once for the whole step
 - **ratchets** (1-4 hits): the step plays that many times, evenly spaced through it. Hits are never closer than 20 ms apart: at fast tempos and short divisions a step plays fewer of them
-- **step locks** (position, pitch, size): the voice plays that buffer position, grain pitch or grain size for this step only, and goes back to its own value at the next step that plays without the lock. The voice's own setting never changes. Turning the param by hand (an encoder, the arc or a grid fader) while a step lock holds it ends the lock at once. Every step lock also ends when the patterns stop, the voice's pattern is cleared or replaced (a scene recall, the chain), or the voice's length is shortened past the step that set it. Step locks have nothing to do with a voice's lock (`[L]`)
+- **step locks** (position, pitch, size): the voice plays that buffer position, grain pitch or grain size for this step only, and goes back to its own value at the next step that plays without the lock. The voice's own setting never changes. Turning the param by hand (an encoder, the arc or a grid fader) while a step lock holds it ends the lock at once. Every step lock also ends when the patterns stop, the voice's pattern is cleared or replaced (a scene recall, the chain), the voice's length is shortened past the step that set it, or, once the step is turned off with no other step of the voice set, when the voice comes around to its step 1 again. Step locks have nothing to do with a voice's lock (`[L]`)
 - **a note** (a scale degree, -14 to 14): the step plays the voice that many tones of the global scale above (or below) its own pitch, for this step only: a synth voice's freq, a buffer voice's rate, an input voice's grain pitch (on top of the step's pitch lock when it has one). Degree 0 is the voice's own pitch. While the scale is off every semitone counts, so degree 3 is three semitones up. A buffer or input voice's pitch is the note a MIDI note plays at its rate (rate 1 is middle C). A step stores a chord (up to 8 degrees); for now each voice plays its first
 - **a bookmark** (1-4): a buffer voice jumps to that bookmark as the step plays, but only when the bookmark lies inside the voice's loop (a jump outside it would reset the loop)
 - **a gate** (0.05-16 steps): this step's gate length, for a gated voice (below)
 
 Scenes keep every step's attributes with the patterns, and recall them as they recall the patterns.
+
+If a step fails to play one of Strata's own voices (a bug), the patterns stop, show stopped, and the error appears in maiden. Other things a step plays through (MIDI out and other integrations, in later versions) never stop the patterns: one that fails is named in maiden once and left out until the patterns start again.
 
 ## Gates
 
@@ -31,7 +33,7 @@ Normally a step only accents a voice that keeps sounding. With **seq gate** on (
 
 ## Euclidean fill
 
-A Euclidean fill spreads a number of hits as evenly as possible over the voice's length (3 hits over 8 steps: steps 1, 4 and 7), turned by a rotation. It writes the voice's first length steps (hits at level 15, the rest off) and keeps the steps past the length and every step's attributes, so you can edit the steps by hand afterwards.
+A Euclidean fill spreads a number of hits as evenly as possible over the voice's length (3 hits over 8 steps: steps 1, 4 and 7), turned by a rotation (0 to the length - 1, wrapping around; the hits go from 0 to the length). It writes the voice's first length steps (hits at level 15, the rest off) and keeps the steps past the length and every step's attributes, so you can edit the steps by hand afterward.
 
 ## Chaining
 
@@ -40,3 +42,5 @@ A Euclidean fill spreads a number of hits as evenly as possible over the voice's
 ## Following the clock's transport
 
 **Follow transport** (PARAMETERS > sequencer, or SETUP's `transport` row: `follow` or `off`; default on) lets an external clock start and stop the patterns: with norns' clock source set to MIDI or Link (with PARAMETERS > CLOCK > link start/stop sync on), a MIDI start or a Link start plays every voice from step 1 at once, on the clock's first beat, whether the patterns played or not (a running chain starts again from its first scene), and a stop stops them as K2 does. On the internal clock nothing follows: PARAMETERS > CLOCK > reset neither starts nor stops the patterns. Strata never starts or stops the clock itself: its play keys start the patterns only.
+
+When the clock starts again without the patterns following it (PARAMETERS > CLOCK > reset on the internal clock, or a MIDI or Link start with follow transport off) while they play, they keep their own count: the next 16th waits for the clock's next 16th, every voice moves by that same amount (at most a 16th later than it would have played), and the voices, the chain's bars and the ratchets stay together, with no step played twice or skipped. The next start of the patterns counts from the clock again.
