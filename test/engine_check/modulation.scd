@@ -29,7 +29,7 @@ var checkState, checkChannels, checkCommands, checkIgnored, checkBuses, checkFas
 var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfoSeries, checkLfoSums, checkShapes;
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
-var checkVelocity, checkStartStop, checkGateKept, stageArgs, ringArgs, bufArgs;
+var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -221,13 +221,16 @@ addCheckDefs = {
         Out.kr(out, [x, PulseCount.kr((step > 1e-6) * active, t_reset), Peak.kr(step * active, t_reset),
             RunningMin.kr(Select.kr(active, [1e9, x]), t_reset), RunningMax.kr(Select.kr(active, [-1e9, x]), t_reset)]);
     }).add;
-    // the ratio of two audio buses' left channels, block by block: now, at
-    // `times` after t_reset (latched), and its lowest in the first minTime
+    // the ratio of two audio buses' left channels, block by block: now, its
+    // lowest in the first minTime after t_reset, at `times` after it
+    // (latched), and last the ratio of the block before t_reset's (latched at
+    // the reset: a trigger sent in the reset's bundle acts in the reset's
+    // block, so this is the level just before the trigger). Seven channels
     SynthDef(\strataCheckRatioTrack, { arg a, b, out, t_reset = 0, minTime = 0.07;
         var x = A2K.kr(In.ar(a, 1)), y = A2K.kr(In.ar(b, 1));
         var ratio = x / y.abs.max(1e-9), elapsed = Sweep.kr(t_reset, 1), times = \times.kr(0 ! 4);
         Out.kr(out, [ratio, Latch.kr(RunningMin.kr(ratio, t_reset), elapsed >= minTime)]
-            ++ times.collect({ arg time; Latch.kr(ratio, elapsed >= time) }));
+            ++ times.collect({ arg time; Latch.kr(ratio, elapsed >= time) }) ++ [Latch.kr(Delay1.kr(ratio), t_reset)]);
     }).add;
     // the pitch of a stereo bus (its sum) and whether it has one
     SynthDef(\strataCheckPitch, { arg in, out;
@@ -450,34 +453,28 @@ checkBuses = {
 };
 
 // Starts, shape changes, moves, sets and stops of the six LFOs at 20 Hz for
-// 2 s (seeded), with starts and shape changes sent in the same tick as a
-// stop, so they reach an LFO in its release. The bound, both times it is
-// read in each step:
-// - right after the step's commands: every LFO node on the server is the
-//   node of its LFO's place, so at most one per LFO, a releasing one
-//   included (a start re-gates it; a shape change frees it as the new node
-//   starts, or replaces a running one in one server step). The places'
-//   nodes are taken as the commands leave them, and the tree is asked for
-//   in the same tick, with no sync between (a sync takes about 27 ms here,
-//   past the release): the server answers it after the commands, in order;
-// - 50 ms later, past the 20 ms release: each running LFO has exactly one
-//   node, of its shape and writing its channel, and each stopped one none.
-// None once all are stopped
+// 2 s (seeded): 40 steps, each sent 50 ms after the last began (a deadline
+// from the series' start, so a slow step never slows the rest), with starts
+// and shape changes also sent in the same tick as a stop, so they reach an
+// LFO in its release. One tree read a step, asked for in the same tick as
+// the step's commands, with no sync between (a sync takes about 27 ms here,
+// past the release): the server answers it after the commands, in order, and
+// the places' nodes are taken as the commands leave them. Each read asserts
+// the bound: every LFO node on the server is its LFO's place's node, so at
+// most one per LFO, a releasing one included (a start re-gates it; a shape
+// change frees it as the new node starts, or replaces a running one in one
+// server step); each running LFO has exactly one, of its shape and writing
+// its channel; and each LFO stopped in the step before, 50 ms earlier, past
+// its 20 ms release, has none and no place. None once all are stopped
 checkLfoSeries = {
-    var steps = 40, wrong = List.new, maxNodes = 0, maxReleasing = 0, actions = Bag.new, settings = Array.newClear(6), final, places;
-    // every LFO node is its place's, one each: [nodes, releasing ones] or nil
-    var placesOnly = {
-        var own = (0 .. 5).collect({ arg lfo; placeSynth.(lfo) !? _.nodeID }).reject(_.isNil);
-        var releasing = (0 .. 5).select({ arg lfo; state[\lfos][lfo] !? { arg place; place[\running].not } ? false })
-            .collect({ arg lfo; placeSynth.(lfo).nodeID });
-        var nodes = lfoNodes.value, ids = nodes.collect(_[\id]);
-        if ((ids.asSet.size == ids.size) and: { ids.every({ arg id; own.includes(id) }) }) {
-            [nodes.size, ids.count({ arg id; releasing.includes(id) })]
-        }
-    };
+    var steps = 40, period = 0.05, wrong = List.new, maxNodes = 0, maxReleasing = 0, actions = Bag.new, settings = Array.newClear(6);
+    var stoppedBefore = [], times = List.new(steps), queries = List.new(steps), t0, final, places, span;
     thisThread.randSeed = 3401;
+    t0 = Main.elapsedTime;
     steps.do({ arg step;
-        var stopped = List.new, nodes, ids, expected, now;
+        var stopped = List.new, own, releasing, nodes, ids, running, queryStart;
+        ((t0 + (period * step)) - Main.elapsedTime).max(0).wait;
+        times.add(Main.elapsedTime - t0);
         6.do({ arg lfo;
             var action = [\start, \shape, \move, \set, \stop, \restart, \reshape, \none].wchoose(
                 [0.2, 0.12, 0.12, 0.12, 0.18, 0.1, 0.1, 0.06].normalizeSum);
@@ -496,32 +493,35 @@ checkLfoSeries = {
             if (current.notNil and: { action != \none }) { command.(\setFastLfo, lfo, *current) };
             settings[lfo] = current;
         });
-        now = placesOnly.value;
-        if (now.isNil) { wrong.add([step, \afterCommands]) } {
-            maxNodes = maxNodes.max(now[0]);
-            maxReleasing = maxReleasing.max(now[1]);
-        };
-        0.05.wait; server.sync;
+        own = (0 .. 5).collect({ arg lfo; placeSynth.(lfo) !? _.nodeID });
+        releasing = (0 .. 5).select({ arg lfo; state[\lfos][lfo] !? { arg place; place[\running].not } ? false })
+            .collect({ arg lfo; own[lfo] });
+        queryStart = Main.elapsedTime;
         nodes = lfoNodes.value;
+        queries.add(Main.elapsedTime - queryStart);
         ids = nodes.collect(_[\id]);
-        expected = settings.collect({ arg each, lfo; if (each.notNil) { [lfo, each] } }).reject(_.isNil);
-        if ((ids.asSet.size != ids.size) or: { ids.size != expected.size }
-            or: { expected.any({ arg pair;
-                var synth = placeSynth.(pair[0]), node = synth !? { nodes.detect({ arg each; each[\id] == synth.nodeID }) };
+        running = settings.collect({ arg each, lfo; if (each.notNil) { [lfo, each] } }).reject(_.isNil);
+        maxNodes = maxNodes.max(ids.size);
+        maxReleasing = maxReleasing.max(ids.count({ arg id; releasing.includes(id) }));
+        if ((ids.asSet.size != ids.size) or: { ids.any({ arg id; own.includes(id).not }) }
+            or: { running.any({ arg pair;
+                var node = nodes.detect({ arg each; each[\id] == own[pair[0]] });
                 node.isNil or: { node[\def] != lfoDefs[pair[1][2]] }
                     or: { node[\controls][\out] != engine.fastModChannel(pair[1][0], 0, pair[1][1]) } }) }
-            or: { stopped.any({ arg lfo; placeSynth.(lfo).notNil }) }) {
-            wrong.add([step, ids.size, expected.size]);
+            or: { stoppedBefore.any({ arg lfo; settings[lfo].isNil and: { own[lfo].notNil } }) }) {
+            wrong.add([step, ids.size, running.size]);
         };
+        stoppedBefore = stopped;
     });
+    span = times.last - times.first;
     6.do({ arg lfo; command.(\stopFastLfo, lfo) });
     0.1.wait; server.sync;
     final = lfoNodes.value;
     places = state[\lfos] ? [0];
     check.(wrong.isEmpty and: { maxNodes <= 6 } and: { maxReleasing > 0 } and: { final.isEmpty } and: { places.every(_.isNil) }
         and: { readAll.value.every(_ == 0) },
-        "modulation: one node per LFO through starts, shape changes, moves and stops at 20 Hz for 2 s, and none once stopped (after each step's commands every LFO node is its place's, a releasing one included; 50 ms later each running LFO has one, of its shape on its channel, and each stopped one none: steps wrong %, at most % LFO nodes and % releasing at once, % left, actions %)".format(
-            wrong.keep(4), maxNodes, maxReleasing, final.size, actions.contents));
+        "modulation: one node per LFO through starts, shape changes, moves and stops at 20 Hz for 2 s, and none once stopped (% steps sent over % s, the slowest tree read % s; at each step's commands every LFO node is its place's, a releasing one included, each running LFO has one, of its shape on its channel, and each stopped a step before has none: steps wrong %, at most % LFO nodes and % releasing at once, % left, actions %)".format(
+            steps, span.round(0.001), queries.maxItem.round(0.001), wrong.keep(4), maxNodes, maxReleasing, final.size, actions.contents));
     resetModulation.value;
 };
 
@@ -658,6 +658,42 @@ checkScatter = {
     check.(reached.every(_ != 0) and: { nodes == 0 } and: { after.every(_ == 0) } and: { state[\scatter].isNil },
         "modulation: scatter's end zeroes its channels (% of 35 written before its end; % scatter nodes left, % of 35 channels at 0 after it)".format(
             reached.count(_ != 0), nodes, after.count(_ == 0)));
+    resetModulation.value;
+};
+
+// An LFO stopped, its 20 ms release over on the server before sclang has
+// handled the /n_end (the routine holds the interpreter for 60 ms in a loop
+// that allocates nothing, so no reply is handled meanwhile), then re-gated
+// and given a new shape in one tick, as a PSET load or a scene recall can
+// set an LFO's on and shape params one after the other about 20 ms after a
+// stop. The re-gate reaches no node; the shape change must free the old node
+// (quietly) and start a new one, never send a Synth.replace to a node that is
+// gone (the server refuses it, posts a failure, sends /fail and makes no
+// node). Afterward the LFO has exactly one node, of the new shape, it
+// modulates its channel, and a stop ends it
+checkRegateEnded = {
+    var fails = 0, responder = OSCFunc({ fails = fails + 1 }, '/fail', server.addr), old, until, nodes, value, ended, ok;
+    command.(\setFastLfo, 2, 3, 0, 0, 0.003, 0.4, 0.0);
+    server.sync; 0.1.wait;
+    old = placeSynth.(2);
+    command.(\stopFastLfo, 2);
+    until = Main.elapsedTime + 0.06;
+    while { Main.elapsedTime < until } { };
+    command.(\setFastLfo, 2, 3, 0, 0, 0.003, 0.4, 0.0);
+    command.(\setFastLfo, 2, 3, 0, 2, 0.003, 0.4, 0.0);
+    command.(\syncFastLfo, 2, 0.25);
+    server.sync; 0.2.wait; server.sync;
+    nodes = lfoNodes.value;
+    value = readChannel.(3, 0);
+    command.(\stopFastLfo, 2);
+    server.sync; 0.1.wait; server.sync;
+    ended = lfoNodes.value.isEmpty and: { placeSynth.(2).isNil };
+    server.sync;
+    responder.free;
+    ok = (fails == 0) and: { nodes.size == 1 } and: { nodes[0][\def] == \strataFastLfoSquare }
+        and: { old.notNil and: { nodes[0][\id] != old.nodeID } } and: { (value - 0.4).abs < 0.005 } and: { ended };
+    check.(ok, "modulation: an LFO re-gated and given a new shape after its release ended on the server gets one new node, which modulates, and a stop ends it (% /fail replies; LFO nodes %; channel % of 0.4; none after the stop: %)".format(
+        fails, nodes.collect(_[\def]), value.round(0.0001), ended));
     resetModulation.value;
 };
 
@@ -1019,7 +1055,7 @@ checkEqual33 = {
 // at times after triggers sent in timestamped bundles
 checkGates = {
     var group = Group.after(engine.processGroup), synthIn = Bus.audio(server, 2), otherIn = Bus.audio(server, 2), silentIn = Bus.audio(server, 2);
-    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 6), track2Bus = Bus.control(server, 6);
+    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 7), track2Bus = Bus.control(server, 7);
     var peaks = Bus.control(server, 2), sources, stages, track, track2, diff, before, open, longer, rerun, mirror, velocity, tapPeak;
     var gateArgs = [\seqGate, 1, \gateSeconds, 0.1, \gateRelease, 0.05];
     var triggerAt = { arg latency, velocity = 1, also;
@@ -1066,11 +1102,22 @@ checkGates = {
     0.6.wait; server.sync;
     open = h.readBus(trackBus);
     rerun = h.readBus(track2Bus);
-    // (the release is at 0.5 at the trigger: the lowest after it is that,
-    // within a block's step of 0.027, where a restart from 0 would read 0)
-    check.((rerun[1] >= 0.44) and: { rerun[1] <= 0.6 } and: { (rerun[2] - 1).abs < 0.01 },
-        "modulation: a retrigger during the release reopens the gate from its level (about the trigger %, lowest after it %, 30 ms after it %)".format(
-            open[3].round(0.0001), rerun[1].round(0.0001), rerun[2].round(0.0001)));
+    // The level just before the trigger (the tracker's last channel: the
+    // block before the trigger's) is about half way down the release (0.4-0.65:
+    // the trigger's bundle falls anywhere in a block, and the attack's and
+    // hold's whole blocks move the release by a block or two). The lowest
+    // after it is the release two blocks on, no lower: the tracker reads each
+    // block's first sample, which is the gate of the block before (an
+    // audio-rate multiply interpolates a control across its block), and the
+    // envelope's level in the trigger's own block is still the release's next
+    // step (its attack starts from there, the block after). So the bound is
+    // two steps (a block over gateRelease, 0.027 each; measured: exactly two)
+    // and a rounding's slack; a gate that dipped further at the re-gate, or
+    // restarted from 0, reads lower
+    check.((rerun[6] >= 0.4) and: { rerun[6] <= 0.65 } and: { rerun[1] >= (rerun[6] - (2 * blockSeconds / 0.05) - 1e-3) }
+        and: { (rerun[2] - 1).abs < 0.01 },
+        "modulation: a retrigger during the release reopens the gate from its level (just before it %, lowest after it %, at most two release steps of % under it; 30 ms after it %)".format(
+            rerun[6].round(0.0001), rerun[1].round(0.0001), (blockSeconds / 0.05).round(0.0001), rerun[2].round(0.0001)));
     // the mirror is not gated and the tap is (both paths, no trigger)
     restart.([synthIn.index, otherIn.index], gateArgs);
     mirror = measureFor.(diff, peaks, 0.3);
@@ -1097,7 +1144,7 @@ checkGates = {
 // and the mirror never differs from the unmuted stage's
 checkMute = {
     var group = Group.after(engine.processGroup), synthIn = Bus.audio(server, 2), otherIn = Bus.audio(server, 2);
-    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 6), peaks = Bus.control(server, 2);
+    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 7), peaks = Bus.control(server, 2);
     var sources, stages, track, diff, results = List.new, back, mirror;
     var runCase = { arg label, argsM, triggerFirst, triggerAfter;
         var muted, opened;
@@ -1435,6 +1482,7 @@ if (area.isNil or: { state.isNil }) {
     checkSync.value;
     checkScatter.value;
     checkReleases.value;
+    checkRegateEnded.value;
     checkPitch.value;
     checkGrainTaps.value;
     checkStageTaps.value;

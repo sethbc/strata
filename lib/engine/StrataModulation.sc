@@ -286,9 +286,10 @@
     }
 
     // An engine LFO's node from its place (shape, channel, controls), at the
-    // tail of fastModGroup, watched until it ends
+    // tail of fastModGroup, watched until it ends. A fresh node: not released
     startFastLfo { arg lfo, place;
         var synth = Synth(this.fastLfoDefName(place[\shape]), place[\controls], areaState[\modulation][\fastModGroup], \addToTail);
+        place[\released] = false;
         ^this.watchFastLfo(lfo, synth, place[\channel])
     }
 
@@ -320,12 +321,17 @@
 
     // setFastLfo: the LFO's node made if it has none; else set (a releasing
     // one re-gated), replaced in the same server step on a new shape
-    // (Synth.replace; a releasing one is freed and a new one started in its
-    // place), moved on a new voice or destination, its old channel zeroed in
-    // the same bundle. Never more than one node per LFO
+    // (Synth.replace, while the node was never released), moved on a new
+    // voice or destination, its old channel zeroed in the same bundle. Never
+    // more than one node per LFO. A node released since it started (stopFastLfo;
+    // place[\released], cleared only by a fresh node) may have ended on the
+    // server already, its /n_end not yet in sclang, even after a re-gate,
+    // which then reached nothing: a Synth.replace of it would be refused and
+    // make no node, and the place would keep a synth that never started. So
+    // its shape change frees it (quietly) and starts a new node, in one bundle
     setFastLfo { arg lfo, voice, destination, shape, rate, depth, offset;
         var state = areaState[\modulation], place = state[\lfos][lfo], channel = this.fastModChannel(voice, 0, destination);
-        var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old;
+        var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old, fresh;
         if (state[\stopped]) { ^this };
         if (place.isNil) {
             place = (shape: shape, channel: channel, controls: controls, running: true);
@@ -339,11 +345,14 @@
         if (shape != place[\shape]) {
             place[\shape] = shape;
             old = place[\synth];
-            place[\synth] = if (place[\running]) {
+            place[\synth] = if (place[\released].not) {
                 this.watchFastLfo(lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
             } {
-                this.sendToSynth(old.freeMsg);
-                this.startFastLfo(lfo, place)
+                context.server.makeBundle(nil, {
+                    this.sendToSynth(old.freeMsg);
+                    fresh = this.startFastLfo(lfo, place);
+                });
+                fresh
             };
             place[\running] = true;
             if (oldChannel != channel) { this.zeroFastModChannels(oldChannel, 1) };
@@ -361,6 +370,7 @@
         var place = areaState[\modulation][\lfos][lfo];
         if (place.notNil and: { place[\running] }) {
             place[\running] = false;
+            place[\released] = true;
             this.sendToSynth(place[\synth].setMsg(\gate, 0));
         };
     }
