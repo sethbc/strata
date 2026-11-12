@@ -544,6 +544,15 @@ return function(S)
     pattern_changed()
   end
 
+  -- Whether reset_row has a default to put the view's row back to: every
+  -- row but euclid and clear (#596: the held hint names the reset only
+  -- where letting go resets; elsewhere it cancels the quick press)
+  local function row_resets(view)
+    local rows, cursor = sync_view(view)
+    local row = rows[cursor]
+    return row.param_id ~= nil or row.spec.attr ~= nil
+  end
+
   -- The edit view's hints: k2_text is ALT+K2's (what letting go does) and
   -- k2_down whether it is held (K1 let go first: its hint alone)
   local function edit_hints(view, alt_held, k2_text, k2_down)
@@ -651,12 +660,16 @@ return function(S)
   end
 
   -- ALT+K2 held: the pattern view opens the edit view (Question 12); the
-  -- edit view resets the cursor's row. The hint names it (alt_hold_hint)
+  -- edit view resets the cursor's row. The hint names it (alt_hold_hint):
+  -- cancel on a row with nothing to reset
   local function seq_alt_hold()
     if edit_open then reset_row(views.page) else edit_open = true end
   end
 
-  local function seq_alt_hold_hint() return edit_open and "reset" or "edit" end
+  local function seq_alt_hold_hint()
+    if not edit_open then return "edit" end
+    return row_resets(views.page) and "reset" or "cancel"
+  end
 
   -- The tempo replaces the header's indicators (the play mark stays)
   local function seq_header_status()
@@ -734,11 +747,14 @@ return function(S)
     end
   end
 
-  -- The editor's ALT+K2 hint: reset once held ALT_HOLD_SECONDS, else the
-  -- quick press's (rand or undo). The owner animates while ALT+K2 is held
-  -- (#592), so the frame clock draws the change at the hold time
+  -- The editor's ALT+K2 hint: reset once held ALT_HOLD_SECONDS (cancel on
+  -- a row with nothing to reset), else the quick press's (rand or undo).
+  -- The owner animates while ALT+K2 is held (#592), so the frame clock
+  -- draws the change at the hold time
   local function editor_k2_text()
-    if editor.alt_k2_at and util.time() - editor.alt_k2_at >= ALT_HOLD_SECONDS then return "K2:reset" end
+    if editor.alt_k2_at and util.time() - editor.alt_k2_at >= ALT_HOLD_SECONDS then
+      return row_resets(views.editor) and "K2:reset" or "K2:cancel"
+    end
     return S.lib.ui_alt.k2_hint(editor_alt)
   end
 
