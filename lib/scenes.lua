@@ -741,7 +741,7 @@ return function(S)
     if scene_num < 1 or scene_num > NUM_SCENES then return end
     if not S.scenes[scene_num].populated then
       print("scene " .. scene_num .. " is empty")
-      header_flash("S" .. scene_num .. " empty")  -- the grid's recall key shows nothing else (#420)
+      header_flash(M.label(scene_num) .. " empty")  -- the grid's recall key shows nothing else (#420)
       return
     end
 
@@ -1372,7 +1372,7 @@ return function(S)
       return false
     end
     capture_scene(scene_num)
-    header_flash(M.autosave() and ("saved S" .. scene_num) or ("S" .. scene_num .. " not on disk"))
+    header_flash(M.autosave() and ("saved " .. M.label(scene_num)) or (M.label(scene_num) .. " not on disk"))
     grid_redraw()
     request_redraw()
     return true
@@ -1390,6 +1390,15 @@ return function(S)
   function M.name(slot)
     if not is_integer_between(slot, 1, NUM_SCENES) then return "" end
     return S.scenes[slot].name
+  end
+
+  -- How a flash names a slot (design §9.3): "S3 dusk" for a named slot,
+  -- "S3" for one with no name and for a number that is no slot. The
+  -- quantizer's label stays "S" .. slot, so "S16 at bar" always fits
+  function M.label(slot)
+    local name = M.name(slot)
+    if name == "" then return "S" .. tostring(slot) end
+    return "S" .. slot .. " " .. name
   end
 
   -- Name a slot, empty or not (the name stays with the slot; a capture

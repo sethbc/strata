@@ -438,16 +438,22 @@ test("every global read is defined", function()
   assert_true(reads.missing_late and reads.defined_b, "reads with a constant key in a nested function are seen")
 end)
 
--- Globals more than one script file may write: lib/pages/buffer.lua puts
--- back the script's own key and enc when the file selector fails, and
+-- Globals more than one script file may write, each with the files that
+-- may write it: strata.lua defines key, enc and redraw; lib/pages/buffer.lua
+-- puts back the script's own key and enc when the file selector fails, and
 -- lib/pages/scenes.lua when the norns menu took its name entry over; the
 -- name entry puts norns.none in redraw again (as textentry.enter does)
 -- when the menu closed over it
-local GLOBALS_WRITTEN_IN_TWO_FILES = { key = true, enc = true, redraw = true }
+local GLOBALS_WRITTEN_IN_TWO_FILES = {
+  key = { "strata.lua", "lib/pages/buffer.lua", "lib/pages/scenes.lua" },
+  enc = { "strata.lua", "lib/pages/buffer.lua", "lib/pages/scenes.lua" },
+  redraw = { "strata.lua", "lib/pages/scenes.lua" },
+}
 
 -- Every global (a global function or any other value) that more than one
--- of a list of { path, text } files writes, as "<name>: <path>:<line>,
--- <path>:<line>, ..."
+-- of a list of { path, text } files writes, unless every file writing it
+-- is one its allowance (allowed[name], a list of paths) names, as
+-- "<name>: <path>:<line>, <path>:<line>, ..."
 local function globals_written_twice(root, sources, allowed)
   local homes, problems = {}, {}
   for _, source in ipairs(sources) do
@@ -457,8 +463,16 @@ local function globals_written_twice(root, sources, allowed)
       table.insert(homes[name], where)
     end
   end
+  local function all_allowed(name, places)
+    local paths = {}
+    for _, path in ipairs(allowed[name] or {}) do paths[path] = true end
+    for _, where in ipairs(places) do
+      if not paths[where:match("^(.*):%d+$") or where] then return false end
+    end
+    return true
+  end
   for name, places in next, homes do
-    if #places > 1 and not allowed[name] then
+    if #places > 1 and not all_allowed(name, places) then
       table.sort(places)
       table.insert(problems, name .. ": " .. table.concat(places, ", "))
     end
@@ -478,20 +492,25 @@ test("no global is defined in two files", function()
   assert_equal(#problems, 0, "globals defined in more than one file (a later include replaces the earlier one):\n  "
     .. table.concat(problems, "\n  "))
   -- the scanner: a function or value defined in two files is found, one
-  -- written twice in the same file or allowed is not
+  -- written twice in the same file, or only by the files its allowance
+  -- names, is not; an allowed name written by a file its allowance does not
+  -- name is found
   local scratch = data_root .. "duplicate_global_check"
   os.execute("mkdir -p '" .. scratch .. "/lib'")
   local files = {
-    { path = "strata.lua", text = "function twice() end\nvalue_twice = 1\nonce = 1\nonce = 2\nfunction allowed() end\n" },
-    { path = "lib/x.lua", text = "return function() function twice() end value_twice = 2 allowed = nil end\n" },
+    { path = "strata.lua", text = "function twice() end\nvalue_twice = 1\nonce = 1\nonce = 2\nfunction allowed() end\n"
+      .. "function strayed() end\n" },
+    { path = "lib/x.lua", text = "return function() function twice() end value_twice = 2 allowed = nil strayed = nil end\n" },
+    { path = "lib/y.lua", text = "return function() strayed = nil end\n" },
   }
   for _, source in ipairs(files) do
     local out = assert(io.open(scratch .. "/" .. source.path, "w")); out:write(source.text); out:close()
   end
-  local found = globals_written_twice(scratch, files, { allowed = true })
+  local found = globals_written_twice(scratch, files,
+    { allowed = { "strata.lua", "lib/x.lua" }, strayed = { "strata.lua", "lib/x.lua" } })
   local names = {}
   for _, entry in ipairs(found) do table.insert(names, entry:match("^([^:]*)")) end
-  assert_equal(table.concat(names, " "), "twice value_twice", "each global defined in two files is found:\n  "
+  assert_equal(table.concat(names, " "), "strayed twice value_twice", "each global defined in two files is found:\n  "
     .. table.concat(found, "\n  "))
 end)
 

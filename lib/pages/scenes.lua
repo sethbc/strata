@@ -44,10 +44,21 @@ return function(S)
   -- entry is open for (nil while none is)
   S.scenes_page = {armed_slot = nil, armed_until = 0, bank = 1, naming = nil}
 
+  -- The name entry (norns' textentry, opened on ALT+K2's release, below):
+  -- the callback it was given and Strata's key and enc as it opened
+  local NAME_ENTRY = {callback = nil, script_key = nil, script_enc = nil}
+
+  -- armed_slot and naming are each nil or a slot, and naming is set exactly
+  -- while the page keeps an open entry's callback
   S.register_invariant("scenes prompt", function()
-    local slot = S.scenes_page.armed_slot
-    if slot ~= nil and not (type(slot) == "number" and slot % 1 == 0 and slot >= 1 and slot <= NUM_SCENES) then
-      return "armed_slot is " .. tostring(slot)
+    local function is_slot(slot)
+      return type(slot) == "number" and slot % 1 == 0 and slot >= 1 and slot <= NUM_SCENES
+    end
+    local slot, naming = S.scenes_page.armed_slot, S.scenes_page.naming
+    if slot ~= nil and not is_slot(slot) then return "armed_slot is " .. tostring(slot) end
+    if naming ~= nil and not is_slot(naming) then return "naming is " .. tostring(naming) end
+    if (naming ~= nil) ~= (NAME_ENTRY.callback ~= nil) then
+      return "naming is " .. tostring(naming) .. " but the name entry's callback is " .. tostring(NAME_ENTRY.callback)
     end
   end)
 
@@ -208,11 +219,19 @@ return function(S)
     end
   end
 
-  -- ALT+E2 jumps a bank: SCENE_BANK_SIZE stops (slot 3 to slot 11, and on
-  -- into the fields from bank 2). ALT+E3 is E3 (fine adjustment)
+  -- ALT+E2 on a slot jumps a bank: to the slot SCENE_BANK_SIZE away (slot 3
+  -- to 11 and back), only when that slot exists, else it does nothing, so
+  -- it never lands on a field. On a field row it moves one stop, as E2.
+  -- ALT+E3 is E3 (fine adjustment)
   local function scenes_alt_enc(n, d)
     if n ~= 2 then return false end
-    M.move_cursor(S.cursors.scene + d * SCENE_BANK_SIZE)
+    local cursor = S.cursors.scene
+    if cursor > NUM_SCENES then
+      M.move_cursor(cursor + d)
+    else
+      local target = cursor + (d > 0 and 1 or -1) * SCENE_BANK_SIZE
+      if d ~= 0 and target >= 1 and target <= NUM_SCENES then M.move_cursor(target) end
+    end
     return true
   end
 
@@ -235,9 +254,7 @@ return function(S)
 
   -- The name entry: norns' textentry, which takes the global key, enc and
   -- redraw for itself while it is open (and cancels on a K2 release), so it
-  -- opens on ALT+K2's release, with no modal owner. NAME_ENTRY holds the
-  -- callback it was given and Strata's key and enc as it opened
-  local NAME_ENTRY = {callback = nil, script_key = nil, script_enc = nil}
+  -- opens on ALT+K2's release, with no modal owner (NAME_ENTRY, above)
 
   -- The entry is closed (its callback ran) or will never call back
   local function close_name_entry()
@@ -273,10 +290,13 @@ return function(S)
   -- runs after set_mode(false) copied the globals). When the callback is
   -- still Strata's and the entry still holds the keys, the menu only came
   -- and went over it: set_mode(false) put Strata's redraw back and drew the
-  -- page, so the entry takes the screen back, as its enter does. Inside the
-  -- entry's own enter and exit (norns.menu.init from play mode) neither
-  -- applies: the callback is Strata's, and at the exit the keys are back.
-  -- A field of S.lib.pages_scenes: the menu-close hook below
+  -- page, so the entry takes the screen back, as its enter does. The
+  -- entry's own enter (norns.menu.init from play mode) runs that second
+  -- branch too, on every open: it puts its key in the global before the
+  -- init, so the hook does early what enter does next (norns.none in
+  -- redraw, then its own redraw). Its exit runs neither: the keys are back
+  -- before its init. A field of S.lib.pages_scenes: the menu-close hook
+  -- below
   function M.reconcile_name_entry()
     if S.scenes_page.naming == nil then return end
     if textentry.callback ~= NAME_ENTRY.callback then

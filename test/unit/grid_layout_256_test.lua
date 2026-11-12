@@ -1106,7 +1106,7 @@ test("256 page 3: scenes 9-16 on columns 9-16, lengths 9-16 on row 6", function(
   context.clock.run_for(0.51)
   context.grid.press(1, 12, 3, 0)
   assert_true(S.scenes[12].populated, "(12,3) held 0.5 s saves scene 12")
-  capture_scene(16); grid_redraw()
+  capture_scene(16); S.lib.scenes.set_name(16, "dusk"); grid_redraw()  -- the quantizer's label stays S16
   for i = 9, 16 do
     assert_equal(device:get_led(i, 1), core.scene_recall_level(i), "recall key " .. i)
     assert_equal(device:get_led(i, 2), core.scene_fade_level(i), "fade key " .. i)
