@@ -925,6 +925,50 @@ test("a param with no engine sender counts nothing and never waits (#646)", func
   assert_true(not sync.reaches_engine(id), "the round robin gives it no slot")
 end)
 
+-- #649 (ruling 93): the budget's exception. A discrete switch (a recall's,
+-- a transition's end, a morph crossing) goes at once, whole, in recall
+-- order, uncounted, even inside deferrable with the window full; a
+-- continuous value written beside it waits in the budget
+test("a morph crossing at a full window: its discrete switch goes at once, uncounted; its continuous value waits (#649)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local sync = S.lib.engine_sync
+  S.drift_metro:stop()
+  local synth = S.constants.SOURCE_SYNTH
+  -- scene 2: reverb 0.6, voice 3 running on buffer 1 at envelope 2; scene
+  -- 1 (the state): reverb 0.2, voice 3 stopped on its synth at envelope 1
+  params:set("reverb_mix", 0.6); params:set("v3_source", synth + 1); params:set("v3_grain_env", 2)
+  if not S.voices[3].active then toggle_voice(3) end
+  capture_scene(2)
+  params:set("reverb_mix", 0.2); toggle_voice(3); params:set("v3_source", synth); params:set("v3_grain_env", 1)
+  capture_scene(1)
+  params:set("morph_a", 1); params:set("morph_b", 2)
+  params:set("morph", 0.4); context.clock.run_for(0.5)   -- at scene 1's corner
+  mid_window(context)
+  spend_budget(S)
+  context.clear_engine_calls()
+  params:set("morph", 0.6)
+  context.clock.run_for(0.01)   -- the crossing's apply, in the same window
+  local function index_of(name, second)
+    for index, call in ipairs(context.engine_calls) do
+      if call.name == name and call.args[1] == 2 and (second == nil or call.args[2] == second) then return index end
+    end
+  end
+  local source, envelope, voice_on = index_of("setGrainSource", 1), index_of("setGrainParam", "envShape"),
+    index_of("voiceOn")
+  assert_true(S.voices[3].active and voice_on ~= nil, "the crossing started voice 3 at once")
+  assert_true(source ~= nil and source < voice_on, "its source went first")
+  assert_true(envelope ~= nil and envelope < voice_on, "its grain values before voiceOn")
+  assert_equal(context.engine_calls[envelope].args[3], 1, "at scene 2's envelope")
+  assert_equal(sync.budget_state().sent, 150, "none of it counted: the window is where it was")
+  assert_equal(#context.calls_named("setReverb"), 0, "the crossing's continuous value waits")
+  assert_equal(sync.budget_state().pending, 1)
+  context.clock.run_for(0.1)
+  local reverb = context.calls_named("setReverb")
+  assert_equal(#reverb, 1, "and goes in the next window")
+  assert_near(reverb[1].args[1], 0.2 + 0.6 * (0.6 - 0.2), 1e-9, "at the blend")
+end)
+
 test("a base override is a finite number; anything else raises naming the param", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
