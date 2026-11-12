@@ -203,15 +203,28 @@ return function(S)
   -- only when that changes what the field shows (so a turn against 1 or 4
   -- never restarts the scan); from none, the first detent either way lands
   -- on 1. ALT+E3 recalls the bookmark shown again (1 from none), so the
-  -- playhead goes back to it with no jump to a neighbor first (#431)
-  local function bookmark_enc(d)
-    local shown = shown_bookmark()
-    if S.alt_held then
-      S.lib.positions.recall_bookmark(S.selected_voice, shown or 1)
-      return
+  -- playhead goes back to it with no jump to a neighbor first (#431). Under
+  -- quantize_actions the recall waits for the beat or bar (3.4, key
+  -- bookmark<v>), and the next detent steps from the bookmark that waits
+  local bookmark_enc
+  do
+    local waiting = {}  -- per voice, the bookmark its waiting recall lands on
+    local function recall(voice_idx, n)
+      waiting[voice_idx] = n
+      S.lib.quantize.schedule("bookmark" .. voice_idx, function() S.lib.positions.recall_bookmark(voice_idx, n) end, "v" .. voice_idx .. " bm " .. n)
     end
-    local n = util.clamp((shown or 0) + d, 1, S.constants.NUM_BOOKMARKS)
-    if n ~= shown then S.lib.positions.recall_bookmark(S.selected_voice, n) end
+
+    function bookmark_enc(d)
+      local voice_idx = S.selected_voice
+      local shown = shown_bookmark()
+      if S.lib.quantize.waiting("bookmark" .. voice_idx) then shown = waiting[voice_idx] or shown end
+      if S.alt_held then
+        recall(voice_idx, shown or 1)
+        return
+      end
+      local n = util.clamp((shown or 0) + d, 1, S.constants.NUM_BOOKMARKS)
+      if n ~= shown then recall(voice_idx, n) end
+    end
   end
 
   -- The cursor slot holds a file longer than the seconds a slot holds of it

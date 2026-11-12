@@ -334,4 +334,36 @@ test("a source switch's unfreeze echoes v<i>_freeze to a MIDI-mapped controller 
   assert_equal(echoes(), "0", "the controller hears the unfreeze")
 end)
 
+-- 3.4 (design §8.9): a freeze key's toggle waits for the beat or bar
+-- quantize_actions names; toggle itself (VOICE's row, a CC) stays immediate
+test("toggle_quantized waits for the bar; toggle flips at once", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function run_to_beat(beat)
+    context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+  end
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(S.lib.freeze.is_frozen(3), "quantize off: at once")
+  S.lib.freeze.toggle(3)
+
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(1.5)
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(not S.lib.freeze.is_frozen(3), "not before the bar")
+  assert_equal(S.lib.ui_flash.text("header"), "v3 frz at bar", "the header says it waits")
+  run_to_beat(3.98)
+  assert_true(not S.lib.freeze.is_frozen(3), "beat 3.98: still not")
+  run_to_beat(4.02)
+  assert_true(S.lib.freeze.is_frozen(3), "the freeze flips at the bar")
+  S.lib.freeze.toggle(3)
+  assert_true(not S.lib.freeze.is_frozen(3), "toggle still flips at once under bar")
+
+  for _, bad in ipairs({0, 8, 2.5, "3"}) do
+    S.lib.freeze.toggle_quantized(bad)
+  end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_true(not S.lib.quantize.waiting("freeze" .. voice_idx), "a bad voice index schedules nothing")
+  end
+end)
+
 end

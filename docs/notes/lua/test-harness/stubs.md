@@ -27,6 +27,7 @@ The stubs mirror the real norns libraries (`~/src/norns/lua`), so check behavior
 
 - `tab.save`/`tab.load`: lib/tabutil.lua's, ported unchanged. The `-- Table: {n}` layout; numbers go through `tostring`, so they keep 14 significant digits as on norns. A plain `return {...}` file loads as nil, so test fixtures are written with `tab.save`, or the `tabutil_text(value)` helper in `test/helpers.lua`.
 - `require("lfo")`: `test/stub_lfo.lua`, compared line by line with `lua/lib/lfo.lua`.
+- `require("pattern_time")`: `test/stub_pattern_time.lua` (3.4), `lua/lib/pattern_time.lua` line by line, over the stub's metro and `util.time()`, so a pattern's metro runs only when a test calls its `event` (`S.gestures[k].pattern.metro.event()`) and the times it records are the clock's. A fresh library table per install (the module returns a constructor, `package.preload` calls it).
   - The library's `lfo_*` params and actions; `reset_phase` and `set("period")` reset and rescale `phase_counter` as the library does.
   - Nothing runs on its own: `context.lfo.tick(instance, raw)` performs one library step, with `raw` 0..1 as the shape output.
   - One deliberate addition: a random step whose min is above its max raises `bad argument #2 to 'random' (interval is empty)` on LuaJIT too. On norns the library's `math.random(min × 100, max × 100)` raises that in Lua 5.3, but LuaJIT's `math.random` accepts an empty interval, so without it the #528 tests could not fail on LuaJIT.

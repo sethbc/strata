@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **morph**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **morph**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -26,6 +26,14 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
 - **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), phase, offset, scaled and raw value (read-only), min, max and baseline, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
 - Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above (and swings half as wide as "from min"), and other min/max values change the size of the swing. Min never goes above max: setting min above max moves max up with it, and setting max below min moves min down with it (norns' LFO library stops every LFO when a random LFO's min is above its max)
+
+## Gestures (group)
+- Gesture 1-4 quantize (free, beat, bar; default free): how gesture recorder 1-4 keeps time. Free plays the loop as you recorded it. Beat and bar round the loop's length to whole beats or bars of the norns clock when the recording stops (at least one), stretch its moves to fit, and start each pass on a beat or bar, so the loop stays with the tempo, Link and MIDI clock. Changing it on a recorded loop converts the loop the same way (back to seconds at the current tempo for free)
+- A recorder records your hand edits of continuous settings (encoders, arc rings, grid faders) as the values they reach, from the first edit to the stop; it never records options, switches, sources, scene recalls, LFOs, the drift, mutations or another recorder's playback. One records at a time, up to 1024 moves or 10 minutes. Its loops are saved with each PSET (in a file beside it, `<pset>.gestures.data`) and between sessions, and load stopped; scenes store only whether each one plays
+- A hand edit of a setting a loop plays holds until the loop's next move of that setting
+
+## Sequencer (group)
+- Quantize actions (off, beat, bar; default off): with beat or bar, a grid's position and bookmark keys and BUFFER's bookmark field (`bm`) wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`). A second press before then replaces the first. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes
 
 ## Buffers (group)
 - Record duration (0.5 s to the buffer length: 16 s, or up to 300 s on the high tier; default 8) and record level (0-2, default 1)

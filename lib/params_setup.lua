@@ -583,13 +583,27 @@ return function(S)
   -- nothing otherwise, so no later package edits this file. Read at init,
   -- so a module included after this one counts
   for _, group in ipairs({{"macros", "macros"}, {"morph", "morph"}, {"scatter", "scatter"}, {"matrix", "matrix"},
-      {"input", "input_level"}, {"gestures", "gestures"}, {"seq", "sequencer"}}) do
+      {"input", "input_level"}, {"gestures", "gestures"}}) do
     local module_name = group[2]
     register_params(group[1], function()
       local module = S.lib[module_name]
       if module and module.add_params then module.add_params() end
     end)
   end
+
+  -- strata_seq (plan item 11): the sequencer's add_params adds the group,
+  -- 6 + S.lib.quantize.PARAM_COUNT params, and calls quantize's add_params
+  -- for its fifth; while the sequencer has none, the group holds
+  -- quantize's params alone
+  register_params("seq", function()
+    local sequencer, quantize = S.lib.sequencer, S.lib.quantize
+    if sequencer and sequencer.add_params then
+      sequencer.add_params()
+    elseif quantize.PARAM_COUNT > 0 then
+      params:add_group("strata_seq", "sequencer", quantize.PARAM_COUNT)
+      quantize.add_params()
+    end
+  end)
 
   register_params("buffers", function()
     -- Sample buffers: recording settings, then file/record/clear/save per

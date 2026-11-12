@@ -621,6 +621,7 @@ test("the LFO scene fields live in S.lib.lfos.SCENE_FIELDS and scenes read them 
   local built_in = #ids
   for _, field in ipairs(expected) do table.insert(ids, field.id) end
   table.insert(ids, "scale"); table.insert(ids, "root")
+  for k = 1, S.constants.NUM_GESTURES do table.insert(ids, "gesture_" .. k .. "_play") end  -- 3.4's recorders
   local globals = S.SCENE_GLOBAL_PARAMS
   assert_equal(#globals, #ids, "as many scene globals as on main")
   for index, id in ipairs(ids) do assert_equal(globals[index].id, id, "global " .. index) end

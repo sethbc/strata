@@ -382,11 +382,11 @@ return function(S)
     local held = record.held
     if held and held.voice == voice_idx and held.cells == cells and held.cell ~= cell then
       local low, high = math.min(held.cell, cell), math.max(held.cell, cell)
-      M.set_loop(voice_idx, (low - 1) / cells, high / cells)
+      S.lib.quantize.schedule("position" .. voice_idx, function() M.set_loop(voice_idx, (low - 1) / cells, high / cells) end, "v" .. voice_idx .. " jump")
       return
     end
     record.held = {voice = voice_idx, cell = cell, cells = cells, page = S.lib.grid_core.page(port)}
-    M.jump(voice_idx, (cell - 1) / cells)
+    S.lib.quantize.schedule("position" .. voice_idx, function() M.jump(voice_idx, (cell - 1) / cells) end, "v" .. voice_idx .. " jump")
   end
 
   -- The strip's keys: 1-4 (recall; with store held, store), "store" and
@@ -405,7 +405,7 @@ return function(S)
           M.store_bookmark(voice_idx, key)
           record.pressed[voice_idx] = key
         else
-          M.recall_bookmark(voice_idx, key)
+          S.lib.quantize.schedule("bookmark" .. voice_idx, function() M.recall_bookmark(voice_idx, key) end, "v" .. voice_idx .. " bm " .. key)
         end
       elseif records[port] then
         -- on the layouts that select a grid voice the release ends the key

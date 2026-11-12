@@ -1,0 +1,42 @@
+## Must not break
+
+- **Control params only, hand edits only.** A recorder takes its events from the `param_touch` registry (encoders, arc rings, grid faders) and keeps only `params.tCONTROL` params; options, binaries, sources, scene recalls and transitions, LFOs (their sends are no touch), the drift, mutations and morph's writes never reach it. While `S.gesture_playing` is set the touch hook takes nothing, so no recorder records a playback, its own or another's.
+- **One recorder takes events at a time.** Starting a recording ends another's recording (which then plays) and every overdub; turning overdub on does the same.
+- **Playback is deferrable.** Every param a recorder plays is set with `params:set` inside `S.lib.engine_sync.deferrable(fn)`, with `S.gesture_playing` set, both put back even when the set raises. `fn` never yields: the quantized loop's sleeps and syncs are outside it. A hand edit is never deferred.
+- **A quantized loop follows the clock.** Its coroutine (`S.gestures[k].clock`) starts the first pass on the next beat or bar (`clock.sync` of the unit) and each later one `length_beats` after it (`clock.sync(length_beats, phase - length_beats)`, the offset matron counts from the next multiple of the length, so a pass never skips one), and sleeps to each event from the beat it reads then (`clock.get_beat_sec()` re-read at each event), so it follows tempo changes and stays locked to Link and MIDI clock. A free loop plays on pattern_time's own metro.
+- **The play param follows the state.** `gesture_<k>_play` is 1 exactly while recorder k plays; every state change sets it silently. Its action (a scene recall) plays a stopped recorder or stops a playing one; one that cannot follow (empty, recording) puts the param back. It is hidden and kept out of PSETs (`set_save` false): a PSET's recorders load stopped from its side file.
+- **The side files go through `S.lib.data_files`** (`write` and `read`, an unusable one `set_aside`), never `tab.save` or `tab.load`. The PSET hook's `write` always writes, empty recorders included, so a PSET saved over never keeps an older side file; its `read` stops every recorder before it reads; a missing file loads empty recorders (a PSET from before 3.4 held none); a file it cannot use (unparsable, another version, a malformed recorder) is set aside with a console line and the recorders load empty, and the PSET still loads. An event whose id this build has no control param for is kept, saved again, and skipped when it plays.
+- **Bounds:** at most `GESTURES.max_events` (1024) events per recorder, a recording or an overdub included (`G<k> full` flashes in the header), and a recording stops 10 minutes (`GESTURES.max_seconds`) after its first event. Every recorder index is checked (1..`NUM_GESTURES`).
+- The `gesture recorders` invariant (`docs/notes/lua/state-and-voices.md`) and the cleanup step `gestures` (95), which stops every metro and clock.
+
+## Owns
+
+`lib/gestures.lua` (`S.lib.gestures`, 3.4, package 1f, design §7), included after `lib/mod_sources.lua`:
+- `S.gestures[k]` for k in 1..`NUM_GESTURES` (4): `pattern` (a pattern of norns' `pattern_time` library, `require "pattern_time"`, made at include time: its `event` list and `count` always, its `time` list for a free loop), `state` (`empty`, `recording`, `playing`, `stopped`), `quantize` (`free`, `beat`, `bar`), and for a quantized loop `offsets` (each event's beats from the loop's start) and `length_beats`; `clock` (the quantized loop's coroutine while it plays), `loop_start` and `next_index` (its pass), `length_seconds` (a free loop's), `loop_started_at`, `first_event_at`, `limit_clock` (the 10-minute stop) and `overdubbing`.
+- `S.gesture_playing`: true while a playback sets a param.
+- `press(k)`, `clear(k)`, `overdub(k)`, `state(k)`, `describe(k)`, `phase(k)`, `add_params()`, `GESTURES` (the tunables).
+- The group `strata_gestures` (8 params), the scene fields `gesture_<k>_play`, the PSET hook `gestures`, the start step `gestures_load` (107), the cleanup steps `gestures_save` (34) and `gestures` (95), the modulation sources `gesture1`..`gesture4`.
+- Its tests: `test/unit/gestures_test.lua`. The harness's pattern_time is `test/stub_pattern_time.lua` (`docs/notes/lua/test-harness/stubs.md`).
+
+## The keys
+
+`press(k)` (MOD's K3 and the grids, from Wave 2): empty → recording (from its first event: a silent lead-in is not part of the loop) → playing (a free loop at once, its first event first; a quantized loop from its next beat or bar) → stopped → playing. A recording with no event goes back to empty. `clear(k)` stops and empties it. `overdub(k)` toggles overdub on a playing recorder: a free loop through pattern_time's `set_overdub` (its `overdub_event` splits the gap the hand edit falls in), a quantized one by inserting the event into the beat list at `(clock.get_beats() - loop_start) mod length_beats`, kept sorted, and moving `next_index` past it so this pass does not play it again (an edit before the first pass starts is not taken). A bad index does nothing.
+
+`describe(k)`: `empty`, `rec 3.2 s` (seconds since the first event, `rec 0.0 s` before it), `play 2.5 s` or `stop 2.5 s` (a free loop's length), `play 3 bars`, `play 1 bar`, `play 4 beats` (a quantized loop's).
+
+## Quantization
+
+- `gesture_<k>_quantize` (option `free`, `beat`, `bar`; default free). While it records the mode waits for the stop; then a beat or bar loop's length in beats (its seconds over `clock.get_beat_sec()` at the stop) rounds to the nearest whole beat or bar (at least one) and every event's offset scales by the same factor: at 120 BPM a 1.9 s recording (3.8 beats) is 4 beats under beat and under bar, a 5.1 s one (10.2 beats) is 12 under bar, and an event at 2.55 s (5.1 beats) lands on beat 6.
+- Changing the mode of a recorded loop converts it the same way (free to beat or bar, beat to bar from its beats), or back to seconds at the current tempo (free); a playing loop keeps playing in its new mode.
+- A hand edit of a param a loop plays holds until the loop's next event for that param.
+
+## Storage
+
+- A recorder's record: `{quantize, events = {{id, value}, ...}}` with `times` (a free loop's pattern_time gaps, seconds, the last to the loop's end) or `beats` (a quantized loop's offsets) and `length_beats`; an empty one is `{quantize}`. A recording is stored as if it stopped then. The file: `{version = 1, recorders = {...}}`.
+- Per PSET: `<PSET path without .pset>.gestures.data`, written with every PSET save, read after every PSET load (every recorder stopped first, a recording kept stopped and then replaced), deleted with the PSET. The quantize params are PSET params too; the side file's quantize sets each recorder's param again, silently.
+- Live: data/strata/gestures.data, read by the start step (stopped) and written by the cleanup step `gestures_save`, which writes only once the start step ran (as the scenes' #72).
+- Scenes store only `gesture_<k>_play` (discrete scene fields, default 0, registered at include time): a recall's 1 plays a stopped recorder and does nothing to an empty one, its 0 stops a playing one; a recording is left alone.
+
+## Sources
+
+`gesture1`..`gesture4` (`S.register_mod_source`, section `gestures`, name `G<k>`, range 0..1): the loop's phase (a free loop's from the time its pass began, `loop_started_at`; a quantized one's from its pass's start beat), 0 while it does not play or before its first pass; `describe` is `describe(k)`. The row (MOD's, 2a): E3 steps the quantize (`enc_param_delta`), K3 presses, `alt_press(2)` (ALT+K2 held) clears, `alt_press(3)` (ALT+K3) toggles overdub; hints `K3:rec E3:quant` (`K3:play`, `K3:stop` by state), and `K3:dub` under ALT while it plays.

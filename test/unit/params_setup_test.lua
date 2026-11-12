@@ -849,8 +849,10 @@ test("the menu records for 3.4's groups follow lfos in order and add nothing wit
   local menu = table.concat(names, " ")
   assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
     "the seven records follow lfos: " .. menu)
+  -- landed: the gestures' group of eight, strata_seq with quantize_actions alone (no sequencer params yet)
+  local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES, seq = 1 + S.lib.quantize.PARAM_COUNT }
   for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures", "seq" }) do
-    assert_equal(added[name], 0, name .. " adds nothing without its module")
+    assert_equal(added[name], landed[name] or 0, name .. " adds nothing without its module")
   end
   -- with its module loaded, a record calls the module's add_params
   local modules = { macros = "macros", morph = "morph", scatter = "scatter", matrix = "matrix",
@@ -859,7 +861,8 @@ test("the menu records for 3.4's groups follow lfos in order and add nothing wit
     local S2 = local_value("S")
     for record_name, module in pairs(modules) do
       S2.lib[module] = S2.lib[module] or {}
-      S2.lib[module].add_params = function() called[#called + 1] = record_name end
+      local real = S2.lib[module].add_params  -- a landed module's own still adds its params
+      S2.lib[module].add_params = function() called[#called + 1] = record_name; if real then real() end end
     end
   end })
   assert_equal(table.concat(called, " "), "macros morph scatter matrix input gestures seq", "each, in menu order")
