@@ -629,7 +629,8 @@ return function(S)
 
   -- Load every recorder from path, stopped: a missing file loads them
   -- empty; one that cannot be used is set aside (path .. ".bak", ...) with
-  -- a console line, and they load empty
+  -- a console line, and they load empty. Returns whether path may be written
+  -- over: false only for a file that could not be used and could not be set aside
   local function read_file(path)
     local loaded, problem, detail = S.lib.data_files.read(path)
     local why
@@ -644,15 +645,18 @@ return function(S)
         end
       end
     end
+    local writable = true
     if why then
       local backup, failure = S.lib.data_files.set_aside(path, GESTURES.backup_suffix)
       print("error loading gestures file " .. path .. ": " .. why .. "; "
         .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
       loaded = nil
+      writable = backup ~= nil
     end
     for k = 1, NUM_GESTURES do load_record(k, loaded and loaded.recorders[k] or nil) end
     request_redraw()
     grid_redraw()
+    return writable
   end
 
   -- The PSET's side file: written with every PSET save, read after every
@@ -667,12 +671,16 @@ return function(S)
     delete = function(path_base) os.remove(path_base .. GESTURES.side_suffix) end,
   })
 
-  -- The live file: loaded at init (stopped), saved at cleanup once loaded
+  -- The live file: loaded at init (stopped), saved at cleanup once it was read,
+  -- missing or set aside (one that could be neither is never written over)
   local live_dir = _path.data .. "strata/"
   local live_loaded = false
   S.register_start(S.constants.START_ORDER.gestures_load, function()
-    read_file(live_dir .. GESTURES.live_file)
-    live_loaded = true
+    local path = live_dir .. GESTURES.live_file
+    live_loaded = read_file(path)
+    if not live_loaded then
+      print("gestures: " .. path .. " could not be read or moved aside; the gestures will not be saved this session")
+    end
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.gestures_save, function()
     if not live_loaded then return end

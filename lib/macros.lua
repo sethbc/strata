@@ -449,7 +449,8 @@ return function(S)
 
   -- Load the targets from path: a missing file loads them empty; one that
   -- cannot be used is set aside (path .. ".bak", ...) with a console line,
-  -- and they load empty
+  -- and they load empty. Returns whether path may be written over: false
+  -- only for a file that could not be used and could not be set aside
   local function read_file(path)
     local loaded, problem, detail = S.lib.data_files.read(path)
     local why
@@ -462,14 +463,17 @@ return function(S)
         why = block_problem(loaded.macros)
       end
     end
+    local writable = true
     if why then
       local backup, failure = S.lib.data_files.set_aside(path, MACROS.backup_suffix)
       print("error loading macros file " .. path .. ": " .. why .. "; "
         .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
       loaded = nil
+      writable = backup ~= nil
     end
     load_block(loaded and loaded.macros or nil)
     report_unknown(path)
+    return writable
   end
 
   -- The live file follows the targets once it has been loaded (a start
@@ -735,10 +739,14 @@ return function(S)
     delete = function(path_base) os.remove(path_base .. MACROS.side_suffix) end,
   })
 
-  -- The live file: loaded at init, saved at cleanup and as the targets change
+  -- The live file: loaded at init, saved at cleanup and as the targets change,
+  -- once it was read, missing or set aside (never written over otherwise)
   S.register_start(S.constants.START_ORDER.macros_load, function()
-    read_file(live.dir .. MACROS.live_file)
-    live.loaded = true
+    local path = live.dir .. MACROS.live_file
+    live.loaded = read_file(path)
+    if not live.loaded then
+      print("macros: " .. path .. " could not be read or moved aside; the targets will not be saved this session")
+    end
     request_redraw()
     grid_redraw()
   end)

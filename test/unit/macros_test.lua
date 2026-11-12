@@ -718,6 +718,40 @@ test("a burst of target edits writes the live file once, with the newest targets
   assert_equal(live.macros[2][1].id, "delay_mix", "saved at cleanup")
 end)
 
+test("a live file that can be neither read nor set aside is never written over", function()
+  local first = loaded()
+  cleanup()
+  local live_path = first.data_dir .. "strata/macros.data"
+  local bad = "return {\n  {1},\n"
+  h.write_text(live_path, bad)
+  local context = load_strata({ data_subdir = data_dir_name(first), before_init = function()
+    local_value("S").lib.data_files.set_aside = function() return nil, "permission denied" end
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(printed_with(context, "targets will not be saved") ~= nil, "a console line says so")
+  S.lib.macros.set_target(1, 1, "reverb_mix", 0, 1)
+  context.clock.run_for(0.2)
+  assert_equal(h.file_text(live_path), bad, "not written over after a change")
+  cleanup()
+  assert_equal(h.file_text(live_path), bad, "nor at cleanup")
+end)
+
+test("a damaged live file that is set aside loads empty and saves normally", function()
+  local first = loaded()
+  cleanup()
+  local live_path = first.data_dir .. "strata/macros.data"
+  h.write_text(live_path, "return {\n  {1},\n")
+  local context = load_strata({ data_subdir = data_dir_name(first) })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(util.file_exists(live_path .. ".bak"), "kept as a backup")
+  assert_equal(S.lib.macros.targets(1)[1].id, "", "loaded empty")
+  S.lib.macros.set_target(1, 1, "reverb_mix", 0, 1)
+  context.clock.run_for(0.2)
+  assert_equal(S.lib.data_files.read(live_path).macros[1][1].id, "reverb_mix", "saved normally afterward")
+end)
+
 test("a PSET without a side file loads empty", function()
   local context, S, macros = loaded()
   local path = context.data_dir .. "strata-05.pset"
