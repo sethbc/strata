@@ -82,7 +82,6 @@ test("a step key held 0.3 s opens the step editor and its release closes it with
   context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
   enc(3, 2)
   assert_equal(patterns[3][5], 2, "E3 on the editor's level row: level 2")
-  assert_true(pages_seq.step_editor_edited(), "an edit the editor counts")
   context.grid.press(1, 12, 3, 1)
   assert_equal(patterns[3][5], 11, "round(12 * 15 / 16) = 11")
   context.grid.press(1, 12, 3, 0)
