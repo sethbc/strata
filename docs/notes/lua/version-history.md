@@ -19,17 +19,33 @@
 - ~~Modulation signal clamping~~ ✓ Implemented (v2.0)
 - More voice types (wavetable, additive, granular noise, etc.)
 - Modulation matrix visualization on grid or arc
-- Per-scene naming/tagging system
+- ~~Per-scene naming~~ ✓ Implemented (v3.4 - 12-character names, `S.lib.scenes.name`); tagging is still open
 - ~~MIDI integration for external control~~ ✓ Implemented (v3.0 - notes, velocity, pitchbend; CC via norns PARAMS > MAP)
 - ~~Sample buffers and live input~~ ✓ Implemented (v3.0 - per-voice sources)
 - ~~Global LFOs~~ ✓ Implemented (v3.0 - three, on norns `lua/lib/lfo.lua`)
-- Engine-side LFOs (above the Lua library's 10 Hz ceiling)
+- ~~Engine-side LFOs (above the Lua library's 10 Hz ceiling)~~ ✓ Implemented (v3.4 - on the five fast destinations, up to 50 Hz, `lib/engine/StrataModulation.sc`)
 - ~~Buffer waveform display on the BUFFER page~~ ✓ Implemented (v3.3 - peaks files, `lib/waveforms.lua`)
 - Tempo-synced delay times
 - Undo/redo for parameter changes
-- Parameter automation recording
+- ~~Parameter automation recording~~ ✓ Implemented (v3.4 - four gesture recorders, `lib/gestures.lua`)
 
 The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
+
+## Version 3.4.0 (2026-11-12)
+
+Modulation and sequencing (design: `docs/design/3.4-design.md`, amended where the build differs). 3.3's sound by default, apart from LFOs on a voice's grain pitch, position, size and filter cutoff, which run in the engine (the cutoff in octaves). Highlights:
+- Fast modulation: the modulation area (`lib/engine/StrataModulation.sc`, order 160) with a 35-channel offset bus addressed by `fastModChannel(voice, noteSlot, destination)`, the offsets added in the grain synths (pitch, position, size) and the per-voice stage (cutoff, level, `voiceMixMod`), eight LFO shapes and scatter as nodes in `fastModGroup`, the matrix's offset node, the stage's step gate and mute; five commands (`setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`).
+- The script's hooks (`lib/state.lua`, `lib/engine_sync.lua`): the `scene_blocks`, `scene_migrations`, `pset_hooks`, `param_touch`, `lock_change`, `step_outputs` and `mod_sources` registries; base overrides and extra offsets; the send budget (`ENGINE_BUDGET`, `deferrable`, `expected_value`); the modal owner (`lib/ui/modal.lua`); a recall as one list of entries (`scene_entries`, `apply_entries`).
+- Modulation: Strata's own six LFOs (`lib/lfos.lua`, rewritten: one 48 Hz clock, `strata_lfo<n>_*` params, 3.3's PSETs and scenes imported), macros and scatter (`lib/macros.lua`, `lib/scatter.lua`), the morph and the XY morph (`lib/morph.lua`), gesture recorders (`lib/gestures.lua`), the matrix (`lib/matrix.lua`), the input level (`lib/input_level.lua`) and the sources' registry (`lib/mod_sources.lua`); the MOD page and its rings (`lib/pages/mod.lua`, `lib/arc/mod.lua`).
+- Sequencing: `lib/sequencer.lua` rewritten (a clock per voice, step attributes, locks as base overrides, notes, gates, swing, euclid, chaining, transport following, step outputs), quantized actions (`lib/quantize.lua`), SEQ's edit view and the step editor (`lib/pages/seq.lua`), step keys on release (`lib/grid/core.lua`).
+- Scenes: sixteen slots in two banks with names, format 6; mute and solo (`lib/voice_mix.lua`).
+- Data files: `macros.data`, `matrix.data`, `gestures.data` (live and per PSET); the reader's cap 32768 tables; the MIDI map repair of 3.3's LFO ids (`lib/midi_in.lua`).
+- Memory: every floor holds with six engine LFOs and scatter running; the stage's check limit 42 KB (`docs/notes/engine/memory.md`).
+- Tests: 1703 Lua tests; the engine check's modulation area; CI's Lua suites in two parallel jobs.
+
+Before the release, a whole-release review split by area filed #595-#641, each fixed in a fix wave of seven groups by file ownership, and #578, #588 and #642 were fixed. The decisions, with the rulings by number, are in `docs/decisions.md` (3.4).
+
+See CHANGELOG.md and `docs/status.md`.
 
 ## Version 3.3.2 (2026-11-11)
 
