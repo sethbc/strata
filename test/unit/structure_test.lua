@@ -1551,10 +1551,14 @@ test("the engine check runner fails a run that printed a WARNING line (#486)", f
 end)
 
 -- The 3.13 Docker script (#544, #545): every container carries a memory cap,
--- and a run is classified by what its log holds, not by how sclang ended
+-- and a run is classified by what its log holds, not by how sclang ended.
+-- Its tests never see the caller's settings: one exported while working on
+-- an area (STRATA_ENGINE_CHECK_AREAS=memory) would make a full run one
+-- container per run, and the others change the image and the cap
+local SC313_CALLER_SETTINGS = "unset STRATA_ENGINE_CHECK_AREAS STRATA_SC313_IMAGE STRATA_SC313_MEMORY && "
 local function run_313_script(root, arguments, extra_path)
   local shell_quote = h.shell_quote
-  local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(extra_path or "") .. (extra_path and ":" or "")
+  local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && " .. SC313_CALLER_SETTINGS .. "PATH=" .. shell_quote(extra_path or "") .. (extra_path and ":" or "")
     .. "$PATH TMPDIR=" .. shell_quote(root) .. " /bin/sh test/run_engine_check_313.sh " .. arguments .. " 2>&1; echo exit=$?")
   local output = pipe:read("*a")
   pipe:close()
@@ -1615,10 +1619,10 @@ local function fake_313_checkout(root, shards, docker_run)
 end
 
 -- environment: assignments for the script's own command (the caller's
--- STRATA_ENGINE_CHECK_AREAS is always cleared first)
+-- settings are always cleared first)
 local function run_fake_313(root, arguments, environment)
   local shell_quote = h.shell_quote
-  local pipe = io.popen("cd " .. shell_quote(root) .. " && unset STRATA_ENGINE_CHECK_AREAS && " .. (environment or "")
+  local pipe = io.popen("cd " .. shell_quote(root) .. " && " .. SC313_CALLER_SETTINGS .. (environment or "")
     .. " PATH=" .. shell_quote(root .. "/bin") .. ":$PATH TMPDIR=" .. shell_quote(root)
     .. " /bin/sh test/run_engine_check_313.sh " .. arguments .. " 2>&1; echo exit=$?")
   local output = pipe:read("*a")
@@ -1668,7 +1672,8 @@ test("the 3.13 script runs a full run as the workflow's shards, each in a contai
     end
   end
   for _, expected in ipairs({ "run 1: passed\n", "run 2: crashed in beta,gamma (sclang ended on signal 11 after 9 s), " .. logs .. "/run-2-beta_gamma.log",
-      "passed 1 of 2; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)", "exit=1" }) do
+      "passed 1 of 2; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)",
+      "shards: passed 5 of 6; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131); missing 0", "exit=1" }) do
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
   -- -c reads the same folder to the same verdict
@@ -1689,6 +1694,13 @@ test("the 3.13 script's -j counts containers, shards of one run and of different
     "    sleep 0.3; rm -f -- " .. active .. "/$$",
     "    echo \"ENGINE CHECK PASSED\"; exit 0",
   }, "\n"))
+  -- the log folder is reused: an earlier start's statuses are there already
+  os.execute("mkdir -p " .. shell_quote(root .. "/logs"))
+  for run = 1, 2 do
+    for _, shard in ipairs({ "alpha", "beta", "gamma" }) do
+      local old = assert(io.open(root .. "/logs/run-" .. run .. "-" .. shard .. ".status", "w")); old:write("0\n"); old:close()
+    end
+  end
   local output = run_fake_313(root, "-n 2 -j 2 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"))
   local counts, most = read_lines(root .. "/counts.txt"), 0
   for _, count in ipairs(counts) do most = math.max(most, tonumber(count)) end
@@ -1770,7 +1782,56 @@ test("the 3.13 script classifies a sharded run by its worst shard, naming it (#5
       "run 3: failed in alpha (FAIL alpha: a check), " .. root .. "/run-3-alpha.log",
       "  and crashed in beta,gamma (sclang ended on signal 11 after 9 s), " .. root .. "/run-3-beta_gamma.log", "run 4: passed\n",
       "slowest shard: beta,gamma in run 2, 120 s",
-      "passed 2 of 4; failed 1; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)", "exit=1" }) do
+      "passed 2 of 4; failed 1; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131)",
+      -- run 3's crash hides behind its failure in the run counts, never in the shard counts
+      "shards: passed 3 of 6; failed 1; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 2 (#131); missing 0", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  h.remove_tree(checkout)
+end)
+
+-- Writes run-<stem>.log and .status in folder for each { stem, status, log }
+local function write_shard_fixtures(folder, fixtures)
+  os.execute("mkdir -p " .. h.shell_quote(folder))
+  for _, fixture in ipairs(fixtures) do
+    local log = assert(io.open(folder .. "/run-" .. fixture[1] .. ".log", "w")); log:write(fixture[3]); log:close()
+    local status = assert(io.open(folder .. "/run-" .. fixture[1] .. ".status", "w")); status:write(fixture[2] .. "\n"); status:close()
+  end
+end
+
+test("the 3.13 script's -c reads a run's shards in the workflow's order, then any it no longer lists by name (#581)", function()
+  local shell_quote, checkout = h.shell_quote, data_root .. "sc313-order"
+  -- the workflow's order is not the file names' order
+  fake_313_checkout(checkout, { "zeta", "alpha" }, "    exit 0")
+  local root = checkout .. "/logs"
+  local crash = "ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\nstrata container seconds: 50\n"
+  write_shard_fixtures(root, { { "1-alpha", 1, crash }, { "1-beta", 1, crash }, { "1-zeta", 1, crash } })
+  local output = run_fake_313(checkout, "-c -n 1 -o " .. shell_quote(root))
+  local expected = "run 1: crashed in zeta (sclang ended on signal 11 after 9 s), " .. root .. "/run-1-zeta.log\n"
+    .. "  and crashed in alpha (sclang ended on signal 11 after 9 s), " .. root .. "/run-1-alpha.log\n"
+    .. "  and crashed in beta (sclang ended on signal 11 after 9 s), " .. root .. "/run-1-beta.log\n"
+    .. "slowest shard: zeta in run 1, 50 s\n"
+  assert_true(output:find(expected, 1, true) ~= nil, "a tie goes to the workflow's first shard, an unlisted one comes last: " .. output)
+  h.remove_tree(checkout)
+end)
+
+test("the 3.13 script's -c reports a run missing some of the workflow's shards as incomplete (#581)", function()
+  local shell_quote, checkout = h.shell_quote, data_root .. "sc313-incomplete"
+  fake_313_checkout(checkout, { "zeta", "alpha", "delta" }, "    exit 0")
+  local root = checkout .. "/logs"
+  local passed = "ENGINE CHECK PASSED\n"
+  write_shard_fixtures(root, {
+    -- run 1 is whole; run 2 has alpha alone, and it passed; run 3 lacks delta and its zeta crashed
+    { "1-zeta", 0, passed }, { "1-alpha", 0, passed }, { "1-delta", 0, passed }, { "2-alpha", 0, passed },
+    { "3-zeta", 1, "ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\n" }, { "3-alpha", 0, passed },
+    -- run 4 is in the old single-process layout, never incomplete
+    { "4", 0, passed },
+  })
+  local output = run_fake_313(checkout, "-c -n 4 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: passed\n", "run 2: incomplete (no log for zeta,delta)\n", "run 3: incomplete (no log for delta)\n",
+      "  and crashed in zeta (sclang ended on signal 11 after 9 s), " .. root .. "/run-3-zeta.log", "run 4: passed\n",
+      "passed 2 of 4; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 0 (#131); incomplete 2",
+      "shards: passed 5 of 9; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131); missing 3", "exit=1" }) do
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
   h.remove_tree(checkout)

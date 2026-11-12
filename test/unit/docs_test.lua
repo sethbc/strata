@@ -1166,6 +1166,50 @@ test("the 3.13 runner's shard list is the workflow's", function()
   assert_equal(output, table.concat(expected, "\n") .. "\nexit=0\n", "-l prints the workflow's shards, one a line, in order, and nothing else")
 end)
 
+test("the 3.13 runner's synopsis is the same in its usage, AGENTS.md, docs/status.md and the runner notes", function()
+  local script = read_repo_file("test/run_engine_check_313.sh")
+  local usage = script:match('echo "usage: %$0 (%[[^"]-)" >&2')
+  assert_true(usage ~= nil, "the script prints a usage line")
+  for _, flag in ipairs({ "[-1]", "[-l]", "[-c]" }) do assert_true(usage:find(flag, 1, true) ~= nil, "the usage names " .. flag) end
+  assert_equal(script:match("\n# usage: [^\n]-test/run_engine_check_313%.sh (%[[^\n]*)"), usage, "the header comment's usage")
+  for _, path in ipairs({ "AGENTS.md", "docs/status.md", "docs/notes/lua/test-harness/engine-check-runner.md" }) do
+    local count = 0
+    for synopsis in read_repo_file(path):gmatch("`test/run_engine_check_313%.sh (%[[^`]*)`") do
+      count = count + 1
+      assert_equal(synopsis, usage, path .. "'s synopsis")
+    end
+    assert_true(count >= 1, path .. " gives the synopsis")
+  end
+end)
+
+-- #582: a doc that says how many shards CI runs says the workflow's number
+local SHARD_COUNT_WORDS = { two = 2, three = 3, four = 4, five = 5, six = 6, seven = 7, eight = 8, nine = 9, ten = 10, eleven = 11, twelve = 12 }
+local function shard_counts(text)
+  local counts = {}
+  for _, pattern in ipairs({ "(%w+)%s+parallel%s+shards", "(%w+)%s+shards" }) do
+    for word in text:gmatch(pattern) do
+      local count = tonumber(word) or SHARD_COUNT_WORDS[word:lower()]
+      if count then counts[#counts + 1] = { word = word, count = count } end
+    end
+  end
+  return counts
+end
+
+test("every doc that counts CI's engine shards counts the workflow's (#582)", function()
+  local sample = shard_counts("runs in seven parallel shards, then in four shards, in 3 shards, in its shards and in different shards")
+  local found = {}
+  for _, entry in ipairs(sample) do found[#found + 1] = entry.count end
+  assert_equal(table.concat(found, " "), "7 4 3", "the counts a doc can quote are found, and only those")
+  local block = read_repo_file(".github/workflows/test.yml"):match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  local shards = 0
+  for _ in block:gmatch("%-%s*([%w,]+)") do shards = shards + 1 end
+  for _, path in ipairs(maintained_docs()) do
+    for _, entry in ipairs(shard_counts(read_repo_file(path))) do
+      assert_equal(entry.count, shards, path .. " says \"" .. entry.word .. " shards\"; the workflow has " .. shards)
+    end
+  end
+end)
+
 test("the 3.13 runner documents its sharded default", function()
   local bullet = read_repo_file("AGENTS.md"):match("\n%- `test/run_engine_check_313%.sh[^\n]*")
   local section = read_repo_file("docs/notes/lua/test-harness/engine-check-runner.md"):match("\n### The engine check on SuperCollider 3%.13.*$")
