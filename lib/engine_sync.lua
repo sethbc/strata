@@ -8,7 +8,9 @@
 -- send_engine_value and grain_key_message are fields of this module's table
 -- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
 -- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
--- (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua).
+-- (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua);
+-- add_voice_sender for lib/params_setup.lua's voice params, whose sends
+-- to a stopped voice the send budget leaves uncounted (#642).
 -- 3.4's hooks are fields too: the base override (set_base_override,
 -- clear_base_override, engine_base_value), extra offsets
 -- (set_extra_offset) and the send budget (deferrable, budget_state;
@@ -89,24 +91,57 @@ return function(S)
     return util.clamp(value + offset, minval, maxval)
   end
 
-  -- The send budget (Question 23): every send_engine_value counts against
-  -- the current window, math.floor(util.time() / window_seconds), which
-  -- never goes back. A send made while S.deferrable_write is set (the Lua
-  -- LFOs, morph, gesture playback, the macros: deferrable(fn)) beyond
-  -- messages_per_window waits as its id's pending value, the newest winning,
-  -- and goes first in the next window, in the order the ids first waited:
-  -- from S.engine_budget_clock, which runs only while something waits, or
-  -- from the first send of that window, whichever comes first. Every other
-  -- send goes at once and drops its id's pending value
+  -- A voice param's engine sender (lib/params_setup.lua's synthesis, grain,
+  -- buffer and crossmod params and the registered grain keys): its call
+  -- runs only while the voice runs (a start sends everything:
+  -- M.start_voice). voice_gates keeps, per param id, the voice and the
+  -- gated sender, so the send budget can ask whether a send reaches the
+  -- engine before it counts it (#642). A sender installed over it later
+  -- (another S.engine_senders entry) is no longer gated
+  local voice_gates = {}
+
+  function M.add_voice_sender(voice_idx, param_id, send)
+    local function sender(value)
+      if S.voices[voice_idx].active then send(value) end
+    end
+    S.engine_senders[param_id] = sender
+    voice_gates[param_id] = {voice = voice_idx, sender = sender}
+  end
+
+  -- Whether a send of the id reaches the engine now: every one does but a
+  -- stopped voice's param's, whose gated sender sends nothing
+  local function reaches_engine(param_id)
+    local gate = voice_gates[param_id]
+    if gate == nil or S.engine_senders[param_id] ~= gate.sender then return true end
+    return S.voices[gate.voice].active
+  end
+
+  -- The send budget (Question 23): every send_engine_value that reaches the
+  -- engine counts against the current window, math.floor(util.time() /
+  -- window_seconds), which never goes back. A send made while
+  -- S.deferrable_write is set (the Lua LFOs, morph, gesture playback, the
+  -- macros: deferrable(fn)) beyond messages_per_window waits as its id's
+  -- pending value, the newest winning, and goes first in the next window,
+  -- in the order the ids first waited: from S.engine_budget_clock, which
+  -- runs only while something waits, or from the first send of that
+  -- window, whichever comes first. Every other send goes at once and drops
+  -- its id's pending value. A send that reaches no engine (a stopped
+  -- voice's param, reaches_engine) never counts and never waits: its value
+  -- is recorded at once, as one that reaches the engine would be (#642)
   local ENGINE_BUDGET = S.constants.ENGINE_BUDGET
   S.deferrable_write = false
   S.engine_budget_clock = nil
   -- failed: the ids whose sender raised on a waiting value (reported once)
   local budget = {window = -math.huge, sent = 0, pending = {}, order = {}, failed = {}}
 
-  -- Record the value as sent, count it and run the param's engine call
-  -- (none when the value already went in a start's own messages)
+  -- Record the value as sent, and when it reaches the engine count it and
+  -- run the param's engine call (none when the value already went in a
+  -- start's own messages)
   local function deliver(param_id, value, already_sent)
+    if not reaches_engine(param_id) then
+      S.engine_param_values[param_id] = value
+      return
+    end
     budget.sent = budget.sent + 1
     S.engine_param_values[param_id] = value
     local sender = S.engine_senders[param_id]
@@ -184,9 +219,9 @@ return function(S)
   end
 
   -- Send a param's value to the engine (one path for every value), within
-  -- the budget
+  -- the budget (a send that reaches no engine goes at once, uncounted)
   local function send_engine_value(param_id, value)
-    if S.deferrable_write then
+    if S.deferrable_write and reaches_engine(param_id) then
       enter_window(current_window())
       if budget.sent >= ENGINE_BUDGET.messages_per_window then
         if budget.pending[param_id] == nil then table.insert(budget.order, param_id) end

@@ -751,11 +751,10 @@ return function(S)
   end
 
   -- A voice param's engine call runs only while the voice is running
-  -- (a start sends everything: S.lib.engine_sync.start_voice)
+  -- (a start sends everything: S.lib.engine_sync.start_voice); the send
+  -- budget counts only the sends that reach the engine (#642)
   local function add_voice_sender(voice_idx, param_id, send)
-    S.engine_senders[param_id] = function(value)
-      if S.voices[voice_idx].active then send(value) end
-    end
+    S.lib.engine_sync.add_voice_sender(voice_idx, param_id, send)
   end
 
   -- A voice param's value through its key's registered filter
