@@ -435,17 +435,19 @@ return function(S)
   -- Strata's own voices: a stopped voice is started at the step's first
   -- hit (a gated one is then retriggered), a running one retriggered at
   -- each hit, a gated one's gate length sent first when it changed. Never a
-  -- node: start_voice for a stopped voice, retrigger for a running one
+  -- node: start_voice for a stopped voice, retrigger for a running one. The
+  -- step's locks and note are set first: a stopped voice's sends wait for
+  -- its start, which carries them, so its first grain plays the step (#632)
   local function voices_play(event)
     local voice_idx = event.voice
     local voice = S.voices[voice_idx]
     local started = false
     if event.first then
+      apply_step(voice_idx, event)
       if not voice.active then
         S.lib.engine_sync.start_voice(voice_idx)
         started = true
       end
-      apply_step(voice_idx, event)
     end
     if not voice.active or (started and not gated(voice_idx)) then return end
     if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx, event.step, event.hits)) end

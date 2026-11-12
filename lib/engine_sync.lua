@@ -104,11 +104,12 @@ return function(S)
   local budget = {window = -math.huge, sent = 0, pending = {}, order = {}}
 
   -- Record the value as sent, count it and run the param's engine call
-  local function deliver(param_id, value)
+  -- (none when the value already went in a start's own messages)
+  local function deliver(param_id, value, already_sent)
     budget.sent = budget.sent + 1
     S.engine_param_values[param_id] = value
     local sender = S.engine_senders[param_id]
-    if sender then sender(value) end
+    if sender and not already_sent then sender(value) end
   end
 
   local function drop_pending(param_id)
@@ -166,10 +167,10 @@ return function(S)
 
   -- Send now, whatever S.deferrable_write says: counted, dropping the id's
   -- pending value (older than this one)
-  local function send_now(param_id, value)
+  local function send_now(param_id, value, already_sent)
     enter_window(current_window())
     drop_pending(param_id)
-    deliver(param_id, value)
+    deliver(param_id, value, already_sent)
     stop_budget_clock_if_idle()
   end
 
@@ -315,11 +316,26 @@ return function(S)
     stop_budget_clock_if_idle()
   end
 
-  -- The end of a voice's sync and start: their own sends carry the stored
-  -- values, so every param of the voice that holds a base override or an
-  -- extra offset is sent again with them (with_lfo_offsets), at once (never
-  -- deferred), in id order. Sends nothing while none does
-  local function resend_modulated_voice_params(voice_idx)
+  -- A start's value for a param (#632): while a base override or an extra
+  -- offset is held on it, the value with them (with_lfo_offsets), so the
+  -- start's first value is the one the engine should play; else the stored
+  -- value, as before 3.4. carried notes each modulated value sent, so the
+  -- start's resend only records it
+  local function start_value(carried, param_id, value)
+    if base_overrides[param_id] == nil and extra_offsets[param_id] == nil then return value end
+    value = with_lfo_offsets(param_id, value)
+    carried[param_id] = value
+    return value
+  end
+
+  -- The end of a voice's sync and start: a sync's own sends carry the
+  -- stored values, so every param of the voice that holds a base override
+  -- or an extra offset is sent again with them (with_lfo_offsets), at once
+  -- (never deferred), in id order. A start's own sends already carried
+  -- them (carried: start_value's), which are only recorded as sent, so
+  -- nothing it sent before voiceOn follows it again. Sends nothing while
+  -- none is held
+  local function resend_modulated_voice_params(voice_idx, carried)
     local prefix = "v" .. voice_idx .. "_"
     local ids, listed = {}, {}
     for _, held in ipairs({base_overrides, extra_offsets}) do
@@ -332,7 +348,8 @@ return function(S)
     end
     table.sort(ids)
     for _, param_id in ipairs(ids) do
-      send_now(param_id, with_lfo_offsets(param_id, params:get(param_id)))
+      local value = with_lfo_offsets(param_id, params:get(param_id))
+      send_now(param_id, value, carried ~= nil and carried[param_id] == value)
     end
   end
 
@@ -434,17 +451,26 @@ return function(S)
     return grain_key, value
   end
 
+  -- A part's value for a voice param: the stored value for a sync (carried
+  -- nil), a start's value (start_value) for a start
+  local function part_value(carried, voice_idx, key, value)
+    if not carried then return value end
+    return start_value(carried, "v" .. voice_idx .. "_" .. key, value)
+  end
+
   -- The registered voice params' part of the sync (S.registry.voice_params):
   -- per record, in registration order, its grain keys' stored values (by key
-  -- name, so the order is fixed), then its sync
-  local function send_registered_voice_values(voice_idx)
+  -- name, so the order is fixed; a start's carry their overrides and
+  -- offsets), then its sync
+  local function send_registered_voice_values(voice_idx, carried)
     local voice = S.voices[voice_idx]
     for _, record in ipairs(S.registry.voice_params) do
       local keys = {}
       for key in pairs(record.grain_keys or {}) do table.insert(keys, key) end
       table.sort(keys)
       for _, key in ipairs(keys) do
-        local name, value = grain_key_message(record.grain_keys[key], voice.extras[key])
+        local name, value = grain_key_message(record.grain_keys[key],
+          part_value(carried, voice_idx, key, voice.extras[key]))
         engine.setGrainParam(voice_idx - 1, name, value)
       end
       if record.sync then record.sync(voice_idx) end
@@ -456,24 +482,27 @@ return function(S)
   -- (send_registered_voice_values) are setGrainParam messages, which the
   -- engine keeps for a stopped voice too: a start sends them before voiceOn
   -- (M.start_voice). The synth params, crossmod and bend are voice-level
-  -- controls, which voiceOn resets: a start sends them after it
-  local function send_grain_params(voice_idx)
+  -- controls, which voiceOn resets: a start sends them after it. carried:
+  -- a start's (start_value), nil for a sync's stored values
+  local function send_grain_params(voice_idx, carried)
     local voice = S.voices[voice_idx]
     local engine_voice = voice_idx - 1
-    engine.setGrainParam(engine_voice, "grainSize", voice.grain.size)
-    engine.setGrainParam(engine_voice, "grainDensity", voice.grain.density * engine_param_value("master_density"))
-    engine.setGrainParam(engine_voice, "pitchShift", voice.grain.pitch)
-    engine.setGrainParam(engine_voice, "posSpread", voice.grain.spread)
+    local function value(key, stored) return part_value(carried, voice_idx, key, stored) end
+    engine.setGrainParam(engine_voice, "grainSize", value("grain_size", voice.grain.size))
+    engine.setGrainParam(engine_voice, "grainDensity",
+      value("grain_density", voice.grain.density) * engine_param_value("master_density"))
+    engine.setGrainParam(engine_voice, "pitchShift", value("grain_pitch", voice.grain.pitch))
+    engine.setGrainParam(engine_voice, "posSpread", value("grain_spread", voice.grain.spread))
     engine.setGrainParam(engine_voice, "envShape", voice.grain.env - 1)
     engine.setGrainParam(engine_voice, "grainMode", voice.grain.mode - 1)
-    engine.setGrainParam(engine_voice, "bufPos", voice.grain.buf_pos)
-    engine.setGrainParam(engine_voice, "bufRate", voice.grain.buf_rate)
-    engine.setGrainParam(engine_voice, "bufScan", voice.grain.buf_scan)
+    engine.setGrainParam(engine_voice, "bufPos", value("buf_pos", voice.grain.buf_pos))
+    engine.setGrainParam(engine_voice, "bufRate", value("buf_rate", voice.grain.buf_rate))
+    engine.setGrainParam(engine_voice, "bufScan", value("buf_scan", voice.grain.buf_scan))
   end
 
-  local function send_synth_params(voice_idx)
+  local function send_synth_params(voice_idx, carried)
     for key, value in pairs(S.voices[voice_idx].params) do
-      engine.setVoiceParam(voice_idx - 1, key, value)
+      engine.setVoiceParam(voice_idx - 1, key, part_value(carried, voice_idx, key, value))
     end
   end
 
@@ -514,27 +543,34 @@ return function(S)
   -- The source and every grain value go first: the engine keeps a stopped
   -- voice's and builds or re-gates its grain synth with them inside voiceOn's
   -- own bundle, so the first grain plays this start's values, never the last
-  -- run's (#325). voiceOn carries the grain values just sent, and the
-  -- voice-level values follow it. The grain-restart hooks run after voiceOn,
-  -- before the voice is marked running (lib/midi_in.lua's relies on it).
-  -- A send that raises before voiceOn has started nothing; once voiceOn is
-  -- sent, a hook or a send that raises sends voiceOff and raises the error
-  -- again, so the engine and voice.active always agree (#382)
+  -- run's (#325). Every value a start sends carries the param's base
+  -- override and extra offsets (start_value: a step's locks and note, set
+  -- before the start, #632), so the first grain plays them too. voiceOn
+  -- carries the values just sent, and the voice-level values follow it.
+  -- The grain-restart hooks run after voiceOn, before the voice is marked
+  -- running (lib/midi_in.lua's relies on it). A send that raises before
+  -- voiceOn has started nothing; once voiceOn is sent, a hook or a send
+  -- that raises sends voiceOff and raises the error again, so the engine
+  -- and voice.active always agree (#382)
   function M.start_voice(voice_idx)
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then return end
     local voice = S.voices[voice_idx]
     if voice.active then return end
+    local carried = {}  -- param id -> the modulated value the start sent (start_value)
+    local function value(key, stored) return part_value(carried, voice_idx, key, stored) end
     forget_sent_voice_values(voice_idx)
     -- not running yet, so no restart hook runs here
     M.send_grain_source(voice_idx)
-    send_grain_params(voice_idx)
-    send_registered_voice_values(voice_idx)
-    engine.voiceOn(voice_idx - 1, voice.params.freq, voice.params.amp, voice.params.pan or 0,
-      voice.grain.size, voice.grain.density * engine_param_value("master_density"), voice.grain.pitch)
+    send_grain_params(voice_idx, carried)
+    send_registered_voice_values(voice_idx, carried)
+    engine.voiceOn(voice_idx - 1, value("freq", voice.params.freq), value("amp", voice.params.amp),
+      value("pan", voice.params.pan or 0), value("grain_size", voice.grain.size),
+      value("grain_density", voice.grain.density) * engine_param_value("master_density"),
+      value("grain_pitch", voice.grain.pitch))
     local started, start_error = xpcall(function()
       -- voiceOn built the synths for the source the engine has recorded
       run_grain_restart_hooks(voice_idx)
-      send_synth_params(voice_idx)
+      send_synth_params(voice_idx, carried)
       send_crossmod_and_bend(voice_idx)
     end, with_traceback)
     if not started then
@@ -543,8 +579,9 @@ return function(S)
       error(start_error, 0)
     end
     voice.active = true
-    -- a running voice's senders send: the overridden and offset params last
-    resend_modulated_voice_params(voice_idx)
+    -- the overridden and offset params: recorded as sent (the start carried
+    -- them), or sent last when a hook changed one meanwhile
+    resend_modulated_voice_params(voice_idx, carried)
   end
 
   -- A voiceOff for every running voice (after MIDI is detached, so no note

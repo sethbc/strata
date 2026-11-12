@@ -308,10 +308,12 @@ return function(S)
       quantize = "quantize",
     },
     -- the voice sync (the voice may not be marked running yet): the
-    -- interval set and the reference note
+    -- interval set and the reference note, from the freq the engine plays (a
+    -- step's note, set before the start it makes, #632)
     sync = function(voice_idx)
       send_intervals_now(voice_idx)
-      engine.setGrainParam(voice_idx - 1, "scaleNote", M.scale_note(voice_idx))
+      engine.setGrainParam(voice_idx - 1, "scaleNote",
+        M.scale_note(voice_idx, S.lib.engine_sync.engine_base_value("v" .. voice_idx .. "_freq")))
     end,
     scene_defaults = scene_defaults,
     discrete = discrete,

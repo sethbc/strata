@@ -729,6 +729,73 @@ test("locks are base overrides for their step", function()
   pattern_clock_stop()
 end)
 
+-- The values a voice's grains need before its voiceOn (#325), and their
+-- first value for the start (name -> value), and the voiceOn
+local function start_messages(context, engine_voice)
+  local first, voice_on = {}, nil
+  for _, call in ipairs(context.engine_calls) do
+    if call.args[1] == engine_voice then
+      if call.name == "voiceOn" then voice_on = call; break end
+      if call.name == "setGrainParam" and first[call.args[2]] == nil then first[call.args[2]] = call.args[3] end
+    end
+  end
+  return first, voice_on
+end
+
+-- A step that starts a stopped voice plays its first grain with its locks
+-- and note: the start's first values carry them (#632)
+test("a locked, noted step that starts a stopped buffer voice: its first values are the step's", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  S.buffers[1].seconds = 8
+  params:set("v3_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v3_buf_pos", 0.2)
+  assert_true(not S.voices[3].active, "voice 3 is stopped")
+  S.patterns[3][1] = 15
+  seq.set_step_attr(3, 1, "pos", 0.6)
+  seq.set_step_attr(3, 1, "size", 0.3)
+  seq.set_step_attr(3, 1, "pitch", 2)
+  seq.set_step_attr(3, 1, "notes", {12})  -- chromatic: an octave up, buf_rate 1 -> 2
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_true(S.voices[3].active, "the step started voice 3")
+  local first, voice_on = start_messages(context, 2)
+  assert_near(first.bufPos, 0.6, 1e-9, "the first bufPos is the position lock")
+  assert_near(first.grainSize, 0.3, 1e-9, "the first grainSize the size lock")
+  assert_near(first.pitchShift, 2, 1e-9, "the first pitchShift the pitch lock")
+  assert_near(first.bufRate, 2, 1e-9, "the first bufRate the note")
+  assert_near(voice_on.args[5], 0.3, 1e-9, "voiceOn's size is the lock")
+  assert_near(voice_on.args[7], 2, 1e-9, "and its pitch")
+  for _, case in ipairs({{"bufPos", 0.6}, {"grainSize", 0.3}, {"pitchShift", 2}, {"bufRate", 2}}) do
+    for _, value in ipairs(grain_values(context, 2, case[1])) do
+      assert_near(value, case[2], 1e-9, case[1] .. ": no stored value is sent for the start")
+    end
+  end
+  pattern_clock_stop()
+end)
+
+test("a noted step that starts a stopped quantized synth voice: voiceOn's freq and the first scaleNote are the note's", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  assert_true(not S.voices[3].active, "voice 3 is stopped")
+  params:set("v3_quantize", 1)
+  local freq = params:get("v3_freq")
+  S.patterns[3][1] = 15
+  seq.set_step_attr(3, 1, "notes", {12})  -- the scale off: an octave up
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local first, voice_on = start_messages(context, 2)
+  assert_near(voice_on.args[2], freq * 2, 1e-6, "voiceOn's freq is the note")
+  local note = 69 + 12 * math.log(freq / 440) / math.log(2)
+  assert_near(first.scaleNote, note + 12, 1e-6, "the first scaleNote is the note's")
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 2 and call.args[2] == "freq" then
+      assert_near(call.args[3], freq * 2, 1e-6, "every freq the start sends is the note")
+    end
+  end
+  pattern_clock_stop()
+end)
+
 test("a lock ends when the patterns stop, the pattern is replaced or cleared", function()
   local context, S = buffer_voice_setup()
   local seq, sync = S.lib.sequencer, S.lib.engine_sync

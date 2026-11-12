@@ -637,13 +637,49 @@ test("a voice sync re-sends the voice's overridden params", function()
   for _, call in ipairs(context.engine_calls) do
     assert_true(call.args[1] ~= 1, "voice 2's params are untouched: " .. call.name)
   end
-  -- a start too, once the voice runs
+  -- a start: the first value it sends already carries the override, and
+  -- nothing a grain synth needs follows voiceOn (#632, #325)
   toggle_voice(1)
   context.clear_engine_calls()
   toggle_voice(1)
   sent = grain_sends(context, 1, "bufPos")
-  assert_near(sent[#sent], 0.3, 1e-9, "a start ends with the override")
+  assert_equal(#sent, 1, "one bufPos for the start")
+  assert_near(sent[1], 0.3, 1e-9, "and it is the override")
+  local voice_on, last_grain
+  for index, call in ipairs(context.engine_calls) do
+    if call.args[1] == 0 and call.name == "voiceOn" then voice_on = index end
+    if call.args[1] == 0 and call.name == "setGrainParam" then last_grain = index end
+  end
+  assert_true(voice_on ~= nil and last_grain < voice_on, "every grain value goes before voiceOn")
   assert_true(#context.calls_named("voiceOn") == 1 and S.voices[1].active, "the voice started")
+  assert_near(S.engine_param_values.v1_buf_pos, 0.3, 1e-9, "the override is the value the engine has")
+end)
+
+test("a start carries the overrides and extra offsets in its first values, voiceOn's included (#632)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  toggle_voice(1)
+  params:set("v1_grain_size", 0.2)
+  sync.set_base_override("v1_grain_pitch", 2)
+  sync.set_extra_offset("probe", "v1_grain_size", 0.1)
+  sync.set_base_override("v1_freq", 330)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local on = context.calls_named("voiceOn")[1]
+  assert_near(on.args[2], 330, 1e-9, "voiceOn's freq is the override")
+  assert_near(on.args[5], 0.3, 1e-9, "its grain size the value with its offset")
+  assert_near(on.args[7], 2, 1e-9, "its pitch the override")
+  for _, case in ipairs({{"grainSize", 0.3}, {"pitchShift", 2}}) do
+    local values = grain_sends(context, 1, case[1])
+    assert_equal(#values, 1, case[1] .. ": one value for the start")
+    assert_near(values[1], case[2], 1e-9, case[1] .. ": the modulated one")
+  end
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "freq" then
+      assert_near(call.args[3], 330, 1e-9, "every freq the start sends is the override")
+    end
+  end
+  sync.set_extra_offset("probe", "v1_grain_size", nil)
 end)
 
 test("a voice sync re-sends a param that holds an extra offset", function()
