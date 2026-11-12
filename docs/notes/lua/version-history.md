@@ -41,9 +41,9 @@ Modulation and sequencing (design: `docs/design/3.4-design.md`, amended where th
 - Scenes: sixteen slots in two banks with names, format 6; mute and solo (`lib/voice_mix.lua`).
 - Data files: `macros.data`, `matrix.data`, `gestures.data` (live and per PSET); the reader's cap 32768 tables; the MIDI map repair of 3.3's LFO ids (`lib/midi_in.lua`).
 - Memory: every floor holds with six engine LFOs and scatter running; the stage's check limit 42 KB (`docs/notes/engine/memory.md`).
-- Tests: 1703 Lua tests; the engine check's modulation area; CI's Lua suites in two parallel jobs.
+- Tests: 1757 Lua tests; the engine check's modulation area; CI's Lua suites in two parallel jobs.
 
-Before the release, a whole-release review split by area filed #595-#641, each fixed in a fix wave of seven groups by file ownership, and #578, #588 and #642 were fixed. The decisions, with the rulings by number, are in `docs/decisions.md` (3.4).
+Before the release, a whole-release review split by area filed #595-#641, each fixed in a fix wave of seven groups by file ownership; then the late fixes: `bufferState` reports numbered per load (#578, `(load × 9 + slot) × 1000 + seconds`, `bufferStateLoads`), the clock stub's instant as matron's tick (#588, #650), a send budget that counts exactly the messages reaching the engine with discrete switches outside it (#642, #644-#646, #649), morph crossings at most once per `MORPH.crossing_seconds` (#653), one side-file helper (`lib/side_files.lua`, #648) and the matrix's sends through `expected_value` (#647), the recorders' live file written soon after each change (#651), the engine check's areas independent of their order (#652) and the budget's flush clock ending at its own wake (#654). #211 (sclang's collector in the waveform area's 300 s check, about 1 run in 10 to 16 today, on the 3.3 engine about as often as on 3.4's) is held. The decisions, with the rulings by number, are in `docs/decisions.md` (3.4).
 
 See CHANGELOG.md and `docs/status.md`.
 
