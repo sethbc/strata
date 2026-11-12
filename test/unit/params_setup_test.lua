@@ -940,9 +940,10 @@ test("the menu records for 3.4's groups follow lfos in order, each adding its mo
   local menu = table.concat(names, " ")
   assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
     "the seven records follow lfos: " .. menu)
-  -- each a group and its params: the macros' sixteen, morph's three,
+  -- each a group and its params: the macros' sixteen, morph's six (the XY
+  -- morph's three with the two-scene morph's three),
   -- scatter's eight, the matrix's 32, the input's one, the gestures' eight
-  local groups = { macros = 1 + S.constants.NUM_MACROS, morph = 1 + 3, scatter = 1 + 8,
+  local groups = { macros = 1 + S.constants.NUM_MACROS, morph = 1 + 6, scatter = 1 + 8,
     matrix = 1 + 2 * S.constants.MATRIX_SLOTS, input = 1 + 1, gestures = 1 + 2 * S.constants.NUM_GESTURES }
   for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures" }) do
     assert_equal(added[name], groups[name], name .. " adds its group")
