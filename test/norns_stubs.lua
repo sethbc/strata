@@ -1714,28 +1714,30 @@ local function make_clock(util)
     return math.max(due, event.scheduled_at)
   end
 
-  -- the ready events by fire time, then by event slot. A sleep is due once
-  -- clock_time reaches its time and a sync once clock_beat is past its beat
-  -- (clock_scheduler.cc), so a sleep and a sync due at one time are both
-  -- posted by any tick after it: one tick, as for every two wake-ups less
-  -- than a tick apart (tick_at). An event whose fire time is not finite (a
-  -- sleep of math.huge: a waiting quantized action's flash) is never due,
-  -- as matron's tick never finds clock_time >= infinity, so it is never in
-  -- the list: no helper takes it as the next event, posts it or moves time
-  -- to it (#650)
-  local function ready_events()
-    local list = {}
-    for coro_id, event in pairs(clock.events) do
-      local time = event.ready and fire_time(event)
-      if time and time < math.huge then
-        table.insert(list, { id = coro_id, event = event, order = event.order, time = time, slot = event.slot })
-      end
+  -- A ready event's fire time when it is ever due, else nil. A sleep is due
+  -- once clock_time reaches its time and a sync once clock_beat is past its
+  -- beat (clock_scheduler.cc), so a sleep and a sync due at one time are
+  -- both posted by any tick after it: one tick, as for every two wake-ups
+  -- less than a tick apart (tick_at). An event whose fire time is not
+  -- finite (a sleep of math.huge: a waiting quantized action's flash) is
+  -- never due, as matron's tick never finds clock_time >= infinity: no
+  -- helper takes it as the next event, posts it or moves time to it (#650)
+  local function due_time(event)
+    local time = event.ready and fire_time(event)
+    if time and time < math.huge then return time end
+    return nil
+  end
+
+  -- The first pending wake-up: the earliest due_time, or nil when nothing
+  -- is due. A scan, with no list built or sorted, since the helpers check
+  -- it before every delivery
+  local function next_wake()
+    local earliest
+    for _, event in pairs(clock.events) do
+      local time = due_time(event)
+      if time and (earliest == nil or time < earliest) then earliest = time end
     end
-    table.sort(list, function(left, right)
-      if left.time ~= right.time then return left.time < right.time end
-      return left.slot < right.slot
-    end)
-    return list
+    return earliest
   end
 
   -- Whether the event an entry found is still the one waiting (not
@@ -1787,15 +1789,18 @@ local function make_clock(util)
   -- ready events due before anchor + MATRON_TICK_SECONDS, which one tick
   -- can post before Lua delivers any (two wake-ups less than a tick apart
   -- can share a tick on a device: the stub's instant is matron's tick,
-  -- ruling 92), in slot order as the tick posts them, and the tick's time:
-  -- the latest of their fire times (a tick posts an event only once it is
-  -- due)
+  -- ruling 92), in slot order as the tick posts them (each ready event
+  -- holds a slot of its own), and the tick's time: the latest of their fire
+  -- times (a tick posts an event only once it is due). Built once per tick,
+  -- from its own events only
   local function tick_at(anchor)
     local due, latest = {}, anchor
-    for _, entry in ipairs(ready_events()) do
-      if entry.time >= anchor + MATRON_TICK_SECONDS then break end
-      table.insert(due, entry)
-      latest = math.max(latest, entry.time)
+    for coro_id, event in pairs(clock.events) do
+      local time = due_time(event)
+      if time and time < anchor + MATRON_TICK_SECONDS then
+        table.insert(due, { id = coro_id, event = event, order = event.order, time = time, slot = event.slot })
+        latest = math.max(latest, time)
+      end
     end
     table.sort(due, function(left, right) return left.slot < right.slot end)
     return due, latest, anchor
@@ -1822,9 +1827,9 @@ local function make_clock(util)
   -- ticks). A tick due later posts nothing yet
   local function post_ticks_by(time)
     while true do
-      local first = ready_events()[1]
-      if not first then return end
-      local due, tick_time, first_wake = tick_at(first.time)
+      local wake = next_wake()
+      if not wake or wake > time then return end  -- its tick's time is at least its wake-up
+      local due, tick_time, first_wake = tick_at(wake)
       if tick_time > time then return end
       post(due, tick_time, first_wake)
     end
@@ -1862,9 +1867,9 @@ local function make_clock(util)
   -- handles first can fall between a tick's posts and its deliveries
   function clock.advance(before_delivery)
     while posted[1] do deliver_next(0) end
-    local first = ready_events()[1]
-    if not first then return end
-    local due, latest, first_wake = tick_at(math.max(util.time(), first.time))
+    local wake = next_wake()
+    if not wake then return end
+    local due, latest, first_wake = tick_at(math.max(util.time(), wake))
     local step_time = math.max(util.time(), latest)
     util.stub_now = step_time
     post(due, step_time, first_wake, { time = step_time, beat = beats_at(step_time) })
@@ -1895,7 +1900,7 @@ local function make_clock(util)
       if item.entry.id == coro_id then waiting.order = item.entry.order end
     end
     if not waiting.order then
-      failure((next(ready_events()) or posted[1]) and "is not waiting" or "is not waiting: nothing is pending")
+      failure((next_wake() or posted[1]) and "is not waiting" or "is not waiting: nothing is pending")
     end
     if target and target.ready and not (fire_time(target) < math.huge) then
       failure("never wakes: it sleeps forever (math.huge)")
@@ -1909,9 +1914,9 @@ local function make_clock(util)
     end
     for _ = 1, 1e6 do
       if not posted[1] then
-        local first = ready_events()[1]
-        if not first then failure("never wakes: nothing is due") end
-        post(tick_at(first.time))
+        local wake = next_wake()
+        if not wake then failure("never wakes: nothing is due") end
+        post(tick_at(wake))
       end
       if before_delivery and is_target(posted[1].entry) then
         local at = delivery_time(posted[1], 0)
@@ -1947,9 +1952,9 @@ local function make_clock(util)
     local resumes = 0
     while true do
       if not posted[1] then
-        local first = ready_events()[1]
-        if not first or math.max(util.time(), first.time + latency) > end_time then break end
-        post(tick_at(first.time))
+        local wake = next_wake()
+        if not wake or math.max(util.time(), wake + latency) > end_time then break end
+        post(tick_at(wake))
       end
       if posted[1].first_wake + latency > end_time then break end
       resumes = resumes + 1
