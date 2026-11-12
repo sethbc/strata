@@ -1,0 +1,2 @@
+### Changed
+- Development, nothing a player sees: the engine check's files area no longer fails when the structure area ran before it in the same sclang. The structure area's poll checks put the engine's own polls back into norns' poll registry instead of new copies that never started, so a later area's second engine (the files area's 60 s save) reports again, and the runner checks after every area that the engine's polls are back as it left them (#652).
