@@ -208,12 +208,13 @@ return function(S)
   -- depth it plays (rate', depth', design §2.4); what the engine holds for
   -- it (engine: {voice, destination, shape, rate, depth, offset}, nil
   -- without a node), whether a hand edit or a phase move waits for the
-  -- next step (edited, sync_due), and the bar it was last synced in
+  -- next step (edited, sync_due) or an edit by a deferrable source for the
+  -- round robin (deferred, deferred_sync), and the bar it was last synced in
   local state = {}
   for n = 1, NUM_LFOS do
     state[n] = {position = 0, last_time = nil, clocked_offset = 0, last_beats = nil, phase = 0, value = 0,
       stepped = false, from = 0.5, to = 0.5, rate = LFO.defaults.rate, depth = LFO.defaults.depth, engine = nil,
-      edited = false, sync_due = false, bar = nil}
+      edited = false, sync_due = false, deferred = false, deferred_sync = false, bar = nil}
   end
 
   -- A deterministic shape's u (0..1) at phase (0..1), design §2.2
@@ -479,6 +480,32 @@ return function(S)
     queue.due[engine_key(n)] = nil
   end
 
+  -- What goes through the round robin goes through the send budget too
+  -- (#633): each LFO's setFastLfo and syncFastLfo are deferrable ids of the
+  -- budget under these keys (no param id holds a space), whose engine
+  -- senders read LFO n's settings and phase when they deliver (a value that
+  -- waited for the next window is never an older one) and send nothing once
+  -- its node has gone. The round robin's sends, made once per LFO, hand the
+  -- key to S.lib.engine_sync.send_engine_value inside deferrable: counted,
+  -- and past the budget waiting for the next window
+  local function sync_key(n) return "lfo" .. n .. " sync" end
+  local function has_node(n) return engine_playing(n) and state[n].engine ~= nil end
+  local engine_sends, sync_sends = {}, {}
+  for n = 1, NUM_LFOS do
+    S.engine_senders[engine_key(n)] = function()
+      if has_node(n) then send_fast_lfo(n, engine_want(n)) end
+    end
+    S.engine_senders[sync_key(n)] = function()
+      if has_node(n) then engine.syncFastLfo(n - 1, M.phase(n)) end
+    end
+    engine_sends[n] = function()
+      if has_node(n) then S.lib.engine_sync.send_engine_value(engine_key(n), state[n].depth / 100) end
+    end
+    sync_sends[n] = function()
+      if has_node(n) then S.lib.engine_sync.send_engine_value(sync_key(n), M.phase(n)) end
+    end
+  end
+
   -- Whether a clocked LFO's base rate (its division at the tempo) moved past
   -- engine_rate_threshold since the engine got it: a tempo change, sent in
   -- the step that sees it, ahead of the round robin (Review Focus 1)
@@ -489,16 +516,18 @@ return function(S)
 
   -- Bring the engine to LFO n's settings: a start, a stop, a new voice,
   -- destination or shape, a hand edit (edited) or a clocked LFO's new tempo
-  -- at once, outside the round robin (at most one send per LFO a step); a
-  -- modulated rate past engine_rate_threshold or depth past send_threshold
-  -- through the round robin; then the sync a start, a restart, a shape or
-  -- phase change or a bar asked for
+  -- at once, outside the round robin (at most one send per LFO a step); an
+  -- edit by a deferrable source (deferred: a macro, morph, gesture playback,
+  -- a fade), a modulated rate past engine_rate_threshold or depth past
+  -- send_threshold through the round robin and the send budget; then the
+  -- sync a start, a restart, a shape or phase change or a bar asked for, at
+  -- once, or through the round robin for a deferrable phase edit
   local function reconcile_engine(n)
     local st = state[n]
     if not engine_playing(n) then
       if st.engine then engine.stopFastLfo(n - 1) end
-      st.engine, st.edited, st.sync_due = nil, false, false
-      queue.due[engine_key(n)] = nil
+      st.engine, st.edited, st.sync_due, st.deferred, st.deferred_sync = nil, false, false, false, false
+      queue.due[engine_key(n)], queue.due[sync_key(n)] = nil, nil
       return
     end
     local want, sent = engine_want(n), st.engine
@@ -506,16 +535,19 @@ return function(S)
       or want.shape ~= sent.shape or tempo_moved(n, want, sent) then
       if not sent or want.shape ~= sent.shape then st.sync_due = true end
       send_fast_lfo(n, want)
-      st.edited = false
-    elseif math.abs(want.rate - sent.rate) > sent.rate * LFO.engine_rate_threshold
+      st.edited, st.deferred = false, false
+    elseif st.deferred or math.abs(want.rate - sent.rate) > sent.rate * LFO.engine_rate_threshold
       or math.abs(want.depth - sent.depth) > LFO.send_threshold then
-      M.mark_due(engine_key(n), function()
-        if engine_playing(n) and state[n].engine then send_fast_lfo(n, engine_want(n)) end
-      end)
+      st.deferred = false
+      M.mark_due(engine_key(n), engine_sends[n])
     end
     if st.sync_due then
-      st.sync_due = false
+      st.sync_due, st.deferred_sync = false, false
+      queue.due[sync_key(n)] = nil
       engine.syncFastLfo(n - 1, M.phase(n))
+    elseif st.deferred_sync then
+      st.deferred_sync = false
+      M.mark_due(sync_key(n), sync_sends[n])
     end
   end
 
@@ -698,10 +730,18 @@ return function(S)
   end
 
   -- A control param's edit (rate, depth, offset, phase, mod amounts): the
-  -- next step sends it (a control param's action never calls the engine)
+  -- next step sends it (a control param's action never calls the engine),
+  -- at once for a hand edit; an edit made while S.deferrable_write is set
+  -- (a macro apply, morph, gesture playback, a fade) through the round robin
+  -- and the send budget, a phase edit as a sync alone (#633)
   local function edited(n, sync)
-    state[n].edited = true
-    if sync then state[n].sync_due = true end
+    local st = state[n]
+    if S.deferrable_write then
+      if sync then st.deferred_sync = true else st.deferred = true end
+      return
+    end
+    st.edited = true
+    if sync then st.sync_due = true end
   end
 
   local function signed_percent(param)

@@ -452,6 +452,91 @@ test("a tempo change resends every clocked engine LFO's rate in its step, ahead 
   end
 end)
 
+-- #633: a deferrable source (a macro, morph, gesture playback, a fade)
+-- moving an engine LFO's control params sends through the round robin and
+-- the send budget; a hand edit still goes at the next step, uncapped
+test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step and the budget's count (#633)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfos, macros = S.lib.lfos, S.lib.macros
+  S.drift_metro:stop()  -- the drift's own sends are never deferred
+  for n = 1, 6 do
+    params:set(lfo_id(n, "dest"), destination_index("v" .. n .. " pitch")); params:set(lfo_id(n), 1)
+    assert_true(macros.set_target(1, n, lfo_id(n, "depth"), 0, 1), "macro 1 row " .. n .. " on LFO " .. n .. "'s depth")
+  end
+  lfo_step(context)
+  -- 12 keys due every step: the round robin is full
+  local probes = 0
+  lfos.on_step(function()
+    for k = 1, 12 do lfos.mark_due("probe " .. k, function() probes = probes + 1 end) end
+  end)
+  -- every engine LFO call, and whether the budget counted it (made by an
+  -- engine sender, which only send_engine_value's delivery runs)
+  local inside, lfo_calls = 0, {}
+  for id, sender in pairs(S.engine_senders) do
+    S.engine_senders[id] = function(value)
+      inside = inside + 1
+      local ok, problem = pcall(sender, value)
+      inside = inside - 1
+      if not ok then error(problem, 0) end
+    end
+  end
+  for _, command in ipairs({ "setFastLfo", "syncFastLfo" }) do
+    local real = engine[command]
+    engine[command] = function(...)
+      table.insert(lfo_calls, { what = command, lfo = (...), counted = inside > 0, depth = select(6, ...) })
+      return real(...)
+    end
+  end
+  local busiest, moved_at = 0, -math.huge
+  local ok, problem = pcall(function()
+    for step = 1, 48 do
+      if util.time() - moved_at >= 1 / 30 then   -- the macro moves at 30 Hz: every depth with it
+        params:set("macro_1", step % 2 == 0 and 0.2 or 0.8)
+        moved_at = util.time()
+      end
+      local before
+      context.clock.advance_until(S.lfo_clock, function() before = { calls = #lfo_calls, probes = probes } end)
+      busiest = math.max(busiest, #lfo_calls - before.calls + probes - before.probes)
+    end
+    lfo_step(context, 6)  -- what the moves left due goes out
+  end)
+  -- a deferrable phase edit (a morph's crossing, gesture playback): its sync alone
+  local phase_from = #lfo_calls
+  if ok then
+    ok, problem = pcall(function()
+      S.lib.engine_sync.deferrable(function() params:set(lfo_id(4, "phase"), 30) end)
+      lfo_step(context, 2)
+    end)
+  end
+  rawset(engine, "setFastLfo", nil); rawset(engine, "syncFastLfo", nil)
+  if not ok then error(problem, 0) end
+  local phase_calls = {}
+  for index = phase_from + 1, #lfo_calls do
+    if lfo_calls[index].lfo == 3 then table.insert(phase_calls, lfo_calls[index].what) end
+  end
+  assert_equal(table.concat(phase_calls, " "), "syncFastLfo", "the deferrable phase edit: one sync, no setFastLfo")
+  assert_true(#lfo_calls > 0, "the moves reach the engine LFOs")
+  assert_true(busiest <= 12, "a step sends at most 12, the LFOs' with the round robin's: " .. busiest)
+  for index, call in ipairs(lfo_calls) do
+    assert_true(call.counted, call.what .. " " .. index .. " (LFO " .. call.lfo .. ") counts against the send budget")
+  end
+  for n = 1, 6 do
+    local last
+    for _, call in ipairs(lfo_calls) do
+      if call.what == "setFastLfo" and call.lfo == n - 1 then last = call end
+    end
+    assert_near(last.depth, params:get(lfo_id(n, "depth")) / 100, 1e-9, "LFO " .. n .. " ends on the macro's last depth")
+  end
+  -- a hand edit goes in the next step, however full the round robin is
+  context.clear_engine_calls()
+  params:set(lfo_id(3, "depth"), 55)
+  lfo_step(context)
+  local calls = calls_with(context, "setFastLfo", 2)
+  assert_equal(#calls, 1, "the hand edit goes in the next step")
+  assert_near(calls[1].args[6], 0.55, 1e-9, "with its depth")
+end)
+
 test("the destination list keeps its indices", function()
   load_strata({ before_init = function()
     local_value("S").register_lfo_global_destination("probe", "delay_time")
