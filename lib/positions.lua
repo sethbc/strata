@@ -23,7 +23,7 @@ return function(S)
     -- a bookmark that waits for its beat or bar (#593) blinks between these,
     -- each for waiting_ticks of the playhead clock's ticks (no steady level
     -- stands clear of 6, 10 and 15 on a varibright grid)
-    waiting_high = 15, waiting_low = 2, waiting_ticks = 4,
+    waiting_high = 15, waiting_low = 2, waiting_ticks = 4, waiting_phases = 2,
   }
   local LEVELS = M.LEVELS
   -- a position a rounding away from a cell's fraction still counts as inside
@@ -565,7 +565,7 @@ return function(S)
         return LEVELS.stored
       end
       if M.waiting_bookmark(voice_idx) == key then
-        return math.floor(blink_ticks / LEVELS.waiting_ticks) % 2 == 0 and LEVELS.waiting_high or LEVELS.waiting_low
+        return math.floor(blink_ticks / LEVELS.waiting_ticks) % LEVELS.waiting_phases == 0 and LEVELS.waiting_high or LEVELS.waiting_low
       end
       if M.last_recalled(voice_idx) == key then return LEVELS.recalled end
       return LEVELS.bookmark
