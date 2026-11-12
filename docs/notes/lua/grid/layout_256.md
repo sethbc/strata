@@ -1,7 +1,12 @@
 ## Must not break
 
 - The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
-- Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`; scene recall keys (page 3, rows 1-2) call `recall_scene` only inside `S.lib.quantize.schedule("scene", fn, "S" .. x)` (design §8.9).
+- Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`; scene recall keys (page 3, rows 1-2) call `recall_scene` only inside `S.lib.quantize.schedule("scene", fn, "S" .. x)` (design §8.9). The step toggle on release and the step editor's hold are the core's (`docs/notes/lua/grid-core.md`); the layout passes no step release on.
+- 3.4's page 1 rows 9-13 (design §11, §8.14) are handled before the presses-only return, since a mute key acts at its release: row 9 columns 1-4 the recorders (`grid_core.gesture_key`, `gesture_level`), 5-11 voices 1-7's mute keys (`mute_key`: a press arms `on_hold` for `LAYOUT_256.solo_hold_seconds`, 0.5 s, whose action toggles `v<i>_solo` and consumes the key; a release of a held, unconsumed key toggles `v<i>_mute`; both through `set_binary_param`), 13-16 the bank keys (`S.lib.macros.set_bank`, which redraws every grid and the arc); rows 10-13 the shown bank's macros (`S.lib.grid_faders.shown_macro_ids()`, `set_param_from_column`, `grid_redraw_fader_row`). Column 12 of row 9 does nothing. Page 2's rows 9-13 are still the parameter faders and their page keys.
+- Their LEDs: a recorder at `gesture_level` (empty 2, stopped 5, playing 10, recording 15); a mute key 2 muted (`v<i>_mute`), 15 soloed and heard (`S.lib.voice_mix.soloed`), 8 otherwise (`LAYOUT_256.mute_levels`); a bank key 15 shown, 6 with targets (`S.lib.macros.bank_has_targets`), 2 empty (`bank_levels`).
+- 3.4's page 3 keys: row 4 columns 1-4 the recorders, row 7 the morph fader (`set_param_from_column("morph", x)`), row 9 `morph_a` and row 10 `morph_b` (`params:set(id, x)` for scene x; LEDs 15 chosen, 6 populated, 2 empty: `morph_scene_levels`). Rows 11-15 stay free for 3a's XY pad.
+- Every freeze key (page 4's column 12, row 16's columns 1-7 while column 8 is held) calls `S.lib.freeze.toggle_quantized`, never `toggle`.
+- The layout record's `shows_modulation(port)` is true on pages 1 and 3, so the drift tick follows the macro faders, the morph and A and B there (`grid_core.any_modulation_shown`).
 - The FX faders follow changes made anywhere through `fx_fader_changed()`, except during a smooth scene transition, which redraws the grid once per step. The layout record's `fx_faders_page = 4` is what `any_fx_faders()` reads, so FX changes redraw the grids only while a 256 shows page 4.
 - Rows 8 and 16 work and draw the same on every page, 1-5 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`; page 3 has them since #442).
 - Row 15's clear (columns 1-7) and randomize (columns 9-15) keys, pages 1 and 2, act only through `grid_core.on_hold` after `LAYOUT_256.pattern_hold_seconds` (`GRID_HOLD.scene_save_seconds`, 0.5 s, #443), never at press, so a release, the grid's removal or cleanup cancels them; the hold's action redraws the grids and asks for a screen redraw (SEQ shows the patterns). They light at 2, 15 while `hold_pending`.
@@ -21,7 +26,7 @@
 
 ## Pages
 
-Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10 (every page); rows 14-15 voice select/toggle and pattern clear/randomize (held 0.5 s); row 16 lock and copy/paste (every page).
+Row 8 columns 13-16 select pages 1-4 (`set_page(port, ...)`): 1 patterns, 2 parameters, 3 scenes, 4 buffers / FX. Rows 1-7 are the patterns on pages 1 and 2; row 8 columns 1-4 play/stop, 5-8 tempo -10, -1, +1, +10 (every page); on page 1 (3.4) row 9 the recorders, mute and bank keys and rows 10-13 the shown bank's macros; rows 14-15 voice select/toggle and pattern clear/randomize (held 0.5 s); row 16 lock and copy/paste (every page).
 
 Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`, a page key: 15 on page 5, 2 elsewhere, as columns 13-16): rows 1-7 are voice v's 16 positions (`S.lib.positions.grid_key(port, v, x, 16, z)`, `grid_level`); rows 9-15 are the strips of voices 1-7 (row 8 + v; `LAYOUT_256.strip_key_columns`: columns 1-4 bookmarks, 6 store, 7 hold, 8 whole, through `strip_key`; the rest dark). Page 5 keys pass releases too (a held key makes a loop or a hold); pages 1-4 never call `S.lib.positions`. Rows 8 and 16 are as on pages 1-4. Page 1's key is (13, 8).
 
@@ -32,7 +37,7 @@ Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`
 ## Row 16: lock, freeze and copy/paste
 
 `grid_key_256_lock(port, x)`:
-- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked. While column 8 of row 16 is held on the port (`grid_core.held`), they are `S.lib.freeze.toggle(x)` instead, and their LEDs show the freeze (15 frozen, 3 not). Column 8 itself does nothing but hold; its LED is 15 while held, 4 otherwise. The grid redraws on every press and release, so the row flips back at once.
+- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked. While column 8 of row 16 is held on the port (`grid_core.held`), they are `S.lib.freeze.toggle_quantized(x)` instead (at the next beat or bar under `quantize_actions`), and their LEDs show the freeze (15 frozen, 3 not). Column 8 itself does nothing but hold; its LED is 15 while held, 4 otherwise. The grid redraws on every press and release, so the row flips back at once.
 - Columns 9-15 (voices 1-7), through the local `copy_paste_key(port, voice)`: with no clipboard, copy the voice's pattern (`clipboard = {voice = v, steps = <copy of S.patterns[v]>}`); with one, paste `clipboard.steps` onto the voice, unless it is the copied voice. The clipboard stays for more pastes.
 - Column 16: clear the clipboard.
 
@@ -56,6 +61,9 @@ Keys:
 - **Row 3**: scene save: hold 0.5 s to capture the current state to scene x (1-16, column x) (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
 - **Row 5, column 1**: scene sequencer on/off, set through `set_binary_param` so a controller mapped to `scene_sequencer_enabled` follows (#538).
 - **Row 5, columns 3-10**: sequence length 1-8; **row 6, columns 3-10**: sequence length 9-16 (`LAYOUT_256.length_rows`, `length_first_column`; 3.4). Row 6 columns 1-2 and 11-16 do nothing and stay dark.
+- **Row 4, columns 1-4** (3.4): gesture recorders 1-4 (`grid_core.gesture_key`).
+- **Row 7** (3.4): the morph fader (`set_param_from_column("morph", x)`, drawn with `grid_redraw_fader_row`).
+- **Rows 9 and 10, columns 1-16** (3.4): column x sets `morph_a` (row 9) or `morph_b` (row 10) to scene x.
 - **Row 8** and **row 16**: as on page 1 (play/stop, tempo, the positions and page keys; lock, the freeze hold, copy and paste), #442.
 
 LEDs:
@@ -78,7 +86,7 @@ It follows changes made anywhere (issue #49):
 - Rows 3-7 (from `GRID_LAYOUT.fx_first_row`): `GRID_LAYOUT.fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"}` are faders (`set_param_from_column`/`grid_redraw_fader_row`; a bar at 8 up to the value, the value's column at 15).
   - The filter/delay param actions call `fx_fader_changed()` (`lib/params_setup.lua`), which redraws the grids while a 256 shows page 4 (`grid_core.any_fx_faders()`), so the faders follow the screen, the arc and scene recalls.
   - During a smooth scene transition (`S.scene_transition_active`) it does not redraw: the transition loop redraws once per step.
-- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input); column 12 (`LAYOUT_256.freeze_column`) is the voice's freeze key, `S.lib.freeze.toggle(voice)` (LED 15 frozen, 3 not). Columns 11 and 13-16 do nothing.
+- Rows 9-15 (`GRID_LAYOUT.source_first_row` + voice - 1): column x is `source_key(voice, x)` (1 synth, 2-9 buffer 1-8, 10 input); column 12 (`LAYOUT_256.freeze_column`) is the voice's freeze key, `S.lib.freeze.toggle_quantized(voice)` (LED 15 frozen, 3 not). Columns 11 and 13-16 do nothing.
   - The freeze param's action calls `grid_redraw()`, so a freeze from VOICE, MIDI or a scene shows at once.
   - `grid_redraw_256_sources`: `source_level`: the selected source 15, other sources 4, empty buffers (not loaded, not recording) 2.
   - The source param action calls `grid_redraw()`; buffer changes call it through `buffer_display_changed()`.

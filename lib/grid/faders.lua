@@ -4,7 +4,9 @@
 -- voice's fader pages show, the column <-> value mapping (following each
 -- param's warp, with a zero column for ranges that span 0), the fader rows'
 -- LEDs, the fader page keys' level and the drift tick's redraw when a shown
--- fader moved (follow_faders). The functions stay global.
+-- fader moved (follow_faders, which 3.4 extends to the macro faders and the
+-- morph), and 3.4's shown macro bank and the 16x8's and 8x16's macro fader
+-- page key. The functions stay global.
 
 return function(S)
   local M = {}
@@ -162,17 +164,76 @@ return function(S)
     return table.concat(parts, ",")
   end
 
-  -- While a grid shows the faders page, redraw the grids when what the
-  -- faders show changed since the last look (the first look draws too), so
+  -- 3.4: the shown macro bank's four param ids (macro_<m>, through
+  -- S.lib.macros.bank_macros), which the 256's page 1 and the 16x8's and
+  -- 8x16's faders page on a bank show
+  function M.shown_macro_ids()
+    local ids = {}
+    for index, m in ipairs(S.lib.macros.bank_macros(S.lib.macros.bank())) do ids[index] = "macro_" .. m end
+    return ids
+  end
+
+  -- What the macro faders and the morph show (3.4), as one string: the
+  -- shown bank, its macros' columns, the morph's column and its scenes A
+  -- and B. The morph and its scenes are set on MOD, the arc, a MIDI map
+  -- and in PARAMETERS too, and none of their actions redraws the grids
+  function M.modulation_signature()
+    local parts = {S.lib.macros.bank()}
+    for _, param_id in ipairs(M.shown_macro_ids()) do parts[#parts + 1] = fader_position(param_id) end
+    parts[#parts + 1] = fader_position("morph")
+    parts[#parts + 1] = params:get("morph_a")
+    parts[#parts + 1] = params:get("morph_b")
+    return table.concat(parts, ",")
+  end
+
+  -- While a grid shows the faders page, or the macro faders or the morph
+  -- (S.lib.grid_core.any_modulation_shown), redraw the grids when what
+  -- they show changed since the last look (the first look draws too), so
   -- idle ticks repaint nothing
   function M.follow_faders()
-    if not S.lib.grid_core.any_page(S.constants.GRID_PAGES.faders) then
+    local signature
+    if S.lib.grid_core.any_page(S.constants.GRID_PAGES.faders) then signature = M.faders_signature() end
+    if S.lib.grid_core.any_modulation_shown() then
+      signature = (signature or "") .. "|" .. M.modulation_signature()
+    end
+    if signature == nil then
       shown_faders = nil
       return
     end
-    local signature = M.faders_signature()
     if signature ~= shown_faders then grid_redraw() end
     shown_faders = signature
+  end
+
+  -- The 16x8's and 8x16's macro fader page key (3.4, design §4.6, §11):
+  -- each press steps the port's faders page voice faders -> bank 1 -> 2
+  -- -> 3 -> 4 -> voice faders, setting the shown bank (S.lib.macros.set_bank
+  -- flashes and redraws every grid and the arc). Whether a port shows a
+  -- bank is per port (port_state(port).macro_faders, forgotten with its
+  -- grid); the bank itself is the one every surface shows. Its LED: 4 on
+  -- the voice faders, 6, 9, 12 and 15 on banks 1-4
+  local MACRO_PAGE = {levels = {4, 6, 9, 12, 15}}
+
+  -- Whether the port's faders page shows the shown bank's macros
+  function M.shows_macros(port)
+    return S.lib.grid_core.port_state(port).macro_faders == true
+  end
+
+  function M.macro_page_key(port)
+    local state = S.lib.grid_core.port_state(port)
+    local bank = S.lib.macros.bank()
+    if not state.macro_faders then
+      state.macro_faders = true
+      S.lib.macros.set_bank(1)
+    elseif bank < S.lib.macros.MACROS.banks then
+      S.lib.macros.set_bank(bank + 1)
+    else
+      state.macro_faders = nil
+    end
+  end
+
+  function M.macro_page_level(port)
+    if not M.shows_macros(port) then return MACRO_PAGE.levels[1] end
+    return MACRO_PAGE.levels[S.lib.macros.bank() + 1] or MACRO_PAGE.levels[1]
   end
 
   -- A fader page's key (the 256's row 13, the 16x8's row 5, the 8x16's

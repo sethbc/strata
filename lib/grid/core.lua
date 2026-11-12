@@ -3,8 +3,10 @@
 -- layout shares: the grid UI state (each port's page, S.param_page,
 -- S.grid_voice_select), the 256's GRID_LAYOUT geometry
 -- (S.lib.grid_core.GRID_LAYOUT), attaching vports, hot-plug, voice
--- selection, each port's held keys and holds (S.grid_held), the step-level
--- and scene-save gestures, the key helpers the layouts share, and the
+-- selection, each port's held keys and holds (S.grid_held), the step keys
+-- (3.4: a toggle on release, the level gesture and the held step's step
+-- editor, S.lib.pages_seq), the scene-save and gesture recorder keys, the
+-- key helpers and levels the layouts share, and the
 -- dispatch of key presses, releases and redraws to the layout records in
 -- S.registry.grid_layouts (lib/grid/layout_256.lua, ...), chosen by each
 -- grid's exact size. The functions that were global stay global, defined
@@ -58,9 +60,13 @@ return function(S)
     return S.grid_pages[port] or 1
   end
 
+  -- A page change ends the port's step gestures (3.4, Review Focus 4): a
+  -- step held on the page it leaves toggles nothing at its release, takes
+  -- no level and closes a step editor it opened
   function M.set_page(port, page)
     if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
     if not whole_number_in(page, 1, MAX_GRID_PAGES) then return end
+    if page ~= M.page(port) then M.end_port_step_gestures(port) end
     S.grid_pages[port] = page
   end
 
@@ -152,9 +158,38 @@ return function(S)
     set_key_value(hold_clocks, port, x, y, clock_id)
   end
 
+  -- The held step key that opened 3.4's step editor (design §8.7), as
+  -- {port, x, y}, or nil: its release, the end of its gesture (a page
+  -- change, a half switch, the voice's pattern replaced), a press with no
+  -- release before it and its grid's removal close the editor
+  -- (S.lib.pages_seq.close_step_editor), so no editor outlives its key
+  local step_editor = {key = nil}
+
+  -- Close the step editor if the key at (x, y) on the port opened it
+  local function close_step_editor_of(port, x, y)
+    local key = step_editor.key
+    if key and key.port == port and key.x == x and key.y == y then
+      step_editor.key = nil
+      S.lib.pages_seq.close_step_editor(port)
+    end
+  end
+
+  -- End the step gesture of the key at (x, y) on the port: its pending
+  -- editor hold is canceled, an editor it opened closes, and it is no
+  -- longer a step key (its release toggles nothing)
+  local function drop_step_key(port, x, y)
+    if key_value(step_keys, port, x, y) == nil then return end
+    set_key_value(step_keys, port, x, y, nil)
+    cancel_hold(port, x, y)
+    close_step_editor_of(port, x, y)
+  end
+
   -- Forget a port's keys: pending holds (canceled), held, consumed and step
-  -- keys, its layout state and its page
+  -- keys (a step editor one of them opened closes), its layout state and
+  -- its page
   local function forget_port(port)
+    local key = step_editor.key
+    if key and key.port == port then close_step_editor_of(port, key.x, key.y) end
     for _, rows in pairs(hold_clocks[port] or {}) do
       for _, clock_id in pairs(rows) do clock.cancel(clock_id) end
     end
@@ -168,16 +203,27 @@ return function(S)
 
   local function press_key(port, x, y)
     -- a press with no release before it (a missed event) starts over
+    drop_step_key(port, x, y)
     cancel_hold(port, x, y)
     set_key_value(consumed_keys, port, x, y, nil)
-    set_key_value(step_keys, port, x, y, nil)
     set_key_value(S.grid_held, port, x, y, util.time())
   end
 
   local function release_key(port, x, y)
+    drop_step_key(port, x, y)
     set_key_value(S.grid_held, port, x, y, nil)
     set_key_value(consumed_keys, port, x, y, nil)
-    set_key_value(step_keys, port, x, y, nil)
+  end
+
+  -- A step key's release (3.4, design §8.7): the held step it pressed
+  -- toggles, unless it was consumed (by the level gesture, or because it
+  -- opened the step editor) or its gesture ended meanwhile; a level key
+  -- toggles nothing. The core does it for every layout, whatever the
+  -- layout does with the release
+  local function release_step_key(port, x, y)
+    local entry = key_value(step_keys, port, x, y)
+    if entry == nil or entry.level_key or M.consumed(port, x, y) then return end
+    toggle_pattern_step(entry.voice, entry.step)
   end
 
   -- A step's level from a key's position along the voice's shown steps
@@ -202,12 +248,26 @@ return function(S)
     return nil
   end
 
-  -- A pattern key. The step toggles at press and the key becomes the voice's
-  -- held step on this port, unless the voice already has one: then that step
-  -- gets this key's level (its position, 1..positions, along the voice's
-  -- shown steps), both keys are consumed and this key is a level key for as
-  -- long as it is down (it never takes a level itself). Releases do nothing.
-  -- A voice, step or position out of range does nothing, so only valid
+  -- A held step key, held GRID_HOLD.step_edit_seconds: open the step
+  -- editor for its voice and step (2b's S.lib.pages_seq.open_step_editor,
+  -- which pushes it as the screen's modal owner). The key is consumed, so
+  -- its release toggles nothing; it closes the editor instead
+  local function open_step_editor(port, x, y, voice_idx, step)
+    if not S.lib.pages_seq.open_step_editor(voice_idx, step, port) then return end
+    step_editor.key = {port = port, x = x, y = y}
+    M.consume(port, x, y)
+  end
+
+  -- A pattern key (3.4, design §8.7). Pressed, the key becomes the voice's
+  -- held step on this port and toggles nothing yet, unless the voice already
+  -- has one: then that step gets this key's level (its position,
+  -- 1..positions, along the voice's shown steps), both keys are consumed,
+  -- the held step's pending editor hold is canceled and this key is a
+  -- level key for as long as it is down (it never takes a level itself).
+  -- A held step toggles at its release (release_step_key, unless consumed);
+  -- held GRID_HOLD.step_edit_seconds (on_hold) it opens the step editor,
+  -- and its release closes it. step_key's own z == 0 does nothing. A
+  -- voice, step or position out of range does nothing, so only valid
   -- steps are ever recorded as held (and later take a level)
   function M.step_key(port, x, y, z, voice_idx, step, position, positions)
     if z ~= 1 then return end
@@ -219,36 +279,43 @@ return function(S)
       S.lib.mutation.note_pattern_edit(voice_idx)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
+      cancel_hold(port, held_x, held_y)
       set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
       return
     end
-    toggle_pattern_step(voice_idx, step)
     set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step})
+    M.on_hold(port, x, y, GRID_HOLD.step_edit_seconds, function()
+      open_step_editor(port, x, y, voice_idx, step)
+    end)
   end
 
-  -- End the step-level gesture on voice_idx's held step keys, on every port:
+  -- End the step gesture on voice_idx's step keys, on every port:
   -- S.lib.sequencer.replace_pattern (every whole-pattern change: clear,
-  -- randomize, a 256's paste, a scene recall) calls it, so a step held from
-  -- before never takes a level in the new pattern. The keys stay held; their
-  -- releases do nothing, as always, and the next step key of the voice
-  -- toggles its own step
+  -- randomize, a 256's paste, a scene recall, a chain link) calls it, so a
+  -- step held from before never takes a level in the new pattern, never
+  -- toggles at its release and closes a step editor it opened (its pending
+  -- hold is canceled). The keys stay held; the next step key of the voice
+  -- is a held step of its own
   function M.end_step_gestures(voice_idx)
-    for _, columns in pairs(step_keys) do
-      for _, rows in pairs(columns) do
+    for port, columns in pairs(step_keys) do
+      for key_x, rows in pairs(columns) do
         for key_y, entry in pairs(rows) do
-          if entry.voice == voice_idx then rows[key_y] = nil end
+          if entry.voice == voice_idx then drop_step_key(port, key_x, key_y) end
         end
       end
     end
   end
 
-  -- End the step-level gesture on every step key held on one port, whatever
-  -- the voice: a 64's half switch calls it, so a step held in the half no
-  -- longer shown never takes a level. The keys stay held; their releases do
-  -- nothing. A port that is not a whole number in 1..S.MAX_GRID_PORTS does
-  -- nothing
+  -- End the step gesture on every step key held on one port, whatever the
+  -- voice: a page change and a 64's half switch call it, so a step held on
+  -- the page or half no longer shown never takes a level, never toggles at
+  -- its release and closes a step editor it opened. The keys stay held. A
+  -- port that is not a whole number in 1..S.MAX_GRID_PORTS does nothing
   function M.end_port_step_gestures(port)
     if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
+    for key_x, rows in pairs(step_keys[port] or {}) do
+      for key_y in pairs(rows) do drop_step_key(port, key_x, key_y) end
+    end
     step_keys[port] = nil
   end
 
@@ -267,9 +334,38 @@ return function(S)
   local LEVELS = S.constants.GRID_LEVELS
   M.LEVELS = LEVELS
 
+  -- 3.4's keys every layout with them shares: a running voice that is
+  -- silenced (muted, or another voice soloed: S.lib.voice_mix.silenced)
+  -- on its on/off key (design §8.14), and the gesture recorders' keys
+  -- (design §7.2, §11: a press, a hold that clears, a level per state)
+  local SHARED_KEYS = {
+    voice_silenced = 6,
+    gesture_clear_seconds = GRID_HOLD.scene_save_seconds,
+    gesture_levels = {empty = 2, stopped = 5, playing = 10, recording = 15},
+  }
+
+  -- 12 running, 6 running but silenced, 2 stopped
   function M.voice_level(voice_idx)
     if not whole_number_in(voice_idx, 1, NUM_VOICES) then return 0 end
-    return S.voices[voice_idx].active and LEVELS.voice_running or LEVELS.voice_stopped
+    if not S.voices[voice_idx].active then return LEVELS.voice_stopped end
+    return S.lib.voice_mix.silenced(voice_idx) and SHARED_KEYS.voice_silenced or LEVELS.voice_running
+  end
+
+  -- Gesture recorder k's key (3.4, design §7.2): a press is
+  -- S.lib.gestures.press(k) at once (empty -> recording -> playing ->
+  -- stopped -> playing, so a loop ends where the key goes down); held
+  -- SHARED_KEYS.gesture_clear_seconds (on_hold) the recorder is cleared.
+  -- A recorder outside 1..NUM_GESTURES does nothing
+  function M.gesture_key(port, x, y, z, k)
+    if z ~= 1 or not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return end
+    S.lib.gestures.press(k)
+    M.on_hold(port, x, y, SHARED_KEYS.gesture_clear_seconds, function() S.lib.gestures.clear(k) end)
+  end
+
+  -- Its LED: empty 2, stopped 5, playing 10, recording 15 (0 for no recorder)
+  function M.gesture_level(k)
+    if not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return 0 end
+    return SHARED_KEYS.gesture_levels[S.lib.gestures.state(k)] or 0
   end
 
   function M.lock_level(voice_idx)
@@ -380,6 +476,19 @@ return function(S)
     for port, grid_port in pairs(S.grids) do
       local layout = grid_port.device and S.registry.grid_layouts[grid_layout(grid_port)]
       if layout and layout.fx_faders_page == M.page(port) then return true end
+    end
+    return false
+  end
+
+  -- Whether a connected grid shows the macro faders or the morph now (3.4):
+  -- its layout record's shows_modulation(port) says so (the 256's pages 1
+  -- and 3, the 16x8's and 8x16's faders page on a bank and their scenes
+  -- page; the 64 has none). The drift tick follows them only then
+  -- (S.lib.grid_faders.follow_faders)
+  function M.any_modulation_shown()
+    for port, grid_port in pairs(S.grids) do
+      local layout = grid_port.device and S.registry.grid_layouts[grid_layout(grid_port)]
+      if layout and layout.shows_modulation and layout.shows_modulation(port) then return true end
     end
     return false
   end
@@ -568,15 +677,17 @@ return function(S)
     else
       cancel_hold(port, x, y)
       if layout and not M.consumed(port, x, y) then layout.key(port, x, y, 0) end
+      release_step_key(port, x, y)
       release_key(port, x, y)
     end
   end
 
   -- Presses and releases. A press is held (S.grid_held) before the layout
   -- sees it. A release cancels the key's hold, reaches the layout unless the
-  -- key was consumed, then forgets the key. Layouts get key(port, x, y, z)
-  -- and return on z == 0 unless they handle releases. One repaint per key,
-  -- also when the handler fails (its error is raised after the repaint)
+  -- key was consumed, toggles a held step key's step (release_step_key),
+  -- then forgets the key. Layouts get key(port, x, y, z) and return on
+  -- z == 0 unless they handle releases. One repaint per key, also when the
+  -- handler fails (its error is raised after the repaint)
   function grid_key(port, x, y, z)
     local grid_port = S.grids[port]
     if not grid_port then return end
