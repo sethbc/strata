@@ -88,11 +88,19 @@ local function scrambled_scenes(before_capture)
   return context, S
 end
 
--- The first continuous scene global that is a number param (the LFO
--- depths): a fade and a morph round it to whole numbers
-local function number_global(S)
+-- The first continuous scene global whose param holds only whole numbers
+-- and has room for low..high: a number param (3.3's LFO depths, which a
+-- fade and a morph round) or a control stepped by 1 (3.4's, which round
+-- themselves as they are set)
+local function whole_number_global(S, low, high)
   for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-    if global.continuous and params:lookup_param(global.id).t == params.tNUMBER then return global.id end
+    if global.continuous then
+      local param = params:lookup_param(global.id)
+      local spec = param.controlspec
+      local whole = param.t == params.tNUMBER or (spec ~= nil and spec.step == 1)
+      local min, max = param_range(global.id)
+      if whole and min <= low and max >= high then return global.id end
+    end
   end
   return nil
 end
@@ -125,11 +133,11 @@ test("the morph params are a group of three, defaulting to A = 1, B = 2 at 0, an
 end)
 
 test("a continuous value is A + morph x (B - A), as a transition's step is", function()
-  -- a number param among the faded ones: 10 in A, 15 in B
+  -- a whole-number param among the faded ones: 10 in A, 15 in B
   local number_id
   local context, S = scrambled_scenes(function(S, slot)
-    number_id = number_global(S)
-    assert_true(number_id ~= nil, "a scene global is a number param")
+    number_id = whole_number_global(S, 10, 15)
+    assert_true(number_id ~= nil, "a continuous scene global holds only whole numbers (a number param or a control stepped by 1)")
     params:set(number_id, slot == 1 and 10 or 15)
   end)
   assert_true(S.lib.morph.plan_ready(), "both endpoints hold valid scenes")
