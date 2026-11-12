@@ -463,6 +463,22 @@ end)
 
 -- The dot swings around the row's middle line (y top + 5) by the depth the
 -- LFO plays: at full depth over the whole wave, at 0 on the line (#520)
+-- The dot shows a value the LFO has played: none from turning it on until
+-- its first step, also when it is turned on again (#415)
+test("an LFO turned on again has no dot until its first step (#415)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set(lfo_id(1, "dest"), destination_index("filt freq")); params:set(lfo_id(1), 1)
+  show_page("LFO")
+  lfo_step(context); redraw()
+  assert_equal(#lfo_row_drawing(context, 1).rects, 1, "a stepped LFO has its dot")
+  params:set(lfo_id(1), 0); redraw()
+  assert_equal(#lfo_row_drawing(context, 1).rects, 0, "off: no dot")
+  params:set(lfo_id(1), 1); redraw()
+  assert_equal(#lfo_row_drawing(context, 1).rects, 0, "on again: no dot before its first step")
+  lfo_step(context); redraw()
+  assert_equal(#lfo_row_drawing(context, 1).rects, 1, "its first step brings the dot back")
+end)
+
 test("the dot's swing follows the depth; at depth 0 it sits on the middle line (#520)", function()
   local context = load_strata(); finish_startup(context)
   params:set(lfo_id(1, "dest"), destination_index("filt freq")); params:set(lfo_id(1, "depth"), 100)

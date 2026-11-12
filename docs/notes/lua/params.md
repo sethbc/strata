@@ -82,8 +82,8 @@ Menu order:
 
 **Fx params** (`S.register_fx_params({name, count, add})`). The fx group's size is 11 plus every record's `count`; init runs each `add()` after tape drift, in registration order, and checks the count.
 
-**PSET hooks** (`S.register_pset_hook({name, write = fn(path_base, number), read = fn(path_base, number, pset_path), delete = fn(path_base, number)})`, each function optional; 3.4, for the per-PSET side files of the macros, the matrix and the recorders). The master record installs norns' three PSET actions (`lua/core/paramset.lua`), which run the hooks in registration order:
-- `params.action_read = function(filename, silent, number)`: `M.migrate_read_pset(filename, silent)` first, then every hook's `read(path_base, number, filename)`;
+**PSET hooks** (`S.register_pset_hook({name, write = fn(path_base, number), read = fn(path_base, number, pset_path, silent), delete = fn(path_base, number)})`, each function optional; 3.4, for the per-PSET side files of the macros, the matrix and the recorders). The master record installs norns' three PSET actions (`lua/core/paramset.lua`), which run the hooks in registration order:
+- `params.action_read = function(filename, silent, number)`: `M.migrate_read_pset(filename, silent)` first, then every hook's `read(path_base, number, filename, silent)` (a hook that sets params passes `silent` on, as the LFOs' 3.3 import does);
 - `params.action_write = function(filename, name, number)`: every hook's `write(path_base, number)`, after norns has written the PSET;
 - `params.action_delete = function(filename, name, number)`: every hook's `delete(path_base, number)`, after norns has deleted it.
 - `path_base` is `filename` without its `.pset` (`<data>/strata/strata-01` for PSET 1). `number` is what norns passes: the PSET's two-digit number (`"01"`) for a PSET the PARAMS menu writes, reads or deletes, nil for one a script reads or writes by path. Each hook runs in its own `pcall`: one that raises prints `pset hook <name>: <error>`, and the next still runs.
