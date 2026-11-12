@@ -3,7 +3,7 @@
 - A new captured field needs `validate_scene` coverage (and a `SCENE_GLOBAL_PARAMS` entry for a global param) and a migration default (`SCENE_GLOBAL_PARAMS.default`, `S.VOICE_SCENE_DEFAULTS` or `S.SCENE_BLOCK_DEFAULTS`), or older files stop loading.
 - A stored value whose meaning changes needs a new `SCENE_DATA_VERSION` and a conversion in `migrate_scene` keyed on `from_version`, never on the value: the Pulse voice's `res` is mirrored (`PULSE_RES.mirror - res`) only in a file older than `PULSE_RES.scene_format` (5), once, as it loads (#314). A file of the current format is never converted.
 - Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, lock and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
-- A fade toward a scene that stops a running LFO (`S.lib.lfos.transition_stops(n, scene_data)`: `lfo_<n>` on now, off in the scene) fades that LFO's depth to 0 and holds its free period and offset; the end sets the scene's exact values with the state (#408). The LFO entries of `S.SCENE_GLOBAL_PARAMS` are `lib/lfos.lua`'s `S.lib.lfos.SCENE_FIELDS` (the records themselves, appended after the built-in globals), carrying `lfo = n` and the depth's `stop_target = 0`; this file never lists the LFO fields itself.
+- A fade toward a scene that stops a running LFO (`S.lib.lfos.transition_stops(n, scene_data)`: `strata_lfo<n>` on now, off in the scene) fades that LFO's depth to 0 and holds its rate and offset; the end sets the scene's exact values with the state (#408). The LFO entries of `S.SCENE_GLOBAL_PARAMS` are `lib/lfos.lua`'s `S.lib.lfos.SCENE_FIELDS` (the records themselves, appended after the built-in globals), carrying `lfo = n` and the depth's `stop_target = 0`; this file never lists the LFO fields itself.
 - A recall is one list: `recall_scene_instant` is `S.lib.scenes.apply_entries(S.lib.scenes.scene_entries(scene_data))`, and `scene_transition_targets` is the continuous entries of `scene_entries`. Their sends, in order, are 3.3.2's: a test compares both against verbatim copies of the merged functions for every voice state and source (`test/unit/scenes_test.lua`). A change to what a recall sets goes in `scene_entries` or `apply_entries`, never beside them, so morph (which applies the same lists) follows.
 - A recall, every fade step and `apply_entries` set each param through the local `set_scene_value`: a registered field's own `set` when its record has one (3.4: a macro sets itself silently), else the local `set_scene_param`: a binary param through `set_binary_param` (`lib/ui/params.lua`), so a controller mapped to it in PARAMS > MAP follows (norns' `Binary:set` sends no CC, #538), any other through `params:set`.
 - A recall's lock entries run every `S.registry.lock_change` hook, `fn(voice_idx, locked)`, for each voice whose lock it changes, after setting `S.frozen[voice_idx]`, as `toggle_lock` does (3.4's 0a); a voice whose lock stays runs none.
@@ -25,7 +25,7 @@
 - A load keeps `S.current_scene` only when the file's scene in that slot encodes to the same text as the one it replaces (`S.lib.data_files.encode`); otherwise it is 0 (#518).
 - Bounds-check the scene number (1..`NUM_SCENES`) and check the slot is populated before recalling.
 - The registered fields are read at init, never at include time: `S.registry.scene_fields` joins `S.SCENE_GLOBAL_PARAMS` in the scenes load's start step (before the file is read, each field's `set` kept by id), and the voice params' scene keys (`S.registry.voice_params`), the scene blocks (`S.registry.scene_blocks`), the migrations (`S.registry.scene_migrations`) and the lock hooks (`S.registry.lock_change`) are read at each use. Until 3.4's 0a lands the last three may not exist: they are read as `S.registry.<name> or {}`.
-- Each LFO's `lfo_offset_<n>` is set before its `lfo_<n>` (#103). The state switch (at a transition's end, or in an instant recall) re-bangs the library's baseline, which zeroes the offset, and `lib/lfos.lua`'s `lfo_<n>` wrapper puts the recalled offset back. Never drop that wrapper or move the offset after the state without a test.
+- Each LFO's settings (its offset among them, #103) are set before its state `strata_lfo<n>`, so an LFO a recall turns on starts with the scene's settings in place (`S.lib.lfos.SCENE_FIELDS` lists the state last).
 - A registered voice param's scene key needs its default in `scene_defaults` (the param's default; a test checks), and a key that must not crossfade needs a whole `{min, max}` in `discrete`. Discrete extras are set at a transition's end, after the voice's source.
 
 ## Owns
@@ -53,7 +53,7 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `
   - voice active and lock states (stored as `frozen`);
   - pattern data (all 7 voices × 16 steps);
   - global parameters: master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, offset, destination and state;
-  - format 3 (3.2): each voice's registered params (`data.voices[i].extras[key]`, the keys of every record's `scene_defaults`), the registered global fields (`S.registry.scene_fields`, stored like the other globals) and each LFO's offset (`lfo_offset_<n>`, #103);
+  - format 3 (3.2): each voice's registered params (`data.voices[i].extras[key]`, the keys of every record's `scene_defaults`), the registered global fields (`S.registry.scene_fields`, stored like the other globals) and each LFO's offset (3.3's library field, #103; 3.4 renames every LFO field, migration `lfos`);
   - 3.4: each registered scene block's value, `data[record.key]` (Scene blocks, below).
 - **Sequencer**: automatic scene progression with configurable timing.
 - **Transitions**: instant recall, or a smooth crossfade between scenes.
@@ -168,10 +168,10 @@ A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3
 ### Smooth transitions
 
 - `scene_transition_targets(scene_data)` snapshots `{id, start, target, step}` for every continuous entry of `scene_entries` *once*, before the fade: the continuous globals in `SCENE_GLOBAL_PARAMS` (master density, filter freq/res/mix, delay time/feedback/mix, reverb, drift, and per LFO the free period, depth and offset), then per voice its synth params, grain params, crossmod amp/freq amounts, mod speed and continuous extras.
-- An LFO the fade stops (`S.lib.lfos.transition_stops(n, scene_data)`: running now, `lfo_<n>` off in the scene) gets a depth target of 0 (its entry's `stop_target`) and no period or offset target, so what the player hears fades out instead of growing toward (or changing rate for) a setting the scene never plays (#408). An LFO the scene keeps on, or one that is off now, crossfades as before. The end sets the scene's depth, period, offset and state.
+- An LFO the fade stops (`S.lib.lfos.transition_stops(n, scene_data)`: running now, `strata_lfo<n>` off in the scene) gets a depth target of 0 (its entry's `stop_target`) and no rate or offset target, so what the player hears fades out instead of growing toward (or changing rate for) a setting the scene never plays (#408). An LFO the scene keeps on, or one that is off now, crossfades as before. The end sets the scene's depth, rate, offset and state.
 - 20 steps whatever the transition time. Step k sets `util.linlin(0, 1, start, target, k / 20)` (the local `step_value`), so the fade is linear over the whole time. Never re-read the current value inside the loop: that makes the fade front-loaded. A target a block's `through_zero` named ramps through 0 instead, and its switches run once at the step that reaches f = 0.5 (Scene blocks, above).
 - A step sets each target through `set_scene_value`, so a registered field with its own `set` is never `params:set`, in a step or at the end.
-- A number param (`step` 1: the LFO depths `lfo_depth_<n>` and offsets `lfo_offset_<n>`, which do not round themselves) is rounded to whole numbers during the fade, so arc and E3 depth and offset steps land on whole percents again. The end applies the scene's exact value.
+- A number param (`step` 1, which does not round itself) is rounded to whole numbers during the fade. 3.4's LFO depths and offsets are one-percent controls, which round themselves, so a fade lands on whole percents. The end applies the scene's exact value.
 - Not interpolated: mod sources, grain envelope shapes and grain modes (`DISCRETE_GRAIN_KEYS`), lock and active states, tempo, filter type and mutation settings, a registered voice param's discrete keys (`discrete`) and a registered field with `discrete = true`. They switch at the end through `recall_scene_instant()`, which also lands every param exactly on its target.
 - The registered voice params that are not discrete crossfade like the built-in ones (`scene_transition_targets`, by key name); a registered field without `discrete` crossfades with the continuous globals.
 - `recall_scene_instant` sets a voice's extras (in sorted key order, #531) after its source, params, grain and crossmod values, so a discrete one such as freeze lands after the source it belongs to.
@@ -308,9 +308,9 @@ Always validate scene data before using it, so a corrupted file cannot crash the
 
 ```lua
 -- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*,
---   drift_amount, and per LFO lfo_shape/mode/clocked/free/depth/offset_<n>, strata_lfo<n>_dest, lfo_<n>);
+--   drift_amount, and per LFO its 13 fields, S.lib.lfos.SCENE_FIELDS, the state strata_lfo<n> last);
 --   an option param's value is an integer from 1 to its option count; an entry with a range
---   ({min, max}: lfo_offset_<n>, -100..100) holds a value inside it
+--   ({min, max}: an LFO's controls and state) holds a value inside it
 -- data.voices: NUM_VOICES tables, each with
 --   active (boolean), source (integer 1..#SOURCE_OPTIONS), params (only known keys, numbers),
 --   grain (only GRAIN_PARAM_IDS keys, numbers; env/mode integers 1..option count),

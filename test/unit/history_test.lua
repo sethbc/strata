@@ -137,10 +137,10 @@ test("a high-tier history recalled on standard plays at most 16 s", function()
   for index, destination in ipairs(S.LFO_DESTINATIONS) do
     if destination.label == "v1 hist" then dest = index end
   end
-  local lfo = local_value("lfos")[1]
   params:set("strata_lfo1_dest", dest)
-  params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
-  for _, phase in ipairs({1.0, 0.0, 1.0}) do context.lfo.tick(lfo, phase) end
+  params:set("strata_lfo1_shape", 3); params:set("strata_lfo1_rate", 10)   -- a 10 Hz square: up, down, up
+  params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
+  context.clock.run_for(0.25)
   -- a PSET value past the range
   params:set("v1_history", 45)
   assert_equal(params:get("v1_history"), 16, "a PSET value clamps too")

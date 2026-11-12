@@ -336,23 +336,23 @@ end)
 
 test("a smooth transition fades LFO depths in whole percents and ends on the scene's exact depth", function()
   local context = load_strata()
-  params:set("lfo_depth_1", 75); params:set("lfo_depth_2", 37.5)   -- a file may hold any number
+  params:set("strata_lfo1_depth", 75); params:set("strata_lfo2_depth", 37)
   capture_scene(1)
-  params:set("lfo_depth_1", 0); params:set("lfo_depth_2", 100)
+  params:set("strata_lfo1_depth", 0); params:set("strata_lfo2_depth", 100)
 
   recall_scene(1, 20)  -- 20 steps; the first runs immediately
   for step = 1, 20 do
     local mix = step / 20
-    for n, fade in ipairs({ { from = 0, to = 75 }, { from = 100, to = 37.5 } }) do
-      local depth = params:get("lfo_depth_" .. n)
+    for n, fade in ipairs({ { from = 0, to = 75 }, { from = 100, to = 37 } }) do
+      local depth = params:get("strata_lfo" .. n .. "_depth")
       assert_equal(depth, math.floor(depth), "LFO " .. n .. " depth is a whole percent at step " .. step)
       assert_near(depth, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " depth at step " .. step)
     end
     wake(context, "scene_transition_clock")
   end
   assert_equal(local_value("scene_transition_active"), false, "transition finished")
-  assert_equal(params:get("lfo_depth_1"), 75, "LFO 1 ends on the scene's depth")
-  assert_equal(params:get("lfo_depth_2"), 37.5, "LFO 2 ends on the scene's exact depth")
+  assert_equal(params:get("strata_lfo1_depth"), 75, "LFO 1 ends on the scene's depth")
+  assert_equal(params:get("strata_lfo2_depth"), 37, "LFO 2 ends on the scene's exact depth")
 end)
 
 -- Loading scenes replaces every slot: a transition that is running must not
@@ -1359,27 +1359,36 @@ end)
 
 test("scenes capture and recall the LFOs; old files load with LFOs off", function()
   local context = load_strata({ data_subdir = "lfo_scenes" }); finish_startup(context)
-  params:set("lfo_shape_1", 2); params:set("lfo_mode_1", 1); params:set("lfo_clocked_1", 5)
-  params:set("lfo_free_2", 9); params:set("lfo_depth_2", 60); params:set("strata_lfo2_dest", 14)
-  params:set("lfo_2", 2)
+  params:set("strata_lfo1_shape", 2); params:set("strata_lfo1_mode", 2); params:set("strata_lfo1_division", 5)
+  params:set("strata_lfo2_rate", 9); params:set("strata_lfo2_depth", 60); params:set("strata_lfo2_dest", 14)
+  params:set("strata_lfo2_phase", 30); params:set("strata_lfo2_rate_mod", 2); params:set("strata_lfo2_depth_mod_amt", -40)
+  params:set("strata_lfo2", 1)
   capture_scene(1)
   local data = local_value("scenes")[1].data
-  assert_equal(data.lfo_shape_1, 2); assert_equal(data.lfo_mode_1, 1); assert_equal(data.lfo_clocked_1, 5)
-  assert_near(data.lfo_free_2, 9, 1e-9); assert_equal(data.lfo_depth_2, 60)
-  assert_equal(data.strata_lfo2_dest, 14); assert_equal(data.lfo_2, 2)
-  params:set("lfo_2", 1); params:set("lfo_depth_2", 0); params:set("strata_lfo2_dest", 1); params:set("lfo_shape_1", 1)
+  assert_equal(data.strata_lfo1_shape, 2); assert_equal(data.strata_lfo1_mode, 2); assert_equal(data.strata_lfo1_division, 5)
+  assert_near(data.strata_lfo2_rate, 9, 1e-6); assert_equal(data.strata_lfo2_depth, 60)
+  assert_equal(data.strata_lfo2_dest, 14); assert_equal(data.strata_lfo2, 1)
+  assert_equal(data.strata_lfo2_phase, 30); assert_equal(data.strata_lfo2_rate_mod, 2)
+  assert_equal(data.strata_lfo2_depth_mod_amt, -40)
+  params:set("strata_lfo2", 0); params:set("strata_lfo2_depth", 0); params:set("strata_lfo2_dest", 1)
+  params:set("strata_lfo1_shape", 1); params:set("strata_lfo2_phase", 0); params:set("strata_lfo2_rate_mod", 1)
   recall_scene(1, 0)
-  assert_equal(params:string("lfo_2"), "on"); assert_equal(params:get("lfo_depth_2"), 60)
-  assert_equal(params:get("strata_lfo2_dest"), 14); assert_equal(params:string("lfo_shape_1"), "tri")
-  assert_equal(local_value("lfos")[2]:get("enabled"), 1, "recalled LFO runs")
-  -- smooth transitions fade depth and free period, switch the rest at the end
+  assert_equal(params:get("strata_lfo2"), 1); assert_equal(params:get("strata_lfo2_depth"), 60)
+  assert_equal(params:get("strata_lfo2_dest"), 14); assert_equal(params:string("strata_lfo1_shape"), "tri")
+  assert_equal(params:get("strata_lfo2_phase"), 30); assert_equal(params:string("strata_lfo2_rate_mod"), "L1")
+  assert_true(local_value("S").lib.lfos.is_on(2), "the recalled LFO runs")
+  -- smooth transitions fade rate, depth and offset, switch the rest at the end
   local continuous = {}
   for _, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do continuous[global.id] = global.continuous end
-  for n = 1, 3 do
-    assert_equal(continuous["lfo_depth_" .. n], true); assert_equal(continuous["lfo_free_" .. n], true)
-    for _, id in ipairs({ "lfo_" .. n, "lfo_shape_" .. n, "lfo_mode_" .. n, "lfo_clocked_" .. n, "strata_lfo" .. n .. "_dest" }) do
-      assert_equal(continuous[id], false, id .. " switches")
+  for n = 1, local_value("NUM_LFOS") do
+    for _, field in ipairs({ "rate", "depth", "offset" }) do
+      assert_equal(continuous["strata_lfo" .. n .. "_" .. field], true, field .. " crossfades")
     end
+    for _, field in ipairs({ "shape", "mode", "division", "phase", "rate_mod", "rate_mod_amt", "depth_mod",
+      "depth_mod_amt", "dest" }) do
+      assert_equal(continuous["strata_lfo" .. n .. "_" .. field], false, field .. " switches")
+    end
+    assert_equal(continuous["strata_lfo" .. n], false, "the state switches")
   end
   -- invalid option values are rejected
   local bad = deep_copy(local_value("scenes")[1]); bad.data.strata_lfo2_dest = 0.5
@@ -1387,132 +1396,130 @@ test("scenes capture and recall the LFOs; old files load with LFOs off", functio
   bad.data.strata_lfo2_dest = #local_value("LFO_DESTINATIONS") + 1
   assert_true(not validate_scene(bad), "out-of-range destination rejected")
   -- a scene saved before the LFOs existed recalls them as off with defaults
+  -- (a depth of 0 on LFOs 1-3, as 3.3 loaded it)
   local old = deep_copy(local_value("scenes")[1])
   for key in pairs(old.data) do
-    if key:find("^lfo_") or key:find("^strata_lfo") then old.data[key] = nil end
+    if key:find("^strata_lfo") then old.data[key] = nil end
   end
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
   tab.save({ version = 2, scenes = { old } }, context.data_dir .. "strata/scenes.data")
   load_scenes_from_disk()
   assert_true(local_value("scenes")[1].populated, "pre-LFO scene file loads")
   recall_scene(1, 0)
-  assert_equal(params:string("lfo_2"), "off"); assert_equal(params:get("lfo_depth_2"), 0)
-  assert_equal(params:get("strata_lfo2_dest"), 1); assert_equal(params:string("lfo_mode_1"), "free")
+  assert_equal(params:get("strata_lfo2"), 0); assert_equal(params:get("strata_lfo2_depth"), 0)
+  assert_equal(params:get("strata_lfo2_dest"), 1); assert_equal(params:string("strata_lfo1_mode"), "free")
+  assert_equal(params:get("strata_lfo5"), 0); assert_equal(params:get("strata_lfo5_depth"), 25, "LFOs 4-6 at their defaults")
 end)
 
--- #103 step 2: scenes store each LFO's offset. It sits before lfo_<n> in
--- SCENE_GLOBAL_PARAMS, so the state switch at a transition's end (the
--- library's on/off re-bangs the baseline, which zeroes the offset) runs
--- after the offset is set: lib/lfos.lua's wrapper must keep it
+-- #103: scenes store each LFO's offset. It sits before the state in
+-- SCENE_GLOBAL_PARAMS, so the state switch at a transition's end runs after
+-- the offset is set, and keeps it
 test("scenes store the LFO offsets; the LFO on/off switch at a transition's end keeps them (#103)", function()
   local context = load_strata(); finish_startup(context)
   local globals, position = {}, {}
   for index, global in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do
     globals[global.id] = global; position[global.id] = index
   end
-  for n = 1, 3 do
-    local offset = globals["lfo_offset_" .. n]
-    assert_true(offset ~= nil, "lfo_offset_" .. n .. " is a scene global")
-    assert_equal(offset.continuous, true, "lfo_offset_" .. n .. " crossfades")
-    assert_equal(offset.default, 0, "lfo_offset_" .. n .. " migrates to 0")
-    assert_true(position["lfo_offset_" .. n] < position["lfo_" .. n], "lfo_offset_" .. n .. " is set before lfo_" .. n)
+  for n = 1, local_value("NUM_LFOS") do
+    local offset = globals["strata_lfo" .. n .. "_offset"]
+    assert_true(offset ~= nil, "LFO " .. n .. "'s offset is a scene global")
+    assert_equal(offset.continuous, true, "LFO " .. n .. "'s offset crossfades")
+    assert_equal(offset.default, 0, "LFO " .. n .. "'s offset migrates to 0")
+    assert_true(position["strata_lfo" .. n .. "_offset"] < position["strata_lfo" .. n], "set before the state")
   end
 
   -- LFO 1 on with +30 %, LFO 2 off with -20 %
-  params:set("lfo_1", 2); params:set("lfo_offset_1", 30)
-  params:set("lfo_offset_2", -20)
+  params:set("strata_lfo1", 1); params:set("strata_lfo1_offset", 30)
+  params:set("strata_lfo2_offset", -20)
   capture_scene(1)
   local data = local_value("scenes")[1].data
-  assert_equal(data.lfo_offset_1, 30, "LFO 1's offset captured")
-  assert_equal(data.lfo_offset_2, -20, "LFO 2's offset captured")
-  assert_equal(data.lfo_offset_3, 0, "LFO 3's offset captured")
+  assert_equal(data.strata_lfo1_offset, 30, "LFO 1's offset captured")
+  assert_equal(data.strata_lfo2_offset, -20, "LFO 2's offset captured")
+  assert_equal(data.strata_lfo3_offset, 0, "LFO 3's offset captured")
   -- the other way round: LFO 1 off, LFO 2 on
-  params:set("lfo_1", 1); params:set("lfo_offset_1", -10)
-  params:set("lfo_2", 2); params:set("lfo_offset_2", 40)
+  params:set("strata_lfo1", 0); params:set("strata_lfo1_offset", -10)
+  params:set("strata_lfo2", 1); params:set("strata_lfo2_offset", 40)
 
   recall_scene(1, 20)  -- 20 steps; the first runs immediately, the switch after the last
   for step = 1, 20 do
     local mix = step / 20
     -- LFO 2 stops at the end: its offset holds until then (#408)
     for n, fade in ipairs({ { from = -10, to = 30 }, { from = 40, to = 40 } }) do
-      local offset = params:get("lfo_offset_" .. n)
+      local offset = params:get("strata_lfo" .. n .. "_offset")
       assert_equal(offset, math.floor(offset), "LFO " .. n .. " offset is a whole percent at step " .. step)
       assert_near(offset, fade.from + (fade.to - fade.from) * mix, 0.5, "LFO " .. n .. " offset at step " .. step)
     end
-    assert_equal(params:string("lfo_1"), "off", "LFO 1 switches only at the end (step " .. step .. ")")
-    assert_equal(params:string("lfo_2"), "on", "LFO 2 switches only at the end (step " .. step .. ")")
+    assert_equal(params:get("strata_lfo1"), 0, "LFO 1 switches only at the end (step " .. step .. ")")
+    assert_equal(params:get("strata_lfo2"), 1, "LFO 2 switches only at the end (step " .. step .. ")")
     wake(context, "scene_transition_clock")
   end
   assert_equal(local_value("scene_transition_active"), false, "transition finished")
-  assert_equal(params:string("lfo_1"), "on", "LFO 1 turned on at the end")
-  assert_equal(params:string("lfo_2"), "off", "LFO 2 turned off at the end")
-  assert_equal(params:get("lfo_offset_1"), 30, "turning LFO 1 on kept the recalled offset")
-  assert_equal(params:get("lfo_offset_2"), -20, "turning LFO 2 off kept the recalled offset")
-  local lfos = local_value("lfos")
-  assert_near(lfos[1]:get("offset"), 0.30, 1e-9, "the library's LFO 1 offset follows")
-  assert_near(lfos[2]:get("offset"), -0.20, 1e-9, "the library's LFO 2 offset follows")
+  assert_equal(params:get("strata_lfo1"), 1, "LFO 1 turned on at the end")
+  assert_equal(params:get("strata_lfo2"), 0, "LFO 2 turned off at the end")
+  assert_equal(params:get("strata_lfo1_offset"), 30, "turning LFO 1 on kept the recalled offset")
+  assert_equal(params:get("strata_lfo2_offset"), -20, "turning LFO 2 off kept the recalled offset")
 
   -- an instant recall that switches the LFOs keeps the offsets too
-  params:set("lfo_1", 1); params:set("lfo_offset_1", 5)
-  params:set("lfo_2", 2); params:set("lfo_offset_2", 5)
+  params:set("strata_lfo1", 0); params:set("strata_lfo1_offset", 5)
+  params:set("strata_lfo2", 1); params:set("strata_lfo2_offset", 5)
   recall_scene(1, 0)
-  assert_equal(params:string("lfo_1"), "on"); assert_equal(params:string("lfo_2"), "off")
-  assert_equal(params:get("lfo_offset_1"), 30, "instant recall: LFO 1's offset")
-  assert_equal(params:get("lfo_offset_2"), -20, "instant recall: LFO 2's offset")
+  assert_equal(params:get("strata_lfo1"), 1); assert_equal(params:get("strata_lfo2"), 0)
+  assert_equal(params:get("strata_lfo1_offset"), 30, "instant recall: LFO 1's offset")
+  assert_equal(params:get("strata_lfo2_offset"), -20, "instant recall: LFO 2's offset")
 end)
 
 test("LFO offsets in scenes: save and load, migration of older scenes, validation (#103)", function()
   local context = load_strata({ data_subdir = "lfo_offsets" }); finish_startup(context)
-  params:set("lfo_3", 2); params:set("lfo_offset_3", -35); params:set("lfo_offset_1", 12)
+  params:set("strata_lfo3", 1); params:set("strata_lfo3_offset", -35); params:set("strata_lfo1_offset", 12)
   capture_scene(2)
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.scenes[2].data.lfo_offset_3, -35, "the offset is saved")
+  assert_equal(saved.scenes[2].data.strata_lfo3_offset, -35, "the offset is saved")
 
   -- a fresh script loads it and recalls it
   context = load_strata({ data_subdir = "lfo_offsets" }); finish_startup(context)
-  assert_equal(local_value("scenes")[2].data.lfo_offset_3, -35, "the offset is loaded")
-  params:set("lfo_offset_1", -40)
+  assert_equal(local_value("scenes")[2].data.strata_lfo3_offset, -35, "the offset is loaded")
+  params:set("strata_lfo1_offset", -40)
   recall_scene(2, 0)
-  assert_equal(params:string("lfo_3"), "on")
-  assert_equal(params:get("lfo_offset_3"), -35, "LFO 3's offset recalled after a reload")
-  assert_equal(params:get("lfo_offset_1"), 12, "LFO 1's offset recalled after a reload")
+  assert_equal(params:get("strata_lfo3"), 1)
+  assert_equal(params:get("strata_lfo3_offset"), -35, "LFO 3's offset recalled after a reload")
+  assert_equal(params:get("strata_lfo1_offset"), 12, "LFO 1's offset recalled after a reload")
 
   -- scenes saved without offsets (version 2, and version 3 before #103) load with offsets 0
   local old = deep_copy(local_value("scenes")[2])
-  for n = 1, 3 do old.data["lfo_offset_" .. n] = nil end
+  for n = 1, 3 do old.data["strata_lfo" .. n .. "_offset"] = nil end
   for _, version in ipairs({ 2, 3 }) do
     tab.save({ version = version, scenes = { [2] = deep_copy(old) } }, context.data_dir .. "strata/scenes.data")
     load_scenes_from_disk()
     local loaded = local_value("scenes")[2]
     assert_true(loaded.populated, "a version " .. version .. " scene without offsets loads")
     for n = 1, 3 do
-      assert_equal(loaded.data["lfo_offset_" .. n], 0, "version " .. version .. ": offset " .. n .. " migrates to 0")
+      assert_equal(loaded.data["strata_lfo" .. n .. "_offset"], 0, "version " .. version .. ": offset " .. n .. " migrates to 0")
     end
-    params:set("lfo_offset_3", 25)
+    params:set("strata_lfo3_offset", 25)
     recall_scene(2, 0)
-    assert_equal(params:get("lfo_offset_3"), 0, "version " .. version .. ": the migrated offset is recalled")
+    assert_equal(params:get("strata_lfo3_offset"), 0, "version " .. version .. ": the migrated offset is recalled")
   end
 
   -- validation covers the offset's range (-100..100, every baseline's)
   capture_scene(1)
   local scene = deep_copy(local_value("scenes")[1])
   for _, good in ipairs({ -100, -50, 0, 12.5, 100 }) do
-    scene.data.lfo_offset_2 = good
+    scene.data.strata_lfo2_offset = good
     assert_true(validate_scene(scene), "offset " .. good .. " accepted")
   end
   for _, bad in ipairs({ 101, -100.5, 150, 0 / 0, "20%", {} }) do
-    scene.data.lfo_offset_2 = bad
+    scene.data.strata_lfo2_offset = bad
     assert_true(not validate_scene(scene), "offset " .. tostring(bad) .. " rejected")
   end
-  scene.data.lfo_offset_2 = nil
+  scene.data.strata_lfo2_offset = nil
   assert_true(not validate_scene(scene), "a missing offset is rejected (migration fills it)")
   -- a file with a bad offset is not loaded
-  scene.data.lfo_offset_2 = 250
+  scene.data.strata_lfo2_offset = 250
   tab.save({ version = 3, scenes = { scene } }, context.data_dir .. "strata/scenes.data")
-  local captured_offset = local_value("scenes")[1].data.lfo_offset_2
+  local captured_offset = local_value("scenes")[1].data.strata_lfo2_offset
   load_scenes_from_disk()
-  assert_equal(local_value("scenes")[1].data.lfo_offset_2, captured_offset, "the bad file is not loaded")
+  assert_equal(local_value("scenes")[1].data.strata_lfo2_offset, captured_offset, "the bad file is not loaded")
   assert_true(local_value("scenes")[2].populated, "the current scenes stay")
   assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
 end)
@@ -2040,30 +2047,30 @@ end)
 -- the state
 test("a fade that stops an LFO fades its depth out and holds its period and offset (#408)", function()
   local context = load_strata(); finish_startup(context)
-  params:set("lfo_depth_1", 80); params:set("lfo_free_1", 30); params:set("lfo_offset_1", -40)
-  params:set("lfo_1", 1)                                          -- off in the scene
+  params:set("strata_lfo1_depth", 80); params:set("strata_lfo1_rate", 1 / 30); params:set("strata_lfo1_offset", -40)
+  params:set("strata_lfo1", 0)                                    -- off in the scene
   capture_scene(1)
-  params:set("lfo_depth_1", 10); params:set("lfo_free_1", 4); params:set("lfo_offset_1", 20)
-  params:set("lfo_1", 2)                                          -- on now
-  local period = params:get("lfo_free_1")
+  params:set("strata_lfo1_depth", 10); params:set("strata_lfo1_rate", 0.25); params:set("strata_lfo1_offset", 20)
+  params:set("strata_lfo1", 1)                                    -- on now
+  local rate = params:get("strata_lfo1_rate")
   recall_scene(1, 20)                                             -- 20 steps of 1 s
   local previous = 10
   for step = 1, 20 do
-    local depth = params:get("lfo_depth_1")
+    local depth = params:get("strata_lfo1_depth")
     assert_true(depth <= previous, "step " .. step .. ": the depth never rises (" .. previous .. " -> " .. depth .. ")")
     assert_equal(depth, math.floor(depth), "step " .. step .. ": a whole percent")
     assert_near(depth, 10 * (1 - step / 20), 0.5, "step " .. step .. ": the depth fades toward 0")
-    assert_equal(params:get("lfo_free_1"), period, "step " .. step .. ": the period holds")
-    assert_equal(params:get("lfo_offset_1"), 20, "step " .. step .. ": the offset holds")
-    assert_equal(params:string("lfo_1"), "on", "step " .. step .. ": the LFO runs until the end")
+    assert_equal(params:get("strata_lfo1_rate"), rate, "step " .. step .. ": the rate holds")
+    assert_equal(params:get("strata_lfo1_offset"), 20, "step " .. step .. ": the offset holds")
+    assert_equal(params:get("strata_lfo1"), 1, "step " .. step .. ": the LFO runs until the end")
     previous = depth
     wake(context, "scene_transition_clock")
   end
   assert_equal(local_value("scene_transition_active"), false, "the fade landed")
-  assert_equal(params:string("lfo_1"), "off", "the LFO stops at the end")
-  assert_equal(params:get("lfo_depth_1"), 80, "with the scene's depth")
-  assert_near(params:get("lfo_free_1"), 30, 1e-9, "the scene's period")
-  assert_equal(params:get("lfo_offset_1"), -40, "and the scene's offset")
+  assert_equal(params:get("strata_lfo1"), 0, "the LFO stops at the end")
+  assert_equal(params:get("strata_lfo1_depth"), 80, "with the scene's depth")
+  assert_near(params:get("strata_lfo1_rate"), 1 / 30, 1e-6, "the scene's rate")
+  assert_equal(params:get("strata_lfo1_offset"), -40, "and the scene's offset")
 end)
 
 -- #411: what the review's mutations of lib/scenes.lua survived
@@ -2362,7 +2369,7 @@ end
 local function reference_targets(S, scene_data)
   local NUM_VOICES, NUM_MOD_SLOTS = S.constants.NUM_VOICES, S.constants.NUM_MOD_SLOTS
   local GRAIN_PARAM_IDS, DISCRETE_GRAIN_KEYS = S.constants.GRAIN_PARAM_IDS, S.constants.DISCRETE_GRAIN_KEYS
-  local LFO_STATE = {off = 1, on = 2}
+  local LFO_STATE = {off = 0, on = 1}
   local function registered_voice_scene_keys()
     local keys = {}
     for _, record in ipairs(S.registry.voice_params) do
@@ -2393,7 +2400,7 @@ local function reference_targets(S, scene_data)
   -- keeps its period and offset: the end sets the scene's values with the
   -- state (#408)
   local function stops(n)
-    return params:get("lfo_" .. n) == LFO_STATE.on and scene_data["lfo_" .. n] == LFO_STATE.off
+    return params:get("strata_lfo" .. n) == LFO_STATE.on and scene_data["strata_lfo" .. n] == LFO_STATE.off
   end
   for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
     if global.continuous then
@@ -2482,7 +2489,7 @@ local function prepare_recall_run(run)
     if S.voices[voice].active ~= active then toggle_voice(voice) end
   end
   scramble_state(100 + run)
-  params:set("reverb_mix", 0.62); params:set("filter_type", 2); params:set("lfo_1", 1)
+  params:set("reverb_mix", 0.62); params:set("filter_type", 2); params:set("strata_lfo1", 0)
   for voice = 1, 7 do
     local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.scene_source)
@@ -2492,7 +2499,7 @@ local function prepare_recall_run(run)
   end
   capture_scene(1)
   scramble_state(200 + run)
-  params:set("reverb_mix", 0.15); params:set("filter_type", 1); params:set("lfo_1", 2)
+  params:set("reverb_mix", 0.15); params:set("filter_type", 1); params:set("strata_lfo1", 1)
   for voice = 1, 7 do
     local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.now_source)
@@ -2549,15 +2556,15 @@ test("scene_transition_targets lists the same targets as before the rewrite", fu
   local S = local_value("S")
   scramble_state(31)
   params:set("reverb_mix", 0.7)
-  params:set("lfo_depth_1", 80); params:set("lfo_free_1", 30); params:set("lfo_offset_1", -40)
-  params:set("lfo_1", 1)                                          -- LFO 1 off in the scene
-  params:set("lfo_depth_2", 60); params:set("lfo_2", 2)          -- LFO 2 on in both
+  params:set("strata_lfo1_depth", 80); params:set("strata_lfo1_rate", 1 / 30); params:set("strata_lfo1_offset", -40)
+  params:set("strata_lfo1", 0)                                    -- LFO 1 off in the scene
+  params:set("strata_lfo2_depth", 60); params:set("strata_lfo2", 1)   -- LFO 2 on in both
   capture_scene(1)
   scramble_state(32)
   params:set("reverb_mix", 0.2)
-  params:set("lfo_depth_1", 10); params:set("lfo_free_1", 4); params:set("lfo_offset_1", 20)
-  params:set("lfo_1", 2)                                          -- on now: the fade stops it
-  params:set("lfo_depth_2", 20)
+  params:set("strata_lfo1_depth", 10); params:set("strata_lfo1_rate", 0.25); params:set("strata_lfo1_offset", 20)
+  params:set("strata_lfo1", 1)                                    -- on now: the fade stops it
+  params:set("strata_lfo2_depth", 20)
   local scene_data = S.scenes[1].data
   local expected = reference_targets(S, scene_data)
   local targets = scene_transition_targets(scene_data)
@@ -2572,10 +2579,10 @@ test("scene_transition_targets lists the same targets as before the rewrite", fu
   local by_id = {}
   for _, target in ipairs(targets) do by_id[target.id] = target end
   assert_near(by_id.reverb_mix.target, 0.7, 1e-9, "reverb mix fades to the scene's")
-  assert_equal(by_id.lfo_depth_1.target, 0, "the stopped LFO's depth fades to 0")
-  assert_equal(by_id.lfo_free_1, nil, "and its period holds")
-  assert_equal(by_id.lfo_offset_1, nil, "and its offset holds")
-  assert_equal(by_id.lfo_depth_2.target, 60, "a running LFO the scene keeps fades to the scene's depth")
+  assert_equal(by_id.strata_lfo1_depth.target, 0, "the stopped LFO's depth fades to 0")
+  assert_equal(by_id.strata_lfo1_rate, nil, "and its rate holds")
+  assert_equal(by_id.strata_lfo1_offset, nil, "and its offset holds")
+  assert_equal(by_id.strata_lfo2_depth.target, 60, "a running LFO the scene keeps fades to the scene's depth")
   assert_equal(by_id.filter_type, nil, "a discrete global is no target")
 end)
 

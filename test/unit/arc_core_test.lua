@@ -135,11 +135,11 @@ test("ALT switches to the page's ALT rings", function()
   assert_equal(alt_draws, 1, "and the FX rings are drawn")
   -- a page without ALT rings keeps its own under ALT
   show_page("LFO")
-  local depth = params:get("lfo_depth_1")
+  local depth = params:get("strata_lfo1_depth")
   S.alt_held = true
   context.arc.turn(1, 1, 100)
   S.alt_held = false
-  assert_true(params:get("lfo_depth_1") > depth, "LFO has no ALT rings: ring 1 stays lfo depth")
+  assert_true(params:get("strata_lfo1_depth") > depth, "LFO has no ALT rings: ring 1 stays lfo depth")
 end)
 
 test("the arc button calls the page's arc_button", function()

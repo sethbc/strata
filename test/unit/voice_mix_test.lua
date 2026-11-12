@@ -109,11 +109,11 @@ test("the voice filter cutoff and both sends are LFO destinations", function()
   assert_equal(S.LFO_DESTINATIONS[built_in].label, "v7 scan", "the last built-in stays where it was")
   -- an LFO on v1's reverb send modulates the engine value, never the param
   params:set("v1_reverb_send", 0.5)
-  local lfo = local_value("lfos")[1]
   params:set("strata_lfo1_dest", labels["v1 rsend"])
-  params:set("lfo_depth_1", 100); params:set("lfo_1", 2)
+  params:set("strata_lfo1_shape", 3); params:set("strata_lfo1_rate", 0.003)   -- a square at its top
+  params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
   context.clear_engine_calls()
-  context.lfo.tick(lfo, 1.0)
+  context.clock.advance_until(S.lfo_clock)
   local sent = sent_grain(context, "reverbSend")
   assert_true(#sent > 0 and sent[#sent].value > 0.5, "the LFO raises the send the engine gets")
   assert_near(params:get("v1_reverb_send"), 0.5, 1e-9, "the param keeps its value")

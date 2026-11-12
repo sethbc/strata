@@ -8,7 +8,7 @@
 -- send_engine_value and grain_key_message are fields of this module's table
 -- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
 -- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
--- (apply_lfo); start_voice for the pattern clock (lib/sequencer.lua).
+-- (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua).
 -- 3.4's hooks are fields too: the base override (set_base_override,
 -- clear_base_override, engine_base_value), extra offsets
 -- (set_extra_offset) and the send budget (deferrable, budget_state;

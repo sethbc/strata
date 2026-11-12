@@ -10,7 +10,7 @@ The screen has eight pages, in this order (each page's own controls are on its p
 2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo; held half a second, it resets the row to its default), ALT+K3 locks the voice
 3. [SEQ](pages/seq.md) - the pattern sequencer: all seven patterns, transport and tempo. ALT+E2 picks the voice row, ALT+E3 sets the tempo, ALT+K2 randomizes the voice's pattern when you let go of K2 (again within 5 s to undo), ALT+K3 clears it
 4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb. ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo)
-5. [LFO](pages/lfo.md) - the three LFOs. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 randomizes the LFO's shape and rate when you let go of K2 (again within 5 s to undo; held half a second, it resets the setting to its default), ALT+K3 turns the LFO on or off
+5. [LFO](pages/lfo.md) - the six LFOs, three at a time. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 randomizes the LFO's shape, rate and phase when you let go of K2 (again within 5 s to undo; held half a second, it resets the setting to its default), ALT+K3 turns the LFO on or off
 6. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
 7. [SCENES](pages/scenes.md) - the eight scenes and the scene sequencer. ALT+K3 saves the current sound into the slot
 8. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own

@@ -65,15 +65,17 @@ test("every arc ring lights all 64 LEDs at its maximum, about half at half, none
   check("MAIN", { "master_density", main_param_id(voice),
              "v" .. voice .. "_grain_size", "v" .. voice .. "_grain_density" }, "MAIN")
   check("FX", { "filter_freq", "filter_res", "delay_time", "delay_mix" }, "FX")
+  -- rings 1-3 the depths of the window's three LFOs (LFOs 1-3 with LFO 1
+  -- selected), ring 4 the selected LFO's rate
   local lfo = {}
-  for n = 1, local_value("NUM_LFOS") do lfo[n] = "lfo_depth_" .. n end
+  for n = 1, 3 do lfo[n] = "strata_lfo" .. n .. "_depth" end
   local selected_lfo = local_value("selected_lfo")
-  lfo[4] = "lfo_free_" .. selected_lfo
+  lfo[4] = "strata_lfo" .. selected_lfo .. "_rate"
   check("LFO", lfo, "LFO")
-  -- in clocked mode ring 4 shows the rate: an option param with an even
-  -- number of rates has no middle index, so only its ends are checked
-  params:set("lfo_mode_" .. selected_lfo, 1)
-  local clocked_id = "lfo_clocked_" .. selected_lfo
+  -- in clocked mode ring 4 shows the division: an option param with an even
+  -- number of divisions has no middle index, so only its ends are checked
+  params:set("strata_lfo" .. selected_lfo .. "_mode", 2)
+  local clocked_id = "strata_lfo" .. selected_lfo .. "_division"
   local _, slowest_rate = param_range(clocked_id)
   params:set(clocked_id, slowest_rate); arc_redraw()
   assert_equal(lit(4), 64, "LFO ring 4 (" .. clocked_id .. ") at maximum")
@@ -145,9 +147,9 @@ test("every continuous arc ring sweeps its param's range in a full turn, followi
   for ring, param_id in ipairs({ "v1_buf_pos" }) do
     sweep("BUFFER", ring, param_id, "BUFFER ring " .. ring)
   end
-  -- LFO ring 4 in free mode (the selected LFO's period); its depth rings and
-  -- clocked rate keep their whole steps (the arc LFO page test)
-  sweep("LFO", 4, "lfo_free_1", "LFO ring 4, free period")
+  -- LFO ring 4 in free mode (the selected LFO's rate); its depth rings and
+  -- clocked division keep their whole steps (the arc LFO page test)
+  sweep("LFO", 4, "strata_lfo1_rate", "LFO ring 4, free rate")
 end)
 
 test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", function()
@@ -435,52 +437,69 @@ test("ring fills follow the params' ranges; scan is bipolar", function()
   assert_true(lit(4) > 30)
 end)
 
-test("arc LFO page: rings 1-3 depth, ring 4 period of the selected LFO", function()
+test("arc LFO page: rings 1-3 the window's depths, ring 4 the selected LFO's rate or division", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
-  show_page("LFO"); for n = 1, 3 do params:set("lfo_depth_" .. n, 0) end   -- LFOs start at 25%
-  context.arc.turn(1, 1, 100); assert_equal(params:get("lfo_depth_1"), 10, "ring 1: 10 ticks per percent")
-  context.arc.turn(1, 3, 55); assert_equal(params:get("lfo_depth_3"), 5, "whole percents only")
-  context.arc.turn(1, 3, 5); assert_equal(params:get("lfo_depth_3"), 6, "remainder carried")
+  local function depth(n) return "strata_lfo" .. n .. "_depth" end
+  show_page("LFO"); for n = 1, 6 do params:set(depth(n), 0) end   -- LFOs start at 25%
+  context.arc.turn(1, 1, 100); assert_equal(params:get(depth(1)), 10, "ring 1: 10 ticks per percent")
+  context.arc.turn(1, 3, 55); assert_equal(params:get(depth(3)), 5, "whole percents only")
+  context.arc.turn(1, 3, 5); assert_equal(params:get(depth(3)), 6, "remainder carried")
   next_frame(context)
   assert_near(device.segments[1].to, 0.1 * math.pi * 2, 1e-9, "ring 1 shows depth")
   key(3, 1); key(3, 0)   -- LFO 2
-  local period = params:get("lfo_free_2")
-  context.arc.turn(1, 4, 100); assert_true(params:get("lfo_free_2") > period, "ring 4: free period")
-  assert_equal(params:get("lfo_free_1"), 4, "only the selected LFO")
+  local rate = params:get("strata_lfo2_rate")
+  context.arc.turn(1, 4, 100); assert_true(params:get("strata_lfo2_rate") > rate, "ring 4: the free rate")
+  assert_near(params:get("strata_lfo1_rate"), 0.25, 1e-9, "only the selected LFO")
   next_frame(context)
-  assert_near(device.segments[4].to, param_fraction("lfo_free_2") * math.pi * 2, 1e-9, "ring 4 shows the period")
-  params:set("lfo_mode_2", 1)   -- clocked
-  local rate = params:get("lfo_clocked_2")
-  context.arc.turn(1, 4, -40); assert_equal(params:get("lfo_clocked_2"), rate - 2, "ring 4: clocked rate, 20 ticks a step")
+  assert_near(device.segments[4].to, param_fraction("strata_lfo2_rate") * math.pi * 2, 1e-9, "ring 4 shows the rate")
+  params:set("strata_lfo2_mode", 2)   -- clocked
+  local division = params:get("strata_lfo2_division")
+  context.arc.turn(1, 4, -40)
+  assert_equal(params:get("strata_lfo2_division"), division - 2, "ring 4: the division, 20 ticks a step")
   next_frame(context)
-  assert_near(device.segments[4].to, param_fraction("lfo_clocked_2") * math.pi * 2, 1e-9)
+  assert_near(device.segments[4].to, param_fraction("strata_lfo2_division") * math.pi * 2, 1e-9)
+  -- LFO 5 selected: the window is LFOs 4-6, and so are rings 1-3
+  for _ = 1, 3 do key(3, 1); key(3, 0) end
+  assert_equal(local_value("selected_lfo"), 5)
+  for ring = 1, 3 do context.arc.turn(1, ring, 10 * ring) end
+  for n = 4, 6 do assert_equal(params:get(depth(n)), n - 3, "ring " .. (n - 3) .. " is LFO " .. n .. "'s depth") end
+  assert_equal(params:get(depth(1)), 10, "LFO 1 is left alone")
+  params:set("strata_lfo5", 1); next_frame(context)
+  assert_equal(device.segments[2].level, 15, "ring 2 bright: LFO 5 runs")
+  assert_equal(device.segments[1].level, 4, "ring 1 dim: LFO 4 is off")
 end)
 
 test("arc LFO ring 4 forgets its carried ticks when the selected LFO or its mode changes", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1); show_page("LFO")
-  for n = 1, 3 do params:set("lfo_mode_" .. n, 1) end   -- clocked: 20 ticks a rate step
-  local rate_1, rate_2 = params:get("lfo_clocked_1"), params:get("lfo_clocked_2")
-  context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_1"), rate_1, "15 ticks carried for LFO 1")
+  local function division(n) return "strata_lfo" .. n .. "_division" end
+  for n = 1, 3 do params:set("strata_lfo" .. n .. "_mode", 2) end   -- clocked: 20 ticks a division step
+  local rate_1, rate_2 = params:get(division(1)), params:get(division(2))
+  context.arc.turn(1, 4, 15); assert_equal(params:get(division(1)), rate_1, "15 ticks carried for LFO 1")
   key(3, 1); key(3, 0)   -- LFO 2
   context.arc.turn(1, 4, 5)
-  assert_equal(params:get("lfo_clocked_2"), rate_2, "LFO 1's carried ticks do not step LFO 2")
-  context.arc.turn(1, 4, 15); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "20 of its own ticks do")
+  assert_equal(params:get(division(2)), rate_2, "LFO 1's carried ticks do not step LFO 2")
+  context.arc.turn(1, 4, 15); assert_equal(params:get(division(2)), rate_2 + 1, "20 of its own ticks do")
   -- away and back again also forgets them
   context.arc.turn(1, 4, 15); key(2, 1); key(2, 0); key(3, 1); key(3, 0)
-  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "reselecting forgets the carry")
+  context.arc.turn(1, 4, 5); assert_equal(params:get(division(2)), rate_2 + 1, "reselecting forgets the carry")
   -- the selected LFO's mode changing forgets them
   context.arc.turn(1, 4, 10)   -- 15 carried
-  params:set("lfo_mode_2", 2); params:set("lfo_mode_2", 1)
-  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 1, "a mode change forgets the carry")
+  params:set("strata_lfo2_mode", 1); params:set("strata_lfo2_mode", 2)
+  context.arc.turn(1, 4, 5); assert_equal(params:get(division(2)), rate_2 + 1, "a mode change forgets the carry")
   -- another LFO's mode changing does not
   context.arc.turn(1, 4, 10)   -- 15 carried
-  params:set("lfo_mode_3", 2)
-  context.arc.turn(1, 4, 5); assert_equal(params:get("lfo_clocked_2"), rate_2 + 2, "LFO 3's mode leaves LFO 2's carry")
-  -- the depth rings keep their own remainders
-  context.arc.turn(1, 1, 5); key(3, 1); key(3, 0); context.arc.turn(1, 1, 5)
-  assert_equal(params:get("lfo_depth_1"), 26, "ring 1's carry survives a selection change")
+  params:set("strata_lfo3_mode", 1)
+  context.arc.turn(1, 4, 5); assert_equal(params:get(division(2)), rate_2 + 2, "LFO 3's mode leaves LFO 2's carry")
+  -- the depth rings keep their remainders while the window stays, and
+  -- forget them when it moves
+  context.arc.turn(1, 1, 5); key(2, 1); key(2, 0); context.arc.turn(1, 1, 5)
+  assert_equal(params:get("strata_lfo1_depth"), 26, "ring 1's carry survives a selection inside the window")
+  context.arc.turn(1, 1, 5)
+  key(3, 1); key(3, 0); key(3, 1); key(3, 0)   -- LFO 3: the window is LFOs 2-4
+  context.arc.turn(1, 1, 5)
+  assert_equal(params:get("strata_lfo2_depth"), 25, "a new window forgets the carry")
 end)
 
 -- LEDs lit on a ring of the arc stub
@@ -535,12 +554,12 @@ test("an arc ring's whole-step turn is an arc touch", function()
   end
   -- LFO: a depth ring (whole percents) and ring 4 on a clocked rate
   show_page("LFO")
-  params:set("lfo_depth_1", 0)
+  params:set("strata_lfo1_depth", 0)
   context.arc.turn(1, 1, 10)
-  assert_equal(take(), "lfo_depth_1:arc", "LFO's depth ring")
-  params:set("lfo_mode_1", 1)  -- clocked
+  assert_equal(take(), "strata_lfo1_depth:arc", "LFO's depth ring")
+  params:set("strata_lfo1_mode", 2)  -- clocked
   context.arc.turn(1, 4, 20)
-  assert_equal(take(), "lfo_clocked_1:arc", "LFO ring 4 on a clocked rate")
+  assert_equal(take(), "strata_lfo1_division:arc", "LFO ring 4 on a clocked division")
   -- SEQ: ring 3, the tempo
   show_page("SEQ")
   context.arc.turn(1, 3, 10)
@@ -1060,7 +1079,7 @@ test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO and BUFFER draw the lev
   assert_levels({12, 12, 12, 12}, "FX")
   -- LFO: depth rings 15 while running, 4 off; ring 4 at 12
   show_page("LFO")
-  params:set("lfo_1", 2); params:set("lfo_2", 1); params:set("lfo_3", 1)
+  params:set("strata_lfo1", 1); params:set("strata_lfo2", 0); params:set("strata_lfo3", 0)
   arc_redraw()
   assert_levels({15, 4, 4, 12}, "LFO")
   -- BUFFER: 15 for a buffer source, 4 otherwise; ALT ring 4 always 12, ALT ring 3 follows the voice

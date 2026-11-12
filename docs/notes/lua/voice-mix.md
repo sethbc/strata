@@ -25,7 +25,7 @@ One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/pa
 
 - Stored in `S.voices[i].extras`; scene defaults are the param defaults (3.1's chain), and `discrete = {filter_type = {1, 3}, mute = {0, 1}}` (`scene_defaults.mute` = 0; `solo` is in neither). VOICE shows `mute` and `solo` as binary rows after the sends.
 - VOICE: the section `filter & sends`, after mix, on every source (`M.VOICE_MIX.section`). Its `layout_states` put each voice on each source (synth, buf 1, input) with the cursor on the section's first and last row, at bandpass and 20000 Hz.
-- LFO destinations (`S.register_lfo_destination`): `vfilt` (`filter_freq`), `dsend` (`delay_send`), `rsend` (`reverb_send`). `lib/history.lua` is included first, so `v<i> hist` comes before them.
+- LFO destinations (`S.register_lfo_destination`): `vfilt` (`filter_freq`), `dsend` (`delay_send`), `rsend` (`reverb_send`), then 3.4's `amp` (the voice's `amp`, 97-103; `vfilt` and `amp` run in the engine, `docs/notes/lua/lfos.md`). `lib/history.lua` is included first, so `v<i> hist` comes before them.
 
 The bypass params (`S.register_fx_params`, record `bypass`, count 2), at the end of the fx group: `delay_bypass` and `reverb_bypass`, binary toggles, default 0 (`M.BYPASS`, in `M.BYPASS_ORDER`). Their senders (`S.engine_senders`, set in the record's `add`) call `engine.setBypass(0, v)` and `engine.setBypass(1, v)`; their actions go through `send_param_to_engine`. `M.bypassed(effect)` ("delay", "reverb") is true while the param is on; the FX page reads it (`docs/notes/lua/pages/fx.md`).
 

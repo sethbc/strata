@@ -7,7 +7,7 @@ Strata includes a comprehensive scene system for longer-form composition and aut
 - **Disk Persistence** - Each scene you save is written to disk at once, and the scenes load on startup ([Saved scenes on disk](#saved-scenes-on-disk))
 - **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
 - **Scene Sequencer** - Automatically progress through scenes for hands-free composition
-- **Complete State Capture** - Scenes store voice parameters and sources, patterns, lock states, and global settings, including each LFO's state, shape, rate, depth, offset and destination (not the audio in the sample buffers)
+- **Complete State Capture** - Scenes store voice parameters and sources, patterns, lock states, and global settings, including each LFO's state, shape, rate, depth, offset, phase, inputs and destination (not the audio in the sample buffers)
 - **Grid Integration** - Dedicated scene page on grid for performance control
 - **Visual Feedback** - `S1`-`S8` indicator shows current scene on screen
 
@@ -35,7 +35,7 @@ Perfect for creating structured ambient compositions with multiple movements or 
 - Press row 1 buttons for instant scene changes (good for rhythmic switching)
 - Press row 2 buttons for smooth crossfades (good for ambient transitions). Saving into the scene a crossfade is heading for stores the sound as it is at that moment; the crossfade still ends on the scene as it was recalled
 - A crossfade's scene shows as current (on the screen's `S1`-`S8`, the SCENES page and the grid) from its start, and blinks until the crossfade lands: it changes with each of the crossfade's 20 steps (every 0.1 s for a 2 s crossfade), then stays lit. A blinking scene is still on its way, so a save during it stores a half-faded sound. If the crossfade does not land (the sequencer cancels it, scenes are loaded from disk, or an error stops it), the scene before it is current again, since the crossfade's own scene was never fully applied. A recall that interrupts a crossfade makes its own scene current; if that recall fails too, the last scene that landed is current
-- A crossfade to a scene that has an LFO off, while that LFO runs, fades the LFO out (its depth to 0, its free period and offset held), then switches it off with the scene's settings; an LFO the scene keeps on fades its depth, free period and offset toward the scene's
+- A crossfade to a scene that has an LFO off, while that LFO runs, fades the LFO out (its depth to 0, its rate and offset held), then switches it off with the scene's settings; an LFO the scene keeps on fades its depth, rate and offset toward the scene's
 - Adjust transition time in PARAMETERS to control crossfade duration
 
 **Automatic Scene Sequencing**:

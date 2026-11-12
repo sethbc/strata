@@ -24,7 +24,8 @@ return function(S)
     filter_types = {"lowpass", "highpass", "bandpass"},
     keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send", "mute", "solo"},
     lfo = {{label = "vfilt", key = "filter_freq"}, {label = "dsend", key = "delay_send"},
-      {label = "rsend", key = "reverb_send"}},
+      {label = "rsend", key = "reverb_send"},
+      {label = "amp", key = "amp"}},
   }
 
   -- The bypass params, by effect: the param id and engine.setBypass's

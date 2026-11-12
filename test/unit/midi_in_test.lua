@@ -554,9 +554,9 @@ test("PARAMS' fine turn steps every one of Strata's number params whole; midi_de
       end
     end
   end
-  -- tempo, the sequence length, midi_device, record_beats, 21 mod sources,
-  -- 35 custom intervals and the LFOs' depth, phase and offset
-  assert_true(numbers >= 4 + 21 + 35 + 9, numbers .. " number params turned")
+  -- tempo, the sequence length, midi_device, record_beats, 21 mod sources
+  -- and 35 custom intervals (3.4's LFO percents are control params)
+  assert_true(numbers >= 4 + 21 + 35, numbers .. " number params turned")
   assert_equal(params:get("clock_tempo"), params:get("tempo"), "norns' clock_tempo follows tempo")
   local system_delta = params:lookup_param("link_quantum")
   system_delta:delta(1 / 20)

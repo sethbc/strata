@@ -1,91 +1,124 @@
 -- lib/pages/lfo.lua
--- The LFO page: one row per LFO (shape, phase dot, destination, depth) and,
--- under the selected LFO's row, a strip of its seven fields (destination,
--- shape, mode, rate, depth, offset, on/off). E2 moves along the strip, E3
--- edits the field (ALT+E3 on the destination jumps a group), K2/K3 select
--- the LFO, ALT+K2 on release randomizes the selected LFO's shape and rate
+-- The LFO page: a window of three of the six LFOs (the selected one and its
+-- neighbors, lib/lfos.lua's window), one row each (shape, phase dot,
+-- destination, depth), and under the selected LFO's row a strip of its
+-- twelve fields (destination, shape, mode, rate, depth, offset, phase, rate
+-- mod, rate amt, depth mod, depth amt, on/off). E2 moves along the strip, E3
+-- edits the field (ALT+E3 on the destination jumps a group, on the rate is
+-- fine, on a percent keeps whole steps), K2/K3 select the LFO, ALT+K2 on
+-- release randomizes the selected LFO's shape, rate or division and phase
 -- (again within 5 s to undo; held past the hold time, it resets the field),
 -- ALT+K3 and the arc button turn the LFO on and off. Registers its
--- S.registry.pages record. The strip's cursor is
--- S.lfo_field (an index into LFO_FIELDS). The functions that were global
--- stay global, as do lfo_dest_group_starts and lfo_dest_group_jump;
--- lfo_running (for the arc rings), row_top, strip_y and layout (LFO_PAGE,
--- for the tests) are fields of this module's table (S.lib.pages_lfo).
+-- S.registry.pages record. The strip's cursor is S.lfo_field (an index into
+-- LFO_FIELDS). The functions that were global stay global, as do
+-- lfo_dest_group_starts and lfo_dest_group_jump; lfo_running, show_lfo,
+-- select_lfo_by, row_top, strip_y and layout (LFO_PAGE, for the tests) are
+-- fields of this module's table (S.lib.pages_lfo).
 
 return function(S)
   local M = {}
   local NUM_LFOS = S.constants.NUM_LFOS
-  local NUM_VOICES = S.constants.NUM_VOICES
   local UI_PAGES = S.constants.UI_PAGES
 
-  -- LFO page: one row per LFO from y 11 (clear of the header): "L<n>", one
-  -- cycle of its shape (64 px), a dot at the estimated phase and last raw
-  -- value while it runs, then its destination and state/depth right-aligned.
-  -- The selected LFO's field strip sits under its row, and the rows below it
-  -- move down to make room, so everything ends by y 55, above the hint row.
-  -- Rows 13 px apart: a destination (baseline top + 4) sits 6 px under the
-  -- row above's state text (top - 2), a blank pixel row between them, and
-  -- 7 px over its own (top + 11), which its descender clears (#422)
+  -- LFO page: one row per LFO of the window from y 11 (clear of the header):
+  -- "L<n>", one cycle of its shape (wave_width px), a dot at its phase and
+  -- value while it runs, then its destination and state/depth
+  -- right-aligned; the window's mark ("4-6") right of the first row's wave,
+  -- on its lower line. The selected LFO's field strip sits under its row,
+  -- and the rows below it move down to make room, so everything ends by y
+  -- 55, above the hint row. Rows 13 px apart: a destination (baseline top +
+  -- 4) sits 6 px under the row above's state text, and 7 px over its own
+  -- (top + 11), which its descender clears (#422). The wave stops short of
+  -- the mark, which stops short of the widest state text ("off 100% R")
   local LFO_PAGE = {
-    row_first_y = 11,   -- top of LFO 1's row
+    row_first_y = 11,   -- top of the window's first row
     row_spacing = 13,
     wave_height = 10,   -- shape value 1 at the row top, 0 at top + 10
     wave_x = 12,
-    wave_width = 64,
+    wave_width = 52,
+    mark_x = 66,          -- the window mark, left-aligned on the first row's lower line
     strip_baseline = 18,  -- the strip's text baseline, below its row's top
     strip_height = 8,     -- how far the rows under the strip move down
     strip_gap = 6,        -- px between two fields
     strip_right = 127,    -- the strip's right edge (the ">" marker ends here)
-    -- the random shape holds a new value each half cycle; drawn as two steps
-    random_display_levels = {0.75, 0.3}
+    window_rows = 3,
+    -- the random shapes drawn as breakpoints {phase, u} (their real values
+    -- are drawn per cycle; the dot shows them)
+    random_displays = {
+      ["s&h"] = {{0, 0.75}, {0.5, 0.75}, {0.5, 0.3}, {1, 0.3}},
+      smooth = {{0, 0.3}, {0.5, 0.75}, {1, 0.4}},
+      drunk = {{0, 0.5}, {0.25, 0.6}, {0.5, 0.45}, {0.75, 0.55}, {1, 0.5}},
+    },
+    -- ALT+K2's randomize: the free rate even in octaves over free_random,
+    -- any division, a whole phase 0-100
+    free_random = {0.05, 10},
   }
   M.layout = LFO_PAGE
+
+  local function lfos() return S.lib.lfos end
+  local function lfo_param(n, field) return S.lib.lfos.param_id(n, field) end
 
   -- The strip's cursor: the field E3 edits
   S.lfo_field = 1
 
   local function lfo_running(n)
-    return params:get("lfo_" .. n) == 2
+    return params:get(lfo_param(n)) == 1
   end
   M.lfo_running = lfo_running
 
-  -- The rate field edits the period param of the LFO's mode
-  local function rate_param_id(n)
-    if params:string("lfo_mode_" .. n) == "clocked" then return "lfo_clocked_" .. n end
-    return "lfo_free_" .. n
+  local function signed(value)
+    return string.format(value > 0 and "+%.0f%%" or "%.0f%%", value)
+  end
+
+  -- The rate field: the rate in Hz (free) or the division (clocked), and
+  -- "max" after it when it runs in Lua above 10 Hz
+  local function rate_text(n)
+    local text
+    if lfos().is_clocked(n) then
+      text = params:string(lfo_param(n, "division"))
+    else
+      text = string.format("%.3gHz", params:get(lfo_param(n, "rate")))
+    end
+    if lfos().capped(n) then text = text .. " max" end
+    return text
   end
 
   -- The strip's fields, in order: label (the hint row's E3:<label>), the
-  -- param E3 edits for LFO n, and the value the strip shows
+  -- param E3 edits for LFO n (nil: the on/off field), whether ALT+E3 keeps
+  -- whole steps (a percent), and the value the strip shows
   local LFO_FIELDS = {
-    {label = "dest", param = function(n) return "strata_lfo" .. n .. "_dest" end,
-      value = function(n) return S.LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label end},
-    {label = "shape", param = function(n) return "lfo_shape_" .. n end,
-      value = function(n) return params:string("lfo_shape_" .. n) end},
-    {label = "mode", param = function(n) return "lfo_mode_" .. n end,
-      value = function(n) return params:string("lfo_mode_" .. n) end},
-    -- the free period as the library stores it, or the clocked division
-    {label = "rate", param = rate_param_id,
-      value = function(n)
-        if params:string("lfo_mode_" .. n) == "clocked" then return params:string("lfo_clocked_" .. n) end
-        return string.format("%.1fs", params:get("lfo_free_" .. n))
-      end},
-    {label = "depth", param = function(n) return "lfo_depth_" .. n end,
-      value = function(n) return string.format("%.0f%%", params:get("lfo_depth_" .. n)) end},
-    -- norns' lib/lfo.lua adds the offset to its scaled value, which apply_lfo sends
-    {label = "offset", param = function(n) return "lfo_offset_" .. n end,
-      value = function(n)
-        local offset = params:get("lfo_offset_" .. n)
-        return string.format(offset > 0 and "+%.0f%%" or "%.0f%%", offset)
-      end},
-    {label = "on/off", param = function(n) return "lfo_" .. n end,
-      value = function(n) return lfo_running(n) and "on" or "off" end}
+    {label = "dest", param = function(n) return lfo_param(n, "dest") end, value = function(n) return lfos().label(n) end},
+    {label = "shape", param = function(n) return lfo_param(n, "shape") end,
+      value = function(n) return params:string(lfo_param(n, "shape")) end},
+    {label = "mode", param = function(n) return lfo_param(n, "mode") end,
+      value = function(n) return params:string(lfo_param(n, "mode")) end},
+    {label = "rate", param = function(n) return lfo_param(n, lfos().is_clocked(n) and "division" or "rate") end,
+      value = rate_text},
+    {label = "depth", whole = true, param = function(n) return lfo_param(n, "depth") end,
+      value = function(n) return string.format("%.0f%%", params:get(lfo_param(n, "depth"))) end},
+    {label = "offset", whole = true, param = function(n) return lfo_param(n, "offset") end,
+      value = function(n) return signed(params:get(lfo_param(n, "offset"))) end},
+    {label = "phase", whole = true, param = function(n) return lfo_param(n, "phase") end,
+      value = function(n) return string.format("ph %.0f%%", params:get(lfo_param(n, "phase"))) end},
+    {label = "rate mod", param = function(n) return lfo_param(n, "rate_mod") end,
+      value = function(n) return "rmod " .. params:string(lfo_param(n, "rate_mod")) end},
+    {label = "rate amt", whole = true, param = function(n) return lfo_param(n, "rate_mod_amt") end,
+      value = function(n) return "ramt " .. signed(params:get(lfo_param(n, "rate_mod_amt"))) end},
+    {label = "depth mod", param = function(n) return lfo_param(n, "depth_mod") end,
+      value = function(n) return "dmod " .. params:string(lfo_param(n, "depth_mod")) end},
+    {label = "depth amt", whole = true, param = function(n) return lfo_param(n, "depth_mod_amt") end,
+      value = function(n) return "damt " .. signed(params:get(lfo_param(n, "depth_mod_amt"))) end},
+    {label = "on/off", param = function(n) return lfo_param(n) end,
+      value = function(n) return lfo_running(n) and "on" or "off" end},
   }
   local DEST_FIELD, RATE_FIELD, STATE_FIELD = 1, 4, #LFO_FIELDS
 
-  -- Top of LFO n's row: the rows under the selected LFO's sit below its strip
+  -- Top of LFO n's row, or nil when it lies outside the window: the rows
+  -- under the selected LFO's sit below its strip
   local function row_top(n)
-    local top = LFO_PAGE.row_first_y + (n - 1) * LFO_PAGE.row_spacing
+    local first = lfos().window(S.selected_lfo)
+    if n < first or n >= first + LFO_PAGE.window_rows then return nil end
+    local top = LFO_PAGE.row_first_y + (n - first) * LFO_PAGE.row_spacing
     if n > S.selected_lfo then top = top + LFO_PAGE.strip_height end
     return top
   end
@@ -97,24 +130,16 @@ return function(S)
   end
   M.strip_y = strip_y
 
-  -- The destination groups' first indices into S.LFO_DESTINATIONS: none (1),
-  -- the globals (2), each voice's "v<i> main" (found by label), then, after
-  -- the built-in ones (lib/lfos.lua's S.lib.lfos.BUILT_IN_DESTINATIONS),
-  -- each registered destination's "v1 <label>" (found by label): lib/lfos.lua
-  -- lists each registration's v1-v7 together, so each is a group (#511)
+  -- The destination groups' first indices into S.LFO_DESTINATIONS: each
+  -- index whose group (lib/lfos.lua: none, the globals, each voice's
+  -- built-in ones, each per-voice registration's v1-v7, then every global
+  -- registration as one group, #511, #580) differs from the one before it
   function lfo_dest_group_starts()
-    local destinations = S.LFO_DESTINATIONS
-    local starts = {1, 2}
-    local voice_starts = {}
-    for index, destination in ipairs(destinations) do
-      local voice = destination.label:match("^v(%d+) main$")
-      if voice then voice_starts[tonumber(voice)] = index end
-    end
-    for voice = 1, NUM_VOICES do
-      if voice_starts[voice] then table.insert(starts, voice_starts[voice]) end
-    end
-    for index = S.lib.lfos.BUILT_IN_DESTINATIONS + 1, #destinations do
-      if destinations[index].label:match("^v1 ") then table.insert(starts, index) end
+    local starts = {}
+    local previous
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do
+      if destination.group ~= previous then table.insert(starts, index) end
+      previous = destination.group
     end
     return starts
   end
@@ -135,38 +160,64 @@ return function(S)
     return index
   end
 
-  -- Turn LFO n on or off (lib/lfos.lua keeps its offset across on/off)
+  -- Turn LFO n on or off, as a controller mapped to it sees (#538)
   local function set_lfo_running(n, on)
-    params:set("lfo_" .. n, on and 2 or 1)
+    set_binary_param(lfo_param(n), on and 1 or 0)
   end
 
   local function toggle_selected_lfo()
     set_lfo_running(S.selected_lfo, not lfo_running(S.selected_lfo))
   end
 
-  -- K2/K3: the previous or next LFO. Arc ring 4's carried ticks were for
-  -- the old LFO's clocked rate
-  local function select_lfo_by(d)
+  -- The selected LFO: ring 4's carried ticks were for the old LFO's rate,
+  -- and the depth rings' for the old window's LFOs
+  local function select_lfo(n)
     local previous_lfo = S.selected_lfo
-    S.selected_lfo = util.clamp(S.selected_lfo + d, 1, NUM_LFOS)
-    if S.selected_lfo ~= previous_lfo then forget_arc_ticks("lfo:4") end
+    local previous_window = lfos().window(previous_lfo)
+    S.selected_lfo = util.clamp(n, 1, NUM_LFOS)
+    if S.selected_lfo == previous_lfo then return end
+    forget_arc_ticks("lfo:4")
+    if lfos().window(S.selected_lfo) ~= previous_window then
+      for ring = 1, LFO_PAGE.window_rows do forget_arc_ticks("lfo:" .. ring) end
+    end
+    request_redraw()
   end
 
-  -- One point (0..1) of a shape at a phase, as the library's process_lfo
-  -- computes its raw value
-  function lfo_shape_value(shape, phase)
-    if shape == "sine" then
-      return (math.sin(2 * math.pi * phase) + 1) / 2
-    elseif shape == "tri" then
-      return phase < 0.5 and phase / 0.5 or 1 - (phase - 0.5) / 0.5
-    elseif shape == "up" then
-      return phase
-    elseif shape == "down" then
-      return 1 - phase
-    elseif shape == "square" then
-      return phase < 0.5 and 1 or 0
+  -- K2/K3: the previous or next LFO
+  function M.select_lfo_by(d)
+    select_lfo(S.selected_lfo + d)
+  end
+
+  -- The LFO page with LFO n selected (MOD's K3 on an LFO's row)
+  function M.show_lfo(n)
+    select_lfo(n)
+    S.lib.ui_keys.set_ui_page(UI_PAGES.index.LFO)
+  end
+
+  -- One point (0..1) of a shape's drawing at a phase: the deterministic
+  -- shapes as they play (lib/lfos.lua's shape_u), a random one as a
+  -- picture of its kind
+  function lfo_wave_value(shape, phase)
+    local points = LFO_PAGE.random_displays[shape]
+    if not points then
+      for index, name in ipairs(S.lib.lfos.LFO.shapes) do
+        if name == shape then return S.lib.lfos.shape_u(index, phase) end
+      end
+      return 0.5
     end
-    return LFO_PAGE.random_display_levels[phase < 0.5 and 1 or 2]  -- random
+    for index = 2, #points do
+      local from, to = points[index - 1], points[index]
+      if phase <= to[1] and to[1] > from[1] then
+        return from[2] + (to[2] - from[2]) * (phase - from[1]) / (to[1] - from[1])
+      end
+    end
+    return points[#points][2]
+  end
+
+  -- Whether the matrix (package 1h) routes LFO n somewhere: read
+  -- defensively, as the matrix may not be loaded
+  local function routed(n)
+    return S.lib.matrix ~= nil and S.lib.matrix.uses_source("lfo" .. n) and true or false
   end
 
   local function draw_lfo_row(n)
@@ -179,10 +230,10 @@ return function(S)
     screen.move(0, top + 7)
     screen.text("L" .. n)
 
-    local shape = params:string("lfo_shape_" .. n)
+    local shape = params:string(lfo_param(n, "shape"))
     screen.level(running and 6 or 2)
     for px = 0, LFO_PAGE.wave_width - 1 do
-      local y = bottom - lfo_shape_value(shape, px / (LFO_PAGE.wave_width - 1)) * LFO_PAGE.wave_height
+      local y = bottom - lfo_wave_value(shape, px / (LFO_PAGE.wave_width - 1)) * LFO_PAGE.wave_height
       if px == 0 then
         screen.move(LFO_PAGE.wave_x, y)
       else
@@ -191,24 +242,32 @@ return function(S)
     end
     screen.stroke()
 
-    if running and S.lfo_last_raw[n] then
-      local x = util.round(LFO_PAGE.wave_x + lfo_phase_estimate(n) * (LFO_PAGE.wave_width - 1))
-      -- the swing around the middle line follows the depth: the whole wave
-      -- at 100 %, the line itself at 0 % (which moves nothing, #520)
-      local swing = (S.lfo_last_raw[n] - 0.5) * params:get("lfo_depth_" .. n) / 100
+    if running and lfos().has_stepped(n) then
+      local x = util.round(LFO_PAGE.wave_x + lfos().phase(n) * (LFO_PAGE.wave_width - 1))
+      -- the swing around the middle line follows the depth it plays: the
+      -- whole wave at 100 %, the line itself at 0 % (which moves nothing, #520)
+      local swing = lfos().value(n) / 2 * lfos().effective_depth(n) / 100
       local y = util.round(bottom - (0.5 + swing) * LFO_PAGE.wave_height)
       screen.level(15)
       screen.rect(x - 1, y - 1, 3, 3)
-      screen.fill()
+      -- a free engine-run LFO's phase is Lua's estimate: drawn hollow
+      if lfos().is_engine_run(n) and not lfos().is_clocked(n) then screen.stroke() else screen.fill() end
+    end
+
+    if n == lfos().window(S.selected_lfo) then
+      screen.level(4)
+      screen.move(LFO_PAGE.mark_x, top + 11)
+      screen.text(n .. "-" .. (n + LFO_PAGE.window_rows - 1))
     end
 
     screen.level(label_level)
     -- 7 px above the state text, so a descender (the y of "density") clears
     -- it (#422), and 6 px under the row above's (LFO_PAGE.row_spacing)
     screen.move(127, top + 4)
-    screen.text_right(S.LFO_DESTINATIONS[params:get("strata_lfo" .. n .. "_dest")].label)
+    screen.text_right(lfos().label(n))
     screen.move(127, top + 11)
-    screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get("lfo_depth_" .. n)))
+    screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get(lfo_param(n, "depth")))
+      .. (routed(n) and " R" or ""))
   end
 
   -- The strip's view: the first and last field drawn, as many as fit with
@@ -264,7 +323,8 @@ return function(S)
   end
 
   function redraw_lfo()
-    for n = 1, NUM_LFOS do
+    local first = lfos().window(S.selected_lfo)
+    for n = first, first + LFO_PAGE.window_rows - 1 do
       draw_lfo_row(n)
     end
     draw_strip()
@@ -284,7 +344,7 @@ return function(S)
   end
 
   -- E2 moves along the strip; E3 edits the cursor's field of the selected
-  -- LFO (ALT+E3 fine on a control param: the free period)
+  -- LFO (ALT+E3 fine on a control param: the free rate)
   local function lfo_enc(n, d)
     if n == 2 then
       S.lfo_field = util.clamp(S.lfo_field + d, 1, #LFO_FIELDS)
@@ -299,11 +359,18 @@ return function(S)
   end
 
   -- ALT+E3 on the destination jumps a group per detent (none, global,
-  -- v1 ... v7, then each registered destination); anything else goes on to
-  -- lfo_enc
+  -- v1 ... v7, then each registered destination, then the registered
+  -- globals); on a percent it keeps whole steps (a fine step of a whole
+  -- percent would round back); anything else goes on to lfo_enc
   local function lfo_alt_enc(n, d)
-    if n ~= 3 or S.lfo_field ~= DEST_FIELD then return false end
-    local dest_id = LFO_FIELDS[DEST_FIELD].param(S.selected_lfo)
+    if n ~= 3 then return false end
+    local field = LFO_FIELDS[S.lfo_field]
+    if field.whole then
+      delta_with_detent(field.param(S.selected_lfo), d)
+      return true
+    end
+    if S.lfo_field ~= DEST_FIELD then return false end
+    local dest_id = field.param(S.selected_lfo)
     local index = params:get(dest_id)
     for _ = 1, math.abs(d) do
       index = lfo_dest_group_jump(index, d)
@@ -314,9 +381,9 @@ return function(S)
 
   local function lfo_key(n)
     if n == 2 then
-      select_lfo_by(-1)
+      M.select_lfo_by(-1)
     elseif n == 3 then
-      select_lfo_by(1)
+      M.select_lfo_by(1)
     end
   end
 
@@ -331,33 +398,27 @@ return function(S)
     request_redraw()
   end
 
-  -- A quick ALT+K2 randomizes the selected LFO's shape and rate, and nothing
-  -- else (#557): the shape is any option; the rate follows the mode, a free
-  -- period of 0.5-30 s even in octaves, or a clocked division from 1/4 to 16
-  -- (norns' lfo_rates_as_strings positions 3-16), so a running LFO keeps
-  -- running with its destination, depth and offset. The section names the
-  -- LFO and its mode ("lfo 2 free"), so each LFO holds its own undo and a
-  -- mode switch drops the undo of the rate no longer shown; voice is nil,
-  -- so no voice's mutation ends it
-  local CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST = 3, 16
-  local FREE_RANDOM_MIN, FREE_RANDOM_MAX = 0.5, 30
+  -- A quick ALT+K2 randomizes the selected LFO's shape (any of the eight),
+  -- its rate (free: even in octaves over LFO_PAGE.free_random) or division
+  -- (clocked: any), and its phase (a whole 0-100), and nothing else (#557):
+  -- destination, mode, depth, offset, on/off and the four mod params are
+  -- kept, so a running LFO keeps running. The section names the LFO and
+  -- its mode ("lfo 2 free"), so each LFO holds its own undo and a mode
+  -- switch drops the undo of the rate no longer shown; voice is nil, so no
+  -- voice's mutation ends it
   local function lfo_randomize_section()
     local n = S.selected_lfo
-    local mode = params:string("lfo_mode_" .. n)
+    local mode = params:string(lfo_param(n, "mode"))
+    local low, high = LFO_PAGE.free_random[1], LFO_PAGE.free_random[2]
     local draws = {
-      {id = "lfo_shape_" .. n, draw = function()
-        return math.random(#params:lookup_param("lfo_shape_" .. n).options)
-      end}
+      {id = lfo_param(n, "shape"), draw = function() return math.random(#S.lib.lfos.LFO.shapes) end},
     }
     if mode == "clocked" then
-      draws[2] = {id = "lfo_clocked_" .. n, draw = function()
-        return math.random(CLOCKED_RANDOM_FIRST, CLOCKED_RANDOM_LAST)
-      end}
+      draws[2] = {id = lfo_param(n, "division"), draw = function() return math.random(#S.lib.lfos.LFO.divisions) end}
     else
-      draws[2] = {id = "lfo_free_" .. n, draw = function()
-        return FREE_RANDOM_MIN * (FREE_RANDOM_MAX / FREE_RANDOM_MIN) ^ math.random()
-      end}
+      draws[2] = {id = lfo_param(n, "rate"), draw = function() return low * (high / low) ^ math.random() end}
     end
+    draws[3] = {id = lfo_param(n, "phase"), draw = function() return math.random(0, 100) end}
     return {page = UI_PAGES.index.LFO, section = "lfo " .. n .. " " .. mode, voice = nil, draws = draws}
   end
 
@@ -366,7 +427,7 @@ return function(S)
     local lfo = S.selected_lfo
     local param_id = LFO_FIELDS[S.lfo_field].param(lfo)
     if S.lfo_field == STATE_FIELD then
-      set_lfo_running(lfo, param_default(param_id) == 2)
+      set_lfo_running(lfo, param_default(param_id) == 1)
     else
       params:set(param_id, param_default(param_id))
     end
@@ -376,8 +437,9 @@ return function(S)
     if n == 2 then S.lib.ui_alt.k2_up(S.registry.pages[UI_PAGES.index.LFO]) end
   end
 
-  -- The layout test's states: each LFO selected, each strip field under the
-  -- cursor (with wide values), clocked and free
+  -- The layout test's states: each strip field under the cursor on LFOs 1
+  -- and 6 (with wide values), each window, an engine-run and modulated
+  -- LFO, a rate with "max", clocked, and the widest ALT hint
   local function layout_state(name, lfo, field, setup)
     return {name = name, setup = function()
       S.selected_lfo = lfo
@@ -385,57 +447,80 @@ return function(S)
       if setup then setup() end
     end}
   end
-  -- The index of the option called name among a param's options, so a state
-  -- keeps its meaning when the library's lists change
+  -- The index of the option called name among a param's options, so a
+  -- state keeps its meaning when the lists change
   local function option_named(param_id, name)
     for index, option in ipairs(params:lookup_param(param_id).options) do
       if option == name then return index end
     end
   end
-  -- The destination whose label is `label`
   local function destination_labeled(label)
     for index, destination in ipairs(S.LFO_DESTINATIONS) do
       if destination.label == label then return index end
     end
   end
+  -- LFO n at its widest: the last destination, a wide shape, the widest
+  -- percents, its mod sources (LFO 1 has none)
+  local function widest(n)
+    params:set(lfo_param(n, "dest"), #S.LFO_DESTINATIONS)
+    params:set(lfo_param(n, "shape"), option_named(lfo_param(n, "shape"), "smooth"))
+    params:set(lfo_param(n, "rate"), 0.003)
+    params:set(lfo_param(n, "depth"), 100)
+    params:set(lfo_param(n, "offset"), -100)
+    params:set(lfo_param(n, "phase"), 100)
+    params:set(lfo_param(n, "rate_mod"), #params:lookup_param(lfo_param(n, "rate_mod")).options)
+    params:set(lfo_param(n, "rate_mod_amt"), -100)
+    params:set(lfo_param(n, "depth_mod"), #params:lookup_param(lfo_param(n, "depth_mod")).options)
+    params:set(lfo_param(n, "depth_mod_amt"), -100)
+    params:set(lfo_param(n), 1)
+  end
   local layout_states = {}
-  for n = 1, NUM_LFOS do
-    table.insert(layout_states, layout_state("lfo" .. n, n, DEST_FIELD, function()
-      params:set("strata_lfo" .. n .. "_dest", #S.LFO_DESTINATIONS)
-      params:set("lfo_" .. n, 2)
-    end))
+  for _, n in ipairs({1, NUM_LFOS}) do
+    for field, entry in ipairs(LFO_FIELDS) do
+      table.insert(layout_states, layout_state("lfo" .. n .. " " .. entry.label, n, field, function() widest(n) end))
+    end
   end
-  local field_names = {"dest", "shape", "mode", "rate", "depth", "offset", "state"}
-  for field, name in ipairs(field_names) do
-    table.insert(layout_states, layout_state("field-" .. name, 2, field, function()
-      params:set("strata_lfo2_dest", #S.LFO_DESTINATIONS)
-      params:set("lfo_shape_2", option_named("lfo_shape_2", "random"))
-      params:set("lfo_free_2", 300)
-      params:set("lfo_depth_2", 100)
-      params:set("lfo_2", 2)
-      params:set("lfo_offset_2", -50)
-    end))
+  for first = 1, NUM_LFOS - LFO_PAGE.window_rows + 1 do
+    local selected = first == 1 and 1 or first + 1
+    table.insert(layout_states, layout_state("window " .. first .. "-" .. (first + LFO_PAGE.window_rows - 1), selected,
+      DEST_FIELD, function()
+        for n = first, first + LFO_PAGE.window_rows - 1 do
+          params:set(lfo_param(n, "dest"), destination_labeled(n % 2 == 0 and "density" or "v7 pitch"))
+          params:set(lfo_param(n), 1)
+        end
+      end))
   end
-  table.insert(layout_states, layout_state("clocked", 3, RATE_FIELD, function()
-    params:set("lfo_mode_3", option_named("lfo_mode_3", "clocked"))
-    params:set("lfo_clocked_3", option_named("lfo_clocked_3", "5/16"))  -- the widest division
+  table.insert(layout_states, layout_state("engine-run and modulated", 3, DEST_FIELD, function()
+    params:set(lfo_param(3, "dest"), destination_labeled("v7 pitch"))
+    params:set(lfo_param(3, "rate_mod"), option_named(lfo_param(3, "rate_mod"), "L1"))
+    params:set(lfo_param(3, "depth_mod"), option_named(lfo_param(3, "depth_mod"), "L2"))
+    params:set(lfo_param(3, "depth"), 100)
+    params:set(lfo_param(1), 1); params:set(lfo_param(3), 1)
+  end))
+  table.insert(layout_states, layout_state("rate max", 2, RATE_FIELD, function()
+    params:set(lfo_param(2, "dest"), destination_labeled("dly fdbk"))
+    params:set(lfo_param(2, "rate"), 12.5)
+    params:set(lfo_param(2), 1)
+  end))
+  table.insert(layout_states, layout_state("clocked", 5, RATE_FIELD, function()
+    params:set(lfo_param(5, "mode"), option_named(lfo_param(5, "mode"), "clocked"))
+    params:set(lfo_param(5, "division"), option_named(lfo_param(5, "division"), "1/16"))
+    params:set(lfo_param(5, "dest"), destination_labeled("rev damp"))
+    params:set(lfo_param(5), 1)
   end))
   -- destinations whose labels have descenders over the state text (#422)
   for index, label in ipairs({"density", "v1 pos", "dly fdbk"}) do
     table.insert(layout_states, layout_state("descender " .. label, index, DEST_FIELD, function()
-      params:set("strata_lfo" .. index .. "_dest", destination_labeled(label))
-      params:set("lfo_" .. index, 2)
+      params:set(lfo_param(index, "dest"), destination_labeled(label))
+      params:set(lfo_param(index), 1)
     end))
   end
-  table.insert(layout_states, layout_state("free", 1, RATE_FIELD, function()
-    params:set("lfo_free_1", 0.1)
-  end))
   -- ALT's widest hint: K2:reset K3:off E3:group (a running LFO, the cursor
   -- on its destination)
   table.insert(layout_states, {name = "ALT+K2 held past the hold time", setup = function(context)
     S.selected_lfo = 1
     S.lfo_field = DEST_FIELD
-    params:set("lfo_1", 2)
+    params:set(lfo_param(1), 1)
     key(1, 1); key(2, 1)
     context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
   end})

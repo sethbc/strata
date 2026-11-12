@@ -1487,7 +1487,7 @@ test("params.md names every Strata group in menu order and every param of a voic
       table.insert(groups, menu_family(param.name))
     end
   end
-  assert_true(#groups >= 7, "Strata adds its groups, saw " .. #groups)
+  assert_true(#groups >= 6, "Strata adds its groups, saw " .. #groups)
   local at = 0
   for _, group in ipairs(groups) do
     local found
@@ -1874,6 +1874,14 @@ test("the engine's fast-modulation constants equal the script's", function()
   assert_equal(engine_spec.num_fast_destinations, local_value("NUM_FAST_DESTINATIONS"),
     "numFastDestinations = NUM_FAST_DESTINATIONS")
   assert_equal(engine_spec.fast_mod_note_slots, local_value("FAST_MOD_NOTE_SLOTS"), "fastModNoteSlots = FAST_MOD_NOTE_SLOTS")
+end)
+
+-- 3.4's LFOs (design §2): Lua's NUM_LFOS LFOs are the engine's numFastLfos
+-- engine LFOs, one node each (setFastLfo's lfo 0..NUM_LFOS - 1)
+test("the engine's numFastLfos equals NUM_LFOS", function()
+  load_strata()
+  assert_equal(engine_spec.num_fast_lfos, 6, "numFastLfos (StrataModulation.sc)")
+  assert_equal(engine_spec.num_fast_lfos, local_value("NUM_LFOS"), "numFastLfos = NUM_LFOS")
 end)
 
 end

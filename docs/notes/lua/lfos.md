@@ -1,128 +1,105 @@
 ## Must not break
 
-- LFOs modulate around the stored value and never `params:set` their destination. `apply_lfo` sends `with_lfo_offsets(id, params:get(id))` through `send_engine_value`.
-- Strata restores a destination explicitly (the library stops calling the action when an LFO is off or its depth is 0): on a destination change, state off and depth 0. Restores are always sent, never deduped.
-- The library owns every `lfo_*` param id and sizes its own group. Never pass a separator to `add_params` or wrap its params in a Strata group (norns groups cannot nest).
-- Every resolved destination is a control param, and every destination label fits the LFO page's right column (49 px).
-- `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them.
-- The offset survives on/off (#103): the library's `lfo_<n>` action re-bangs `lfo_baseline_<n>`, whose `change_offset` sets `lfo_offset_<n>` to 0, so the `lfo_<n>` wrapper's `before` saves the offset and its `after` sets it back when it changed (`params:set`, so the library's offset follows; the number param clamps it to the baseline's range). A baseline change itself still zeroes the offset, as the library intends. This covers every way the state is set: the LFO page, PARAMS, scene recalls, cleanup. So anything that turns an LFO on or off (a page, a scene, cleanup) uses a plain `params:set("lfo_<n>", ...)`. Scenes rely on it: they set the recalled `lfo_offset_<n>` before `lfo_<n>`, so without the wrapper the state switch at a transition's end would zero it.
-- Destination indices are stored in PSETs and scenes (`strata_lfo<n>_dest`), so the 68 built-in destinations never move. Registered destinations (`S.registry.lfo_destinations`) go after all of them, in registration order: a per-voice record by voice 1-7, a global one (`{label, param_id, global = true}`, 3.4's 0a) as one destination, so a later registration only appends. The list is built at init (`add_lfo_params`), never at include time.
-- The LFOs' scene fields are `S.lib.lfos.SCENE_FIELDS`, which `lib/scenes.lua` appends to `S.SCENE_GLOBAL_PARAMS` after its built-in globals, the records themselves: a change to an LFO's scene fields is made here, never in `lib/scenes.lua`. Their ids, order and defaults are what scenes.data holds, so a change needs a scene migration. `S.lib.lfos.transition_stops(n, scene_data)` is what a fade asks of an LFO (#408).
-- A state action that runs (a change of state, or a bang of `lfo_<n>`) resets the library's phase: the `lfo_<n>` action ends with `lfo_bang`, which bangs `lfo_reset_<n>` and calls `reset_phase()` (#251). A PSET load or scene recall that leaves the state as it is runs no action (norns' option param bangs only on a change), so it resets nothing: running LFOs keep their phases (#416). The dot follows through the `lfo_reset_<n>` wrapper's `sync_lfo_phase`; never make the dot stay put on a repeated on, it would disagree with the LFO.
-- The dot takes the library's own phase (`sync_lfo_phase`, from `phase_counter`) after every library action that moves it, never a phase of Strata's: after a reset (each target where `LFO:reset_phase` puts it, mid: rising included) and after a mode change, whose action sets the mode before the period, so `change_period` reads the old period in the new mode's unit and the phase jumps by the beat length (#409). A rate change (`lfo_clocked_<n>`, `lfo_free_<n>`) keeps the library's phase, so the dot rebases before it.
-- The LFO page's randomize (#557) sets `lfo_shape_<n>`, `lfo_free_<n>` and `lfo_clocked_<n>`, so their wrappers call `note_param_edit` after the library's action (an edit of a held param ends the randomize undo). A new randomized LFO param needs the same chain.
-- `LFO_PPQN` (48) and the send dedupe bound the message rate. The ceiling is the library's 10 Hz: anything faster belongs in the engine.
-- The dedupe measures along the destination's warp (`destination_position`: an exponential range in octaves, #406) and without the step rounding `unmap` does first, so a linear destination's threshold is exactly 1/1000 of its range and a stepped one (a 0.01-step mix) still moves by 1/1000. It unmaps with a step-0 copy of the spec, never the param's own spec, which it never changes.
-- `apply_lfo` never raises (#517): norns' lattice runs every LFO's step, so one error would stop all three for the session. It runs the step (`step_lfo`) through the frame's `S.lib.ui_frame.contained_call`, which prints `strata: LFO <n> step failed:` with the traceback, once per distinct message per LFO (a good step forgets it).
-- `lfo_min_<n>` never rises above `lfo_max_<n>` (#528): the library's random shape calls `math.random(min × 100, max × 100)`, which raises on norns' Lua 5.3 inside the lattice when the interval is empty. Each bound's wrapper moves the other with it before the library's action (min set above max raises max to it; max set below min lowers min), never itself, so a pair loaded one value at a time (a PSET, min before max) lands as stored.
+- LFOs modulate around the stored value and never `params:set` their destination. A Lua-run LFO sends `with_lfo_offsets(id, params:get(id))` through `S.lib.engine_sync.send_engine_value`, with its offset `m` in `S.lfo_scaled[n]` and its param in `S.lfo_last_dest[n]`; an engine-run LFO sets neither.
+- **The destination decides where an LFO runs** (design 3.4 Question 2): a destination entry whose fixed param is one of the five fast ones (`v<i>_grain_pitch`, `buf_pos`, `grain_size`, `filter_freq`, `amp`: the entry's `fast`) runs in the engine, at any rate; every other one, `v<i> main` included (it can resolve to any param), runs in Lua, at most `LFO.lua_max_hz` (10 Hz).
+- **One clock** (`S.lfo_clock`) steps all six, every `1 / LFO.step_hz` s (48 Hz), in index order, from the start step `lfo_clock` (125) to the cleanup step `lfos` (120); the `lfo clock` invariant checks it. Its sleep is outside every deferrable write: each send of a step goes inside `S.lib.engine_sync.deferrable` (the drain), and nothing inside yields.
+- **At most `LFO.sends_per_step` (12) sends a step**, the LFOs' and the matrix's together, in one round robin (`mark_due(key, send)`): keys in the order first marked, a later mark of a key replacing its send, the next step starting where the last stopped. A Lua destination's key is its param id, so two LFOs (or an LFO and the matrix) on one param send once.
+- **A Lua send is skipped under `LFO.send_threshold`** (1/1000) of the destination's range, measured along its warp (`destination_position`: an exponential range in octaves, #406) with a step-0 copy of its spec, never the param's own spec. Restores are always sent, at once.
+- **A control param's action never calls the engine** (AGENTS.md): the rate, depth, offset, phase and mod amounts mark their LFO `edited` (and the phase `sync_due`), and the next step sends them; the on/off, destination, shape, mode, division and mod source actions reconcile the engine at once.
+- **An engine-run LFO's commands**: `setFastLfo(n - 1, voice - 1, destination, shape - 1, rate', depth' / 100, 2 × offset / 100)` at a start, a new voice, destination or shape, and a hand edit; then `syncFastLfo(n - 1, phase(n))` after a start, a shape, mode, division or phase change, every bar (`LFO.bar_beats`, 4) for a clocked LFO and at once when the beats fall (a transport start); `stopFastLfo(n - 1)` when it is turned off, its depth goes to 0 or its destination stops being fast. Its modulated rate is resent past `LFO.engine_rate_threshold` (0.5 %) and its depth past 1/1000, through the round robin. Never more than one node per LFO: a running node is moved or replaced by `setFastLfo`, never started again.
+- **A clocked engine LFO's rate reads `S.lib.params_setup.beat_seconds_now()`**, so a tempo change (the param, Link, MIDI clock) reaches the engine within one step (Review Focus 1).
+- **A modulation input reads a lower-numbered LFO only** (`strata_lfo<n>_rate_mod` and `_depth_mod` offer none, L1 .. L(n-1)), so the six evaluate in index order with no loop. A source that is off reads 0.
+- Every resolved destination is a control param, and every label, with `~` when it is fast, fits the LFO page's right column (49 px). A global destination's param (`S.register_lfo_global_destination`) is checked at the clock's start step, once every params record has run: one that is not a control param raises, naming its label.
+- `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them; `with_lfo_offsets` sums them for `n = 1..NUM_LFOS`.
+- Destination indices are stored in PSETs and scenes (`strata_lfo<n>_dest`), so the 68 built-in destinations never move. Registered destinations (`S.registry.lfo_destinations`) go after all of them, in registration order: a per-voice record by voice 1-7, a global one as one destination, so a later registration only appends. 3.4's `v<i> amp` is registered from `lib/voice_mix.lua` after `rsend` (97-103), so the macros' global entries follow from 104. The list is built at init (`add_lfo_params`), never at include time.
+- The LFOs' scene fields are `S.lib.lfos.SCENE_FIELDS`, which `lib/scenes.lua` appends to `S.SCENE_GLOBAL_PARAMS` after its built-in globals, the records themselves: a change to an LFO's scene fields is made here, never in `lib/scenes.lua`, and needs a scene migration. `S.lib.lfos.transition_stops(n, scene_data)` is what a fade asks of an LFO (#408).
+- 3.3's settings are imported, never lost: the scene migration (`before_version` 6) converts and drops the library's `lfo_*` fields of LFOs 1-3, filling only what is missing (it runs again on a scene saved while the format is still 5); the PSET hook converts them only when the file has `lfo_shape_1` and no `strata_lfo1_shape`.
+- No step raises (#517): each LFO's step, each `on_step` hook and each send run through `S.lib.ui_frame.contained_call`, which prints `strata: LFO <n> step failed:` (or `LFO step hook`, `LFO send`) with the traceback, once per distinct message, and the clock and the other LFOs go on.
+- The page randomize (#557) sets `strata_lfo<n>_shape`, `_rate`, `_division` and `_phase`, so their actions call `note_param_edit` (an edit of a held param ends the randomize undo). A new randomized LFO param needs the same call.
 
 ## Owns
 
 `lib/lfos.lua` (`S.lib.lfos`):
-- `S.lfos`, `S.selected_lfo`, `S.lfo_last_raw`, `S.LFO_DESTINATIONS`;
-- `lfo_destination_id`, `restore_lfo_destination`, `apply_lfo` (its step `step_lfo`, `destination_position` with its `unstepped_specs` and the per-LFO `step_errors` are local), the phase estimate (`lfo_phase_estimate`; `library_phase`, `sync_lfo_phase` and `rebase_lfo_phase` are local), `wrap_param_action`, `add_lfo_params`;
-- `LFO_DEFAULT_PERIOD` as `S.lib.lfos.LFO_DEFAULT_PERIOD` and `LFO_OFFSET_RANGE` (`{-100, 100}`, the library's offset range for every baseline) as `S.lib.lfos.LFO_OFFSET_RANGE`, the free period's scene default and the offset's scene range;
-- the LFOs' scene fields, `S.lib.lfos.SCENE_FIELDS`, and `S.lib.lfos.transition_stops(n, scene_data)` (Scenes, below);
-- cleanup step 120: the LFOs stopped, their destinations restored.
+- `S.LFO_DESTINATIONS`, `S.selected_lfo`, `S.lfo_clock`;
+- the globals `lfo_destination_id`, `restore_lfo_destination`, `add_lfo_params`;
+- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`;
+- `SCENE_FIELDS`, `transition_stops`, the scene migration `lfos` and the PSET hook `lfos`;
+- the modulation sources `lfo1`..`lfo6`;
+- the start step `lfo_clock`, the cleanup step `lfos` and the invariant `lfo clock`.
 
 Elsewhere:
 - The LFO page is `lib/pages/lfo.lua` (`docs/notes/lua/pages/lfo.md`), the arc's LFO rings `lib/arc/lfo.lua` (`docs/notes/lua/arc-pages.md`).
-- `forget_arc_lfo_period_ticks` is in `lib/arc/core.lua`.
+- `forget_arc_lfo_period_ticks` is in `lib/arc/core.lua`; the mode action calls it for the selected LFO.
+- The five fast destinations' engine side is the modulation area (`docs/notes/engine/modulation.md`).
 - The grid has no LFO controls.
 
-Three LFOs (`NUM_LFOS`), built on norns' `lua/lib/lfo.lua` (`local LFO = require "lfo"`), stored in `S.lfos[n]`. They are not the per-voice drift (`drift_update`, `docs/notes/lua/mutation.md`).
+Six LFOs (`NUM_LFOS`, the engine's `numFastLfos`). They are not the per-voice drift (`drift_update`, `docs/notes/lua/mutation.md`). norns' `lua/lib/lfo.lua` is no longer used (3.4, design Question 1).
 
-## Construction
+## Params
 
-`add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record):
-- `LFO:add{shape = "sine", min = -1, max = 1, depth = LFO_DEFAULT_DEPTH (0.25, since 3.1), mode = "free", period = LFO_DEFAULT_PERIOD (4), baseline = "center", action = function(scaled, raw) apply_lfo(n, scaled, raw) end}`;
-- then `S.lfos[n]:add_params(tostring(n), nil, "LFO " .. n)`;
-- then `lfo_depth_<n>`'s `default` and `value` are rounded to a whole 25: the library computes depth × 100, a float in Lua 5.3 that its formatter would show as `25.0%`. The scene migration default for `lfo_depth_<n>` stays 0 (`lib/scenes.lua`), so files without LFO depths keep silent LFOs.
+`add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record), builds the destination labels and adds one group per LFO, `strata_lfo_<n>` ("LFO n", `LFO.group_size` 13 params; groups cannot nest):
 
-The library owns the params:
-- `lfo_<n>` (state, option off/on), `lfo_shape_<n>`, `lfo_depth_<n>` (a **number 0-100, percent**), `lfo_phase_<n>`, `lfo_offset_<n>`, `lfo_mode_<n>` (clocked/free), `lfo_clocked_<n>` (rate option), `lfo_free_<n>` (0.1-300 s), `lfo_reset_<n>`, ...;
-- `lfo_*` ids are reserved for it.
-- It starts an LFO from its state param's action. That is off by default, so `init` starts nothing.
-- It hides the other params while the LFO is off.
+| Param | Kind | Default |
+|---|---|---|
+| `strata_lfo<n>` | binary toggle (on) | 0 |
+| `strata_lfo<n>_dest` | option, the destination list | 1 (none) |
+| `strata_lfo<n>_shape` | option: sine, tri, square, up, down, s&h, smooth, drunk | 1 |
+| `strata_lfo<n>_mode` | option: free, clocked | 1 |
+| `strata_lfo<n>_rate` | control 0.003-50 Hz, exp, step 0 | 0.25 |
+| `strata_lfo<n>_division` | option: 1/16 ... 1024 (the library's 22 clocked rates) | 13 (`4`) |
+| `strata_lfo<n>_depth` | control 0-100 %, step 1 | 25 |
+| `strata_lfo<n>_offset` | control -100..100 %, step 1 | 0 |
+| `strata_lfo<n>_phase` | control 0-100 %, step 1 | 0 |
+| `strata_lfo<n>_rate_mod`, `_depth_mod` | option: none, L1 .. L(n-1) | 1 |
+| `strata_lfo<n>_rate_mod_amt`, `_depth_mod_amt` | control -100..100 %, step 1 | 0 |
 
-## PARAMS layout
-
-- The library adds its own group per LFO: `lfo_group_<n>`, "LFO n", 15 params.
-- So Strata's destinations get their own group first: `strata_lfos` ("lfo destinations", `NUM_LFOS` params `strata_lfo<n>_dest`).
+The percents' quantum is one percent a detent. A division of value r is a period of 4r beats.
 
 ## Destinations
 
-`S.LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, resolve}`:
+`S.LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, resolve, group, fast}`:
 - `none`, `density`, `drift`, `filt freq`, `filt res`, `filt mix`, `dly time`, `dly fdbk`, `dly mix`, `rev mix`, `rev size`, `rev damp`;
-- then per voice (`VOICE_LFO_DESTINATIONS`): `v<i> main` (`main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan`.
-- 12 + 8 per voice = 68 entries (`BUILT_IN_LFO_DESTINATIONS`).
-- then, built at init by `add_lfo_params` (`lfo_destination_labels`), the registered ones, in registration order: for each `S.register_lfo_destination(label, suffix)`, `v1 <label>` ... `v7 <label>`, modulating `v<i>_<suffix>` (a control param); for each global record (`{label, param_id, global = true}`, `S.register_lfo_global_destination`, 3.4's 0a), one destination `<label>` modulating `param_id`. A label that repeats a built-in or earlier label is an error, naming the register function its record came from (`register_lfo_destination` or `register_lfo_global_destination`). Keep `v7 <label>` within the LFO page's right column (3.2's: `hist`, `vfilt`, `dsend`, `rsend`). 3.2's registration order is the include order: the history module before the voice-mix module.
-- So with 3.2's four the list has 96 entries: 69-75 `v1 hist` ... `v7 hist`, 76-82 `vfilt`, 83-89 `dsend`, 90-96 `rsend`. The LFO page's ALT+E3 makes each registration's seven one group, from its `v1 <label>` (#511, `docs/notes/lua/pages/lfo.md`).
-- `lfo_destination_id(n)` returns the resolved id or nil.
+- then per voice: `v<i> main` (`main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan`;
+- 12 + 8 per voice = 68 entries (`S.lib.lfos.BUILT_IN_DESTINATIONS`);
+- then, built at init by `add_lfo_params` (`lfo_destination_labels`), the registered ones, in registration order: for each `S.register_lfo_destination(label, suffix)`, `v1 <label>` ... `v7 <label>`; for each global record (`S.register_lfo_global_destination(label, param_id)`), one destination. A label that repeats one is an error naming the register function.
+- 3.4's list: 69-75 `v<i> hist`, 76-82 `vfilt`, 83-89 `dsend`, 90-96 `rsend`, 97-103 `amp`, then the globals (`macro 1` .. `macro 16`, 104-119, from package 1e).
+- `group` is what ALT+E3 jumps by (#511, #580): `none`, `global`, `v<i>`, `registered <k>` per per-voice record and `registered globals` for every global one.
+- `fast` (`{voice, destination}`) marks an entry whose fixed param is fast: `v<i> size`, `pitch`, `pos`, `vfilt` and `amp`. `is_engine_run(n)` is LFO n's entry having it, whether or not the LFO is on.
 
-## Modulating around the stored value
+## The clock and a step
 
-With min -1, max 1 and a center baseline, the library hands the action `scaled` in -depth..depth:
-- depth = percent / 100;
-- the library's `lfo_offset_<n>` param adds `(max - min) × offset / 100` to it (kept across on/off, see Must not break).
+Each step (`step_all`), every 1/48 s:
+- each LFO in index order (`step_lfo`): off, its value is 0. On: a free LFO's position advances by the rate it played since the last step times the time since (`util.time()`, so a late wake-up does not slow it); a clocked LFO's phase is `(beats / period + clocked_offset + phase)` mod 1, with `clocked_offset` integrating only what rate modulation adds, so an unmodulated clocked LFO is exact against the clock. A wrap draws a random shape's next value. Then its value (2u - 1), rate' and depth' (`evaluate`), and its destination: the engine's settings (`reconcile_engine`), or a Lua send (`step_lua`);
+- the `on_step` hooks (the matrix's), each contained;
+- the drain: at most 12 of the due keys, in the round robin, each inside `deferrable`.
 
-Other library settings the user can change in PARAMS, `lfo_min_<n>`, `lfo_max_<n>` and `lfo_baseline_<n>` (`docs/user/params.md` tells users to keep the defaults):
-- a `min` baseline gives `scaled` in -1..-1 + 2 × depth (below the stored value, up to 50 % depth);
-- a `max` baseline gives 1 - depth..1 (the library's `scaled_min = max * (1 - depth)`: above it, half as wide);
-- other `lfo_min_<n>`/`lfo_max_<n>` values scale the swing; min stays at or below max (see Must not break).
+`phase(n)` is computed when read: a free LFO's from its last step plus the time since at the rate it plays, a clocked one's from `clock.get_beats()`, so the page's dot is smooth. `value(n)` is the last step's (and, at the turn-on, the start's).
 
-`apply_lfo(n, scaled, raw)` runs `step_lfo(n, scaled, raw)` under `xpcall` (see Must not break), which:
-- stores `S.lfo_last_raw[n] = raw` and resolves the destination;
-- records `S.lfo_last_dest[n]` and `S.lfo_scaled[n] = scaled`;
-- sends `with_lfo_offsets(id, params:get(id))` through `send_engine_value`: clamp(stored + (sum of `S.lfo_scaled` of every LFO whose `S.lfo_last_dest` is id) × 0.5 × (maxval - minval)) over `param_range(id)`.
-- LFOs on one destination add up. `params:set` is never called for a destination.
+## Shapes and modulation
 
-## Send dedupe
-
-- `apply_lfo` skips the send when the new value's position along the destination's range differs from that of `S.engine_param_values[id]` (the last value sent to that destination by any path) by less than `LFO_SEND_THRESHOLD` (1/1000).
-- The position is `destination_position(id, value)`: `unmap` on a copy of the destination's controlspec with step 0 (`unmap` rounds to the step first), made with `spec:copy()` the first time a spec is used and kept in `unstepped_specs`, keyed weakly by the spec (a param given a new spec gets a new copy; a destination's range never changes in place). A linear range's position moves by the value's change over the range, so 1/1000 of the range, as in 3.0; an exponential one's in octaves, so 1/1000 of the range's octaves: 7.97 cents on a voice's freq (20-2000 Hz), where a linear threshold was 1.98 Hz, about 68 cents at 50 Hz (#406).
-- So a slow LFO sends only when it has moved, and moves evenly in octaves on a frequency.
-- Restores and param-action sends are never skipped.
+- u(φ): sine `(sin 2πφ + 1) / 2`, tri `2φ` then `2 - 2φ`, square 1 then 0, up φ, down `1 - φ`; s&h holds the cycle's draw; smooth runs from the last draw to this one; drunk the same, each draw the last plus up to ±`LFO.drunk_step` (0.2), reflected into 0..1. A turn-on draws afresh (drunk from 0.5).
+- Lua's offset: `m = value × depth' / 100 + 2 × offset / 100` half ranges, sent as `stored + m × half the range`, clamped by `with_lfo_offsets` once with every other LFO's and extra offset on the param.
+- `rate' = clamp(rate × 4 ^ (amount × s), 0.003 Hz, ceiling)` (the run's ceiling: 10 Hz in Lua, 50 in the engine); clocked, the division's rate at `beat_seconds_now()` times the same factor. `depth' = clamp(depth × (1 + amount × s), 0, 100)`. s is the source's `value`.
+- `offset_for(param_id, m)` is `m × half the param's range` (a Lua destination's, as `with_lfo_offsets` adds it); `m_for(param_id, base, value)` inverts design §3.3's laws: pitch `/1.875`, position `/0.5`, size `/0.245`, cutoff `log(value / base) / log(31.62)`, amp `value / base - 1` (0 at base 0); any other param by half its range.
 
 ## Restores
 
-`restore_lfo_destination(n)`:
-- clears `S.lfo_last_dest[n]`/`S.lfo_scaled[n]`;
-- `send_param_to_engine(old id, params:get(old id))`: the stored value plus any other LFO's offset on it. Always sent.
-
-Called from:
-- the `strata_lfo<n>_dest` action (destination changed);
-- wrappers installed with `wrap_param_action(id, before, after)` around the library's `lfo_<n>` action (state off; its `before`/`after` also keep the offset) and `lfo_depth_<n>` action (depth 0).
-- When a `main` destination re-resolves to a different param (the voice's source changed), `apply_lfo` restores the old id once, then modulates the new one.
-
-## Dot phase estimate
-
-The library's running phase moves on its lattice's steps (`get("phase")` is the phase offset setting), so Strata estimates it between the moments it takes it from the library:
-- `lfo_phase_estimate(n)` = (`lfo_phase_base[n]` + (`util.time()` - `lfo_phase_time[n]`) / period in seconds + phase offset) % 1.
-- Clocked periods in seconds are beats × `clock.get_beat_sec()`.
-- `library_phase(n)` is the library's phase before the offset, as its `process_lfo` computes it from `phase_counter` (in beats, 1/ppqn a step): `phase_counter / period` clocked, `phase_counter × clock.get_beat_sec() / period` free, % 1.
-- `sync_lfo_phase(n)` sets the base to `library_phase(n)` at `util.time()`: at init, after `lfo_reset_<n>` (the state turning on bangs it too) and after the library's `lfo_mode_<n>` action (#409). `LFO:reset_phase` puts floor at 0.75, ceiling at 0.25 and mid: falling at 0.5 of the cycle; mid: rising sets `phase_counter` to beat length / period itself, so a free LFO restarts at (beat length / period)² (1/64 for 4 s at 120 BPM) and a clocked one at 0.
-- Wrappers on `lfo_clocked_<n>` and `lfo_free_<n>` call `rebase_lfo_phase(n)` (base = the estimate now) before the library changes the period, which keeps the phase like the library's `change_period` (within 1/ppqn of a step).
-- At 120 BPM, a free 4 s LFO 0.5 s after a floor reset is at 0.875; switched to clocked (rate 4, 16 beats) the library is at 0.75390625, and back to free 1 s later at 0.9375: the dot is too.
-- Tempo changes are not tracked: the estimate drifts until the next reset or mode change.
-- The stub has no lattice: its `phase_counter` moves only through `reset_phase` and `set("period")`, so a test that changes the mode of a running LFO adds the lattice's beats itself (`run_lfo` in `test/unit/lfos_test.lua`).
-
-## Rate ceiling and message rate
-
-- The library's ceiling: free periods down to 0.1 s (10 Hz), clocked rates down to "1/16" (a period of 1/4 beat; clocked periods are the rate × 4 beats).
-- The library calls the action on every step while depth > 0.
-- So each LFO is set to `LFO_PPQN` (48) steps per beat with `S.lfos[n]:set("ppqn", LFO_PPQN)` right after `LFO:add`.
-  - The library's default is 96.
-  - `set("ppqn")` before `start` is what the sprocket is built from, and its phase counter advances 1/ppqn per step, so the phase maths are unchanged.
-- Result: at most 96 sends/s per LFO at 120 BPM, 240 at 300 BPM (one engine message, or one per running voice for master density), fewer with the dedupe.
+`restore_lfo_destination(n)`: clears `S.lfo_last_dest[n]`/`S.lfo_scaled[n]` and sends `send_param_to_engine(id, params:get(id))` (the stored value plus any other offset on it). Called by the on/off action (off), the depth action (0), the destination action, a step whose `main` destination re-resolved or turned fast, and cleanup.
 
 ## Scenes
 
-- `S.lib.lfos.SCENE_FIELDS`, which `lib/scenes.lua` appends to `SCENE_GLOBAL_PARAMS` after its built-in globals, holds per LFO `lfo_shape_<n>`, `lfo_mode_<n>`, `lfo_clocked_<n>` (default 13, the library's index for a period of 4), `lfo_free_<n>`, `lfo_depth_<n>` and `lfo_offset_<n>` (continuous, `lfo = n`; the depth's `stop_target` 0), `strata_lfo<n>_dest`, then `lfo_<n>` last, so an LFO starts with its settings in place. Each record is `{id, continuous, default, lfo?, stop_target?, range?}`.
-- `S.lib.lfos.transition_stops(n, scene_data)`: true when LFO n runs now (`lfo_<n>` on) and is off in the scene. A fade to such a scene fades the LFO's `stop_target` fields there and holds its other continuous fields (#408, `docs/notes/lua/scenes.md`).
-- The offset (#103, format 3) crossfades in whole percents like the depth. Its entry's `range` (`LFO_OFFSET_RANGE`) is what `validate_scene` accepts; a recalled offset outside the current baseline's range (a scene saved with another baseline) is clamped by the param. Its state switch at the end keeps it (see Must not break).
-- Scenes without them migrate to the defaults (LFOs off, offsets 0).
+- `SCENE_FIELDS` per LFO, in recall order: shape, mode, division, rate, depth, offset, phase, rate_mod, rate_mod_amt, depth_mod, depth_mod_amt, dest, then the state. Rate, depth and offset are continuous (`lfo = n`; the depth's `stop_target` 0); the rest switch at a transition's end. Every control field and the state carry `range` (the param's), which `validate_scene` checks; option fields are checked as option indices. Each default is its param's.
+- `transition_stops(n, scene_data)`: LFO n runs now and the scene has it off.
+- The migration `lfos` (`before_version` 6): for LFOs 1-3, the library's `lfo_shape_<n>` (sine, tri, square, random, up, down → 1, 2, 3, 6, 4, 5), `lfo_mode_<n>` (1 clocked, 2 free → 2, 1), `lfo_clocked_<n>` (the same index), `lfo_free_<n>` (a period: `rate = 1 / period`), `lfo_depth_<n>`, `lfo_offset_<n>` and `lfo_<n>` (1 off, 2 on → 0, 1); a random shape plays at twice the rate (rate doubled, the division with half the period, nearest in octaves). Then the old fields are dropped. A scene with no depth for LFO 1-3 gets 0 (3.3's migration default); `migrate_scene` fills the rest with the defaults (LFOs 4-6 off). An old value outside its options converts to 0, which `validate_scene` rejects.
+
+## PSETs
+
+The PSET hook `lfos` (`read`): when the file has `lfo_shape_1` and no `strata_lfo1_shape`, LFOs 1-3 are set from the library's lines with the scene migration's conversions (plus `lfo_phase_<n>`), the state last, and `imported 3.3 LFO settings` is printed. `strata_lfo<n>_dest` has already loaded. The PSET is not rewritten.
+
+## Sources
+
+`lfo1`..`lfo6` (`S.register_mod_source`): name `L<n>`, section `lfos`, range -1..1, `value` = `value(n)`, `describe` = `describe(n)` (`v3 pitch~ 25% <L2`), `row`: E3 the depth (`delta_with_detent`), fine E3, K3 `S.lib.pages_lfo.show_lfo(n)`, hints `K3:lfo E3:depth`.
 
 ## Cleanup
 
-Per LFO (step 120): `S.lfos[n]:stop()`, `params:set("lfo_<n>", 1)` and `restore_lfo_destination(n)`.
+Step 120: the clock is canceled, every engine LFO gets `stopFastLfo`, every Lua destination is restored (none of it reaches the engine on norns, #461).

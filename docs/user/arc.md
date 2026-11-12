@@ -6,7 +6,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 ## Arc Encoders
 
-The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per rate), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
+The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per division), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
 
 On the **MAIN** page:
 
@@ -42,8 +42,8 @@ On the **FX** page:
 
 On the **LFO** page:
 
-- **Rings 1-3** - Depth of LFO 1-3 (10 ticks per percent; bright while the LFO runs)
-- **Ring 4** - Period of the LFO selected on the page: the free period, or the clocked rate when its mode is clocked (part-turns toward the next rate are forgotten when you select another LFO or change its mode)
+- **Rings 1-3** - Depth of the three LFOs the page shows: LFOs 1-3 while LFO 1 or 2 is selected, up to LFOs 4-6 while 5 or 6 is (10 ticks per percent; bright while the LFO runs; part-turns are forgotten when the page shows another three)
+- **Ring 4** - Rate of the LFO selected on the page: the free rate, or the clocked rate when its mode is clocked (part-turns toward the next clocked rate are forgotten when you select another LFO or change its mode)
 
 On the **BUFFER** page:
 

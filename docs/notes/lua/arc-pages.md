@@ -7,11 +7,11 @@
   - SEQ ring 4: `(S.selected_voice - 1) / (NUM_VOICES - 1)`;
   - SCENES ring 1: `(S.cursors.scene - 1) / (NUM_SCENES + #SCENES_FIELDS - 1)`.
 - Every continuous ring sweeps its control param's whole range in `UI_PAGES.ARC_TICKS_PER_SWEEP` (1024) ticks through `arc_sweep_param`. Never give a ring its own scale. The only exceptions step whole values through `arc_whole_steps(key, delta, ticks)` and then `delta_with_detent(id, steps)` (or move a cursor):
-  - LFO: depth 10 ticks per percent, clocked rate 20 ticks per rate (`"lfo:<ring>"`);
+  - LFO: depth 10 ticks per percent, clocked division 20 ticks per division (`"lfo:<ring>"`);
   - VOICE: option and number rows 20 ticks per step (`"voice:<ring>"`); a binary row (a registered param, kind `"binary"`) steps the same way as a two-value option, set with `set_binary_param` (a step up on, a step down off; it is `params:set` plus the MIDI-map feedback norns' `params:delta` sends, #519), and its ring is drawn with `arc_ring_fill` from its value (dark off, whole ring on);
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
-- Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
+- Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), the depth rings' when the LFO page's window moves, a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
 - VOICE's rings read the cursor only from `S.lib.ui_cursors.sync("voice")` (the cursor module's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw (after a source switch the raw cursor can sit past the last row or on a section label) and never through the VOICE page module (a test checks). Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`, the page's name for `S.lib.ui_cursors.place("voice", index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
 - SCENES ring 1 moves the cursor only through `S.lib.pages_scenes.move_cursor(slot)`, the page's own move (E2 uses it too), which disarms a pending overwrite confirmation and clears its prompt. The ring never touches `S.scenes_page` itself.
@@ -50,13 +50,13 @@ FX (`ARC_FX_RINGS`, `{param_id}` per ring):
 - each drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp.
 
 LFO:
-- Rings 1-3: `lfo_depth_1..3` in whole percents. `arc_whole_steps("lfo:<ring>", ...)` accumulates `ARC_LFO.ticks_per_percent` = 10 ticks per percent per ring, keeping the remainder, so the number param never holds a fraction.
-- Ring 4 (`ARC_LFO.period_ring`): the period of `S.selected_lfo` (`lfo_period_param_id`):
-  - free mode: `lfo_free_<n>` through `arc_sweep_param`;
-  - clocked mode: `lfo_clocked_<n>`, one option per `ARC_LFO.ticks_per_rate` = 20 ticks.
-- Ring 4's carried remainder (`S.arc_ticks["lfo:4"]`) belongs to one LFO's clocked rate.
-  - `forget_arc_lfo_period_ticks()` (`forget_arc_ticks("lfo:4")`) clears it when `S.selected_lfo` changes and when the selected LFO's `lfo_mode_<n>` changes (a `wrap_param_action` after-hook added in `add_lfo_params`), so it never steps another LFO or mode.
-  - The depth rings keep theirs (until the page changes, which forgets every carry).
+- Rings 1-3 (`ARC_LFO.depth_rings`): the depths (`strata_lfo<n>_depth`) of the LFO page's window of three, `S.lib.lfos.window(S.selected_lfo)` + ring - 1 (LFOs 1-3 with LFO 1 or 2 selected, 4-6 with 5 or 6), in whole percents. `arc_whole_steps("lfo:<ring>", ...)` accumulates `ARC_LFO.ticks_per_percent` = 10 ticks per percent per ring, keeping the remainder, so the one-percent control never holds a fraction.
+- Ring 4 (`ARC_LFO.rate_ring`): the rate of `S.selected_lfo` (`rate_param_id`):
+  - free mode: `strata_lfo<n>_rate` through `arc_sweep_param`;
+  - clocked mode: `strata_lfo<n>_division`, one option per `ARC_LFO.ticks_per_rate` = 20 ticks.
+- Ring 4's carried remainder (`S.arc_ticks["lfo:4"]`) belongs to one LFO's division.
+  - The page's `select_lfo` (`forget_arc_ticks("lfo:4")`) clears it when `S.selected_lfo` changes, and `forget_arc_lfo_period_ticks()` when the selected LFO's `strata_lfo<n>_mode` changes (the mode action, `lib/lfos.lua`), so it never steps another LFO or mode.
+  - The depth rings keep theirs while the window stays; a selection that moves the window forgets `lfo:1`-`lfo:3` (as a page change forgets every carry).
 
 BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` per ring, drawn with `arc_ring_fill_param`, so `buf_scan` is bipolar):
 - plain: ring 1 `v<selected>_buf_pos` (every tick calls `S.lib.positions.scrub_turned(voice)`, which starts the friction glide), 2 `v<selected>_loop_start`, 3 `v<selected>_loop_length`, 4 `v<selected>_buf_scan`;

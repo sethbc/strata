@@ -22,7 +22,7 @@ local MAX_STEP_LEVEL = 15     -- Pattern step levels are 0 (off) to 15; level / 
 local NUM_BUFFERS = 8         -- Sample buffer slots (engine numBuffers)
 local STANDARD_BUFFER_SECONDS = 16  -- Length of each buffer slot on the standard tier (engine standardBufferSeconds)
 local BUFFER_DATA_VERSION = 2 -- Buffer paths file format version (written into buffers.data)
-local NUM_LFOS = 3            -- Global LFOs (norns lib/lfo.lua)
+local NUM_LFOS = 6            -- Global LFOs (lib/lfos.lua; engine numFastLfos)
 local NUM_BOOKMARKS = 4       -- Bookmarks per voice (3.3)
 local NORNS_SAMPLE_RATE = 48000  -- norns' server rate (JACK, scsynth), the one copy (#516): a slot's frames, a file's seconds in it
 
