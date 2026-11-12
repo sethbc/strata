@@ -936,4 +936,69 @@ test("the hint rows", function()
   assert_equal(hints(), "K2:back K3:step E3:quantize", "the edit view under it again")
 end)
 
+-- #592: over a page that does not animate (MAIN), the frame clock alone
+-- (no redraw() here) turns the editor's hint at the hold time and moves its
+-- strip's playhead
+test("over MAIN the step editor's hint and playhead move with the frame clock alone (#592)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(0.6)
+  assert_equal(hint_text(context), "K2:reset K3:clr E2:step", "held past the hold time: a frame draws the reset's hint")
+  key(2, 0); key(1, 0)
+  -- voice 1 at 1/16 sounds step 3 from 0.25 s to 0.375 s; a frame comes every 1/15 s
+  pattern_toggle()
+  context.clock.run_for(0.36)
+  local playing = rect_at(context, 60 + 2 * 4, 13, 3, 3)
+  assert_true(playing, "the strip's step 3 is drawn")
+  assert_equal(playing.level, 4, "and plays (an empty step at 4)")
+  assert_equal(rect_at(context, 60, 13, 3, 3).level, 1, "step 1 no longer plays")
+  pattern_toggle()
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
+-- Ruling 71: the editor's own pattern replacements keep it open; the grids
+-- read step_editor_replacing() in end_step_gestures to tell them apart
+test("step_editor_replacing is true exactly while the editor's own action replaces the pattern", function()
+  local context, S = started_on_seq()
+  local pages_seq = S.lib.pages_seq
+  local seen = {}
+  local real = S.lib.grid_core.end_step_gestures
+  S.lib.grid_core.end_step_gestures = function(voice_idx)
+    seen[#seen + 1] = tostring(pages_seq.step_editor_replacing())
+    return real(voice_idx)
+  end
+  local function take()
+    local text = table.concat(seen, " ")
+    for index = #seen, 1, -1 do seen[index] = nil end
+    return text
+  end
+  assert_equal(pages_seq.step_editor_replacing(), false, "no editor open")
+  pages_seq.open_step_editor(2, 3, 1)
+  go_to(context, "euclid"); take()
+  enc(3, 2); assert_equal(take(), "true", "E3 on euclid")
+  key(1, 1); enc(3, 1); key(1, 0); assert_equal(take(), "true", "ALT+E3 on euclid")
+  go_to(context, "clear"); take()
+  tap(3); assert_equal(take(), "true", "K3 on the clear row")
+  key(1, 1); tap(3); key(1, 0); assert_equal(take(), "true", "ALT+K3")
+  math.randomseed(2)
+  key(1, 1); tap(2); assert_equal(take(), "true", "ALT+K2's randomize")
+  tap(2); key(1, 0); assert_equal(take(), "true", "and its undo")
+  S.lib.sequencer.replace_pattern(2, {}); assert_equal(take(), "false", "a replacement from outside, the editor open")
+  clear_pattern(5); assert_equal(take(), "false", "another voice's clear from outside")
+  assert_equal(pages_seq.step_editor_replacing(), false, "false between actions")
+  assert_true(pages_seq.step_editor() ~= nil, "the editor is still open")
+  -- a replacement that raises still sets it back to false
+  S.lib.grid_core.end_step_gestures = function() error("probe raises") end
+  go_to(context, "euclid")
+  local ok = pcall(enc, 3, 1)
+  S.lib.grid_core.end_step_gestures = real
+  assert_true(not ok, "the probe raised through the editor's E3")
+  assert_equal(pages_seq.step_editor_replacing(), false, "back to false after a raise")
+  pages_seq.close_step_editor(1)
+  assert_equal(pages_seq.step_editor_replacing(), false, "and with no editor")
+end)
+
 end

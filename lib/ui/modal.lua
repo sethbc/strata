@@ -11,12 +11,14 @@
 --
 -- An owner is {draw = fn(), hints = fn(alt_held) -> string, enc = fn(n, d),
 -- key = fn(n, z), arc_delta = fn(n, d), arc_key = fn(n, z), arc_redraw =
--- fn(arc_port)}: only draw is required; a missing handler ignores its input.
+-- fn(arc_port), animates = fn() -> boolean}: only draw is required; a
+-- missing handler ignores its input. animates, read by the frame clock
+-- (lib/ui/frame.lua) as a page's is, draws every frame while true (#592).
 
 return function(S)
   local M = {}
 
-  local OWNER_HANDLERS = {"hints", "enc", "key", "arc_delta", "arc_key", "arc_redraw"}
+  local OWNER_HANDLERS = {"hints", "enc", "key", "arc_delta", "arc_key", "arc_redraw", "animates"}
 
   -- The pushed owners, the top one last. Local: push and pop are the only
   -- ways on and off

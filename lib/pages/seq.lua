@@ -94,11 +94,11 @@ return function(S)
     {row = "quantize", label = "quantize", param_id = "quantize_actions"},
   }
 
-  -- The continuous locks (on their param's controlspec) and how a step
-  -- attribute reads. A lock's param is the voice's, after "v<i>_"; a step's
-  -- gate is a length on the voice's gate length's range
-  local LOCK_PARAMS = {pos = "buf_pos", pitch = "grain_pitch", size = "grain_size", gate = "seq_gate_length"}
+  -- How a step attribute reads, and the param a step's gate moves on (the
+  -- voice's gate length's range). The step locks' params are the
+  -- sequencer's (SEQ.lock_params: lock_param_name)
   local ATTR_FORMATS = {pos = "%.2f", pitch = "%.2f", size = "%.2f s", gate = "%.2f st"}
+  local STEP_GATE_PARAM = "seq_gate_length"
 
   -- The step under the cursor, on the selected voice's row
   local function cursor_step()
@@ -192,10 +192,19 @@ return function(S)
     return false
   end
 
+  -- A continuous lock's param name after "v<i>_": a step lock's from the
+  -- sequencer's SEQ.lock_params, a step's gate STEP_GATE_PARAM; nil for any
+  -- other key
+  local function lock_param_name(key)
+    if key == "gate" then return STEP_GATE_PARAM end
+    return S.lib.sequencer.SEQ.lock_params[key]
+  end
+
   -- The param a continuous lock (pos, pitch, size, a step's gate) moves on,
   -- or nil for any other key
   function M.lock_param_id(voice_idx, key)
-    return LOCK_PARAMS[key] and voice_param_id(voice_idx, LOCK_PARAMS[key])
+    local name = lock_param_name(key)
+    return name and voice_param_id(voice_idx, name)
   end
 
   -- What a step holds for key: its level, notes[1] for "notes", else the
@@ -264,6 +273,12 @@ return function(S)
     if editor and editor.voice == voice_idx and editor.step == step then editor.edited = true end
   end
 
+  -- True exactly while an action of the open step editor runs a pattern
+  -- replacement (ruling 71): the grids read it (step_editor_replacing) in
+  -- end_step_gestures, so the editor's own euclid, clear and randomize keep
+  -- it open while a replacement from anywhere else closes it
+  local replacing = false
+
   -- Turn voice's step's key by d whole steps ("level", "prob", "ratchet",
   -- "notes", "bookmark"), or a continuous lock ("pos", "pitch", "size",
   -- "gate") by d detents of its param's quantum (opts.fine: a tenth of it)
@@ -297,7 +312,7 @@ return function(S)
     elseif key == "bookmark" then
       if not M.has_bookmarks(voice_idx) then return false end
       seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, NUM_BOOKMARKS, d))
-    elseif LOCK_PARAMS[key] then
+    elseif lock_param_name(key) then
       local raw_delta = opts.raw
       if raw_delta == nil then
         local spec = params:lookup_param(M.lock_param_id(voice_idx, key)).controlspec
@@ -345,6 +360,17 @@ return function(S)
   local function view_place(view)
     if view == views.editor then return editor.voice, editor.step end
     return S.selected_voice, cursor_step()
+  end
+
+  -- Run fn, a pattern replacement (a euclid fill, a clear, a randomize or
+  -- its undo), as one of view's actions: for the step editor with replacing
+  -- set around it, set back even when fn raises (the error is raised again)
+  local function run_replacement(view, fn)
+    if view ~= views.editor then return fn() end
+    replacing = true
+    local ran, problem = xpcall(fn, with_traceback)
+    replacing = false
+    if not ran then error(problem, 0) end
   end
 
   -- The view's rows and its cursor on them (the anchored row, or the
@@ -455,12 +481,14 @@ return function(S)
     S.lib.sequencer.euclid(voice_idx, hits, fill[2] + rotation_d)
   end
 
-  -- E3 on a row (ALT+E3: fine on a control row, the rotation on euclid; a
-  -- whole-number row steps as E3 does)
-  local function turn_row(voice_idx, step, row, d)
+  -- E3 on view's row (ALT+E3: fine on a control row, the rotation on
+  -- euclid; a whole-number row steps as E3 does)
+  local function turn_row(view, voice_idx, step, row, d)
     local spec = row.spec
     if spec.row == "euclid" then
-      if S.alt_held then turn_euclid(voice_idx, 0, d) else turn_euclid(voice_idx, d, 0) end
+      run_replacement(view, function()
+        if S.alt_held then turn_euclid(voice_idx, 0, d) else turn_euclid(voice_idx, d, 0) end
+      end)
     elseif spec.binary then
       -- on with a turn up, off with a turn down, as VOICE's binary rows
       set_binary_param(row.param_id, d > 0 and 1 or 0)
@@ -479,7 +507,7 @@ return function(S)
     elseif n == 3 then
       local voice_idx, step = view_place(view)
       local rows, cursor = sync_view(view)
-      turn_row(voice_idx, step, rows[cursor], d)
+      turn_row(view, voice_idx, step, rows[cursor], d)
     end
   end
 
@@ -488,7 +516,7 @@ return function(S)
     local voice_idx, step = view_place(view)
     local rows, cursor = sync_view(view)
     if rows[cursor].spec.row == "clear" then
-      clear_pattern(voice_idx)
+      run_replacement(view, function() clear_pattern(voice_idx) end)
     else
       toggle_pattern_step(voice_idx, step)
     end
@@ -692,12 +720,13 @@ return function(S)
         M.close_step_editor(editor.port)
       elseif editor.alt_k2_at then
         editor.alt_k2_at = nil
-        S.lib.ui_alt.k2_up(editor_alt)
+        run_replacement(views.editor, function() S.lib.ui_alt.k2_up(editor_alt) end)
         pattern_changed()
       end
     elseif n == 3 and z == 1 then
       if S.alt_held then
-        clear_pattern(editor.voice)
+        local voice_idx = editor.voice
+        run_replacement(views.editor, function() clear_pattern(voice_idx) end)
         pattern_changed()
       else
         edit_k3(views.editor)
@@ -706,11 +735,18 @@ return function(S)
   end
 
   -- The editor's ALT+K2 hint: reset once held ALT_HOLD_SECONDS, else the
-  -- quick press's (rand or undo). The frame clock animates only the page's
-  -- record, so over another page the hint turns at the next drawn frame
+  -- quick press's (rand or undo). The owner animates while ALT+K2 is held
+  -- (#592), so the frame clock draws the change at the hold time
   local function editor_k2_text()
     if editor.alt_k2_at and util.time() - editor.alt_k2_at >= ALT_HOLD_SECONDS then return "K2:reset" end
     return S.lib.ui_alt.k2_hint(editor_alt)
+  end
+
+  -- The frame clock draws every frame while it is true (lib/ui/frame.lua):
+  -- while ALT+K2 is held on the editor (its hint turns at the hold time) or
+  -- the patterns play (its strip's playhead moves), over any page
+  local function editor_animates()
+    return editor ~= nil and (editor.alt_k2_at ~= nil or S.pattern_playing)
   end
 
   editor_owner = {
@@ -721,6 +757,7 @@ return function(S)
     end,
     enc = editor_enc,
     key = editor_key,
+    animates = editor_animates,
   }
   -- lib/arc/seq.lua sets its ring fields (arc_delta, arc_redraw)
   M.step_editor_owner = editor_owner
@@ -761,6 +798,14 @@ return function(S)
     return editor ~= nil and editor.edited
   end
 
+  -- Whether an action of the open step editor is running a pattern
+  -- replacement now (its euclid, clear, ALT+K3, ALT+K2's randomize or
+  -- undo; ruling 71): the grids keep the editor open through those and
+  -- close it at any other replacement. False with no editor open
+  function M.step_editor_replacing()
+    return editor ~= nil and replacing
+  end
+
   -- The editor is open exactly while its owner is the modal one
   S.register_invariant("step editor", function()
     local pushed = S.lib.ui_modal.top() == editor_owner
@@ -799,6 +844,7 @@ return function(S)
     seq.set_step_attr(voice_idx, step, "ratchet", SEQ.max_ratchet)
     seq.set_step_attr(voice_idx, step, "gate", SEQ.gate_steps[2])
     seq.set_step_attr(voice_idx, step, "notes", {-SEQ.max_degree})
+    seq.set_step_attr(voice_idx, step, "pos", 0.88)  -- "0.88": no narrow 1 in it
     seq.set_step_attr(voice_idx, step, "pitch", 4)
     seq.set_step_attr(voice_idx, step, "size", 0.5)
     params:set("seq_chain_from", S.constants.NUM_SCENES)
