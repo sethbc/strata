@@ -39,9 +39,11 @@
     fastLfoDefName { arg shape; ^("strataFastLfo" ++ this.fastLfoShapeNames[shape]).asSymbol }
 
     // The envelopes' attack and release (s): an engine LFO's (and its depth
-    // lag), scatter's
+    // lag), scatter's; and the lag of scatter's gains (s), so a lock, an
+    // unlock, a mask or a depth change glides (#610)
     fastLfoFadeSeconds { ^0.02 }
     scatterFadeSeconds { ^0.5 }
+    scatterGainLagSeconds { ^0.5 }
 
     // The offset node's key in synths (one of effectKeys: it never ends on
     // its own, so messages to it go plainly)
@@ -244,9 +246,10 @@
         // Scatter: slow smooth noise on every channel, each at rate x its own
         // spread (drawn here, at build: voices and destinations never move
         // together) times its gain (depth x the channel's voice and
-        // destination bits), through a 0.5 s ASR; one Out over the whole bus
+        // destination bits, lagged 0.5 s: a gain set to 0 or back glides,
+        // never steps), through a 0.5 s ASR; one Out over the whole bus
         SynthDef(\strataScatter, { arg out, rate = 0.1, gate = 1;
-            var gains = \gains.kr(0 ! numChannels), spread = { rrand(0.8, 1.2) } ! numChannels;
+            var gains = Lag.kr(\gains.kr(0 ! numChannels), this.scatterGainLagSeconds), spread = { rrand(0.8, 1.2) } ! numChannels;
             var env = EnvGen.kr(Env.asr(this.scatterFadeSeconds, 1, this.scatterFadeSeconds), this.openedGate(gate), doneAction: 2);
             Out.kr(out, LFDNoise3.kr(rate * spread) * gains * env);
         }).add;
