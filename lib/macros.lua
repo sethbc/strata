@@ -467,72 +467,26 @@ return function(S)
     end
   end
 
-  -- Write the targets to path (none too, so a PSET saved over never keeps
-  -- an older side file). Returns whether it was written
-  local function write_file(path)
-    local written, detail = S.lib.data_files.write(path, {version = MACROS.data_version, macros = sparse()})
-    if not written then print("error: macros not saved to " .. path .. " (" .. tostring(detail) .. ")") end
-    return written
-  end
-
-  -- Load the targets from path: a missing file loads them empty; one that
-  -- cannot be used is set aside (path .. ".bak", ...) with a console line,
-  -- and they load empty. Returns whether path may be written over: false
-  -- only for a file that could not be used and could not be set aside
-  local function read_file(path)
-    local loaded, problem, detail = S.lib.data_files.read(path)
-    local why
-    if loaded == nil and problem ~= "missing" then
-      why = tostring(detail)
-    elseif loaded ~= nil then
-      if type(loaded) ~= "table" or loaded.version ~= MACROS.data_version then
-        why = "not a version " .. MACROS.data_version .. " macros file"
-      else
-        why = block_problem(loaded.macros)
-      end
-    end
-    local writable = true
-    if why then
-      local backup, failure = S.lib.data_files.set_aside(path, MACROS.backup_suffix)
-      print("error loading macros file " .. path .. ": " .. why .. "; "
-        .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
-      loaded = nil
-      writable = backup ~= nil
-    end
-    load_block(loaded and loaded.macros or nil)
-    report_unknown(path)
-    return writable
-  end
-
-  -- The live file follows the targets once it has been loaded (a start
-  -- step that failed never overwrites it): one write MACROS.save_delay s
-  -- after the first change of a burst (MOD's E3 sets a row a detent),
-  -- carrying the newest targets, from S.macro_save_clock; the cleanup step
-  -- writes at once
-  local live = {dir = _path.data .. "strata/", loaded = false}
-  S.macro_save_clock = nil
-
-  local function write_live()
-    if not live.loaded then return end
-    if util.file_exists(live.dir) == false then util.make_dir(live.dir) end
-    write_file(live.dir .. MACROS.live_file)
-  end
-
-  local function save_live()
-    if not live.loaded or S.macro_save_clock then return end
-    S.macro_save_clock = clock.run(function()
-      clock.sleep(MACROS.save_delay)
-      S.macro_save_clock = nil
-      write_live()
-    end)
-  end
-
-  local function cancel_save()
-    if S.macro_save_clock then
-      clock.cancel(S.macro_save_clock)
-      S.macro_save_clock = nil
-    end
-  end
+  -- The files (lib/side_files.lua): the live file data/strata/macros.data
+  -- and the one beside each PSET, {version, macros = <sparse>}. A file that
+  -- cannot be used is set aside and loads no targets; an unknown id loads,
+  -- named on the console at each file load. The live file follows the
+  -- targets once the start step loaded it (one that failed is never
+  -- written over): one write MACROS.save_delay s after the first change of
+  -- a burst (MOD's E3 sets a row a detent), carrying the newest targets,
+  -- from S.macro_save_clock; the cleanup step writes at once
+  local files = S.lib.side_files.new({
+    name = "macros", contents = "targets", version = MACROS.data_version, key = "macros",
+    live_file = MACROS.live_file, side_suffix = MACROS.side_suffix, backup_suffix = MACROS.backup_suffix,
+    save_delay = MACROS.save_delay, clock_field = "macro_save_clock",
+    capture = sparse,
+    validate = block_problem,
+    load = function(block, path)
+      load_block(block)
+      report_unknown(path)
+    end,
+  })
+  local save_live = files.save_live
 
   local function targets_changed()
     save_live()
@@ -774,32 +728,16 @@ return function(S)
   -- after every PSET load (every waiting apply dropped first: the read ran
   -- the macros' actions, and the PSET holds its targets' own values),
   -- deleted with the PSET
-  S.register_pset_hook({
-    name = "macros",
-    write = function(path_base) write_file(path_base .. MACROS.side_suffix) end,
-    read = function(path_base)
-      cancel_pending(nil)
-      read_file(path_base .. MACROS.side_suffix)
-      targets_changed()
-    end,
-    delete = function(path_base) os.remove(path_base .. MACROS.side_suffix) end,
-  })
+  S.register_pset_hook(files.pset_hook(function() cancel_pending(nil) end, targets_changed))
 
   -- The live file: loaded at init, saved at cleanup and as the targets change,
   -- once it was read, missing or set aside (never written over otherwise)
   S.register_start(S.constants.START_ORDER.macros_load, function()
-    local path = live.dir .. MACROS.live_file
-    live.loaded = read_file(path)
-    if not live.loaded then
-      print("macros: " .. path .. " could not be read or moved aside; the targets will not be saved this session")
-    end
+    files.load_live()
     request_redraw()
     grid_redraw()
   end)
-  S.register_cleanup(S.constants.CLEANUP_ORDER.macros_save, function()
-    cancel_save()
-    write_live()
-  end)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.macros_save, files.save_now)
 
   -- Cleanup cancels the apply clock and every retired one (nothing waiting
   -- is applied) and learn
