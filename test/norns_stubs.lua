@@ -28,7 +28,8 @@
 --   * clock follows lua/core/clock.lua over matron's scheduler
 --     (clock_scheduler.cc): clock.run resumes the coroutine at once (an
 --     error there reaches the caller); sleep and sync yield to the
---     scheduler, which wakes a sleep at its time and a sync at the next
+--     scheduler, which wakes a sleep at its time (never, for math.huge:
+--     no helper moves time to it, #650) and a sync at the next
 --     sync beat (counted from the coroutine's previous sync beat when it
 --     synced last, with the offset argument and FLT_EPSILON) on a beat
 --     timeline that runs at the clock tempo and keeps its beat when the
@@ -1717,13 +1718,17 @@ local function make_clock(util)
   -- clock_time reaches its time and a sync once clock_beat is past its beat
   -- (clock_scheduler.cc), so a sleep and a sync due at one time are both
   -- posted by any tick after it: one tick, as for every two wake-ups less
-  -- than a tick apart (tick_at)
+  -- than a tick apart (tick_at). An event whose fire time is not finite (a
+  -- sleep of math.huge: a waiting quantized action's flash) is never due,
+  -- as matron's tick never finds clock_time >= infinity, so it is never in
+  -- the list: no helper takes it as the next event, posts it or moves time
+  -- to it (#650)
   local function ready_events()
     local list = {}
     for coro_id, event in pairs(clock.events) do
-      if event.ready then
-        table.insert(list, { id = coro_id, event = event, order = event.order, time = fire_time(event),
-          slot = event.slot })
+      local time = event.ready and fire_time(event)
+      if time and time < math.huge then
+        table.insert(list, { id = coro_id, event = event, order = event.order, time = time, slot = event.slot })
       end
     end
     table.sort(list, function(left, right)
@@ -1876,10 +1881,12 @@ local function make_clock(util)
   -- waiting, or have its resume posted; it stops with an error as soon as
   -- another clock cancels it before its resume is posted. A cancel after
   -- the post (by an earlier resume of its tick) does not stop its
-  -- delivery, which raises as on norns. before_delivery (optional) runs
-  -- once coro_id's resume is posted (its event no longer ready) and before
-  -- it is delivered, with util.time() at its delivery, as a reset, a jump
-  -- or another event Lua handles first can fall between the two
+  -- delivery, which raises as on norns. A coroutine that sleeps forever
+  -- (math.huge) is never due: it fails at once, running nothing (#650).
+  -- before_delivery (optional) runs once coro_id's resume is posted (its
+  -- event no longer ready) and before it is delivered, with util.time() at
+  -- its delivery, as a reset, a jump or another event Lua handles first can
+  -- fall between the two
   function clock.advance_until(coro_id, before_delivery)
     local function failure(why) error("clock.advance_until: coroutine " .. tostring(coro_id) .. " " .. why, 3) end
     local target = clock.events[coro_id]
@@ -1890,6 +1897,9 @@ local function make_clock(util)
     if not waiting.order then
       failure((next(ready_events()) or posted[1]) and "is not waiting" or "is not waiting: nothing is pending")
     end
+    if target and target.ready and not (fire_time(target) < math.huge) then
+      failure("never wakes: it sleeps forever (math.huge)")
+    end
     local function is_target(entry) return entry.id == coro_id and entry.order == waiting.order end
     local function target_posted()
       for _, item in ipairs(posted) do
@@ -1898,7 +1908,11 @@ local function make_clock(util)
       return false
     end
     for _ = 1, 1e6 do
-      if not posted[1] then post(tick_at(ready_events()[1].time)) end
+      if not posted[1] then
+        local first = ready_events()[1]
+        if not first then failure("never wakes: nothing is due") end
+        post(tick_at(first.time))
+      end
       if before_delivery and is_target(posted[1].entry) then
         local at = delivery_time(posted[1], 0)
         post_ticks_by(at)
