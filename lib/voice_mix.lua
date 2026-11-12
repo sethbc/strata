@@ -68,22 +68,24 @@ return function(S)
     return extras ~= nil and extras.solo == 1 and not M.silenced(voice)
   end
 
-  -- What each voice's engine last got as voiceMute (1 or 0): a running
-  -- voice is sent only when its answer changes. A voice's sync sets it
+  -- What each voice's stage last got as voiceMute (1 or 0; nil, the
+  -- engine's 0): a voice is sent only when its answer changes. A voice's
+  -- sync sets it
   local sent_mute = {}
 
   local function mute_value(voice_idx) return M.silenced(voice_idx) and 1 or 0 end
 
-  -- Every running voice whose answer changed gets it; a stopped voice gets
-  -- its answer with its next start's sync
+  -- Every voice whose answer changed gets it, running or not (#640): the
+  -- stage is one persistent node per voice, so a stopped voice's release
+  -- still sounding goes silent within the mute's 20 ms (the one exception
+  -- to "param actions reach the engine only while a voice runs" besides
+  -- the source; it creates no node)
   local function send_changed_mutes()
     for voice_idx = 1, S.constants.NUM_VOICES do
-      if S.voices[voice_idx].active then
-        local value = mute_value(voice_idx)
-        if (sent_mute[voice_idx] or 0) ~= value then
-          sent_mute[voice_idx] = value
-          engine.setGrainParam(voice_idx - 1, "voiceMute", value)
-        end
+      local value = mute_value(voice_idx)
+      if (sent_mute[voice_idx] or 0) ~= value then
+        sent_mute[voice_idx] = value
+        engine.setGrainParam(voice_idx - 1, "voiceMute", value)
       end
     end
   end
