@@ -1664,7 +1664,11 @@ test("a reset Strata's transport handler never sees keeps every voice in step, w
   pattern_clock_stop()
 end)
 
-test("a resume posted before a reset and delivered after it plays on time, and its voice stays in step", function()
+-- Ruling 58 (fix round 3), in matron's order: clock_start_from_source resets
+-- the beat and every waiting sync, then posts the start event, so a resume
+-- posted before the reset is delivered first and the start (Strata's
+-- handler) after it
+test("a resume posted before a reset plays on time, the start comes after it, and its voice stays in step", function()
   local context, S = setup()
   params:set("v1_seq_swing", 66)
   local events = in_step_setup(context, S)
@@ -1673,12 +1677,179 @@ test("a resume posted before a reset and delivered after it plays on time, and i
   local posted_at
   context.clock.advance_until(S.pattern_clocks[1], function()
     posted_at = util.time()
-    context.clock.transport_start()  -- the internal clock's reset, between the post and the delivery
+    context.clock.transport_reset()  -- the internal clock's reset, between the post and the delivery
   end)
   local played = voice_events(events, 1, true)
   assert_near(played[#played].time, posted_at, 1e-9, "voice 1 played its step when it was posted")
+  clock.transport.start()  -- then norns delivers the start event
   assert_equal(count_in_step(context, S, 6.3, "posted before the reset"), 3, "voice 2 moves on once a bar")
   assert_gaps_bounded(events, DIVISIONS, "posted before the reset")
+  pattern_clock_stop()
+end)
+
+-- A new clock source is set from a param action, on Lua's own thread, so a
+-- resume already posted is delivered after the jump: delivered beats late
+-- with no time gone by, which a late delivery (Lua busy) never is
+test("a resume posted before a jump forward and delivered after it keeps the count, and its voice stays in step", function()
+  local context, S = setup()
+  params:set("v1_seq_swing", 66)
+  local events = in_step_setup(context, S)
+  context.clock.run_for(0.6)  -- beat 2.2: voice 1's next step, a swung one, is due at 2.33
+  context.clock.advance_until(S.pattern_clocks[1])  -- its hop onto the clock's 16th at 2.25
+  local posted_at
+  context.clock.advance_until(S.pattern_clocks[1], function()
+    posted_at = util.time()
+    context.clock.set_beat(30.3)  -- a new clock source, 28 beats ahead
+  end)
+  local played = voice_events(events, 1, true)
+  assert_near(played[#played].time, posted_at, 1e-9, "voice 1 played its step when it was posted")
+  assert_equal(count_in_step(context, S, 6.3, "posted before a jump forward"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "posted before a jump forward")
+  pattern_clock_stop()
+end)
+
+-- Every change of the transport's 16th (S.pattern_sounding_step) over
+-- seconds, in 10 ms steps: {time, step}
+local function transport_moves(context, S, seconds)
+  local moves, last = {}, S.pattern_sounding_step
+  for _ = 1, math.floor(seconds / 0.01 + 0.5) do
+    context.clock.run_for(0.01)
+    if S.pattern_sounding_step ~= last then
+      last = S.pattern_sounding_step
+      table.insert(moves, {time = util.time(), step = last})
+    end
+  end
+  return moves
+end
+
+test("a transport resume posted before a reset counts on: its 16ths never freeze and never jump", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1: the transport waits for 20.25, after the voices due then
+  local before = S.pattern_sounding_step
+  context.clock.advance_until(S.pattern_clock, function() context.clock.transport_reset() end)
+  assert_equal(S.pattern_sounding_step, before % 16 + 1, "the transport counted the 16th it was posted for")
+  clock.transport.start()
+  local moves = transport_moves(context, S, 6.3)
+  local last, last_time = S.pattern_sounding_step, util.time() - 6.3
+  assert_true(#moves >= 40, "the 16ths go on: " .. #moves .. " moves")
+  for index, move in ipairs(moves) do
+    local previous = index == 1 and before % 16 + 1 or moves[index - 1].step
+    assert_equal(move.step, previous % 16 + 1, "one 16th at a time, move " .. index)
+    local gap = move.time - (index == 1 and last_time or moves[index - 1].time)
+    assert_true(gap <= 0.25 + 0.01 + 1e-9, string.format("move %d comes %.3f s after the one before", index, gap))
+  end
+  assert_true(last ~= nil, "the transport plays")
+  assert_gaps_bounded(events, DIVISIONS, "the transport posted before the reset")
+  pattern_clock_stop()
+end)
+
+-- A reset no handler sees whose resumes were all posted before it (every
+-- clock due on the same 16th): the first clock to sync again keeps the count
+test("a reset no handler sees, posted after every clock's resume, keeps every voice in step", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1: every clock of the patterns is due at 20.25
+  clock.transport.start = function() end  -- another script's, which never calls Strata's
+  local reset = false
+  repeat
+    context.clock.advance(function()
+      if not reset and clock.get_beats() >= 20.25 then
+        reset = true
+        context.clock.transport_reset()
+      end
+    end)
+  until reset
+  assert_equal(count_in_step(context, S, 6.3, "every resume posted first"), 3, "voice 2 moves on once a bar")
+  assert_gaps_bounded(events, DIVISIONS, "every resume posted first")
+  assert_true(S.lib.sequencer.count_offset() ~= 0, "the clocks kept the count themselves")
+  pattern_clock_stop()
+end)
+
+-- Rule 2: a jump a clock notices maps the transport's pending 16th to the
+-- clock's first 16th after now, as the handler does, so a 1/32 voice never
+-- plays two steps at one instant
+local function assert_no_two_at_once(events, voice_idx, what)
+  local steps = voice_events(events, voice_idx, true)
+  for index = 2, #steps do
+    assert_true(steps[index].time > steps[index - 1].time + 1e-9,
+      string.format("%s: voice %d's steps %d and %d at one instant (%.4f s)", what, voice_idx, index - 1, index,
+        steps[index].time))
+  end
+end
+
+local function thirty_second_jump(run_seconds, to_beat, what)
+  local context, S = setup()
+  params:set("v1_seq_division", 1)  -- 1/32
+  local events = in_step_setup(context, S)
+  context.clock.run_for(run_seconds)
+  context.clock.set_beat(to_beat)
+  assert_equal(count_in_step(context, S, 6.3, what), 3, what .. ": voice 2 moves on once a bar")
+  assert_no_two_at_once(events, 1, what)
+  assert_gaps_bounded(events, {[1] = 0.125, [2] = 4}, what)
+  pattern_clock_stop()
+end
+
+test("a 1/32 voice never plays two steps at one instant through a jump back a clock notices", function()
+  thirty_second_jump(9.55, 5, "a 1/32 voice set back")
+end)
+
+test("a 1/32 voice never plays two steps at one instant through a jump forward a clock notices", function()
+  thirty_second_jump(4.05, 30.3, "a 1/32 voice set forward")
+end)
+
+-- Rule 3: late is not a jump. Voice 1 at 1/16t (a step every 1/6 beat); its
+-- 14th step, at 13/6 beats from the start, is off the 16ths
+test("a resume posted 0.05 beat late on a triplet step plays once and leaves the count alone", function()
+  local context, S = setup()
+  params:set("v1_seq_division", 2)  -- 1/16t
+  local start_beat, start_time = clock.get_beats(), util.time()
+  local events = in_step_setup(context, S)
+  local late_beat = start_beat + 13 / 6
+  local late_time = start_time + 13 / 6 * 0.5
+  context.clock.run_for(late_time - util.time() - 0.001)
+  local before = #voice_events(events, 1, true)
+  context.set_time(late_time + 0.025)  -- posted 0.05 beat after its beat
+  context.clock.advance()
+  local steps = voice_events(events, 1, true)
+  assert_equal(#steps, before + 1, "the late step played")
+  assert_equal(steps[#steps].step, 14, "step 14")
+  assert_near(steps[#steps].beat, late_beat + 0.05, 1e-9, "late")
+  assert_equal(S.lib.sequencer.count_offset(), 0, "the count did not move")
+  context.clock.run_for(0.26)
+  steps = voice_events(events, 1, true)
+  assert_equal(#steps, before + 4, "the next three steps")
+  for index = 1, 3 do
+    assert_near(steps[before + 1 + index].beat, start_beat + (13 + index) / 6, 1e-9, "on its beat, step " .. 14 + index)
+  end
+  pattern_clock_stop()
+end)
+
+-- Rule 4: no bursts. Voice 1's resume for its tick at 2.25 is delivered two
+-- beats late (Lua busy): it plays one step, the one the beat puts it at, then
+-- goes on in step with the others
+test("a clock held two beats plays one step when it wakes, then goes on in step", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(0.6)  -- beat 2.2
+  local delivered_at
+  context.clock.advance_until(S.pattern_clocks[1], function()
+    context.set_time(util.time() + 1.0)
+    delivered_at = util.time()
+  end)
+  local at_delivery = {}
+  for _, event in ipairs(voice_events(events, 1, true)) do
+    if math.abs(event.time - delivered_at) < 1e-9 then table.insert(at_delivery, event) end
+  end
+  assert_equal(#at_delivery, 1, "one step when it wakes")
+  assert_equal(at_delivery[1].step, 14, "the step the beat puts it at (beat 4.25, 13 16ths after the start)")
+  assert_equal(count_in_step(context, S, 6.3, "held"), 3, "voice 2 moves on once a bar")
+  local after = {}
+  for _, event in ipairs(events) do
+    if event.time >= delivered_at - 1e-9 then table.insert(after, event) end
+  end
+  assert_no_two_at_once(after, 1, "held")
+  assert_gaps_bounded(after, DIVISIONS, "held")
   pattern_clock_stop()
 end)
 
