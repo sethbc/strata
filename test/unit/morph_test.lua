@@ -291,28 +291,214 @@ test("an empty corner's weight is shared among the others; fewer than two valid 
   assert_equal(S.current_scene, 1, "the current scene stays")
 end)
 
-test("a routing that differs between corners has its depth at the current corner's times its lead", function()
+-- 3a fix round 1, the far edges: where every valid corner weighs 0 the
+-- weights are the limit from inside the square, so along a far edge they
+-- follow the position (equal shares only at a diagonal corner point)
+test("on a far edge whose corners are empty the weights still follow the position", function()
+  local context, S = two_scenes()                                -- A and B saved, C and D empty
+  settle_xy(context, 0.25, 1)
+  local a, b, c, d = S.lib.morph.weights()
+  for name, pair in pairs({ a = { a, 0.75 }, b = { b, 0.25 }, c = { c, 0 }, d = { d, 0 } }) do
+    assert_near(pair[1], pair[2], 1e-12, name .. " at (0.25, 1)")
+  end
+  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "0.2 + 0.25 x 0.4, as at y 0")
+  settle_xy(context, 1, 1)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "(1, 1): B's")
+  -- only C and D saved, at the default y 0
+  context = load_strata(); finish_startup(context)
+  S = local_value("S")
+  params:set("reverb_mix", 1.0); capture_scene(4)
+  params:set("reverb_mix", 0.4); capture_scene(3)
+  settle(context, 0.25)
+  a, b, c, d = S.lib.morph.weights()
+  for name, pair in pairs({ a = { a, 0 }, b = { b, 0 }, c = { c, 0.75 }, d = { d, 0.25 } }) do
+    assert_near(pair[1], pair[2], 1e-12, name .. " at (0.25, 0) with only C and D")
+  end
+  assert_near(params:get("reverb_mix"), 0.55, 1e-9, "0.4 + 0.25 x 0.6")
+end)
+
+-- Scenes 1-4: reverb_mix 0.2, 0.6, 0.4 and 1.0; filter_freq and voice 6
+-- agree in A and B (1000 Hz, stopped) and differ in C and D (5000 Hz,
+-- running); delay_mix and voice 7 agree in A and C (0.1, stopped) and
+-- differ in B and D (0.7, running). The state is scene 1's
+local function edge_scenes()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  local matrix = S.lib.matrix
-  -- A: R1 lfo1 > v1 size at 40; B: lfo2 > v1 size at 60; C and D as A at 40
-  matrix.set_routing(1, "lfo2", "v1_grain_size"); params:set("matrix_1_depth", 60); capture_scene(2)
-  matrix.set_routing(1, "lfo1", "v1_grain_size"); params:set("matrix_1_depth", 40)
-  capture_scene(3); capture_scene(4); capture_scene(1)
-  local expected = {
-    { 0.25, 0, 20, "lfo1" },     -- 40 x (0.75 - 0.25)
-    { 0.5, 0, 0, "lfo1" },       -- a and b tie: 0
-    { 0, 0, 40, "lfo1" },        -- at A: A's depth
-    { 0.25, 0.25, 15, "lfo1" },  -- 40 x (0.5625 - 0.1875): C's weight counts as the largest other
-    { 0.6, 0, 12, "lfo2" },      -- past the crossing: B's routing, 60 x (0.6 - 0.4)
-    { 1, 0, 60, "lfo2" },
-  }
-  for _, row in ipairs(expected) do
+  local function scene(slot, mix, top, right)
+    params:set("reverb_mix", mix)
+    params:set("filter_freq", top and 5000 or 1000)
+    params:set("delay_mix", right and 0.7 or 0.1)
+    if S.voices[6].active ~= top then toggle_voice(6) end
+    if S.voices[7].active ~= right then toggle_voice(7) end
+    capture_scene(slot)
+  end
+  scene(4, 1.0, true, true); scene(3, 0.4, true, false); scene(2, 0.6, false, true); scene(1, 0.2, false, false)
+  return context, S
+end
+
+-- ruling 87: a corner counts only while its weight is above 0, so on an
+-- edge the morph is the two-scene morph of that edge, entry for entry
+test("at y 0 a hand change A and B agree on survives, whatever C and D hold (ruling 87)", function()
+  local context, S = edge_scenes()
+  recall_scene(1, 0)
+  params:set("filter_freq", 3000); toggle_voice(6)               -- by hand
+  for _, x in ipairs({ 0.3, 1, 0 }) do
+    settle(context, x)
+    assert_near(params:get("filter_freq"), 3000, 1e-6, x .. ": the hand-set filter freq stays")
+    assert_true(S.voices[6].active, x .. ": the hand-started voice 6 runs")
+  end
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "the morph still moves what A and B differ in")
+  -- C and D join once y is above 0: their entries apply
+  settle_xy(context, 0.3, 0.1)
+  assert_near(params:get("filter_freq"), 1400, 1e-6, "1000 + (0.07 + 0.03) x 4000")
+  assert_true(not S.voices[6].active, "voice 6 takes the current corner A's state")
+  -- what the morph set follows its blend back to the edge
+  settle_xy(context, 0.3, 0)
+  assert_near(params:get("filter_freq"), 1000, 1e-6, "back at y 0: A's and B's 1000 Hz, never stranded at 1400")
+end)
+
+-- A corner point is the end of its row's two-scene morph: the first apply
+-- there (after a recall) sets what A and B differ in, as the morph between
+-- A and B does at 0
+test("a first apply at a corner point is the end of its row's two-scene morph", function()
+  local context, S = edge_scenes()
+  settle(context, 0.4)
+  recall_scene(2, 0)
+  assert_true(S.voices[7].active, "scene 2 runs voice 7")
+  settle(context, 0)
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "(0, 0): A's reverb mix")
+  assert_true(not S.voices[7].active, "and A's voice 7, stopped")
+  assert_near(params:get("filter_freq"), 1000, 1e-6, "what A and B agree on is left as recalled")
+end)
+
+test("on the A to C edge a hand change A and C agree on survives (ruling 87)", function()
+  local context, S = edge_scenes()
+  recall_scene(1, 0)
+  params:set("delay_mix", 0.4); toggle_voice(7)                  -- by hand
+  for _, y in ipairs({ 0.3, 0.8 }) do
+    settle_xy(context, 0, y)
+    assert_near(params:get("delay_mix"), 0.4, 1e-9, y .. ": the hand-set delay mix stays")
+    assert_true(S.voices[7].active, y .. ": the hand-started voice 7 runs")
+  end
+  assert_near(params:get("reverb_mix"), 0.36, 1e-9, "0.2 + 0.8 x 0.2: the morph moves what A and C differ in")
+  assert_true(S.voices[6].active, "and switches voice 6 to C's at the corner change")
+  -- B and D join once x is above 0
+  settle_xy(context, 0.25, 0.8)
+  assert_near(params:get("delay_mix"), 0.25, 1e-9, "0.1 + 0.25 x 0.6")
+  assert_true(not S.voices[7].active, "voice 7 takes the current corner C's state")
+end)
+
+-- #641: the flash names the slot as every scene flash does
+test("an empty corner's flash names its slot by its label (#641)", function()
+  local context, S = two_scenes()
+  S.lib.scenes.set_name(5, "dusk")                               -- a named empty slot
+  local flashes = {}
+  local real_flash = header_flash
+  header_flash = function(text) table.insert(flashes, text); return real_flash(text) end
+  params:set("morph_b", 5)
+  settle(context, 0.3)
+  header_flash = real_flash
+  assert_equal(table.concat(flashes, ", "), "S5 dusk empty", "S.lib.scenes.label's name")
+end)
+
+-- #626: the PSET hook ends a clock whose resume norns may have posted while
+-- the PSET was read: retired, it ends at its wake and applies nothing (a
+-- cancel would make norns' clock.resume raise)
+test("a PSET read while the morph clock's resume is posted raises nothing and applies nothing (#626)", function()
+  local context, S = two_scenes()
+  settle(context, 0.3)
+  params:set("reverb_mix", 0.9)
+  params:write(1)                                                -- the PSET: morph 0.3, reverb 0.9
+  params:set("morph", 0.6)                                       -- a move: the clock waits on its first sleep
+  context.clock.advance(function() params:read(1) end)           -- its resume posted, then the read and its hook
+  context.clock.run_for(0.5)
+  assert_near(params:get("morph"), 0.3, 1e-9, "the PSET's position")
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied over the PSET's values")
+  assert_equal(S.morph_clock, nil, "no clock is left")
+  settle(context, 0.35)
+  assert_near(params:get("reverb_mix"), 0.34, 1e-9, "the next move applies (0.2 + 0.35 x 0.4)")
+end)
+
+-- Scenes 1-4 with routing R1 to v1 size: each corner's {source, depth}
+-- (nil leaves the slot empty). The state is scene 1's
+local function routing_scenes(corners)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for slot = 4, 1, -1 do
+    local routing = corners[slot]
+    if routing then
+      S.lib.matrix.set_routing(1, routing[1], "v1_grain_size"); params:set("matrix_1_depth", routing[2])
+      capture_scene(slot)
+    end
+  end
+  return context, S
+end
+
+local function assert_routing_rows(context, S, rows)
+  for _, row in ipairs(rows) do
     settle_xy(context, row[1], row[2])
     local where = "(" .. row[1] .. ", " .. row[2] .. ")"
     assert_near(params:get("matrix_1_depth"), row[3], 1e-9, where .. ": R1's depth")
-    assert_equal(matrix.routing(1).source, row[4], where .. ": R1's source")
+    assert_equal(S.lib.matrix.routing(1).source, row[4], where .. ": R1's source")
   end
+end
+
+-- ruling 88: a through-zero id ramps between groups of the counting corners
+-- that hold the same routing: the current corner's group's weighted mean
+-- times the group's lead over the largest other group's weight
+test("a routing that differs between corners ramps between the groups that hold it alike", function()
+  -- A: R1 lfo1 > v1 size at 40; B: lfo2 at 60; C and D as A at 40
+  local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 }, { "lfo1", 40 } })
+  assert_routing_rows(context, S, {
+    { 0.25, 0, 20, "lfo1" },     -- 40 x (0.75 - 0.25)
+    { 0.5, 0, 0, "lfo1" },       -- a and b tie: 0
+    { 0, 0, 40, "lfo1" },        -- at A: A's depth
+    { 0.25, 0.25, 25, "lfo1" },  -- the group A, C, D (0.8125) leads B (0.1875): 40 x 0.625
+    { 0.6, 0, 12, "lfo2" },      -- past the crossing: B's routing, 60 x (0.6 - 0.4)
+    { 1, 0, 60, "lfo2" },
+  })
+end)
+
+test("a routing two corners share never ramps between them", function()
+  -- the review's probe: A and C share lfo1 > v1 size at 40, B's differs (lfo2
+  -- at 60), D as A
+  local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 }, { "lfo1", 40 } })
+  assert_routing_rows(context, S, {
+    { 0, 0.25, 40, "lfo1" },     -- the A to C edge: one group, its mean
+    { 0, 0.5, 40, "lfo1" },
+    { 0, 0.75, 40, "lfo1" },
+    { 0, 1, 40, "lfo1" },
+  })
+  -- just inside the edge: A, C and D (0.995) lead B (0.005)
+  local written
+  local real_set = S.lib.scenes.set_value
+  S.lib.scenes.set_value = function(id, value)
+    if id == "matrix_1_depth" then written = value end
+    return real_set(id, value)
+  end
+  settle_xy(context, 0.01, 0.5)
+  S.lib.scenes.set_value = real_set
+  assert_near(written, 39.6, 1e-9, "(0.01, 0.5): morph writes 40 x 0.99, never 0")
+  assert_near(params:get("matrix_1_depth"), 40, 1e-9, "stored to its whole step")
+  assert_equal(S.lib.matrix.routing(1).source, "lfo1", "on the shared routing")
+  -- the ramp follows the current discrete corner's group: with D empty, at
+  -- (0.53, 0.5) B leads A alone (0.3605 to 0.3197), so the corner and the
+  -- routing switch to B's, while A and C together (0.6395) still lead B:
+  -- the depth goes to 0 at the crossing and rises once B's group leads
+  context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 } })
+  assert_routing_rows(context, S, {
+    { 0.3, 0.5, 26, "lfo1" },                         -- 40 x (0.8235 - 0.1765) = 25.9, stored 26
+    { 0.52, 0.5, 12, "lfo1" },                        -- 40 x (0.6486 - 0.3514) = 11.9, stored 12
+    { 0.53, 0.5, 0, "lfo2" },
+    { 0.7, 0.5, 5, "lfo2" },                          -- 60 x (0.5385 - 0.4615) = 4.6, stored 5
+  })
+  -- A and C sharing the routing at 40 and 20: a straight blend between them
+  context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 20 } })
+  assert_routing_rows(context, S, {
+    { 0, 0.25, 35, "lfo1" },
+    { 0, 0.5, 30, "lfo1" },
+    { 0, 1, 20, "lfo1" },
+  })
 end)
 
 -- ruling 24: a PSET load sets the new params as it sets the morph, without
@@ -333,8 +519,9 @@ test("a PSET load restores morph y and the corners without applying them", funct
   assert_equal(params:get("morph_c"), 4, "and its corner C")
   assert_near(params:get("reverb_mix"), 0.9, 1e-9, "the PSET's own value, not the morph's")
   assert_equal(S.morph_clock, nil, "no apply waits")
-  settle_xy(context, 0.5, 1)
-  assert_near(params:get("reverb_mix"), 1.0, 1e-9, "the next move applies with the PSET's corners: C and D both scene 4")
+  settle_xy(context, 0.5, 0.75)
+  -- A 0.125, B 0.125, C and D 0.375 each, C and D both scene 4 (1.0)
+  assert_near(params:get("reverb_mix"), 0.85, 1e-9, "the next move applies with the PSET's corners")
 end)
 
 -- #584: a move between two recalls of one scene, inside the clock's 0.1 s,
