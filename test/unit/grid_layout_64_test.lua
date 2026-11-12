@@ -40,8 +40,8 @@ local function key_count(keys)
   return count
 end
 
--- What the real step editor (2b's S.lib.pages_seq) has open, as "voice
--- step port", or nil (test/helpers.lua)
+-- What the real step editor (the SEQ page's, S.lib.pages_seq) has open,
+-- as "voice step port", or nil (test/helpers.lua)
 local shown_step_editor = h.shown_step_editor
 
 

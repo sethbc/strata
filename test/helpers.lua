@@ -327,7 +327,7 @@ local function wake_buffer_clock(context, slot)
   context.clock.advance_until(local_value("buffer_record_clocks")[slot])
 end
 
--- What 3.4's real step editor (2b's S.lib.pages_seq) has open, as
+-- What 3.4's real step editor (the SEQ page's, S.lib.pages_seq) has open, as
 -- "voice step port" ("3 5 1"), or nil while it is closed. The grid tests
 -- run their held steps against the real editor (#630): its edits, its own
 -- replacements (the euclid row) and a close from the screen (K2) are all

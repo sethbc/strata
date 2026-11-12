@@ -476,7 +476,7 @@ test("play/stop columns 1-4 on row 8 all light with the state (256)", function()
 end)
 
 
--- 3.1 (Task 2h): copy/paste on row 16, tempo key feedback, the scene page's
+-- 3.1: copy/paste on row 16, tempo key feedback, the scene page's
 -- sequencer position and the lock keys
 
 local function S_table() return local_value("S") end
@@ -893,7 +893,7 @@ test("256 lights the sounding step between steps, as SEQ does (#113)", function(
   assert_equal(led(2, 2), 0)
 end)
 
--- 3.3 (Task 2c): page 5, the positions page, and the armed record key
+-- 3.3: page 5, the positions page, and the armed record key
 local function page5_grid()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
@@ -1354,7 +1354,7 @@ test("the 256's step keys toggle on release on pages 1 and 2", function()
   end
 end)
 
--- Fix round 2: a release acts only for the key pressed in its role. A step
+-- A release acts only for the key pressed in its role. A step
 -- key held into page 3 and let go on recorder 1's cell records nothing; a
 -- page 2 fader key on row 9 held into page 1 and let go on a mute key
 -- mutes nothing

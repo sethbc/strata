@@ -13,8 +13,8 @@ local function tap(context, port, x, y)
   context.grid.press(port, x, y, 1); context.grid.press(port, x, y, 0)
 end
 
--- What the real step editor (2b's S.lib.pages_seq) has open, as "voice
--- step port", or nil (test/helpers.lua)
+-- What the real step editor (the SEQ page's, S.lib.pages_seq) has open,
+-- as "voice step port", or nil (test/helpers.lua)
 local shown_step_editor = h.shown_step_editor
 
 -- 3.4 (design §8.7, Question 11): a step key toggles on its release, so a
@@ -93,8 +93,9 @@ test("a step key held 0.3 s opens the step editor and its release closes it with
   assert_equal(patterns[3][12], 0)
 end)
 
--- Review Focus 4: a held step whose release never comes. The editor
--- closes, nothing toggles and no later key takes the stale one as held.
+-- A held step whose release never comes (the grid unplugged, its page
+-- changed, the pattern replaced, a second press): the editor closes,
+-- nothing toggles and no later key takes the stale one as held.
 -- Against the real step editor (#630)
 test("the step editor closes when its grid goes away, changes page or the pattern is replaced", function()
   local context, S, patterns
@@ -292,7 +293,7 @@ test("two recorder keys held at once each act at their own release", function()
   gestures.clear(1)
 end)
 
--- Fix round 2: a hold armed for a key's role on one page never acts once
+-- A hold armed for a key's role on one page never acts once
 -- the port shows another page: a scene save, a pattern clear, a
 -- recorder's clear and a solo held through a page change do nothing
 test("a page change cancels the port's pending holds", function()
@@ -335,8 +336,8 @@ test("a page change cancels the port's pending holds", function()
   S.lib.gestures.clear(1)
 end)
 
--- Ruling 67: the held step against the real step editor (2b's
--- S.lib.pages_seq, no double)
+-- Ruling 67: the held step against the real step editor (the SEQ page's
+-- S.lib.pages_seq), whose own euclid fill keeps it open
 test("a held step opens the real step editor, which survives its own euclid fill", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
