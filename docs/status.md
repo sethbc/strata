@@ -64,7 +64,7 @@ CHANGELOG.md has every change. In short:
 
 ## Open items
 
-- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved; its step gates amendment, Question 41, awaits review), built from `docs/superpowers/plans/2026-11-11-3.4-plan.md`.
+- **Next: 3.4**, modulation and sequencing (`docs/design/3.4-design.md`, approved, with its amendments of 2026-11-11: step gates, swing, mute and solo, the input level as a source, and the XY morph), built from `docs/superpowers/plans/2026-11-11-3.4-plan.md`.
 - [#578](https://github.com/sethbc/strata/issues/578) **`bufferState` reports numbered per load:** two quick loads into one slot can show the first load's status for a moment (accepted for 3.3, `docs/decisions.md`); outside the 3.4 plan's waves.
 - [#211](https://github.com/sethbc/strata/issues/211) **A rarer sclang collector failure** in the waveform area's 300 s loads and saves (#131's family), seen on SuperCollider 3.13 and on 3.14.1, so it is not 3.13-only; a rerun passes.
 - **Candidate:** a seconds-based scan mode. `bufScan` moves in valid-region lengths per second, so a 300 s slot scans 300 s per second at scan 1; loop regions are the answer until then.
