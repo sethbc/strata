@@ -27,8 +27,11 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth. norns' own LFO library is no longer used, so its min, max, baseline and reset parameters are gone; a PSET saved with 3.3 loads its LFO settings into the new parameters (the console prints `imported 3.3 LFO settings`), with LFOs 4-6 off and every setting 3.3 did not have at its default, so it plays as it did
 
 ## Macros (group)
-- Macro 1-16 (0-100 %, default 0): each moves up to eight targets at once, each between two ends of its own (where the macro's 0 % and 100 % put it; a first end above the second turns it around), along the target's own scale (a frequency in octaves). A target is any setting an LFO can move, or an LFO's rate or depth, never another macro or the morph. See [Modulation](modulation.md#macros)
+- Macro 1-16 (0-100 %, default 0): each moves up to eight targets at once, each between two ends of its own (where the macro's 0 % and 100 % put it; a first end above the second turns it around), along the target's own scale (a frequency in octaves). A target is any setting an LFO can move, or an LFO's rate or depth, or a matrix routing's depth, never another macro or the morph. See [Modulation](modulation.md#macros)
 - The targets are not parameters: they are saved with each PSET (in a file beside it, `<pset>.macros.data`), in scenes and between sessions. A scene recall, a fade and the morph set a macro's value without moving its targets, since the scene holds their own values
+
+## Morph (group)
+- Morph (0-100 %, default 0): the position between two saved scenes, 0 % scene A's sound and 100 % scene B's. Morph A and morph B (scene 1-16, defaults 1 and 2) pick the scenes. None of the three is stored in a scene. See [Modulation](modulation.md#morph)
 
 ## Scatter (group)
 - Scatter (off by default), depth (0-100 %, default 10 %), rate (0.01-1 Hz, default 0.1 Hz), and the settings it moves: pitch and position (on by default), size, cutoff and amp (off). See [Modulation](modulation.md#scatter)
@@ -47,11 +50,9 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - A hand edit of a setting a loop plays holds until the loop's next move of that setting
 
 ## Sequencer (group)
-- Quantize actions (off, beat, bar; default off): with beat or bar, a grid's position and bookmark keys and BUFFER's bookmark field (`bm`) wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`). A second press before then replaces the first. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes
-
-## Sequencer (group)
-The pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
-- Chain (off/on, default off), chain from (scene 1-16, default 1), chain scenes (1-16, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, and nothing else
+The quantizer for actions, the pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
+- Quantize actions (off, beat, bar; default off): with beat or bar, these wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`, `S3 at beat`, `v2 frz at bar`, `play at bar`): a grid's position and bookmark keys, BUFFER's bookmark field (`bm`), a scene recall (the SCENES page's K2, K3 and arc button, and every grid's scene keys) and the start of the patterns (a stop never waits). A grid's keys for a voice's audio freeze wait too. A second press of the same kind before then replaces the first. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes
+- Chain (off/on, default off), chain from (scene 1-16, default 1), chain scenes (1-16, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, their step attributes and each voice's sequence length and division, and nothing else
 - Division reset (trigger): every voice back to step 1 at the next bar
 - Follow transport (off/on, default on): a MIDI clock or Link start and stop start and stop the patterns (SETUP's `transport` row)
 
