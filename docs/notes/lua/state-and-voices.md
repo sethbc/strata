@@ -76,7 +76,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
 | 160 | follow an external clock's transport: install `clock.transport.start` and `stop`, which act only when `clock_source` is not internal, keeping the handlers found (#530) | `lib/sequencer.lua` |
 
-3.4's orders are in `START_ORDER` ahead of their modules (package 0a), so no later package edits `lib/constants.lua` for one; each module registers its own as it lands (`RESERVED_START_ORDERS` in `test/unit/structure_test.lua` lists the ones still waiting: none now).
+Every order in `START_ORDER` has its step: `test/unit/structure_test.lua` checks one order per step and one registered step per order.
 
 Adding a step:
 - A new resource gets its start in the module that owns it, at a free order at its place in this sequence (the orders are spaced by 10), next to its cleanup step.
@@ -142,7 +142,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 170 | clear every grid vport's key handler, put its grid back to rotation 0 and leave it dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
 | 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
 
-3.4's orders held for their modules, as for the start steps above (`RESERVED_CLEANUP_ORDERS` in `test/unit/structure_test.lua`: none now).
+Every order in `CLEANUP_ORDER` has its step, checked as for the start steps above.
 
 Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).

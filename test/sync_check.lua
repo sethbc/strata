@@ -207,12 +207,13 @@ function sync_check.sc_commands(sc_source)
   return stubs.engine_signatures_from_source(sc_source)
 end
 
--- Commands the engine has before the script calls them: 3.4's Wave 0 adds
--- five that Wave 1's packages call (1b the three LFO commands, 1e
--- setScatter, 1h setFastOffset). A pending command may go uncalled; one a
--- script file calls fails the check, as does a name the engine does not
--- have, so the list never outlives its use. One name per line: each package
--- removes its own when its call lands.
+-- Commands the engine has before the script calls them (empty: 3.4's five
+-- fast-modulation commands, pending until the Lua that calls each landed,
+-- are all called now). A pending command may go uncalled; one a script
+-- file calls fails the check, as does a name the engine does not have, so
+-- the list never outlives its use. One name per line: a release whose
+-- engine lands a command before its caller adds it here, and the caller's
+-- change removes it.
 sync_check.PENDING_COMMANDS = {
 }
 

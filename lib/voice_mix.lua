@@ -98,7 +98,7 @@ return function(S)
     if key == "mute" or key == "solo" then
       return {type = "binary", name = key, behavior = "toggle", default = 0,
         action = function()
-          if update_voice_list then update_voice_list() end  -- MAIN's list marks it
+          update_voice_list()  -- MAIN's list marks it
           request_redraw()
           grid_redraw()  -- the grids light a silenced voice
         end}
