@@ -56,10 +56,13 @@ return function(S)
   end
 
   -- A freeze key's toggle (3.4, design §8.9): at the next beat or bar
-  -- quantize_actions names, or at once while it is off (key freeze<v>)
+  -- quantize_actions names, or at once while it is off (key freeze<v>). A
+  -- press while the voice's toggle waits takes that toggle back (#625)
   function M.toggle_quantized(voice_idx)
     if not valid_voice(voice_idx) then return end
-    S.lib.quantize.schedule("freeze" .. voice_idx, function() M.toggle(voice_idx) end, "v" .. voice_idx .. " frz")
+    local key = "freeze" .. voice_idx
+    if S.lib.quantize.cancel(key) then return end
+    S.lib.quantize.schedule(key, function() M.toggle(voice_idx) end, "v" .. voice_idx .. " frz")
   end
 
   -- VOICE's layout tests and page renders: every voice frozen, its cursor

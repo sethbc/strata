@@ -40,13 +40,24 @@ return function(S)
   end
 
   -- Drop the action of this key that waits, if one does: its clock is
-  -- canceled and, unless keep_flash, its flash ends
+  -- canceled and, unless keep_flash, its flash ends. Returns whether one
+  -- waited
   local function cancel(key, keep_flash)
     local action = M.actions[key]
-    if not action then return end
+    if not action then return false end
     M.actions[key] = nil
     clock.cancel(action.clock)
     if not keep_flash then end_flash(action) end
+    return true
+  end
+
+  -- Drop the action of this key that waits (its flash ends with it), and
+  -- say whether one did: a toggle pressed again while its action waits
+  -- takes it back (lib/freeze.lua, the play key), and any start or stop of
+  -- the patterns drops a waiting start (#625)
+  function M.cancel(key)
+    if type(key) ~= "string" then return false end
+    return cancel(key)
   end
 
   -- Run fn now (quantize_actions off) or at the next beat or bar, replacing

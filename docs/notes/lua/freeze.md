@@ -8,7 +8,7 @@
 
 ## Owns
 
-- `lib/freeze.lua` (`S.lib.freeze`): the `freeze` voice-param record, the `source_change` hook, `M.FREEZE` (keys, engine names, section, modes), `M.spectral_offered()`, `M.mode_options()`, `M.is_frozen(voice_idx)`, `M.toggle(voice_idx)` (both bounds-checked: any other value is not frozen, and a toggle of it does nothing), and 3.4's `M.toggle_quantized(voice_idx)`: `M.toggle` through `S.lib.quantize.schedule("freeze<v>", ...)` (label `v<v> frz`, which fits the header flash as `v7 frz at beat`), so it waits for the beat or bar `quantize_actions` names and acts at once while it is off (a bad index schedules nothing). The grids' freeze keys move to it in Wave 2 (2c); `M.toggle` itself, VOICE's row and a mapped CC never wait (`docs/notes/lua/quantize.md`).
+- `lib/freeze.lua` (`S.lib.freeze`): the `freeze` voice-param record, the `source_change` hook, `M.FREEZE` (keys, engine names, section, modes), `M.spectral_offered()`, `M.mode_options()`, `M.is_frozen(voice_idx)`, `M.toggle(voice_idx)` (both bounds-checked: any other value is not frozen, and a toggle of it does nothing), and 3.4's `M.toggle_quantized(voice_idx)`: `M.toggle` through `S.lib.quantize.schedule("freeze<v>", ...)` (label `v<v> frz`, which fits the header flash as `v7 frz at beat`), so it waits for the beat or bar `quantize_actions` names and acts at once while it is off (a bad index schedules nothing); a press while the voice's toggle waits takes it back (`S.lib.quantize.cancel`, #625) and schedules nothing. The grids' freeze keys move to it in Wave 2 (2c); `M.toggle` itself, VOICE's row and a mapped CC never wait (`docs/notes/lua/quantize.md`).
 - Its unit tests: `test/unit/freeze_test.lua`. The engine side: `docs/notes/engine/freeze.md`.
 
 ## The params

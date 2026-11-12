@@ -366,4 +366,30 @@ test("toggle_quantized waits for the bar; toggle flips at once", function()
   end
 end)
 
+-- A freeze key pressed again while its toggle waits takes the toggle back
+-- (#625); another voice's waiting toggle stays
+test("a second freeze key press while its toggle waits takes it back", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function run_to_beat(beat)
+    context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+  end
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(1.5)
+  S.lib.freeze.toggle_quantized(2)
+  S.lib.freeze.toggle_quantized(4)
+  assert_equal(S.lib.ui_flash.text("header"), "v4 frz at bar")
+  S.lib.freeze.toggle_quantized(4)
+  assert_true(not S.lib.quantize.waiting("freeze4"), "the second press takes voice 4's toggle back")
+  assert_true(S.lib.quantize.waiting("freeze2"), "voice 2's still waits")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "the taken-back toggle's flash goes")
+  run_to_beat(4.02)
+  assert_true(S.lib.freeze.is_frozen(2), "voice 2 freezes at the bar")
+  assert_true(not S.lib.freeze.is_frozen(4), "voice 4 does not")
+  S.lib.freeze.toggle_quantized(4)
+  assert_true(S.lib.quantize.waiting("freeze4"), "a third press waits again")
+  run_to_beat(8.02)
+  assert_true(S.lib.freeze.is_frozen(4), "and freezes at its bar")
+end)
+
 end
