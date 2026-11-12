@@ -60,12 +60,13 @@ return function(S)
     return S.grid_pages[port] or 1
   end
 
-  -- A page change ends what every key held on the port was pressed to do
-  -- (3.4, Review Focus 4, fix round 2): its step gestures end (a step held
-  -- on the page it leaves toggles nothing at its release, takes no level
-  -- and closes a step editor it opened), its pending holds are canceled (a
-  -- scene save, a pattern clear, a recorder's clear, a solo) and its keys'
-  -- roles are forgotten (a recorder or mute key's release does nothing)
+  -- A page change ends what every key held on the port was pressed to do,
+  -- so no key acts on a page it was not pressed on: its step gestures end
+  -- (a step held on the page it leaves toggles nothing at its release,
+  -- takes no level and closes a step editor it opened), its pending holds
+  -- are canceled (a scene save, a pattern clear, a recorder's clear, a
+  -- solo) and its keys' roles are forgotten (a recorder or mute key's
+  -- release does nothing). Another port's keys are left alone
   function M.set_page(port, page)
     if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
     if not whole_number_in(page, 1, MAX_GRID_PAGES) then return end
@@ -290,9 +291,10 @@ return function(S)
   end
 
   -- A held step key, held GRID_HOLD.step_edit_seconds: open the step
-  -- editor for its voice and step (2b's S.lib.pages_seq.open_step_editor,
-  -- which pushes it as the screen's modal owner). The key is consumed, so
-  -- its release toggles nothing; it closes the editor instead
+  -- editor for its voice and step (SEQ's S.lib.pages_seq.open_step_editor,
+  -- which pushes it as the screen's modal owner) and note the key as the
+  -- one that opened it. The key is consumed, so its release toggles
+  -- nothing; it closes the editor instead
   local function open_step_editor(port, x, y, voice_idx, step)
     if not S.lib.pages_seq.open_step_editor(voice_idx, step, port) then return end
     step_editor.key = {port = port, x = x, y = y}
