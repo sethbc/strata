@@ -55,8 +55,8 @@ return function(S)
 
   -- 3.4's modulation state (design §0.1), local to this module and reached
   -- through the functions below: per param id, the base override a step
-  -- lock or an LFO on a macro holds (nil: the stored value), and the extra
-  -- offsets, per param id {source_key = offset in the param's units}
+  -- lock or note holds (the sequencer's; nil: the stored value), and the
+  -- extra offsets, per param id {source_key = offset in the param's units}
   local base_overrides = {}
   local extra_offsets = {}
 
@@ -255,7 +255,8 @@ return function(S)
     send_engine_value(param_id, with_lfo_offsets(param_id, value))
   end
 
-  -- The base override (step locks, LFOs on macros): while one is set the
+  -- The base override (the sequencer's step locks and notes, its one user;
+  -- an LFO on a macro moves extra offsets instead): while one is set the
   -- engine starts from it instead of the stored value, which keeps
   -- changing underneath (a param action's send is held under it). Setting
   -- and clearing send at once. Only a hand edit of the param clears it (the

@@ -5,12 +5,11 @@
 -- through schedule(key, fn, label). The quantize_actions param (off, beat,
 -- bar) says how long: off runs fn at once, beat and bar wait on a clock for
 -- the next beat or bar (clock.sync), a new action of the same key replacing
--- the waiting one, and the header flashes "<label> at <beat|bar>" while it
--- waits. The param is the fifth of the strata_seq group, which
--- lib/sequencer.lua's add_params sizes with PARAM_COUNT and fills by
--- calling add_params (lib/params_setup.lua's "seq" record adds the group
--- with this param alone while the sequencer has none). Registers the
--- cleanup step CLEANUP_ORDER.quantize and the "quantize" invariant.
+-- the waiting one (cancel(key) drops one: a toggle pressed again), and the
+-- header flashes "<label> at <beat|bar>" while it waits. The param is the
+-- fifth of the strata_seq group, which lib/sequencer.lua's add_params sizes
+-- with PARAM_COUNT and fills by calling add_params. Registers the cleanup
+-- step CLEANUP_ORDER.quantize and the "quantize" invariant.
 
 return function(S)
   local M = {}

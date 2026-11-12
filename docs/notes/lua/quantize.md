@@ -5,7 +5,7 @@
 - A waiting pattern start never outlives a start or stop of the patterns: `lib/sequencer.lua`'s `start_patterns` (the play key's own run, a followed transport start) and `pattern_clock_stop` (the play key, a followed transport stop, the error path, cleanup) call `cancel("patterns")` (#625).
 - An action waits exactly while its clock runs (the `quantize` invariant): the entry `M.actions[key]` is dropped as its clock wakes, before `fn` runs, and by every cancel. A waiting `fn` that raises prints `strata: quantized <key> failed: <error>` (the harness counts it as a script error) and leaves nothing waiting.
 - **A dropped action's clock is never canceled while its resume may be posted** (#626): norns delivers every resume matron posted, and one whose coroutine was canceled meanwhile makes `clock.resume` raise (maiden prints `bad argument #1 to 'resume'`). A cancel (a replacement, `cancel(key)`) whose action's sync is within `QUANTIZE.wake_tolerance` (1/32 beat) of its beat or past it, or whose beat is below the one it synced at (a reset or a new clock source moved the sync), retires the clock (`M.retired`): at that resume it finds its action gone and ends, running nothing. Any other is canceled at once. The sync's beat is worked out as matron's scheduler does (the clock's first wait counts from the beat it synced at). Cleanup cancels every retired clock still waiting; the invariant wants each to run until then.
-- `PARAM_COUNT` is the number of params `add_params` adds (1): `lib/sequencer.lua`'s `strata_seq` group counts it in its size and calls `add_params` for its fifth param (plan item 11), so either package could land first. With the sequencer's `add_params` (3.4's 1d) the group holds its seven params, `quantize_actions` fifth; `lib/params_setup.lua`'s `seq` record adds `strata_seq` with quantize's params alone only for a sequencer without one.
+- `PARAM_COUNT` is the number of params `add_params` adds (1): `lib/sequencer.lua`'s `strata_seq` group counts it in its size and calls `add_params` for its fifth param (plan item 11), so the group holds its seven params, `quantize_actions` fifth.
 - Cleanup step 97 cancels every waiting action and every retired clock, and nothing more (the flashes' own step, 140, ends the header's flash).
 
 ## Owns
@@ -18,7 +18,7 @@
 - `actions`: the waiting actions by key, `{clock, flash, token, sync_beat, landing}` (tests read the clocks here); `retired`: the dropped actions' clocks left to end at their resume.
 - `QUANTIZE`, the module's one table of tunables (`param_count`, `param_id`, `modes`, `beats` per mode, `wake_tolerance`, `flt_epsilon`, `flash_seconds`).
 - The cleanup step `CLEANUP_ORDER.quantize` (97) and the `quantize` invariant.
-- Its tests: `test/unit/quantize_test.lua` (the waits, the replacement, the flash, every wrap's flash fitting `HEADER.flash_width` for voice 7 under beat, a failing action, the cleanup, and `strata_seq` as the sequencer's group of seven, its own and with a test double for its `add_params`).
+- Its tests: `test/unit/quantize_test.lua` (the waits, the replacement, `cancel`, a drop with the resume posted (driven with `context.clock.advance`, which delivers every posted resume, #588), the flash through a tempo change, every wrap's flash fitting `HEADER.flash_width` for voice 7 under beat, a failing action, the cleanup, and `strata_seq` as the sequencer's group of seven).
 
 ## Callers
 
