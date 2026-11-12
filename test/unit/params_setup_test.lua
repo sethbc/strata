@@ -834,6 +834,7 @@ test("the menu records for 3.4's groups follow lfos in order: a landed module ad
   load_strata({ before_init = function()
     local S = local_value("S")
     S.lib.morph = nil  -- a module that exists (1g's), taken away: its record has none to call
+    S.lib.input_level = nil  -- 3.4's modules that have landed are loaded: hide this one
     for _, record in ipairs(S.registry.params) do
       local add = record.add
       record.add = function()

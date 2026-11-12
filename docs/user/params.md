@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **morph**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **morph**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -26,6 +26,9 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - **lfo destinations** (group) - LFO 1-3 dest (none by default)
 - **LFO 1**, **LFO 2**, **LFO 3** (groups, the norns LFO library's own parameters) - lfo state (off by default), shape (sine), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), phase, offset, scaled and raw value (read-only), min, max and baseline, mode (free) and rate (4 s free, or a clocked rate), reset and reset target. Turning an LFO on shows the rest of its settings
 - Keep min at -1, max at 1 and the baseline at "from center": Strata's depth math assumes all three. With them an LFO swings up to half the destination's range either side of the value you set. "From min" starts the swing half the range below that value (it reaches above the value only past 50 % depth), "from max" starts it half the range above (and swings half as wide as "from min"), and other min/max values change the size of the swing. Min never goes above max: setting min above max moves max up with it, and setting max below min moves min down with it (norns' LFO library stops every LFO when a random LFO's min is above its max)
+
+## Input (group)
+- Input follow gain (1-30, default 4): scales the live input's level, the modulation source `IN` on the MOD page and in the matrix, so a line-level input moves a destination. It does not change what you hear or the BUFFER page's meter
 
 ## Gestures (group)
 - Gesture 1-4 quantize (free, beat, bar; default free): how gesture recorder 1-4 keeps time. Free plays the loop as you recorded it. Beat and bar round the loop's length to whole beats or bars of the norns clock when the recording stops (at least one), stretch its moves to fit, and start each pass on a beat or bar, so the loop stays with the tempo, Link and MIDI clock. Changing it on a recorded loop converts the loop the same way (back to seconds at the current tempo for free)

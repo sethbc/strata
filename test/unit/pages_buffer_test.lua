@@ -366,7 +366,7 @@ test("the input meter shows the louder channel with a 1 s peak hold", function()
   local context = load_strata(); finish_startup(context)
   local meter = local_value("S").lib.pages_buffer
   local INPUT_METER = meter.INPUT_METER
-  assert_equal(INPUT_METER.poll_seconds, 0.05); assert_equal(INPUT_METER.segments, 8)
+  assert_equal(INPUT_METER.segments, 8)
   assert_equal(INPUT_METER.floor_db, -48); assert_equal(INPUT_METER.db_per_segment, 6)
   assert_equal(INPUT_METER.peak_hold_seconds, 1)
   assert_equal(meter.input_meter_segments(1), 8, "0 dB lights every segment")
@@ -377,10 +377,8 @@ test("the input meter shows the louder channel with a 1 s peak hold", function()
   assert_equal(meter.input_meter_segments(0 / 0), 0, "NaN: none")
   assert_equal(meter.input_meter_segments(4), 8, "above 0 dB: all eight")
   local left, right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
-  assert_true(not left.running and not right.running, "the input polls wait for BUFFER")
+  assert_true(left.running and right.running, "the input level module's polls run on any page")
   show_page("BUFFER")
-  assert_true(left.running and right.running, "BUFFER starts amp_in_l and amp_in_r")
-  assert_near(left.time, 0.05, 1e-9, "every 0.05 s"); assert_near(right.time, 0.05, 1e-9)
   redraw()
   local lit, peak, segments = meter_state(context)
   assert_equal(segments, 8, "eight segments"); assert_equal(lit, 0, "silent at first"); assert_equal(peak, nil)
@@ -404,29 +402,31 @@ test("the input meter shows the louder channel with a 1 s peak hold", function()
   assert_equal((meter_state(context)), 8, "the right channel at 0 dB lights all eight")
 end)
 
-test("the input polls stop when BUFFER is left and in cleanup", function()
+test("BUFFER's meter shows the module's levels and redraws only while it shows", function()
   local context = load_strata(); finish_startup(context)
-  local left, right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
+  local S = local_value("S")
+  local pages = local_value("UI_PAGES")
+  -- on another page a poll value asks for no redraw
+  next_frame(context)
+  context.polls.fire("amp_in_l", 1)
+  assert_equal(pages.screen_dirty, false, "no redraw off BUFFER")
   show_page("BUFFER")
-  assert_true(left.running and right.running, "running on BUFFER")
-  context.polls.fire("amp_in_l", 1); next_frame(context)
-  assert_equal((meter_state(context)), 8)
+  next_frame(context)
+  assert_equal((meter_state(context)), 8, "BUFFER draws the module's level")
+  assert_equal(S.lib.pages_buffer.meter.peak, 0, "a visit starts with no held peak")
+  context.polls.fire("amp_in_l", 0.01); next_frame(context)
+  context.polls.fire("amp_in_l", 0.5); context.polls.fire("amp_in_r", 0.1)
+  assert_equal(pages.screen_dirty, true, "a new level on BUFFER asks for a redraw")
+  next_frame(context)
+  assert_equal((meter_state(context)), 7, "the louder channel")
   show_page("SCENES")
-  assert_true(not left.running and not right.running, "stopped when BUFFER is left")
-  assert_equal(left.callback, nil, "a late value after leave reaches no callback")
-  assert_equal(right.callback, nil)
-  show_page("BUFFER")
-  assert_true(left.running and right.running, "running again on BUFFER")
-  redraw()
-  local lit, peak = meter_state(context)
-  assert_equal(lit, 0, "a new visit starts silent")
-  assert_equal(peak, nil, "with no held peak")
+  next_frame(context)
+  context.polls.fire("amp_in_l", 0.01)
+  assert_equal(pages.screen_dirty, false, "no redraw once BUFFER is left")
+  show_page("BUFFER"); redraw()
+  local _, peak = meter_state(context)
+  assert_equal(peak, nil, "a new visit starts with no held peak")
   cleanup()
-  assert_true(not left.running and not right.running, "cleanup stops them")
-  -- cleanup on another page (polls never started) is fine
-  context = load_strata(); finish_startup(context)
-  local ok, problem = pcall(cleanup)
-  assert_true(ok, tostring(problem))
   -- a norns without the input polls: BUFFER still draws
   context = load_strata(); finish_startup(context)
   context.polls.polls.amp_in_l, context.polls.polls.amp_in_r = nil, nil
@@ -465,24 +465,6 @@ test("a repeated input meter value asks for no redraw (#438)", function()
   assert_equal(pages.screen_dirty, false, "the same level and peak: no redraw")
   context.polls.fire("amp_in_l", 1)
   assert_equal(pages.screen_dirty, true, "a new level asks for one")
-end)
-
--- #438 (3): norns replaces its poll objects when it re-registers the polls,
--- so each visit looks them up again
-test("each BUFFER visit looks the input polls up again: replaced poll objects move the meter (#438)", function()
-  local context = load_strata(); finish_startup(context)
-  show_page("BUFFER"); show_page("SCENES")
-  for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do
-    local entry = { name = name, callback = nil, time = 0.25, running = false }
-    function entry:start() self.running = true end
-    function entry:stop() self.running = false end
-    context.polls.polls[name] = entry   -- as norns re-registers its polls (an engine load)
-  end
-  show_page("BUFFER")
-  assert_true(context.polls.polls.amp_in_l.running and context.polls.polls.amp_in_r.running,
-    "the second visit starts the new poll objects")
-  context.polls.fire("amp_in_l", 1); next_frame(context)
-  assert_equal((meter_state(context)), 8, "and their values move the meter")
 end)
 
 -- #435: the page animated, and the meter asked for redraws, under the open

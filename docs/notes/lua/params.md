@@ -46,7 +46,7 @@ Every adjustable value is a norns param:
 
 Menu order:
 - `strata` (the hidden `strata_pset_format`, master density, tempo), `strata_mutations` (named `mutations`), `strata_scenes` (named `scenes`);
-- the fx, lfo destinations, LFO 1-3 and buffers groups, then the `strata_record` and `strata_positions` groups, the `midi` group and the `scale` section;
+- the fx, lfo destinations, LFO 1-3, input (`strata_input`, `lib/input_level.lua`) and buffers groups, then the `strata_record` and `strata_positions` groups, the `midi` group and the `scale` section;
 - then each voice's synthesis (after any registered record's `add_first` params), granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
 
 ## Registries
