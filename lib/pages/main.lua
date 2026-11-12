@@ -66,8 +66,7 @@ return function(S)
     for i = 1, NUM_VOICES do
       local status = S.voices[i].active and "+" or "-"
       if S.voices[i].active then
-        local extras = S.voices[i].extras
-        if extras and extras.solo == 1 and not (extras.mute == 1) then
+        if S.lib.voice_mix.soloed(i) then
           status = "s"
         elseif S.lib.voice_mix.silenced(i) then
           status = "m"
@@ -292,6 +291,16 @@ return function(S)
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),
       layout_state("resonator, input source", 1, S.constants.SOURCE_INPUT),
       -- the widest ALT+K2 hint: K2:cancel K3:unlock
+      -- the list's m and s marks: voice 1 muted, voice 2 soloed (3 and 4 are m too)
+      {name = "voice list marks m and s", setup = function()
+        for i = 1, NUM_VOICES do
+          if not S.voices[i].active then toggle_voice(i) end
+        end
+        params:set("v1_mute", 1)
+        params:set("v2_solo", 1)
+        S.selected_voice = 2
+        update_voice_list()
+      end},
       {name = "ALT+K2 held past the hold time, voice locked", setup = function(context)
         toggle_lock(S.selected_voice)
         key(1, 1); key(2, 1)
