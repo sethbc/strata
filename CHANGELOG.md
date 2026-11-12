@@ -81,7 +81,6 @@ Modulation and sequencing: six LFOs, the fast ones running in the engine at up t
 
 - **Learn waits across page changes** (#595), where the design canceled it on a page change: on MOD nothing a player turns touches a target, so learn could only be finished from a grid.
 - **The 16×8's and 8×16's macro key enters at the bank already shown** (#618), not at bank 1, so a tap on one grid no longer moves the bank MOD, the arc and the other grids show; a fader page key or a voice key leaves the macros for that page of voice faders (#619).
-- **A gesture recorder's grid key acts on release:** a tap records, plays or stops, and a half-second hold only clears, so a clear never records or plays first.
 - **MOD's ALT hint names only what acts on the row** (`K2:rand` in scatter and the matrix, `K2:clear` where only the hold clears something), and a routing's source choices are every modulation source, all sixteen macros included, whatever bank the list shows.
 - **MAIN's `~` follows the voice's name**, which it shortens, since the row after `[F]` is full.
 - **SCENES' name entry is norns' own text entry,** opened when ALT+K2 is let go.
