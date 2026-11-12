@@ -58,10 +58,13 @@ return function(S)
     chromatic_mask = 4095,           -- every pitch class (lib/variation.lua's scale_mask, the scale off)
     tone_tolerance = 0.01,           -- semitones: a pitch this near a tone is on it
     beat_tolerance = 1e-9,           -- beats: two beats this near are one
-    -- beats: a wake this near its hop's beat is on time (ruling 54): above a
-    -- tick's jitter (a late MIDI or internal tick pulls the beat back a few
-    -- ms), under the shortest division (1/32: 1/8 beat)
+    -- beats: a wake this far before its hop's beat is still on time (ruling
+    -- 54): above a tick's jitter (a late MIDI or internal tick pulls the beat
+    -- back a few ms), under the shortest division (1/32: 1/8 beat)
     wake_tolerance = 1 / 32,
+    -- beats: a wake this late or later is not (ruling 58): under it a late
+    -- resume plays and the count stays; a 16th, the transport's step
+    late_beats = 1 / 4,
     hop_beats = 1 / 4,               -- no wait spans more than a 16th (wait_for)
     flt_epsilon = 2 ^ -23,           -- matron's FLT_EPSILON (clock_scheduler_next_clock_beat)
     loop_tolerance = 1e-6,           -- as lib/positions.lua's jump: inside the loop
@@ -89,17 +92,22 @@ return function(S)
   end
 
   -- The playing state (local; read through the functions below): per voice
-  -- {anchor, tick, beat, due, position, pass_length, last_sync, stale} and
-  -- the transport's {anchor, tick, beat, due, last_sync, stale}. A
+  -- {anchor, tick, beat, due, position, pass_length} and the transport's
+  -- {anchor, tick, beat, due, played_at (the time of its last 16th)}, each
+  -- with its wait's {last_sync, generation, sync_time, sync_beat,
+  -- sync_beat_seconds, stale}. A
   -- participant's beats (the beat of its tick 0, of the step it played
   -- last, of the step it waits for) are on the sequencer's own count, the
   -- clock's beats plus play.offset: 0 from every pattern start, and set
   -- whenever the clock's beat jumps while they play (a transport start the
   -- patterns do not follow, a new clock source: play.keep_count, below,
-  -- rulings 47 and 54), so every clock, the bars and the ratchets stay in
-  -- step through it; play.generation rises with each. last_sync: the clock
-  -- beat the scheduler counts the participant's next sync from; stale: it
-  -- may be an old count's (a sleep resets it). play.failed: the
+  -- rulings 47, 54 and 58), so every clock, the bars and the ratchets stay
+  -- in step through it; play.generation rises with each. last_sync: the
+  -- clock beat the scheduler counts the participant's next sync from, and
+  -- generation the play.generation it synced in; sync_time, sync_beat and
+  -- sync_beat_seconds: the time, the beat and a beat's length when it
+  -- synced; stale: last_sync may be an old count's (a sleep resets it).
+  -- play.failed: the
   -- outputs skipped until the next start; play.started: a voice started
   -- since the last redraw; play.reset_beat: a division reset's bar;
   -- overrides: per voice, the param ids its last played step overrides;
@@ -541,25 +549,44 @@ return function(S)
 
   -- The clocks (design 8.2, 8.13) ------------------------------------------
 
-  -- Keep one count through a jump of the clock's beat (rulings 47 and 54):
-  -- the sequencer's count is the clock's beats plus play.offset, and the
-  -- offset is set so the transport's pending 16th waits for the clock's
-  -- first 16th after the jump, every other clock shifting by as much (at
-  -- most one 16th late). So steps that fell together still do, 16th steps
-  -- land on the clock's 16ths, no step plays twice or is skipped, and the
-  -- chain's and the division reset's bars and the ratchets keep their
-  -- places. jump_beats: how long before now the jump can have happened: 0
-  -- for a transport start, which Strata's handler sees at once; a hop for a
-  -- jump a clock noticed at its wake (matron rescheduled every waiting sync
-  -- within a hop after the new beat). Raising play.generation tells every
-  -- waiting clock the count moved
-  function play.keep_count(jump_beats)
+  -- Keep one count through a jump of the clock's beat (rulings 47, 54 and
+  -- 58): the sequencer's count is the clock's beats plus play.offset, and
+  -- the offset is set so the transport's pending 16th waits for the clock's
+  -- first 16th at or after the moment it is due: a 16th after the
+  -- transport's last, in time (the jump does not move time), or now when
+  -- that has passed (a 16th within SEQ.wake_tolerance before now is now, as
+  -- a wake is). Every other clock shifts by as much: at most one 16th late
+  -- and never early, whether the handler keeps it at the jump or a clock
+  -- notices it up to a hop later. So steps that fell together still do, 16th
+  -- steps land on the clock's 16ths, no step plays twice, and the chain's
+  -- and the division reset's bars and the ratchets keep their places.
+  -- Raising play.generation tells every waiting clock the count moved
+  function play.keep_count()
     if not S.pattern_playing then return end
     local sixteenth, state = SEQ.transport_beats, play.transport
-    local from = clock.get_beats() - jump_beats
-    local next_sixteenth = (math.floor(from / sixteenth + SEQ.beat_tolerance) + 1) * sixteenth
-    play.offset = state.anchor + (state.tick + 1) * sixteenth - next_sixteenth
+    local now, beat_seconds = clock.get_beats(), clock.get_beat_sec()
+    local since_last = (util.time() - (state.played_at or util.time())) / beat_seconds
+    local due = math.max(now - SEQ.wake_tolerance, now + sixteenth - since_last)
+    local first_sixteenth = math.ceil(due / sixteenth - SEQ.beat_tolerance) * sixteenth
+    play.offset = state.anchor + (state.tick + 1) * sixteenth - first_sixteenth
     play.generation = play.generation + 1
+  end
+
+  -- Whether target, a beat of the sequencer's count, has come
+  local function is_due(target)
+    return target - play.offset <= clock.get_beats() + SEQ.flt_epsilon
+  end
+
+  -- Whether the beat has gone a 16th or more further since the
+  -- participant's last sync (state.sync_time, sync_beat and
+  -- sync_beat_seconds: the time, beat and beat length then) than the time
+  -- gone by explains, even at the faster of the two tempos: a jump forward.
+  -- A late delivery (Lua busy) moves both together, and a tempo change
+  -- mid-wait never reads as one
+  local function jumped_forward(state)
+    local beat_seconds = math.min(state.sync_beat_seconds, clock.get_beat_sec())
+    local beats, seconds = clock.get_beats() - state.sync_beat, util.time() - state.sync_time
+    return beats - seconds / beat_seconds >= SEQ.late_beats
   end
 
   -- Wait for target, a beat of the sequencer's count (the clock's beat
@@ -569,30 +596,47 @@ return function(S)
   -- the scheduler counts a sync from the beat of the coroutine's last
   -- (state.last_sync) and lands on the first multiple of the span after it
   -- plus the offset, so an offset in (-span, 0] makes it the target itself.
+  -- No clock waits on an old reference (ruling 58): before each sync it
+  -- compares the beat with state.last_sync. Below it, the beat went back
+  -- after its last resume was posted (a reset or a jump between the post
+  -- and the delivery, or during its step) and the scheduler would count from
+  -- the old beat: the count moved, and the clock keeps it unless it was kept
+  -- meanwhile. A 16th or more above it (a late delivery: Lua was busy), the
+  -- sync would land in the past. Either way, and after any count change
+  -- (state.stale), a sleep first makes the scheduler count from now.
   -- At each wake (ruling 54) the clock tests the beat its clock.sync
   -- returned (the beat matron's tick fired it on; the live beat, which a late
   -- tick can pull back, is never the test):
-  -- - within SEQ.wake_tolerance of the hop's beat it is on time and the step
-  --   plays, whatever was kept meanwhile (a resume posted before a reset);
-  -- - further from it the count moved: kept meanwhile (play.generation
+  -- - from SEQ.wake_tolerance before the hop's beat to under
+  --   SEQ.late_beats after it, it is on time and the step plays, late or
+  --   not, whatever was kept meanwhile (a resume posted before a reset). If
+  --   the beat has meanwhile gone on further than the time since its sync
+  --   explains (jumped_forward: a jump forward after the post, such as a new
+  --   clock source set on Lua's own thread), the count moved too: the clock
+  --   keeps it unless it was kept meanwhile, and the step plays on it;
+  -- - outside that the count moved: kept meanwhile (play.generation
   --   changed), or a jump no one announced (a new clock source, another
   --   script's transport handler), which this clock keeps itself, as the
-  --   handler would; a jump forward is noticed the same way. It then waits
-  --   on the count as it is now.
-  -- After any count change the scheduler's reference for the coroutine's
-  -- next sync can be an old beat (state.stale): a sleep first makes it count
-  -- from now. A target the count has already passed plays at once, so no
-  -- clock ever waits for the beat to climb back to an old count
+  --   handler would. It then waits on the count as it is now.
+  -- A target the count has already passed returns at once: the caller plays
+  -- at most one step for it (rule 4)
   local function wait_for(state, target)
     local hop = SEQ.hop_beats
     while true do
-      local generation = play.generation
+      local now = clock.get_beats()
+      if now < state.last_sync - SEQ.wake_tolerance then
+        if play.generation == state.generation then play.keep_count() end
+        state.stale = true
+      elseif now >= state.last_sync + SEQ.late_beats then
+        state.stale = true
+      end
       if state.stale then
         clock.sleep(0)
-        state.stale, state.last_sync = false, clock.get_beats()
+        now = clock.get_beats()
+        state.stale, state.last_sync = false, now
       end
       local clock_target = target - play.offset
-      if clock_target <= clock.get_beats() + SEQ.flt_epsilon then return end
+      if clock_target <= now + SEQ.flt_epsilon then return end
       local from = state.last_sync
       local landing, offset = clock_target, 0
       if clock_target - from > hop then
@@ -601,13 +645,20 @@ return function(S)
         offset = clock_target % hop
         if offset > 0 then offset = offset - hop end
       end
-      state.last_sync = landing
+      state.last_sync, state.generation = landing, play.generation
+      state.sync_time, state.sync_beat, state.sync_beat_seconds = util.time(), now, clock.get_beat_sec()
       local woke = clock.sync(hop, offset) or clock.get_beats()
-      if math.abs(woke - landing) <= SEQ.wake_tolerance then
-        if play.generation ~= generation then state.stale = true end
+      if woke >= landing - SEQ.wake_tolerance and woke < landing + SEQ.late_beats then
+        if play.generation ~= state.generation then state.stale = true end
+        if jumped_forward(state) then
+          -- after the post (a new clock source, set on Lua's own thread):
+          -- the step plays, on the count kept now
+          if play.generation == state.generation then play.keep_count() end
+          state.stale = true
+        end
         if landing == clock_target then return end
       else
-        if play.generation == generation then play.keep_count(hop) end
+        if play.generation == state.generation then play.keep_count() end
         state.stale = true
       end
     end
@@ -720,13 +771,11 @@ return function(S)
 
   -- A voice's step ------------------------------------------------------
 
-  -- The voice's step at its tick: the position wraps at the pass's length
-  -- (a length change applies at once while the position is inside it, at
-  -- the wrap otherwise); a set step draws its probability once and plays
-  -- its first hit; returns the hits still to play and their spacing
-  local function begin_voice_step(voice_idx)
+  -- The voice's step at its tick, and its position moved on: the position
+  -- wraps at the pass's length (a length change applies at once while the
+  -- position is inside it, at the wrap otherwise)
+  local function take_position(voice_idx)
     local state = play.voices[voice_idx]
-    at_beat(state.beat)
     local length = voice_length(voice_idx)
     if length ~= state.pass_length and state.position <= length then state.pass_length = length end
     if state.position > state.pass_length then
@@ -736,7 +785,18 @@ return function(S)
       if overrides[voice_idx] and not M.has_set_step(voice_idx) then end_overrides(voice_idx) end
     end
     local step = state.position
-    S.pattern_sounding_steps[voice_idx], state.position = step, step + 1
+    state.position = step + 1
+    return step
+  end
+
+  -- The voice's step at its tick (take_position): a set step draws its
+  -- probability once and plays its first hit; returns the hits still to
+  -- play and their spacing
+  local function begin_voice_step(voice_idx)
+    local state = play.voices[voice_idx]
+    at_beat(state.beat)
+    local step = take_position(voice_idx)
+    S.pattern_sounding_steps[voice_idx] = step
     local level = S.patterns[voice_idx][step]
     local hits, spacing, semitones = 0, 0, nil
     local attrs = S.pattern_steps[voice_idx][step] or {}
@@ -774,6 +834,7 @@ return function(S)
     end
     S.pattern_sounding_step = S.pattern_position
     S.pattern_position = S.pattern_position % PATTERN_LENGTH + 1
+    state.played_at = util.time()  -- for keep_count
     finish_beat(state.beat)
   end
 
@@ -792,6 +853,41 @@ return function(S)
     error(result, 0)
   end
 
+  -- The voice reaches its tick k at beat (a division reset's bar puts it
+  -- back at step 1, from there)
+  local function take_tick(voice_idx, k, beat)
+    local state = play.voices[voice_idx]
+    local reset = play.reset_beat
+    if reset and near(beat, reset) and state.anchor < reset - SEQ.beat_tolerance then
+      state.anchor, k = reset, 0
+      state.position, state.pass_length = 1, voice_length(voice_idx)
+    end
+    state.tick, state.beat = k, beat
+  end
+
+  -- No bursts (rule 4): at a wake the voice plays at most one step that has
+  -- come. While its next tick has come too, the step at its tick is skipped
+  -- (its position moves on, nothing plays) and it takes that tick, so it
+  -- plays the latest, at the position the count puts it at
+  local function skip_due_ticks(voice_idx)
+    while true do
+      local k, beat = next_voice_tick(voice_idx)
+      if not is_due(beat) then return end
+      take_position(voice_idx)
+      take_tick(voice_idx, k, beat)
+    end
+  end
+
+  -- The hit to play at a wake for hit: the latest of the step's hits that
+  -- has come, or nil when the voice's next tick has come (its step's other
+  -- hits are skipped)
+  local function due_hit(voice_idx, plan, hit)
+    local _, next_beat = next_voice_tick(voice_idx)
+    if is_due(next_beat) then return nil end
+    while hit < plan.hits and is_due(plan.beat + hit * plan.spacing) do hit = hit + 1 end
+    return hit
+  end
+
   -- A voice's clock from beat (its step 1 at once, its anchor): each step,
   -- its ratchets, then the wait for its next tick. Every wait is outside
   -- the guard
@@ -799,14 +895,18 @@ return function(S)
     local state = play.voices[voice_idx]
     state.anchor, state.tick, state.beat, state.due = beat, 0, beat, nil
     state.position, state.pass_length = 1, voice_length(voice_idx)
-    state.last_sync, state.stale = clock.get_beats(), false
+    state.last_sync, state.generation, state.stale = clock.get_beats(), play.generation, false
     local function forget() S.pattern_clocks[voice_idx] = nil end
     local function begin() return begin_voice_step(voice_idx) end
     local plan = guarded(forget, begin)
     while true do
-      for hit = 2, plan.hits do
+      local hit = 2
+      while hit <= plan.hits do
         wait_for(state, plan.beat + (hit - 1) * plan.spacing)
+        hit = guarded(forget, function() return due_hit(voice_idx, plan, hit) end)
+        if hit == nil then break end
         guarded(forget, function() play_voice_hit(voice_idx, plan, hit) end)
+        hit = hit + 1
       end
       local next_tick = guarded(forget, function()
         local k, target = next_voice_tick(voice_idx)
@@ -816,13 +916,8 @@ return function(S)
       wait_for(state, next_tick.target)
       state.due = nil
       guarded(forget, function()
-        local reset, k = play.reset_beat, next_tick.k
-        if reset and near(next_tick.target, reset) and state.anchor < reset - SEQ.beat_tolerance then
-          -- the division reset's bar: step 1, from here
-          state.anchor, k = reset, 0
-          state.position, state.pass_length = 1, voice_length(voice_idx)
-        end
-        state.tick, state.beat = k, next_tick.target
+        take_tick(voice_idx, next_tick.k, next_tick.target)
+        skip_due_ticks(voice_idx)
       end)
       plan = guarded(forget, begin)
     end
@@ -835,18 +930,24 @@ return function(S)
     S.pattern_clocks[voice_idx] = clock.run(voice_clock, voice_idx, beat)
   end
 
+  -- The transport's clock from beat: a 16th at each wake, the latest that
+  -- has come (rule 4: the 16ths skipped meanwhile move its position on)
   local function transport_clock(beat)
     local state = play.transport
     state.anchor, state.tick, state.beat, state.due = beat, 0, beat, nil
-    state.last_sync, state.stale = clock.get_beats(), false
+    state.last_sync, state.generation, state.stale = clock.get_beats(), play.generation, false
     local function forget() S.pattern_clock = nil end
     guarded(forget, transport_step)
     while true do
-      local target = state.anchor + (state.tick + 1) * SEQ.transport_beats
+      local sixteenth = SEQ.transport_beats
+      local target = state.anchor + (state.tick + 1) * sixteenth
       state.due = target
       wait_for(state, target)
       state.due = nil
-      state.tick, state.beat = state.tick + 1, target
+      local tick = state.tick + 1
+      while is_due(state.anchor + (tick + 1) * sixteenth) do tick = tick + 1 end
+      S.pattern_position = (S.pattern_position - 1 + tick - state.tick - 1) % PATTERN_LENGTH + 1
+      state.tick, state.beat = tick, state.anchor + tick * sixteenth
       guarded(forget, transport_step)
     end
   end
@@ -1098,13 +1199,19 @@ return function(S)
   -- reset, or an external start with seq_follow_transport off) has put the
   -- clock's count back (to 0) and every waiting sync on beat 0: the count is
   -- kept through it at once (keep_count, ruling 47), and each clock, woken
-  -- at once by the reset, waits again on it (wait_for)
+  -- at once by the reset, waits again on it (wait_for). A clock whose
+  -- resume matron posted before the reset was delivered before this handler
+  -- (matron posts the start after the reset) and its next sync already
+  -- counts from now (wait_for, ruling 58). No clock is canceled here: matron
+  -- posts the woken clocks' resumes within a millisecond of the reset,
+  -- often before this runs, and norns would deliver each to a coroutine it
+  -- no longer has (clock.resume errors)
   function transport.start()
     if M.follows_transport() then
       pattern_clock_start()
       request_redraw()
     else
-      play.keep_count(0)
+      play.keep_count()
     end
     if transport.previous_start then transport.previous_start() end
   end

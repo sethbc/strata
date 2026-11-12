@@ -1771,8 +1771,10 @@ local function make_clock(util)
   -- posted event as it was: its next sync counts on from its own beat.
   -- Events scheduled during the step wait for the next one; one canceled by
   -- an earlier one in the step is skipped (norns would resume a coroutine it
-  -- no longer has and report the error)
-  function clock.advance()
+  -- no longer has and report the error). before_delivery (optional) runs
+  -- once the step's events are posted and before the first is delivered, as
+  -- a reset or a jump can fall between a tick's posts and Lua's deliveries
+  function clock.advance(before_delivery)
     local pending = ready_events()
     local first = pending[1]
     if not first then return end
@@ -1788,6 +1790,7 @@ local function make_clock(util)
     table.sort(due, function(left, right) return left.slot < right.slot end)
     local tick = { time = step_time, beat = beats_at(step_time) }
     for _, entry in ipairs(due) do entry.event.ready = false end  -- posted
+    if before_delivery then before_delivery() end
     for _, entry in ipairs(due) do
       if clock.events[entry.id] == entry.event and entry.event.order == entry.order then fire(entry, tick) end
     end
@@ -1856,8 +1859,12 @@ local function make_clock(util)
   -- waiting sync's beat at 0 (clock_scheduler_reset_sync_events), so each
   -- fires on the next tick and its coroutine's next sync counts on from
   -- beat 0; then it calls clock.transport.start, as _norns.clock.start does.
-  -- A stop calls clock.transport.stop. Neither calls a handler that is nil
-  function clock.transport_start()
+  -- A stop calls clock.transport.stop. Neither calls a handler that is nil.
+  -- transport_reset is the start's reset alone: matron then posts
+  -- EVENT_CLOCK_START, so Lua delivers every resume posted before the reset
+  -- first, then the start (a test calls clock.transport.start itself), then
+  -- the resumes the reset brings
+  function clock.transport_reset()
     beat_reference.beat, beat_reference.time = 0, util.time()
     for _, event in pairs(clock.events) do
       if event.ready and event.type == SCHEDULE_SYNC then
@@ -1865,6 +1872,10 @@ local function make_clock(util)
         event.scheduled_at, event.scheduled_beat = util.time(), 0
       end
     end
+  end
+
+  function clock.transport_start()
+    clock.transport_reset()
     if clock.transport.start ~= nil then clock.transport.start() end
   end
 

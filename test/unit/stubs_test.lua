@@ -1515,6 +1515,61 @@ test("stub clock: transport_start resets the beat and the waiting syncs, then ca
   context.clock.transport_stop()
 end)
 
+-- clock_start_from_source resets the beat and the waiting syncs, then posts
+-- EVENT_CLOCK_START: Lua delivers every resume posted before it first, then
+-- the start (clock.transport.start). transport_reset is the reset alone
+test("stub clock: transport_reset resets the beat and the waiting syncs and calls no handler", function()
+  local context = load_strata(); finish_startup(context)
+  local starts = 0
+  clock.transport.start = function() starts = starts + 1 end
+  local wakes = {}
+  local syncing = clock.run(function()
+    while true do table.insert(wakes, {beat = clock.sync(1), time = util.time()}) end
+  end)
+  context.clock.run_for(0.75)  -- beat 2.5, waiting for beat 3
+  local reset_at = util.time()
+  context.clock.transport_reset()
+  assert_near(clock.get_beats(), 0, 1e-9, "the beat is 0")
+  assert_equal(starts, 0, "no handler runs")
+  context.clock.run_for(0)
+  assert_equal(#wakes, 2, "the waiting sync fired on the next tick")
+  assert_near(wakes[2].time, reset_at, 1e-9, "at once")
+  context.clock.run_for(0.5)
+  assert_near(wakes[3].beat, 1, 1e-9, "then counted on from 0")
+  clock.cancel(syncing)
+end)
+
+-- advance's hook runs once the step's resumes are posted, before any is
+-- delivered: a reset in it leaves every posted resume as it was
+test("stub clock: advance's hook runs between the step's posts and its deliveries", function()
+  local context = load_strata(); finish_startup(context)  -- beat 1
+  local woke = {}
+  local function waiter(name)
+    return clock.run(function()
+      while true do table.insert(woke, {name = name, beat = clock.sync(1)}) end
+    end)
+  end
+  local first, second = waiter("first"), waiter("second")
+  local hooked, posted = 0, 0
+  repeat
+    context.clock.advance(function()
+      hooked = hooked + 1
+      -- the steps before (the script's own clocks) post neither
+      if context.clock.events[first].ready then return end
+      posted = posted + 1
+      assert_equal(context.clock.events[second].ready, false, "the second's resume is posted with the first's")
+      context.clock.transport_reset()
+    end)
+  until #woke > 0
+  assert_true(hooked >= 1, "the hook runs in every step")
+  assert_equal(posted, 1, "once in the step where both were due")
+  assert_equal(#woke, 2, "both were delivered")
+  assert_near(woke[1].beat, 2, 1e-9, "with the beat they were posted at")
+  assert_near(woke[2].beat, 2, 1e-9, "both")
+  assert_near(context.clock.events[first].sync_beat, 3, 1e-9, "each counts its next sync on from 2")
+  clock.cancel(first); clock.cancel(second)
+end)
+
 -- matron's clock_set_source (and crow's input division) reschedule every
 -- waiting sync from the new source's beat (clock_scheduler_reschedule_sync_events:
 -- the next multiple of its beats after the new beat, plus its offset), with
