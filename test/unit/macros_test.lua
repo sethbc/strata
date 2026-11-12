@@ -287,11 +287,7 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   macros.set_target(1, 2, "v3_grain_pitch", 0, 1)
   params:set("macro_1", 0.5); settle(context)
   local pitch = params:get("v3_grain_pitch")
-  -- without the matrix's fast sums, a fast target moves nothing (and raises
-  -- nothing)
-  S.lib.matrix = matrix_stand_in()
-  S.engine_senders.macro_1(0.7)
-  context.clock.run_for(0.05)
+  local matrix = S.lib.matrix
   local fast = {}
   S.lib.matrix = matrix_stand_in(function(key, id, m) table.insert(fast, { key = key, id = id, m = m }) end)
   context.clear_engine_calls()
@@ -317,8 +313,9 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   assert_near(reverbs[#reverbs].args[1], 0.5, 1e-9, "and the engine gets the stored value back")
   assert_equal(#fast, 2, "the fast extra is cleared too")
   assert_equal(fast[2].id, "v3_grain_pitch"); assert_equal(fast[2].m, nil)
-  -- a real LFO on the destination macro 1: square at 100 % puts the macro at 1
-  S.lib.matrix = matrix_stand_in()
+  -- a real LFO on the destination macro 1, with the real matrix: square at
+  -- 100 % puts the macro at 1
+  S.lib.matrix = matrix
   local lfos = S.lib.lfos
   local destination
   for index, entry in ipairs(S.LFO_DESTINATIONS) do
@@ -330,11 +327,14 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   params:set(lfos.param_id(1), 1)
   context.clock.run_for(0.1)
   assert_near(engine_value(S, "reverb_mix"), 1, 1e-9, "the LFO moves the target's engine value")
+  -- 4 - 2.125 (1 and 0.5 along 0.25-4) is 1 of the pitch's half range 1.875
+  assert_near(matrix.offset("v3_grain_pitch"), 1, 1e-9, "and the fast target's, through the matrix")
   assert_near(params:get("macro_1"), 0.5, 1e-9, "and never the macro")
   assert_near(params:get("reverb_mix"), 0.5, 1e-9, "nor the target")
   params:set(lfos.param_id(1), 0)
   context.clock.run_for(0.1)
   assert_near(engine_value(S, "reverb_mix"), 0.5, 1e-9, "turned off, the target is back on its value")
+  assert_near(matrix.offset("v3_grain_pitch"), 0, 1e-12, "and the fast one")
 end)
 
 test("a target that changes or loads drops the extra an LFO on its macro gave the old one", function()
