@@ -376,6 +376,23 @@ return function(S)
   -- Lua-run LFOs: modulating around the stored value
   ---------------------------------------------------------------------------
 
+  -- Destinations whose engine sender reaches no engine (a macro's, which
+  -- works out its targets' extras: lib/macros.lua) take no round-robin slot
+  -- and no budget message (#636): an LFO on one runs that sender itself
+  -- (S.engine_senders[id]), once a step after the six LFOs when the
+  -- modulated value moved by send_threshold from the one it last handed
+  -- over (last[id]), and at once at a restore. ids in registration order;
+  -- due[id] while a step's LFO moved it
+  local direct = {known = {}, ids = {}, last = {}, due = {}}
+  local send_direct  -- (id, always): below, once destination_position is
+
+  function M.direct_destination(param_id)
+    assert(type(param_id) == "string", "S.lib.lfos.direct_destination: a param id is a string")
+    assert(not direct.known[param_id], "S.lib.lfos.direct_destination: " .. param_id .. " is registered")
+    direct.known[param_id] = true
+    table.insert(direct.ids, param_id)
+  end
+
   -- LFO n stops modulating its destination: the engine gets the stored value
   -- back (plus any other LFO's offset on it). Always sends.
   function restore_lfo_destination(n)
@@ -383,7 +400,11 @@ return function(S)
     if not id then return end
     S.lfo_last_dest[n] = nil
     S.lfo_scaled[n] = nil
-    send_param_to_engine(id, params:get(id))
+    if direct.known[id] then
+      send_direct(id, true)
+    else
+      send_param_to_engine(id, params:get(id))
+    end
   end
 
   -- The offset of a Lua destination for m half ranges (the matrix's too)
@@ -435,8 +456,22 @@ return function(S)
     S.lib.engine_sync.send_engine_value(id, S.lib.engine_sync.with_lfo_offsets(id, params:get(id)))
   end
 
+  -- A direct destination's modulated value to its sender (always: a
+  -- restore's, whatever it last handed over)
+  send_direct = function(id, always)
+    local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
+    local last = direct.last[id]
+    if not always and last ~= nil
+      and math.abs(destination_position(id, value) - destination_position(id, last)) < LFO.send_threshold then
+      return
+    end
+    direct.last[id] = value
+    S.engine_senders[id](value)
+  end
+
   -- A Lua-run LFO's step: its offset m (design §2.2) on its destination,
-  -- queued when the value moved by send_threshold since the last send
+  -- queued when the value moved by send_threshold since the last send (a
+  -- direct destination: handed over after the six LFOs)
   local function step_lua(n)
     local st = state[n]
     local id = lfo_destination_id(n)
@@ -448,6 +483,10 @@ return function(S)
     if not id or depth == 0 then return end
     S.lfo_last_dest[n] = id
     S.lfo_scaled[n] = st.value * st.depth / 100 + 2 * params:get(param_id(n, "offset")) / 100
+    if direct.known[id] then
+      direct.due[id] = true
+      return
+    end
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
     local last_sent = S.lib.engine_sync.expected_value(id)
     if last_sent ~= nil and math.abs(destination_position(id, value) - destination_position(id, last_sent))
@@ -631,6 +670,13 @@ return function(S)
     local step = {}
     for n = 1, NUM_LFOS do
       S.lib.ui_frame.contained_call(step_errors, n, "LFO " .. n .. " step", step_lfo, n, now, step)
+    end
+    -- the direct destinations the LFOs moved, each once with every LFO's offset
+    for _, id in ipairs(direct.ids) do
+      if direct.due[id] then
+        direct.due[id] = nil
+        S.lib.ui_frame.contained_call(send_errors, id, "LFO send", send_direct, id, false)
+      end
     end
     beats_reading.last = step.beats
     for index, fn in ipairs(step_hooks) do

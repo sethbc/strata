@@ -167,10 +167,10 @@ return function(S)
     revisions[m] = 0
   end
 
-  local function fast_key(m, id) return source_key(m) .. " " .. id end
-
   -- The matrix sums a fast destination's extras into its setFastOffset
-  -- (lib/matrix.lua); without a matrix a fast target does nothing
+  -- (lib/matrix.lua); without a matrix a fast target does nothing. Handed
+  -- over at once: the hand-over reaches no engine, so it takes no slot of
+  -- the LFOs' round robin (#636), and the matrix's step sends the sum
   local function set_fast_extra(m, id, value)
     local matrix = S.lib.matrix
     if matrix and matrix.set_fast_extra then matrix.set_fast_extra(source_key(m), id, value) end
@@ -178,13 +178,14 @@ return function(S)
 
   local function send_target(id) send_param_to_engine(id, params:get(id)) end
 
-  -- Clear row k's extra, its target sent again in the round robin
+  -- Clear row k's extra, its target sent again (a Lua one in the round
+  -- robin, a fast one in the matrix's next step)
   local function clear_extra(m, k)
     local held = extras[m][k]
     if not held then return end
     extras[m][k] = nil
     if held.fast then
-      S.lib.lfos.mark_due(fast_key(m, held.id), function() set_fast_extra(m, held.id, nil) end)
+      set_fast_extra(m, held.id, nil)
     else
       S.lib.engine_sync.set_extra_offset(source_key(m), held.id, nil)
       S.lib.lfos.mark_due(held.id, function() send_target(held.id) end)
@@ -220,8 +221,7 @@ return function(S)
         local at_value = spec:map(row.min + value * (row.max - row.min))
         if S.lib.lfos.fast_destination(id) then
           extras[m][k] = {id = id, fast = true}
-          local offset = S.lib.lfos.m_for(id, at_stored, at_value)
-          S.lib.lfos.mark_due(fast_key(m, id), function() set_fast_extra(m, id, offset) end)
+          set_fast_extra(m, id, S.lib.lfos.m_for(id, at_stored, at_value))
         else
           extras[m][k] = {id = id, fast = false}
           S.lib.engine_sync.set_extra_offset(source_key(m), id, at_value - at_stored)
@@ -232,8 +232,12 @@ return function(S)
     computed[m] = seen
   end
 
+  -- The sender reaches no engine: an LFO on the macro runs it itself, once
+  -- a step and at a restore, outside the round robin and the send budget
+  -- (S.lib.lfos.direct_destination, #636)
   for m = 1, NUM_MACROS do
     S.engine_senders[macro_id(m)] = function(value) lfo_moved(m, value) end
+    S.lib.lfos.direct_destination(macro_id(m))
   end
 
   -- Whether an LFO modulates macro m now (its Lua destination is the macro)
