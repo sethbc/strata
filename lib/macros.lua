@@ -281,14 +281,33 @@ return function(S)
   -- pending[m]: macro m waits for the clock; last[m]: its last apply's time
   local applying = {pending = {}, last = {}}
   local apply_errors = {}
+  -- The apply clock is never canceled while norns may have posted its
+  -- resume (#626: norns delivers every resume it posted, and clock.resume
+  -- raises for a coroutine it no longer has, which maiden prints): it is
+  -- retired instead. token rises with each start and each retire, and a
+  -- clock whose token is old ends at its next wake, doing nothing;
+  -- retired[id] while such a clock waits for that wake. Only cleanup
+  -- cancels
+  local apply_clock = {token = 0, retired = {}}
 
   local function any_pending() return next(applying.pending) ~= nil end
 
+  -- Retire the apply clock: it is no longer S.macro_clock, and it ends at
+  -- its next wake (1 / apply_hz at the most)
   local function stop_clock()
     if S.macro_clock then
-      clock.cancel(S.macro_clock)
+      apply_clock.retired[S.macro_clock] = true
+      apply_clock.token = apply_clock.token + 1
       S.macro_clock = nil
     end
+  end
+
+  -- Cleanup's: cancel the apply clock and every retired one still waiting
+  local function cancel_clocks()
+    if S.macro_clock then clock.cancel(S.macro_clock) end
+    for id in pairs(apply_clock.retired) do clock.cancel(id) end
+    S.macro_clock, apply_clock.retired = nil, {}
+    apply_clock.token = apply_clock.token + 1
   end
 
   -- Drop macro m's waiting apply (every macro's when m is nil); the clock
@@ -325,13 +344,16 @@ return function(S)
 
   -- The one clock for every macro: from its next tick, each waiting macro
   -- applies once 1 / apply_hz has passed since its last apply; it sleeps to
-  -- the next one due and ends when none waits. An apply that raises prints
-  -- once and the others go on
+  -- the next one due and ends when none waits, or at the first wake after
+  -- it was retired (its token checked after each wait). An apply that
+  -- raises prints once and the others go on
   local function start_clock()
     if S.macro_clock then return end
-    S.macro_clock = clock.run(function()
+    apply_clock.token = apply_clock.token + 1
+    local token, id = apply_clock.token, nil
+    id = clock.run(function()
       clock.sleep(0)
-      while any_pending() do
+      while token == apply_clock.token and any_pending() do
         local now, next_due = util.time(), nil
         for m = 1, NUM_MACROS do
           if applying.pending[m] then
@@ -345,8 +367,10 @@ return function(S)
         end
         if next_due then clock.sleep(math.max(0, next_due - util.time())) end
       end
-      S.macro_clock = nil
+      if token == apply_clock.token then S.macro_clock = nil end
+      apply_clock.retired[id] = nil
     end)
+    S.macro_clock = id
   end
 
   local function mark_pending(m)
@@ -758,14 +782,17 @@ return function(S)
     write_live()
   end)
 
-  -- Cleanup cancels the apply clock (nothing waiting is applied) and learn
+  -- Cleanup cancels the apply clock and every retired one (nothing waiting
+  -- is applied) and learn
   S.register_cleanup(S.constants.CLEANUP_ORDER.macros, function()
-    cancel_pending(nil)
+    applying.pending = {}
+    cancel_clocks()
     M.cancel_learn()
   end)
 
   -- A macro waits exactly while the apply clock runs, and that clock is a
-  -- live coroutine
+  -- live coroutine; a retired clock is never S.macro_clock and is
+  -- forgotten when it ends
   S.register_invariant("macro apply", function()
     if any_pending() ~= (S.macro_clock ~= nil) then
       return "a macro waits: " .. tostring(any_pending()) .. ", but the clock is " .. tostring(S.macro_clock)
@@ -773,6 +800,13 @@ return function(S)
     local thread = S.macro_clock and clock.threads and clock.threads[S.macro_clock]
     if S.macro_clock and type(thread) == "thread" and coroutine.status(thread) == "dead" then
       return "the macro clock " .. tostring(S.macro_clock) .. " has ended"
+    end
+    for id in pairs(apply_clock.retired) do
+      if id == S.macro_clock then return "the macro clock " .. id .. " is retired but still the apply clock" end
+      thread = clock.threads and clock.threads[id]
+      if clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead") then
+        return "the retired macro clock " .. id .. " has gone but is kept"
+      end
     end
   end)
 

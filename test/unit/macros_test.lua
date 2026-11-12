@@ -580,6 +580,43 @@ test("a PSET load cancels every pending apply before it loads the targets", func
   assert_near(params:get("reverb_mix"), 0.2, 1e-9, "a silent read applies nothing")
 end)
 
+-- #626 (the macros' part): norns delivers every resume it posted, so a
+-- clock canceled after its resume is posted raises in clock.resume
+-- (maiden prints `bad argument #1 to 'resume'`). The apply clock is
+-- retired instead, and ends at its next wake
+test("a PSET load or a silent set while the apply clock's resume is posted retires the clock, never cancels it (#626)", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  params:set("macro_1", 0.9); settle(context)
+  params:set("reverb_mix", 0.2)
+  local path = context.data_dir .. "strata-03.pset"
+  params:write(path)
+  params:set("macro_1", 0.3)  -- the clock sleeps 0 to its first apply
+  context.clock.advance_until(S.macro_clock, function() params:read(path) end)  -- the read falls after its post
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(S.macro_clock, nil, "nothing waits")
+  settle(context)
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "the PSET's own reverb mix: the retired clock applied nothing")
+  -- a recall's silent set, the same way
+  params:set("macro_1", 0.6)
+  context.clock.advance_until(S.macro_clock, function() macros.set_silently(1, 0.4) end)
+  errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "set_silently cancels no posted clock: " .. table.concat(errors, "; "))
+  settle(context)
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "nothing applied")
+  -- the clock starts again with the next move
+  params:set("macro_1", 0.5); settle(context)
+  assert_near(params:get("reverb_mix"), 0.5, 1e-9, "the next move applies")
+  -- cleanup ends a clock left to finish too
+  params:set("macro_1", 0.7)
+  local retired = S.macro_clock
+  macros.set_silently(1, 0.7)
+  assert_true(clock.threads[retired] ~= nil, "a retired clock waits for its wake")
+  cleanup()
+  assert_equal(clock.threads[retired], nil, "cleanup cancels it")
+end)
+
 test("writing a PSET always writes its side file, so an overwritten PSET never keeps a stale one", function()
   local context, S, macros = loaded()
   local path = context.data_dir .. "strata-02.pset"
