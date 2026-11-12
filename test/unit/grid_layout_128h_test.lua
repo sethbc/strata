@@ -974,7 +974,7 @@ test("128h: a freeze key waits for the beat and a step key toggles on release", 
   assert_equal(params:get("v3_freeze"), 1, "and freezes voice 3 at it")
 end)
 
--- Fix round 2: a release acts only for the key pressed in its role: a step
+-- A release acts only for the key pressed in its role: a step
 -- key held into page 3 and let go on recorder 1's cell records nothing
 test("128h: a step key held into page 3 is no recorder key at its release", function()
   local context = load_strata(); finish_startup(context)
