@@ -48,8 +48,9 @@ return function(S)
     check(spec)
     local files = {}
     -- loaded: the start step read the live file, found it missing or set it
-    -- aside, so it may be written over
-    local live = {path = LIVE_DIR .. spec.live_file, loaded = false}
+    -- aside, so it may be written over; closed: the cleanup step wrote it,
+    -- so no timed write starts after it
+    local live = {path = LIVE_DIR .. spec.live_file, loaded = false, closed = false}
     if spec.save_delay then S[spec.clock_field] = nil end  -- the timed write's clock, while it waits
 
     -- Write the data to path (none too, so a PSET saved over never keeps
@@ -109,10 +110,12 @@ return function(S)
 
     -- The live file follows the data once the start step loaded it: one
     -- write save_delay s after the first change of a burst, carrying the
-    -- newest data, from S[clock_field]
+    -- newest data, from S[clock_field]; never after the cleanup step's
+    -- write (a later cleanup step may change the data: the gestures' stop
+    -- of every recorder ends a recording, which that write already held)
     function files.save_live()
       if not spec.save_delay then error("side_files: " .. spec.name .. " has no timed write", 2) end
-      if not live.loaded or S[spec.clock_field] then return end
+      if not live.loaded or live.closed or S[spec.clock_field] then return end
       S[spec.clock_field] = clock.run(function()
         clock.sleep(spec.save_delay)
         S[spec.clock_field] = nil
@@ -121,12 +124,13 @@ return function(S)
     end
 
     -- The cleanup step: the timed write is canceled and the live file is
-    -- written at once
+    -- written at once, its last write of the session
     function files.save_now()
       if spec.save_delay and S[spec.clock_field] then
         clock.cancel(S[spec.clock_field])
         S[spec.clock_field] = nil
       end
+      live.closed = true
       write_live()
     end
 

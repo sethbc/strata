@@ -1,3 +1,4 @@
 ### Changed
+- Gesture loops are saved to the card a moment after a recording, an overdub or a clear ends (and after a quantize change or a PSET load), not only when the script exits, so a crash, a power cut or a restart from maiden no longer loses the loops recorded since the script started.
 - No change for players: the modulation matrix asks the send budget what the engine has or will have, as the LFOs do, so a value another writer left waiting for the same param never reaches the engine after the matrix's newer one.
 - No change for players: the macros, the matrix and the gesture recorders read and write their files (data/strata/ and beside each PSET) through one shared helper, so the rules that protect them (a damaged file set aside, one that cannot be set aside never written over) are kept in one place.

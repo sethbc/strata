@@ -690,6 +690,7 @@ test("cleanup runs every registered step in today's order", function()
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
     { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
     { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
+    { "gestures saved", S.gesture_save_clock },  -- the recordings' timed write (#651), canceled as the step writes
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
     { "matrix learn", S.matrix_learn_clock },
     { "lfos", S.lfo_clock } }

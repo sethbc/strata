@@ -40,6 +40,10 @@ return function(S)
     post_seconds = 0.01,
     flt_epsilon = 2 ^ -23,  -- matron's FLT_EPSILON (clock_scheduler_next_clock_beat)
     unit_names = {beat = {"beat", "beats"}, bar = {"bar", "bars"}},
+    -- s from a change of the recorders (a recording, an overdub or a
+    -- clear ends, a loop's quantize, a PSET load) to the live file's write
+    -- (#651), one write per burst
+    save_delay = 0.1,
     data_version = 1,
     live_file = "gestures.data",       -- in data/strata/
     side_suffix = ".gestures.data",    -- after a PSET's path without .pset
@@ -92,6 +96,15 @@ return function(S)
     request_redraw()
     grid_redraw()
   end
+
+  -- The live file and the PSET side files (lib/side_files.lua, below)
+  local files
+
+  -- What the files store changed (a recording, an overdub or a clear
+  -- ended, a loop's quantize, a PSET load): the live file follows
+  -- GESTURES.save_delay s later, one write per burst (#651). Playback and a
+  -- stop change nothing stored
+  local function stored_changed() files.save_live() end
 
   -- Play one event: a control param this build has is set, inside
   -- deferrable, with S.gesture_playing set; any other id is skipped (and
@@ -321,6 +334,7 @@ return function(S)
         clock.cancel(run.clock)
       end
     end
+    if recorder.overdubbing then stored_changed() end  -- the stop ends an overdub
     recorder.overdubbing, recorder.loop_start = false, nil
     recorder.pattern:set_overdub(0)
   end
@@ -357,6 +371,7 @@ return function(S)
       if recorder.quantize ~= "free" then convert(recorder, recorder.quantize) end
       recorder.state = "stopped"
       if play then start_playback(k) end
+      stored_changed()
     end
     changed(k)
   end
@@ -370,6 +385,7 @@ return function(S)
         if recorder.overdubbing then
           recorder.overdubbing = false
           recorder.pattern:set_overdub(0)
+          stored_changed()
           changed(other)
         end
       end
@@ -377,6 +393,7 @@ return function(S)
   end
 
   local function full(k, recorder)
+    if recorder.overdubbing then stored_changed() end
     recorder.overdubbing = false
     recorder.pattern:set_overdub(0)
     header_flash("G" .. k .. " full")
@@ -471,11 +488,13 @@ return function(S)
   function M.clear(k)
     if not valid(k) then return end
     local recorder = S.gestures[k]
+    local held = recorder.state ~= "empty"
     cancel_limit_clock(recorder)
     stop_playback(k)
     recorder.pattern:clear()
     recorder.offsets, recorder.length_beats, recorder.length_seconds = nil, nil, nil
     recorder.state = "empty"
+    if held then stored_changed() end
     changed(k)
   end
 
@@ -488,6 +507,7 @@ return function(S)
     if recorder.overdubbing then
       recorder.overdubbing = false
       recorder.pattern:set_overdub(0)
+      stored_changed()
     else
       take_events(k)
       recorder.overdubbing = true
@@ -543,6 +563,7 @@ return function(S)
     if recorder.state == "playing" or recorder.state == "stopped" then convert(recorder, mode) end
     recorder.quantize = mode
     if playing then start_playback(k) end
+    stored_changed()
     changed(k)
   end
 
@@ -699,10 +720,14 @@ return function(S)
   -- recorder as stored (an empty one too, so a PSET saved over never keeps
   -- an older side file). Every file load leaves the recorders stopped, then
   -- redraws; one that cannot be used (unparsable, another version, a
-  -- malformed recorder) is set aside and they load empty
-  local files = S.lib.side_files.new({
+  -- malformed recorder) is set aside and they load empty. The live file is
+  -- written GESTURES.save_delay s after what it stores changes
+  -- (stored_changed, #651: from S.gesture_save_clock) and at the cleanup
+  -- step, once the start step loaded it
+  files = S.lib.side_files.new({
     name = "gestures", contents = "gestures", version = GESTURES.data_version, key = "recorders",
     live_file = GESTURES.live_file, side_suffix = GESTURES.side_suffix, backup_suffix = GESTURES.backup_suffix,
+    save_delay = GESTURES.save_delay, clock_field = "gesture_save_clock",
     capture = function()
       local recorders = {}
       for k = 1, NUM_GESTURES do recorders[k] = stored(k) end
@@ -726,11 +751,13 @@ return function(S)
   })
 
   -- The PSET's side file: written with every PSET save, read after every
-  -- PSET load (every recorder stopped first), deleted with the PSET
-  S.register_pset_hook(files.pset_hook(stop_all))
+  -- PSET load (every recorder stopped first; the live file follows the
+  -- loaded recorders), deleted with the PSET
+  S.register_pset_hook(files.pset_hook(stop_all, stored_changed))
 
-  -- The live file: loaded at init (stopped), saved at cleanup once it was read,
-  -- missing or set aside (one that could be neither is never written over)
+  -- The live file: loaded at init (stopped), saved as the recorders change
+  -- and at cleanup once it was read, missing or set aside (one that could be
+  -- neither is never written over)
   S.register_start(S.constants.START_ORDER.gestures_load, files.load_live)
   S.register_cleanup(S.constants.CLEANUP_ORDER.gestures_save, files.save_now)
 
