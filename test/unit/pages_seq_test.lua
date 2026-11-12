@@ -959,6 +959,28 @@ test("over MAIN the step editor's hint and playhead move with the frame clock al
   S.lib.pages_seq.close_step_editor(1)
 end)
 
+-- The norns menu can take ALT+K2's release (K1 let go and tapped while K2
+-- is down): the editor's press must not outlive it, or its owner would
+-- animate (redraw at 15 fps) and its hint stay K2:reset until it closes
+test("a K2 release the norns menu takes leaves the step editor neither animating nor at K2:reset", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local owner = S.lib.pages_seq.step_editor_owner
+  S.lib.pages_seq.open_step_editor(2, 4, 1)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(0.6)
+  assert_true(owner.animates(), "held: the editor animates")
+  _menu.set_mode(true)   -- the menu opens; K2's release goes to it
+  _menu.set_mode(false)
+  assert_true(not S.pattern_playing)
+  assert_equal(owner.animates(), false, "after the menu, with the patterns stopped, no animation")
+  key(1, 1)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:clr E2:step", "the hint is back to the quick press's")
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
 -- Ruling 71: the editor's own pattern replacements keep it open; the grids
 -- read step_editor_replacing() in end_step_gestures to tell them apart
 test("step_editor_replacing is true exactly while the editor's own action replaces the pattern", function()
