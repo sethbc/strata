@@ -833,6 +833,7 @@ test("the menu records for 3.4's groups follow lfos in order and add nothing wit
   local added, called = {}, {}
   load_strata({ before_init = function()
     local S = local_value("S")
+    S.lib.morph = nil  -- a module that exists (1g's), taken away: its record has none to call
     for _, record in ipairs(S.registry.params) do
       local add = record.add
       record.add = function()

@@ -601,7 +601,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget", "buffer start reload",
+  "morph clock", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget", "buffer start reload",
   "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
 
 -- 3.4's orders, in CLEANUP_ORDER and START_ORDER ahead of the modules that
@@ -614,7 +614,6 @@ local RESERVED_CLEANUP_ORDERS = {
   "matrix_save",
   "gestures",
   "quantize",
-  "morph_clock",
   "macros",
   "matrix",
   "scatter",
@@ -661,6 +660,7 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.engine_sync.deferrable(function()  -- a send past the budget waits: the flush clock runs
     for _ = 1, S.constants.ENGINE_BUDGET.messages_per_window + 1 do send_param_to_engine("drift_amount", 0) end
   end)
+  params:set("morph", 0.5)  -- the morph clock waits to apply it
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -690,7 +690,8 @@ test("cleanup runs every registered step in today's order", function()
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
-    { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock } }
+    { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
+    { "morph clock", S.morph_clock } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")

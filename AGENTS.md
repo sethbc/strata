@@ -64,6 +64,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/ui/modal.lua` | `ui_modal` | `docs/notes/lua/ui/pages-and-dispatch.md` | ui_modal_test.lua |
 | `lib/quantize.lua` | `quantize` | `docs/notes/lua/quantize.md` | quantize_test.lua |
 | `lib/mod_sources.lua` | `mod_sources` | `docs/notes/lua/mod-sources.md` | mod_sources_test.lua |
+| `lib/morph.lua` | `morph` | `docs/notes/lua/morph.md` | morph_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -204,6 +205,7 @@ The Lua side's, across modules:
 - **The playhead restarts where the engine's scan does**: a `voiceOn` and a running voice's source switch (`S.register_grain_restart`) and a jump reset it; a new place that restarts a voice's scan resets the playhead too, and anything that changes the hold or the glide's rate calls `S.lib.playheads.advance(v)` first. `docs/notes/lua/playheads.md`
 - **Jumps and recalls** enter through `S.lib.positions.jump` and `recall_bookmark` (the grid, the arc and BUFFER alike), which send `t_scanReset` only while the voice runs (only buffer voices respond); the scan hold (a set of holders per voice, #238), the glide and the last recalled bookmark are transient (never params, scenes or PSETs), and a held grid position key lives in `S.lib.grid_core.port_state(port).positions` only. `docs/notes/lua/positions.md`
 - **Bookmarks, 3.4's interface**: `S.lib.bookmarks.recall(v, n)` and `is_set(v, n)` keep their names and behavior and never create a node (a pattern lock fires them). `docs/notes/lua/bookmarks.md`
+- **Morph writes params and never recalls**: it never calls `recall_scene` or `recall_scene_instant`, never starts a transition and never clears the undo itself; every value goes through `S.lib.scenes.apply_entries` (continuous values with `only = "continuous"`, the crossing's discrete entries with `only = "discrete"`), inside `S.lib.engine_sync.deferrable`, at most 10 applies a second and 120 values an apply, from the one clock `S.morph_clock`; a PSET load never applies it. `docs/notes/lua/morph.md`
 
 ## Working in parallel
 
