@@ -77,8 +77,15 @@ return function(S)
         value = function() return S.lib.scenes.label(params:get("morph_a")) end},
       {id = "morph_b", label = "B", kind = "param", param_id = "morph_b", hint = "E3:scene",
         value = function() return S.lib.scenes.label(params:get("morph_b")) end},
+      -- 3a (design §5.5): the XY morph's corners C and D and its second axis
+      {id = "morph_c", label = "C", kind = "param", param_id = "morph_c", hint = "E3:scene",
+        value = function() return S.lib.scenes.label(params:get("morph_c")) end},
+      {id = "morph_d", label = "D", kind = "param", param_id = "morph_d", hint = "E3:scene",
+        value = function() return S.lib.scenes.label(params:get("morph_d")) end},
       {id = "morph", label = "morph", kind = "param", param_id = "morph", hint = "E3:morph",
         value = function() return percent(params:get("morph")) end},
+      {id = "morph_y", label = "y", kind = "param", param_id = "morph_y", hint = "E3:morph",
+        value = function() return percent(params:get("morph_y")) end},
     },
     scatter = {
       {id = "scatter", label = "on", kind = "toggle", param_id = "scatter"},
@@ -1084,6 +1091,17 @@ return function(S)
     end
   end
 
+  -- The morph's four corners on slots 13-16, each named with twelve of the
+  -- widest letter (3a: the morph section at its widest)
+  local function widest_corners()
+    local corners = S.lib.morph.MORPH.corners
+    for index, corner in ipairs(corners) do
+      local slot = S.constants.NUM_SCENES - #corners + index
+      S.lib.scenes.set_name(slot, string.rep("W", S.constants.SCENE_NAME_MAX))
+      params:set("morph_" .. corner, slot)
+    end
+  end
+
   local function hand_edit() delta_with_detent("reverb_mix", 1) end
 
   -- G1 empty, G2 playing, G3 stopped, G4 recording
@@ -1140,6 +1158,10 @@ return function(S)
       S.lib.scenes.set_name(16, "WWWWWWWWWWWW"); params:set("morph_a", 16); params:set("morph_b", 15)
     end),
     state("morph at 100%", "morph", function() params:set("morph", 1) end),
+    state("morph C, four twelve-letter scene names", "morph_c", widest_corners),
+    state("morph y at 100%, four twelve-letter scene names", "morph_y", function()
+      widest_corners(); params:set("morph", 1); params:set("morph_y", 1)
+    end),
     state("scatter on", "scatter", function() params:set("scatter", 1) end),
     state("scatter rate, depth and rate at the top", "scatter_rate", function()
       params:set("scatter_depth", 100); params:set("scatter_rate", 1)

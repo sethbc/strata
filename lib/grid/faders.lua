@@ -5,8 +5,9 @@
 -- param's warp, with a zero column for ranges that span 0), the fader rows'
 -- LEDs, the fader page keys' level and the drift tick's redraw when a shown
 -- fader moved (follow_faders, which 3.4 extends to the macro faders and the
--- morph), and 3.4's shown macro bank and the 16x8's and 8x16's macro fader
--- page key. The functions stay global.
+-- morph), and 3.4's shown macro bank, the 16x8's and 8x16's macro fader
+-- page key and set_param_fraction (the 256's morph pad). The functions that
+-- were global stay global.
 
 return function(S)
   local M = {}
@@ -114,6 +115,22 @@ return function(S)
     S.lib.ui_detent.run_touch_hooks(param_id, "grid")
   end
 
+  -- 3.4 (3a): set a control param at a fraction (0-1, clamped) of its
+  -- range, in its warp's terms (the 256's morph pad); another param maps
+  -- linearly to its whole values. Then the touch hooks run, as "grid", so
+  -- a gesture recorder records it
+  function M.set_param_fraction(param_id, fraction)
+    local spec = params:lookup_param(param_id).controlspec
+    fraction = util.clamp(fraction, 0, 1)
+    if spec then
+      params:set(param_id, spec:map(fraction))
+    else
+      local minval, maxval = param_range(param_id)
+      params:set(param_id, util.round(util.linlin(0, 1, minval, maxval, fraction)))
+    end
+    S.lib.ui_detent.run_touch_hooks(param_id, "grid")
+  end
+
   -- Column x on one of the parameter page's faders
   function set_fader_param(voice_idx, fader_index, x)
     local param_id = fader_param_ids(voice_idx)[fader_index]
@@ -174,15 +191,18 @@ return function(S)
   end
 
   -- What the macro faders and the morph show (3.4), as one string: the
-  -- shown bank, its macros' columns, the morph's column and its scenes A
-  -- and B. The morph and its scenes are set on MOD, the arc, a MIDI map
-  -- and in PARAMETERS too, and none of their actions redraws the grids
+  -- shown bank, its macros' columns, the morph's column, its scenes A to D
+  -- and its position (x and y, which the 256's pad shows finer than the
+  -- fader's columns). The morph and its scenes are set on MOD, the arc, a
+  -- MIDI map and in PARAMETERS too, and none of their actions redraws the
+  -- grids
   function M.modulation_signature()
     local parts = {S.lib.macros.bank()}
     for _, param_id in ipairs(M.shown_macro_ids()) do parts[#parts + 1] = fader_position(param_id) end
     parts[#parts + 1] = fader_position("morph")
-    parts[#parts + 1] = params:get("morph_a")
-    parts[#parts + 1] = params:get("morph_b")
+    for _, param_id in ipairs({"morph_a", "morph_b", "morph_c", "morph_d", "morph", "morph_y"}) do
+      parts[#parts + 1] = params:get(param_id)
+    end
     return table.concat(parts, ",")
   end
 

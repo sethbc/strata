@@ -10,7 +10,8 @@
 -- while column 8 of row 16 is held. 3.4: page 1's row 9 holds the gesture
 -- recorders, the mute keys and the macro bank keys, rows 10-13 the shown
 -- bank's macros; page 3's rows 4, 7, 9 and 10 the recorders, the morph and
--- its scenes A and B. The functions stay global.
+-- its scenes A and B, and rows 11-15 x columns 12-16 the XY morph's pad.
+-- The functions stay global.
 
 return function(S)
   local M = {}
@@ -71,6 +72,13 @@ return function(S)
     morph_row = 7,
     morph_scene_rows = {[9] = "morph_a", [10] = "morph_b"},
     morph_scene_levels = {chosen = 15, populated = 6, empty = 2},
+    -- 3.4 (3a, design §5.5), page 3: the XY morph's 5x5 pad on rows 11-15
+    -- x columns 12-16, x (morph) from 0 at column 12 to 1 at 16, y
+    -- (morph_y) from 0 at row 15 to 1 at row 11, in quarters; the corners'
+    -- cells by the scene param each shows (A at x 0, y 0, ...)
+    pad = {first_column = 12, last_row = 15, steps = 4,
+      corners = {{0, 0, "morph_a"}, {4, 0, "morph_b"}, {0, 4, "morph_c"}, {4, 4, "morph_d"}},
+      levels = {position = 15, populated = 8, empty = 2, other = 4}},
   }
 
   -- Page 1's row 9 at column x: the recorder, the mute key's voice or the
@@ -177,6 +185,46 @@ return function(S)
     return S.scenes[slot].populated and levels.populated or levels.empty
   end
 
+  -- The pad's cell at (x, y) as its steps from x = 0 and y = 0, or nil
+  -- off the pad
+  local function pad_cell(x, y)
+    local pad = LAYOUT_256.pad
+    local column, row = x - pad.first_column, pad.last_row - y
+    if column < 0 or column > pad.steps or row < 0 or row > pad.steps then return nil end
+    return column, row
+  end
+
+  -- A press on the pad: morph to the column's x and morph_y to the row's
+  -- y, each as a grid touch (S.lib.grid_faders.set_param_fraction), so a
+  -- recorder records both
+  local function pad_key(x, y)
+    local column, row = pad_cell(x, y)
+    local steps = LAYOUT_256.pad.steps
+    S.lib.grid_faders.set_param_fraction("morph", column / steps)
+    S.lib.grid_faders.set_param_fraction("morph_y", row / steps)
+  end
+
+  -- The pad's LEDs: the cell nearest the position 15, a corner 8 while its
+  -- scene is populated and 2 while not, every other cell 4
+  local function redraw_pad(grid_device)
+    local pad = LAYOUT_256.pad
+    local levels = pad.levels
+    local corner_levels = {}
+    for _, corner in ipairs(pad.corners) do
+      local populated = S.scenes[params:get(corner[3])].populated
+      corner_levels[corner[1] .. "," .. corner[2]] = populated and levels.populated or levels.empty
+    end
+    local position_column = util.round(params:get("morph") * pad.steps)
+    local position_row = util.round(params:get("morph_y") * pad.steps)
+    for column = 0, pad.steps do
+      for row = 0, pad.steps do
+        local level = corner_levels[column .. "," .. row] or levels.other
+        if column == position_column and row == position_row then level = levels.position end
+        grid_device:led(pad.first_column + column, pad.last_row - row, level)
+      end
+    end
+  end
+
   local function redraw_morph(grid_device)
     for k = 1, S.constants.NUM_GESTURES do
       grid_device:led(k, LAYOUT_256.recorder_row, grid_core.gesture_level(k))
@@ -185,6 +233,7 @@ return function(S)
     for y, scene_param in pairs(LAYOUT_256.morph_scene_rows) do
       for slot = 1, NUM_SCENES do grid_device:led(slot, y, morph_scene_level(scene_param, slot)) end
     end
+    redraw_pad(grid_device)
   end
 
   -- Page 3's sequence length key at (x, y): the length it sets, or nil
@@ -287,6 +336,9 @@ return function(S)
       elseif morph_row(y) then
         -- Rows 7, 9 and 10 (3.4): the morph, A and B
         morph_key(x, y)
+      elseif pad_cell(x, y) then
+        -- Rows 11-15, columns 12-16 (3.4): the XY morph's pad
+        pad_key(x, y)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
@@ -441,7 +493,8 @@ return function(S)
         end
       end
 
-      -- Rows 4, 7, 9 and 10 (3.4): the recorders, the morph, A and B
+      -- Rows 4, 7, 9 and 10 (3.4): the recorders, the morph, A and B; rows
+      -- 11-15, columns 12-16, the XY morph's pad
       redraw_morph(grid_device)
 
       grid_redraw_256_transport(port, grid_device)

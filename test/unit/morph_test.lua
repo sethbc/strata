@@ -116,31 +116,248 @@ local function whole_number_global(S, low, high)
   return nil
 end
 
-test("the morph params are a group of three, defaulting to A = 1, B = 2 at 0, and no scene field", function()
+-- Scenes 1-4: reverb_mix 0.2, 0.6, 0.4 and 1.0; voice 3 stopped on its
+-- synth in scene 1, running on buffer 1, 2 and 3 in scenes 2-4. The state
+-- is scene 1's; the corners are the defaults (A 1, B 2, C 3, D 4)
+local function four_scenes(options)
+  local context = load_strata(options); finish_startup(context)
+  local S = local_value("S")
+  local synth = S.constants.SOURCE_SYNTH
+  toggle_voice(3)
+  for buffer, mix in ipairs({ 0.6, 0.4, 1.0 }) do
+    params:set("reverb_mix", mix); params:set("v3_source", synth + buffer)
+    capture_scene(buffer + 1)
+  end
+  params:set("reverb_mix", 0.2); toggle_voice(3); params:set("v3_source", synth)
+  capture_scene(1)
+  return context, S
+end
+
+-- Set both axes and run the clocks until the morph has applied and rested
+local function settle_xy(context, x, y)
+  params:set("morph", x); params:set("morph_y", y)
+  context.clock.run_for(0.5)
+end
+
+test("the morph params are a group of six, defaulting to A-D = 1-4 at 0, 0, and no scene field", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local group = params:lookup_param("strata_morph")
   assert_equal(group.t, params.tGROUP, "strata_morph is a group")
-  assert_equal(group.n, 3, "of three params")
+  assert_equal(group.n, 6, "of six params")
   local index = params.lookup["strata_morph"]
-  assert_equal(params.params[index + 1].id, "morph", "morph first")
-  assert_equal(params.params[index + 2].id, "morph_a", "then A")
-  assert_equal(params.params[index + 3].id, "morph_b", "then B")
+  local ids = { "morph", "morph_a", "morph_b", "morph_c", "morph_d", "morph_y" }
+  for offset, id in ipairs(ids) do
+    assert_equal(params.params[index + offset].id, id, id .. " is param " .. offset .. " of the group")
+  end
   assert_equal(params:get("morph"), 0, "the morph starts at 0")
-  assert_equal(params:get("morph_a"), 1, "A is scene 1")
-  assert_equal(params:get("morph_b"), 2, "B is scene 2")
-  local morph_a = params:lookup_param("morph_a")
-  assert_equal(morph_a.min, 1, "A takes a scene from 1")
-  assert_equal(morph_a.max, S.constants.NUM_SCENES, "to NUM_SCENES")
-  assert_equal(params:lookup_param("morph_b").max, S.constants.NUM_SCENES, "B too")
+  assert_equal(params:get("morph_y"), 0, "and so does its second axis")
+  for corner, slot in pairs({ a = 1, b = 2, c = 3, d = 4 }) do
+    local param = params:lookup_param("morph_" .. corner)
+    assert_equal(param.t, params.tNUMBER, corner .. " is a number param")
+    assert_equal(params:get("morph_" .. corner), slot, corner .. " is scene " .. slot)
+    assert_equal(param.min, 1, corner .. " takes a scene from 1")
+    assert_equal(param.max, S.constants.NUM_SCENES, corner .. " to NUM_SCENES")
+  end
+  assert_equal(params:lookup_param("morph_y").t, params.tCONTROL, "morph_y is a control")
   assert_equal(params:string("morph"), "0 %", "the position shows in percent")
   params:set("morph", 0.35)
   assert_equal(params:string("morph"), "35 %", "in whole percents")
+  params:set("morph_y", 0.6)
+  assert_equal(params:string("morph_y"), "60 %", "the second axis too")
   capture_scene(1)
-  for _, id in ipairs({ "morph", "morph_a", "morph_b" }) do
+  local targets, destinations = {}, {}
+  for _, id in ipairs(S.lib.macros.target_ids()) do targets[id] = true end
+  for _, id in ipairs(S.lib.matrix.destination_ids()) do destinations[id] = true end
+  for _, id in ipairs(ids) do
     assert_equal(S.scenes[1].data[id], nil, id .. " is no scene field")
+    assert_true(not targets[id], id .. " is no macro target")
+    assert_true(not destinations[id], id .. " is no matrix destination")
+    for _, destination in ipairs(S.LFO_DESTINATIONS) do
+      assert_true(destination.resolve() ~= id, id .. " is no LFO destination (" .. destination.label .. ")")
+    end
   end
   context.clock.run_for(0.5)
+end)
+
+test("at y 0 the XY morph is the two-scene morph, value for value", function()
+  -- four scenes that differ in most continuous values; voice 3 stopped in
+  -- A and B, running in C and D
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  scramble_state(23); params:set("reverb_mix", 0.4); toggle_voice(3); capture_scene(3)
+  scramble_state(24); params:set("reverb_mix", 1.0); capture_scene(4)
+  toggle_voice(3)
+  scramble_state(21); params:set("reverb_mix", 0.9); capture_scene(2)
+  scramble_state(22); params:set("reverb_mix", 0.1); capture_scene(1)
+  assert_true(S.scenes[4].data.voices[3].active and not S.scenes[2].data.voices[3].active, "C and D differ from A and B")
+  settle_xy(context, 0.5, 0)
+  assert_near(params:get("reverb_mix"), 0.5, 1e-9, "reverb mix halfway from A's 0.1 to B's 0.9")
+  local morphed = continuous_values(S, 2)
+  assert_true(not S.voices[3].active, "voice 3 stays stopped, as in A and B, never as in C or D")
+  assert_equal(S.voices[3].source, S.scenes[2].data.voices[3].source, "on B's source")
+  -- the same fraction of a 20-step transition from scene 1 to scene 2
+  recall_scene(1, 0)
+  recall_scene(2, 2)                                              -- step 1 runs at once
+  for _ = 2, 10 do wake(context, "scene_transition_clock") end    -- step 10: f = 0.5
+  local faded = 0
+  for _, target in ipairs(scene_transition_targets(S.scenes[2].data)) do
+    faded = faded + 1
+    assert_near(morphed[target.id], params:get(target.id), 1e-9, target.id .. " as the transition's step 10")
+  end
+  assert_true(faded > 120, "every continuous value compared (" .. faded .. ")")
+  cancel_scene_transition()
+end)
+
+test("a continuous value is the weighted sum of the four corners", function()
+  local context, S = four_scenes()
+  settle_xy(context, 0.5, 0.5)
+  local a, b, c, d = S.lib.morph.weights()
+  for name, weight in pairs({ a = a, b = b, c = c, d = d }) do assert_near(weight, 0.25, 1e-12, name .. "'s weight") end
+  assert_near(params:get("reverb_mix"), 0.55, 1e-9, "(0.2 + 0.6 + 0.4 + 1.0) / 4")
+  settle_xy(context, 1, 1)
+  assert_near(params:get("reverb_mix"), 1.0, 1e-9, "(1, 1) is D's")
+  settle_xy(context, 0, 1)
+  assert_near(params:get("reverb_mix"), 0.4, 1e-9, "(0, 1) is C's")
+  settle_xy(context, 0.25, 0.75)
+  -- A 0.1875, B 0.0625, C 0.5625, D 0.1875: 0.0375 + 0.0375 + 0.225 + 0.1875
+  assert_near(params:get("reverb_mix"), 0.49, 1e-9, "0.4875, stored to 0.01")
+  settle_xy(context, 1, 0)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "(1, 0) is B's")
+end)
+
+test("discrete entries follow the current corner, which changes past a lead of 0.04", function()
+  local context, S = four_scenes()
+  local synth = S.constants.SOURCE_SYNTH
+  local morph = S.lib.morph
+  settle(context, 0.1)
+  assert_equal(morph.corner(), "a", "0.1: corner a")
+  assert_true(not S.voices[3].active, "voice 3 stopped, as in A")
+  settle(context, 0.5)
+  assert_equal(morph.corner(), "a", "from a at (0.5, 0): a and b tie, a stays")
+  settle(context, 0.51)
+  assert_equal(morph.corner(), "a", "0.51: b leads by 0.02, a stays")
+  assert_equal(S.voices[3].source, synth, "on A's source")
+  settle(context, 0.53)
+  assert_equal(morph.corner(), "b", "0.53: b leads by 0.06")
+  assert_true(S.voices[3].active, "voice 3 runs, as in B")
+  assert_equal(S.voices[3].source, synth + 1, "on B's buffer 1")
+  params:set("morph_y", 0.6); context.clock.run_for(0.5)
+  local a, b, c, d = morph.weights()
+  assert_near(a, 0.188, 1e-12, "A at (0.53, 0.6)"); assert_near(b, 0.212, 1e-12, "B")
+  assert_near(c, 0.282, 1e-12, "C"); assert_near(d, 0.318, 1e-12, "D")
+  assert_equal(morph.corner(), "d", "D leads b by 0.106: d")
+  assert_equal(S.voices[3].source, synth + 3, "on D's buffer 3")
+  -- from d to (0.5, 0) in one move: a and b tie at 0.5, the tie goes to a
+  params:set("morph", 0.5); params:set("morph_y", 0); context.clock.run_for(0.5)
+  assert_equal(morph.corner(), "a", "a tie goes to a")
+  assert_true(not S.voices[3].active, "voice 3 stops, as in A")
+  assert_equal(S.voices[3].source, synth, "back on A's synth")
+  -- the first apply after a recall (or a plan change) takes the largest
+  -- weight, a tie the later corner (at y 0: B from 0.5, as the two-scene
+  -- morph)
+  recall_scene(1, 0)
+  settle_xy(context, 0.5, 0.5)
+  assert_equal(morph.corner(), "d", "all four tie at (0.5, 0.5): the first apply takes d")
+  assert_equal(S.voices[3].source, synth + 3, "on D's buffer 3")
+end)
+
+test("an empty corner's weight is shared among the others; fewer than two valid corners do nothing", function()
+  local context, S = four_scenes()
+  params:set("morph_d", 9)                                      -- an empty slot
+  settle_xy(context, 0.5, 0.5)
+  local a, b, c, d = S.lib.morph.weights()
+  for name, weight in pairs({ a = a, b = b, c = c }) do assert_near(weight, 1 / 3, 1e-12, name .. " takes a third") end
+  assert_equal(d, 0, "the empty corner none")
+  assert_near(params:get("reverb_mix"), 0.4, 1e-9, "(0.2 + 0.6 + 0.4) / 3")
+  settle_xy(context, 1, 0.5)
+  a, b, c, d = S.lib.morph.weights()
+  for name, pair in pairs({ a = { a, 0 }, b = { b, 1 }, c = { c, 0 }, d = { d, 0 } }) do
+    assert_near(pair[1], pair[2], 1e-12, name .. " at (1, 0.5): B takes D's half")
+  end
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "B's value")
+  -- one valid corner: nothing happens, and the first empty one flashes
+  local flashes = {}
+  local real_flash = header_flash
+  header_flash = function(text) table.insert(flashes, text); return real_flash(text) end
+  recall_scene(1, 0)
+  params:set("reverb_mix", 0.5)
+  params:set("morph_b", 10); params:set("morph_c", 11)
+  assert_true(not S.lib.morph.plan_ready(), "only A holds a scene")
+  settle_xy(context, 0.3, 0.7)
+  header_flash = real_flash
+  assert_equal(table.concat(flashes, ", "), "S10 empty", "the first empty corner flashes, once")
+  assert_near(params:get("reverb_mix"), 0.5, 1e-9, "nothing is set")
+  assert_equal(S.current_scene, 1, "the current scene stays")
+end)
+
+test("a routing that differs between corners has its depth at the current corner's times its lead", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local matrix = S.lib.matrix
+  -- A: R1 lfo1 > v1 size at 40; B: lfo2 > v1 size at 60; C and D as A at 40
+  matrix.set_routing(1, "lfo2", "v1_grain_size"); params:set("matrix_1_depth", 60); capture_scene(2)
+  matrix.set_routing(1, "lfo1", "v1_grain_size"); params:set("matrix_1_depth", 40)
+  capture_scene(3); capture_scene(4); capture_scene(1)
+  local expected = {
+    { 0.25, 0, 20, "lfo1" },     -- 40 x (0.75 - 0.25)
+    { 0.5, 0, 0, "lfo1" },       -- a and b tie: 0
+    { 0, 0, 40, "lfo1" },        -- at A: A's depth
+    { 0.25, 0.25, 15, "lfo1" },  -- 40 x (0.5625 - 0.1875): C's weight counts as the largest other
+    { 0.6, 0, 12, "lfo2" },      -- past the crossing: B's routing, 60 x (0.6 - 0.4)
+    { 1, 0, 60, "lfo2" },
+  }
+  for _, row in ipairs(expected) do
+    settle_xy(context, row[1], row[2])
+    local where = "(" .. row[1] .. ", " .. row[2] .. ")"
+    assert_near(params:get("matrix_1_depth"), row[3], 1e-9, where .. ": R1's depth")
+    assert_equal(matrix.routing(1).source, row[4], where .. ": R1's source")
+  end
+end)
+
+-- ruling 24: a PSET load sets the new params as it sets the morph, without
+-- applying them
+test("a PSET load restores morph y and the corners without applying them", function()
+  local context, S = four_scenes()
+  settle_xy(context, 0.5, 0.5)
+  assert_near(params:get("reverb_mix"), 0.55, 1e-9, "the four corners' blend")
+  params:set("reverb_mix", 0.9)                                  -- a hand edit after the morph
+  params:set("morph_c", 4)                                       -- C is scene 4 in the PSET
+  params:write(1)
+  settle_xy(context, 0, 0)
+  params:set("morph_c", 3)
+  params:set("reverb_mix", 0.5)
+  params:read(1)
+  context.clock.run_for(0.5)
+  assert_near(params:get("morph_y"), 0.5, 1e-9, "the PSET's y")
+  assert_equal(params:get("morph_c"), 4, "and its corner C")
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "the PSET's own value, not the morph's")
+  assert_equal(S.morph_clock, nil, "no apply waits")
+  settle_xy(context, 0.5, 1)
+  assert_near(params:get("reverb_mix"), 1.0, 1e-9, "the next move applies with the PSET's corners: C and D both scene 4")
+end)
+
+-- #584: a move between two recalls of one scene, inside the clock's 0.1 s,
+-- never applies over the second recall
+test("a move between two recalls of the same scene is dropped (#584)", function()
+  local context, S = two_scenes()
+  recall_scene(2, 0)
+  params:set("morph", 0.3)
+  recall_scene(2, 0)
+  context.clock.run_for(0.5)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "scene 2's value stays")
+  assert_equal(S.current_scene, 2, "scene 2 stays current")
+  assert_true(S.voices[3].active, "as do its voices")
+  assert_equal(S.morph_clock, nil, "the move was dropped")
+  -- the same with the clock asleep between two applies
+  params:set("morph", 0.2)
+  context.clock.run_for(0)                                        -- applied; the clock sleeps 0.1 s
+  recall_scene(2, 0)
+  params:set("morph", 0.3)
+  recall_scene(2, 0)
+  context.clock.run_for(0.5)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "after an apply too")
+  assert_equal(S.current_scene, 2)
 end)
 
 test("a continuous value is A + morph x (B - A), as a transition's step is", function()
