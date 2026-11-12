@@ -56,14 +56,23 @@ return function(S)
     end
   end
 
-  -- MAIN's voice list: "<n><+|-> <name>", "+" for a running voice, "-" for a
-  -- stopped one, the type's short name, then " [L]" when locked. Plain
+  -- MAIN's voice list: "<n><+|-|m|s> <name>", "+" for a running voice, "-" for a
+  -- stopped one, "m" for a running voice that is silenced (muted, or another
+  -- is soloed) and "s" for a soloed one, the type's short name, then " [L]" when locked. Plain
   -- ASCII, so the entries' width does not depend on the font drawing other
   -- glyphs (the details column shows the full name and ON/OFF)
   function update_voice_list()
     local items = {}
     for i = 1, NUM_VOICES do
       local status = S.voices[i].active and "+" or "-"
+      if S.voices[i].active then
+        local extras = S.voices[i].extras
+        if extras and extras.solo == 1 and not (extras.mute == 1) then
+          status = "s"
+        elseif S.lib.voice_mix.silenced(i) then
+          status = "m"
+        end
+      end
       local lock = S.frozen[i] and " [L]" or ""
       items[i] = i .. status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock
     end

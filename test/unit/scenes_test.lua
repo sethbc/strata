@@ -1103,6 +1103,8 @@ test("scene recall: one full sync per voice whose source changed, after its para
       end
       -- and what a record's sync sends after them (lib/positions.lua's bookmarks)
       if record.name == "bookmarks" then registered.scrubRate, registered.scanHold = true, true end
+      -- (lib/voice_mix.lua's: the effective mute)
+      if record.name == "voice_mix" then registered.voiceMute = true end
       -- (lib/variation.lua's)
       if record.name == "variation" then
         for index = 1, local_value("S").lib.variation.VARIATION.max_intervals do registered["interval" .. index] = true end

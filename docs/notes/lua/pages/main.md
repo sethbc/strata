@@ -41,7 +41,7 @@
 ## Voice list
 
 - `update_voice_list()` recreates the `UI.ScrollingList` (`S.voice_list`) on every change.
-- Each entry is `<n><+|-> <name>[ [L]]`, plain ASCII, so its width does not depend on how the norns font draws other glyphs:
+- Each entry is `<n><+|-|m|s> <name>[ [L]]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; a stopped voice is always `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
   - the voice number;
   - active status (`+` running, `-` stopped);
   - the voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF;

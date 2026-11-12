@@ -229,9 +229,9 @@ test("the filter & sends section is on VOICE for every source", function()
           if row.selectable == false then label_at = index else table.insert(keys, row.param_id) end
         end
       end
-      assert_true(label_at ~= nil, "v" .. voice_idx .. " has the filter & sends section")
       local expected = {}
       for _, key in ipairs(KEYS) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
+      for _, key in ipairs({"mute", "solo"}) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
       assert_equal(table.concat(keys, " "), table.concat(expected, " "), "its rows, in order")
     end
   end
@@ -335,6 +335,165 @@ test("the voice sends show in percent and send the same value (#387)", function(
     if call.args[2] == "delaySend" then sent = call.args[3] end
   end
   assert_near(sent, 0.25, 1e-9, "the engine still gets the 0-1 value")
+end)
+
+-- Mute and solo (3.4, #1j): the voices running are 1-4
+local function run_voices_1_to_4(context)
+  finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 1, 4 do
+    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  return S
+end
+
+local function mutes_sent(context)
+  local by_voice = {}
+  for _, entry in ipairs(sent_grain(context, "voiceMute")) do
+    by_voice[entry.voice + 1] = entry.value
+    by_voice.count = (by_voice.count or 0) + 1
+  end
+  return by_voice
+end
+
+test("a mute silences a voice without stopping it", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  context.clear_engine_calls()
+  params:set("v3_mute", 1)
+  local sent = mutes_sent(context)
+  assert_equal(sent.count, 1, "one message")
+  assert_equal(sent[3], 1, "voice 3 muted")
+  assert_equal(#context.calls_named("voiceOff"), 0, "no voiceOff")
+  assert_true(S.voices[3].active, "voice 3 still runs")
+  assert_true(S.lib.voice_mix.silenced(3), "voice 3 is silenced")
+  assert_true(not S.lib.voice_mix.silenced(1), "voice 1 is not")
+  context.clear_engine_calls()
+  params:set("v3_mute", 0)
+  assert_equal(mutes_sent(context)[3], 0, "unmuting sends 0")
+end)
+
+test("silenced is safe for any argument", function()
+  local context = load_strata(); finish_startup(context)
+  local silenced = local_value("S").lib.voice_mix.silenced
+  for _, bad in ipairs({0, 8, -1, 1.5, "x", false}) do assert_equal(silenced(bad), false, tostring(bad)) end
+  assert_equal(silenced(nil), false)
+end)
+
+test("a solo silences every voice that is not soloed", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  params:set("v4_mute", 1)
+  context.clear_engine_calls()
+  params:set("v2_solo", 1)
+  local sent = mutes_sent(context)
+  assert_equal(sent[1], 1); assert_equal(sent[3], 1)
+  assert_equal(sent[2], nil, "the soloed voice was not silenced")
+  assert_equal(sent[4], nil, "voice 4 was muted already")
+  assert_equal(sent.count, 2)
+  context.clear_engine_calls()
+  params:set("v4_solo", 1)  -- voice 4 is muted and soloed: still silenced
+  assert_equal(mutes_sent(context).count, nil, "a muted voice stays silenced when soloed")
+  assert_true(S.lib.voice_mix.silenced(4), "mute wins over solo")
+  context.clear_engine_calls()
+  params:set("v4_mute", 0)
+  assert_equal(mutes_sent(context)[4], 0, "voice 4 plays")
+  context.clear_engine_calls()
+  params:set("v2_solo", 0); params:set("v4_solo", 0)
+  local after = mutes_sent(context)
+  assert_equal(after[1], 0); assert_equal(after[3], 0)
+  for voice_idx = 1, 4 do assert_equal(S.lib.voice_mix.silenced(voice_idx), false) end
+  params:set("v1_mute", 1)
+  context.clear_engine_calls()
+  params:set("v2_solo", 1); params:set("v2_solo", 0)
+  assert_true(S.lib.voice_mix.silenced(1), "a voice muted before stays silenced")
+  assert_equal(mutes_sent(context)[1], nil, "and was never sent 0")
+  assert_equal(#context.calls_named("voiceOff"), 0)
+end)
+
+test("a stopped voice gets no mute message and its start syncs the effective mute", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  context.clear_engine_calls()
+  params:set("v6_mute", 1); params:set("v5_solo", 1)
+  for _, entry in ipairs(sent_grain(context, "voiceMute")) do
+    assert_true(entry.voice + 1 <= 4, "no message to the stopped voices 5-7")
+  end
+  context.clear_engine_calls()
+  toggle_voice(6)  -- muted
+  local sent = mutes_sent(context)
+  assert_equal(sent[6], 1, "voice 6 starts silenced")
+  local voice_on_at, mute_at
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "voiceOn" and call.args[1] == 5 then voice_on_at = index end
+    if call.name == "setGrainParam" and call.args[1] == 5 and call.args[2] == "voiceMute" then mute_at = index end
+  end
+  assert_true(mute_at < voice_on_at, "the mute is sent before voiceOn")
+  context.clear_engine_calls()
+  toggle_voice(5)  -- soloed
+  assert_equal(mutes_sent(context)[5], 0, "the soloed voice starts audible")
+  params:set("v5_solo", 0)
+  assert_true(S.voices[6].active)
+end)
+
+test("scenes store mutes and never solos", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  params:set("v2_mute", 1); params:set("v3_solo", 1)
+  capture_scene(1)
+  assert_equal(S.scenes[1].data.voices[2].extras.mute, 1, "the mute is captured")
+  assert_true(not scene_holds(S.scenes[1].data, "solo"), "no solo in the scene")
+  assert_true(validate_scene(S.scenes[1]))
+  local record
+  for _, each in ipairs(S.registry.voice_params) do if each.name == "voice_mix" then record = each end end
+  assert_equal(record.scene_defaults.mute, 0); assert_equal(record.scene_defaults.solo, nil)
+  assert_true(record.discrete.mute ~= nil and record.discrete.solo == nil, "mute is discrete")
+  params:set("v2_mute", 0); params:set("v3_solo", 0); params:set("v1_solo", 1)
+  recall_scene(1, 0)
+  assert_equal(params:get("v2_mute"), 1, "the recall mutes voice 2")
+  assert_equal(params:get("v1_solo"), 1, "and leaves the solo")
+  assert_equal(params:get("v3_solo"), 0)
+  -- a scene saved before 3.4 has no mute: every voice plays
+  local old = S.scenes[1].data.voices[2].extras
+  old.mute = nil
+  migrate_scene(S.scenes[1], local_value("SCENE_DATA_VERSION"))
+  assert_equal(S.scenes[1].data.voices[2].extras.mute, 0, "the migration default is unmuted")
+  assert_true(validate_scene(S.scenes[1]))
+end)
+
+test("a muted voice's steps still retrigger it", function()
+  local context = load_strata()
+  run_voices_1_to_4(context)
+  params:set("v1_mute", 1)
+  for step = 1, 4 do toggle_pattern_step(1, step) end
+  context.clear_engine_calls()
+  pattern_toggle()
+  for _ = 1, 3 do wake(context, "pattern_clock") end
+  pattern_toggle()
+  local count = 0
+  for _, call in ipairs(context.calls_named("retrigger")) do if call.args[1] == 0 then count = count + 1 end end
+  assert_equal(count, 4, "voice 1 retriggers on every step")
+  assert_equal(#context.calls_named("voiceOff"), 0)
+end)
+
+test("randomize, mutations and the fader pages never touch mute or solo", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(5)
+  for voice_idx = 1, 7 do randomize_voice(voice_idx) end
+  for _ = 1, 20 do gentle_mutate() end
+  for _ = 1, 20 do drift_update() end
+  -- VOICE's section randomize draws exist, and none is mute or solo
+  local record
+  for _, each in ipairs(S.registry.voice_params) do if each.name == "voice_mix" then record = each end end
+  assert_equal(record.randomize.mute, nil); assert_equal(record.randomize.solo, nil)
+  for voice_idx = 1, 7 do
+    assert_equal(params:get("v" .. voice_idx .. "_mute"), 0); assert_equal(params:get("v" .. voice_idx .. "_solo"), 0)
+    for _, param_id in ipairs(fader_param_ids(voice_idx)) do
+      assert_true(not param_id:find("_mute", 1, true) and not param_id:find("_solo", 1, true), param_id)
+    end
+  end
 end)
 
 end
