@@ -307,6 +307,8 @@ end)
 test("matrix: shares the LFO cap", function()
   local context, S, matrix = loaded()
   local lfos = S.lib.lfos
+  -- every voice running: every routed send reaches the engine and takes a slot (#644)
+  for v = 1, S.constants.NUM_VOICES do if not S.voices[v].active then toggle_voice(v) end end
   local lfo_labels = { "rev mix", "rev size", "rev damp", "dly time", "dly fdbk", "dly mix" }
   local lfo_destinations = { "reverb_mix", "reverb_size", "reverb_damp", "delay_time", "delay_feedback", "delay_mix" }
   local taken = {}
