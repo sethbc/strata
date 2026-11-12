@@ -53,7 +53,7 @@ return function(S)
       -- a two-value option: a step up turns it on, a step down off
       set_binary_param(row.param_id, steps > 0 and 1 or 0)
     else
-      delta_with_detent(row.param_id, steps)
+      delta_with_detent(row.param_id, steps, {source = "arc"})
     end
   end
 

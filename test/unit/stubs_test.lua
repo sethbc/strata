@@ -575,6 +575,25 @@ test("an error the script catches and prints fails the test unless it claims it 
   assert_equal(#context.take_script_errors(), 0, "other printed lines are no errors")
 end)
 
+-- 3.4's PSET hooks run in a pcall each and print "pset hook <name>: <error>"
+-- (lib/params_setup.lua): to the harness that line is a script error too
+test("a PSET hook that fails is a script error the test must claim", function()
+  local context = load_strata({ before_init = function()
+    local_value("S").register_pset_hook({ name = "probe", write = function() error("hook exploded") end })
+  end })
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  local path = context.data_dir .. "hook.pset"
+  local ok, message = run_test(function() params:write(path) end)
+  assert_true(not ok, "a passing test whose PSET hook failed fails")
+  assert_true(tostring(message):find("hook exploded", 1, true), "with the printed error: " .. tostring(message))
+  ok, message = run_test(function()
+    params:write(path); h.claim_script_errors(context, 1, "pset hook probe: ", "hook exploded")
+  end)
+  assert_true(ok, "a test that claims it passes: " .. tostring(message))
+  print("pset hook names nothing that failed"); print("pset >> write: " .. path)
+  assert_equal(#context.take_script_errors(), 0, "other printed lines are no errors")
+end)
+
 test("a broken invariant is reported by name, a held one is not", function()
   load_strata()
   assert_equal(#h.check_invariants(), 0, "every invariant holds after a load")

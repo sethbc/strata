@@ -73,8 +73,10 @@ return function(S)
   -- the value is found away from 0 (something else moved it) or
   -- DETENT.hold_seconds after it started (so a hold left over from a turn
   -- long ago never swallows a detent, even if the value is back at 0).
-  -- Every change that set the param then runs the touch hooks once ("arc"
-  -- for arc ticks, else "enc"); a detent the hold swallows runs none
+  -- Every change that set the param then runs the touch hooks once, with
+  -- opts.source when given (an arc ring's whole steps pass "arc"), else
+  -- "arc" for arc ticks and "enc" for detents; a detent the hold swallows
+  -- runs none
   function delta_with_detent(param_id, d, opts)
     opts = opts or {}
     local param = params:lookup_param(param_id)
@@ -88,7 +90,7 @@ return function(S)
       if spec then raw_delta = d * spec.quantum / (opts.fine and FINE_DIVISOR or 1) end
       units = math.abs(d) * DETENT.arc_ticks
     end
-    local source = opts.arc_ticks and "arc" or "enc"
+    local source = opts.source or (opts.arc_ticks and "arc" or "enc")
 
     -- a turn, marked as one (S.turning_param); the hold's own set to 0
     -- below is a set

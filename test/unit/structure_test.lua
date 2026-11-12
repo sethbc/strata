@@ -607,9 +607,25 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer p
 -- 3.4's orders, in CLEANUP_ORDER and START_ORDER ahead of the modules that
 -- register their steps (package 0a): each package moves its names from here
 -- to the step lists as its step lands
-local RESERVED_CLEANUP_ORDERS = { "macros_save", "gestures_save", "matrix_save", "gestures", "quantize", "morph_clock",
-  "macros", "matrix", "scatter" }
-local RESERVED_START_ORDERS = { "input_level", "macros_load", "gestures_load", "matrix_load", "lfo_clock" }
+-- One name per line: Wave 1's packages each remove their own in parallel
+local RESERVED_CLEANUP_ORDERS = {
+  "macros_save",
+  "gestures_save",
+  "matrix_save",
+  "gestures",
+  "quantize",
+  "morph_clock",
+  "macros",
+  "matrix",
+  "scatter",
+}
+local RESERVED_START_ORDERS = {
+  "input_level",
+  "macros_load",
+  "gestures_load",
+  "matrix_load",
+  "lfo_clock",
+}
 
 -- No step is registered at a reserved order
 local function assert_reserved_free(steps, orders, reserved)

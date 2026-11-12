@@ -6,7 +6,8 @@
 -- the file selector's check: the header, then the owner's body and hints)
 -- and lib/arc/core.lua's arc_delta, arc_key and arc_redraw go to top()
 -- while one is pushed. Fields of this module's table (S.lib.ui_modal):
--- push, pop, top.
+-- push, pop, top, and key (strata.lua's K2/K3 while an owner is pushed: a
+-- release reaches an owner only if its press did).
 --
 -- An owner is {draw = fn(), hints = fn(alt_held) -> string, enc = fn(n, d),
 -- key = fn(n, z), arc_delta = fn(n, d), arc_key = fn(n, z), arc_redraw =
@@ -20,6 +21,11 @@ return function(S)
   -- The pushed owners, the top one last. Local: push and pop are the only
   -- ways on and off
   local stack = {}
+
+  -- Per key (2, 3): the owner its press went to, until its release. Only a
+  -- press an owner saw releases into it: a key that went down on the page
+  -- (or on another owner) releases into nothing
+  local pressed = {}
 
   local function index_of(owner)
     for index, pushed in ipairs(stack) do
@@ -44,11 +50,15 @@ return function(S)
     request_redraw()
   end
 
-  -- Take an owner off the stack, wherever it is; an owner not on it: nothing
+  -- Take an owner off the stack, wherever it is; an owner not on it:
+  -- nothing. Its keys still down release into nothing
   function M.pop(owner)
     local index = index_of(owner)
     if not index then return end
     table.remove(stack, index)
+    for n, press_owner in pairs(pressed) do
+      if press_owner == owner then pressed[n] = nil end
+    end
     request_redraw()
   end
 
@@ -57,12 +67,32 @@ return function(S)
     return stack[#stack]
   end
 
-  -- No owner is on the stack twice
+  -- K2 or K3 (z 1 down, 0 up) while an owner is pushed (strata.lua's key):
+  -- a press goes to the top owner's key(n, 1), a release to its key(n, 0)
+  -- only when that owner saw the press
+  function M.key(n, z)
+    local owner = M.top()
+    if not owner then return end
+    if z == 1 then
+      pressed[n] = owner
+      if owner.key then owner.key(n, 1) end
+    else
+      local press_owner = pressed[n]
+      pressed[n] = nil
+      if press_owner == owner and owner.key then owner.key(n, 0) end
+    end
+  end
+
+  -- No owner is on the stack twice, and every key down on an owner is on
+  -- one that is pushed
   S.register_invariant("modal owner", function()
     local seen = {}
     for index, owner in ipairs(stack) do
       if seen[owner] then return "owner " .. tostring(owner) .. " is on the stack at " .. seen[owner] .. " and " .. index end
       seen[owner] = index
+    end
+    for n, press_owner in pairs(pressed) do
+      if not seen[press_owner] then return "key " .. tostring(n) .. " is down on an owner that is not pushed" end
     end
   end)
 

@@ -520,6 +520,49 @@ local function place_voice_cursor(index)
   local_value("S").lib.pages_voice.place_cursor(index)
 end
 
+-- 3.4's touch hooks (S.register_param_touch) name an arc ring's edit "arc",
+-- the whole-step rings' too (they call delta_with_detent with opts.source)
+test("an arc ring's whole-step turn is an arc touch", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  local log = {}
+  S.register_param_touch(function(param_id, source) log[#log + 1] = param_id .. ":" .. source end)
+  local function take()
+    local text = table.concat(log, " ")
+    for index in pairs(log) do log[index] = nil end
+    return text
+  end
+  -- LFO: a depth ring (whole percents) and ring 4 on a clocked rate
+  show_page("LFO")
+  params:set("lfo_depth_1", 0)
+  context.arc.turn(1, 1, 10)
+  assert_equal(take(), "lfo_depth_1:arc", "LFO's depth ring")
+  params:set("lfo_mode_1", 1)  -- clocked
+  context.arc.turn(1, 4, 20)
+  assert_equal(take(), "lfo_clocked_1:arc", "LFO ring 4 on a clocked rate")
+  -- SEQ: ring 3, the tempo
+  show_page("SEQ")
+  context.arc.turn(1, 3, 10)
+  assert_equal(take(), "tempo:arc", "SEQ's tempo ring")
+  -- VOICE: a whole-step row (an option param)
+  show_page("VOICE")
+  local rows = voice_page_rows(S.selected_voice)
+  local option_index
+  for index, row in ipairs(rows) do
+    if row.kind == "option" and row.param_id:match("_grain_env$") then option_index = index end
+  end
+  assert_true(option_index ~= nil, "VOICE has the grain envelope row")
+  S.lib.ui_cursors.place("voice", option_index)
+  local _, row_indices = voice_page_group(rows, option_index)
+  local ring
+  for n, index in ipairs(row_indices) do if index == option_index then ring = n end end
+  local before = params:get(rows[option_index].param_id)
+  context.arc.turn(1, ring, before < #S.constants.GRAIN_ENV_OPTIONS and 20 or -20)
+  assert_true(params:get(rows[option_index].param_id) ~= before, "the ring stepped the envelope")
+  assert_equal(take(), rows[option_index].param_id .. ":arc", "VOICE's whole-step ring")
+end)
+
 test("VOICE's rings read the cursor from the cursor module, not the page", function()
   local file = assert(io.open(h.repo_root .. "/lib/arc/voice.lua", "r")); local source = file:read("*a"); file:close()
   assert_true(not source:find("pages_voice", 1, true), "lib/arc/voice.lua never calls into lib/pages/voice.lua")
