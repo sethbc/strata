@@ -199,7 +199,10 @@
     // 20-20000, before both banks and their 0.05 s lag), ampOffset m4
     // (through voiceLevel on both paths) and voiceGate, the factor on the
     // stage's whole output after the mirror's tap of the other path:
-    //   (1 - gate x (1 - env)) x (1 - mute lagged 20 ms)
+    //   (1 - gate lagged 20 ms x (1 - env)) x (1 - mute lagged 20 ms)
+    // (seqGate switched on a running voice, or at a recall's end, glides as
+    // the mute does, #614; a gate held at 1 is exactly 1, so the envelope's
+    // attack and release are unchanged)
     // env is gateAttackSeconds up (5 ms in whole control blocks),
     // gateSeconds held, gateRelease down, started by the
     // stage's t_trig (retrigger's, the accent's) and restarted from its level
@@ -223,7 +226,7 @@
         controls[\voiceMute] = voiceMute;
         controls[\filterFreq] = (controls[\filterFreq] * (this.fastModCutoffFactor ** m[3])).clip(20, 20000);
         controls[\ampOffset] = m[4];
-        controls[\voiceGate] = (1 - (gate * (1 - env))) * (1 - mute.lag(0.02));
+        controls[\voiceGate] = (1 - (gate.lag(0.02) * (1 - env))) * (1 - mute.lag(0.02));
         ^controls
     }
 
