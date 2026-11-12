@@ -16,11 +16,13 @@ This is version 3.3.2. Version 3.0 added buffers and live input, filter and dela
 - Random files from a folder, a start point anywhere in a long file, and saving a buffer or just its loop region
 - Waveforms and playheads on the BUFFER page; position jumps, loops and four bookmarks per voice on every grid (and bookmark recalls on the BUFFER page); arc scrubbing that glides on with a set friction
 - Per-voice freeze, grain variation (reverse, jitter, intervals), scale quantize and loop regions
-- Cross-modulation between voices, six global LFOs and probability-based mutations
+- Cross-modulation between voices, six global LFOs (the fast ones run in the engine) and probability-based mutations
+- Sixteen macros, a morph between two scenes, scatter, gesture recorders and a sixteen-routing modulation matrix on the MOD page, with the live input's level as a source
 - A filter and delay and reverb sends per voice; filter, delay, reverb and a limiter on the master output
-- Sixteen named scenes in two banks, with smooth recall and a scene sequencer
+- Sixteen named scenes in two banks, with smooth recall and a scene sequencer; actions that can wait for the beat or bar
+- Mute and solo for every voice
 - A nine-page screen UI that reaches every parameter, the patterns, the scenes and the modulation without a grid or arc
-- A pattern sequencer (on the SEQ page and the grid), MIDI input and monome arc support
+- A pattern sequencer (on the SEQ page and the grid) with a length, division and swing per voice, probability, ratchets, step locks, gates, Euclidean fill and scene chaining, MIDI input and monome arc support
 
 ## Requirements
 
@@ -57,7 +59,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 1. The script starts with the Resonator and FM voices active, on the MAIN page
 2. Use E2 to select a voice, and E3 to adjust its main parameter (K2 moves to grain size and grain density)
 3. Press K3 to start or stop the selected voice. Hold K1 for ALT: ALT+K2 randomizes the voice (again within 5 s to undo) and ALT+K3 locks it
-4. Turn E1 to reach the other pages: VOICE for every parameter of the voice, SEQ for the patterns, FX for master density and the effects, BUFFER to record, load and see the buffers, and SCENES to save and recall scenes (a saved scene is written to disk at once)
+4. Turn E1 to reach the other pages: VOICE for every parameter of the voice, SEQ for the patterns, FX for master density and the effects, MOD for the macros, morph, scatter, recorders and matrix, BUFFER to record, load and see the buffers, and SCENES to save and recall scenes (a saved scene is written to disk at once)
 
 ## Documentation
 
