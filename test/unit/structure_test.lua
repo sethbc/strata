@@ -1997,4 +1997,21 @@ test("the peak scan allocates nothing per sample", function()
   end
 end)
 
+-- A norns poll has one callback: only lib/input_level.lua names the input
+-- level polls (a page's layout state may fire a value, which sets nothing)
+test("only lib/input_level.lua names the input polls", function()
+  local offenders = {}
+  for _, source in ipairs(read_lua_sources()) do
+    if source.path ~= "lib/input_level.lua" then
+      for line in (source.text .. "\n"):gmatch("(.-)\n") do
+        if line:find("amp_in_[lr]") and not line:find("context.polls.fire", 1, true) and not line:match("^%s*%-%-") then
+          offenders[#offenders + 1] = source.path
+          break
+        end
+      end
+    end
+  end
+  assert_equal(table.concat(offenders, " "), "", "a norns poll has one callback")
+end)
+
 end

@@ -620,8 +620,11 @@ return function(S)
   end
   S.lib.input_level.on_level(meter_input)
 
-  -- A visit starts with no held peak
+  -- A visit starts with no held peak, shows the last polled level, and looks
+  -- the input polls up again (norns replaces its poll objects when it
+  -- re-registers the polls, #438)
   local function start_input_meter()
+    S.lib.input_level.refresh()
     meter.peak, meter.peak_at, meter.shown = 0, 0, nil
   end
 

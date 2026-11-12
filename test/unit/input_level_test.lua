@@ -90,18 +90,50 @@ test("the group strata_input holds one param", function()
   assert_equal(spec.minval, 1); assert_equal(spec.maxval, 30)
 end)
 
-test("only lib/input_level.lua names the input polls", function()
-  local offenders = {}
-  -- (a page's layout state may fire a poll value: that sets nothing)
-  local pipe = io.popen("grep -rnE 'amp_in_[lr]' lib 2>/dev/null")
-  for line in pipe:lines() do
-    local file = line:match("^([^:]+):")
-    if file:match("%.lua$") and file ~= "lib/input_level.lua" and not line:find("context.polls.fire", 1, true) then
-      offenders[#offenders + 1] = file
-    end
+test("refresh looks the polls up again, so replaced poll objects still move the level (#438)", function()
+  local context = load_strata(); finish_startup(context)
+  local level = local_value("S").lib.input_level
+  local old_left = context.polls.polls.amp_in_l
+  for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do
+    local entry = { name = name, callback = nil, time = 0.25, running = false }
+    function entry:start() self.running = true end
+    function entry:stop() self.running = false end
+    context.polls.polls[name] = entry   -- as norns re-registers its polls (an engine load)
   end
-  pipe:close()
-  assert_equal(table.concat(offenders, " "), "", "a norns poll has one callback")
+  level.refresh()
+  assert_true(not old_left.running and old_left.callback == nil, "the old object is stopped and let go")
+  local new_left, new_right = context.polls.polls.amp_in_l, context.polls.polls.amp_in_r
+  assert_true(new_left.running and new_right.running, "the new objects run")
+  assert_near(new_left.time, 1 / 30, 1e-9)
+  context.polls.fire("amp_in_l", 0.1)
+  assert_near(level.value(), 0.4, 1e-6, "and their values move the source")
+  -- a refresh with the same objects keeps them running
+  level.refresh()
+  assert_true(new_left.running and new_right.running)
+  context.polls.fire("amp_in_r", 0.2)
+  assert_near(level.value(), 0.8, 1e-6)
+  cleanup()
+  assert_true(not new_left.running and not new_right.running, "cleanup stops the refreshed objects")
+end)
+
+test("a listener that raises stops no other listener and the levels are stored", function()
+  local context = load_strata(); finish_startup(context)
+  local level = local_value("S").lib.input_level
+  local calls = 0
+  level.on_level(function() error("listener boom") end)
+  level.on_level(function() calls = calls + 1 end)
+  local printed = {}
+  local real_print = print
+  print = function(...) printed[#printed + 1] = table.concat({...}, " ") end
+  local ok = pcall(function()
+    context.polls.fire("amp_in_l", 0.3); context.polls.fire("amp_in_l", 0.4)
+  end)
+  print = real_print
+  assert_true(ok, "the poll callback does not raise")
+  assert_equal(calls, 2, "the second listener ran each time")
+  assert_near(level.levels(), 0.4, 1e-6, "the level is stored")
+  assert_equal(#printed, 1, "the same error prints once")
+  assert_true(printed[1]:find("listener boom", 1, true) ~= nil)
 end)
 
 end
