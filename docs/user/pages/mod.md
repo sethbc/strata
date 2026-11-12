@@ -55,7 +55,7 @@ Each row is a target and the two ends it moves between as the macro goes from 0 
 - **K3** - Next column
 - **E3** - Change the column: the target, through every setting a macro can move (none first), or an end, 1 % per step (ALT+E3 0.1 %)
 - **ALT+E3** on the target - Jump a group (the globals, voice 1 ... voice 7, the registered settings, the LFOs' rates and depths, the routings' depths)
-- **ALT+K3** - Learn: the next setting you touch with an encoder, an arc ring or a grid fader becomes the row's target, from 0 to 100 % (the header shows `M1 > v3 pitch`, or `not a macro target`). The row shows `learn` while it waits; K2, leaving the page or 10 seconds cancels it
+- **ALT+K3** - Learn: the next setting you touch with an encoder, an arc ring or a grid fader, on any page, becomes the row's target, from 0 to 100 % (the header shows `M1 > v3 pitch`; a setting no macro can move shows `not a macro target`, and learn waits on). Learn waits while you change pages, so go to the setting's page (VOICE, FX, LFO, ...) and turn it there; while it waits the header says `learn M1 row 2` on every page and the row shows `learn`. K2 here, another learn or 10 seconds without a touch cancels it
 - **ALT+K2** held half a second - Empty the row (with K1 held, a row with a target shows `K2:clear`; an empty row shows no K2)
 - **K2** - Back to the list
 
@@ -77,7 +77,7 @@ K2:back K3:off E3:source
 - **E2** - Select the row
 - **E3** - Change it: the source, through every modulation source in turn (ALT+E3 jumps to the next kind: LFOs, macros, recorders, the input); the destination, through every setting an LFO can move but the macros (ALT+E3 jumps a group); the depth (ALT+E3 in finer steps); on or off. A routing that gets both a source and a destination at a depth of 0 starts at 25 %, so you hear it. All sixteen macros are offered as sources, whatever bank the list shows
 - **K3** - Turn the routing on or off
-- **ALT+K3** on `dest` - Learn: the next setting you touch becomes the destination (the header shows `R3 > v3 pitch`, or `not a destination`); K2, leaving the page, showing another routing (arc ring 4) or 10 seconds cancels it
+- **ALT+K3** on `dest` - Learn: the next setting you touch, on any page, becomes the destination (the header shows `R3 > v3 pitch`; a setting that cannot be one shows `not a destination`, and learn waits on). As for a macro, it waits while you change pages, the header saying `learn R3 dest`; K2 here, another learn, showing another routing (arc ring 4) or 10 seconds without a touch cancels it
 - **ALT+K2** held half a second - Clear the routing
 - **K2** - Back to the list
 

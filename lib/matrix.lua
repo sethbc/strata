@@ -657,8 +657,8 @@ return function(S)
   end
 
   -- Arm learn for routing k's destination: the next hand-touched param that
-  -- is a destination becomes it, as a MOD edit; cancel_learn (MOD's K2 and
-  -- page change) or learn_seconds without a touch cancels it. Returns
+  -- is a destination becomes it, as a MOD edit; cancel_learn (MOD's K2 in
+  -- its view) or learn_seconds without a touch cancels it. Returns
   -- whether it is armed
   function M.learn(k)
     if not is_index(k) then return false end

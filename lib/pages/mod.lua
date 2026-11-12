@@ -8,10 +8,11 @@
 -- describe(), row); the bank row, the morph and scatter rows and the
 -- matrix's routings R1-R16 are the page's own. K3 on a macro row opens its
 -- target view, on a routing row the routing view; ALT+K3 there learns
--- (S.lib.macros.learn, S.lib.matrix.learn), canceled by K2 and a page
--- change. ALT+K2 on release randomizes the scatter or matrix section
--- (S.lib.ui_alt's shared handler, with its undo; held 0.5 s it clears a
--- recorder, a target row or a routing). The rows are built from the
+-- (S.lib.macros.learn, S.lib.matrix.learn), which waits across page
+-- changes with a notice in the header, canceled by K2 in the view, a new
+-- learn or its timeout. ALT+K2 on release randomizes the scatter or
+-- matrix section (S.lib.ui_alt's shared handler, with its undo; held
+-- 0.5 s it clears a recorder, a target row or a routing). The rows are built from the
 -- registry at each use and the cursor follows its row's id, so a source
 -- registered later shows at once and a bank change keeps the cursor's
 -- place. Registers its S.registry.pages record. S.lib.pages_mod holds what
@@ -937,11 +938,20 @@ return function(S)
     return false
   end
 
-  -- Leaving MOD cancels learn
-  local function mod_leave()
-    S.lib.macros.cancel_learn()
-    S.lib.matrix.cancel_learn()
+  -- Learn waits across page changes (ruling 80, #595: no surface on MOD
+  -- touches a target or a destination). While it does, the header says so
+  -- on every page: a standing notice of S.lib.ui_flash, under any flash (a
+  -- refused touch's), gone as learn ends (a learned touch, K2 in the view,
+  -- a new learn, the routing view moving on, the timeout: each asks for a
+  -- redraw). Cut to the flash's width by the header
+  local function learn_notice()
+    local m, k = S.lib.macros.learning()
+    if m then return "learn M" .. m .. " row " .. k end
+    local routing = S.lib.matrix.learning()
+    if routing then return "learn R" .. routing .. " dest" end
+    return nil
   end
+  S.lib.ui_flash.add_notice("header", learn_notice)
 
   ---------------------------------------------------------------------------
   -- What the rings read and move (lib/arc/mod.lua)
@@ -1175,6 +1185,13 @@ return function(S)
   table.insert(layout_states, view_state("M1 targets, empty, learning row 2", function()
     open_targets(1); S.lib.macros.learn(1, 2)
   end, 2, 1))
+  -- the header's learn notice at its widest, for a target and a destination
+  table.insert(layout_states, view_state("M16 targets, learning row 8", function()
+    open_targets(16); S.lib.macros.learn(16, MACRO_TARGETS)
+  end, MACRO_TARGETS, 1, widest_targets))
+  table.insert(layout_states, view_state("R16 routing, learning its destination", function()
+    open_routing(16); S.lib.matrix.learn(MATRIX_SLOTS)
+  end, 2, nil, widest_routings))
   for row, name in ipairs(MOD_PAGE.routing_rows) do
     table.insert(layout_states, view_state("R16 routing, " .. name, function() open_routing(16) end, row, nil,
       widest_routings))
@@ -1189,7 +1206,7 @@ return function(S)
   S.registry.pages[UI_PAGES.index.MOD] = {name = "MOD", draw = redraw_mod, hints = mod_hints,
     enc = mod_enc, alt_enc = mod_alt_enc, key = mod_key, alt_key = mod_alt_key,
     alt_key_release = mod_alt_key_release, alt_hold = mod_alt_hold, alt_hold_hint = mod_alt_hold_hint,
-    randomize_section = mod_randomize_section, animates = mod_animates, leave = mod_leave,
+    randomize_section = mod_randomize_section, animates = mod_animates,
     arc_button = mod_arc_button, layout_states = layout_states}
 
   return M

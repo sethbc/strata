@@ -47,7 +47,7 @@ Each routing's read and each destination's update is contained (above); a raisin
 
 ## Learn
 
-`learn(k)` (MOD's ALT+K3 on the routing view's `dest` row, package 2a) arms routing k's destination; the next param a hand touches (the `param_touch` registry: an encoder, an arc ring, a grid fader) that is a destination becomes it through `edit_routing` (the 25 % rule applies), and the header flashes `R<k> > <label>` (`R3 > v3 pitch`). A touched voice's main param that is no destination itself learns `v<i>_main`. Any other touched param (a macro, an LFO param, a matrix depth, an option) flashes `not a destination`, and learn waits on. `cancel_learn()` (MOD's K2 and page change), a new `learn` or 10 s without a touch ends it.
+`learn(k)` (MOD's ALT+K3 on the routing view's `dest` row, package 2a) arms routing k's destination; the next param a hand touches (the `param_touch` registry: an encoder, an arc ring, a grid fader) that is a destination becomes it through `edit_routing` (the 25 % rule applies), and the header flashes `R<k> > <label>` (`R3 > v3 pitch`). A touched voice's main param that is no destination itself learns `v<i>_main`. Any other touched param (a macro, an LFO param, a matrix depth, an option) flashes `not a destination`, and learn waits on. `cancel_learn()` (MOD's K2 in its view, or its routing view showing another routing), a new `learn` or 10 s without a touch ends it; a page change does not (ruling 80: the touch is made on another page).
 
 ## Storage
 

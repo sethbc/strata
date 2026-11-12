@@ -565,7 +565,7 @@ return function(S)
 
   -- Arm learn for row k of macro m: the next hand-touched param that is a
   -- target becomes the row's id, at min 0 and max 1; cancel_learn (MOD's K2
-  -- and page change) or learn_seconds without a touch cancels it. Returns
+  -- in its view) or learn_seconds without a touch cancels it. Returns
   -- whether it is armed
   function M.learn(m, k)
     if not (is_index(m, NUM_MACROS) and is_index(k, MACRO_TARGETS)) then return false end

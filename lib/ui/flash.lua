@@ -5,7 +5,8 @@
 -- while that page is up, so a prompt never sits over another page's keys.
 -- header_flash and
 -- buffer_page_flash (lib/pages/buffer.lua) start them; the functions that
--- are global stay global.
+-- are global stay global. Under the flashes, a slot shows a module's
+-- standing notice while its state lasts (add_notice: MOD's learn).
 
 return function(S)
   local M = {}
@@ -55,13 +56,36 @@ return function(S)
     end)
   end
 
-  -- The slot's text while it shows (and its page, if it has one, is up),
-  -- else nil
+  -- Standing notices (3.4): per slot, functions a module adds that return a
+  -- text while what they tell stands (MOD's learn waiting for a touch,
+  -- ruling 80), else nil. A slot shows its first standing notice on every
+  -- page whenever no flash shows in it, for exactly as long as the state
+  -- lasts: a notice has no clock, and whatever ends the state asks for the
+  -- redraw
+  local notices = {}
+  for slot in pairs(M.slots) do notices[slot] = {} end
+
+  function M.add_notice(slot, text_fn)
+    slot_state(slot)
+    assert(type(text_fn) == "function", "a notice is a function")
+    table.insert(notices[slot], text_fn)
+  end
+
+  local function notice_text(slot)
+    for _, text_fn in ipairs(notices[slot]) do
+      local text = text_fn()
+      if text ~= nil then return tostring(text) end
+    end
+    return nil
+  end
+
+  -- What the slot shows: its flash while it shows (and its page, if it has
+  -- one, is up), else its first standing notice, else nil
   function M.text(slot)
     local state = slot_state(slot)
-    if not state.text or util.time() >= state.ends_at then return nil end
-    if state.page and state.page ~= S.ui_page then return nil end
-    return state.text
+    local flashing = state.text ~= nil and util.time() < state.ends_at and not (state.page and state.page ~= S.ui_page)
+    if flashing then return state.text end
+    return notice_text(slot)
   end
 
   function M.cancel_all()

@@ -85,6 +85,25 @@ local function alt_k2_held(context)
   context.clock.run_for(local_value("S").constants.ALT_HOLD_SECONDS)
 end
 
+-- A touch a surface makes on another page: VOICE's E3 on one of a voice's
+-- params (the voice selected, the cursor put on the param's row)
+local function voice_e3(S, voice_idx, param_id, d)
+  show_page("VOICE")
+  S.lib.ui_keys.select_voice_by(voice_idx - S.selected_voice)
+  local index = S.lib.pages_voice.row_of(param_id)
+  assert_true(index, "VOICE has a row " .. param_id)
+  S.lib.pages_voice.place_cursor(index)
+  enc(3, d)
+end
+
+-- The header's text at x 40, a flash or a notice (nil: the page dots)
+local function header_notice(context)
+  context.screen.clear(); redraw()
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == 8 and entry.x == 40 then return entry.text end
+  end
+end
+
 -- Every param's value, joined (what a press that changes nothing leaves)
 local function param_snapshot()
   local ids = {}
@@ -260,7 +279,9 @@ test("K3 on a macro row opens its targets; E3 edits the cursor's column; K2 goes
   assert_equal(cursor_label(context), "M1", "to the macro's row")
 end)
 
-test("ALT+K3 in the target view learns the next touched target", function()
+-- Ruling 80 (#595): no surface on MOD touches a target, so learn waits
+-- across page changes, the header saying so on every page
+test("ALT+K3 in the target view learns the next setting touched, on any page", function()
   local context, S = loaded()
   local macros = S.lib.macros
   place(S, "source:macro2")
@@ -270,22 +291,69 @@ test("ALT+K3 in the target view learns the next touched target", function()
   tap(3); key(1, 0)
   local m, k = macros.learning()
   assert_equal(m, 2); assert_equal(k, 2, "learn armed for M2 row 2")
-  delta_with_detent("v3_grain_pitch", 1, { source = "arc" })
-  assert_equal(S.macros[2].targets[2].id, "v3_grain_pitch", "the touched param")
+  show_page("VOICE")
+  assert_equal(macros.learning(), 2, "a page change keeps learn armed")
+  assert_equal(header_notice(context), "learn M2 row 2", "and VOICE's header says it waits")
+  assert_screen_layout(context, "VOICE while learn waits")
+  voice_e3(S, 3, "v3_grain_pitch", 1)
+  assert_equal(S.macros[2].targets[2].id, "v3_grain_pitch", "VOICE's E3 learned the param it turned")
   assert_equal(S.macros[2].targets[2].min, 0); assert_equal(S.macros[2].targets[2].max, 1)
-  assert_equal(S.lib.ui_flash.text("header"), "M2 > v3 pitch")
-  assert_equal(macros.learning(), nil)
-  -- K2 cancels it
+  assert_equal(macros.learning(), nil, "learn is done")
+  assert_equal(header_notice(context), "M2 > v3 pitch", "the learned flash in the notice's place")
+  context.clock.run_for(1.51)
+  assert_equal(header_notice(context), nil, "then the dots: the notice is gone")
+  -- K2 in the view still cancels it, on MOD after another page
+  show_page("MOD")
+  assert_equal(S.mod_page.view, "targets", "MOD still shows M2's targets")
   key(1, 1); tap(3); key(1, 0)
   assert_true(macros.learning() ~= nil, "armed again")
+  show_page("LFO"); show_page("MOD")
   tap(2)
   assert_equal(macros.learning(), nil, "K2 cancels")
   assert_equal(S.mod_page.view, "list")
-  -- a page change cancels it
+  assert_equal(header_notice(context), nil, "and the notice goes with it")
+  -- and so does its timeout, on any page
   tap(3); key(1, 1); tap(3); key(1, 0)
-  assert_true(macros.learning() ~= nil)
+  show_page("FX")
+  context.clock.run_for(9.9)
+  assert_equal(header_notice(context), "learn M2 row 1", "still waiting at 9.9 s")
+  context.clock.run_for(0.2)
+  assert_equal(macros.learning(), nil, "10 s without a touch cancel it")
+  assert_equal(header_notice(context), nil, "and the notice")
+end)
+
+-- A touch learn refuses leaves it waiting, and its notice comes back once
+-- the refusal's flash ends
+test("learn waits on through a touch it refuses: a macro, or an LFO param for a routing", function()
+  local context, S = loaded()
+  context.arc.plug(1)
+  local macros, matrix = S.lib.macros, S.lib.matrix
+  place(S, "source:macro1"); tap(3)
+  key(1, 1); tap(3); key(1, 0)
+  assert_equal(macros.learning(), 1, "M1 row 1 waits")
+  local macro = params:get("macro_1")
+  context.arc.turn(1, 3, 100)                  -- the target view's ring 3: the macro
+  assert_true(params:get("macro_1") > macro, "ring 3 moved macro 1")
+  assert_equal(S.lib.ui_flash.text("header"), "not a macro target", "a macro is refused")
+  assert_equal(macros.learning(), 1, "learn waits on")
+  assert_equal(macros.targets(1)[1].id, "", "the row is still empty")
+  context.clock.run_for(1.51)
+  assert_equal(header_notice(context), "learn M1 row 1", "the notice is back after the refusal")
+  tap(2)
+  place(S, "routing:1"); tap(3); enc(2, 1)      -- R1's dest row
+  key(1, 1); tap(3); key(1, 0)
+  assert_equal(matrix.learning(), 1, "R1's destination waits")
   show_page("LFO")
-  assert_equal(macros.learning(), nil, "a page change cancels")
+  enc(2, -20); enc(2, 4)                       -- the strip's depth
+  local depth = params:get("strata_lfo1_depth")
+  enc(3, 1)
+  assert_equal(params:get("strata_lfo1_depth"), depth + 1, "LFO's E3 moved LFO 1's depth")
+  assert_equal(S.lib.ui_flash.text("header"), "not a destination", "an LFO param is refused")
+  assert_equal(matrix.learning(), 1, "learn waits on")
+  assert_equal(matrix.routing(1).dest, "", "no destination yet")
+  context.clock.run_for(1.51)
+  assert_equal(header_notice(context), "learn R1 dest", "the notice is back")
+  assert_screen_layout(context, "LFO while learn waits")
 end)
 
 test("K3 on a gesture row presses its recorder; ALT+K3 toggles overdub; ALT+K2 held clears it", function()
@@ -375,6 +443,7 @@ end)
 
 test("the routing view edits source, destination, depth and on, and learns a destination", function()
   local context, S = loaded()
+  context.arc.plug(1)
   local matrix = S.lib.matrix
   local sources = S.lib.mod_sources.list()
   local dests = matrix.destination_ids()
@@ -411,9 +480,17 @@ test("the routing view edits source, destination, depth and on, and learns a des
   assert_equal(hint_text(context), "K2:rand K3:learn E3:group")
   tap(3); key(1, 0)
   assert_equal(matrix.learning(), 1, "learn armed")
-  delta_with_detent("v2_grain_size", 1, { source = "arc" })
-  assert_equal(matrix.routing(1).dest, "v2_grain_size", "the touched param")
-  assert_equal(S.lib.ui_flash.text("header"), "R1 > v2 size")
+  -- no surface on MOD touches a destination: learn waits across the page
+  -- change (ruling 80), and an arc ring on FX learns
+  show_page("FX")
+  assert_equal(matrix.learning(), 1, "a page change keeps learn armed")
+  assert_equal(header_notice(context), "learn R1 dest", "FX's header says learn waits")
+  context.arc.turn(1, 4, 10)                   -- FX's ring 4: the delay mix
+  assert_equal(matrix.routing(1).dest, "delay_mix", "the ring's param")
+  assert_equal(S.lib.ui_flash.text("header"), "R1 > dly mix")
+  assert_equal(matrix.learning(), nil, "learn is done")
+  show_page("MOD")
+  assert_equal(S.mod_page.view, "routing", "MOD still shows R1")
   -- K2 cancels and goes back
   key(1, 1); tap(3); key(1, 0)
   assert_equal(matrix.learning(), 1)
