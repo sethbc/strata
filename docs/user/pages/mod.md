@@ -55,7 +55,7 @@ Each row is a target and the two ends it moves between as the macro goes from 0 
 - **K3** - Next column
 - **E3** - Change the column: the target, through every setting a macro can move (none first), or an end, 1 % per step (ALT+E3 0.1 %)
 - **ALT+E3** on the target - Jump a group (the globals, voice 1 ... voice 7, the registered settings, the LFOs' rates and depths, the routings' depths)
-- **ALT+K3** - Learn: the next setting you touch with an encoder, an arc ring or a grid fader, on any page, becomes the row's target, from 0 to 100 % (the header shows `M1 > v3 pitch`; a setting no macro can move shows `not a macro target`, and learn waits on). Learn waits while you change pages, so go to the setting's page (VOICE, FX, LFO, ...) and turn it there; while it waits the header says `learn M1 row 2` on every page and the row shows `learn`. K2 here, another learn or 10 seconds without a touch cancels it
+- **ALT+K3** - Learn: the next setting you touch with an encoder, an arc ring or a grid fader, on any page, becomes the row's target, from 0 to 100 % (the header shows `M1 > v3 pitch`; a setting no macro can move shows `not a target`, and learn waits on). Learn waits while you change pages, so go to the setting's page (VOICE, FX, LFO, ...) and turn it there; while it waits the header says `learn M1 row 2` on every page and the row shows `learn`. K2 here, another learn or 10 seconds without a touch cancels it
 - **ALT+K2** held half a second - Empty the row (with K1 held, a row with a target shows `K2:clear`; an empty row shows no K2)
 - **K2** - Back to the list
 

@@ -334,7 +334,7 @@ test("learn waits on through a touch it refuses: a macro, or an LFO param for a 
   local macro = params:get("macro_1")
   context.arc.turn(1, 3, 100)                  -- the target view's ring 3: the macro
   assert_true(params:get("macro_1") > macro, "ring 3 moved macro 1")
-  assert_equal(S.lib.ui_flash.text("header"), "not a macro target", "a macro is refused")
+  assert_equal(S.lib.ui_flash.text("header"), "not a target", "a macro is refused")
   assert_equal(macros.learning(), 1, "learn waits on")
   assert_equal(macros.targets(1)[1].id, "", "the row is still empty")
   context.clock.run_for(1.51)
