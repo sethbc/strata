@@ -33,7 +33,7 @@ ALT+K2 held opens it on the selected voice and the step under the cursor. The li
 - **ALT+E3** - Fine adjustment (a tenth of a detent) on the continuous rows; on `euclid` the rotation
 - **K2** - Back to the patterns
 - **K3** - Turn the step on (at 15) or off; on the `clear` row, clear the voice's pattern
-- **ALT+K2** - A quick press randomizes the voice's pattern (or undoes it), as on the patterns. Held past half a second, letting go resets the row under the cursor: a lock, note, gate or bookmark of the step to `off`, `prob` to 100 %, `ratchet` to one hit, the level to 0, a setting to its default (the hint says `K2:reset`)
+- **ALT+K2** - A quick press randomizes the voice's pattern (or undoes it), as on the patterns. Held past half a second, letting go resets the row under the cursor: a lock, note, gate or bookmark of the step to `off`, `prob` to 100 %, `ratchet` to one hit, the level to 0, a setting to its default (the hint says `K2:reset`). On `euclid` and `clear`, which have nothing to reset, the hint says `K2:cancel` and letting go does nothing
 - **ALT+K3** - Clear the voice's pattern
 
 The `note` row edits the step's first note. A step can hold a chord of up to 8 notes (scenes and the chain keep them); the row changes only the first, and `off` clears them all.

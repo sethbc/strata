@@ -929,11 +929,39 @@ test("the hint rows", function()
   key(2, 1); context.clock.run_for(0.6)
   assert_equal(hints(), "K2:reset K3:clr E2:step", "held: letting go resets the row")
   key(2, 0); key(1, 0)
+  -- the euclid and clear rows have nothing to reset: held, letting go only
+  -- cancels the quick press's randomize (#596)
+  local function held_hints()
+    key(1, 1); key(2, 1); context.clock.run_for(0.6)
+    local with_alt = hints()
+    key(1, 0)
+    local alone = hints()
+    key(2, 0)
+    return with_alt, alone
+  end
+  for _, label in ipairs({ "euclid", "clear" }) do
+    go_to(context, label)
+    local pattern = steps_of(S, S.selected_voice)
+    local with_alt, alone = held_hints()
+    assert_equal(with_alt, "K2:cancel K3:clr E2:step", "held on " .. label .. ": letting go does nothing")
+    assert_equal(alone, "K2:cancel", "K1 let go first on " .. label .. ": K2's hint alone")
+    assert_true(same_steps(steps_of(S, S.selected_voice), pattern), "and letting go on " .. label .. " changed nothing")
+  end
   S.lib.pages_seq.open_step_editor(2, 4, 1)
   assert_equal(hints(), "K2:back K3:step E3:level", "the step editor")
   key(1, 1); assert_equal(hints(), "K2:rand K3:clr E2:step", "the step editor with ALT")
   key(1, 0)
+  local with_alt, alone = held_hints()
+  assert_equal(with_alt, "K2:reset K3:clr E2:step", "held on the editor's level: letting go resets it")
+  assert_equal(alone, "K2:reset")
+  for _, label in ipairs({ "euclid", "clear" }) do
+    go_to(context, label)
+    with_alt, alone = held_hints()
+    assert_equal(with_alt, "K2:cancel K3:clr E2:step", "held on the editor's " .. label .. ": letting go does nothing")
+    assert_equal(alone, "K2:cancel", "K1 let go first on the editor's " .. label)
+  end
   S.lib.pages_seq.close_step_editor(1)
+  go_to(context, "quantize")
   assert_equal(hints(), "K2:back K3:step E3:quantize", "the edit view under it again")
 end)
 
