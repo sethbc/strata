@@ -403,7 +403,8 @@ test("a solo silences every voice that is not soloed", function()
   assert_equal(sent[1], 1); assert_equal(sent[3], 1)
   assert_equal(sent[2], nil, "the soloed voice was not silenced")
   assert_equal(sent[4], nil, "voice 4 was muted already")
-  assert_equal(sent.count, 2)
+  for voice_idx = 5, 7 do assert_equal(sent[voice_idx], 1, "stopped voice " .. voice_idx .. " too (#640)") end
+  assert_equal(sent.count, 5)
   context.clear_engine_calls()
   params:set("v4_solo", 1)  -- voice 4 is muted and soloed: still silenced
   assert_equal(mutes_sent(context).count, nil, "a muted voice stays silenced when soloed")
@@ -424,14 +425,18 @@ test("a solo silences every voice that is not soloed", function()
   assert_equal(#context.calls_named("voiceOff"), 0)
 end)
 
-test("a stopped voice gets no mute message and its start syncs the effective mute", function()
+test("a stopped voice gets its mute when it changes and its start syncs the effective mute", function()
   local context = load_strata()
   local S = run_voices_1_to_4(context)
   context.clear_engine_calls()
-  params:set("v6_mute", 1); params:set("v5_solo", 1)
-  for _, entry in ipairs(sent_grain(context, "voiceMute")) do
-    assert_true(entry.voice + 1 <= 4, "no message to the stopped voices 5-7")
-  end
+  params:set("v6_mute", 1)
+  assert_equal(mutes_sent(context)[6], 1, "the stopped voice's stage is muted (#640)")
+  context.clear_engine_calls()
+  params:set("v5_solo", 1)
+  local solo_sent = mutes_sent(context)
+  assert_equal(solo_sent[6], nil, "voice 6 was muted already")
+  assert_equal(solo_sent[7], 1, "the solo silences stopped voice 7")
+  assert_equal(solo_sent[5], nil, "and never the soloed voice")
   context.clear_engine_calls()
   toggle_voice(6)  -- muted
   local sent = mutes_sent(context)
@@ -447,6 +452,37 @@ test("a stopped voice gets no mute message and its start syncs the effective mut
   assert_equal(mutes_sent(context)[5], 0, "the soloed voice starts audible")
   params:set("v5_solo", 0)
   assert_true(S.voices[6].active)
+end)
+
+-- #640: the stage is one persistent node per voice, so a voice stopped
+-- while its release still sounds is silenced by a mute or another's solo
+-- within the mute's 20 ms, and an unmute lets the rest of it sound
+test("a mute or solo during a stopped voice's release reaches its stage at once (#640)", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  toggle_voice(3)  -- voice 3 releases
+  assert_true(not S.voices[3].active)
+  context.clear_engine_calls()
+  params:set("v3_mute", 1)
+  local sent = mutes_sent(context)
+  assert_equal(sent[3], 1, "the releasing voice is muted")
+  assert_equal(sent.count, 1, "and no other voice gets a message")
+  context.clear_engine_calls()
+  params:set("v3_mute", 0)
+  assert_equal(mutes_sent(context)[3], 0, "unmuted")
+  context.clear_engine_calls()
+  params:set("v1_solo", 1)
+  sent = mutes_sent(context)
+  for voice_idx = 2, S.constants.NUM_VOICES do
+    assert_equal(sent[voice_idx], 1, "voice " .. voice_idx .. ", running or stopped, is silenced by the solo")
+  end
+  assert_equal(sent[1], nil, "the soloed voice was not silenced")
+  context.clear_engine_calls()
+  params:set("v1_solo", 0)
+  sent = mutes_sent(context)
+  assert_equal(sent.count, S.constants.NUM_VOICES - 1, "the solo's end reaches the same voices")
+  assert_equal(#context.calls_named("voiceOn"), 0, "no voice starts")
+  assert_equal(#context.calls_named("voiceOff"), 0, "and none stops")
 end)
 
 test("scenes store mutes and never solos", function()
