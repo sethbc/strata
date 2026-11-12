@@ -1515,6 +1515,76 @@ test("stub clock: transport_start resets the beat and the waiting syncs, then ca
   context.clock.transport_stop()
 end)
 
+-- matron's clock_set_source (and crow's input division) reschedule every
+-- waiting sync from the new source's beat (clock_scheduler_reschedule_sync_events:
+-- the next multiple of its beats after the new beat, plus its offset), with
+-- no transport start
+test("stub clock: set_beat moves the beat and reschedules the waiting syncs from it, as a source change does", function()
+  local context = load_strata(); finish_startup(context)
+  local starts = 0
+  clock.transport.start = function() starts = starts + 1 end
+  local wakes = {}
+  local syncing = clock.run(function()
+    while true do table.insert(wakes, {beat = clock.sync(1, -0.25), time = util.time()}) end
+  end)
+  context.clock.run_for(0.5)  -- beat 2: it waited for 1.75 and now waits for 2.75
+  assert_equal(#wakes, 1, "woke at beat 1.75")
+  local jumped_at = util.time()
+  context.clock.set_beat(10.1)
+  assert_near(clock.get_beats(), 10.1, 1e-9, "the beat jumps")
+  assert_equal(starts, 0, "no transport start")
+  context.clock.run_for(0.4)
+  assert_equal(#wakes, 2, "the waiting sync was rescheduled from 10.1")
+  assert_near(wakes[2].beat, 10.75, 1e-9, "to the next multiple of 1 after it, less 0.25")
+  assert_near(wakes[2].time, jumped_at + 0.325, 1e-9, "0.65 beats on")
+  clock.cancel(syncing)
+end)
+
+-- matron's tick posts every resume due on it before Lua delivers any, so a
+-- reset or a jump can fall between a coroutine's post and its delivery
+test("stub clock: advance posts every due resume before delivering one, and advance_until can act between", function()
+  local context = load_strata(); finish_startup(context)  -- beat 1
+  local woke = {}
+  -- the first coroutine, resumed first in the step, resets the clock
+  local first, resetting = nil, true
+  local real_sync = clock.sync
+  clock.sync = function(...)
+    local beat = real_sync(...)
+    if resetting and coroutine.running() == context.clock.threads[first] then
+      resetting = false
+      context.clock.transport_start()
+    end
+    return beat
+  end
+  local function waiter(name)
+    return clock.run(function()
+      while true do table.insert(woke, {name = name, beat = clock.sync(1)}) end
+    end)
+  end
+  first = waiter("first")
+  local second = waiter("second")
+  repeat context.clock.advance() until #woke > 0  -- to the step at beat 2, where both are due
+  clock.sync = real_sync
+  assert_equal(#woke, 2, "both woke in the step")
+  assert_equal(woke[2].name, "second")
+  assert_near(woke[2].beat, 2, 1e-9, "the second's resume was posted before the reset: it carries beat 2")
+  assert_near(context.clock.events[second].sync_beat, 3, 1e-9,
+    "and the reset left its event alone: its next sync counts on from 2, not from the reset's 0")
+  -- advance_until's hook runs once the coroutine's resume is posted, before
+  -- it is delivered: a reset in it leaves that resume as it was (each now
+  -- waits for beat 3, counted on from beat 2)
+  local hooked = 0
+  context.clock.advance_until(first, function()
+    hooked = hooked + 1
+    assert_equal(context.clock.events[first].ready, false, "posted before the hook")
+    context.clock.transport_start()
+  end)
+  assert_equal(hooked, 1, "the hook ran once")
+  assert_equal(woke[#woke].name, "first")
+  assert_near(woke[#woke].beat, 3, 1e-9, "delivered with the beat it was posted at")
+  clock.cancel(first); clock.cancel(second)
+end)
+
 -- norns' lib/er.lua, required as "er": the bucket method, w shifting right
 test("stub er.gen is norns' lib/er.lua", function()
   load_strata()
