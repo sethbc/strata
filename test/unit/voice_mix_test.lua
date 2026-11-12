@@ -526,7 +526,6 @@ test("a mute or solo redraws the grid", function()
   local context = load_strata()
   run_voices_1_to_4(context)
   local calls = 0
-  local grid_core = local_value("S").lib.grid_core
   local original = grid_redraw
   grid_redraw = function() calls = calls + 1 end
   params:set("v3_mute", 1)
