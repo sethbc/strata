@@ -1319,6 +1319,74 @@ test("page 3's morph fader and its A and B rows", function()
   assert_equal(device:get_led(1, 5), 4, "row 5's sequencer key")
 end)
 
+-- 3a (design §5.5): set_param_fraction sets a control at a fraction of its
+-- range (in its warp's terms) and runs the touch hooks as the grid
+test("set_param_fraction sets a control at a fraction of its range, as a grid touch", function()
+  local context = load_strata(); finish_startup(context)
+  local log = {}
+  local_value("S").register_param_touch(function(param_id, source) log[#log + 1] = param_id .. ":" .. source end)
+  local faders = local_value("S").lib.grid_faders
+  faders.set_param_fraction("reverb_mix", 0.25)
+  assert_near(params:get("reverb_mix"), 0.25, 1e-9, "a quarter of 0-1")
+  faders.set_param_fraction("filter_freq", 0.5)
+  assert_near(params:get("filter_freq"), 20 * 1000 ^ 0.5, 0.01, "half of 20-20000 Hz along its exp warp")
+  faders.set_param_fraction("reverb_mix", 1.5)
+  assert_near(params:get("reverb_mix"), 1, 1e-9, "a fraction past 1 sets the top")
+  assert_equal(table.concat(log, " "), "reverb_mix:grid filter_freq:grid reverb_mix:grid", "each set one touch, from the grid")
+end)
+
+-- 3a (design §5.5): page 3's rows 11-15 x columns 12-16 are the XY pad:
+-- column 12 is x = 0 and 16 x = 1, row 15 y = 0 and row 11 y = 1; LEDs the
+-- cell nearest the position 15, a corner 8 with its scene populated and 2
+-- without, the rest 4
+test("page 3's pad sets morph and morph y, and lights the position and the corners", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  local function pad_rows()
+    local rows = {}
+    for y = 11, 15 do
+      local levels = {}
+      for x = 12, 16 do levels[#levels + 1] = device:get_led(x, y) end
+      rows[#rows + 1] = table.concat(levels, " ")
+    end
+    return table.concat(rows, " / ")
+  end
+  capture_scene(1); capture_scene(4)          -- A and D hold scenes, B (2) and C (3) are empty
+  local touches = {}
+  S.register_param_touch(function(param_id, source) touches[#touches + 1] = param_id .. ":" .. source end)
+  S.lib.gestures.press(1)                     -- recorder 1 records from the first touch
+  tap(context, 15, 8)                         -- page 3
+  assert_equal(pad_rows(), "2 4 4 4 8 / 4 4 4 4 4 / 4 4 4 4 4 / 4 4 4 4 4 / 15 4 4 4 2",
+    "at (0, 0) A's cell is the position; D populated 8, C and B empty 2")
+  tap(context, 14, 13)
+  assert_near(params:get("morph"), 0.5, 1e-9, "(14,13): morph 0.5")
+  assert_near(params:get("morph_y"), 0.5, 1e-9, "and morph y 0.5")
+  assert_equal(pad_rows(), "2 4 4 4 8 / 4 4 4 4 4 / 4 4 15 4 4 / 4 4 4 4 4 / 8 4 4 4 2", "the center lit")
+  tap(context, 16, 15)
+  assert_near(params:get("morph"), 1, 1e-9, "(16,15): morph 1")
+  assert_near(params:get("morph_y"), 0, 1e-9, "morph y 0")
+  assert_equal(pad_rows(), "2 4 4 4 8 / 4 4 4 4 4 / 4 4 4 4 4 / 4 4 4 4 4 / 8 4 4 4 15", "B's corner is the position")
+  assert_equal(table.concat(touches, " "), "morph:grid morph_y:grid morph:grid morph_y:grid", "each press touches both")
+  local recorded, values = {}, {}
+  for _, event in ipairs(S.gestures[1].pattern.event) do
+    recorded[#recorded + 1] = event.id; values[#values + 1] = event.value
+  end
+  assert_equal(table.concat(recorded, " "), "morph morph_y morph morph_y", "recorder 1 recorded both axes")
+  for index, value in ipairs({ 0.5, 0.5, 1, 0 }) do assert_near(values[index], value, 1e-9, "event " .. index) end
+  S.lib.gestures.clear(1)
+  -- set off the grid (MOD, a MIDI map, a recorder): shown at the next tick
+  params:set("morph_y", 0.3); params:set("morph", 0.1)
+  drift_update()
+  assert_equal(device:get_led(12, 14), 15, "(0.1, 0.3): the nearest cell is column 12, row 14")
+  params:set("morph_d", 2)
+  drift_update()
+  assert_equal(device:get_led(16, 11), 2, "D picked elsewhere: its empty scene shows")
+  for y = 11, 15 do
+    for x = 1, 11 do assert_equal(device:get_led(x, y), 0, "(" .. x .. "," .. y .. ") stays dark") end
+  end
+end)
+
 -- design §8.9: every freeze key toggles through S.lib.freeze.toggle_quantized
 test("the 256's freeze keys wait for the beat while quantize_actions is on", function()
   local context = load_strata(); finish_startup(context)

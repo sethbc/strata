@@ -3118,4 +3118,30 @@ test("a block's apply cannot change the saved scene", function()
   assert_same(S.scenes[1].data.tb, { level = 7, inner = { depth = 3 } }, "and leaves the slot's data as it was")
 end)
 
+-- #584: morph tells a recall that came after a move by this count, even a
+-- second recall of the scene already current
+test("takeovers counts every recall and every transition started", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local scenes = S.lib.scenes
+  local count = scenes.takeovers()
+  assert_equal(count, 0, "none at load")
+  capture_scene(2)
+  assert_equal(scenes.takeovers(), count, "a capture takes nothing over")
+  recall_scene(2, 0)
+  assert_equal(scenes.takeovers(), count + 1, "an instant recall counts")
+  recall_scene(2, 0)
+  assert_equal(scenes.takeovers(), count + 2, "a second recall of the current scene too")
+  recall_scene(2, 2)
+  assert_equal(scenes.takeovers(), count + 3, "a transition counts at its start")
+  context.clock.run_for(2.5)
+  assert_true(not S.scene_transition_active, "the transition landed")
+  assert_equal(scenes.takeovers(), count + 3, "its landing is no second takeover")
+  recall_scene(5, 0)
+  assert_equal(scenes.takeovers(), count + 3, "an empty slot's recall takes nothing over")
+  capture_scene(6); S.scenes[6].data.tempo = "fast"
+  recall_scene(6, 0)
+  assert_equal(scenes.takeovers(), count + 3, "nor an invalid scene's")
+end)
+
 end

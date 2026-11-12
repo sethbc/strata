@@ -158,7 +158,7 @@ test("the list draws each section's sources from their records, in section order
   -- consecutive duplicates (the cursor at the last row) dropped
   local walk = {}
   for _, label in ipairs(labels) do if walk[#walk] ~= label then walk[#walk + 1] = label end end
-  assert_equal(table.concat(walk, " "), "bank M1 M2 M3 M4 A B morph on depth rate pitch pos size cutoff amp "
+  assert_equal(table.concat(walk, " "), "bank M1 M2 M3 M4 A B C D morph y on depth rate pitch pos size cutoff amp "
     .. "G1 G2 G3 G4 L1 L2 L3 L4 L5 L6 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 IN",
     "the rows in section order")
   assert_equal(table.concat(sections, " "), "macros morph scatter gestures lfos matrix audio",
@@ -623,6 +623,51 @@ test("every param a MOD randomize draws ends the undo when edited by hand", func
     end
   end
   assert_true(context ~= nil)
+end)
+
+-- 3a (design §5.5): the morph section's rows A, B, C, D (the corners'
+-- scenes, by label), morph and y (the two axes, in percent); E3 steps a
+-- corner's scene and moves an axis, as on A, B and morph
+test("the morph section shows C, D and y", function()
+  local context, S = loaded()
+  S.lib.scenes.set_name(3, "dusk")
+  params:set("morph_d", 12); params:set("morph_y", 0.35)
+  place(S, "morph_c")
+  assert_equal(row_text(context, list_row(context, "C").y, ROW_LABEL_X), "C  S3 dusk", "C shows its slot's label")
+  assert_equal(row_text(context, list_row(context, "D").y, ROW_LABEL_X), "D  S12", "D an unnamed slot")
+  place(S, "morph_y")
+  assert_equal(row_text(context, list_row(context, "y").y, ROW_LABEL_X), "y  35%", "y in percent")
+  assert_equal(cursor_label(context), "y", "the cursor on y")
+  enc(3, 5)
+  assert_near(params:get("morph_y"), 0.4, 1e-9, "E3 moves y")
+  -- the order: A, B, C, D, then the axes morph and y
+  place(S, "morph")
+  local morph_row, y_row, d_row = list_row(context, "morph"), list_row(context, "y"), list_row(context, "D")
+  assert_true(morph_row and y_row and d_row, "D, morph and y in view")
+  assert_equal(y_row.y - morph_row.y, 8, "y follows morph")
+  assert_equal(morph_row.y - d_row.y, 8, "morph follows D")
+  place(S, "morph_c")
+  assert_equal(list_row(context, "D").y - list_row(context, "C").y, 8, "D follows C")
+  assert_equal(list_row(context, "C").y - list_row(context, "B").y, 8, "C follows B")
+  place(S, "morph_c")
+  enc(3, 2)
+  assert_equal(params:get("morph_c"), 5, "E3 steps C's scene")
+  place(S, "morph_d")
+  enc(3, -1)
+  assert_equal(params:get("morph_d"), 11, "and D's")
+  local function hints_on(id, alt)
+    place(S, id)
+    if alt then key(1, 1); redraw() end
+    local text = hint_text(context)
+    if alt then key(1, 0) end
+    return text
+  end
+  assert_equal(hints_on("morph_c"), "E3:scene")
+  assert_equal(hints_on("morph_d"), "E3:scene")
+  assert_equal(hints_on("morph_y"), "E3:morph")
+  assert_equal(hints_on("morph_c", true), "", "C: no ALT key acts")
+  assert_equal(hints_on("morph_y", true), "E3:fine", "y: no K2 part, fine as morph")
+  assert_screen_layout(context, "the morph section")
 end)
 
 test("the hint row names each row's keys", function()

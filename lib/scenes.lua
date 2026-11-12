@@ -16,7 +16,7 @@
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir, move_aside_unloadable_file and SCENE_LOAD are fields of
 -- this module's table (S.lib.scenes) for lib/buffers.lua, and revision(slot)
--- for morph. Registers its three
+-- and takeovers() for morph. Registers its three
 -- cleanup steps (saving the scenes, the sequencer, the transition) and the
 -- transition's invariant.
 
@@ -69,6 +69,13 @@ return function(S)
   local revisions = {}
   local function raise_revision(slot) revisions[slot] = (revisions[slot] or 0) + 1 end
   function M.revision(slot) return revisions[slot] or 0 end
+
+  -- Recalls and transitions started (recall_scene, past its checks): morph
+  -- compares S.lib.scenes.takeovers() between a move and its apply, so a
+  -- recall after the move wins even when it recalls the scene already
+  -- current (#584)
+  local takeover_count = 0
+  function M.takeovers() return takeover_count end
 
   -- Scene management functions
 
@@ -752,6 +759,7 @@ return function(S)
     end
 
     transition_time = transition_time or 0
+    takeover_count = takeover_count + 1
 
     -- Any new recall supersedes a transition that is still running (which
     -- puts its previous scene back: this recall redraws), and ends the

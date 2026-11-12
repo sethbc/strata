@@ -12,12 +12,12 @@ macros
 K3:targets E3:value
 ```
 
-The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `morph`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), then **audio** (`IN`, the input level). A section added by a later release shows after these. The row under the cursor is bright.
+The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `C`, `D`, `morph`, `y`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), then **audio** (`IN`, the input level). A section added by a later release shows after these. The row under the cursor is bright.
 
 What each row shows:
 - **bank** - the bank shown (`1  M1-M4`: bank 1 holds macros 1-4). The MOD page, its arc rings and the grids show the same bank
 - **M1**-**M16** - the macro's first target and how many more (`v3 pitch +2`; `-` with none) and its value
-- **A**, **B** - the two scenes the morph goes between, with their names (`S3 dusk`); **morph** - the position, 0 % at A, 100 % at B
+- **A**, **B**, **C**, **D** - the four scenes the morph goes between, with their names (`S3 dusk`): A and B along the first axis, C and D above them; **morph** - the position across, 0 % at A (and C), 100 % at B (and D); **y** - the position up, 0 % at A and B, 100 % at C and D. With `y` at 0 % the morph goes between A and B alone
 - **scatter** - on or off, its depth and rate, and which settings it moves
 - **G1**-**G4** - each recorder: `empty`, `rec 3.2 s` while it records, `play 2 bars` or `play 5.0 s` while it plays, `stop 5.0 s`
 - **L1**-**L6** - each LFO's destination (`~` when it runs in the engine), depth, and the LFOs its rate and depth follow (`v3 pitch~ 25% <L2`)
@@ -28,7 +28,7 @@ What each row shows:
 
 - **E2** - Move the cursor
 - **K2** - Jump to the next section (after the last, back to the first)
-- **E3** - Change the row: the bank, a macro's value, the morph's scenes and position, scatter's on/off, depth, rate and settings (turn right for on, left for off), a recorder's quantize (free, beat or bar), an LFO's depth, a routing's depth, the input's gain
+- **E3** - Change the row: the bank, a macro's value, the morph's scenes and its position on both axes, scatter's on/off, depth, rate and settings (turn right for on, left for off), a recorder's quantize (free, beat or bar), an LFO's depth, a routing's depth, the input's gain
 - **ALT+E3** - The same in finer steps, where the value is continuous
 - **K3** - On the bank row, the next bank (bank 4 back to 1); on a macro, its targets (below); on scatter's switches, on or off; on a recorder, its next state (record, play, stop, play: [Modulation](../modulation.md#gesture-recorders)); on an LFO, the LFO page with that LFO selected; on a routing, the routing (below)
 - **ALT+E2** on a macro - The same macro of the next bank (turn left for the bank before); the arc's rings and the grids follow

@@ -1,52 +1,59 @@
 -- lib/morph.lua
--- Scene morph (3.4, design §5): the morph, morph_a and morph_b params
--- (the group strata_morph), the plan between the two scenes they name and
--- the clock (S.morph_clock) that applies the morph's latest position. Morph
--- writes params and never recalls: the plan is the two scenes'
--- S.lib.scenes.scene_entries paired by id, each continuous value is set
--- through S.lib.scenes.set_value, the setter a transition's step uses (a
--- registered field's own set, a macro's silent one; a quantized freq
--- snaps), and the discrete entries switch at the crossing through
--- S.lib.scenes.apply_entries' only = "discrete". Every apply writes
--- inside S.lib.engine_sync.deferrable.
--- S.lib.morph holds add_params, plan_ready and MORPH (the tunables).
--- Registers the morph clock's cleanup step, a PSET hook (a PSET load sets
--- the position without applying it) and the "morph clock" invariant.
+-- Scene morph (3.4, design §5, the XY morph of §5.5): the params morph and
+-- morph_y (the position, x and y), morph_a to morph_d (the four corners'
+-- scenes: A at (0, 0), B at (1, 0), C at (0, 1), D at (1, 1)), in the group
+-- strata_morph, the plan over the four scenes they name and the clock
+-- (S.morph_clock) that applies the latest position. Morph writes params and
+-- never recalls: the plan is the scenes' S.lib.scenes.scene_entries paired
+-- by id, each continuous value (the corners' values weighted by the
+-- position) is set through S.lib.scenes.set_value, the setter a
+-- transition's step uses (a registered field's own set, a macro's silent
+-- one; a quantized freq snaps), and the discrete entries switch to the
+-- current corner's through S.lib.scenes.apply_entries' only = "discrete".
+-- At y = 0 it is the morph between A and B, value for value. Every apply
+-- writes inside S.lib.engine_sync.deferrable.
+-- S.lib.morph holds add_params, plan_ready, weights, corner and MORPH (the
+-- tunables). Registers the morph clock's cleanup step, a PSET hook (a PSET
+-- load sets the position without applying it) and the "morph clock"
+-- invariant.
 
 return function(S)
   local M = {}
   local NUM_SCENES = S.constants.NUM_SCENES
 
   -- apply_hz: applies a second at most, while the morph moves;
-  -- hysteresis: the discrete entries switch to B at 0.5 + it and back to A
-  -- at 0.5 - it (epsilon absorbs a position's float error);
-  -- max_values_per_apply: continuous values one apply sets, round robin;
-  -- send_threshold: while the morph moves, a value that moved less than
-  -- this fraction of its param's range since morph last set it is skipped
-  -- (the applies at rest set every value that moved at all)
+  -- hysteresis: the discrete entries switch to another corner when its
+  -- weight leads the current corner's by twice it (at y = 0: to B at
+  -- 0.5 + it, back to A at 0.5 - it; epsilon absorbs a position's float
+  -- error); max_values_per_apply: continuous values one apply sets, round
+  -- robin; send_threshold: while the morph moves, a value that moved less
+  -- than this fraction of its param's range since morph last set it is
+  -- skipped (the applies at rest set every value that moved at all);
+  -- corners: in the order ties go to; min_corners: the valid corners the
+  -- morph needs
   local MORPH = {apply_hz = 10, hysteresis = 0.02, max_values_per_apply = 120, send_threshold = 1 / 1000,
-    epsilon = 1e-9, param_count = 3}
+    epsilon = 1e-9, param_count = 6, corners = {"a", "b", "c", "d"}, min_corners = 2}
   M.MORPH = MORPH
 
   S.morph_clock = nil
 
   -- plan: the plan for the scenes and revisions it was built from (nil
-  -- until first asked). applied: what the morph last set, side "a" or "b"
-  -- (nil: the next apply takes the side by position, as after a plan
+  -- until first asked). applied: what the morph last set, corner "a" to
+  -- "d" (nil: the next apply takes the corner by weight, as after a plan
   -- change), values by param id and the round robin's cursor. moved: a
-  -- position waits for the clock; move_held and move_scene: whether morph
-  -- held the state at the latest move, and the current scene then (a
-  -- recall or fade after the move wins over it); pending: the last apply
-  -- left values for the next one; flashed: the plan's empty endpoint has
-  -- flashed
+  -- position waits for the clock; move_held, move_scene and
+  -- move_takeovers: whether morph held the state at the latest move, the
+  -- current scene then and the scenes' takeover count (a recall or fade
+  -- after the move wins over it); pending: the last apply left values for
+  -- the next one; flashed: the plan's empty corner has flashed
   local state = {plan = nil, applied = {values = {}, cursor = 1}, moved = false, move_held = false, move_scene = 0,
-    pending = false, flashed = false}
+    move_takeovers = 0, pending = false, flashed = false}
 
   local function forget_applied()
-    state.applied = {side = nil, values = {}, cursor = 1}
+    state.applied = {corner = nil, values = {}, cursor = 1}
   end
 
-  -- An entry's identity in both scenes' lists: a param by id, a block by
+  -- An entry's identity in every scene's list: a param by id, a block by
   -- key, a voice state (active, lock, pattern) by key and voice
   local function entry_key(entry)
     if entry.kind == "block" then return "block " .. entry.key end
@@ -65,27 +72,32 @@ return function(S)
     return true
   end
 
-  -- The slot of an endpoint that holds no valid scene, else nil
-  local function empty_endpoint(a, b)
-    for _, slot in ipairs({a, b}) do
-      local scene = S.scenes[slot]
-      if not (scene and scene.populated and validate_scene(scene)) then return slot end
-    end
-    return nil
+  -- Whether a slot holds a valid scene
+  local function valid_slot(slot)
+    local scene = S.scenes[slot]
+    return scene ~= nil and scene.populated and validate_scene(scene)
   end
 
   -- The ramps through 0 (design §10.2): every block with through_zero,
-  -- asked A's value to B's and B's back to A's. The ids it names ramp; the
-  -- switches run at the crossing toward their side
-  local function block_ramps(data_a, data_b)
-    local ids, switches = {}, {a = {}, b = {}}
+  -- asked from each valid corner's value to each other's. The ids it names
+  -- ramp; switches[from][to] run at the crossing from one corner to the
+  -- other
+  local function block_ramps(corners, data)
+    local ids, switches = {}, {}
+    for _, from in ipairs(corners) do
+      switches[from] = {}
+      for _, to in ipairs(corners) do switches[from][to] = {} end
+    end
     for _, record in ipairs(S.registry.scene_blocks or {}) do
       if record.through_zero then
-        for side, ramps in pairs({b = record.through_zero(data_a[record.key], data_b[record.key]),
-            a = record.through_zero(data_b[record.key], data_a[record.key])}) do
-          for _, ramp in ipairs(ramps or {}) do
-            ids[ramp.id] = true
-            if ramp.switch then table.insert(switches[side], ramp.switch) end
+        for _, from in ipairs(corners) do
+          for _, to in ipairs(corners) do
+            if from ~= to then
+              for _, ramp in ipairs(record.through_zero(data[from][record.key], data[to][record.key]) or {}) do
+                ids[ramp.id] = true
+                if ramp.switch then table.insert(switches[from][to], ramp.switch) end
+              end
+            end
           end
         end
       end
@@ -93,13 +105,13 @@ return function(S)
     return ids, switches
   end
 
-  -- A continuous pair of the plan: its param's id and voice, its value in
-  -- A and B, its rounding step (a number param's whole numbers) and the
-  -- move under which it is skipped
-  local function plan_item(entry_a, entry_b)
-    local low, high = param_range(entry_a.id)
-    return {id = entry_a.id, voice = entry_a.voice, a = entry_a.value, b = entry_b.value,
-      step = params:lookup_param(entry_a.id).t == params.tNUMBER and 1 or nil,
+  -- A continuous entry of the plan: its param's id and voice, its value in
+  -- each valid corner, its rounding step (a number param's whole numbers)
+  -- and the move under which it is skipped
+  local function plan_item(entry, values)
+    local low, high = param_range(entry.id)
+    return {id = entry.id, voice = entry.voice, values = values,
+      step = params:lookup_param(entry.id).t == params.tNUMBER and 1 or nil,
       threshold = (high - low) * MORPH.send_threshold}
   end
 
@@ -109,7 +121,7 @@ return function(S)
   -- length's filter stands down (S.scene_recall_in_progress); morph's sets
   -- are a transition step's, with the filter on, so the start goes first
   -- (its action cuts a length the new start leaves no room for) and the
-  -- length, which a blend of two fitting pairs always fits, after it
+  -- length, which a blend of fitting pairs always fits, after it
   local function plan_units(items)
     local LOOP = S.lib.loops.LOOP
     local units, pairs_by_voice = {}, {}
@@ -137,82 +149,173 @@ return function(S)
     return units
   end
 
-  -- The plan between slots a and b: continuous pairs that differ (and the
-  -- ramps' ids), as round robin units, each side's discrete entries that
-  -- differ, in recall order, and the switches. Entries equal in A and B,
-  -- or in one scene only, are left out. ready is false while an endpoint
-  -- is empty or invalid
-  local function build_plan(a, b)
-    local plan = {a = a, b = b, revision_a = S.lib.scenes.revision(a), revision_b = S.lib.scenes.revision(b)}
-    plan.empty = empty_endpoint(a, b)
-    plan.ready = plan.empty == nil
+  -- Each valid corner's entry under every key of an entry, or nil when one
+  -- lacks it or holds it as another kind
+  local function counterparts_of(entry, corners, by_key)
+    local found = {}
+    for _, corner in ipairs(corners) do
+      local counterpart = by_key[corner][entry_key(entry)]
+      if not (counterpart and counterpart.kind == entry.kind) then return nil end
+      found[corner] = counterpart
+    end
+    return found
+  end
+
+  -- The plan over the four slots (by corner): the valid corners, in
+  -- MORPH.corners' order; the continuous entries that differ between them
+  -- (and the ramps' ids, kept whether or not they differ), as round robin
+  -- units in the first valid corner's entry order; each corner's discrete
+  -- entries that differ from another's, in its recall order (first, for an
+  -- apply with no corner applied), and from each other corner's
+  -- (between[from][to], for a crossing); the switches. An entry equal in
+  -- every valid corner, or missing from one, is left out. ready is false
+  -- with fewer than MORPH.min_corners valid corners; empty is then the
+  -- first empty or invalid corner's slot
+  local function build_plan(slots)
+    local plan = {slots = slots, revisions = {}, valid = {}, corners = {}}
+    for _, corner in ipairs(MORPH.corners) do
+      plan.revisions[corner] = S.lib.scenes.revision(slots[corner])
+      if valid_slot(slots[corner]) then
+        plan.valid[corner] = true
+        table.insert(plan.corners, corner)
+      elseif plan.empty == nil then
+        plan.empty = slots[corner]
+      end
+    end
+    plan.ready = #plan.corners >= MORPH.min_corners
     if not plan.ready then return plan end
-    local data_a, data_b = S.scenes[a].data, S.scenes[b].data
-    local lists = {a = S.lib.scenes.scene_entries(data_a), b = S.lib.scenes.scene_entries(data_b)}
-    local by_key = {a = {}, b = {}}
-    for side, list in pairs(lists) do
-      for _, entry in ipairs(list) do by_key[side][entry_key(entry)] = entry end
+    local data, lists, by_key = {}, {}, {}
+    for _, corner in ipairs(plan.corners) do
+      data[corner] = S.scenes[slots[corner]].data
+      lists[corner] = S.lib.scenes.scene_entries(data[corner])
+      by_key[corner] = {}
+      for _, entry in ipairs(lists[corner]) do by_key[corner][entry_key(entry)] = entry end
     end
     local ramp_ids
-    ramp_ids, plan.switches = block_ramps(data_a, data_b)
+    ramp_ids, plan.switches = block_ramps(plan.corners, data)
+    plan.reference = plan.corners[1]
     local items = {}
-    plan.ramps, plan.discrete = {}, {a = {}, b = {}}
-    for _, entry_a in ipairs(lists.a) do
-      local entry_b = by_key.b[entry_key(entry_a)]
-      if entry_b and entry_b.kind == entry_a.kind and entry_a.kind == "continuous" then
-        if ramp_ids[entry_a.id] then
-          table.insert(plan.ramps, plan_item(entry_a, entry_b))
-        elseif entry_a.value ~= entry_b.value then
-          table.insert(items, plan_item(entry_a, entry_b))
+    plan.ramps = {}
+    for _, entry in ipairs(lists[plan.reference]) do
+      local counterparts = entry.kind == "continuous" and counterparts_of(entry, plan.corners, by_key)
+      if counterparts then
+        local values, differs = {}, false
+        for corner, counterpart in pairs(counterparts) do
+          values[corner] = counterpart.value
+          differs = differs or counterpart.value ~= entry.value
+        end
+        if ramp_ids[entry.id] then
+          table.insert(plan.ramps, plan_item(entry, values))
+        elseif differs then
+          table.insert(items, plan_item(entry, values))
         end
       end
     end
     plan.continuous = plan_units(items)
-    for side, other in pairs({a = "b", b = "a"}) do
-      for _, entry in ipairs(lists[side]) do
-        local counterpart = by_key[other][entry_key(entry)]
-        if entry.kind ~= "continuous" and counterpart and counterpart.kind == entry.kind
-            and not same_value(entry.value, counterpart.value) then
-          table.insert(plan.discrete[side], entry)
+    plan.first, plan.between = {}, {}
+    for _, from in ipairs(plan.corners) do plan.between[from] = {} end
+    for _, to in ipairs(plan.corners) do
+      plan.first[to] = {}
+      for _, from in ipairs(plan.corners) do plan.between[from][to] = {} end
+      for _, entry in ipairs(lists[to]) do
+        local counterparts = entry.kind ~= "continuous" and counterparts_of(entry, plan.corners, by_key)
+        if counterparts then
+          local differs = false
+          for _, from in ipairs(plan.corners) do
+            if from ~= to and not same_value(entry.value, counterparts[from].value) then
+              differs = true
+              table.insert(plan.between[from][to], entry)
+            end
+          end
+          if differs then table.insert(plan.first[to], entry) end
         end
       end
     end
     return plan
   end
 
-  -- The plan for the scenes morph_a and morph_b name now, rebuilt when
-  -- either param or either slot's revision changed. A new plan forgets
-  -- what was applied (its first apply takes the side by position) and may
-  -- flash its empty endpoint again
+  -- The plan for the scenes morph_a to morph_d name now, rebuilt when a
+  -- corner's param or its slot's revision changed. A new plan forgets what
+  -- was applied (its first apply takes the corner by weight) and may flash
+  -- its empty corner again
   local function plan_is_current(plan)
-    local a, b = params:get("morph_a"), params:get("morph_b")
-    return plan ~= nil and plan.a == a and plan.b == b and plan.revision_a == S.lib.scenes.revision(a)
-      and plan.revision_b == S.lib.scenes.revision(b)
+    if plan == nil then return false end
+    for _, corner in ipairs(MORPH.corners) do
+      local slot = params:get("morph_" .. corner)
+      if plan.slots[corner] ~= slot or plan.revisions[corner] ~= S.lib.scenes.revision(slot) then return false end
+    end
+    return true
   end
 
   local function current_plan()
     if not plan_is_current(state.plan) then
-      state.plan = build_plan(params:get("morph_a"), params:get("morph_b"))
+      local slots = {}
+      for _, corner in ipairs(MORPH.corners) do slots[corner] = params:get("morph_" .. corner) end
+      state.plan = build_plan(slots)
       state.flashed = false
       forget_applied()
     end
     return state.plan
   end
 
-  -- Both endpoints hold valid scenes
+  -- At least two corners hold valid scenes
   function M.plan_ready()
     return current_plan().ready
   end
 
-  -- The side the discrete entries take at position: by position when none
-  -- was applied (A below 0.5, B from it), else across the hysteresis.
-  -- Returns the side and whether this is a crossing
-  local function side_at(position)
-    local side = state.applied.side
-    if side == nil then return position < 0.5 and "a" or "b", false end
-    if side == "a" and position >= 0.5 + MORPH.hysteresis - MORPH.epsilon then return "b", true end
-    if side == "b" and position <= 0.5 - MORPH.hysteresis + MORPH.epsilon then return "a", true end
-    return side, false
+  -- The corners' weights at the position (x = morph, y = morph_y): A
+  -- (1 - x)(1 - y), B x(1 - y), C (1 - x)y, D xy, an empty or invalid
+  -- corner's shared among the valid ones in proportion (equally where they
+  -- all weigh 0), so they sum to 1; every one 0 with no valid corner
+  local function weights_of(plan)
+    local x, y = params:get("morph"), params:get("morph_y")
+    local raw = {a = (1 - x) * (1 - y), b = x * (1 - y), c = (1 - x) * y, d = x * y}
+    local weights, total = {}, 0
+    for _, corner in ipairs(plan.corners) do total = total + raw[corner] end
+    for _, corner in ipairs(MORPH.corners) do
+      if not plan.valid[corner] then
+        weights[corner] = 0
+      elseif total > 0 then
+        weights[corner] = raw[corner] / total
+      else
+        weights[corner] = 1 / #plan.corners
+      end
+    end
+    return weights
+  end
+
+  -- The weights at the position now, a, b, c, d
+  function M.weights()
+    local weights = weights_of(current_plan())
+    return weights.a, weights.b, weights.c, weights.d
+  end
+
+  -- The corner the discrete entries take at these weights, and whether it
+  -- is a crossing. With none applied: the largest weight, a tie going to
+  -- the later corner (at y = 0, A below 0.5 and B from it). Else another
+  -- corner once its weight leads the current one's by twice the
+  -- hysteresis (the largest, a tie going to the earlier: a, b, c, d)
+  local function corner_at(plan, weights)
+    local current, best = state.applied.corner, nil
+    if current == nil then
+      for index = #plan.corners, 1, -1 do
+        local corner = plan.corners[index]
+        if best == nil or weights[corner] > weights[best] + MORPH.epsilon then best = corner end
+      end
+      return best, false
+    end
+    for _, corner in ipairs(plan.corners) do
+      if corner ~= current and (best == nil or weights[corner] > weights[best] + MORPH.epsilon) then best = corner end
+    end
+    if best and weights[best] - weights[current] >= 2 * MORPH.hysteresis - MORPH.epsilon then return best, true end
+    return current, false
+  end
+
+  -- The current discrete corner, "a" to "d": the one the morph applied, or
+  -- the next apply takes at the position now ("a" with no valid corner)
+  function M.corner()
+    local plan = current_plan()
+    return corner_at(plan, weights_of(plan)) or state.applied.corner or MORPH.corners[1]
   end
 
   local function rounded(item, value)
@@ -220,22 +323,36 @@ return function(S)
     return value
   end
 
-  -- A + position x (B - A), as a transition's step (util.linlin); a ramp
-  -- A x (1 - 2 position) on A's side and B x (2 position - 1) on B's, 0
-  -- until its side has switched
-  local function blend_value(item, position)
-    return rounded(item, util.linlin(0, 1, item.a, item.b, position))
+  -- The weighted sum of the corners' values, as the first valid corner's
+  -- value plus each other's weighted difference from it (at y = 0, A +
+  -- x (B - A), a transition step's arithmetic); a corner of weight 1 gives
+  -- its own value exactly
+  local function blend_value(plan, item, weights)
+    local base = item.values[plan.reference]
+    local value = base
+    for _, corner in ipairs(plan.corners) do
+      local weight = weights[corner]
+      if weight == 1 then return rounded(item, item.values[corner]) end
+      if corner ~= plan.reference then value = value + weight * (item.values[corner] - base) end
+    end
+    return rounded(item, value)
   end
 
-  local function ramp_value(item, side, position)
-    if side == "a" then return rounded(item, item.a * math.max(0, 1 - 2 * position)) end
-    return rounded(item, item.b * math.max(0, 2 * position - 1))
+  -- A ramp through 0: the current corner's value times its lead over the
+  -- largest other weight (at y = 0, A x (1 - 2x) on A's side and
+  -- B x (2x - 1) on B's), 0 where two corners weigh the same
+  local function ramp_value(plan, item, corner, weights)
+    local others = 0
+    for _, other in ipairs(plan.corners) do
+      if other ~= corner and weights[other] > others then others = weights[other] end
+    end
+    return rounded(item, item.values[corner] * math.max(0, weights[corner] - others))
   end
 
   -- Whether a value is due: never set by this plan, or moved since morph
   -- set it, by at least its threshold while the morph moves (exact false)
   -- and by anything at rest (exact true), so a morph at rest lands every
-  -- value on its blend (at 0 and 1, the scene's own)
+  -- value on its blend (at a corner, the scene's own)
   local function due(item, value, exact)
     local last = state.applied.values[item.id]
     if last == nil then return true end
@@ -248,14 +365,14 @@ return function(S)
   -- together), then the plan's units round robin from the cursor, a unit
   -- whole or not at all. Returns the writes and whether values are left
   -- for the next apply
-  local function continuous_writes(plan, side, position, exact)
+  local function continuous_writes(plan, corner, weights, exact)
     local writes, more = {}, false
     local function add(item, value)
       table.insert(writes, {item = item, value = value})
       state.applied.values[item.id] = value
     end
     for _, item in ipairs(plan.ramps) do
-      local value = ramp_value(item, side, position)
+      local value = ramp_value(plan, item, corner, weights)
       if due(item, value, exact) then
         if #writes >= MORPH.max_values_per_apply then more = true else add(item, value) end
       end
@@ -264,7 +381,7 @@ return function(S)
     for _ = 1, #units do
       local unit, values, unit_due = units[cursor], {}, false
       for index, item in ipairs(unit.members) do
-        values[index] = blend_value(item, position)
+        values[index] = blend_value(plan, item, weights)
         unit_due = unit_due or due(item, values[index], exact)
       end
       if unit_due then
@@ -282,15 +399,15 @@ return function(S)
   -- A plan rebuilt since the last apply, or none applied, waits for a move
   local function rest_due()
     local plan = state.plan
-    local side = state.applied.side
-    if not (side and plan and plan.ready and plan_is_current(plan)) then return false end
-    local position = params:get("morph")
+    local corner = state.applied.corner
+    if not (corner and plan and plan.ready and plan_is_current(plan)) then return false end
+    local weights = weights_of(plan)
     for _, item in ipairs(plan.ramps) do
-      if due(item, ramp_value(item, side, position), true) then return true end
+      if due(item, ramp_value(plan, item, corner, weights), true) then return true end
     end
     for _, unit in ipairs(plan.continuous) do
       for _, item in ipairs(unit.members) do
-        if due(item, blend_value(item, position), true) then return true end
+        if due(item, blend_value(plan, item, weights), true) then return true end
       end
     end
     return false
@@ -302,13 +419,15 @@ return function(S)
     for _, write in ipairs(writes) do S.lib.scenes.set_value(write.item.id, write.value) end
   end
 
-  -- Write the plan at position: at a crossing the ramps go to 0, then the
-  -- switches run; on a new side its discrete entries switch (recall order,
-  -- apply_entries); then the continuous values. Returns whether values
-  -- are left
-  local function write_position(plan, position, exact)
-    local side, crossed = side_at(position)
-    if side ~= state.applied.side then
+  -- Write the plan at these weights: at a crossing the ramps go to 0,
+  -- then the switches from the old corner to the new run; on a new corner
+  -- its discrete entries switch (recall order, apply_entries: those that
+  -- differ from the old corner's, or with none applied, from any other's);
+  -- then the continuous values. Returns whether values are left
+  local function write_position(plan, weights, exact)
+    local corner, crossed = corner_at(plan, weights)
+    local from = state.applied.corner
+    if corner ~= from then
       if crossed then
         local zeros = {}
         for _, item in ipairs(plan.ramps) do
@@ -318,12 +437,13 @@ return function(S)
           end
         end
         set_values(zeros)
-        for _, switch in ipairs(plan.switches[side]) do switch() end
+        for _, switch in ipairs(plan.switches[from][corner]) do switch() end
       end
-      state.applied.side = side
-      if #plan.discrete[side] > 0 then S.lib.scenes.apply_entries(plan.discrete[side], {only = "discrete"}) end
+      state.applied.corner = corner
+      local entries = crossed and plan.between[from][corner] or plan.first[corner]
+      if #entries > 0 then S.lib.scenes.apply_entries(entries, {only = "discrete"}) end
     end
-    local writes, more = continuous_writes(plan, side, position, exact)
+    local writes, more = continuous_writes(plan, corner, weights, exact)
     set_values(writes)
     return more
   end
@@ -335,19 +455,21 @@ return function(S)
   end
 
   -- A recall or a fade came after the latest move: something took over
-  -- that the move did not see (morph held the state at the move, or the
-  -- current scene changed since). Such a move is dropped, never applied
-  -- over it
+  -- that the move did not see (morph held the state at the move but no
+  -- longer does, the current scene changed since, or a recall or fade
+  -- started since, even of the scene current at the move, #584). Such a
+  -- move is dropped, never applied over it
   local function move_overtaken()
-    return taken_over() and (state.move_held or S.current_scene ~= state.move_scene)
+    return taken_over() and (state.move_held or S.current_scene ~= state.move_scene
+      or S.lib.scenes.takeovers() ~= state.move_takeovers)
   end
 
-  -- One apply of the morph's position (exact: at rest, below). An empty or
-  -- invalid endpoint flashes once per plan and changes nothing. Otherwise
-  -- it cancels a running transition, writes inside deferrable, leaves no
-  -- scene current and redraws. A move made after a recall starts again
-  -- from the recalled state, as after a plan change. Returns whether
-  -- values are left
+  -- One apply of the morph's position (exact: at rest, below). With fewer
+  -- than two valid corners it flashes the first empty one once per plan
+  -- and changes nothing. Otherwise it cancels a running transition, writes
+  -- inside deferrable, leaves no scene current and redraws. A move made
+  -- after a recall starts again from the recalled state, as after a plan
+  -- change. Returns whether values are left
   local function apply_position(exact)
     local plan = current_plan()
     if not plan.ready then
@@ -359,8 +481,8 @@ return function(S)
     end
     if taken_over() then forget_applied() end
     cancel_scene_transition()
-    local position, more = params:get("morph"), false
-    S.lib.engine_sync.deferrable(function() more = write_position(plan, position, exact) end)
+    local weights, more = weights_of(plan), false
+    S.lib.engine_sync.deferrable(function() more = write_position(plan, weights, exact) end)
     S.current_scene = 0
     request_redraw()
     grid_redraw()
@@ -415,27 +537,36 @@ return function(S)
     end)
   end
 
+  -- The morph and morph_y actions: mark a move (and whether morph held the
+  -- state, the current scene and the takeover count) and start the clock
+  local function note_move()
+    state.moved = true
+    state.move_held, state.move_scene = not taken_over(), S.current_scene
+    state.move_takeovers = S.lib.scenes.takeovers()
+    start_clock()
+  end
+
   -- The morph's own params, in the group strata_morph (the menu record
-  -- "morph" of lib/params_setup.lua adds them). None is a scene field, an
-  -- LFO destination or a macro target
+  -- "morph" of lib/params_setup.lua adds them): the position's x, the four
+  -- corners' scenes, the position's y. None is a scene field, an LFO
+  -- destination or a macro target
   local function percent(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end
 
   function M.add_params()
     params:add_group("strata_morph", "morph", MORPH.param_count)
     params:add{type = "control", id = "morph", name = "morph",
-      controlspec = controlspec.new(0, 1, "lin", 0, 0, ""), formatter = percent,
-      action = function()
-        state.moved = true
-        state.move_held, state.move_scene = not taken_over(), S.current_scene
-        start_clock()
-      end}
-    params:add{type = "number", id = "morph_a", name = "morph A", min = 1, max = NUM_SCENES, default = 1}
-    params:add{type = "number", id = "morph_b", name = "morph B", min = 1, max = NUM_SCENES, default = 2}
+      controlspec = controlspec.new(0, 1, "lin", 0, 0, ""), formatter = percent, action = note_move}
+    for index, corner in ipairs(MORPH.corners) do
+      params:add{type = "number", id = "morph_" .. corner, name = "morph " .. corner:upper(), min = 1,
+        max = NUM_SCENES, default = index}
+    end
+    params:add{type = "control", id = "morph_y", name = "morph y",
+      controlspec = controlspec.new(0, 1, "lin", 0, 0, ""), formatter = percent, action = note_move}
   end
 
-  -- A PSET load sets the morph (its action starts the clock) with the
-  -- PSET's own values: nothing applies, and the next move starts again
-  -- from the loaded state
+  -- A PSET load sets the morph and morph_y (their actions start the clock)
+  -- with the PSET's own values: nothing applies, and the next move starts
+  -- again from the loaded state
   S.register_pset_hook({name = "morph", read = function()
     stop_clock()
     forget_applied()
