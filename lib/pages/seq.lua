@@ -263,15 +263,9 @@ return function(S)
     return math.min(value, high)
   end
 
-  -- The step editor, while it is open: {voice, step, port, edited,
-  -- alt_k2_at (the time ALT+K2 went down on it, until its release)}
+  -- The step editor, while it is open: {voice, step, port, alt_k2_at (the
+  -- time ALT+K2 went down on it, until its release)}
   local editor = nil
-
-  -- An edit of the editor's voice and step from any control while it is
-  -- open: the grid reads it (step_editor_edited) to consume its key
-  local function note_editor_edit(voice_idx, step)
-    if editor and editor.voice == voice_idx and editor.step == step then editor.edited = true end
-  end
 
   -- True exactly while an action of the open step editor runs a pattern
   -- replacement (ruling 71): the grids read it (step_editor_replacing) in
@@ -322,9 +316,7 @@ return function(S)
     else
       return false
     end
-    local changed = step_value(voice_idx, step, key) ~= before
-    if changed then note_editor_edit(voice_idx, step) end
-    return changed
+    return step_value(voice_idx, step, key) ~= before
   end
 
   -- The edit view ----------------------------------------------------------
@@ -691,33 +683,16 @@ return function(S)
     alt_hold = function() reset_row(views.editor) end,
   }
 
-  -- What the editor shows and edits, as one string: an encoder turn that
-  -- changes it is an edit (step_editor_edited)
-  local function editor_signature()
-    local voice_idx, step = editor.voice, editor.step
-    local rows, cursor = sync_view(views.editor)
-    local parts = {step, cursor}
-    for _, row in ipairs(rows) do
-      if row.spec then
-        parts[#parts + 1] = row.param_id and string.format("%.17g", params:get(row.param_id))
-          or row_text(voice_idx, step, row)
-      end
-    end
-    for _, level in ipairs(S.patterns[voice_idx]) do parts[#parts + 1] = level end
-    return table.concat(parts, ",")
-  end
-
   local editor_owner
 
+  -- ALT+E2 its step; E2 and E3 as the edit view's
   local function editor_enc(n, d)
     if editor == nil then return end
-    local before = editor_signature()
     if n == 2 and S.alt_held then
       editor.step = util.clamp(editor.step + d, 1, PATTERN_LENGTH)
     else
       edit_enc(views.editor, n, d)
     end
-    if editor and editor_signature() ~= before then editor.edited = true end
   end
 
   -- K2 closes the editor (the page shows again), K3 the step on or off (on
@@ -797,7 +772,7 @@ return function(S)
   function M.open_step_editor(voice_idx, step, port)
     if not valid_place(voice_idx, step) then return false end
     if editor then S.lib.ui_modal.pop(editor_owner) end
-    editor = {voice = voice_idx, step = step, port = port, edited = false}
+    editor = {voice = voice_idx, step = step, port = port}
     forget_arc_ticks()
     S.lib.ui_modal.push(editor_owner)
     return true
@@ -816,12 +791,6 @@ return function(S)
   function M.step_editor()
     if editor == nil then return nil end
     return {voice = editor.voice, step = editor.step, port = editor.port}
-  end
-
-  -- Whether an encoder or ring changed something (a value, the pattern,
-  -- the row or the step) since the editor opened; false while closed
-  function M.step_editor_edited()
-    return editor ~= nil and editor.edited
   end
 
   -- Whether an action of the open step editor is running a pattern

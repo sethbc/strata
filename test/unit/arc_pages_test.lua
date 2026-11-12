@@ -1259,7 +1259,6 @@ test("the step editor's rings edit pos, pitch, size and prob, and with ALT ratch
   assert_equal(S.patterns[2][7], 5, "100 ticks: level 5")
   assert_equal(S.selected_voice, 1, "SEQ's ring 4 is not reached")
   key(1, 0)
-  assert_true(S.lib.pages_seq.step_editor_edited(), "a ring's edit is an edit")
   -- the rings: a set lock bright at param_value_fraction, an off one dim at
   -- the stored value
   arc_redraw()
