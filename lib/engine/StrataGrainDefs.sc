@@ -188,7 +188,8 @@
     //      gain, the sends, the mirror and the tap are the voice's mix stage
     //      (StrataMix.sc): one Out writes this synth's path.
     // 3.4's fast modulation offsets pitch and size first (fastMod, the
-    // modulation area's hook, from the Event's fastMod: neutral in Wave 0).
+    // modulation area's hook, from the Event's fastMod: the block's
+    // offsets, StrataModulation.sc).
     // Returns (sig: the stereo signal, fade: its fade).
     grainSignal { arg controls, reader;
         var c = this.fastMod(controls), env, modSigs, rateMod, bendRate, grainMode, mode, trig;
