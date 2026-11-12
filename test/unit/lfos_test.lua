@@ -427,6 +427,31 @@ test("a tempo change resends a clocked engine LFO's rate", function()
   assert_near(calls[1].args[5], 0.25, 1e-9, "at 60 BPM: 0.25 Hz")
 end)
 
+-- Review Focus 1: a tempo change reaches every clocked engine LFO in the
+-- step that sees it, whatever waits in the round robin
+test("a tempo change resends every clocked engine LFO's rate in its step, ahead of a full round robin", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  for n, label in ipairs({ "v3 pitch", "v4 size", "v5 vfilt" }) do
+    params:set(lfo_id(n, "mode"), option_index(lfo_id(n, "mode"), "clocked"))
+    params:set(lfo_id(n, "division"), option_index(lfo_id(n, "division"), "1"))
+    params:set(lfo_id(n, "dest"), destination_index(label)); params:set(lfo_id(n), 1)
+  end
+  -- 12 keys due every step: the round robin is full
+  lfos.on_step(function()
+    for k = 1, 12 do lfos.mark_due("probe " .. k, function() end) end
+  end)
+  lfo_step(context, 3)
+  context.clear_engine_calls()
+  params:set("clock_tempo", 60)
+  lfo_step(context)
+  for n = 1, 3 do
+    local calls = calls_with(context, "setFastLfo", n - 1)
+    assert_equal(#calls, 1, "LFO " .. n .. "'s new rate goes out in the step")
+    assert_near(calls[1].args[5], 0.25, 1e-9, "LFO " .. n .. " at 60 BPM: 0.25 Hz")
+  end
+end)
+
 test("the destination list keeps its indices", function()
   load_strata({ before_init = function()
     local_value("S").register_lfo_global_destination("probe", "delay_time")
@@ -515,6 +540,71 @@ test("a 3.3 PSET's LFO lines are imported once", function()
   assert_equal(params:get(lfo_id(1, "depth")), 40, "the PSET's own depth")
   assert_equal(params:string(lfo_id(1, "shape")), "s&h", "and its own shape")
   for _, line in ipairs(context.printed) do assert_true(line ~= "imported 3.3 LFO settings", "nothing imported") end
+end)
+
+-- A 3.3 PSET holds three LFOs and no inputs: what it cannot hold goes to its
+-- default, so the PSET plays as it did in 3.3; a silent read stays silent
+test("a 3.3 PSET sets every LFO param it cannot hold to its default, and a silent read runs no action", function()
+  local context = load_strata(); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "old.pset"
+  h.write_text(path, table.concat({ '"strata_lfo1_dest": ' .. destination_index("v3 pitch"), '"lfo_1": 2',
+    '"lfo_shape_1": 1', '"lfo_mode_1": 2', '"lfo_free_1": 4', '"lfo_depth_1": 40', '"lfo_offset_1": 0',
+    '"lfo_phase_1": 0', '"lfo_2": 1', '"lfo_shape_2": 2', '"lfo_3": 1', '"lfo_shape_3": 3', "" }, "\n"))
+  -- the session's own settings the PSET cannot hold
+  for n = 4, 6 do
+    params:set(lfo_id(n, "dest"), destination_index("rev mix")); params:set(lfo_id(n, "shape"), 8)
+    params:set(lfo_id(n, "depth"), 70); params:set(lfo_id(n, "rate"), 3); params:set(lfo_id(n, "phase"), 40)
+    params:set(lfo_id(n, "mode"), 2); params:set(lfo_id(n), 1)
+  end
+  for n = 2, 3 do
+    params:set(lfo_id(n, "rate_mod"), 2); params:set(lfo_id(n, "rate_mod_amt"), 30)
+    params:set(lfo_id(n, "depth_mod"), 2); params:set(lfo_id(n, "depth_mod_amt"), -30)
+  end
+  params:read(path)
+  for n = 4, 6 do
+    for _, field in ipairs({ "dest", "shape", "mode", "rate", "division", "depth", "offset", "phase", "rate_mod",
+      "rate_mod_amt", "depth_mod", "depth_mod_amt" }) do
+      assert_near(params:get(lfo_id(n, field)), param_default(lfo_id(n, field)), 1e-9, "LFO " .. n .. " " .. field)
+    end
+    assert_equal(params:get(lfo_id(n)), 0, "LFO " .. n .. " off")
+  end
+  for n = 1, 3 do
+    for _, field in ipairs({ "rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt" }) do
+      assert_near(params:get(lfo_id(n, field)), param_default(lfo_id(n, field)), 1e-9, "LFO " .. n .. " " .. field)
+    end
+  end
+  assert_equal(params:get(lfo_id(1)), 1, "LFO 1 imported on")
+  -- a silent read sets the params and runs no action: no engine LFO starts
+  params:set(lfo_id(1), 0)
+  params:set(lfo_id(2, "rate_mod"), 2)
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get(lfo_id(1)), 1, "imported on, silently")
+  assert_equal(params:get(lfo_id(2, "rate_mod")), 1, "its default, silently")
+  assert_equal(#context.calls_named("setFastLfo") + #context.calls_named("syncFastLfo"), 0,
+    "a silent read starts no engine LFO")
+  -- a read that is not silent starts it
+  params:set(lfo_id(1), 0)
+  context.clear_engine_calls()
+  params:read(path)
+  assert_equal(#context.calls_named("setFastLfo"), 1, "a plain read runs the on action")
+  -- a running Lua LFO a silent read turns off lets its destination go at
+  -- the next step (its action, which restores at once, did not run)
+  params:set("reverb_mix", 0.3)
+  params:set(lfo_id(4, "dest"), destination_index("rev mix")); params:set(lfo_id(4), 1)
+  params:set(lfo_id(4, "shape"), option_index(lfo_id(4, "shape"), "square")); params:set(lfo_id(4, "rate"), 0.003)
+  lfo_step(context)
+  assert_equal(local_value("lfo_last_dest")[4], "reverb_mix", "LFO 4 holds rev mix")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get(lfo_id(4)), 0, "off, silently")
+  assert_equal(#context.calls_named("setReverb"), 0, "nothing sent by the silent read")
+  lfo_step(context)
+  local restores = context.calls_named("setReverb")
+  assert_equal(#restores, 1, "the next step restores rev mix")
+  assert_near(restores[1].args[1], 0.3, 1e-9, "to its stored value")
+  assert_equal(local_value("lfo_last_dest")[4], nil, "and LFO 4 holds nothing")
 end)
 
 test("a format 5 scene's LFO fields migrate, and LFOs 4-6 default to off", function()
@@ -641,6 +731,59 @@ test("a Lua-run LFO restores the stored value when turned off, at depth 0 and on
   context.clear_engine_calls(); params:set(lfo_id(1), 0)
   assert_equal(#context.calls_named("setDelay"), 1, "off restores")
   assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9)
+end)
+
+test("a full-depth LFO clamps its destination to both ends of the range (#50)", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("delay_feedback", 0.95)              -- dly fdbk, 0-0.95
+  hold_lfo(1, "dly fdbk", 100, true)              -- value -1: 0.475 sent
+  lfo_step(context)
+  params:set(lfo_id(1, "phase"), 0)               -- value +1: 0.95 + 0.475
+  context.clear_engine_calls(); lfo_step(context)
+  assert_near(context.calls_named("setDelay")[1].args[2], 0.95, 1e-9, "clamped at the top of the range")
+  params:set("delay_feedback", 0); params:set(lfo_id(1, "phase"), 50)   -- value -1: 0 - 0.475
+  context.clear_engine_calls(); lfo_step(context)
+  local calls = context.calls_named("setDelay")
+  assert_near(calls[#calls].args[2], 0, 1e-9, "clamped at the bottom of the range")
+  assert_near(params:get("delay_feedback"), 0, 1e-9, "param value untouched")
+end)
+
+test("a restore is sent even when the engine already holds the stored value", function()
+  for _, ending in ipairs({ "off", "depth 0" }) do
+    local context = load_strata(); finish_startup(context)
+    params:set("filter_mix", 0.5)
+    -- value +1 at depth 50 with an offset of -25: m = 0.5 - 0.5 = 0, so the
+    -- engine keeps the stored 0.5 while the LFO holds the destination
+    hold_lfo(1, "filt mix", 50); params:set(lfo_id(1, "offset"), -25)
+    context.clear_engine_calls(); lfo_step(context, 3)
+    assert_equal(#context.calls_named("setFilter"), 0, "nothing moved, nothing sent")
+    assert_equal(local_value("lfo_last_dest")[1], "filter_mix", "the LFO holds the destination")
+    context.clear_engine_calls()
+    if ending == "off" then params:set(lfo_id(1), 0) else params:set(lfo_id(1, "depth"), 0) end
+    local calls = context.calls_named("setFilter")
+    assert_equal(#calls, 1, ending .. ": the restore sends")
+    assert_near(calls[1].args[4], 0.5, 1e-9, ending .. ": the stored value")
+  end
+end)
+
+-- The on/off param's bang (a PSET or scene that sets it on again) restarts
+-- the phase, in Lua and in the engine (#251)
+test("setting a running LFO on again restarts its phase, and an engine LFO's with it (#251)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "phase"), 10); params:set(lfo_id(1), 1)
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  params:set(lfo_id(2, "rate"), 0.25); params:set(lfo_id(2), 1)
+  context.clock.run_for(1)
+  assert_near(lfos.phase(1), 0.35, 1e-6, "the phase has moved")
+  params:lookup_param(lfo_id(1)):bang()
+  assert_near(lfos.phase(1), 0.1, 1e-9, "a bang restarts it at the phase param")
+  context.clear_engine_calls()
+  params:lookup_param(lfo_id(2)):bang()
+  local syncs = calls_with(context, "syncFastLfo", 1)
+  assert_equal(#syncs, 1, "the engine LFO is synced to the restart")
+  assert_near(syncs[1].args[2], 0, 1e-9, "at its start")
+  assert_equal(#context.calls_named("setFastLfo"), 0, "its node is kept")
 end)
 
 test("main destination follows a voice's source and restores the old param", function()
@@ -817,13 +960,28 @@ test("an error inside an LFO step is printed once and the LFOs keep stepping (#5
     failure = nil
     context.clear_engine_calls(); lfo_step(context)
     assert_true(#context.calls_named("setFilter") >= 1, "the next good step of LFO 1 sends")
+    local function reports()
+      local printed = 0
+      for _, line in ipairs(context.printed) do
+        if line:find("strata: LFO 1 step failed: ", 1, true) == 1 then printed = printed + 1 end
+      end
+      return printed
+    end
+    failure = "lfo step boom"
+    lfo_step(context, 2)
+    assert_equal(reports(), 2, "the same error after a good step prints again, once")
+    failure = "another lfo boom"
+    lfo_step(context)
+    assert_equal(reports(), 3, "a different message prints at once")
   end)
   destination.resolve = real_resolve
   if not ok then error(problem, 0) end
-  h.claim_script_errors(context, 1, "strata: LFO 1 step failed: ", "lfo step boom")
+  h.claim_script_errors(context, 3, "strata: LFO 1 step failed: ", "another lfo boom")
 end)
 
-test("cleanup stops the clock and the engine LFOs and restores the Lua destinations", function()
+-- norns frees the engine before cleanup() (#461): the step stops the clock;
+-- an engine LFO's node is gone with the engine, so nothing stops it
+test("cleanup stops the clock and sends no stopFastLfo", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   assert_true(S.lfo_clock ~= nil, "the clock runs from the start step")
@@ -832,9 +990,11 @@ test("cleanup stops the clock and the engine LFOs and restores the Lua destinati
   lfo_step(context)
   context.clear_engine_calls(); cleanup()
   assert_equal(S.lfo_clock, nil, "the clock is canceled")
-  assert_near(context.calls_named("setFilter")[1].args[1], 800, 1e-6, "the Lua destination restored")
-  assert_equal(#calls_with(context, "stopFastLfo", 1), 1, "the engine LFO stopped")
+  assert_equal(#context.calls_named("stopFastLfo"), 0, "no stopFastLfo: the engine is gone by then")
   assert_equal(context.clock.pending_count(), 0, "no clock left")
+  context.clear_engine_calls()
+  context.clock.run_for(1)
+  assert_equal(#context.calls_named("setFastLfo") + #context.calls_named("setFilter"), 0, "nothing steps after cleanup")
 end)
 
 -- #316: every control param with a sender reaches the engine only through
@@ -899,6 +1059,34 @@ test("every control param with a sender sends its LFO-offset value; one without 
   end
   assert_true(checked > 200, "many control params have senders: " .. checked)
   S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+end)
+
+-- AGENTS.md: a control param's action never calls the engine; an engine
+-- LFO's control params reach it at the next step
+test("an engine-run LFO's rate, depth, offset, phase and amounts call no engine command in their sets", function()
+  local context = load_strata(); finish_startup(context)
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch")); params:set(lfo_id(2), 1)
+  params:set(lfo_id(2, "rate_mod"), 2); params:set(lfo_id(2, "depth_mod"), 2)
+  lfo_step(context)
+  local edits = { { "rate", 2, "rate", 2 }, { "depth", 60, "depth", 0.6 }, { "offset", 20, "offset", 0.4 },
+    { "phase", 30 }, { "rate_mod_amt", 40 }, { "depth_mod_amt", -40 } }
+  for _, edit in ipairs(edits) do
+    context.clear_engine_calls()
+    params:set(lfo_id(2, edit[1]), edit[2])
+    assert_equal(#context.engine_calls, 0, edit[1] .. ": no engine command inside the set")
+    lfo_step(context)
+    local calls = context.calls_named("setFastLfo")
+    if edit[1] == "phase" then
+      local syncs = calls_with(context, "syncFastLfo", 1)
+      assert_equal(#syncs, 1, "phase: the next step syncs")
+      assert_near(syncs[1].args[2], local_value("S").lib.lfos.phase(2), 1e-6, "to the new phase")
+    else
+      assert_equal(#calls, 1, edit[1] .. ": the next step sends it")
+    end
+    if edit[3] == "rate" then assert_near(calls[1].args[5], edit[4], 1e-9, "the new rate") end
+    if edit[3] == "depth" then assert_near(calls[1].args[6], edit[4], 1e-9, "the new depth") end
+    if edit[3] == "offset" then assert_near(calls[1].args[7], edit[4], 1e-9, "the new offset") end
+  end
 end)
 
 test("an edit of the LFO shape, rate, division or phase ends the randomize undo (#557)", function()
@@ -977,6 +1165,15 @@ test("the LFO clock invariant holds from the start step to cleanup", function()
   S.lfo_clock = nil
   assert_true(check() ~= nil, "a lost clock breaks it")
   S.lfo_clock = clock_id
+  -- a clock canceled (or ended) behind the module's back, its id still kept
+  clock.cancel(clock_id)
+  local broken = check()
+  assert_true(broken ~= nil and tostring(broken):find("not running", 1, true) ~= nil,
+    "a canceled clock whose id is still in S.lfo_clock breaks it: " .. tostring(broken))
+  -- the module's own stop leaves a state it accepts
+  S.lib.lfos.stop_clock()
+  assert_equal(S.lfo_clock, nil, "stop_clock forgets the clock")
+  assert_equal(check(), nil, "stopped by the module: it holds")
   cleanup()
   assert_equal(check(), nil, "it holds after cleanup")
 end)

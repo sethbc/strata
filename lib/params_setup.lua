@@ -231,12 +231,13 @@ return function(S)
   -- norns' three PSET actions (lua/core/paramset.lua), installed by the
   -- master record: number is what norns passes, the PSET's two-digit
   -- number ("01") or nil for one read or written by path. A read migrates
-  -- the PSET first (M.migrate_read_pset), then runs the hooks. norns clears
+  -- the PSET first (M.migrate_read_pset), then runs the hooks, passing on
+  -- the read's silent flag (a hook that sets params honors it). norns clears
   -- the three with the script's params, so no cleanup step is needed
   function pset.install_actions()
     params.action_read = function(filename, silent, number)
       M.migrate_read_pset(filename, silent)
-      run_pset_hooks("read", filename, number, filename)
+      run_pset_hooks("read", filename, number, filename, silent)
     end
     params.action_write = function(filename, name, number) run_pset_hooks("write", filename, number) end
     params.action_delete = function(filename, name, number) run_pset_hooks("delete", filename, number) end

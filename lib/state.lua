@@ -387,9 +387,10 @@ return function()
   end
 
   -- A PSET hook (lib/params_setup.lua runs it): {name, write = fn(path_base,
-  -- number), read = fn(path_base, number, pset_path), delete =
+  -- number), read = fn(path_base, number, pset_path, silent), delete =
   -- fn(path_base, number)}, each function optional; path_base is the PSET's
-  -- path without .pset, number norns' two-digit string or nil
+  -- path without .pset, number norns' two-digit string or nil, silent the
+  -- read's own flag
   function M.register_pset_hook(record)
     local kind = "register_pset_hook"
     require_open("pset_hooks", kind)

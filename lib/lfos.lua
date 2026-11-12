@@ -438,9 +438,11 @@ return function(S)
     local st = state[n]
     local id = lfo_destination_id(n)
     -- a "main" destination re-resolves to another param when the voice's
-    -- source changes: give the old one back first
-    if id ~= S.lfo_last_dest[n] then restore_lfo_destination(n) end
-    if not id or params:get(param_id(n, "depth")) == 0 then return end
+    -- source changes: give the old one back first (and at depth 0: a silent
+    -- read sets the depth without its action's restore)
+    local depth = params:get(param_id(n, "depth"))
+    if id ~= S.lfo_last_dest[n] or depth == 0 then restore_lfo_destination(n) end
+    if not id or depth == 0 then return end
     S.lfo_last_dest[n] = id
     S.lfo_scaled[n] = st.value * st.depth / 100 + 2 * params:get(param_id(n, "offset")) / 100
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
@@ -466,7 +468,7 @@ return function(S)
   local function engine_want(n)
     local st, fast = state[n], destination_of(n).fast
     return {voice = fast.voice, destination = fast.destination, shape = params:get(param_id(n, "shape")) - 1,
-      rate = st.rate, depth = st.depth / 100,
+      rate = st.rate, depth = st.depth / 100, base = st.base,
       offset = util.clamp(2 * params:get(param_id(n, "offset")) / 100, -2, 2)}
   end
 
@@ -476,11 +478,20 @@ return function(S)
     queue.due[engine_key(n)] = nil
   end
 
+  -- Whether a clocked LFO's base rate (its division at the tempo) moved past
+  -- engine_rate_threshold since the engine got it: a tempo change, sent in
+  -- the step that sees it, ahead of the round robin (Review Focus 1)
+  local function tempo_moved(n, want, sent)
+    return is_clocked(n) and sent.base ~= nil and want.base ~= nil
+      and math.abs(want.base - sent.base) > sent.base * LFO.engine_rate_threshold
+  end
+
   -- Bring the engine to LFO n's settings: a start, a stop, a new voice,
-  -- destination or shape, or a hand edit (edited) at once; a modulated rate
-  -- past engine_rate_threshold or depth past send_threshold through the
-  -- round robin; then the sync a start, a shape or phase change or a bar
-  -- asked for
+  -- destination or shape, a hand edit (edited) or a clocked LFO's new tempo
+  -- at once, outside the round robin (at most one send per LFO a step); a
+  -- modulated rate past engine_rate_threshold or depth past send_threshold
+  -- through the round robin; then the sync a start, a restart, a shape or
+  -- phase change or a bar asked for
   local function reconcile_engine(n)
     local st = state[n]
     if not engine_playing(n) then
@@ -491,7 +502,7 @@ return function(S)
     end
     local want, sent = engine_want(n), st.engine
     if not sent or st.edited or want.voice ~= sent.voice or want.destination ~= sent.destination
-      or want.shape ~= sent.shape then
+      or want.shape ~= sent.shape or tempo_moved(n, want, sent) then
       if not sent or want.shape ~= sent.shape then st.sync_due = true end
       send_fast_lfo(n, want)
       st.edited = false
@@ -532,6 +543,8 @@ return function(S)
     local st = state[n]
     if not is_on(n) then
       st.value = 0
+      if S.lfo_last_dest[n] then restore_lfo_destination(n) end
+      if st.engine then reconcile_engine(n) end
       return
     end
     local previous = st.phase
@@ -592,6 +605,17 @@ return function(S)
   local clock_runs = false
   S.lfo_clock = nil
 
+  -- Stop the clock (cleanup's first part; a test that wants a quiet
+  -- scheduler calls it too)
+  local function stop_clock()
+    clock_runs = false
+    if S.lfo_clock then
+      clock.cancel(S.lfo_clock)
+      S.lfo_clock = nil
+    end
+  end
+  M.stop_clock = stop_clock
+
   S.register_start(S.constants.START_ORDER.lfo_clock, function()
     check_global_destinations()
     if S.lfo_clock then clock.cancel(S.lfo_clock) end
@@ -604,26 +628,29 @@ return function(S)
     end)
   end)
 
+  -- The clock runs from its start step to cleanup or stop_clock, and its
+  -- coroutine with it (clock.threads, as norns' clock keeps them): a clock
+  -- canceled or ended behind the module's back breaks it
   S.register_invariant("lfo clock", function()
     if clock_runs and S.lfo_clock == nil then return "the LFO clock stopped before cleanup" end
     if not clock_runs and S.lfo_clock ~= nil then return "the LFO clock runs outside its start step and cleanup" end
+    if clock_runs and clock.threads then
+      local thread = clock.threads[S.lfo_clock]
+      if type(thread) ~= "thread" or coroutine.status(thread) == "dead" then
+        return "the LFO clock " .. tostring(S.lfo_clock) .. " is not running (canceled or ended) before cleanup"
+      end
+    end
   end)
 
-  -- Cleanup (step 120): the clock stops, every engine LFO is released and
-  -- every Lua destination gets its stored value back (norns has freed the
-  -- engine by then, #461: none of it arrives on the device)
+  -- Cleanup (step 120): the clock stops and nothing waits to be sent.
+  -- norns has freed the engine by then (#461), and an engine LFO's node
+  -- with it, so nothing stops one; every Lua destination is restored as in
+  -- 3.3 (none of it arrives on the device)
   S.register_cleanup(S.constants.CLEANUP_ORDER.lfos, function()
-    clock_runs = false
-    if S.lfo_clock then
-      clock.cancel(S.lfo_clock)
-      S.lfo_clock = nil
-    end
+    stop_clock()
     queue.due = {}
     for n = 1, NUM_LFOS do
-      if state[n].engine then
-        engine.stopFastLfo(n - 1)
-        state[n].engine = nil
-      end
+      state[n].engine = nil
       restore_lfo_destination(n)
     end
   end)
@@ -651,6 +678,7 @@ return function(S)
       st.value = 2 * lfo_u(n, st.phase) - 1
       evaluate(n)
       st.bar = is_clocked(n) and math.floor(clock.get_beats() / LFO.bar_beats) or nil
+      st.sync_due = true   -- a restart of a running engine LFO (a bang, #251) moves its phase too
     else
       restore_lfo_destination(n)
       st.value, st.stepped = 0, false
@@ -872,21 +900,34 @@ return function(S)
 
   -- A 3.3 PSET holds the library's lines (lfo_shape_1 and no
   -- strata_lfo1_shape): after norns has read it, LFOs 1-3 are set from
-  -- them once, the state last. The PSET is not rewritten; the next save
-  -- writes the new ids
+  -- them once, the state last, and every LFO param such a PSET cannot hold
+  -- goes to its default (LFO 1-3's rate and depth inputs, all of LFOs 4-6,
+  -- off), so the PSET plays as it did in 3.3. Every set passes the read's
+  -- silent on. The PSET is not rewritten; the next save writes the new ids
   local function pset_value(text, id)
     return tonumber(text:match('"' .. id .. '"%s*:%s*([^\n]*)'))
   end
 
-  S.register_pset_hook({name = "lfos", read = function(_, _, pset_path)
+  local INPUT_FIELDS = {"rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt"}
+  local SETTING_FIELDS = {"dest", "shape", "mode", "rate", "division", "depth", "offset", "phase", "rate_mod",
+    "rate_mod_amt", "depth_mod", "depth_mod_amt"}
+
+  S.register_pset_hook({name = "lfos", read = function(_, _, pset_path, silent)
     local file = io.open(pset_path, "r")
     if not file then return end
     local text = file:read("*a")
     file:close()
     if not pset_value(text, "lfo_shape_1") or pset_value(text, param_id(1, "shape")) then return end
-    for n = 1, LIBRARY.lfos do
-      for _, setting in ipairs(library_settings(n, function(id) return pset_value(text, id) end)) do
-        params:set(setting.id, setting.value)
+    local function set_default(id) params:set(id, param_default(id), silent) end
+    for n = 1, NUM_LFOS do
+      if n <= LIBRARY.lfos then
+        for _, field in ipairs(INPUT_FIELDS) do set_default(param_id(n, field)) end
+        for _, setting in ipairs(library_settings(n, function(id) return pset_value(text, id) end)) do
+          params:set(setting.id, setting.value, silent)
+        end
+      else
+        for _, field in ipairs(SETTING_FIELDS) do set_default(param_id(n, field)) end
+        set_default(param_id(n))
       end
     end
     print("imported 3.3 LFO settings")
