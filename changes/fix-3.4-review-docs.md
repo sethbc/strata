@@ -1,2 +1,0 @@
-### Changed
-- The user pages, README and fragments now say what the script does: ALT+K2 on SCENES names the slot, quantize actions also hold scene recalls, grid freeze keys and the pattern start, a chain link also loads each voice's step attributes, length and division, macros can move the routings' depths, a pattern step's bookmark lock recalls a bookmark, and a fast, deep LFO on the voice filter cutoff is smoothed. No change to the sound.

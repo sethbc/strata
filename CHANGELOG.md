@@ -1,5 +1,109 @@
 # Strata Changelog
 
+## Version 3.4.0 - 2026-11-12
+
+Modulation and sequencing: six LFOs, the fast ones running in the engine at up to 50 Hz, sixteen macros, a morph between two or four scenes, scatter, four gesture recorders and a sixteen-routing modulation matrix, on a new MOD page; a sequencer with a length, division and swing per voice, probability, ratchets, step locks, notes, bookmark jumps and gates per step, Euclidean fill, pattern chaining and transport following, with a step edit view on SEQ and a step editor on the grids; sixteen named scenes in two banks; mute and solo per voice; actions that wait for the beat or bar. Underneath, the engine gains a fast-modulation area with five new commands. Scenes, PSETs and PARAMS > MAP mappings from 3.3 load, and every new setting starts where it sounds as 3.3 did; what does sound or play differently is under Sound Changes and Upgrade Notes. norns needs one restart after updating.
+
+### Upgrade Notes
+
+- **Restart norns after updating** (SYSTEM > RESTART): the engine has a new file, `lib/engine/StrataModulation.sc`, which SuperCollider compiles only at a restart. No engine file was renamed or deleted since 3.3.
+- **Nine pages:** MOD is the sixth, after LFO, so BUFFER, SCENES and SETUP are one E1 step further on. The header's page dots start 4 px further left to make room for the ninth.
+- **Scenes are saved as format 6,** with sixteen slots and a name each. A 3.3 scenes file loads into slots 1-8, with 9-16 empty, and its default names (`scene 1` ...) are dropped; the first save keeps the old file as `scenes.data.v5`, since Strata 3.3 cannot read format 6.
+- **The LFOs are Strata's own** instead of norns' LFO library, so their parameters have new names (`strata_lfo<n>` and `strata_lfo<n>_<setting>`). A PSET or scene saved with 3.3 loads its LFO settings into them (the console prints `imported 3.3 LFO settings`); a 3.3 random LFO becomes s&h at twice the rate, so it changes value as often as before; the library's min, max, baseline and reset settings are gone; the free rate is set in Hz (0.003-50 Hz) instead of as a period, on the LFO page, in PARAMETERS and on the arc's ring 4.
+- **MIDI mappings on 3.3's LFO parameters** (#602): a CC mapped in PARAMS > MAP to LFO 1-3's depth, offset, phase or clocked rate moves at start to the new parameter of the same meaning; a mapping on any other 3.3 LFO parameter is removed, since MAP could not show it and every CC it received raised an error in norns' MIDI handler. The console names each one; every other mapping is left as it is.
+- **A PSET saved with 3.3 loads every setting 3.4 added at its default** (#628): the mutes and solos, scatter, the sequencer's lengths, divisions, swing, gates and chain, the morph, the macros' values, the routings' depths and the recorders' timing, so it plays as it did instead of keeping the session's values. It has no macro targets, routings or recorded loops, so it loads with none.
+- **Grid step keys toggle on release,** not on press, on every layout, so a step can be held and edited without toggling it first; a tap toggles a tap's length later than before. A step held 0.3 s opens the step editor instead.
+- **A grid's page change cancels what its held keys were doing:** a scene save or a 16×16 pattern clear or randomize held through the change no longer happens, and a key held from the page before never acts as the key it comes up on.
+- **SEQ's ALT+K2 held** past half a second opens the edit view (it canceled before); a quick press still randomizes the pattern.
+- **SCENES:** ALT+K2 names the slot under the cursor, ALT+E2 jumps a bank, and the arc's rings 3 and 4 are the morph's position and scene B.
+- **New data files** in `~/dust/data/strata/`: `macros.data`, `matrix.data` and `gestures.data` keep the macro targets, the routings and the recorders' loops between sessions, and each PSET saved with 3.4 has its own beside it (`<pset>.macros.data`, `<pset>.matrix.data`, `<pset>.gestures.data`).
+
+### Sound Changes
+
+- **LFOs on a voice's grain pitch, buffer position and grain size run in the engine:** they move smoothly instead of in steps, at the same depth, and up to 50 Hz.
+- **An LFO on a voice's filter cutoff (`vfilt`) runs in the engine and moves in octaves** (#613), up to five either way at 100 % depth, where 3.3 moved it by the same number of hertz up and down. A 3.3 PSET or scene with an LFO on `vfilt` keeps its depth and rate but sounds different: its sweep now rises and falls by the same interval. The filter smooths the cutoff, so a fast, deep LFO on it swings less than its depth says, the more so the faster and deeper it is.
+
+### LFOs
+
+- **Six LFOs** (three before), LFOs 4-6 off by default, with three new shapes, smooth random, s&h (a new value each cycle, held) and drunk (a random walk), a start phase, and LFO-to-LFO modulation: each LFO's rate and depth can follow a lower-numbered LFO.
+- **Where an LFO runs:** on one of a voice's five fast destinations, its grain pitch, buffer position, grain size, filter cutoff and the new level destination (`v<i> amp`, from silence to double at 100 %), in the engine, smoothly and at up to 50 Hz; on every other setting in the script, at up to 10 Hz, updating 48 times a second whatever the tempo. A clocked LFO in the engine is lined up with the clock every bar and whenever the clock starts again.
+- **The LFO page** shows three LFOs at a time around the selected one, marks a destination that runs in the engine with `~`, a rate above the script's 10 Hz with `max` and an LFO a routing reads with `R`; the arc's depth rings follow the three shown and ring 4 is the selected LFO's rate. ALT+K2 randomizes the selected LFO's shape, its rate (or clocked rate) and its phase.
+
+### Macros, Morph, Scatter, Recorders and the Matrix
+
+- **Sixteen macros in four banks** (PARAMETERS > macros): each moves up to eight targets at once, each between two ends of its own along the target's scale. A target is any setting an LFO can move, an LFO's rate or depth, or a routing's depth, never a macro or the morph. Macros map to controllers through PARAMETERS > MAP, and an LFO on a macro (the destinations `macro 1` ... `macro 16`) moves its targets around their values. Scenes store each macro's value and its targets; a recall, a fade and the morph set a macro without moving its targets. Learn (ALT+K3 on a target row) takes the next setting you touch with an encoder, an arc ring or a grid fader, on any page: it waits while you change pages, the header saying so (`learn M1 row 2`), until K2 in the view, a new learn or 10 seconds without a touch cancels it.
+- **The morph** (PARAMETERS > morph) blends every setting that differs between scenes A and B as `morph` goes from 0 to 100 %, and switches voices, sources and the settings that cannot blend as it passes the middle (at 52 % on the way up, 48 % on the way down). With `morph y` and two more scenes, C and D, it is an XY morph between four scenes at the corners of a square, each weighted by how near the position is to its corner; at `morph y` 0 % it is exactly the morph between A and B. It writes the settings, so the blend can be saved as a new scene, at most ten times a second; a PSET restores its position without applying it.
+- **Scatter** (PARAMETERS > scatter): slow, smooth random movement of every unlocked voice's grain pitch and position (and, switched on, its size, filter cutoff and level), with a depth and a rate, running in the engine. Locking a voice or changing what scatter moves glides over about half a second. Scenes store its eight settings.
+- **Four gesture recorders** record your hand moves of continuous settings (encoders, arc rings, grid faders) and loop them, free or rounded to whole beats or bars and started on the beat or bar (and on a MIDI or Link start's first beat), with overdub, up to 1024 moves or 10 minutes. The loops are saved with each PSET and between sessions; scenes store whether each one plays.
+- **A modulation matrix of sixteen routings** (PARAMETERS > matrix for each routing's depth, -100 to 100 %, and on/off): a routing moves any setting an LFO can move by a source's value times its depth, around the value you set, adding up with the setting's LFOs before its range limits it. A source is an LFO, a macro, a recorder's loop place or the input level. The routings are saved with each PSET and between sessions and in scenes; a scene fades the depths, and a routing that changes its source or destination fades to 0 and switches halfway.
+- **The live input's level is a modulation source** (`IN`), scaled by the new `input follow gain` (PARAMETERS > input, 1-30, default 4). The input level is now read on every page; BUFFER's meter looks and behaves as before.
+- **MAIN** shows `~` after the selected voice's name while the engine moves it: an LFO running in the engine on one of its settings, scatter or a routing.
+
+### The MOD Page
+
+- **One list** of the macros (the shown bank, each with its first target and value), the morph (`A`, `B`, `C`, `D`, `morph`, `y`), scatter, the recorders, the six LFOs at a glance and the matrix's routings (`R3 L2>v3 pitch~  +40%`), then the input level. K2 jumps to the next section; K3 shows a macro's eight targets and their ends, records, plays and stops a recorder, shows an LFO on the LFO page or opens a routing; ALT+K3 overdubs a recorder, turns a routing on or off, or learns a macro target or a routing's destination; ALT+K2 held clears a recorder, a target or a routing; a quick ALT+K2 randomizes scatter's depth and rate, or the depth of every complete routing, with its undo. ALT+E2 on a macro shows the next bank.
+- **Its arc rings** are the shown bank's four macros, or the depths of the four routings around the cursor in the matrix; with K1 held the morph, scatter's depth and rate and morph scene B; in a macro's targets the row's two ends, the macro and the row; in a routing its depth, source, destination and the routing shown. The arc's button turns a routing on or off, shows the next bank, presses a recorder or turns scatter on or off.
+
+### Sequencer
+
+- **A clock per voice:** each voice's pattern has its own length (1-16 steps), division (1/32 to a bar per step) and swing (50-75 %), so voices run polyrhythms from one start; a division reset puts every voice back at step 1 at the next bar.
+- **What a step holds,** beyond its level: a probability, ratchets (up to four hits, never closer than 20 ms), step locks of the buffer position, grain pitch and grain size (for that step only; the voice's own setting never changes), a note in scale degrees (a chord is stored; voices play its first note), a bookmark to jump to and a gate length. A step that starts a stopped voice plays its first grain with its locks and note. Scenes keep every step's attributes with the patterns.
+- **Gates:** with a voice's `seq gate` on, it is heard only while a step's gate is open, with its own gate length and release; a MIDI note opens it for the voice's gate length, and switching the gate on or off fades over 20 ms.
+- **Euclidean fill** spreads a number of hits evenly over a voice's length, with a rotation.
+- **Pattern chaining:** every few bars, the next saved scene of a range gives its patterns, their step attributes and each voice's length and division, and nothing else.
+- **Following the clock's transport** (SETUP's `transport` row and PARAMETERS > sequencer > follow transport, on by default): with MIDI clock or Link, a start plays every voice from step 1 and a stop stops the patterns. On the internal clock, PARAMETERS > CLOCK > reset still leaves them as they are. When the clock restarts or jumps while the patterns play and do not follow it, every voice keeps its place in one count; after a moment when the norns is busy (a long load), each voice plays the step the clock has reached and skips the ones it missed, so the patterns stay in time with the clock.
+- **SEQ's edit view** (ALT+K2 held on SEQ): the voice's length, division, swing, gate, gate length and release, a Euclidean fill and a clear row; the step's level, probability, ratchets, gate, note, position, pitch (shown as a ratio, `1.50x`) and size locks and bookmark; and the chain and quantize settings. SEQ's pattern rows draw the steps past a voice's length as dots, mark a gated voice with `G` and light each voice's own playing step.
+- **The step editor:** the same view for any voice and step, opened by holding a grid step key for 0.3 s over any page, with arc rings for the step's locks, probability, ratchets, note, bookmark and level; letting go of the key closes it.
+
+### Scenes and Quantized Actions
+
+- **Sixteen scenes in two banks, with names.** SCENES shows the bank of the slot under the cursor (ALT+E2 jumps a bank), each slot with its name; ALT+K2 names a slot through norns' text entry (up to 12 characters, on an empty slot too, kept when a scene is saved into it). The header shows `S1`-`S16`, the scene sequence goes up to 16, the arc's ring 1 on SCENES runs over the 16 slots and four fields, and the grids' scene pages hold scenes and lengths 9-16.
+- **Actions on the beat or bar:** with PARAMETERS > sequencer > quantize actions on beat or bar (off by default), scene recalls, freezes from the grid, bookmark recalls, position jumps and the pattern start wait for the next beat or bar of the clock, and the header says so (`S3 at bar`) until the action runs. Pressing a freeze key or the play key again while its action waits takes it back, and a transport start or stop drops a waiting pattern start. A step's bookmark lock never waits; a grid's position page blinks a bookmark that waits.
+
+### Mute and Solo
+
+- **Mute and solo per voice:** `mute` and `solo` rows at the end of VOICE's filter & sends section silence a voice within 20 ms without stopping it (a solo silences every voice that is not soloed). MAIN's voice list marks a silenced running voice `m` and a soloed one `s`. Scenes keep mutes and never solos.
+
+### Grid and Arc
+
+- **Gesture recorder keys** (a tap records, plays and stops as you let go; a half-second hold only clears), **macro faders and banks** (the 16×16's page 1 rows 10-13 and its bank keys; a macro page key on the 16×8's and 8×16's faders page, which enters at the bank MOD shows, steps through the next three and goes back to the voice faders after the fourth) and **the morph** (a morph fader on every scenes page but the 8×8's, and the 16×16's A and B rows).
+- **The 16×16's XY pad:** page 3's rows 11-15, columns 12-16 are a 5×5 pad that sets both of the morph's axes with one press.
+- **Mute and solo on the 16×16:** page 1 row 9 columns 5-11 mute voices 1-7 on a tap and solo them on a half-second hold. Every layout's voice keys light a running voice that is silenced at 6.
+- **Grid freeze keys** wait for the next beat or bar while quantize actions is on.
+- **SCENES' arc rings 3 and 4:** the morph's position and morph scene B (20 ticks a scene).
+
+### Fixes
+
+- **A MIDI or Link start the patterns follow, or a press of the play key, just as a step is due** no longer prints `bad argument #1 to 'resume'` in maiden.
+- **A grid key whose release raised a script error no longer stays held:** before, a step key left held that way made every later key of its voice on that grid set a level instead of toggling its own step.
+
+### Deviations from the 3.4 design
+
+- **Learn waits across page changes** (#595), where the design canceled it on a page change: on MOD nothing a player turns touches a target, so learn could only be finished from a grid.
+- **The 16×8's and 8×16's macro key enters at the bank already shown** (#618), not at bank 1, so a tap on one grid no longer moves the bank MOD, the arc and the other grids show; a fader page key or a voice key leaves the macros for that page of voice faders (#619).
+- **A gesture recorder's grid key acts on release:** a tap records, plays or stops, and a half-second hold only clears, so a clear never records or plays first.
+- **MOD's ALT hint names only what acts on the row** (`K2:rand` in scatter and the matrix, `K2:clear` where only the hold clears something), and a routing's source choices are every modulation source, all sixteen macros included, whatever bank the list shows.
+- **MAIN's `~` follows the voice's name**, which it shortens, since the row after `[F]` is full.
+- **SCENES' name entry is norns' own text entry,** opened when ALT+K2 is let go.
+- **SEQ's edit view says `K2:cancel`** for ALT+K2 held on its `euclid` and `clear` rows, which have nothing to reset (#596), and a step's probability has no `off`: its ring stops at its ends.
+- **The XY morph counts a corner only while its weight is above 0,** so on an edge it is exactly that edge's two-scene morph, and a routing that corners agree on blends its depth between them instead of fading to 0.
+
+### Internals and Development
+
+- **The modulation area** (`lib/engine/StrataModulation.sc`, order 160): a 35-channel control bus of offsets for each voice's five fast destinations (addressed by voice, note slot and destination, one slot per voice for now), the offsets added inside the grain synths (pitch, position, size) and the per-voice mix stage (cutoff, level), the eight LFO shapes and scatter as nodes in a group at the head of the engine, an offset node for the matrix, and the stage's step gate and mute. Five new commands, `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter` and `setFastOffset` (AGENTS.md's table); no other command changes.
+- **Real-time memory:** every floor holds with six engine LFOs and scatter running on every voice and destination. The mix stage's check limit is 42 KB (40 before): the cutoff and level offsets, the step gate and the mute take each stage to about 40.9 KB. Measured at release, the memory area as CI runs it (first in its shard) in four full runs on SuperCollider 3.13, identical: `\strataGrainRing` 59.0 KB, `\strataGrainBuf` 69.1 KB (18.9 KB under its 88 KB limit), the stage 40.9 KB, scatter 42.1 KB; on high, synth -> buffer -> synth leaves the least, 4120 KB, 536 KB above its 3.5 MB floor. A full run in one sclang on 3.14.1 reads each def a probe's step lower and leaves about 120 KB less (`docs/notes/engine/memory.md`).
+- **The script's hooks:** registries for scene blocks and migrations, PSET hooks, touches, lock changes, step outputs and modulation sources; a base override and extra offsets per param, so locks, LFOs, macros and routings move a setting's engine value without changing the param; one send budget of 150 messages per 100 ms shared by every modulation writer (LFOs, the matrix, morph, recorders, macros), with hand edits, steps, notes and recalls never deferred; a modal screen owner (the step editor); a scene recall as one ordered list of entries that the recall, a fade and the morph all apply.
+- **New modules:** `lib/quantize.lua`, `lib/mod_sources.lua`, `lib/macros.lua`, `lib/scatter.lua`, `lib/gestures.lua`, `lib/morph.lua`, `lib/matrix.lua`, `lib/input_level.lua`, `lib/ui/modal.lua`, `lib/pages/mod.lua` and `lib/arc/mod.lua`; `lib/lfos.lua` and `lib/sequencer.lua` are rewritten.
+- **Data files:** the data file reader takes up to 32768 tables (8192 before), four times the largest scenes file 3.4 can write; a live macros, matrix or gestures file that is damaged and cannot be set aside is never written over (a console line says the session's changes are not saved).
+- **Development: the engine check** has a modulation area (the five commands, the nodes' lifecycle, each destination's law, the gate and mute, and a comparison with 3.3's defs at every offset 0), and the memory area runs every case with six engine LFOs and scatter running and checks the area's node sizes. The local SuperCollider 3.13 runner (`test/run_engine_check_313.sh`) runs a full run as CI's shards, each in a fresh sclang of its own, and passes a run only when every shard passed, so a long-lived sclang no longer crashes it (#581); `-1` keeps the old run in one sclang and `-l` lists the shards.
+- **Development: tests.** The clock stub delivers every resume norns has posted, also to a clock canceled in the same step, has transport start and stop helpers, and the PSET stub follows norns' paramset (its write, read and delete actions with a PSET's number); a test pins that a recall's sends are 3.3's, compared against verbatim copies of 3.3's functions. Clocks whose resume may already be posted are retired with a token, never canceled.
+- **Development: CI** runs the Lua 5.3 and LuaJIT suites as two jobs in parallel, gathered by one `lua` job as the engine shards are by `engine`, and the engine check's seven shards are rebalanced from 3.4's area times.
+- `lua test/run.lua` / `luajit test/run.lua` grew from 1253 to 1703 tests.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/decisions.md`.
+
 ## Version 3.3.2 - 2026-11-11
 
 Page randomize (#557). ALT+K2 randomizes on every page of parameters, the section under the cursor on VOICE, FX and LFO, and pressing it again within 5 seconds undoes it, on the same key. Results stay playable: ranges keep feedback, resonance and the effect mixes below runaway, and level, sources, bypasses and a locked voice's params are never touched. No engine file changed, so a script reload is enough. No param, scene or file format changes.
