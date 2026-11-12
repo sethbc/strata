@@ -395,10 +395,15 @@ test("the cursor stops at 16 slots and four fields, and ALT+E2 jumps a bank", fu
   S.lib.pages_scenes.move_cursor(3)
   key(1, 1)
   enc(2, 1); assert_equal(S.cursors.scene, 11, "ALT+E2 right: slot 3 to slot 11, the same place in bank 2")
-  enc(2, 1); assert_equal(S.cursors.scene, 19, "a bank on from slot 11 is the third field")
-  enc(2, -1); assert_equal(S.cursors.scene, 11, "ALT+E2 left: back a bank")
-  enc(2, -1); assert_equal(S.cursors.scene, 3, "to slot 3")
-  enc(2, -1); assert_equal(S.cursors.scene, 1, "clamped to slot 1")
+  enc(2, -1); assert_equal(S.cursors.scene, 3, "ALT+E2 left: back to slot 3")
+  enc(2, -1); assert_equal(S.cursors.scene, 3, "no slot eight before slot 3: it stays")
+  S.lib.pages_scenes.move_cursor(13)
+  enc(2, 1); assert_equal(S.cursors.scene, 13, "no slot eight after slot 13: it stays, off the fields")
+  enc(2, -1); assert_equal(S.cursors.scene, 5, "slot 13 left: slot 5")
+  S.lib.pages_scenes.move_cursor(17)
+  enc(2, 1); assert_equal(S.cursors.scene, 18, "on a field row ALT+E2 moves one stop, as E2")
+  enc(2, -1); assert_equal(S.cursors.scene, 17, "back one stop")
+  enc(2, -1); assert_equal(S.cursors.scene, 16, "and from the first field to slot 16")
   key(1, 0)
   -- a jump is a cursor move: it disarms a pending overwrite
   capture_scene(4)
@@ -523,6 +528,7 @@ end)
 test("SCENES' keys and the arc button recall through the quantizer", function()
   local context, S = started_on_scenes()
   capture_scene(11)
+  S.lib.scenes.set_name(11, "dusk")   -- the quantizer's label stays S<n>, without the name
   local scheduled, recalls = {}, {}
   local real_schedule, real_recall = S.lib.quantize.schedule, recall_scene
   S.lib.quantize.schedule = function(action_key, fn, label)
@@ -542,6 +548,32 @@ test("SCENES' keys and the arc button recall through the quantizer", function()
   end
   S.lib.quantize.schedule, recall_scene = real_schedule, real_recall
   assert_equal(table.concat(recalls, ","), "11:4,11:0,11:0", "K2 fades, K3 and the button recall at once")
+end)
+
+-- The scenes prompt invariant also ties the name entry's slot to its kept
+-- callback: naming is nil or a slot, and set exactly while an entry is open
+test("the scenes prompt invariant holds the name entry's slot to its callback", function()
+  local context, S = started_on_scenes()
+  local invariant
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "scenes prompt" then invariant = record.fn end
+  end
+  assert_true(invariant, "the invariant is registered")
+  assert_equal(invariant(), nil, "it holds with no entry open")
+  S.scenes_page.naming = 3
+  assert_true(type((invariant())) == "string", "naming set with no entry open breaks it")
+  S.scenes_page.naming = nil
+  S.lib.pages_scenes.move_cursor(4)
+  key(1, 1); key(2, 1); key(2, 0)
+  assert_equal(S.scenes_page.naming, 4, "an entry is open for slot 4")
+  assert_equal(invariant(), nil, "it holds while the entry is open")
+  S.scenes_page.naming = nil
+  assert_true(type((invariant())) == "string", "an open entry with naming cleared breaks it")
+  S.scenes_page.naming = 17
+  assert_true(type((invariant())) == "string", "naming outside 1-16 breaks it")
+  S.scenes_page.naming = 4
+  context.textentry.finish("noon")
+  assert_equal(invariant(), nil, "it holds once the entry has called back")
 end)
 
 end

@@ -218,7 +218,7 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `midi notes` | `lib/midi_in.lua` | a note is held on a voice (`S.midi_state.held`) exactly while some channel's note on maps it there (`note_voice`), and every `started` entry is a voice index set to true |
   | `scan holds` | `lib/positions.lua` | a voice's scan is held exactly while it has a holder |
   | `strip store` | `lib/positions.lua` | a port holds store one way only: its one store key (`store_down`) on a layout that selects a grid voice, a key per voice (`store`) on the others |
-  | `scenes prompt` | `lib/pages/scenes.lua` | `S.scenes_page.armed_slot` is nil or a whole scene number in 1..`NUM_SCENES` |
+  | `scenes prompt` | `lib/pages/scenes.lua` | `S.scenes_page.armed_slot` and `S.scenes_page.naming` are each nil or a whole scene number in 1..`NUM_SCENES`, and `naming` is set exactly while the page keeps an open name entry's callback |
   | `grid keys` | `lib/grid/core.lua` | every consumed key and every key with a pending hold (`on_hold`) is a held key (`S.grid_held`), and a port has an attached device recorded (`attached_devices[port]`) exactly while it is attached (`S.grids[port]`) |
   | `arc connection` | `lib/arc/core.lua` | `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)` |
   | `key presses` | `lib/ui/keys.lua` | every `S.key_press_alt[n]` has an `S.key_press_page[n]` |
