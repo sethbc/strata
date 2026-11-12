@@ -334,28 +334,247 @@ end)
 
 test("matrix: its sends are deferrable", function()
   local context, S, matrix = loaded()
+  S.drift_metro:stop()  -- the drift's own sends would share the window's count
+  local sync = S.lib.engine_sync
   params:set("macro_1", 1)
   route(S, 1, "macro1", "reverb_mix", 40)
   route(S, 2, "macro1", "v3_grain_pitch", 40)
-  local flags = {}
-  local real_fast = engine.setFastOffset
-  engine.setFastOffset = function(...)
-    table.insert(flags, { what = "fast", deferrable = S.deferrable_write })
-    return real_fast(...)
+  -- each engine call of the round robin, with S.deferrable_write and the
+  -- budget's count since the step's sends began (this hook runs after the
+  -- matrix's, before the round robin sends)
+  local flags, step_sends, before = {}, 0, 0
+  S.lib.lfos.on_step(function() step_sends, before = 0, sync.budget_state().sent end)
+  local function watch(command)
+    local real = engine[command]
+    engine[command] = function(...)
+      step_sends = step_sends + 1
+      table.insert(flags, { what = command, deferrable = S.deferrable_write,
+        counted = sync.budget_state().sent - before == step_sends })
+      return real(...)
+    end
   end
-  local ok, problem = pcall(spying_sends, S, function(id)
-    if id == "reverb_mix" then table.insert(flags, { what = id, deferrable = S.deferrable_write }) end
-  end, function()
+  watch("setReverb"); watch("setFastOffset")
+  local ok, problem = pcall(function()
     lfo_step(context, 2)
     matrix.clear(1); matrix.clear(2)   -- their restores too
     lfo_step(context, 2)
   end)
-  rawset(engine, "setFastOffset", nil)
+  rawset(engine, "setReverb", nil); rawset(engine, "setFastOffset", nil)
   if not ok then error(problem, 0) end
   assert_equal(#flags, 4, "a send and a restore of each")
   for index, flag in ipairs(flags) do
     assert_equal(flag.deferrable, true, flag.what .. " send " .. index .. " has S.deferrable_write set")
+    assert_equal(flag.counted, true, flag.what .. " send " .. index .. " counts against the budget")
   end
+end)
+
+test("matrix: a fast send past the budget waits and goes out first in the next window, with its newest sum", function()
+  local context, S, matrix = loaded()
+  S.drift_metro:stop()
+  local sync = S.lib.engine_sync
+  local budget = S.constants.ENGINE_BUDGET
+  params:set("macro_1", 1); context.clock.run_for(0.05)
+  -- a step early in its window, so the next two share it
+  repeat lfo_step(context) until util.time() % budget.window_seconds < budget.window_seconds / 4
+  local fill = false
+  S.lib.lfos.on_step(function()   -- after the matrix's hook, before the round robin sends
+    if not fill then return end
+    sync.deferrable(function()
+      while sync.budget_state().sent < budget.messages_per_window do sync.send_engine_value("drift_amount", 0.01) end
+    end)
+  end)
+  route(S, 1, "macro1", "v3_grain_pitch", 50)
+  local window = math.floor(util.time() / budget.window_seconds)
+  fill = true
+  context.clear_engine_calls(); lfo_step(context)
+  fill = false
+  assert_equal(math.floor(util.time() / budget.window_seconds), window, "the step shares the window")
+  assert_equal(#context.calls_named("setFastOffset"), 0, "the window's 150 are spent: the offset waits")
+  assert_equal(sync.budget_state().pending, 1, "one value waits")
+  params:set("macro_1", 0.6)                      -- a newer sum: 0.3
+  context.clear_engine_calls(); lfo_step(context)
+  assert_equal(math.floor(util.time() / budget.window_seconds), window, "still the same window")
+  assert_equal(#context.calls_named("setFastOffset"), 0, "it still waits")
+  assert_equal(sync.budget_state().pending, 1, "one value for the channel, the newest")
+  context.clear_engine_calls()
+  h.wake(context, "engine_budget_clock")          -- the next window
+  local first = context.engine_calls[1]
+  assert_equal(first and first.name, "setFastOffset", "first in the next window")
+  assert_equal(first.args[1], 2); assert_equal(first.args[3], 0)
+  assert_near(first.args[4], 0.3, 1e-9, "with the newest sum")
+  assert_equal(#context.calls_named("setFastOffset"), 1, "once")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+end)
+
+test("matrix: a fast sum that returns to 0 while its send waits sends 0, never the stale sum", function()
+  local context, S, matrix = loaded()
+  S.drift_metro:stop()
+  local sync = S.lib.engine_sync
+  local budget = S.constants.ENGINE_BUDGET
+  params:set("macro_1", 1); context.clock.run_for(0.05)
+  repeat lfo_step(context) until util.time() % budget.window_seconds < budget.window_seconds / 4
+  local fill = false
+  S.lib.lfos.on_step(function()
+    if not fill then return end
+    sync.deferrable(function()
+      while sync.budget_state().sent < budget.messages_per_window do sync.send_engine_value("drift_amount", 0.01) end
+    end)
+  end)
+  route(S, 1, "macro1", "v3_grain_pitch", 50)
+  fill = true
+  lfo_step(context)                               -- 0.5 waits for the next window
+  fill = false
+  assert_equal(sync.budget_state().pending, 1, "the sum waits")
+  params:set("matrix_1_depth", 0)                 -- the routing stops in the same window
+  context.clear_engine_calls(); lfo_step(context)
+  h.wake(context, "engine_budget_clock")
+  lfo_step(context, 3)
+  local fast = fast_calls(context, 2, 0)
+  assert_true(#fast >= 1, "the waiting send goes out")
+  for _, call in ipairs(fast) do assert_equal(call.args[4], 0, "with 0, never the stale 0.5") end
+  assert_equal(matrix.offset("v3_grain_pitch"), 0)
+end)
+
+test("matrix: a voice start or a sync resends no unmoved fast channel", function()
+  local context, S, matrix = loaded()
+  params:set("macro_1", 1)
+  route(S, 1, "macro1", "v3_grain_pitch", 50)
+  lfo_step(context)
+  assert_near(last_fast(context, 2, 0), 0.5, 1e-9)
+  -- the engine's offset node keeps the channel's value through a start and a sync
+  context.clear_engine_calls()
+  toggle_voice(3)
+  lfo_step(context, 3)
+  assert_equal(#context.calls_named("voiceOn"), 1, "voice 3 started")
+  assert_equal(#context.calls_named("setFastOffset"), 0, "a start resends nothing")
+  sync_voice_values_to_engine(3)
+  lfo_step(context, 3)
+  assert_equal(#context.calls_named("setFastOffset"), 0, "nor a sync")
+  params:set("macro_1", 0.5)
+  lfo_step(context)
+  assert_near(last_fast(context, 2, 0), 0.25, 1e-9, "a move still sends")
+end)
+
+test("matrix: a raising source or destination is skipped alone, with one console line each", function()
+  local context, S, matrix = loaded()
+  S.register_mod_source({ key = "broken", name = "BR", section = "test", range = { 0, 1 },
+    value = function() error("source boom") end })
+  route(S, 1, "broken", "v1_grain_spread", 50)    -- its source raises
+  route(S, 2, "macro1", "reverb_size", 50)        -- its update raises
+  route(S, 3, "macro1", "reverb_mix", 50)
+  route(S, 4, "macro1", "v3_grain_pitch", 50)
+  route(S, 5, "macro1", "delay_mix", 50)          -- its sender raises
+  local real_offset_for = S.lib.lfos.offset_for
+  S.lib.lfos.offset_for = function(id, m)
+    if id == "reverb_size" then error("destination boom") end
+    return real_offset_for(id, m)
+  end
+  S.engine_senders.delay_mix = function() error("sender boom") end
+  local ok, problem = pcall(function()
+    for step = 1, 4 do
+      local macro = step % 2 == 0 and 1 or 0.5
+      params:set("macro_1", macro)
+      context.clear_engine_calls(); lfo_step(context)
+      -- 50 % of the macro: m = macro / 2, half a range of 1 each way on reverb_mix
+      assert_near(sent_reverb(context), params:get("reverb_mix") + macro / 2 * 0.5, 1e-9, "step " .. step .. ": reverb_mix plays")
+      assert_near(last_fast(context, 2, 0), macro / 2, 1e-9, "step " .. step .. ": v3 pitch plays")
+    end
+  end)
+  S.lib.lfos.offset_for = real_offset_for
+  if not ok then error(problem, 0) end
+  local lines = h.claim_script_errors(context, 3, "strata: ")
+  local text = table.concat(lines, "\n")
+  assert_true(text:find("matrix routing 1 failed", 1, true) ~= nil, "the source's routing, once")
+  assert_true(text:find("matrix destination reverb_size failed", 1, true) ~= nil, "the destination, once")
+  assert_true(text:find("sender boom", 1, true) ~= nil, "the sender, once")
+end)
+
+test("matrix: a scene's unknown parts get a console line, and its apply redraws", function()
+  local context, S, matrix = loaded()
+  capture_scene(1)
+  S.scenes[1].data.matrix = { [3] = { source = "future_source", dest = "v9_grain_pitch" } }
+  recall_scene(1, 0)
+  assert_equal(matrix.routing(3).source, "future_source", "kept")
+  assert_true(printed_with(context, "future_source") ~= nil, "a console line names the source")
+  assert_true(printed_with(context, "v9_grain_pitch") ~= nil, "and the destination")
+  -- the block's apply asks for a redraw itself (morph's crossing applies it outside a recall)
+  local block
+  for _, record in ipairs(S.registry.scene_blocks) do
+    if record.key == "matrix" then block = record end
+  end
+  local asked = 0
+  local real_request = request_redraw
+  request_redraw = function(...) asked = asked + 1; return real_request(...) end
+  local ran, problem = pcall(block.apply, { [1] = { source = "macro1", dest = "reverb_mix" } })
+  request_redraw = real_request
+  if not ran then error(problem, 0) end
+  assert_true(asked >= 1, "the apply asked for a redraw")
+  assert_equal(matrix.routing(1).dest, "reverb_mix")
+end)
+
+test("matrix: a live file that can be neither read nor set aside is never written over", function()
+  local first = load_strata(); finish_startup(first)
+  cleanup()
+  local live_path = first.data_dir .. "strata/matrix.data"
+  local bad = "return {\n  {1},\n"
+  h.write_text(live_path, bad)
+  local context = load_strata({ data_subdir = data_dir_name(first), before_init = function()
+    local S = local_value("S")
+    S.lib.data_files.set_aside = function() return nil, "permission denied" end
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(printed_with(context, "routings will not be saved") ~= nil, "a console line says so")
+  S.lib.matrix.set_routing(1, "macro1", "reverb_mix")
+  context.clock.run_for(0.2)
+  assert_equal(h.file_text(live_path), bad, "not written over after a change")
+  cleanup()
+  assert_equal(h.file_text(live_path), bad, "nor at cleanup")
+end)
+
+test("matrix: the step after a voice sync or a start leaves a Lua destination routed in the engine", function()
+  local context, S, matrix = loaded()
+  params:set("macro_1", 1)
+  local stored = params:get("v1_grain_spread")
+  route(S, 1, "macro1", "v1_grain_spread", 40)    -- +0.2
+  local function last_spread()
+    local calls = grain_calls(context, 0, "posSpread")
+    return calls[#calls] and calls[#calls].args[3]
+  end
+  lfo_step(context)
+  assert_near(last_spread(), stored + 0.2, 1e-9, "routed")
+  sync_voice_values_to_engine(1)
+  lfo_step(context)
+  assert_near(last_spread(), stored + 0.2, 1e-9, "after a sync")
+  toggle_voice(1); toggle_voice(1)
+  lfo_step(context)
+  assert_near(last_spread(), stored + 0.2, 1e-9, "after a stop and a start")
+  -- what the engine has forgotten (a sync forgets the voice's sent values) the next step sends again
+  S.engine_param_values.v1_grain_spread = nil
+  context.clear_engine_calls(); lfo_step(context)
+  assert_equal(#grain_calls(context, 0, "posSpread"), 1, "sent again")
+  assert_near(last_spread(), stored + 0.2, 1e-9)
+  assert_near(params:get("v1_grain_spread"), stored, 1e-12, "the stored value stays")
+end)
+
+test("matrix: an idle step sends nothing and leaves no offset", function()
+  local context, S, matrix = loaded()
+  S.drift_metro:stop()
+  context.clear_engine_calls(); lfo_step(context, 5)
+  assert_equal(#context.engine_calls, 0, "nothing routed: nothing sent")
+  for _, id in ipairs(matrix.destination_ids()) do assert_equal(matrix.offset(id), 0, id) end
+  -- a routing cleared still gets its restore, once, and the matrix is idle again
+  params:set("macro_1", 1)
+  route(S, 1, "macro1", "reverb_mix", 40)
+  route(S, 2, "macro1", "v3_grain_pitch", 40)
+  lfo_step(context)
+  matrix.clear(1); matrix.clear(2)
+  context.clear_engine_calls(); lfo_step(context, 5)
+  assert_equal(#context.calls_named("setReverb"), 1, "the Lua restore")
+  assert_equal(#context.calls_named("setFastOffset"), 1, "the fast one's 0")
+  context.clear_engine_calls(); lfo_step(context, 5)
+  assert_equal(#context.engine_calls, 0, "idle again")
+  assert_equal(matrix.offset("reverb_mix"), 0); assert_equal(matrix.offset("v3_grain_pitch"), 0)
 end)
 
 test("matrix: a hand edit of a destination is not deferrable", function()
@@ -962,34 +1181,37 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
     matrix.set_routing(k, "macro" .. (17 - k), destinations[k])
     params:set("matrix_" .. k .. "_depth", -100 + k)
   end
-  -- the step attributes (design §9.2: package 1d's block), on every step of
-  -- every voice, eight notes each
-  local function full_steps()
-    local steps = {}
-    for voice = 1, NUM_VOICES do
-      steps[voice] = {}
-      for step = 1, PATTERN_LENGTH do
-        steps[voice][step] = { prob = 37, ratchet = 4, notes = { -14, -9, -5, -2, 0, 3, 7, 14 }, pos = 0.123456789,
-          pitch = 1.23456789, size = 0.123456789, bookmark = 4 }
-      end
+  -- every attribute the sequencer stores (design §8.1, §8.12, §9.2), on
+  -- every step of every voice, eight notes each, through its own setter
+  local sequencer = S.lib.sequencer
+  local notes = { -14, -9, -5, -2, 0, 3, 7, 14 }
+  local attrs = { prob = 37, ratchet = 4, pos = 0.123456789, pitch = 1.23456789, size = 0.123456789, bookmark = 4,
+    gate = 7.123456789 }
+  for voice = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do
+      sequencer.set_step_attr(voice, step, "notes", notes)
+      for key, value in pairs(attrs) do sequencer.set_step_attr(voice, step, key, value) end
     end
-    return steps
   end
-  for slot = 1, S.constants.NUM_SCENES do
-    capture_scene(slot)
-    S.scenes[slot].data.steps = full_steps()
+  for key, value in pairs(attrs) do
+    assert_near(sequencer.step_attr(NUM_VOICES, PATTERN_LENGTH, key), value, 1e-12, "the sequencer stored " .. key)
   end
-  cleanup()  -- writes scenes.data through S.lib.data_files.write
+  assert_equal(#sequencer.step_attr(NUM_VOICES, PATTERN_LENGTH, "notes"), 8, "and eight notes")
+  -- a real save of each slot: captured and written through S.lib.data_files.write
+  for slot = 1, S.constants.NUM_SCENES do assert_true(S.lib.scenes.save(slot), "slot " .. slot .. " saved") end
   local text = h.file_text(context.data_dir .. "strata/scenes.data")
   local tables = select(2, text:gsub("%-%- Table: ", ""))
   assert_true(tables <= S.lib.data_files.DATA_FILES.max_tables,
     tables .. " tables fit the reader's bound of " .. S.lib.data_files.DATA_FILES.max_tables)
+  cleanup()
   local _, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
   for slot = 1, next_S.constants.NUM_SCENES do
     local scene = next_S.scenes[slot]
     assert_true(scene.populated and validate_scene(scene), "scene " .. slot .. " loaded and validates")
     assert_equal(entry_count(scene.data.matrix), 16, "scene " .. slot .. " holds every routing")
-    assert_equal(scene.data.steps[NUM_VOICES][PATTERN_LENGTH].notes[8], 14, "scene " .. slot .. " holds its steps")
+    local last = scene.data.steps[NUM_VOICES][PATTERN_LENGTH]
+    assert_equal(last.notes[8], 14, "scene " .. slot .. " holds its steps' notes")
+    assert_near(last.gate, 7.123456789, 1e-9, "and their gates")
   end
   for k = 1, 16 do next_matrix.set_routing(k, "", "") end
   recall_scene(16, 0)

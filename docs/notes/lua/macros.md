@@ -31,7 +31,7 @@ Elsewhere: the MOD page and its rings (package 2a) draw and edit the macros thro
 `target_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added):
 - every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: the built-in ones (a voice's `main` as `v<i>_main`), then the registered ones (`hist`, `vfilt`, `dsend`, `rsend`, `amp` per voice), 102 in all;
 - each LFO's `strata_lfo<n>_rate` and `strata_lfo<n>_depth` (n 1-6);
-- each routing's `matrix_<k>_depth` (k 1-16), once package 1h adds them.
+- each routing's `matrix_<k>_depth` (k 1-16, `lib/matrix.lua`).
 
 `target_label(id)` is the LFO destination's label (`v3 pitch`, `rev mix`, `v3 main`), `L<n> rate` or `L<n> depth`, `R<k> depth`, or the id itself when unknown.
 
