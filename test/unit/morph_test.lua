@@ -42,6 +42,17 @@ local function continuous_values(S, slot)
   return values
 end
 
+-- The same ids with the values the scene's own data holds. Counting what
+-- differs from these never depends on the order a recall set a voice's
+-- params in: two reads of one value can differ in the last bit (#586)
+local function scene_data_values(S, slot)
+  local values = {}
+  for _, entry in ipairs(S.lib.scenes.scene_entries(S.scenes[slot].data)) do
+    if entry.kind == "continuous" then values[entry.id] = entry.value end
+  end
+  return values
+end
+
 -- The index in the engine calls of the first call named `name` whose first
 -- argument is `first` (and second `second`, when given) from index `from`
 local function call_index(context, name, first, second, from)
@@ -243,9 +254,11 @@ test("an apply sets at most 120 values and a still morph converges", function()
   recall_scene(2, 0)
   local b_values = continuous_values(S, 2)
   recall_scene(1, 0)
+  local a_data, b_data = scene_data_values(S, 1), scene_data_values(S, 2)
   local differing = 0
-  for id, value in pairs(a_values) do
-    if b_values[id] ~= value then differing = differing + 1 end
+  for id, value in pairs(a_data) do
+    assert_true(b_data[id] ~= nil, id .. " is in both scenes")
+    if b_data[id] ~= value then differing = differing + 1 end
   end
   assert_true(differing > 120, "the scenes differ in more than 120 values (" .. differing .. ")")
   -- each apply cancels a transition first, then sets its continuous values
