@@ -5,7 +5,7 @@
 -- Run alone: lua test/run.lua pages_seq
 
 return function(h)
-local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local show_page, hint_text, tap, assert_screen_layout = h.show_page, h.hint_text, h.tap, h.assert_screen_layout
 
@@ -374,12 +374,15 @@ test("undo while the pattern clock plays restores the old steps (#557)", functio
   tap(2)
 end)
 
-test("SEQ's hold of ALT+K2 cancels (#557)", function()
+-- 3.4 (design 8.6, Question 12): the hold opens the edit view
+test("SEQ's hold of ALT+K2 opens the edit view and randomizes nothing", function()
   local context, S = started_on_seq()
   key(1, 1); key(2, 1); context.clock.run_for(0.6); redraw()
-  assert_equal(hint_text(context), "K2:cancel K3:clr E3:bpm", "held")
+  assert_equal(hint_text(context), "K2:edit K3:clr E3:bpm", "held")
   key(2, 0); key(1, 0)
   for step = 1, 16 do assert_equal(S.patterns[1][step], 0, "nothing randomized") end
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v1 step 1"), "the edit view shows")
 end)
 
 -- K1 let go before K2: the release still randomizes or cancels, so the
@@ -392,9 +395,10 @@ test("K2's release hint stays after K1 comes up first (#557)", function()
   context.screen.clear(); redraw()
   assert_equal(hint_text(context), "K2:rand", "K1 up, K2 down: the quick release's hint")
   context.clock.run_for(0.6); context.screen.clear(); redraw()
-  assert_equal(hint_text(context), "K2:cancel", "held past the hold time: letting go cancels")
+  assert_equal(hint_text(context), "K2:edit", "held past the hold time: letting go opens the edit view")
   key(2, 0); context.screen.clear(); redraw()
-  assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+  assert_equal(hint_text(context), "K2:back K3:step E3:length", "K2 up: the edit view's plain hints")
+  assert_true(plain ~= hint_text(context), "not the pattern view's")
 end)
 
 test("SEQ hints", function()
@@ -425,10 +429,511 @@ test("SEQ's playing column is the sequencer's sounding step, the one the grid li
   assert_equal(device:get_led(3, 2), 0, "and not the next step")
   assert_equal(cell(context, 2, 3).level, 1, "SEQ: column 3 does not play either")
   -- no sounding step: no playing column, though the transport runs
-  S.pattern_sounding_step = nil
+  S.pattern_sounding_steps[1] = nil
   redraw()
   assert_equal(cell(context, 1, 2).level, 9, "nothing sounding: no playing column")
   tap(2)
+end)
+
+---------------------------------------------------------------------------
+-- 3.4 (design 8.6, 8.7, 8.12, 8.13): the pattern view's lengths, playheads
+-- and gate marks, the edit view and the step editor
+
+-- The edit view's rows (design 8.6, as VOICE's): 7 px apart from y 24, five
+-- in view, labels at x 3 (level 15 under the cursor), values right-aligned
+-- at x 124
+local EDIT = { first_y = 24, spacing = 7, visible = 5, field_x = 3, value_right = 124 }
+
+-- The cursor row's label and value on the drawn screen (nil when none)
+local function cursor_row(context)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == EDIT.field_x and entry.level == 15 and entry.y >= EDIT.first_y
+      and entry.y <= EDIT.first_y + (EDIT.visible - 1) * EDIT.spacing then
+      for _, other in ipairs(context.screen.texts) do
+        if other.y == entry.y and other.x == EDIT.value_right and other.align == "right" then
+          return entry.text, other.text
+        end
+      end
+      return entry.text, nil
+    end
+  end
+end
+
+local function screen_signature(context)
+  local parts = {}
+  for _, entry in ipairs(context.screen.texts) do
+    parts[#parts + 1] = entry.x .. "," .. entry.y .. "," .. entry.level .. "," .. entry.text
+  end
+  return table.concat(parts, ";")
+end
+
+-- Walk the edit view's rows with E2 from the first and call visit(label,
+-- value) on each; the walk ends where E2 changes nothing. Returns true
+-- when visit did
+local function walk_rows(context, visit)
+  enc(2, -100)
+  local last
+  for _ = 1, 60 do
+    context.screen.clear(); redraw()
+    local signature = screen_signature(context)
+    if signature == last then return false end
+    last = signature
+    if visit(cursor_row(context)) then return true end
+    enc(2, 1)
+  end
+  return false
+end
+
+-- Every row's label, in order, as one string
+local function row_labels(context)
+  local labels = {}
+  walk_rows(context, function(label) labels[#labels + 1] = label end)
+  return table.concat(labels, " ")
+end
+
+-- Put the cursor on the nth row labeled label and return its value as drawn
+local function go_to(context, label, nth)
+  local seen, found = 0, nil
+  local reached = walk_rows(context, function(text, value)
+    if text == label then
+      seen = seen + 1
+      if seen == (nth or 1) then found = value; return true end
+    end
+  end)
+  assert_true(reached, "the edit view has a row " .. label .. " (" .. (nth or 1) .. ")")
+  return found
+end
+
+-- The value the cursor row shows now
+local function shown(context)
+  context.screen.clear(); redraw()
+  return select(2, cursor_row(context))
+end
+
+-- ALT+K2 held past the hold time, then let go
+local function alt_k2_hold(context)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(local_value("S").constants.ALT_HOLD_SECONDS + 0.05)
+  key(2, 0); key(1, 0)
+end
+
+local function open_edit_view(context)
+  alt_k2_hold(context)
+  context.screen.clear(); redraw()
+end
+
+-- The marks drawn on a pattern row's baseline besides its number and run state
+local function row_marks(context, voice_idx)
+  local count = 0
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == row_y(voice_idx) + 5 and entry.x ~= 0 and entry.x ~= 127 then count = count + 1 end
+  end
+  return count
+end
+
+test("steps past a voice's length draw as dots and each row plays its own step", function()
+  local context, S = started_on_seq()
+  params:set("v2_seq_length", 5)
+  S.patterns[2][4] = 9; S.patterns[2][9] = 12
+  redraw()
+  assert_true(cell(context, 2, 5), "step 5 of a five-step voice is a cell")
+  assert_equal(cell(context, 2, 4).level, 9, "a step inside the length keeps its level")
+  for step = 6, 16 do
+    assert_true(cell(context, 2, step) == nil, "step " .. step .. " is no cell")
+    local dot = rect_at(context, cell_x(step) + 1, row_y(2) + 1, 1, 1)
+    assert_true(dot, "step " .. step .. " is a 1x1 dot")
+    assert_equal(dot.level, 1, "at level 1, set or not"); assert_equal(dot.filled, true)
+  end
+  assert_true(cell(context, 1, 16), "voice 1 keeps its sixteen cells")
+  assert_screen_layout(context, "SEQ with a five-step voice")
+  -- voice 1 at 1/16 and voice 3 at 1/8: after two 16ths voice 1 sounds
+  -- step 3 and voice 3 step 2
+  params:set("v3_seq_division", 5)
+  tap(2)
+  context.clock.run_for(0.25 + 1e-6)
+  redraw()
+  assert_equal(cell(context, 1, 3).level, 4, "voice 1's playing column is step 3 (an empty step at 4)")
+  assert_equal(cell(context, 3, 2).level, 4, "voice 3's is step 2")
+  assert_equal(cell(context, 1, 2).level, 1, "voice 1 has left step 2")
+  assert_equal(cell(context, 3, 3).level, 1, "voice 3 has not reached step 3")
+  -- voice 2 wraps at its length: four 16ths later it sounds step 2 again
+  context.clock.run_for(0.5)
+  redraw()
+  assert_equal(S.lib.sequencer.sounding_step(2), 2)
+  assert_equal(cell(context, 2, 2).level, 4, "voice 2's playing column after its wrap")
+  assert_equal(cell(context, 1, 7).level, 4, "voice 1's is step 7")
+  tap(2)
+end)
+
+test("ALT+K2 held opens the edit view; a quick press still randomizes the pattern", function()
+  local context, S = started_on_seq()
+  S.selected_voice = 2; S.cursors.seq_step = 5
+  math.randomseed(7)
+  key(1, 1); tap(2); key(1, 0)
+  local set = 0
+  for step = 1, 16 do if S.patterns[2][step] > 0 then set = set + 1 end end
+  assert_true(set > 0, "a quick press randomizes voice 2's pattern")
+  local randomized = steps_of(S, 2)
+  open_edit_view(context)
+  assert_true(h.screen_shows(context, "v2 step 5"), "the hold opens the edit view on the voice and step")
+  assert_true(same_steps(steps_of(S, 2), randomized), "the hold changes no step")
+  enc(2, 1)
+  assert_equal(S.cursors.seq_step, 5, "E2 moves the row, not the step")
+  key(1, 1); enc(2, 3); key(1, 0)
+  assert_equal(S.cursors.seq_step, 8, "ALT+E2 moves the step")
+  assert_equal(S.selected_voice, 2, "and keeps the voice")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v2 step 8"))
+  -- a quick press in the edit view: the undo of the randomize, then a new one
+  key(1, 1); tap(2); key(1, 0)
+  for step = 1, 16 do assert_equal(S.patterns[2][step], 0, "the quick press undid the randomize: step " .. step) end
+  math.randomseed(9)
+  key(1, 1); tap(2); key(1, 0)
+  set = 0
+  for step = 1, 16 do if S.patterns[2][step] > 0 then set = set + 1 end end
+  assert_true(set > 0, "the next quick press randomizes again")
+  -- K2: back to the pattern view, its cursor on the step edited
+  tap(2)
+  context.screen.clear(); redraw()
+  assert_true(not h.screen_shows(context, "v2 step 8"), "K2 goes back to the pattern view")
+  assert_true(cursor_rect(context, 2, 8), "whose cursor is on step 8")
+  assert_true(not S.pattern_playing, "K2 in the edit view never plays")
+end)
+
+test("the edit view edits length, division and each step attribute", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  S.buffers[1].seconds = 8
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)  -- a buffer voice, whose bookmarks are set
+  params:set("v1_buf_pos", 0.4); params:set("v1_grain_pitch", 1.5); params:set("v1_grain_size", 0.12)
+  S.cursors.seq_step = 3
+  open_edit_view(context)
+  assert_equal(go_to(context, "length"), "16")
+  enc(3, -4); assert_equal(params:get("v1_seq_length"), 12, "E3 sets the length"); assert_equal(shown(context), "12")
+  assert_equal(go_to(context, "division"), "1/16")
+  enc(3, 2); assert_equal(params:get("v1_seq_division"), 5); assert_equal(shown(context), "1/8")
+  assert_equal(go_to(context, "level"), "0")
+  enc(3, 9); assert_equal(S.patterns[1][3], 9, "E3 sets the step's level"); assert_equal(shown(context), "9")
+  assert_equal(go_to(context, "prob"), "100%", "no probability: it plays always")
+  enc(3, -20); assert_equal(seq.step_attr(1, 3, "prob"), 80); assert_equal(shown(context), "80%")
+  assert_equal(go_to(context, "ratchet"), "x1")
+  enc(3, 1); assert_equal(seq.step_attr(1, 3, "ratchet"), 2); assert_equal(shown(context), "x2")
+  assert_equal(go_to(context, "note"), "off")
+  enc(3, 3); assert_equal(seq.step_attr(1, 3, "notes")[1], 3); assert_equal(shown(context), "+3")
+  enc(3, -5); assert_equal(shown(context), "-2", "a note below the voice's pitch")
+  enc(3, -12); assert_equal(shown(context), "-14", "down to -14")
+  enc(3, -1); assert_equal(seq.step_attr(1, 3, "notes"), nil, "below -14: off"); assert_equal(shown(context), "off")
+  assert_equal(go_to(context, "pos"), "off")
+  enc(3, 2); assert_near(seq.step_attr(1, 3, "pos"), 0.42, 1e-9); assert_equal(shown(context), "0.42")
+  assert_near(params:get("v1_buf_pos"), 0.4, 1e-9, "the lock leaves the stored position")
+  assert_equal(go_to(context, "pitch"), "off")
+  enc(3, 1); enc(3, -1)
+  assert_near(seq.step_attr(1, 3, "pitch"), 1.5, 1e-9); assert_equal(shown(context), "1.50")
+  assert_equal(go_to(context, "size"), "off")
+  enc(3, 1); enc(3, -1)
+  assert_near(seq.step_attr(1, 3, "size"), 0.12, 1e-9); assert_equal(shown(context), "0.12 s")
+  assert_equal(go_to(context, "bookmark"), "off")
+  enc(3, 2); assert_equal(seq.step_attr(1, 3, "bookmark"), 2); assert_equal(shown(context), "2")
+  for step = 1, 16 do
+    if step ~= 3 then assert_equal(S.pattern_steps[1][step], nil, "only step 3 has attributes: " .. step) end
+  end
+  -- K3 turns the step on and off, from any row
+  go_to(context, "chain")
+  tap(3); assert_equal(S.patterns[1][3], 0, "K3 turns the set step off")
+  tap(3); assert_equal(S.patterns[1][3], 15, "and on at 15")
+  assert_screen_layout(context, "SEQ's edit view")
+end)
+
+test("a lock or note from off starts at the stored value or 0", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  params:set("v1_buf_pos", 0.3)
+  open_edit_view(context)
+  go_to(context, "pos"); enc(3, 1)
+  assert_near(seq.step_attr(1, 1, "pos"), 0.31, 1e-9, "a turn up from off: the stored 0.30, one step up")
+  seq.set_step_attr(1, 1, "pos", nil)
+  enc(3, -1)
+  assert_near(seq.step_attr(1, 1, "pos"), 0.29, 1e-9, "a turn down from off: one step down")
+  go_to(context, "note"); enc(3, 1)
+  assert_equal(seq.step_attr(1, 1, "notes")[1], 1, "a note from off starts at 0")
+  seq.set_step_attr(1, 1, "notes", nil)
+  enc(3, -2)
+  assert_equal(seq.step_attr(1, 1, "notes")[1], -2, "either way")
+  -- the step's own gate from off starts at the voice's gate length (2 steps;
+  -- one detent of its exp range, 0.05-16, is 0.01 of 0.05 x 320^x)
+  params:set("v1_seq_gate_length", 2)
+  go_to(context, "gate", 2); enc(3, 1)
+  assert_near(seq.step_attr(1, 1, "gate"), 2.11876, 1e-4, "the step's gate starts at the voice's")
+  -- a lock at its range's start goes off below it
+  seq.set_step_attr(1, 1, "pos", 0.01)
+  go_to(context, "pos")
+  enc(3, -1); assert_near(seq.step_attr(1, 1, "pos"), 0, 1e-9, "down to the range's start")
+  enc(3, -1); assert_equal(seq.step_attr(1, 1, "pos"), nil, "below it: off")
+  assert_equal(shown(context), "off")
+  assert_near(params:get("v1_buf_pos"), 0.3, 1e-9, "the stored position never moved")
+end)
+
+test("the note row edits notes[1] and keeps further entries; off clears the list", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  seq.set_step_attr(1, 1, "notes", {2, 5, -1})
+  open_edit_view(context)
+  assert_equal(go_to(context, "note"), "+2", "the row shows notes[1]")
+  enc(3, 1)
+  local notes = seq.step_attr(1, 1, "notes")
+  assert_equal(#notes, 3, "three notes still")
+  assert_equal(notes[1], 3, "E3 moves notes[1]"); assert_equal(notes[2], 5); assert_equal(notes[3], -1, "and keeps the rest")
+  enc(3, -17)
+  assert_equal(seq.step_attr(1, 1, "notes")[1], -14)
+  assert_equal(#seq.step_attr(1, 1, "notes"), 3)
+  enc(3, -1)
+  assert_equal(seq.step_attr(1, 1, "notes"), nil, "off clears the whole list")
+  assert_equal(shown(context), "off")
+  -- ALT+K2 held on the row clears it too
+  seq.set_step_attr(1, 1, "notes", {4, 7})
+  alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 1, "notes"), nil, "the row's reset clears the list")
+end)
+
+test("the euclid row fills the voice's steps: E3 the hits, ALT+E3 the rotation", function()
+  local context, S = started_on_seq()
+  params:set("v1_seq_length", 8)
+  S.patterns[1][12] = 6
+  S.lib.sequencer.set_step_attr(1, 4, "prob", 50)
+  open_edit_view(context)
+  assert_equal(go_to(context, "euclid"), "-", "no fill yet")
+  enc(3, 3)
+  local expected = {15, 0, 0, 15, 0, 0, 15, 0}
+  for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "3 hits in 8: step " .. step) end
+  assert_equal(S.patterns[1][12], 6, "a step past the length is kept")
+  assert_equal(S.lib.sequencer.step_attr(1, 4, "prob"), 50, "and the attributes")
+  assert_equal(shown(context), "3/8 +0")
+  key(1, 1); enc(3, 1); key(1, 0)
+  expected = {0, 15, 0, 0, 15, 0, 0, 15}
+  for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "rotated by 1: step " .. step) end
+  assert_equal(shown(context), "3/8 +1")
+  enc(3, -1)
+  assert_equal(shown(context), "2/8 +1", "E3 keeps the rotation")
+  enc(3, -5)
+  assert_equal(shown(context), "0/8 +1", "the hits stop at 0")
+  for step = 1, 8 do assert_equal(S.patterns[1][step], 0, "no hits: step " .. step) end
+end)
+
+test("ALT+K2 held in the edit view resets the row", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  open_edit_view(context)
+  go_to(context, "division"); enc(3, 2)
+  assert_equal(params:get("v1_seq_division"), 5)
+  alt_k2_hold(context)
+  assert_equal(params:get("v1_seq_division"), 3, "a voice param back to its default")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v1 step 1"), "the edit view stays")
+  seq.set_step_attr(1, 1, "pos", 0.7)
+  go_to(context, "pos"); alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 1, "pos"), nil, "a lock back to off")
+  seq.set_step_attr(1, 1, "ratchet", 3)
+  go_to(context, "ratchet"); alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 1, "ratchet"), nil, "a ratchet back to one hit")
+  params:set("seq_chain_bars", 9)
+  go_to(context, "bars"); alt_k2_hold(context)
+  assert_equal(params:get("seq_chain_bars"), 4, "a chain param back to its default")
+  params:set("seq_chain", 1)
+  go_to(context, "chain"); alt_k2_hold(context)
+  assert_equal(params:get("seq_chain"), 0, "the chain off")
+  for step = 1, 16 do assert_equal(S.patterns[1][step], 0, "a hold randomizes nothing") end
+end)
+
+test("the bookmark row shows only when the voice has a set bookmark", function()
+  local context, S = started_on_seq()
+  open_edit_view(context)
+  local synth = row_labels(context)
+  assert_true(not synth:find("bookmark", 1, true), "a synth voice has no bookmark row: " .. synth)
+  S.buffers[1].seconds = 8
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  assert_equal(row_labels(context), "length division swing gate gate len gate rel euclid clear level prob ratchet "
+    .. "gate note pos pitch size bookmark chain from scenes bars quantize", "every row, in order")
+  S.buffers[1].seconds = 0
+  assert_true(not row_labels(context):find("bookmark", 1, true), "an empty slot has none")
+end)
+
+-- Each row's hint names its label, so every row is checked with the cursor
+-- on it (the layout states draw five windows of rows)
+test("every edit view row lays out with the cursor on it, on voices 1 and 7, with and without bookmarks", function()
+  for _, voice_idx in ipairs({ 1, 7 }) do
+    for _, bookmarks in ipairs({ false, true }) do
+      local context, S = started_on_seq()
+      S.lib.ui_keys.select_voice_by(voice_idx - S.selected_voice)
+      S.cursors.seq_step = 16
+      if bookmarks then
+        S.buffers[1].seconds = 8
+        params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1)
+      end
+      open_edit_view(context)
+      local rows = 0
+      walk_rows(context, function(label)
+        rows = rows + 1
+        local where = string.format("v%d%s, row %s", voice_idx, bookmarks and " with bookmarks" or "", label)
+        assert_screen_layout(context, where)
+        key(1, 1); context.screen.clear(); redraw()
+        assert_screen_layout(context, where .. ", ALT")
+        key(1, 0); context.screen.clear(); redraw()
+      end)
+      assert_equal(rows, bookmarks and 22 or 21, "every row visited")
+    end
+  end
+end)
+
+test("the gate rows edit the voice's gate, its length and release, and a step's own length", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  redraw()
+  assert_equal(row_marks(context, 1), 0, "no mark on an ungated voice's row")
+  open_edit_view(context)
+  assert_equal(go_to(context, "gate"), "off")
+  enc(3, 1); assert_equal(params:get("v1_seq_gate"), 2, "E3 turns the gate on"); assert_equal(shown(context), "on")
+  assert_equal(go_to(context, "gate len"), "0.50 st")
+  enc(3, 1); assert_true(params:get("v1_seq_gate_length") > 0.5, "E3 lengthens it")
+  assert_equal(go_to(context, "gate rel"), "0.10 s")
+  enc(3, -1); assert_true(params:get("v1_seq_gate_release") < 0.1, "E3 shortens the release")
+  assert_equal(go_to(context, "swing"), "50%")
+  enc(3, 8); assert_equal(params:get("v1_seq_swing"), 58); assert_equal(shown(context), "58%")
+  assert_equal(go_to(context, "gate", 2), "off", "the step's gate: the voice's length")
+  seq.set_step_attr(1, 1, "gate", 2)
+  assert_equal(shown(context), "2.00 st")
+  alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 1, "gate"), nil); assert_equal(shown(context), "off")
+  tap(2)  -- back to the pattern view
+  context.screen.clear(); redraw()
+  assert_equal(row_marks(context, 1), 1, "the pattern view marks voice 1's gated row")
+  assert_equal(row_marks(context, 2), 0, "and not voice 2's")
+  params:set("v2_seq_gate", 2)
+  context.screen.clear(); redraw()
+  assert_equal(row_marks(context, 2), 1, "two gated voices, one under the other")
+  assert_screen_layout(context, "SEQ with two gated voices")
+end)
+
+test("open_step_editor shows the editor over any page and close_step_editor returns to it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages_seq = S.lib.pages_seq
+  show_page("MAIN")
+  assert_equal(pages_seq.step_editor(), nil, "no editor before an open")
+  assert_equal(pages_seq.step_editor_edited(), false)
+  assert_equal(pages_seq.open_step_editor(3, 5, 1), true)
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v3 step 5"), "the screen shows the editor")
+  assert_equal(context.screen.texts[1].text, "MAIN", "under MAIN's header")
+  local editor = pages_seq.step_editor()
+  assert_equal(editor.voice, 3); assert_equal(editor.step, 5); assert_equal(editor.port, 1)
+  assert_equal((cursor_row(context)), "level", "it opens on the step's level")
+  assert_equal(pages_seq.step_editor_edited(), false, "nothing edited yet")
+  enc(1, 2)
+  assert_equal(local_value("ui_page"), 1, "E1 does nothing")
+  assert_equal(pages_seq.step_editor_edited(), false, "E1 edits nothing")
+  enc(3, 4)
+  assert_equal(S.patterns[3][5], 4, "E3 sets the editor's step's level")
+  assert_equal(pages_seq.step_editor_edited(), true, "an E3 turn is an edit")
+  local selected = S.selected_voice
+  enc(2, 1); context.screen.clear(); redraw()
+  assert_equal((cursor_row(context)), "prob", "E2 moves the editor's row")
+  assert_equal(S.selected_voice, selected, "the selected voice stays")
+  pages_seq.close_step_editor(1)
+  assert_equal(pages_seq.step_editor(), nil, "closed")
+  assert_equal(S.lib.ui_modal.top(), nil, "the owner is popped")
+  assert_equal(pages_seq.step_editor_edited(), false, "a closed editor has edited nothing")
+  context.screen.clear(); redraw()
+  assert_true(not h.screen_shows(context, "v3 step 5"), "MAIN again")
+  assert_screen_layout(context, "MAIN after the step editor")
+  -- a second open from another port replaces the first, whose close then
+  -- does nothing
+  assert_equal(pages_seq.open_step_editor(3, 5, 1), true)
+  enc(3, 1)
+  assert_equal(pages_seq.open_step_editor(6, 12, 2), true)
+  editor = pages_seq.step_editor()
+  assert_equal(editor.voice, 6); assert_equal(editor.step, 12); assert_equal(editor.port, 2)
+  assert_equal(pages_seq.step_editor_edited(), false, "the new editor has edited nothing")
+  pages_seq.close_step_editor(1)
+  assert_true(pages_seq.step_editor() ~= nil, "the first port's close leaves the second's editor")
+  pages_seq.close_step_editor(2)
+  assert_equal(pages_seq.step_editor(), nil)
+  assert_equal(S.lib.ui_modal.top(), nil)
+  -- an editor for no step opens nothing
+  assert_equal(pages_seq.open_step_editor(8, 1, 1), false, "voice 8")
+  assert_equal(pages_seq.open_step_editor(1, 17, 1), false, "step 17")
+  assert_equal(pages_seq.step_editor(), nil)
+  for _, page in ipairs({ "VOICE", "SEQ", "BUFFER", "SETUP" }) do
+    show_page(page)
+    pages_seq.open_step_editor(7, 16, 1)
+    context.screen.clear(); redraw()
+    assert_true(h.screen_shows(context, "v7 step 16"), "the editor over " .. page)
+    pages_seq.close_step_editor(1)
+  end
+end)
+
+test("the step editor's keys act on its own voice and step", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  local pages_seq = S.lib.pages_seq
+  S.selected_voice = 1; S.cursors.seq_step = 1
+  pages_seq.open_step_editor(4, 6, 1)
+  tap(3)
+  assert_equal(S.patterns[4][6], 15, "K3 turns the editor's step on")
+  assert_equal(S.patterns[1][1], 0, "not the page's")
+  key(1, 1); enc(2, 2); key(1, 0)
+  assert_equal(pages_seq.step_editor().step, 8, "ALT+E2 moves the editor's step")
+  assert_equal(S.cursors.seq_step, 1, "and leaves SEQ's cursor")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v4 step 8"))
+  math.randomseed(4)
+  key(1, 1); tap(2); key(1, 0)
+  local set = 0
+  for step = 1, 16 do if S.patterns[4][step] > 0 then set = set + 1 end end
+  assert_true(set > 0, "a quick ALT+K2 randomizes the editor's voice")
+  for step = 1, 16 do assert_equal(S.patterns[1][step], 0, "and no other voice") end
+  key(1, 1); tap(2); key(1, 0)
+  for step = 1, 16 do
+    assert_equal(S.patterns[4][step], step == 6 and 15 or 0, "a second quick press undoes it: step " .. step)
+  end
+  enc(2, 1); enc(3, -10)
+  assert_equal(seq.step_attr(4, 8, "prob"), 90)
+  key(1, 1); key(2, 1); context.clock.run_for(0.6)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:reset K3:clr E2:step", "held: letting go resets the row")
+  key(2, 0); key(1, 0)
+  assert_equal(seq.step_attr(4, 8, "prob"), nil, "the hold reset the row")
+  key(1, 1); tap(3); key(1, 0)
+  for step = 1, 16 do assert_equal(S.patterns[4][step], 0, "ALT+K3 clears the editor's voice") end
+  tap(2)
+  assert_equal(pages_seq.step_editor(), nil, "K2 closes the editor")
+  context.screen.clear(); redraw()
+  assert_true(not h.screen_shows(context, "v4 step 8"), "SEQ again")
+  assert_true(not S.pattern_playing, "K2 in the editor never plays")
+end)
+
+test("the hint rows", function()
+  local context, S = started_on_seq()
+  local function hints() context.screen.clear(); redraw(); return hint_text(context) end
+  assert_equal(hints(), "K2:play K3:step E3:level", "the pattern view")
+  key(1, 1); assert_equal(hints(), "K2:rand K3:clr E3:bpm", "with ALT")
+  key(2, 1); context.clock.run_for(0.6)
+  assert_equal(hints(), "K2:edit K3:clr E3:bpm", "ALT+K2 held: letting go opens the edit view")
+  key(2, 0); key(1, 0)
+  assert_equal(hints(), "K2:back K3:step E3:length", "the edit view, on its first row")
+  go_to(context, "gate rel"); assert_equal(hints(), "K2:back K3:step E3:gate rel")
+  go_to(context, "prob"); assert_equal(hints(), "K2:back K3:step E3:prob")
+  go_to(context, "clear"); assert_equal(hints(), "K2:back K3:clr", "on the clear row K3 clears")
+  go_to(context, "quantize"); assert_equal(hints(), "K2:back K3:step E3:quantize")
+  key(1, 1); assert_equal(hints(), "K2:rand K3:clr E2:step", "the edit view with ALT")
+  key(2, 1); context.clock.run_for(0.6)
+  assert_equal(hints(), "K2:reset K3:clr E2:step", "held: letting go resets the row")
+  key(2, 0); key(1, 0)
+  S.lib.pages_seq.open_step_editor(2, 4, 1)
+  assert_equal(hints(), "K2:back K3:step E3:level", "the step editor")
+  key(1, 1); assert_equal(hints(), "K2:rand K3:clr E2:step", "the step editor with ALT")
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+  assert_equal(hints(), "K2:back K3:step E3:quantize", "the edit view under it again")
 end)
 
 end

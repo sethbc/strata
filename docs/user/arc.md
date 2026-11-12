@@ -6,7 +6,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 ## Arc Encoders
 
-The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per division), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
+The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per division), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice), the step editor's probability (about 10 ticks per percent) and ALT rings (20 ticks per step) and the SCENES cursor ring (10 ticks per slot or field). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
 
 On the **MAIN** page:
 
@@ -24,7 +24,7 @@ With **K1 held** (ALT), MAIN's rings change to the selected voice's:
 
 On the **VOICE** page, the four rings edit four rows of the voice's list: the group of four the cursor is in (rows 1-4, 5-8, ... counting only the parameters, not the section names), ring 1 the group's first row. Moving the cursor into the next group moves the rings with it. Continuous parameters sweep as above; choices and numbers (grain envelope and mode, the mod sources, the source) step one value per 20 ticks. An on/off row (freeze, quantize) turns on after 20 ticks up and off after 20 ticks down. Its ring is dark while off and a full ring while on. A ring past the last row of the list is dark and does nothing. The ring of the row under the cursor is the brightest.
 
-On the **SEQ** page:
+On the **SEQ** page, in the patterns and in the edit view alike (in the edit view ring 1 moves the step being edited):
 
 - **Ring 1** - Step cursor (10 ticks per step)
 - **Ring 2** - Level of the step under the cursor on the selected voice's pattern, 0 (off) to 15 (10 ticks per level; the grid follows)
@@ -32,6 +32,14 @@ On the **SEQ** page:
 - **Ring 4** - Voice row, the selected voice (20 ticks per voice)
 
 Rings 1, 2 and 4 show their position: the step across the 16 steps, the level up to 15, the voice across the 7 voices. At the first position (step 1, level 0, voice 1) one LED stays lit, so the ring never looks off. The same holds for the SCENES cursor ring at slot 1.
+
+While a grid's **step editor** is open (a step key held on the grid, over any page; see the [SEQ page](pages/seq.md)), the rings edit that step instead of the page's:
+
+- **Ring 1** - Position, **Ring 2** - pitch, **Ring 3** - size, the step's step locks (see [Sequencer](sequencer.md)): a full turn for the whole range of the voice's own parameter. A step lock that is off starts from the voice's own value; turning below the start of the range turns it off again
+- **Ring 4** - Probability, in whole percents (a full turn for 0-100 %)
+- With **ALT** held: **Ring 1** - ratchets, **Ring 2** - note, **Ring 3** - bookmark (dark and does nothing without bookmarks), **Ring 4** - the step's level (20 ticks per step)
+
+A set step lock, note or bookmark is drawn bright; one that is off is drawn dim at the value a turn starts from.
 
 On the **FX** page:
 
@@ -74,7 +82,7 @@ On the **SETUP** page the rings are off and do nothing.
 The button runs the page's main action, on the pages that give it one (each page's own page under [Screen Controls](controls.md) says which):
 
 - **MAIN** and **VOICE** - start or stop the selected voice
-- **SEQ** - play or stop the patterns
+- **SEQ** - play or stop the patterns (nothing while a step editor is open)
 - **LFO** - turn the selected LFO on or off
 - **BUFFER** - record into the slot under the cursor, or stop
 - **SCENES** - recall the slot under the cursor at once
@@ -85,7 +93,7 @@ The button runs the page's main action, on the pages that give it one (each page
 - Ring position shows the current parameter value, or the cursor's position on SEQ and SCENES
 - MAIN: bright rings (level 15/12) for a running voice, dim (4/3) for a stopped one; ring 1 (density) always bright. The ALT rings at 12 for a running voice, 3 for a stopped one
 - VOICE: the cursor row's ring at 15, the others at 12
-- SEQ: step and level rings at 15, tempo and voice rings at 12
+- SEQ: step and level rings at 15, tempo and voice rings at 12; the step editor's at 15 while set, 4 while off
 - FX: level 12; frequency and delay time follow their exponential curve
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 - BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12
