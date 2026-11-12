@@ -467,6 +467,25 @@ test("a repeated input meter value asks for no redraw (#438)", function()
   assert_equal(pages.screen_dirty, true, "a new level asks for one")
 end)
 
+-- #438 (3): norns replaces its poll objects when it re-registers the polls,
+-- so each visit looks them up again (S.lib.input_level.refresh)
+test("each BUFFER visit looks the input polls up again: replaced poll objects move the meter and the source (#438)", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("BUFFER"); show_page("SCENES")
+  for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do
+    local entry = { name = name, callback = nil, time = 0.25, running = false }
+    function entry:start() self.running = true end
+    function entry:stop() self.running = false end
+    context.polls.polls[name] = entry   -- as norns re-registers its polls (an engine load)
+  end
+  show_page("BUFFER")
+  assert_true(context.polls.polls.amp_in_l.running and context.polls.polls.amp_in_r.running,
+    "the second visit starts the new poll objects")
+  context.polls.fire("amp_in_l", 1); next_frame(context)
+  assert_equal((meter_state(context)), 8, "and their values move the meter")
+  assert_near(local_value("S").lib.input_level.value(), 1, 1e-9, "and the source")
+end)
+
 -- #435: the page animated, and the meter asked for redraws, under the open
 -- file selector, so norns' file list was redrawn 15 times a second
 test("the open file selector is not redrawn every frame over an animating slot, nor by the meter (#435)", function()

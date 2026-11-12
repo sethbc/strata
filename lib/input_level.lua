@@ -2,7 +2,8 @@
 -- The input level (3.4, design §10.3), S.lib.input_level: norns' two input
 -- level polls (the only code that names them: a norns poll has one
 -- callback) run from the start step to the cleanup step at poll_hz, on
--- every page. levels() returns the last two amplitudes, value() the louder
+-- every page (refresh() looks them up again, at the start and at each BUFFER
+-- visit). levels() returns the last two amplitudes, value() the louder
 -- one times input_follow_gain, clamped to 0..1, and on_level(fn) runs fn
 -- after each poll value (BUFFER's input meter redraws from it, only while
 -- it shows). Registers the modulation source `input` (section audio) and
@@ -17,7 +18,7 @@ return function(S)
 
   -- amps: the latest value per poll; polls: the poll objects, per name;
   -- started: between the start step and cleanup; listeners: on_level's
-  local state = {amps = {}, polls = {}, started = false, listeners = {}}
+  local state = {amps = {}, polls = {}, started = false, listeners = {}, errors = {}}
 
   function M.add_params()
     params:add_group("strata_input", "input", 1)
@@ -45,21 +46,37 @@ return function(S)
   local function polled(name, value)
     if type(value) ~= "number" or value ~= value then value = 0 end
     state.amps[name] = value
-    for _, fn in ipairs(state.listeners) do fn() end
+    -- each listener runs contained: one that raises prints once per distinct
+    -- message and stops no other
+    for index, fn in ipairs(state.listeners) do
+      S.lib.ui_frame.contained_call(state.errors, index, "input level listener", fn)
+    end
   end
 
-  -- The polls are looked up at the start; a norns without them leaves the
-  -- level at 0
-  S.register_start(S.constants.START_ORDER.input_level, function()
-    state.started = true
+  -- Look both polls up again with poll.set, give them the module's callback
+  -- and rate and start them, stopping an object held before when it is a
+  -- different one: norns replaces its poll objects whenever it re-registers
+  -- the polls (an engine load), so the start step and each BUFFER visit call
+  -- this (#438). A norns without the polls leaves the level at 0
+  function M.refresh()
     for _, name in ipairs(INPUT_LEVEL.polls) do
       local input_poll = poll.set(name, function(value) polled(name, value) end)
+      local old = state.polls[name]
+      if old and old ~= input_poll then
+        old:stop()
+        old.callback = nil
+      end
       state.polls[name] = input_poll
       if input_poll then
         input_poll.time = 1 / INPUT_LEVEL.poll_hz
         input_poll:start()
       end
     end
+  end
+
+  S.register_start(S.constants.START_ORDER.input_level, function()
+    state.started = true
+    M.refresh()
   end)
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.input_meter, function()
