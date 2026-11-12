@@ -327,36 +327,15 @@ local function wake_buffer_clock(context, slot)
   context.clock.advance_until(local_value("buffer_record_clocks")[slot])
 end
 
--- 3.4's step editor (2b's S.lib.pages_seq), as a double for the grid
--- tests: the four functions the grid calls, shaped as 2b gives them
--- (open_step_editor(voice, step, port) returns true, close_step_editor(port),
--- step_editor() returns {voice, step, port} or nil, step_editor_replacing()
--- a boolean, false unless a test sets editor.replacing; editor.edited is a
--- test's note of an edit, which nothing reads). Open pushes a modal owner
--- and close pops it, as the real editor does; editor.calls records each
--- open and close. Install it after load_strata
-local function step_editor_double()
-  local S = local_value("S")
-  local editor = {open = nil, edited = false, replacing = false, calls = {}}
-  local owner = {draw = function() end}
-  local seq = S.lib.pages_seq
-  function seq.open_step_editor(voice, step, port)
-    table.insert(editor.calls, "open " .. voice .. " " .. step .. " " .. port)
-    if editor.open then S.lib.ui_modal.pop(owner) end
-    editor.open, editor.edited = {voice = voice, step = step, port = port}, false
-    S.lib.ui_modal.push(owner)
-    return true
-  end
-  function seq.close_step_editor(port)
-    table.insert(editor.calls, "close " .. port)
-    if editor.open and editor.open.port == port then
-      editor.open = nil
-      S.lib.ui_modal.pop(owner)
-    end
-  end
-  function seq.step_editor() return editor.open end
-  function seq.step_editor_replacing() return editor.replacing end
-  return editor
+-- What 3.4's real step editor (2b's S.lib.pages_seq) has open, as
+-- "voice step port" ("3 5 1"), or nil while it is closed. The grid tests
+-- run their held steps against the real editor (#630): its edits, its own
+-- replacements (the euclid row) and a close from the screen (K2) are all
+-- reached through its keys, encoders and grid holds
+local function shown_step_editor()
+  local editor = local_value("S").lib.pages_seq.step_editor()
+  if editor == nil then return nil end
+  return editor.voice .. " " .. editor.step .. " " .. editor.port
 end
 
 -- Deep copy of plain data tables
@@ -691,7 +670,7 @@ local HEADER_FLASH_X = 40
 local DESCENDER_CLEARANCE = 7
 
 -- Check the drawn screen: everything inside 128x64, no two strings overlap on
--- a row, the page title at 0,8, then either the eight page dots (at least
+-- a row, the page title at 0,8, then either the nine page dots (at least
 -- 4 px after the title) or, while a header flash shows, its text at 40,8
 -- and no dots; no header rect (dot, play mark) under a header string; and a
 -- hint row at y 62.
@@ -882,7 +861,7 @@ return {
   finish_startup = finish_startup,
   wake = wake,
   wake_buffer_clock = wake_buffer_clock,
-  step_editor_double = step_editor_double,
+  shown_step_editor = shown_step_editor,
   deep_copy = deep_copy,
   tabutil_text = tabutil_text,
   file_text = file_text,

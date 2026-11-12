@@ -40,8 +40,9 @@ local function key_count(keys)
   return count
 end
 
--- 2b's step editor's five functions, as a double (test/helpers.lua)
-local step_editor_double = h.step_editor_double
+-- What the real step editor (2b's S.lib.pages_seq) has open, as "voice
+-- step port", or nil (test/helpers.lua)
+local shown_step_editor = h.shown_step_editor
 
 
 test("every 64 grid key runs without error", function()
@@ -456,26 +457,30 @@ test("64: a hold in the step views keeps working and never reaches positions", f
   local context, S = positions_grid()
   local calls = 0
   local original = S.lib.positions.strip_key
-  local editor = step_editor_double()
   S.lib.positions.strip_key = function() calls = calls + 1 end
+  local shown = {}
+  local function look() shown[#shown + 1] = tostring(shown_step_editor()) end
   context.grid.press(1, 3, 2, 1)
-  context.clock.run_for(0.6)
-  context.grid.press(1, 3, 2, 0)
-  context.grid.press(1, 6, 3, 1); context.clock.run_for(0.6); context.grid.press(1, 6, 3, 0)
+  context.clock.run_for(0.6); look()
+  context.grid.press(1, 3, 2, 0); look()
+  context.grid.press(1, 6, 3, 1); context.clock.run_for(0.6); look()
+  context.grid.press(1, 6, 3, 0); look()
   S.lib.positions.strip_key = original
   assert_equal(calls, 0, "no strip call from the step views")
-  assert_equal(table.concat(editor.calls, ","), "open 2 3 1,close 1,open 3 6 1,close 1", "each hold opened the step editor")
+  assert_equal(table.concat(shown, ","), "2 3 1,nil,3 6 1,nil", "each hold opened the step editor, each release closed it")
 end)
 
 test("switching halves ends a held step gesture", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   context.grid.plug(1, 8, 8)
-  step_editor_double()
   context.grid.press(1, 3, 1, 1)  -- half 1: voice 1 step 3 held
   assert_equal(patterns[1][3], 0, "step 3 toggles at its release, not its press")
-  context.grid.press(1, 1, 8, 1); context.clock.run_for(0.6); context.grid.press(1, 1, 8, 0)
+  context.grid.press(1, 1, 8, 1); context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), "1 3 1", "the held step opened the step editor")
+  context.clock.run_for(0.25); context.grid.press(1, 1, 8, 0)
   assert_equal(shown_half(1), 2, "the hold showed steps 9-16")
+  assert_equal(shown_step_editor(), nil, "and closed the editor with the half it left")
   tap(context, 1, 8, 1)
   assert_equal(patterns[1][16], 15, "column 8 now toggles step 16")
   assert_equal(patterns[1][3], 0, "the hidden held step takes no level")
@@ -510,28 +515,27 @@ end)
 test("a held step opens the step editor in the steps views", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  local editor = step_editor_double()
   local patterns = local_value("patterns")
   context.grid.plug(1, 8, 8)
   context.grid.press(1, 3, 2, 1); context.clock.run_for(0.35)
-  assert_equal(table.concat(editor.calls, ","), "open 2 3 1", "steps 1-8: voice 2's step 3")
+  assert_equal(shown_step_editor(), "2 3 1", "steps 1-8: voice 2's step 3")
   context.grid.press(1, 3, 2, 0)
-  assert_equal(editor.open, nil, "the release closes it")
+  assert_equal(shown_step_editor(), nil, "the release closes it")
   assert_equal(patterns[2][3], 0, "and toggles nothing")
   switch_half(context, 1)
   context.grid.press(1, 3, 2, 1); context.clock.run_for(0.35)
-  assert_equal(editor.calls[#editor.calls], "open 2 11 1", "steps 9-16: voice 2's step 11")
-  assert_true(S.lib.ui_modal.top() ~= nil, "the editor has the screen")
+  assert_equal(shown_step_editor(), "2 11 1", "steps 9-16: voice 2's step 11")
+  assert_equal(S.lib.ui_modal.top(), S.lib.pages_seq.step_editor_owner, "the editor has the screen")
   -- the half switch ends the held step: the editor closes, nothing toggles
   switch_half(context, 1)
   assert_equal(grid_core().page(1), 5, "the hold went on to the positions view")
-  assert_equal(editor.open, nil, "the editor closed with the half")
+  assert_equal(shown_step_editor(), nil, "the editor closed with the half")
   assert_equal(S.lib.ui_modal.top(), nil)
   context.grid.press(1, 3, 2, 0)
   assert_equal(patterns[2][11], 0, "its release toggles nothing")
-  local opened = #editor.calls
-  context.grid.press(1, 3, 1, 1); context.clock.run_for(0.35); context.grid.press(1, 3, 1, 0)
-  assert_equal(#editor.calls, opened, "the positions view opens no editor")
+  context.grid.press(1, 3, 1, 1); context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), nil, "the positions view opens no editor")
+  context.grid.press(1, 3, 1, 0)
   -- a tap still toggles, on its release
   switch_half(context, 1)
   context.grid.press(1, 5, 4, 1)
