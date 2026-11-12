@@ -1354,4 +1354,32 @@ test("the 256's step keys toggle on release on pages 1 and 2", function()
   end
 end)
 
+-- Fix round 2: a release acts only for the key pressed in its role. A step
+-- key held into page 3 and let go on recorder 1's cell records nothing; a
+-- page 2 fader key on row 9 held into page 1 and let go on a mute key
+-- mutes nothing
+test("a key held into another page acts there neither as a recorder nor as a mute key", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 16, 16)
+  local S = S_table()
+  local patterns = local_value("patterns")
+  context.grid.press(1, 1, 4, 1)  -- page 1: voice 4's step 1
+  tap(context, 15, 8)             -- page 3
+  context.grid.press(1, 1, 4, 0)  -- let go on recorder 1's cell
+  assert_equal(S.lib.gestures.state(1), "empty", "recorder 1 records nothing")
+  assert_equal(patterns[4][1], 0, "and the step is untouched")
+  tap(context, 14, 8)             -- page 2
+  local before = params:get("v1_mute")
+  context.grid.press(1, 5, 9, 1)  -- page 2's first fader, column 5
+  tap(context, 13, 8)             -- page 1
+  context.grid.press(1, 5, 9, 0)  -- let go on voice 1's mute key
+  assert_equal(params:get("v1_mute"), before, "voice 1's mute is untouched")
+  -- pressed in their roles, both still act at their release
+  tap(context, 5, 9)
+  assert_equal(params:get("v1_mute"), 1, "a mute key's own tap mutes")
+  tap(context, 15, 8); tap(context, 1, 4)
+  assert_equal(S.lib.gestures.state(1), "recording", "a recorder key's own tap records")
+  S.lib.gestures.clear(1)
+end)
+
 end

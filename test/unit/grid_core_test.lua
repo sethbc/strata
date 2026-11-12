@@ -272,6 +272,109 @@ test("a recorder key presses at its release, and its hold only clears", function
   gestures.clear(3)
 end)
 
+test("two recorder keys held at once each act at their own release", function()
+  local context = load_strata(); finish_startup(context)
+  local gestures = local_value("S").lib.gestures
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 1, 9, 1); context.grid.press(1, 2, 9, 1)
+  context.grid.press(1, 2, 9, 0)
+  assert_equal(gestures.state(2), "recording", "recorder 2's release presses it")
+  assert_equal(gestures.state(1), "empty", "recorder 1's key, still down, nothing yet")
+  context.grid.press(1, 1, 9, 0)
+  assert_equal(gestures.state(1), "recording", "recorder 1's release presses it")
+  assert_equal(gestures.state(2), "empty", "which ends recorder 2's empty recording")
+  gestures.clear(1)
+end)
+
+-- Fix round 2: a hold armed for a key's role on one page never acts once
+-- the port shows another page: a scene save, a pattern clear, a
+-- recorder's clear and a solo held through a page change do nothing
+test("a page change cancels the port's pending holds", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
+  -- a scene save held on page 3, the page left for page 1
+  tap(context, 1, 15, 8)
+  context.grid.press(1, 4, 3, 1)
+  tap(context, 1, 13, 8)
+  context.clock.run_for(0.6)
+  context.grid.press(1, 4, 3, 0)
+  assert_true(not S.scenes[4].populated, "the save held through a page change saved nothing")
+  -- a clear held on page 1's row 15, the page left for page 2
+  patterns[2][3] = 15
+  context.grid.press(1, 2, 15, 1)
+  tap(context, 1, 14, 8)
+  context.clock.run_for(0.6)
+  context.grid.press(1, 2, 15, 0)
+  assert_equal(patterns[2][3], 15, "the clear held through a page change cleared nothing")
+  -- a recorder's clear and a solo held on page 1, the page left for page 3
+  tap(context, 1, 13, 8)
+  tap(context, 1, 1, 9)
+  assert_equal(S.lib.gestures.state(1), "recording")
+  context.grid.press(1, 1, 9, 1); context.grid.press(1, 6, 9, 1)
+  tap(context, 1, 15, 8)
+  context.clock.run_for(0.6)
+  context.grid.press(1, 1, 9, 0); context.grid.press(1, 6, 9, 0)
+  assert_equal(S.lib.gestures.state(1), "recording", "the recorder's clear held through a page change cleared nothing")
+  assert_equal(params:get("v2_solo"), 0, "the solo held through a page change soloed nothing")
+  assert_equal(params:get("v2_mute"), 0, "and its release muted nothing")
+  -- another grid's page change leaves this one's holds alone
+  tap(context, 1, 13, 8)
+  context.grid.press(1, 6, 9, 1)
+  tap(context, 2, 15, 8)
+  context.clock.run_for(0.6)
+  context.grid.press(1, 6, 9, 0)
+  assert_equal(params:get("v2_solo"), 1, "grid 2's page change: grid 1's solo hold acts")
+  S.lib.gestures.clear(1)
+end)
+
+-- Ruling 67: the held step against the real step editor (2b's
+-- S.lib.pages_seq, no double)
+test("a held step opens the real step editor, which survives its own euclid fill", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages_seq = S.lib.pages_seq
+  local patterns = local_value("patterns")
+  h.show_page("FX")
+  local fx_page = S.ui_page
+  context.grid.plug(1, 16, 16)
+  local replacing = {}
+  local real_end = S.lib.grid_core.end_step_gestures
+  S.lib.grid_core.end_step_gestures = function(voice_idx)
+    replacing[#replacing + 1] = tostring(pages_seq.step_editor_replacing())
+    return real_end(voice_idx)
+  end
+  context.grid.press(1, 5, 3, 1)
+  context.clock.run_for(S.constants.GRID_HOLD.step_edit_seconds + 0.05)
+  local editor = pages_seq.step_editor()
+  assert_true(editor ~= nil, "held 0.3 s: the step editor is open")
+  assert_equal(editor.voice, 3); assert_equal(editor.step, 5); assert_equal(editor.port, 1)
+  assert_true(S.lib.ui_modal.top() ~= nil, "as the screen's modal owner")
+  -- E2 from the editor's first row (level) up to euclid, E3 fills
+  enc(2, -2); enc(3, 4)
+  local hits = 0
+  for step = 1, 16 do if patterns[3][step] == 15 then hits = hits + 1 end end
+  assert_equal(hits, 4, "E3 on euclid: four hits in voice 3's 16 steps")
+  assert_equal(table.concat(replacing, " "), "true", "the fill replaced the pattern as the editor's own")
+  assert_true(pages_seq.step_editor() ~= nil, "and the editor stays open")
+  local step_5 = patterns[3][5]
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(pages_seq.step_editor(), nil, "the key's release closes it")
+  assert_equal(S.lib.ui_modal.top(), nil)
+  assert_equal(patterns[3][5], step_5, "and toggles nothing")
+  assert_equal(S.ui_page, fx_page, "FX is shown again")
+  -- a replacement from outside closes it
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  assert_true(pages_seq.step_editor() ~= nil, "open again")
+  S.lib.sequencer.replace_pattern(3, {})
+  assert_equal(replacing[#replacing], "false", "a replacement from outside")
+  assert_equal(pages_seq.step_editor(), nil, "closes the editor")
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(patterns[3][5], 0, "and the key's release toggles nothing")
+  S.lib.grid_core.end_step_gestures = real_end
+end)
+
 -- A voice has at most one held step on a port (#450): a second key of the
 -- voice always sets a level. A step held after an earlier one's release is
 -- the held step

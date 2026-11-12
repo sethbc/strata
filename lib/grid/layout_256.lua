@@ -89,15 +89,19 @@ return function(S)
 
   -- A mute key: a press arms the solo hold (the hold toggles v<i>_solo and
   -- consumes the key); a release within it toggles v<i>_mute, both through
-  -- set_binary_param, so a mapped controller follows (#538). A release the
-  -- core never saw pressed does nothing
+  -- set_binary_param, so a mapped controller follows (#538). Only a key
+  -- pressed as this mute key (grid_core.press_as, "mute <v>") acts at its
+  -- release: never one pressed on another page (a page 2 fader key held
+  -- into page 1), nor one the core never saw pressed
   local function mute_key(port, x, y, z, voice_idx)
+    local role = "mute " .. voice_idx
     if z == 1 then
+      grid_core.press_as(port, x, y, role)
       grid_core.on_hold(port, x, y, LAYOUT_256.solo_hold_seconds, function()
         set_binary_param(solo_id(voice_idx), params:get(solo_id(voice_idx)) == 1 and 0 or 1)
         grid_core.consume(port, x, y)
       end)
-    elseif grid_core.held(port, x, y) ~= nil then
+    elseif grid_core.pressed_as(port, x, y, role) then
       set_binary_param(mute_id(voice_idx), params:get(mute_id(voice_idx)) == 1 and 0 or 1)
     end
   end
