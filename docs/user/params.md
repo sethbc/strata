@@ -116,6 +116,8 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | filter mix | 0-1 | 0 | 0 leaves the filter out |
 | delay send | 0-100% | 100 | |
 | reverb send | 0-100% | 100 | |
+| mute | off/on | off | Silences the voice without stopping it; scenes keep it ([Mute and solo](voices-and-grains.md#mute-and-solo)) |
+| solo | off/on | off | Silences every voice that is not soloed; scenes never keep it |
 | bookmark 1-4 | 0-1 | 0, 0.25, 0.5, 0.75 | Buffer voices: saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs ([voices and grains](voices-and-grains.md#bookmarks)) |
 
 None of the extras (history to bookmark 4) is randomized, mutated or on the grid's fader pages.

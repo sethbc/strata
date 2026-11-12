@@ -23,7 +23,7 @@ The hint row shows `K2:field K3:start` (or `K3:stop` for a running voice). While
 
 ## Voice list
 
-The left column lists the voices, four at a time: each entry is the voice number, `+` (running) or `-` (stopped), the short name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[L]` when locked, for example `3- fold [L]`. The selected voice is bright. The list keeps four voices in view at both ends.
+The left column lists the voices, four at a time: each entry is the voice number, `+` (running), `-` (stopped), `m` (running but silenced: muted, or another voice is soloed) or `s` (soloed), the short name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[L]` when locked, for example `3- fold [L]`. The selected voice is bright. The list keeps four voices in view at both ends.
 
 ## Details
 

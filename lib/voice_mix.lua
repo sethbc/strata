@@ -11,7 +11,9 @@
 -- (engine.setBypass); PSETs store them, scenes never do. MAIN's
 -- randomize, mutation and the fader pages never touch any of them; VOICE's
 -- ALT+K2 on its section draws all but the filter's mix (the record's
--- randomize, #557). See docs/notes/lua/voice-mix.md.
+-- randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary, default 0):
+-- silenced(voice) is the answer, sent to the engine as the stage's voiceMute
+-- (a scene stores the mute, never the solo). See docs/notes/lua/voice-mix.md.
 
 return function(S)
   local M = {}
@@ -20,7 +22,7 @@ return function(S)
   M.VOICE_MIX = {
     section = "filter & sends",   -- VOICE's last section, after mix
     filter_types = {"lowpass", "highpass", "bandpass"},
-    keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send"},
+    keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send", "mute", "solo"},
     lfo = {{label = "vfilt", key = "filter_freq"}, {label = "dsend", key = "delay_send"},
       {label = "rsend", key = "reverb_send"}},
   }
@@ -39,12 +41,55 @@ return function(S)
     return bypass ~= nil and params:get(bypass.param_id) == 1
   end
 
+  -- Whether a voice is silenced: muted, or some voice is soloed and it is
+  -- not. False for anything that is not a voice 1..NUM_VOICES
+  function M.silenced(voice)
+    local count = S.constants.NUM_VOICES
+    if type(voice) ~= "number" or voice < 1 or voice > count or voice % 1 ~= 0 then return false end
+    local function held(index, key)
+      local voice_state = S.voices[index]
+      return voice_state ~= nil and voice_state.extras ~= nil and voice_state.extras[key] == 1
+    end
+    if held(voice, "mute") then return true end
+    if held(voice, "solo") then return false end
+    for index = 1, count do
+      if held(index, "solo") then return true end
+    end
+    return false
+  end
+
+  -- What each voice's engine last got as voiceMute (1 or 0): a running
+  -- voice is sent only when its answer changes. A voice's sync sets it
+  local sent_mute = {}
+
+  local function mute_value(voice_idx) return M.silenced(voice_idx) and 1 or 0 end
+
+  -- Every running voice whose answer changed gets it; a stopped voice gets
+  -- its answer with its next start's sync
+  local function send_changed_mutes()
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      if S.voices[voice_idx].active then
+        local value = mute_value(voice_idx)
+        if (sent_mute[voice_idx] or 0) ~= value then
+          sent_mute[voice_idx] = value
+          engine.setGrainParam(voice_idx - 1, "voiceMute", value)
+        end
+      end
+    end
+  end
+
   -- The sends are 0-1 values shown as a percent (display only)
   local function send_percent(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end
 
   -- The params' specs (a params:add table without an id), by key
   local function voice_mix_param(key)
-    if key == "filter_type" then
+    if key == "mute" or key == "solo" then
+      return {type = "binary", name = key, behavior = "toggle", default = 0,
+        action = function()
+          if update_voice_list then update_voice_list() end  -- MAIN's list marks it
+          request_redraw()
+        end}
+    elseif key == "filter_type" then
       return {type = "option", name = "filter type", options = M.VOICE_MIX.filter_types, default = 1}
     elseif key == "filter_freq" then
       return {type = "control", name = "filter freq", controlspec = controlspec.new(20, 20000, "exp", 0, 5000, "Hz")}
@@ -94,6 +139,17 @@ return function(S)
       for _, key in ipairs(M.VOICE_MIX.keys) do
         S.lib.params_setup.add_voice_extra(voice_idx, record, key, voice_mix_param(key))
       end
+      -- mute and solo send the effective mute (not a grain key: that sends
+      -- a stored value as it is) to the voices whose answer changed
+      for _, key in ipairs({"mute", "solo"}) do
+        S.engine_senders["v" .. voice_idx .. "_" .. key] = send_changed_mutes
+      end
+    end,
+    -- the voice sync (the voice may not be marked running yet): the
+    -- effective mute
+    sync = function(voice_idx)
+      sent_mute[voice_idx] = mute_value(voice_idx)
+      engine.setGrainParam(voice_idx - 1, "voiceMute", sent_mute[voice_idx])
     end,
     grain_keys = {
       filter_type = {name = "filterType", value = function(option) return option - 1 end},
@@ -104,8 +160,8 @@ return function(S)
       reverb_send = "reverbSend",
     },
     scene_defaults = {filter_type = 1, filter_freq = 5000, filter_res = 0.5, filter_mix = 0, delay_send = 1,
-      reverb_send = 1},
-    discrete = {filter_type = {1, #M.VOICE_MIX.filter_types}},
+      reverb_send = 1, mute = 0},
+    discrete = {filter_type = {1, #M.VOICE_MIX.filter_types}, mute = {0, 1}},
     voice_rows = {section = M.VOICE_MIX.section, rows = M.VOICE_MIX.keys},
     layout_states = layout_states,
     fader = false,

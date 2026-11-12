@@ -66,6 +66,33 @@ test("MAIN voice list entries read <n><+|-> <name> with [L]", function()
   end
 end)
 
+test("the voice list marks a silenced voice m and a soloed one s, inside the list's width", function()
+  local context = load_strata(); finish_startup(context)  -- voices 1 and 2 run
+  params:set("v1_mute", 1)
+  local entries = local_value("voice_list").entries
+  assert_equal(entries[1], "1m reso", "a muted running voice")
+  assert_equal(entries[2], "2+ fm")
+  params:set("v2_solo", 1)
+  entries = local_value("voice_list").entries
+  assert_equal(entries[1], "1m reso", "muted stays m")
+  assert_equal(entries[2], "2s fm", "the soloed voice")
+  params:set("v1_mute", 0)
+  assert_equal(local_value("voice_list").entries[1], "1m reso", "silenced by the solo")
+  assert_equal(local_value("voice_list").entries[3], "3- fold", "a stopped voice stays -")
+  params:set("v3_mute", 1)
+  assert_equal(local_value("voice_list").entries[3], "3- fold", "a stopped muted voice stays -")
+  params:set("v2_solo", 0)
+  assert_equal(local_value("voice_list").entries[1], "1+ reso")
+  for voice_idx = 1, 7 do
+    if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
+    toggle_lock(voice_idx)
+    params:set("v" .. voice_idx .. "_mute", 1)
+  end
+  for _, entry in ipairs(local_value("voice_list").entries) do
+    assert_true(h.text_width(entry) <= 60, "'" .. entry .. "' ends by x 60")
+  end
+end)
+
 test("the voice list shows four voices and never scrolls past an end", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")

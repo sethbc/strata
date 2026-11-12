@@ -11,7 +11,7 @@ Below it, five rows at a time, the voice's parameters in six sections, each unde
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
 - **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp), pan (the Sub has no pan) and freeze. With the high performance setting a freeze mode row follows: `hold` or `spectral`
 - **variation** - reverse, pitch, pan and size jitter, intervals, interval probability and quantize (see [Voices and Granular Processing](../voices-and-grains.md))
-- **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out) and its delay and reverb sends (see [Global Controls and Effects](../effects.md))
+- **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out) its delay and reverb sends (see [Global Controls and Effects](../effects.md)), then `mute` and `solo` (off/on; see [Mute and solo](../voices-and-grains.md#mute-and-solo))
 
 ### Bookmarks
 
