@@ -122,6 +122,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 90 | stop the pattern clock and give the clock back the transport handlers found at init, if the script's are still installed | `lib/sequencer.lua` |
 | 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
+| 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
 | 120 | stop the LFOs that init built (through their state params, like the library's menu) and give their destinations back their stored values | `lib/lfos.lua` |
 | 122 | stop the playhead clock (`stop_clock`) | `lib/playheads.lua` |
 | 124 | cancel every voice's scrub glide and scan hold (`scrubRate` and `scanHold` back to 0) | `lib/positions.lua` |
@@ -146,7 +147,6 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 36 | save matrix.data (`matrix_save`) | lib/matrix.lua (new in 1h) |
 | 95 | the recorders' clocks (`gestures`) | lib/gestures.lua (1f) |
 | 97 | cancel every waiting quantized action (`quantize`) | `lib/quantize.lua` (1f) |
-| 112 | the morph clock (`morph_clock`) | lib/morph.lua (new in 1g) |
 | 114 | the macros' apply clock (`macros`) | lib/macros.lua (1e) |
 | 118 | the matrix clock (`matrix`) | lib/matrix.lua (1h) |
 | 125 | scatter (`scatter`) | lib/scatter.lua (new in 1e) |
@@ -227,4 +227,5 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `param turn` | `lib/ui/detent.lua` | `S.turning_param` is nil between events (a turn marks its param only while it sets it, #318) |
   | `engine budget` | `lib/engine_sync.lua` | values wait for the send budget exactly while its flush clock runs (`S.engine_budget_clock`), and every waiting id has a value (3.4) |
   | `modal owner` | `lib/ui/modal.lua` | no owner is on the modal stack twice, and every key down on an owner is on one that is pushed (3.4) |
+  | `morph clock` | `lib/morph.lua` | a morph move or a value left for the next apply always has `S.morph_clock` to apply it, and that clock's coroutine is not dead (3.4) |
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.

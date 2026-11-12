@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **lfo destinations**, **LFO 1-3**, **morph**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
