@@ -438,7 +438,7 @@ test("the hint row is cut to the screen", function()
   assert_screen_layout(context, "BUFFER with a long flash")
 end)
 
--- 3.4: the dots move 4 px left (a ninth page comes in 3.4's Wave 2) and the
+-- 3.4: the dots move 4 px left (for 3.4's ninth page, MOD) and the
 -- scene runs to S16, 3 px wider than S8 (design §9.1, Question 16)
 test("nine dots from x 36 clear the play mark; S16 clears REC", function()
   local context = load_strata(); finish_startup(context)

@@ -1589,7 +1589,7 @@ test("a swung step's ratchets fit its own length", function()
   assert_hit_time(step_2[2], 0.2075, "half of the 0.085 s left")
 end)
 
--- Review findings (fix round 1) ----------------------------------------
+-- The package review's findings ----------------------------------------
 
 -- AGENTS.md: scaleNote is resent on every change that moves it. A synth
 -- voice's scaleNote is its freq as a note, and a noted step moves the freq
@@ -1730,7 +1730,7 @@ test("a pattern start after an unfollowed reset counts from the clock again", fu
   pattern_clock_stop()
 end)
 
--- Ruling 54 (fix round 2): what a clock does at each wake. Voice 1 at 1/16
+-- Ruling 54: what a clock does at each wake. Voice 1 at 1/16
 -- and voice 2 at a bar, every step set, playing; returns the probe's events
 local function in_step_setup(context, S)
   for step = 1, 16 do S.patterns[1][step] = 15; S.patterns[2][step] = 15 end
@@ -1825,7 +1825,7 @@ test("a reset Strata's transport handler never sees keeps every voice in step, w
   pattern_clock_stop()
 end)
 
--- Ruling 58 (fix round 3), in matron's order: clock_start_from_source resets
+-- Ruling 58, in matron's order: clock_start_from_source resets
 -- the beat and every waiting sync, then posts the start event, so a resume
 -- posted before the reset is delivered first and the start (Strata's
 -- handler) after it

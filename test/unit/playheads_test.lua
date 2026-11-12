@@ -337,14 +337,14 @@ end
 -- Tick by tick until the key's LED leaves the waiting levels: the landing's
 -- repaint, in whichever call delivers it (the playheads clock can share the
 -- bar's tick, #588). After each tick: the key's LED, the repaints that tick
--- made and whether the bookmark still waits (each tick is one clock step of
--- 1 / 15 s)
+-- made and whether the bookmark still waits (each tick is one step of the
+-- playheads' clock, 1 / PLAYHEADS.update_hz s)
 local function trace(context, S, device, voice_idx, n)
-  local LEVELS = S.lib.positions.LEVELS
+  local LEVELS, tick = S.lib.positions.LEVELS, 1 / S.constants.PLAYHEADS.update_hz
   local steps = {}
   local last, count = key_led(device, voice_idx, n), device.refresh_count
   for _ = 1, 60 do
-    context.clock.run_for(1 / 15)
+    context.clock.run_for(tick)
     local led = key_led(device, voice_idx, n)
     -- a step that ends before the clock's next tick has seen nothing yet
     if #steps > 0 or led ~= last or device.refresh_count ~= count then

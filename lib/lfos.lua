@@ -552,7 +552,7 @@ return function(S)
 
   -- Whether a clocked LFO's base rate (its division at the tempo) moved past
   -- engine_rate_threshold since the engine got it: a tempo change, sent in
-  -- the step that sees it, ahead of the round robin (Review Focus 1)
+  -- the step that sees it, ahead of the round robin, so a tempo change reaches it within one step
   local function tempo_moved(n, want, sent)
     return is_clocked(n) and sent.base ~= nil and want.base ~= nil
       and math.abs(want.base - sent.base) > sent.base * LFO.engine_rate_threshold

@@ -26,7 +26,7 @@
 
 ## The keys
 
-`press(k)` (MOD's K3 and the grids, from Wave 2): empty → recording (from its first event: a silent lead-in is not part of the loop) → playing (a free loop at once, its first event first; a quantized loop from its next beat or bar) → stopped → playing. A recording with no event goes back to empty. `clear(k)` stops and empties it. `overdub(k)` toggles overdub on a playing recorder: a free loop through pattern_time's `set_overdub` (its `overdub_event` splits the gap the hand edit falls in), a quantized one by inserting the event into the beat list at `(clock.get_beats() - loop_start) mod length_beats`, kept sorted, and moving `next_index` past it so this pass does not play it again (an edit before the first pass starts is not taken). A bad index does nothing.
+`press(k)` (MOD's K3 and the grids): empty → recording (from its first event: a silent lead-in is not part of the loop) → playing (a free loop at once, its first event first; a quantized loop from its next beat or bar) → stopped → playing. A recording with no event goes back to empty. `clear(k)` stops and empties it. `overdub(k)` toggles overdub on a playing recorder: a free loop through pattern_time's `set_overdub` (its `overdub_event` splits the gap the hand edit falls in), a quantized one by inserting the event into the beat list at `(clock.get_beats() - loop_start) mod length_beats`, kept sorted, and moving `next_index` past it so this pass does not play it again (an edit before the first pass starts is not taken). A bad index does nothing.
 
 `describe(k)`: `empty`, `rec 3.2 s` (seconds since the first event, `rec 0.0 s` before it), `play 2.5 s` or `stop 2.5 s` (a free loop's length), `play 3 bars`, `play 1 bar`, `play 4 beats` (a quantized loop's).
 
