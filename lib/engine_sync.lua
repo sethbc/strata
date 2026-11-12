@@ -645,6 +645,7 @@ return function(S)
   M.with_lfo_offsets = with_lfo_offsets
   M.send_engine_value = send_engine_value
   M.grain_key_message = grain_key_message
+  M.reaches_engine = reaches_engine  -- the LFOs' round robin (lib/lfos.lua, #644)
 
   return M
 end

@@ -331,7 +331,10 @@ return function(S)
   ---------------------------------------------------------------------------
   -- The send queue: due keys sent in one round robin, at most
   -- sends_per_step a step, in the order each key was first marked, each
-  -- send inside S.lib.engine_sync.deferrable (it can wait for the budget)
+  -- send inside S.lib.engine_sync.deferrable (it can wait for the budget).
+  -- A key that reaches no engine (a stopped voice's param:
+  -- S.lib.engine_sync.reaches_engine) still runs in its turn, so its value
+  -- is recorded, but takes no slot (#644)
   ---------------------------------------------------------------------------
   local queue = {keys = {}, known = {}, due = {}, cursor = 1}
 
@@ -357,7 +360,7 @@ return function(S)
       local send = queue.due[key]
       if send then
         queue.due[key] = nil
-        sent = sent + 1
+        if S.lib.engine_sync.reaches_engine(key) then sent = sent + 1 end
         S.lib.ui_frame.contained_call(send_errors, key, "LFO send", S.lib.engine_sync.deferrable, send)
       end
       position = position % count + 1

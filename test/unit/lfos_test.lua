@@ -243,6 +243,104 @@ test("at most 12 sends a step, round robin, and every due key within two steps",
   end
 end)
 
+-- #644: a due key that reaches no engine (a stopped voice's param:
+-- S.lib.engine_sync.reaches_engine) still runs in its turn, so its value
+-- is recorded, but takes none of the step's 12 slots
+
+-- Fourteen voice-gated params of voice v (their senders send only while it runs)
+local function voice_send_ids(v)
+  local ids = {}
+  for _, key in ipairs({ "grain_size", "grain_density", "grain_pitch", "grain_spread", "buf_pos", "buf_rate", "buf_scan",
+    "mod_amp_amt_1", "mod_amp_amt_2", "mod_amp_amt_3", "mod_freq_amt_1", "mod_freq_amt_2", "mod_freq_amt_3",
+    "mod_speed" }) do
+    ids[#ids + 1] = "v" .. v .. "_" .. key
+  end
+  return ids
+end
+
+-- Voice 1 running, voice 2 stopped
+local function one_running_one_stopped(S)
+  if not S.voices[1].active then toggle_voice(1) end
+  if S.voices[2].active then toggle_voice(2) end
+end
+
+test("a stopped voice's due sends take none of a step's 12; a running voice's stay capped at 12 (#644)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfos = S.lib.lfos
+  one_running_one_stopped(S)
+  local ran = { [1] = 0, [2] = 0 }
+  local function mark(id, v)
+    lfos.mark_due(id, function()
+      ran[v] = ran[v] + 1
+      S.lib.engine_sync.send_engine_value(id, params:get(id))
+    end)
+  end
+  local stopped, running = voice_send_ids(2), voice_send_ids(1)
+  for k = 1, 12 do mark(stopped[k], 2) end   -- first in the round robin
+  for k = 1, 13 do mark(running[k], 1) end
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(ran[2], 12, "every stopped voice's send ran in its turn")
+  assert_equal(ran[1], 12, "and the running voice's took all 12 slots")
+  lfo_step(context)
+  assert_equal(ran[1], 13, "its 13th went in the next step, as before")
+  assert_equal(ran[2], 12, "nothing ran twice")
+  for _, call in ipairs(context.engine_calls) do
+    assert_true(call.args[1] ~= 1, "nothing reached stopped voice 2: " .. call.name)
+  end
+  assert_equal(S.lib.engine_sync.expected_value(stopped[1]), params:get(stopped[1]), "its values are recorded")
+end)
+
+test("an LFO on a stopped voice leaves the running voice its 12; the voice's start, then its next step (#644)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfos, sync = S.lib.lfos, S.lib.engine_sync
+  one_running_one_stopped(S)
+  params:set("v2_grain_density", 20)
+  -- LFO 1 rising at 1 Hz on voice 2's density, at depth 20: due every step
+  params:set(lfo_id(1, "dest"), destination_index("v2 dens"))
+  params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "up"))
+  params:set(lfo_id(1, "rate"), 1); params:set(lfo_id(1, "depth"), 20)
+  params:set(lfo_id(1), 1)
+  -- after the LFO's key, 12 of running voice 1's sends due every step
+  local running, ran = voice_send_ids(1), 0
+  lfos.on_step(function()
+    for k = 1, 12 do
+      local id = running[k]
+      lfos.mark_due(id, function() ran = ran + 1; sync.send_engine_value(id, params:get(id)) end)
+    end
+  end)
+  context.clear_engine_calls()
+  for step = 1, 3 do
+    ran = 0
+    lfo_step(context)
+    assert_equal(ran, 12, "step " .. step .. ": the running voice's 12 all go")
+    -- 20 + value x 0.2 x half of 1-100
+    assert_near(sync.expected_value("v2_grain_density"), 20 + 9.9 * lfos.value(1), 1e-9,
+      "step " .. step .. ": the stopped voice's LFO value is recorded")
+  end
+  local function densities() return calls_with(context, "setGrainParam", 1) end
+  assert_equal(#densities(), 0, "nothing reached the stopped voice")
+  -- the start sends the stored density; the next step the modulated one, once
+  toggle_voice(2)
+  local sent = {}
+  for _, call in ipairs(densities()) do
+    if call.args[2] == "grainDensity" then sent[#sent + 1] = call.args[3] end
+  end
+  local master = params:get("master_density")
+  assert_equal(#sent, 1, "the start sends one density")
+  assert_near(sent[1], 20 * master, 1e-9, "the stored one")
+  lfo_step(context)
+  sent = {}
+  for _, call in ipairs(densities()) do
+    if call.args[2] == "grainDensity" then sent[#sent + 1] = call.args[3] end
+  end
+  assert_equal(#sent, 2, "the next step sends one more")
+  assert_near(sent[2], (20 + 9.9 * lfos.value(1)) * master, 1e-9, "the value the LFO has now")
+  params:set(lfo_id(1), 0)
+end)
+
 test("a Lua-run LFO above 10 Hz plays at 10 Hz", function()
   local context = load_strata(); finish_startup(context)
   local lfos = local_value("S").lib.lfos
