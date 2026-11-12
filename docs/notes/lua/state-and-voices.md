@@ -64,6 +64,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 90 | listen for MIDI (`midi_init`) | `lib/midi_in.lua` |
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
+| 107 | load the gesture recorders, stopped, from data/strata/gestures.data (`START_ORDER.gestures_load`; a missing file loads them empty, one it cannot use is set aside), then redraw the screen and grids (3.4) | `lib/gestures.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
@@ -77,7 +78,6 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 |-------|------|--------|
 | 62 | the input level polls (`START_ORDER.input_level`) | lib/input_level.lua (new in 1i) |
 | 105 | load macros.data (`macros_load`) | lib/macros.lua (new in 1e) |
-| 107 | load gestures.data (`gestures_load`) | lib/gestures.lua (new in 1f) |
 | 108 | load matrix.data (`matrix_load`) | lib/matrix.lua (new in 1h) |
 | 125 | the LFO clock (`lfo_clock`) | `lib/lfos.lua` (1b) |
 
@@ -113,6 +113,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 10 | give the clock back the tempo handler found at init, if the script's is still installed (`restore_tempo_change_handler`) | `lib/params_setup.lua` |
 | 20 | give the norns menu its own `_menu.set_mode` back (`unwatch_menu_opening`), before anything that can fail | `lib/ui/menu_watch.lua` |
 | 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
+| 34 | save the gesture recorders to data/strata/gestures.data (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
 | 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |
 | 60 | stop the frame clock | `lib/ui/frame.lua` |
@@ -120,6 +121,8 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 80 | stop the mutation metro and set `mutation_enabled` to 0, so param and state agree | `lib/mutation.lua` |
 | 85 | cancel the randomize undo's expiry clock | `lib/mutation.lua` |
 | 90 | stop the pattern clock and give the clock back the transport handlers found at init, if the script's are still installed | `lib/sequencer.lua` |
+| 95 | stop every gesture recorder: a recording ends (kept, stopped), every free loop's metro stops and every quantized loop's clock and 10-minute clock are canceled (`gestures`, 3.4) | `lib/gestures.lua` |
+| 97 | cancel every quantized action that waits (`quantize`, 3.4; the flashes' own step ends its header flash) | `lib/quantize.lua` |
 | 100 | stop the scene sequencer through its param (`scene_sequencer_enabled` 0 when the param exists, then `scene_sequencer_stop`) | `lib/scenes.lua` |
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
@@ -143,10 +146,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | Order | Step | Module |
 |-------|------|--------|
 | 32 | save macros.data (`CLEANUP_ORDER.macros_save`) | lib/macros.lua (new in 1e) |
-| 34 | save gestures.data (`gestures_save`) | lib/gestures.lua (new in 1f) |
 | 36 | save matrix.data (`matrix_save`) | lib/matrix.lua (new in 1h) |
-| 95 | the recorders' clocks (`gestures`) | lib/gestures.lua (1f) |
-| 97 | cancel every waiting quantized action (`quantize`) | `lib/quantize.lua` (1f) |
 | 114 | the macros' apply clock (`macros`) | lib/macros.lua (1e) |
 | 118 | the matrix clock (`matrix`) | lib/matrix.lua (1h) |
 | 125 | scatter (`scatter`) | lib/scatter.lua (new in 1e) |
@@ -228,4 +228,6 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `engine budget` | `lib/engine_sync.lua` | values wait for the send budget exactly while its flush clock runs (`S.engine_budget_clock`), and every waiting id has a value (3.4) |
   | `modal owner` | `lib/ui/modal.lua` | no owner is on the modal stack twice, and every key down on an owner is on one that is pushed (3.4) |
   | `morph clock` | `lib/morph.lua` | a morph move or a value left for the next apply always has `S.morph_clock` to apply it, and that clock's coroutine is not dead (3.4) |
+  | `quantize` | `lib/quantize.lua` | a quantized action waits (`S.lib.quantize.actions[key]`) exactly while its clock runs (3.4) |
+  | `gesture recorders` | `lib/gestures.lua` | at most one recorder records; pattern_time's `rec` is 1 exactly while its recorder records; a free loop's metro (`pattern.play`) or a quantized loop's clock runs exactly while it plays, never both, and the right one for its loop; the 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; `gesture_<k>_play` is 1 exactly while it plays (3.4) |
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.

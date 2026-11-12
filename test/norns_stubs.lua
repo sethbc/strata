@@ -2912,6 +2912,8 @@ function stubs.install(options)
   package.preload["lfo"] = function() return context.lfo.library end
   package.loaded["fileselect"] = nil
   package.preload["fileselect"] = function() return context.fileselect end
+  package.loaded["pattern_time"] = nil
+  package.preload["pattern_time"] = function() return require("stub_pattern_time")() end
 
   if options.quiet then
     _G.print = function(...)

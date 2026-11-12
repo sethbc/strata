@@ -9,7 +9,7 @@ local deep_copy, show_page = h.deep_copy, h.show_page
 
 test("grain pitch drift wanders subtly around the user-set pitch (C4)", function()
   local context = load_strata()
-  local drift_metro = context.metro.all[1]
+  local drift_metro = local_value("S").drift_metro
   assert_true(drift_metro.running and drift_metro.event == drift_update, "drift metro running")
   params:set("v1_grain_pitch", 1.5)
   math.randomseed(3)

@@ -1045,4 +1045,58 @@ test("one glide clock follows a run of turns, and a turn during the glide ends i
   assert_true(started <= 4, "a few clocks over the whole run, one per fling: " .. started)
 end)
 
+-- 3.4 (design §8.9, plan item 12): the grid's position and bookmark keys
+-- wait for the beat or bar quantize_actions names; jump, recall_bookmark and
+-- a step's bookmark lock (S.lib.bookmarks.recall) never wait
+test("a position key and a bookmark key wait for the bar; a step's bookmark lock does not", function()
+  local context, S = buffer_voices()
+  local positions = S.lib.positions
+  local function run_to_beat(beat)
+    context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+  end
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(1.5)
+  positions.grid_key(1, 1, 9, 16, 1)
+  positions.grid_key(1, 1, 9, 16, 0)
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "the jump waits")
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "no scan restart yet")
+  assert_true(S.lib.quantize.waiting("position1"))
+  assert_equal(S.lib.ui_flash.text("header"), "v1 jump at bar")
+  run_to_beat(3.98)
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "beat 3.98: still waits")
+  run_to_beat(4.02)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "the jump lands at the bar")
+  assert_equal(#grain_calls(context, "t_scanReset"), 1, "one scan restart")
+
+  -- a two-key loop replaces the waiting jump of its first key
+  positions.grid_key(1, 1, 5, 16, 1)
+  positions.grid_key(1, 1, 9, 16, 1)
+  release_all(positions, 16, 1, 9, 5)
+  local start, length = loop_of(1)
+  assert_near(start, 0, 1e-9, "the loop waits too"); assert_near(length, 1, 1e-9)
+  run_to_beat(8.02)
+  start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9, "the loop lands at the bar"); assert_near(length, 0.3125, 1e-9)
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "at the loop's start, not cell 5's jump")
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+
+  positions.strip_key(1, 1, 2, 1)
+  positions.strip_key(1, 1, 2, 0)
+  assert_equal(positions.last_recalled(1), nil, "the bookmark recall waits")
+  assert_true(S.lib.quantize.waiting("bookmark1"))
+  assert_equal(S.lib.ui_flash.text("header"), "v1 bm 2 at bar")
+  run_to_beat(12.02)
+  assert_equal(positions.last_recalled(1), 2, "recalled at the bar")
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9)
+
+  S.lib.bookmarks.recall(1, 3)
+  assert_equal(positions.last_recalled(1), 3, "a step's bookmark lock recalls at once")
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9)
+  assert_true(not S.lib.quantize.waiting("bookmark1"), "and schedules nothing")
+  positions.recall_bookmark(1, 4)
+  assert_equal(positions.last_recalled(1), 4, "recall_bookmark itself is immediate")
+  positions.jump(1, 0.1)
+  assert_near(params:get("v1_buf_pos"), 0.1, 1e-9, "so is jump")
+end)
+
 end
