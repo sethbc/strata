@@ -1052,4 +1052,140 @@ test("cleanup stops the morph clock", function()
   assert_near(params:get("reverb_mix"), 0.2, 1e-9, "and nothing applies")
 end)
 
+-- #653 (ruling 94): a crossing's discrete switch is applied at most once
+-- per MORPH.crossing_seconds. A single crossing is immediate; while a
+-- second waits the continuous values keep moving; when the wait ends the
+-- corner current then is applied (the newest wins), and a crossing there
+-- and back inside the wait applies nothing
+
+-- Move the morph and run one apply's worth of the clocks
+local function move(context, x)
+  params:set("morph", x)
+  context.clock.run_for(0.1)
+end
+
+test("a crossing within crossing_seconds of the last waits; then the corner current then switches, once (#653)", function()
+  local context, S = two_scenes()
+  assert_near(S.lib.morph.MORPH.crossing_seconds, 0.3, 1e-9)
+  settle(context, 0.4)
+  assert_true(not S.voices[3].active, "at A: voice 3 stopped")
+  context.clear_engine_calls()
+  move(context, 0.6)
+  assert_true(S.voices[3].active, "a first crossing switches at once")
+  move(context, 0.4)
+  assert_true(S.voices[3].active, "a second within the wait does not: voice 3 keeps running")
+  assert_near(params:get("reverb_mix"), 0.36, 1e-9, "while the continuous value follows the morph (0.2 + 0.4 x 0.4)")
+  assert_equal(count_calls(context, "voiceOff", 2), 0, "nothing stopped yet")
+  context.clock.run_for(0.3)
+  assert_true(not S.voices[3].active, "after the wait the corner current then, A, switches")
+  assert_equal(count_calls(context, "voiceOff", 2), 1, "once")
+  assert_equal(count_calls(context, "voiceOn", 2), 1, "after the one start")
+  context.clock.run_for(0.5)
+  assert_equal(S.morph_clock, nil, "then the clock rests")
+end)
+
+test("a crossing there and back inside the wait applies nothing at its end (#653)", function()
+  local context, S = two_scenes()
+  settle(context, 0.4)
+  context.clear_engine_calls()
+  move(context, 0.6)
+  assert_true(S.voices[3].active, "the first crossing starts voice 3")
+  move(context, 0.4)
+  move(context, 0.6)
+  context.clock.run_for(0.5)
+  assert_true(S.voices[3].active, "voice 3 still runs")
+  assert_equal(count_calls(context, "voiceOff", 2), 0, "it never stopped")
+  assert_equal(count_calls(context, "voiceOn", 2), 1, "nor started again")
+  assert_near(params:get("reverb_mix"), 0.44, 1e-9, "the continuous value is 0.6's")
+  assert_equal(S.morph_clock, nil, "and the clock rests")
+end)
+
+test("a recall, a PSET load or cleanup during the wait drops the waiting crossing (#653)", function()
+  local function waiting()
+    local context, S = two_scenes()
+    settle(context, 0.4)
+    move(context, 0.6)
+    move(context, 0.4)
+    assert_true(S.voices[3].active, "the crossing back waits")
+    context.clear_engine_calls()
+    return context, S
+  end
+  local context, S = waiting()
+  recall_scene(2, 0)    -- scene 2: voice 3 running
+  context.clock.run_for(0.5)
+  assert_true(S.voices[3].active, "the recalled scene's voice 3 stays")
+  assert_equal(count_calls(context, "voiceOff", 2), 0, "a recall dropped the waiting crossing")
+  assert_equal(S.current_scene, 2, "the recalled scene stays current")
+  assert_equal(S.morph_clock, nil, "and no clock runs")
+  context, S = waiting()
+  for _, hook in ipairs(S.registry.pset_hooks) do
+    if hook.name == "morph" then hook.read() end
+  end
+  context.clock.run_for(0.5)
+  assert_equal(count_calls(context, "voiceOff", 2), 0, "a PSET load dropped it")
+  assert_equal(S.morph_clock, nil, "and its clock")
+  context, S = waiting()
+  for _, record in ipairs(S.registry.cleanup) do
+    if record.order == S.constants.CLEANUP_ORDER.morph_clock then record.fn() end
+  end
+  context.clock.run_for(0.5)
+  assert_equal(count_calls(context, "voiceOff", 2), 0, "and so did cleanup")
+  assert_equal(S.morph_clock, nil)
+end)
+
+test("the XY morph's corner switch waits the same (#653)", function()
+  local context, S = four_scenes()
+  settle_xy(context, 0, 0.4)
+  assert_true(not S.voices[3].active, "on A's side of the A to C edge: voice 3 stopped")
+  context.clear_engine_calls()
+  params:set("morph_y", 0.6); context.clock.run_for(0.1)
+  assert_true(S.voices[3].active, "crossing to C starts voice 3 at once")
+  assert_equal(S.lib.morph.corner(), "c")
+  params:set("morph_y", 0.4); context.clock.run_for(0.1)
+  assert_true(S.voices[3].active, "the crossing back to A waits")
+  assert_equal(S.lib.morph.corner(), "c", "C stays the current corner while it waits")
+  assert_near(params:get("reverb_mix"), 0.28, 1e-9, "while the continuous value follows (0.2 + 0.4 x (0.4 - 0.2))")
+  context.clock.run_for(0.3)
+  assert_true(not S.voices[3].active, "after the wait A switches")
+  assert_equal(count_calls(context, "voiceOff", 2), 1, "once")
+  assert_equal(S.lib.morph.corner(), "a")
+end)
+
+test("swept across the crossing on every apply, the morph switches at most once per crossing_seconds (#653)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.drift_metro:stop()
+  -- scene 2: every voice running; scene 1: every voice stopped
+  for v = 1, S.constants.NUM_VOICES do
+    if not S.voices[v].active then toggle_voice(v) end
+  end
+  capture_scene(2)
+  for v = 1, S.constants.NUM_VOICES do toggle_voice(v) end
+  capture_scene(1)
+  settle(context, 0.4)
+  context.clear_engine_calls()
+  -- 2 s: 20 applies, each on the other side of the crossing
+  local switches, running, start_size = 0, false, nil
+  for tick = 1, 20 do
+    params:set("morph", tick % 2 == 1 and 0.6 or 0.4)
+    context.clock.run_for(0.1)
+    if S.voices[1].active ~= running then
+      switches, running = switches + 1, S.voices[1].active
+    end
+    if tick == 1 then start_size = #context.engine_calls end
+  end
+  -- 1 + floor(2 / 0.3) = 7 switches at most, starts and stops in turn:
+  -- 4 starts of all seven voices and 3 stops
+  local voices = S.constants.NUM_VOICES
+  assert_true(start_size >= voices * 50, "the first crossing starts all seven at once: " .. start_size .. " messages")
+  assert_true(switches <= 7, "at most 7 switches in 2 s, saw " .. switches)
+  assert_true(switches >= 6, "and they still follow the morph, saw " .. switches)
+  assert_true(#context.calls_named("voiceOn") <= 4 * voices, "at most 4 starts of every voice")
+  assert_true(#context.calls_named("voiceOff") <= 3 * voices, "and 3 stops")
+  local messages = #context.engine_calls
+  assert_true(messages <= 4 * start_size + 3 * voices, "at most 4 starts and 3 stops' messages: " .. messages)
+  assert_true(messages / 2 < S.constants.ENGINE_BUDGET.messages_per_window * 10,
+    "under the budget's 1500 a second: " .. messages / 2)
+end)
+
 end
