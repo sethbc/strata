@@ -104,7 +104,7 @@ An index that is not a whole number in its range, or a NaN or infinite continuou
 
 ### Memory
 
-Measured at package 1a (`docs/notes/engine/memory.md` has every figure): an LFO node 4.2-6.7 KB by shape (sine and tri 5.1, square, up and down 4.2, s&h 5.9, smooth and drunk 6.7), scatter 34.5 KB (the design estimated 18: its 35 noise generators, 35 rate products, 35 gain products and 35 envelope products are about 140 UGens), the offset node 11.0 KB; the stage 40.4 KB (41.3 in a full run in one sclang; 35.4 before; its check is 42 KB since 3.4), `\strataGrainRing` 59.0 KB and `\strataGrainBuf` 69.1 KB (58.1 and 67.4 before). With six engine LFOs and scatter on every voice and destination, the worst cases leave 150-170 KB less than before, against the design's estimate of 111 KB, and every floor holds (the tightest, high synth -> buffer -> synth, 536-556 KB above it).
+Measured at package 1a (`docs/notes/engine/memory.md` has every figure): an LFO node 4.2-6.7 KB by shape (sine and tri 5.1, square, up and down 4.2, s&h 5.9, smooth and drunk 6.7), scatter 34.5 KB (the design estimated 18: its 35 noise generators, 35 rate products, 35 gain products and 35 envelope products are about 140 UGens), the offset node 11.0 KB; the stage 40.45 KB (40.87 in a full run in one sclang, forty stages measured in steps of 0.42 KB; 35.4 before; its check is 42 KB since 3.4), `\strataGrainRing` 59.0 KB and `\strataGrainBuf` 69.1 KB (58.1 and 67.4 before). With six engine LFOs and scatter on every voice and destination, the worst cases leave 150-170 KB less than before, against the design's estimate of 111 KB, and every floor holds (the tightest, high synth -> buffer -> synth, 536-556 KB above it).
 
 ### The check (`test/engine_check/modulation.scd`)
 

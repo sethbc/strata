@@ -105,7 +105,7 @@ var checkGrainMemorySizes = {
 // bus), so the figure is within a probe / 20 (under 1 KB)
 var checkGrainSynthSizes = {
     var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), count = 20;
-    var ring = engine.ringBuffersFor(0, 0), sizes, sizes32, stageKB;
+    var ring = engine.ringBuffersFor(0, 0), sizes, sizes32, stageKB, stages = 40;
     var argsFor = (
         strataGrainRing: [\bufL, ring[0], \bufR, ring[1], \phaseBus, ring[2]],
         strataGrainBuf: [\bufnumL, engine.buffersL[0], \bufnumR, engine.buffersR[0]]
@@ -152,7 +152,7 @@ var checkGrainSynthSizes = {
     // half the grain defs' 0.85 KB (the readings, alone and in a full run, are
     // in the notes)
     stageKB = if (SynthDescLib.global.at(\strataVoiceMix).isNil) { 0 } {
-        var before = floodFit.value, synths, after, stages = 40;
+        var before = floodFit.value, synths, after;
         synths = stages.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
             \mirrorOut, privateBus, \tapOut, privateBus, \delaySendOut, privateBus.index, \reverbSendOut, privateBus.index,
             \fxMixIn, engine.mixBus(\fxMix).index, \modBus1, engine.silentBus, \modBus2, engine.silentBus, \modBus3, engine.silentBus], group) });
@@ -161,8 +161,8 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / stages
     };
-    check.((stageKB > 0) and: { stageKB < 42 }, "memory: a voice's mix stage takes under 42 KB of the pool (% KB, forty stages measured: steps of % KB)".format(
-        stageKB.round(0.01), (probeKB / 40).round(0.01)));
+    check.((stageKB > 0) and: { stageKB < 42 }, "memory: a voice's mix stage takes under 42 KB of the pool (% KB, % stages measured: steps of % KB)".format(
+        stageKB.round(0.01), stages, (probeKB / stages).round(0.01)));
     group.free; privateBus.free;
 };
 
