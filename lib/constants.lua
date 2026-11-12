@@ -267,7 +267,6 @@ local CLEANUP_ORDER = {
   morph_clock = 112,        -- lib/morph.lua
   macros = 114,             -- lib/macros.lua: the apply clock
   matrix = 118,             -- lib/matrix.lua: the matrix clock
-  scatter = 125,            -- lib/scatter.lua
 }
 
 return {

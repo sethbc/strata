@@ -16,7 +16,7 @@
 - `SCATTER`, the module's one table (the param count, the depth's and the rate's ranges and defaults, the destination toggles in bit order).
 - The engine senders of the eight params, the lock hook, the PSET hook `scatter` and the eight scene fields.
 
-Scatter keeps no clock, metro, poll or handler, so it registers no cleanup step: `CLEANUP_ORDER.scatter` (125) stays unused (`docs/notes/lua/state-and-voices.md`). norns frees the engine before `cleanup()` (#461), and the engine's node with it.
+Scatter registers no cleanup step, and `CLEANUP_ORDER` has no `scatter` order (3.4's plan held one, 125, retired in 1e's review): scatter keeps no clock, metro, poll or device handler, so there is nothing to stop, and a step could only send `setScatter(0, ...)`, which never arrives, since norns frees the engine (and the scatter node with it) before `cleanup()` (#461).
 
 Elsewhere: the engine's scatter node and its release are the modulation area's (`docs/notes/engine/modulation.md`); the MOD page's scatter rows and the arc's ALT rings are package 2a's.
 

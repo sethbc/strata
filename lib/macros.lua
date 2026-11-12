@@ -156,9 +156,16 @@ return function(S)
   -- An LFO on a macro (design §4.4): the targets' engine values move
   ---------------------------------------------------------------------------
 
-  -- Per macro and row, the extra it holds: {id = the resolved param, fast}
-  local extras = {}
-  for m = 1, NUM_MACROS do extras[m] = {} end
+  -- Per macro and row, the extra it holds: {id = the resolved param, fast}.
+  -- Per macro, what its extras were last worked out from (computed[m]:
+  -- the stored macro value, the targets' revision and each row's resolved
+  -- param, false for none), and the targets' revision, which every change
+  -- of a row raises
+  local extras, computed, revisions = {}, {}, {}
+  for m = 1, NUM_MACROS do
+    extras[m] = {}
+    revisions[m] = 0
+  end
 
   local function fast_key(m, id) return source_key(m) .. " " .. id end
 
@@ -198,9 +205,11 @@ return function(S)
   local function lfo_moved(m, value)
     value = util.clamp(value, 0, 1)
     local stored = params:get(macro_id(m))
+    local seen = {stored = stored, revision = revisions[m], ids = {}}
     for k = 1, MACRO_TARGETS do
       local row = S.macros[m].targets[k]
       local id = resolve(row.id)
+      seen.ids[k] = id or false
       local held = extras[m][k]
       if held and held.id ~= id then clear_extra(m, k) end  -- a main entry that resolves elsewhere now
       if value == stored or not id or lfo_skips(id) then
@@ -220,11 +229,47 @@ return function(S)
         end
       end
     end
+    computed[m] = seen
   end
 
   for m = 1, NUM_MACROS do
     S.engine_senders[macro_id(m)] = function(value) lfo_moved(m, value) end
   end
+
+  -- Whether an LFO modulates macro m now (its Lua destination is the macro)
+  local function modulated(m)
+    local id = macro_id(m)
+    for n = 1, S.constants.NUM_LFOS do
+      if S.lfo_last_dest[n] == id then return true end
+    end
+    return false
+  end
+
+  -- Whether macro m's extras were worked out from what holds now: the
+  -- stored value, the rows (their revision) and where each row resolves
+  local function extras_current(m)
+    local seen = computed[m]
+    if not seen or seen.stored ~= params:get(macro_id(m)) or seen.revision ~= revisions[m] then return false end
+    for k, row in ipairs(S.macros[m].targets) do
+      if (resolve(row.id) or false) ~= seen.ids[k] then return false end
+    end
+    return true
+  end
+
+  -- The LFO step only sends a macro again once its modulated value moves,
+  -- which a change of the stored value under the LFO's clamp, an edited or
+  -- loaded row and a main entry resolving elsewhere never do: at each step
+  -- (S.lib.lfos.on_step, after the LFOs, before the round robin's sends), a
+  -- macro an LFO modulates, or one holding an extra, whose extras are no
+  -- longer current has them worked out again from the macro as the LFOs
+  -- modulate it now
+  S.lib.lfos.on_step(function()
+    for m = 1, NUM_MACROS do
+      if (modulated(m) or next(extras[m]) ~= nil) and not extras_current(m) then
+        lfo_moved(m, S.lib.engine_sync.with_lfo_offsets(macro_id(m), params:get(macro_id(m))))
+      end
+    end
+  end)
 
   ---------------------------------------------------------------------------
   -- Applying (design §4.1)
@@ -250,9 +295,15 @@ return function(S)
     if not any_pending() then stop_clock() end
   end
 
+  local function set_target_value(id, fraction)
+    params:set(id, params:lookup_param(id).controlspec:map(fraction))
+  end
+
   -- Set every target with a known id to min + value x (max - min) of its
   -- range, along its warp, inside deferrable: the targets' actions send,
-  -- the screen shows them and scenes capture them
+  -- the screen shows them and scenes capture them. Each row's set is
+  -- contained: one that raises prints once (per row and message) and the
+  -- other rows are still set
   local function apply_now(m)
     applying.pending[m] = nil
     applying.last[m] = util.time()
@@ -262,7 +313,8 @@ return function(S)
         local row = S.macros[m].targets[k]
         local id = resolve(row.id)
         if id then
-          params:set(id, params:lookup_param(id).controlspec:map(row.min + value * (row.max - row.min)))
+          S.lib.ui_frame.contained_call(apply_errors, m .. " " .. k, "macro " .. m .. " row " .. k .. " apply",
+            set_target_value, id, row.min + value * (row.max - row.min))
         end
       end
     end)
@@ -362,6 +414,7 @@ return function(S)
   local function load_block(block)
     for m = 1, NUM_MACROS do
       clear_extras(m)
+      revisions[m] = revisions[m] + 1
       local rows = block and block[m]
       for k = 1, MACRO_TARGETS do
         local row = rows and rows[k]
@@ -462,6 +515,7 @@ return function(S)
 
   local function set_row(m, k, id, min, max)
     clear_extra(m, k)
+    revisions[m] = revisions[m] + 1
     if id == "" then
       S.macros[m].targets[k] = empty_row()
     else

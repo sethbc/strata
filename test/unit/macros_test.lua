@@ -374,6 +374,128 @@ test("an LFO on a macro skips LFO-param targets", function()
   assert_near(params:get("strata_lfo2_depth"), 50, 1e-9, "and its param stays")
 end)
 
+-- LFO 1 on macro m, square (u = 1 for its first 2 s at the default 0.25 Hz)
+-- at depth percent: the macro plays at its value + depth / 200, clamped to 1
+local function square_lfo_on_macro(S, m, depth)
+  local lfos = S.lib.lfos
+  for index, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "macro " .. m then params:set(lfos.param_id(1, "dest"), index) end
+  end
+  params:set(lfos.param_id(1, "shape"), 3)
+  params:set(lfos.param_id(1, "depth"), depth)
+  params:set(lfos.param_id(1), 1)
+end
+
+-- The last value of reverb_mix the engine got (setReverb's first argument)
+local function sent_reverb(context)
+  local calls = context.calls_named("setReverb")
+  return calls[#calls] and calls[#calls].args[1]
+end
+
+test("an LFO on a macro follows its stored value, even while the LFO's clamp holds the macro still", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  params:set("macro_1", 0.6); settle(context)
+  square_lfo_on_macro(S, 1, 100)  -- 0.6 + 0.5, clamped: the macro plays at 1
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), 1, 1e-9, "+0.4 on the target's 0.6")
+  params:set("macro_1", 0.9); settle(context)  -- still 1 under the LFO's clamp
+  context.clear_engine_calls()
+  params:set("reverb_mix", 0.5)                -- a hand edit of the target
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), 0.6, 1e-9, "the extra is +0.1 now, from the new stored value")
+  assert_near(sent_reverb(context), 0.6, 1e-9, "and the engine has it")
+  -- a silent set (a recall, a fade, morph) is followed the same way
+  macros.set_silently(1, 0.7)
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), 0.8, 1e-9, "+0.3 from 0.7")
+end)
+
+test("an LFO on a macro follows a range edit of a target", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  params:set("macro_1", 0.5); settle(context)
+  square_lfo_on_macro(S, 1, 50)  -- the macro plays at 0.75
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), 0.75, 1e-9, "+0.25")
+  context.clear_engine_calls()
+  macros.set_target(1, 1, "reverb_mix", 0, 0.4)  -- 0.2 at the stored 0.5, 0.3 at 0.75
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), 0.6, 1e-9, "the new range's extra, +0.1")
+  assert_near(sent_reverb(context), 0.6, 1e-9, "sent")
+  -- a new id for the row takes the LFO at once too
+  macros.set_target(1, 1, "delay_mix", 0, 1)
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "delay_mix"), params:get("delay_mix") + 0.25, 1e-9, "the new target")
+  assert_near(engine_value(S, "reverb_mix"), params:get("reverb_mix"), 1e-9, "and none on the old one")
+end)
+
+-- Macro 1 at 0.5 on reverb_mix 0-1, under LFO 1 square at 50 % (the macro
+-- plays at 0.75), then its row emptied: no extra
+local function lfo_on_macro_without_targets(context, S, macros, before_emptying)
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  params:set("macro_1", 0.5); settle(context)
+  square_lfo_on_macro(S, 1, 50)
+  context.clock.run_for(0.1)
+  before_emptying()
+  macros.set_target(1, 1, "", 0, 1)
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), params:get("reverb_mix"), 1e-9, "no target, no extra")
+end
+
+test("an LFO on a macro follows a scene recall of the targets", function()
+  local context, S, macros = loaded()
+  lfo_on_macro_without_targets(context, S, macros, function() capture_scene(1) end)
+  recall_scene(1, 0)
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), params:get("reverb_mix") + 0.25, 1e-9, "the recalled target takes the LFO")
+  assert_near(sent_reverb(context), params:get("reverb_mix") + 0.25, 1e-9, "sent")
+end)
+
+test("an LFO on a macro follows a PSET load of the targets", function()
+  local context, S, macros = loaded()
+  local path = context.data_dir .. "strata-07.pset"
+  lfo_on_macro_without_targets(context, S, macros, function() params:write(path) end)
+  params:read(path)
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, "reverb_mix"), params:get("reverb_mix") + 0.25, 1e-9, "the loaded target takes the LFO")
+  assert_near(sent_reverb(context), params:get("reverb_mix") + 0.25, 1e-9, "sent")
+end)
+
+test("an LFO on a macro follows a main entry that resolves elsewhere after a source change", function()
+  local context, S, macros = loaded()
+  local fast = {}
+  S.lib.matrix = { set_fast_extra = function(key, id, m) fast[#fast + 1] = { key = key, id = id, m = m } end }
+  macros.set_target(1, 1, "v2_main", 0, 1)
+  params:set("macro_1", 0.5); settle(context)
+  local main = main_param_id(2)
+  square_lfo_on_macro(S, 1, 50)
+  context.clock.run_for(0.1)
+  assert_true(engine_value(S, main) ~= params:get(main), "the synth param takes the LFO")
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 1)  -- a buffer: the main entry is the position now
+  context.clock.run_for(0.1)
+  assert_near(engine_value(S, main), params:get(main), 1e-9, "the param it left has no extra")
+  assert_equal(fast[#fast] and fast[#fast].id, "v2_buf_pos", "the position takes it, as a fast target")
+  assert_near(fast[#fast].m, 0.5, 1e-9, "0.25 of the position's half range 0.5")
+end)
+
+test("a target whose set raises leaves the macro's other rows applied, and prints once", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  macros.set_target(1, 2, "delay_mix", 0, 1)
+  local param = params:lookup_param("reverb_mix")
+  local real_action = param.action
+  param.action = function() error("boom") end
+  params:set("macro_1", 0.4); settle(context)
+  assert_near(params:get("delay_mix"), 0.4, 1e-9, "row 2 is applied")
+  params:set("macro_1", 0.6); settle(context)
+  assert_near(params:get("delay_mix"), 0.6, 1e-9, "at every apply")
+  param.action = real_action
+  h.claim_script_errors(context, 1, "strata: macro 1 row 1 apply failed: ", "boom")
+end)
+
 test("a PSET load cancels every pending apply before it loads the targets", function()
   local context, S, macros = loaded()
   macros.set_target(1, 1, "reverb_mix", 0, 1)

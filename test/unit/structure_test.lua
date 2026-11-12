@@ -635,7 +635,6 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
 local RESERVED_CLEANUP_ORDERS = {
   "matrix_save",
   "matrix",
-  "scatter",
 }
 local RESERVED_START_ORDERS = {
   "matrix_load",

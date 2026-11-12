@@ -72,7 +72,7 @@ The percents' quantum is one percent a detent. A division of value r is a period
 
 Each step (`step_all`), every 1/48 s:
 - each LFO in index order (`step_lfo`): off, its value is 0. On: a free LFO's position advances by the rate it played since the last step times the time since (`util.time()`, so a late wake-up does not slow it); a clocked LFO's phase is `(beats / period + clocked_offset + phase)` mod 1, with `clocked_offset` integrating only what rate modulation adds, so an unmodulated clocked LFO is exact against the clock. A wrap draws a random shape's next value. Then its value (2u - 1), rate' and depth' (`evaluate`), and its destination: the engine's settings (`reconcile_engine`), or a Lua send (`step_lua`);
-- the `on_step` hooks (the matrix's), each contained;
+- the `on_step` hooks (the macros', `docs/notes/lua/macros.md`, and the matrix's), each contained;
 - the drain: at most 12 of the due keys, in the round robin, each inside `deferrable`.
 
 `phase(n)` is computed when read: a free LFO's from its last step plus the time since at the rate it plays, a clocked one's from `clock.get_beats()`, so the page's dot is smooth. `value(n)` is the last step's (and, at the turn-on, the start's).

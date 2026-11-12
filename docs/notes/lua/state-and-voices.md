@@ -59,6 +59,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
 | 50 | create the mutation metro (`S.mutation_metro`, `mutation_rate`, `gentle_mutate`); the `mutation_enabled` param starts it | `lib/mutation.lua` |
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
+| 62 | set and start the input level polls `amp_in_l` and `amp_in_r` (`START_ORDER.input_level`; a poll a norns lacks is skipped) (3.4) | `lib/input_level.lua` |
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
@@ -78,7 +79,6 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 
 | Order | Step | Module |
 |-------|------|--------|
-| 62 | the input level polls (`START_ORDER.input_level`) | `lib/input_level.lua` |
 | 108 | load matrix.data (`matrix_load`) | lib/matrix.lua (new in 1h) |
 
 Adding a step:
@@ -149,7 +149,6 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 |-------|------|--------|
 | 36 | save matrix.data (`matrix_save`) | lib/matrix.lua (new in 1h) |
 | 118 | the matrix clock (`matrix`) | lib/matrix.lua (1h) |
-| 125 | scatter (`scatter`): unused, since scatter keeps no clock, metro, poll or handler and cleanup reaches no engine (#461) | `lib/scatter.lua` |
 
 Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).
