@@ -780,30 +780,48 @@ checkRegateEnded = {
 // a start: the release has ended on the server, its /n_end not yet in
 // sclang (the interpreter held 60 ms, as checkRegateEnded does), so the
 // re-gate and the sync reach no node, and the node restarts once sclang
-// handles the /n_end. The restarted node must start at the synced phase,
-// advanced by rate x the time since the sync, not at 0: an up LFO (u = the
-// phase) of depth 1 at 0.003 Hz, synced to 0.4, reads 2 x 0.4 - 1 = -0.2
-// (-1 at phase 0). One node, a new one
+// handles the /n_end, here held 200 ms more after the sync. The restarted
+// node must start at the synced phase advanced by rate x the time since
+// the sync: two up LFOs (u = the phase) of depth 1 at 0.5 Hz on voice 7's
+// position and size channels, the restarted one and a reference that runs
+// on, both synced to 0.2 in one tick and read in one /c_getn, must read
+// within 0.05 of each other (2 x 0.5 Hz x 50 ms: only a 50 ms difference
+// in when the two syncs take effect trips it; when sclang computes the
+// restart's phase against when the server starts its node moved them by
+// 8-13 ms in the runs, gaps of 0.008-0.013). Started at the synced phase without
+// the time since (rate x at least 0.2 s), the restarted one reads at least
+// 2 x 0.5 x 0.2 = 0.2 lower; at phase 0, 0.4 lower still. One node, a new one
 checkRestartPhase = {
-    var fails = 0, responder = OSCFunc({ fails = fails + 1 }, '/fail', server.addr), old, until, nodes, value, ok;
-    command.(\setFastLfo, 3, 6, 2, 3, 0.003, 1.0, 0.0);
+    var fails = 0, responder = OSCFunc({ fails = fails + 1 }, '/fail', server.addr), old, until, nodes, values, gap, ok;
+    var rate = 0.5, hold = 0.2, tolerance = 0.05;
+    command.(\setFastLfo, 3, 6, 2, 3, rate, 1.0, 0.0);
+    command.(\setFastLfo, 4, 6, 1, 3, rate, 1.0, 0.0);
     server.sync; 0.1.wait;
     old = placeSynth.(3);
     command.(\stopFastLfo, 3);
     until = Main.elapsedTime + 0.06;
     while { Main.elapsedTime < until } { };
-    command.(\setFastLfo, 3, 6, 2, 3, 0.003, 1.0, 0.0);
-    command.(\syncFastLfo, 3, 0.4);
-    server.sync; 0.2.wait; server.sync;
+    command.(\setFastLfo, 3, 6, 2, 3, rate, 1.0, 0.0);
+    command.(\syncFastLfo, 3, 0.2);
+    command.(\syncFastLfo, 4, 0.2);
+    // the /n_end waits until the interpreter is free again
+    until = Main.elapsedTime + hold;
+    while { Main.elapsedTime < until } { };
+    server.sync; 0.1.wait; server.sync;
     nodes = lfoNodes.value;
-    value = readChannel.(6, 2);
+    // [the reference (position), the restarted one (size)], in one read
+    values = h.readBus(Bus.new(\control, engine.fastModChannel(6, 0, 1), 2, server));
     server.sync;
     responder.free;
-    ok = (fails == 0) and: { nodes.size == 1 } and: { nodes[0][\def] == \strataFastLfoUp }
-        and: { old.notNil and: { placeSynth.(3).notNil } and: { nodes[0][\id] == placeSynth.(3).nodeID } and: { nodes[0][\id] != old.nodeID } }
-        and: { (value + 0.2).abs < 0.01 };
-    check.(ok, "modulation: an LFO whose node restarts (its release ended as it was re-gated, the sync after it reaching no node) starts at the synced phase (% /fail replies; LFO nodes %, a new one %; channel % of -0.2, -1 at phase 0)".format(
-        fails, nodes.collect(_[\def]), (old.notNil and: { nodes.notEmpty } and: { nodes[0][\id] != old.nodeID }), value.round(0.0001)));
+    gap = if (values.size == 2) { values[1] - values[0] } { inf };
+    ok = (fails == 0) and: { nodes.size == 2 } and: { nodes.every({ arg node; node[\def] == \strataFastLfoUp }) }
+        and: { old.notNil and: { placeSynth.(3).notNil } and: { nodes.collect(_[\id]).includes(placeSynth.(3).nodeID) }
+            and: { placeSynth.(3).nodeID != old.nodeID } }
+        and: { gap.abs < tolerance };
+    check.(ok, "modulation: an LFO whose node restarts (its release ended as it was re-gated, the sync after it reaching no node, the restart % s after the sync) starts at the synced phase advanced by rate x the time since (% /fail replies; LFO nodes %, a new one %; at % Hz the restarted one reads %, the reference synced in the same tick %: a gap of %, within %; without the time since at least % lower)".format(
+        hold, fails, nodes.collect(_[\def]), (old.notNil and: { placeSynth.(3).notNil } and: { placeSynth.(3).nodeID != old.nodeID }),
+        rate, values[1] !? { arg value; value.round(0.0001) }, values[0] !? { arg value; value.round(0.0001) },
+        gap.round(0.0001), tolerance, 2 * rate * hold));
     resetModulation.value;
 };
 
