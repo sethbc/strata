@@ -325,7 +325,20 @@ return function(S)
         slot[entry.cc] = target
         print("midi map: " .. id .. " (a 3.3 LFO param) moved to " .. target)
       else
-        print("midi map: " .. id .. " (a 3.3 LFO param) removed: 3.4 has no param of its meaning")
+        -- why it goes: no 3.4 param of its meaning, its 3.4 param mapped
+        -- already (naming that map's CC), or its CC taken by another map
+        local why = "3.4 has no param of its meaning"
+        local kept = target and params.lookup[target] and pmap.data[target]
+        if type(kept) == "table" then
+          why = string.format("its 3.4 param %s is already mapped (CC %s, channel %s, device %s)", target,
+            tostring(kept.cc), tostring(kept.ch), tostring(kept.dev))
+        elseif target and params.lookup[target] and slot then
+          why = string.format("its CC %s (channel %s, device %s) maps %s", tostring(entry.cc), tostring(entry.ch),
+            tostring(entry.dev), tostring(slot[entry.cc]))
+        elseif target and params.lookup[target] then
+          why = "its map names no device and channel"
+        end
+        print("midi map: " .. id .. " (a 3.3 LFO param) removed: " .. why)
       end
     end
     if #stale > 0 and type(pmap.write) == "function" then pmap.write() end
