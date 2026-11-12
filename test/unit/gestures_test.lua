@@ -690,6 +690,152 @@ test("the sources gesture1-4 read the loop's phase, 0 when not playing", functio
   assert_equal(gestures.state(1), "playing", "the row's press is the recorder's")
 end)
 
+-- Count the writes of the live file data/strata/gestures.data while body runs
+local function live_writes(context, S, body)
+  local live_path = context.data_dir .. "strata/gestures.data"
+  local count = 0
+  local real_write = S.lib.data_files.write
+  S.lib.data_files.write = function(path, value)
+    if path == live_path then count = count + 1 end
+    return real_write(path, value)
+  end
+  local ok, problem = pcall(body, function() return count end)
+  S.lib.data_files.write = real_write
+  if not ok then error(problem, 0) end
+  return live_path
+end
+
+test("a recording that ends is in the live file shortly after, without cleanup (#651)", function()
+  local context, S, gestures = loaded()
+  local live_path = live_writes(context, S, function(writes)
+    record(context, gestures, 1, {{0.1, "reverb_mix", 1}, {0.5, "delay_mix", 1}}, 1)
+    assert_equal(writes(), 0, "nothing is written as the recording ends")
+    context.clock.run_for(0.05)
+    assert_equal(writes(), 0, "nor during the delay")
+    context.clock.run_for(0.1)
+    assert_equal(writes(), 1, "one write after it")
+  end)
+  local live = S.lib.data_files.read(live_path)
+  assert_true(live ~= nil, "the live file is on the card")
+  assert_equal(#live.recorders[1].events, 2, "holding the loop")
+  assert_equal(live.recorders[1].events[2].id, "delay_mix")
+  assert_equal(gestures.state(1), "playing", "which plays on")
+end)
+
+test("a burst of a recording's end, an overdub and a clear writes the live file once (#651)", function()
+  local context, S, gestures = loaded()
+  local live_path = live_writes(context, S, function(writes)
+    record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)   -- ends: the burst starts
+    gestures.overdub(1); hand_edit("delay_mix"); gestures.overdub(1)
+    record(context, gestures, 2, {{0, "delay_mix", 1}}, 0)      -- another recording, ended at once
+    gestures.clear(1)
+    context.clock.run_for(0.2)
+    assert_equal(writes(), 1, "one write for the burst")
+  end)
+  local live = S.lib.data_files.read(live_path)
+  assert_equal(live.recorders[1].events, nil, "with the newest recorders: 1 cleared")
+  assert_equal(live.recorders[2].events[1].id, "delay_mix", "2 recorded")
+end)
+
+test("an overdub's end, a clear, a PSET load and a loop's new quantize each reach the live file (#651)", function()
+  local context, S, gestures = loaded()
+  local path = context.data_dir .. "strata-08.pset"
+  local live_path = context.data_dir .. "strata/gestures.data"
+  local function live() return S.lib.data_files.read(live_path) end
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+  context.clock.run_for(0.2)
+  gestures.overdub(1); context.clock.run_for(0.5); hand_edit("delay_mix")
+  context.clock.run_for(0.2)
+  assert_equal(#live().recorders[1].events, 1, "an overdub that goes on is not written yet")
+  gestures.overdub(1)                                -- ends
+  context.clock.run_for(0.2)
+  assert_equal(#live().recorders[1].events, 2, "the overdub's end")
+  params:write(path)
+  gestures.clear(1)
+  context.clock.run_for(0.2)
+  assert_equal(live().recorders[1].events, nil, "the clear")
+  params:read(path)                                  -- the same quantize: only the side file changes them
+  context.clock.run_for(0.2)
+  assert_equal(#live().recorders[1].events, 2, "the PSET's loop")
+  params:set("gesture_1_quantize", BEAT)             -- a recorded loop converts to beats
+  context.clock.run_for(0.2)
+  assert_equal(live().recorders[1].quantize, "beat", "the new quantize")
+  assert_true(live().recorders[1].beats ~= nil, "in beats")
+end)
+
+test("a stop or another recorder's recording that ends an overdub reaches the live file (#651)", function()
+  local context, S, gestures = loaded()
+  local live_path = context.data_dir .. "strata/gestures.data"
+  local function events() return #S.lib.data_files.read(live_path).recorders[1].events end
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+  context.clock.run_for(0.2)
+  gestures.overdub(1); context.clock.run_for(0.3); hand_edit("delay_mix")
+  gestures.press(1)                                  -- a stop ends the overdub
+  context.clock.run_for(0.2)
+  assert_equal(events(), 2, "the stop's overdub")
+  gestures.press(1); gestures.overdub(1); context.clock.run_for(0.3); hand_edit("reverb_mix")
+  gestures.press(2)                                  -- a recording on 2 ends 1's overdub
+  context.clock.run_for(0.2)
+  assert_equal(events(), 3, "the overdub another recording ended")
+  assert_equal(gestures.state(2), "recording")
+end)
+
+test("playback and a stop write nothing to the live file (#651)", function()
+  local context, S, gestures = loaded()
+  params:set("gesture_2_quantize", BAR)
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}, {0.3, "delay_mix", 1}}, 0.5)
+  record(context, gestures, 2, {{0.1, "reverb_mix", 1}}, 1)
+  context.clock.run_for(0.2)                         -- the recordings' write
+  live_writes(context, S, function(writes)
+    context.clock.run_for(1); fire(S, 1); fire(S, 1)  -- both play
+    gestures.press(1); gestures.press(2)            -- stop
+    context.clock.run_for(0.5)
+    gestures.press(1); gestures.press(2)            -- play again
+    run_to_beat(context, math.ceil(clock.get_beats()) + 8)
+    capture_scene(1); gestures.press(1); recall_scene(1, 0)  -- a recall plays it again
+    context.clock.run_for(0.5)
+    assert_equal(writes(), 0, "nothing changed: nothing is written")
+  end)
+end)
+
+test("a live file that could not be set aside is never written over by a recording's write (#651)", function()
+  local first = loaded()
+  cleanup()
+  local live_path = first.data_dir .. "strata/gestures.data"
+  local bad = "return {\n  {1},\n"
+  h.write_text(live_path, bad)
+  local context = load_strata({ data_subdir = first.data_dir:match("([^/]+)/$"), before_init = function()
+    local_value("S").lib.data_files.set_aside = function() return nil, "permission denied" end
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  record(context, S.lib.gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+  S.lib.gestures.overdub(1); hand_edit("delay_mix"); S.lib.gestures.overdub(1)
+  S.lib.gestures.clear(1)
+  context.clock.run_for(0.2)
+  assert_equal(h.file_text(live_path), bad, "not written over after a recording")
+  assert_equal(S.gesture_save_clock, nil, "no write waits")
+  cleanup()
+  assert_equal(h.file_text(live_path), bad, "nor at cleanup")
+end)
+
+test("cleanup writes the live file once, a recording it ends included, and leaves no write waiting (#651)", function()
+  local context, S, gestures = loaded()
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)    -- its timed write waits
+  gestures.press(2); hand_edit("delay_mix")                    -- 2 records as cleanup runs
+  local live_path = live_writes(context, S, function(writes)
+    assert_true(S.gesture_save_clock ~= nil, "a timed write waits")
+    cleanup()
+    assert_equal(writes(), 1, "one write, at the cleanup step")
+    assert_equal(S.gesture_save_clock, nil, "and no timed write is left")
+    context.clock.run_for(0.2)
+    assert_equal(writes(), 1, "none after it")
+  end)
+  local live = S.lib.data_files.read(live_path)
+  assert_equal(#live.recorders[1].events, 1, "the loop")
+  assert_equal(live.recorders[2].events[1].id, "delay_mix", "and the recording, as if it stopped then")
+end)
+
 test("cleanup stops every recorder's metro and clock", function()
   local context, S, gestures = loaded()
   params:set("gesture_2_quantize", BAR)

@@ -202,6 +202,25 @@ test("side files: the live file is loaded at the start, then written once per bu
   if not ok then error(problem, 0) end
 end)
 
+test("side files: a change after the cleanup step's write starts no timed write (#651)", function()
+  local context, S = loaded()
+  local files, state = probe(S)
+  local path = context.data_dir .. "strata/probe.data"
+  files.load_live()
+  files.save_now()
+  local count = counting_writes(S, path)
+  local ok, problem = pcall(function()
+    -- a later cleanup step that changes the data (the gestures' stop of every recorder ends a recording)
+    state.data = { n = 1 }
+    files.save_live()
+    assert_equal(S.probe_save_clock, nil, "no clock is left running after cleanup")
+    context.clock.run_for(0.2)
+    assert_equal(count.writes, 0, "and nothing is written after the cleanup step's write")
+  end)
+  count.stop()
+  if not ok then error(problem, 0) end
+end)
+
 test("side files: the PSET hook's write always writes, its read passes silent on, its delete removes the file", function()
   local context, S = loaded()
   local order = {}
