@@ -202,7 +202,10 @@ return function(S)
   -- sum, half ranges); fast_handed[id], the value last handed to the
   -- budget (it may still wait there); fast_extras[id][source_key], the
   -- macros' LFO extras (half ranges)
-  local held = {lua = {}, fast = {}, fast_want = {}, fast_handed = {}, fast_extras = {}}
+  -- lua_handed[id] and lua_handed_over[id], the value a Lua destination's
+  -- send last handed to the budget and what the engine had then
+  local held = {lua = {}, lua_handed = {}, lua_handed_over = {}, fast = {}, fast_want = {}, fast_handed = {},
+    fast_extras = {}}
 
   -- A fast channel (voice, destination) is one deferrable id of the send
   -- budget (ruling 65): its key, which no param id can be (it holds
@@ -250,9 +253,21 @@ return function(S)
     return unstepped:unmap(value)
   end
 
+  -- What the engine had (false for nothing) when a value was handed over
+  local function engine_seen(id)
+    local value = S.engine_param_values[id]
+    if value == nil then return false end
+    return value
+  end
+
+  -- A Lua destination's send: the value is handed to the budget, which may
+  -- keep it waiting; lua_handed[id] remembers it, with what the engine had
+  -- then (lua_handed_over[id]), until something else reaches the engine
   local function send_lua(id)
     local sync = S.lib.engine_sync
-    sync.send_engine_value(id, sync.with_lfo_offsets(id, params:get(id)))
+    local value = sync.with_lfo_offsets(id, params:get(id))
+    held.lua_handed[id], held.lua_handed_over[id] = value, engine_seen(id)
+    sync.send_engine_value(id, value)
   end
 
   -- A Lua destination is sent in the round robin under its own id (the
@@ -271,8 +286,20 @@ return function(S)
   -- Whether a Lua destination's value now moved past the LFOs' threshold
   -- from what the engine last got (S.engine_param_values: a voice sync
   -- forgets it, so the next step sends again), or the engine got nothing
+  -- The reference is the value last handed to the budget while the engine
+  -- still has what it had then (that value, or a newer one, may wait in
+  -- the budget: a sum back at the delivered value must replace it); once
+  -- the engine's value changed (the handed one delivered, a hand edit, a
+  -- sync), it is what the engine has
   local function lua_moved(id)
     local last = S.engine_param_values[id]
+    if held.lua_handed[id] ~= nil then
+      if engine_seen(id) == held.lua_handed_over[id] then
+        last = held.lua_handed[id]
+      else
+        held.lua_handed[id], held.lua_handed_over[id] = nil, nil
+      end
+    end
     if last == nil then return true end
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
     return math.abs(position(id, value) - position(id, last)) >= S.lib.lfos.LFO.send_threshold
@@ -350,9 +377,13 @@ return function(S)
     local entry = channel(id)
     local want = util.clamp(scratch.fast_sums[id] or 0, -MATRIX.fast_limit, MATRIX.fast_limit)
     local engine_has = S.engine_param_values[entry.key] or 0
-    local handed = held.fast_handed[id] or 0
+    -- only this send hands the channel's key to the budget, so the value
+    -- last handed is what the engine has or will have
+    local handed = held.fast_handed[id]
+    local reference = handed or engine_has
+    handed = handed or 0
     held.fast_want[id] = want
-    if math.abs(want - engine_has) >= S.lib.lfos.LFO.send_threshold
+    if math.abs(want - reference) >= S.lib.lfos.LFO.send_threshold
         or (want == 0 and (engine_has ~= 0 or handed ~= 0)) then
       held.fast[id] = true
       S.lib.lfos.mark_due(entry.key, entry.send)
@@ -473,17 +504,26 @@ return function(S)
   -- A console line for every part this version has no source or
   -- destination for (a later release's): kept, saved again, and the
   -- routing does not play
-  local function report_unknown(path)
+  -- A file load names every unknown part at each load; a scene apply (a
+  -- recall, a fade's end, morph's crossing, the scene sequencer's every
+  -- recall) names each distinct unknown source key or destination id once
+  -- a session, at the first apply that holds it (scene_reported, by kind
+  -- and text)
+  local scene_reported = {}
+  local function report_unknown(path, once_a_session)
+    local function report(k, kind, text)
+      local seen = kind .. " " .. text
+      if once_a_session then
+        if scene_reported[seen] then return end
+        scene_reported[seen] = true
+      end
+      print("matrix: " .. path .. ": routing " .. k .. "'s " .. kind .. " " .. text
+        .. " is unknown here; kept, and it does not play")
+    end
     for k = 1, MATRIX_SLOTS do
       local routing = S.matrix[k]
-      if routing.source ~= "" and not source_known(routing.source) then
-        print("matrix: " .. path .. ": routing " .. k .. "'s source " .. routing.source
-          .. " is unknown here; kept, and it does not play")
-      end
-      if routing.dest ~= "" and not destination_known(routing.dest) then
-        print("matrix: " .. path .. ": routing " .. k .. "'s destination " .. routing.dest
-          .. " is unknown here; kept, and it does not play")
-      end
+      if routing.source ~= "" and not source_known(routing.source) then report(k, "source", routing.source) end
+      if routing.dest ~= "" and not destination_known(routing.dest) then report(k, "destination", routing.dest) end
     end
   end
 
@@ -705,7 +745,7 @@ return function(S)
     validate = function(value) return block_problem(value) == nil end,
     apply = function(value)
       load_block(value)
-      report_unknown("a scene")
+      report_unknown("a scene", true)
       routings_changed()
     end,
     discrete = true,
@@ -757,7 +797,9 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix, function()
     M.cancel_learn()
     for id in pairs(held.lua) do S.lib.engine_sync.set_extra_offset(MATRIX.extra_key, id, nil) end
-    for _, part in ipairs({"lua", "fast", "fast_want", "fast_handed", "fast_extras"}) do held[part] = {} end
+    for _, part in ipairs({"lua", "lua_handed", "lua_handed_over", "fast", "fast_want", "fast_handed", "fast_extras"}) do
+      held[part] = {}
+    end
   end)
 
   -- Learn waits exactly while its timeout clock runs
