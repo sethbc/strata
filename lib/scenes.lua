@@ -1412,5 +1412,6 @@ return function(S)
 
   M.scene_data_dir = scene_data_dir
   M.move_aside_unloadable_file = move_aside_unloadable_file
+  M.set_value = set_scene_value  -- morph sets its continuous values as a transition's step does
   return M
 end

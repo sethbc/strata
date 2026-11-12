@@ -3,11 +3,12 @@
 -- (the group strata_morph), the plan between the two scenes they name and
 -- the clock (S.morph_clock) that applies the morph's latest position. Morph
 -- writes params and never recalls: the plan is the two scenes'
--- S.lib.scenes.scene_entries paired by id, continuous values are set
--- through S.lib.scenes.apply_entries (so a registered field's own set, a
--- macro's silent one, runs as in a transition's step) and the discrete
--- entries switch at the crossing through apply_entries' only =
--- "discrete". Every apply writes inside S.lib.engine_sync.deferrable.
+-- S.lib.scenes.scene_entries paired by id, each continuous value is set
+-- through S.lib.scenes.set_value, the setter a transition's step uses (a
+-- registered field's own set, a macro's silent one; a quantized freq
+-- snaps), and the discrete entries switch at the crossing through
+-- S.lib.scenes.apply_entries' only = "discrete". Every apply writes
+-- inside S.lib.engine_sync.deferrable.
 -- S.lib.morph holds add_params, plan_ready and MORPH (the tunables).
 -- Registers the morph clock's cleanup step, a PSET hook (a PSET load sets
 -- the position without applying it) and the "morph clock" invariant.
@@ -20,8 +21,9 @@ return function(S)
   -- hysteresis: the discrete entries switch to B at 0.5 + it and back to A
   -- at 0.5 - it (epsilon absorbs a position's float error);
   -- max_values_per_apply: continuous values one apply sets, round robin;
-  -- send_threshold: a value that moved less than this fraction of its
-  -- param's range since morph last set it is skipped
+  -- send_threshold: while the morph moves, a value that moved less than
+  -- this fraction of its param's range since morph last set it is skipped
+  -- (the applies at rest set every value that moved at all)
   local MORPH = {apply_hz = 10, hysteresis = 0.02, max_values_per_apply = 120, send_threshold = 1 / 1000,
     epsilon = 1e-9, param_count = 3}
   M.MORPH = MORPH
@@ -32,9 +34,13 @@ return function(S)
   -- until first asked). applied: what the morph last set, side "a" or "b"
   -- (nil: the next apply takes the side by position, as after a plan
   -- change), values by param id and the round robin's cursor. moved: a
-  -- position waits for the clock; pending: the last apply left values for
-  -- the next one; flashed: the plan's empty endpoint has flashed
-  local state = {plan = nil, applied = {values = {}, cursor = 1}, moved = false, pending = false, flashed = false}
+  -- position waits for the clock; move_held and move_scene: whether morph
+  -- held the state at the latest move, and the current scene then (a
+  -- recall or fade after the move wins over it); pending: the last apply
+  -- left values for the next one; flashed: the plan's empty endpoint has
+  -- flashed
+  local state = {plan = nil, applied = {values = {}, cursor = 1}, moved = false, move_held = false, move_scene = 0,
+    pending = false, flashed = false}
 
   local function forget_applied()
     state.applied = {side = nil, values = {}, cursor = 1}
@@ -97,10 +103,45 @@ return function(S)
       threshold = (high - low) * MORPH.send_threshold}
   end
 
+  -- The round robin's units: one item each, but a voice's loop pair
+  -- (lib/loops.lua) is one unit, written whole whenever either value is
+  -- due, start before length. A recall sets the length first while the
+  -- length's filter stands down (S.scene_recall_in_progress); morph's sets
+  -- are a transition step's, with the filter on, so the start goes first
+  -- (its action cuts a length the new start leaves no room for) and the
+  -- length, which a blend of two fitting pairs always fits, after it
+  local function plan_units(items)
+    local LOOP = S.lib.loops.LOOP
+    local units, pairs_by_voice = {}, {}
+    for _, item in ipairs(items) do
+      local prefix = item.voice and ("v" .. item.voice .. "_")
+      local key = prefix and (item.id == prefix .. LOOP.start_key and "start"
+        or item.id == prefix .. LOOP.length_key and "length")
+      if key then
+        local pair = pairs_by_voice[item.voice]
+        if not pair then
+          pair = {members = {}}
+          pairs_by_voice[item.voice] = pair
+          table.insert(units, pair)
+        end
+        pair[key] = item
+      else
+        table.insert(units, {members = {item}})
+      end
+    end
+    for _, pair in pairs(pairs_by_voice) do
+      if pair.start then table.insert(pair.members, pair.start) end
+      if pair.length then table.insert(pair.members, pair.length) end
+      pair.start, pair.length = nil, nil
+    end
+    return units
+  end
+
   -- The plan between slots a and b: continuous pairs that differ (and the
-  -- ramps' ids), each side's discrete entries that differ, in recall order,
-  -- and the switches. Entries equal in A and B, or in one scene only, are
-  -- left out. ready is false while an endpoint is empty or invalid
+  -- ramps' ids), as round robin units, each side's discrete entries that
+  -- differ, in recall order, and the switches. Entries equal in A and B,
+  -- or in one scene only, are left out. ready is false while an endpoint
+  -- is empty or invalid
   local function build_plan(a, b)
     local plan = {a = a, b = b, revision_a = S.lib.scenes.revision(a), revision_b = S.lib.scenes.revision(b)}
     plan.empty = empty_endpoint(a, b)
@@ -114,17 +155,19 @@ return function(S)
     end
     local ramp_ids
     ramp_ids, plan.switches = block_ramps(data_a, data_b)
-    plan.continuous, plan.ramps, plan.discrete = {}, {}, {a = {}, b = {}}
+    local items = {}
+    plan.ramps, plan.discrete = {}, {a = {}, b = {}}
     for _, entry_a in ipairs(lists.a) do
       local entry_b = by_key.b[entry_key(entry_a)]
       if entry_b and entry_b.kind == entry_a.kind and entry_a.kind == "continuous" then
         if ramp_ids[entry_a.id] then
           table.insert(plan.ramps, plan_item(entry_a, entry_b))
         elseif entry_a.value ~= entry_b.value then
-          table.insert(plan.continuous, plan_item(entry_a, entry_b))
+          table.insert(items, plan_item(entry_a, entry_b))
         end
       end
     end
+    plan.continuous = plan_units(items)
     for side, other in pairs({a = "b", b = "a"}) do
       for _, entry in ipairs(lists[side]) do
         local counterpart = by_key[other][entry_key(entry)]
@@ -141,12 +184,15 @@ return function(S)
   -- either param or either slot's revision changed. A new plan forgets
   -- what was applied (its first apply takes the side by position) and may
   -- flash its empty endpoint again
-  local function current_plan()
+  local function plan_is_current(plan)
     local a, b = params:get("morph_a"), params:get("morph_b")
-    local plan = state.plan
-    if not (plan and plan.a == a and plan.b == b and plan.revision_a == S.lib.scenes.revision(a)
-        and plan.revision_b == S.lib.scenes.revision(b)) then
-      state.plan = build_plan(a, b)
+    return plan ~= nil and plan.a == a and plan.b == b and plan.revision_a == S.lib.scenes.revision(a)
+      and plan.revision_b == S.lib.scenes.revision(b)
+  end
+
+  local function current_plan()
+    if not plan_is_current(state.plan) then
+      state.plan = build_plan(params:get("morph_a"), params:get("morph_b"))
       state.flashed = false
       forget_applied()
     end
@@ -186,65 +232,99 @@ return function(S)
     return rounded(item, item.b * math.max(0, 2 * position - 1))
   end
 
-  -- Whether a value is due: never set by this plan, or moved by at least
-  -- its threshold (and at all) since morph set it
-  local function due(item, value)
+  -- Whether a value is due: never set by this plan, or moved since morph
+  -- set it, by at least its threshold while the morph moves (exact false)
+  -- and by anything at rest (exact true), so a morph at rest lands every
+  -- value on its blend (at 0 and 1, the scene's own)
+  local function due(item, value, exact)
     local last = state.applied.values[item.id]
     if last == nil then return true end
     local moved = math.abs(value - last)
-    return moved > 0 and moved >= item.threshold
+    return moved > 0 and (exact or moved >= item.threshold)
   end
 
-  -- The continuous writes of one apply, at most max_values_per_apply: the
-  -- ramps first (their switch and their depth go together), then the
-  -- plan's values round robin from the cursor. Returns the entries and
-  -- whether values are left for the next apply
-  local function continuous_writes(plan, side, position, entries)
-    local more = false
+  -- The continuous writes of one apply, {item, value} in order, at most
+  -- max_values_per_apply: the ramps first (their switch and their depth go
+  -- together), then the plan's units round robin from the cursor, a unit
+  -- whole or not at all. Returns the writes and whether values are left
+  -- for the next apply
+  local function continuous_writes(plan, side, position, exact)
+    local writes, more = {}, false
     local function add(item, value)
-      if #entries >= MORPH.max_values_per_apply then more = true; return false end
-      table.insert(entries, {kind = "continuous", id = item.id, value = value, voice = item.voice})
+      table.insert(writes, {item = item, value = value})
       state.applied.values[item.id] = value
-      return true
     end
     for _, item in ipairs(plan.ramps) do
       local value = ramp_value(item, side, position)
-      if due(item, value) then add(item, value) end
+      if due(item, value, exact) then
+        if #writes >= MORPH.max_values_per_apply then more = true else add(item, value) end
+      end
     end
-    local list, cursor = plan.continuous, state.applied.cursor
-    for _ = 1, #list do
-      local item = list[cursor]
-      local value = blend_value(item, position)
-      if due(item, value) and not add(item, value) then break end
-      cursor = cursor % #list + 1
+    local units, cursor = plan.continuous, state.applied.cursor
+    for _ = 1, #units do
+      local unit, values, unit_due = units[cursor], {}, false
+      for index, item in ipairs(unit.members) do
+        values[index] = blend_value(item, position)
+        unit_due = unit_due or due(item, values[index], exact)
+      end
+      if unit_due then
+        if #writes + #unit.members > MORPH.max_values_per_apply then more = true; break end
+        for index, item in ipairs(unit.members) do add(item, values[index]) end
+      end
+      cursor = cursor % #units + 1
     end
     state.applied.cursor = cursor
-    return entries, more
+    return writes, more
+  end
+
+  -- Whether, at rest, a value of the current plan is off its exact blend
+  -- (an apply that skipped it under the threshold while the morph moved).
+  -- A plan rebuilt since the last apply, or none applied, waits for a move
+  local function rest_due()
+    local plan = state.plan
+    local side = state.applied.side
+    if not (side and plan and plan.ready and plan_is_current(plan)) then return false end
+    local position = params:get("morph")
+    for _, item in ipairs(plan.ramps) do
+      if due(item, ramp_value(item, side, position), true) then return true end
+    end
+    for _, unit in ipairs(plan.continuous) do
+      for _, item in ipairs(unit.members) do
+        if due(item, blend_value(item, position), true) then return true end
+      end
+    end
+    return false
+  end
+
+  -- Each value as a transition's step sets it (S.lib.scenes.set_value,
+  -- no recall flag: a quantized freq snaps)
+  local function set_values(writes)
+    for _, write in ipairs(writes) do S.lib.scenes.set_value(write.item.id, write.value) end
   end
 
   -- Write the plan at position: at a crossing the ramps go to 0, then the
   -- switches run; on a new side its discrete entries switch (recall order,
   -- apply_entries); then the continuous values. Returns whether values
   -- are left
-  local function write_position(plan, position)
+  local function write_position(plan, position, exact)
     local side, crossed = side_at(position)
     if side ~= state.applied.side then
       if crossed then
         local zeros = {}
         for _, item in ipairs(plan.ramps) do
           if state.applied.values[item.id] ~= 0 then
-            table.insert(zeros, {kind = "continuous", id = item.id, value = 0, voice = item.voice})
+            table.insert(zeros, {item = item, value = 0})
             state.applied.values[item.id] = 0
           end
         end
-        if #zeros > 0 then S.lib.scenes.apply_entries(zeros, {only = "continuous"}) end
+        set_values(zeros)
         for _, switch in ipairs(plan.switches[side]) do switch() end
       end
       state.applied.side = side
       if #plan.discrete[side] > 0 then S.lib.scenes.apply_entries(plan.discrete[side], {only = "discrete"}) end
     end
-    local entries, more = continuous_writes(plan, side, position, {})
-    if #entries > 0 then S.lib.scenes.apply_entries(entries, {only = "continuous"}) end
+    local writes, more = continuous_writes(plan, side, position, exact)
+    set_values(writes)
     return more
   end
 
@@ -254,12 +334,21 @@ return function(S)
     return S.current_scene ~= 0 or S.scene_transition_active
   end
 
-  -- One apply of the morph's position. An empty or invalid endpoint
-  -- flashes once per plan and changes nothing. Otherwise it cancels a
-  -- running transition, writes inside deferrable, leaves no scene current
-  -- and redraws. After a recall the apply starts again from the recalled
-  -- state, as after a plan change. Returns whether values are left
-  local function apply_position()
+  -- A recall or a fade came after the latest move: something took over
+  -- that the move did not see (morph held the state at the move, or the
+  -- current scene changed since). Such a move is dropped, never applied
+  -- over it
+  local function move_overtaken()
+    return taken_over() and (state.move_held or S.current_scene ~= state.move_scene)
+  end
+
+  -- One apply of the morph's position (exact: at rest, below). An empty or
+  -- invalid endpoint flashes once per plan and changes nothing. Otherwise
+  -- it cancels a running transition, writes inside deferrable, leaves no
+  -- scene current and redraws. A move made after a recall starts again
+  -- from the recalled state, as after a plan change. Returns whether
+  -- values are left
+  local function apply_position(exact)
     local plan = current_plan()
     if not plan.ready then
       if not state.flashed then
@@ -271,7 +360,7 @@ return function(S)
     if taken_over() then forget_applied() end
     cancel_scene_transition()
     local position, more = params:get("morph"), false
-    S.lib.engine_sync.deferrable(function() more = write_position(plan, position) end)
+    S.lib.engine_sync.deferrable(function() more = write_position(plan, position, exact) end)
     S.current_scene = 0
     request_redraw()
     grid_redraw()
@@ -286,18 +375,32 @@ return function(S)
     state.moved, state.pending = false, false
   end
 
+  -- What the clock does at a tick: "move" (apply the latest position), or,
+  -- with no move waiting (a move a recall or fade overtook is dropped),
+  -- "rest" while values are left or off their exact blend and nothing took
+  -- over, else nil (the clock stops)
+  local function next_apply()
+    if state.moved and move_overtaken() then state.moved = false end
+    if state.moved then return "move" end
+    if not taken_over() and (state.pending or rest_due()) then return "rest" end
+    return nil
+  end
+
   -- The clock runs while a move waits or values are left: its first apply
   -- on the next tick (a PSET load's hook runs before it), then one each
-  -- 1 / apply_hz while the morph moves, one more at rest, and more while
-  -- values are left, unless a recall took over. An error in an apply ends
-  -- the clock (it forgets its own id first) and is raised again
+  -- 1 / apply_hz while the morph moves, and at rest more while values are
+  -- left or off their exact blend, unless a recall took over. An error in
+  -- an apply ends the clock (it forgets its own id first) and is raised
+  -- again
   local function start_clock()
     if S.morph_clock then return end
     S.morph_clock = clock.run(function()
       clock.sleep(0)
-      while state.moved or (state.pending and not taken_over()) do
+      while true do
+        local kind = next_apply()
+        if not kind then break end
         state.moved = false
-        local applied, result = xpcall(apply_position, with_traceback)
+        local applied, result = xpcall(function() return apply_position(kind == "rest") end, with_traceback)
         if not applied then
           S.morph_clock = nil
           state.pending = false
@@ -323,6 +426,7 @@ return function(S)
       controlspec = controlspec.new(0, 1, "lin", 0, 0, ""), formatter = percent,
       action = function()
         state.moved = true
+        state.move_held, state.move_scene = not taken_over(), S.current_scene
         start_clock()
       end}
     params:add{type = "number", id = "morph_a", name = "morph A", min = 1, max = NUM_SCENES, default = 1}
