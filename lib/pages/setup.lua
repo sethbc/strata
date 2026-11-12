@@ -63,6 +63,8 @@ return function(S)
       M.flash(SETUP_PAGE.load_texts[outcome],
         outcome == "confirm" and S.lib.scenes.SCENE_LOAD.confirm_seconds or nil)
     end},
+    -- 3.4: the patterns follow the clock's transport (lib/sequencer.lua)
+    {label = "transport", kind = "param", param_id = "seq_follow_transport", binary = {[0] = "off", [1] = "follow"}},
   }
   M.SETUP_FIELDS = SETUP_FIELDS
 
@@ -200,6 +202,7 @@ return function(S)
       return field.key == "buffer_seconds" and (value .. " s") or value
     end
     if field.format then return string.format(field.format, params:get(field.param_id)) end
+    if field.binary then return field.binary[params:get(field.param_id)] end
     if field.param_id == "mutation_enabled" then return params:get(field.param_id) == 1 and "on" or "off" end
     return params:string(field.param_id)
   end
@@ -305,7 +308,7 @@ return function(S)
       elseif field and field.kind == "performance" then
         step_performance_field(field, d)
       elseif field and field.kind == "param" then
-        if field.param_id == "mutation_enabled" then
+        if field.param_id == "mutation_enabled" or field.binary then
           -- a binary has no range for enc_param_delta; set_binary_param
           -- echoes it to a MIDI map (#538)
           set_binary_param(field.param_id, d > 0 and 1 or 0)
@@ -356,7 +359,7 @@ return function(S)
         enc(2, 60)
       end},
       {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
-        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 8)
+        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 9)
       end},
       {name = "buffers missing", setup = function()
         S.buffers[1].missing_path = "/x/a.wav"; S.buffers[2].missing_path = "/x/b.wav"

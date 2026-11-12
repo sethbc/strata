@@ -41,7 +41,7 @@ So an edit, a mutation, a scene-fade step or the 10 Hz drift on a modulated para
 
 ## 3.4's modulation hooks
 
-Three additions, for step locks, LFOs on macros, the matrix and the deferrable writers (design §0.1). Nothing in 3.3's code uses them yet, so the engine gets what it got.
+Three additions, for step locks, LFOs on macros, the matrix and the deferrable writers (design §0.1). The sequencer's step locks and notes use the base override (`docs/notes/lua/sequencer.md`); with no lock or note set, the engine gets what it got in 3.3.
 
 **The base override** (`S.lib.engine_sync.set_base_override(param_id, value)`, `clear_base_override(param_id)`, `engine_base_value(param_id)`):
 - While an override is set, `with_lfo_offsets(param_id, value)` starts from it instead of `value`, so every send of the param (its action's, an LFO step's) carries the override plus the offsets. The stored value keeps changing underneath: a param action stores its value and its send is held under the override.

@@ -1483,7 +1483,8 @@ end
 -- leaves one unclaimed, as it does a clock error, and
 -- context.take_script_errors() claims them (#473)
 local SCRIPT_ERROR_PATTERNS = { "^strata: [^\n]- failed: ", "^scene sequencer: scene %d+ failed: ",
-  "^pset hook [^\n]-: " }  -- a 3.4 PSET hook that raised (lib/params_setup.lua)
+  "^pset hook [^\n]-: ",     -- a 3.4 PSET hook that raised (lib/params_setup.lua)
+  "^step output [^\n]-: " }  -- a 3.4 step output that raised (lib/sequencer.lua)
 stubs.script_errors = {}
 
 function stubs.take_script_errors()
@@ -1831,6 +1832,28 @@ local function make_clock(util)
     local count = 0
     for _ in pairs(clock.threads) do count = count + 1 end
     return count
+  end
+
+  -- Test helpers: the clock source's transport, as matron's
+  -- clock_start_from_source and clock_stop_from_source run it (clock.cc,
+  -- for the source in use). A start puts the beat at 0 now and every
+  -- waiting sync's beat at 0 (clock_scheduler_reset_sync_events), so each
+  -- fires on the next tick and its coroutine's next sync counts on from
+  -- beat 0; then it calls clock.transport.start, as _norns.clock.start does.
+  -- A stop calls clock.transport.stop. Neither calls a handler that is nil
+  function clock.transport_start()
+    beat_reference.beat, beat_reference.time = 0, util.time()
+    for _, event in pairs(clock.events) do
+      if event.ready and event.type == SCHEDULE_SYNC then
+        event.sync_beat = 0
+        event.scheduled_at, event.scheduled_beat = util.time(), 0
+      end
+    end
+    if clock.transport.start ~= nil then clock.transport.start() end
+  end
+
+  function clock.transport_stop()
+    if clock.transport.stop ~= nil then clock.transport.stop() end
   end
 
   return clock
@@ -2914,6 +2937,8 @@ function stubs.install(options)
   package.preload["pattern_time"] = function() return require("stub_pattern_time")() end
   package.loaded["textentry"] = nil
   package.preload["textentry"] = function() return context.textentry.library end
+  package.loaded["er"] = nil
+  package.preload["er"] = function() return require("stub_er") end
 
   if options.quiet then
     _G.print = function(...)
