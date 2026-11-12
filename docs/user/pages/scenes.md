@@ -14,6 +14,8 @@ The sixteen scene slots are in two banks of eight: scenes 1-8 and scenes 9-16. T
 | ALT+K2 | Name the slot (when you let K2 go) |
 | ALT+K3 | Save the current sound into the slot |
 
+With quantize actions on (`beat` or `bar`, PARAMETERS > sequencer), K2, K3 and the arc button's recall wait for the next beat or bar and the header says so (`S3 at bar`); a second recall before then replaces the first. A save never waits.
+
 The hint row on an empty slot reads `empty  ALT+K3:save` (K2 and K3 recall nothing there; they flash `S<n> empty` in the header, as a grid's recall key does). With K1 held the hint offers `K2:name K3:save` on a slot and neither on a field. Saving into an empty slot happens at once. Saving into a slot that already holds a scene asks first: the hint row asks, naming the keys that answer (`K3 again: overwrite S<n>` while ALT is held, `ALT+K3: overwrite S<n>` once ALT is up), and a second ALT+K3 within 2 seconds saves (a plain K3 still recalls the slot, so it overwrites nothing); after 2 seconds the question goes from the hint row by itself. Moving the cursor cancels the question, so it never applies to another slot. A message from another page (a failed buffer load, say) never hides the question; while a message meant for every page covers the hint row, the next ALT+K3 asks again instead of saving. The question shows on this page only.
 
 ## Naming a slot
