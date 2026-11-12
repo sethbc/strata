@@ -266,7 +266,7 @@ local CLEANUP_ORDER = {
   quantize = 97,            -- lib/quantize.lua: the waiting actions
   morph_clock = 112,        -- lib/morph.lua
   macros = 114,             -- lib/macros.lua: the apply clock
-  matrix = 118,             -- lib/matrix.lua: the matrix clock
+  matrix = 118,             -- lib/matrix.lua: matrix learn's timeout clock
 }
 
 return {

@@ -196,11 +196,44 @@ return function(S)
   ---------------------------------------------------------------------------
 
   -- What the matrix holds: lua[id], the extra offset it set on a Lua
-  -- destination (param units); fast_sent[id], the last setFastOffset value
-  -- of a fast one (absent: 0, as the engine starts); fast_want[id], what
-  -- the next send of it carries (the clamped sum, half ranges);
-  -- fast_extras[id][source_key], the macros' LFO extras (half ranges)
-  local held = {lua = {}, fast_sent = {}, fast_want = {}, fast_extras = {}}
+  -- destination (param units); fast[id], true while a fast destination is
+  -- tracked (its sum, the value last handed to the budget or the engine's
+  -- value is not 0); fast_want[id], what its next send carries (the clamped
+  -- sum, half ranges); fast_handed[id], the value last handed to the
+  -- budget (it may still wait there); fast_extras[id][source_key], the
+  -- macros' LFO extras (half ranges)
+  local held = {lua = {}, fast = {}, fast_want = {}, fast_handed = {}, fast_extras = {}}
+
+  -- A fast channel (voice, destination) is one deferrable id of the send
+  -- budget (ruling 65): its key, which no param id can be (it holds
+  -- spaces, and never starts v<i>_, so a voice sync never forgets it: the
+  -- engine's offset node keeps its value), has an engine sender that sends
+  -- setFastOffset, so each send goes through send_engine_value, counted,
+  -- waiting under the budget with the newest sum winning, and the value
+  -- the engine last got is S.engine_param_values[key]. Per fast param id,
+  -- {key, send} (send: the round robin's function), made once
+  local channels = {}
+  for voice = 1, NUM_VOICES do
+    for destination = 0, S.constants.NUM_FAST_DESTINATIONS - 1 do
+      S.engine_senders["matrix fast " .. voice .. " " .. destination] = function(value)
+        engine.setFastOffset(voice - 1, MATRIX.note_slot, destination, value)
+      end
+    end
+  end
+
+  local function channel(id)
+    local known = channels[id]
+    if known then return known end
+    local voice, destination = S.lib.lfos.fast_destination(id)
+    local key = "matrix fast " .. voice .. " " .. destination
+    known = {key = key, send = function()
+      local value = held.fast_want[id] or 0
+      held.fast_handed[id] = value
+      S.lib.engine_sync.send_engine_value(key, value)
+    end}
+    channels[id] = known
+    return known
+  end
 
   -- A value's position along a destination's range as its warp places it,
   -- unrounded (a copy of the spec with step 0, made once per spec): what
@@ -223,8 +256,17 @@ return function(S)
   end
 
   -- A Lua destination is sent in the round robin under its own id (the
-  -- LFOs' key for it too: one send carries every layer)
-  local function mark_lua(id) S.lib.lfos.mark_due(id, function() send_lua(id) end) end
+  -- LFOs' key for it too: one send carries every layer); its function is
+  -- made once
+  local lua_senders = {}
+  local function mark_lua(id)
+    local send = lua_senders[id]
+    if not send then
+      send = function() send_lua(id) end
+      lua_senders[id] = send
+    end
+    S.lib.lfos.mark_due(id, send)
+  end
 
   -- Whether a Lua destination's value now moved past the LFOs' threshold
   -- from what the engine last got (S.engine_param_values: a voice sync
@@ -236,76 +278,120 @@ return function(S)
     return math.abs(position(id, value) - position(id, last)) >= S.lib.lfos.LFO.send_threshold
   end
 
-  local function send_fast(id)
-    local voice, destination = S.lib.lfos.fast_destination(id)
-    local value = held.fast_want[id] or 0
-    engine.setFastOffset(voice - 1, MATRIX.note_slot, destination, value)
-    held.fast_sent[id] = value ~= 0 and value or nil
+  -- One step's working tables, emptied and reused every step: the sums by
+  -- param (Lua and fast apart) and the sorted ids of each kind
+  local scratch = {lua_sums = {}, fast_sums = {}, ids = {}}
+  -- Per routing and per destination, the error last printed
+  -- (contained_call), and the labels its line names, made once
+  local step_errors = {routings = {}, destinations = {}, routing_labels = {}, destination_labels = {}}
+  for k = 1, MATRIX_SLOTS do step_errors.routing_labels[k] = "matrix routing " .. k end
+
+  local function destination_label(id)
+    local label = step_errors.destination_labels[id]
+    if not label then
+      label = "matrix destination " .. id
+      step_errors.destination_labels[id] = label
+    end
+    return label
   end
 
-  local function sorted(set)
-    local ids = {}
-    for id in pairs(set) do ids[#ids + 1] = id end
+  local function empty(set)
+    for key in pairs(set) do set[key] = nil end
+  end
+
+  -- scratch.ids: the keys of the given sets, sorted (one order every step)
+  local function sorted_ids(first, second)
+    local ids = scratch.ids
+    for index = #ids, 1, -1 do ids[index] = nil end
+    for id in pairs(first) do ids[#ids + 1] = id end
+    for id in pairs(second) do
+      if first[id] == nil then ids[#ids + 1] = id end
+    end
     table.sort(ids)
     return ids
   end
 
-  -- Each playing routing's m (depth / 100 x the source's normalized value)
-  -- by the param it reaches, Lua and fast apart; a value that is not finite
-  -- reads 0 (mod_sources.normalized), and an m of 0 reaches nothing
-  local function sums()
-    local lua_sums, fast_sums = {}, {}
+  -- Routing k's m (depth / 100 x the source's normalized value), added to
+  -- the sum of the param it reaches, Lua or fast; a value that is not
+  -- finite reads 0 (mod_sources.normalized), and an m of 0 reaches nothing
+  local function read_routing(k)
+    local id, depth = playing(k)
+    if not id then return end
+    local m = depth / 100 * S.lib.mod_sources.normalized(S.matrix[k].source)
+    if m ~= 0 and finite(m) then
+      local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums
+      into[id] = (into[id] or 0) + m
+    end
+  end
+
+  -- A Lua destination's sum is its extra offset, sent when its value moved;
+  -- one whose sum returns to 0 gives its offset up and is sent once more
+  local function update_lua(id)
+    local sync = S.lib.engine_sync
+    local m = scratch.lua_sums[id] or 0
+    if m ~= 0 then
+      local offset = S.lib.lfos.offset_for(id, m)
+      sync.set_extra_offset(MATRIX.extra_key, id, offset)
+      held.lua[id] = offset
+      if lua_moved(id) then mark_lua(id) end
+    else
+      sync.set_extra_offset(MATRIX.extra_key, id, nil)
+      held.lua[id] = nil
+      mark_lua(id)
+    end
+  end
+
+  -- A fast destination's clamped sum is sent when it moved by the
+  -- threshold from the value the engine last got (its channel's
+  -- S.engine_param_values), and once more when it returns to 0 while the
+  -- engine, or the budget, holds another; it is tracked until all three
+  -- are 0
+  local function update_fast(id)
+    local entry = channel(id)
+    local want = util.clamp(scratch.fast_sums[id] or 0, -MATRIX.fast_limit, MATRIX.fast_limit)
+    local engine_has = S.engine_param_values[entry.key] or 0
+    local handed = held.fast_handed[id] or 0
+    held.fast_want[id] = want
+    if math.abs(want - engine_has) >= S.lib.lfos.LFO.send_threshold
+        or (want == 0 and (engine_has ~= 0 or handed ~= 0)) then
+      held.fast[id] = true
+      S.lib.lfos.mark_due(entry.key, entry.send)
+    else
+      held.fast[id] = (want ~= 0 or engine_has ~= 0 or handed ~= 0) or nil
+    end
+  end
+
+  -- Nothing to do: no routing with both parts set, nothing held, no extra
+  local function idle()
+    if next(held.lua) or next(held.fast) or next(held.fast_extras) then return false end
     for k = 1, MATRIX_SLOTS do
-      local id, depth = playing(k)
-      if id then
-        local m = depth / 100 * S.lib.mod_sources.normalized(S.matrix[k].source)
-        if m ~= 0 and finite(m) then
-          local into = S.lib.lfos.fast_destination(id) and fast_sums or lua_sums
-          into[id] = (into[id] or 0) + m
-        end
-      end
+      local routing = S.matrix[k]
+      if routing.source ~= "" and routing.dest ~= "" then return false end
+    end
+    return true
+  end
+
+  -- One step, after the LFOs: every destination a playing routing or a
+  -- fast extra reaches, and every one the matrix still holds. Each
+  -- routing's read and each destination's update is contained: one that
+  -- raises is skipped, printing once per message (#517), and every other
+  -- routing and destination still plays
+  local function step()
+    if idle() then return end
+    local lua_sums, fast_sums = scratch.lua_sums, scratch.fast_sums
+    empty(lua_sums); empty(fast_sums)
+    local contained_call = S.lib.ui_frame.contained_call
+    for k = 1, MATRIX_SLOTS do
+      contained_call(step_errors.routings, k, step_errors.routing_labels[k], read_routing, k)
     end
     for id, extras in pairs(held.fast_extras) do
       for _, m in pairs(extras) do fast_sums[id] = (fast_sums[id] or 0) + m end
     end
-    return lua_sums, fast_sums
-  end
-
-  -- One step, after the LFOs: every destination a playing routing or a
-  -- fast extra reaches, and every one the matrix still holds. A Lua
-  -- destination's sum is its extra offset, sent when it moved; one whose
-  -- sum returns to 0 gives its offset up and is sent once more. A fast
-  -- destination's clamped sum is sent when it moved by the threshold, and
-  -- once more when it returns to 0
-  local function step()
-    local lua_sums, fast_sums = sums()
-    local sync, threshold = S.lib.engine_sync, S.lib.lfos.LFO.send_threshold
-    local lua_ids = {}
-    for id in pairs(lua_sums) do lua_ids[id] = true end
-    for id in pairs(held.lua) do lua_ids[id] = true end
-    for _, id in ipairs(sorted(lua_ids)) do
-      local m = lua_sums[id] or 0
-      if m ~= 0 then
-        local offset = S.lib.lfos.offset_for(id, m)
-        sync.set_extra_offset(MATRIX.extra_key, id, offset)
-        held.lua[id] = offset
-        if lua_moved(id) then mark_lua(id) end
-      else
-        sync.set_extra_offset(MATRIX.extra_key, id, nil)
-        held.lua[id] = nil
-        mark_lua(id)
-      end
+    for _, id in ipairs(sorted_ids(lua_sums, held.lua)) do
+      contained_call(step_errors.destinations, id, destination_label(id), update_lua, id)
     end
-    local fast_ids = {}
-    for id in pairs(fast_sums) do fast_ids[id] = true end
-    for id in pairs(held.fast_sent) do fast_ids[id] = true end
-    for _, id in ipairs(sorted(fast_ids)) do
-      local want = util.clamp(fast_sums[id] or 0, -MATRIX.fast_limit, MATRIX.fast_limit)
-      local sent = held.fast_sent[id] or 0
-      held.fast_want[id] = want
-      if math.abs(want - sent) >= threshold or (want == 0 and sent ~= 0) then
-        S.lib.lfos.mark_due("matrix " .. id, function() send_fast(id) end)
-      end
+    for _, id in ipairs(sorted_ids(fast_sums, held.fast)) do
+      contained_call(step_errors.destinations, id, destination_label(id), update_fast, id)
     end
   end
 
@@ -411,7 +497,8 @@ return function(S)
 
   -- Load the routings from path: a missing file loads them empty; one that
   -- cannot be used is set aside (path .. ".bak", ...) with a console line,
-  -- and they load empty
+  -- and they load empty. Returns whether path may be written over: false
+  -- only for a file that could not be used and could not be set aside
   local function read_file(path)
     local loaded, problem, detail = S.lib.data_files.read(path)
     local why
@@ -424,14 +511,17 @@ return function(S)
         why = block_problem(loaded.matrix)
       end
     end
+    local writable = true
     if why then
       local backup, failure = S.lib.data_files.set_aside(path, MATRIX.backup_suffix)
       print("error loading matrix file " .. path .. ": " .. why .. "; "
         .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
       loaded = nil
+      writable = backup ~= nil
     end
     load_block(loaded and loaded.matrix or nil)
     report_unknown(path)
+    return writable
   end
 
   -- The live file follows the routings once it has been loaded (a start
@@ -605,7 +695,9 @@ return function(S)
   -- at its end, before the depths. A routing whose source or destination
   -- differs ramps its depth through 0 and switches at the midpoint (a
   -- transition) or the crossing (morph), so its old destination never
-  -- moves toward the new depth
+  -- moves toward the new depth. Its apply names every unknown part (a scene
+  -- from a later release) in a console line, saves the live file and asks
+  -- for a redraw (morph's crossing applies it outside a recall)
   S.register_scene_block({
     key = "matrix",
     default = function() return {} end,
@@ -613,7 +705,8 @@ return function(S)
     validate = function(value) return block_problem(value) == nil end,
     apply = function(value)
       load_block(value)
-      save_live()
+      report_unknown("a scene")
+      routings_changed()
     end,
     discrete = true,
     through_zero = function(from, to)
@@ -641,10 +734,16 @@ return function(S)
     delete = function(path_base) os.remove(path_base .. MATRIX.side_suffix) end,
   })
 
-  -- The live file: loaded at init, saved at cleanup and as the routings change
+  -- The live file: loaded at init, saved at cleanup and as the routings
+  -- change, once it was read, missing or set aside. One that could be
+  -- neither read nor set aside is never written over (scenes.data's rule):
+  -- the routings are not saved in this session, which one line says
   S.register_start(S.constants.START_ORDER.matrix_load, function()
-    read_file(live.dir .. MATRIX.live_file)
-    live.loaded = true
+    local path = live.dir .. MATRIX.live_file
+    live.loaded = read_file(path)
+    if not live.loaded then
+      print("matrix: " .. path .. " could not be read or moved aside; the routings will not be saved this session")
+    end
     request_redraw()
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix_save, function()
@@ -658,7 +757,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix, function()
     M.cancel_learn()
     for id in pairs(held.lua) do S.lib.engine_sync.set_extra_offset(MATRIX.extra_key, id, nil) end
-    held.lua, held.fast_sent, held.fast_want, held.fast_extras = {}, {}, {}, {}
+    for _, part in ipairs({"lua", "fast", "fast_want", "fast_handed", "fast_extras"}) do held[part] = {} end
   end)
 
   -- Learn waits exactly while its timeout clock runs
