@@ -58,6 +58,15 @@ return function(S)
     return false
   end
 
+  -- Whether a voice is soloed: its solo is on and it is not muted, so it is
+  -- not silenced. False for anything that is not a voice 1..NUM_VOICES
+  function M.soloed(voice)
+    if type(voice) ~= "number" or voice < 1 or voice > S.constants.NUM_VOICES or voice % 1 ~= 0 then return false end
+    local voice_state = S.voices[voice]
+    local extras = voice_state and voice_state.extras
+    return extras ~= nil and extras.solo == 1 and not M.silenced(voice)
+  end
+
   -- What each voice's engine last got as voiceMute (1 or 0): a running
   -- voice is sent only when its answer changes. A voice's sync sets it
   local sent_mute = {}
@@ -88,6 +97,7 @@ return function(S)
         action = function()
           if update_voice_list then update_voice_list() end  -- MAIN's list marks it
           request_redraw()
+          grid_redraw()  -- the grids light a silenced voice
         end}
     elseif key == "filter_type" then
       return {type = "option", name = "filter type", options = M.VOICE_MIX.filter_types, default = 1}

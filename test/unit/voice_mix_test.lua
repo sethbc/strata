@@ -229,6 +229,7 @@ test("the filter & sends section is on VOICE for every source", function()
           if row.selectable == false then label_at = index else table.insert(keys, row.param_id) end
         end
       end
+      assert_true(label_at ~= nil, "v" .. voice_idx .. " has the filter & sends section")
       local expected = {}
       for _, key in ipairs(KEYS) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
       for _, key in ipairs({"mute", "solo"}) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
@@ -380,6 +381,18 @@ test("silenced is safe for any argument", function()
   assert_equal(silenced(nil), false)
 end)
 
+test("a second solo un-silences its voice and no other", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  params:set("v2_solo", 1)
+  context.clear_engine_calls()
+  params:set("v4_solo", 1)
+  local second = mutes_sent(context)
+  assert_equal(second[4], 0, "voiceMute 0 to voice 4")
+  assert_equal(second.count, 1, "and to no other voice")
+  assert_true(not S.lib.voice_mix.silenced(4) and S.lib.voice_mix.silenced(1))
+end)
+
 test("a solo silences every voice that is not soloed", function()
   local context = load_strata()
   local S = run_voices_1_to_4(context)
@@ -494,6 +507,32 @@ test("randomize, mutations and the fader pages never touch mute or solo", functi
       assert_true(not param_id:find("_mute", 1, true) and not param_id:find("_solo", 1, true), param_id)
     end
   end
+end)
+
+test("soloed is true for a soloed voice that is not muted, and safe for any argument", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  local voice_mix = S.lib.voice_mix
+  assert_equal(voice_mix.soloed(2), false)
+  params:set("v2_solo", 1)
+  assert_equal(voice_mix.soloed(2), true); assert_equal(voice_mix.soloed(1), false)
+  params:set("v2_mute", 1)
+  assert_equal(voice_mix.soloed(2), false, "muted is silenced, not soloed")
+  for _, bad in ipairs({0, 8, -1, 1.5, "x", false}) do assert_equal(voice_mix.soloed(bad), false, tostring(bad)) end
+  assert_equal(voice_mix.soloed(nil), false)
+end)
+
+test("a mute or solo redraws the grid", function()
+  local context = load_strata()
+  run_voices_1_to_4(context)
+  local calls = 0
+  local grid_core = local_value("S").lib.grid_core
+  local original = grid_redraw
+  grid_redraw = function() calls = calls + 1 end
+  params:set("v3_mute", 1)
+  params:set("v2_solo", 1)
+  grid_redraw = original
+  assert_true(calls >= 2, "grid_redraw ran for each (" .. calls .. ")")
 end)
 
 end
