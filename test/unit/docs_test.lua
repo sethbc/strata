@@ -1151,6 +1151,32 @@ test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
   assert_true(runner:find("docker/sc313", 1, true) ~= nil, "the runner builds test/docker/sc313")
 end)
 
+-- #581: a full run on 3.13 is CI's shards, each in a fresh sclang, read from
+-- the workflow at each start; -l prints them and starts nothing
+test("the 3.13 runner's shard list is the workflow's", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local block = workflow:match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  assert_true(block ~= nil, "the engine-shard matrix lists its areas")
+  local expected = {}
+  for shard in block:gmatch("%-%s*([%w,]+)") do expected[#expected + 1] = shard end
+  assert_true(#expected >= 2, "the workflow has shards")
+  local pipe = io.popen("cd " .. h.shell_quote(repo_root) .. " && /bin/sh test/run_engine_check_313.sh -l 2>&1; echo exit=$?")
+  local output = pipe:read("*a")
+  pipe:close()
+  assert_equal(output, table.concat(expected, "\n") .. "\nexit=0\n", "-l prints the workflow's shards, one a line, in order, and nothing else")
+end)
+
+test("the 3.13 runner documents its sharded default", function()
+  local bullet = read_repo_file("AGENTS.md"):match("\n%- `test/run_engine_check_313%.sh[^\n]*")
+  local section = read_repo_file("docs/notes/lua/test-harness/engine-check-runner.md"):match("\n### The engine check on SuperCollider 3%.13.*$")
+  for name, text in pairs({ ["AGENTS.md's bullet on the 3.13 runner"] = bullet or "", ["the runner notes' 3.13 section"] = section or "" }) do
+    assert_true(text:find("`-1`", 1, true) ~= nil, name .. " names -1, the run in one sclang")
+    assert_true(text:find("`-l`", 1, true) ~= nil, name .. " names -l, the shard list")
+    assert_true(text:find("shard", 1, true) ~= nil and text:find(".github/workflows/test.yml", 1, true) ~= nil,
+      name .. " says a full run is the workflow's shards")
+  end
+end)
+
 test("CI cancels superseded runs of pull requests only, never of main (#51)", function()
   local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
   local setting = workflow:match("\n%s*cancel%-in%-progress:%s*([^\n]-)%s*\n")
