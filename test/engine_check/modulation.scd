@@ -30,7 +30,7 @@ var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfo
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
 var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
-var checkScatterGlides, checkGateLag;
+var checkScatterGlides, checkRestartPhase, checkGateLag;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -772,6 +772,38 @@ checkRegateEnded = {
         and: { old.notNil and: { nodes[0][\id] != old.nodeID } } and: { (value - 0.4).abs < 0.005 } and: { ended };
     check.(ok, "modulation: an LFO re-gated and given a new shape after its release ended on the server gets one new node, which modulates, and a stop ends it (% /fail replies; LFO nodes %; channel % of 0.4; none after the stop: %)".format(
         fails, nodes.collect(_[\def]), value.round(0.0001), ended));
+    resetModulation.value;
+};
+
+// A restarted LFO keeps its phase (#611). Lua's stop, then its start one
+// step later (20.8 ms, past the 20 ms release) with the sync it sends after
+// a start: the release has ended on the server, its /n_end not yet in
+// sclang (the interpreter held 60 ms, as checkRegateEnded does), so the
+// re-gate and the sync reach no node, and the node restarts once sclang
+// handles the /n_end. The restarted node must start at the synced phase,
+// advanced by rate x the time since the sync, not at 0: an up LFO (u = the
+// phase) of depth 1 at 0.003 Hz, synced to 0.4, reads 2 x 0.4 - 1 = -0.2
+// (-1 at phase 0). One node, a new one
+checkRestartPhase = {
+    var fails = 0, responder = OSCFunc({ fails = fails + 1 }, '/fail', server.addr), old, until, nodes, value, ok;
+    command.(\setFastLfo, 3, 6, 2, 3, 0.003, 1.0, 0.0);
+    server.sync; 0.1.wait;
+    old = placeSynth.(3);
+    command.(\stopFastLfo, 3);
+    until = Main.elapsedTime + 0.06;
+    while { Main.elapsedTime < until } { };
+    command.(\setFastLfo, 3, 6, 2, 3, 0.003, 1.0, 0.0);
+    command.(\syncFastLfo, 3, 0.4);
+    server.sync; 0.2.wait; server.sync;
+    nodes = lfoNodes.value;
+    value = readChannel.(6, 2);
+    server.sync;
+    responder.free;
+    ok = (fails == 0) and: { nodes.size == 1 } and: { nodes[0][\def] == \strataFastLfoUp }
+        and: { old.notNil and: { placeSynth.(3).notNil } and: { nodes[0][\id] == placeSynth.(3).nodeID } and: { nodes[0][\id] != old.nodeID } }
+        and: { (value + 0.2).abs < 0.01 };
+    check.(ok, "modulation: an LFO whose node restarts (its release ended as it was re-gated, the sync after it reaching no node) starts at the synced phase (% /fail replies; LFO nodes %, a new one %; channel % of -0.2, -1 at phase 0)".format(
+        fails, nodes.collect(_[\def]), (old.notNil and: { nodes.notEmpty } and: { nodes[0][\id] != old.nodeID }), value.round(0.0001)));
     resetModulation.value;
 };
 
@@ -1596,6 +1628,7 @@ if (area.isNil or: { state.isNil }) {
     checkScatterGlides.value;
     checkReleases.value;
     checkRegateEnded.value;
+    checkRestartPhase.value;
     checkPitch.value;
     checkGrainTaps.value;
     checkStageTaps.value;
