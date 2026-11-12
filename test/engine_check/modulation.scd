@@ -30,6 +30,7 @@ var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfo
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
 var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
+var checkScatterGlides;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -247,6 +248,13 @@ addCheckDefs = {
     SynthDef(\strataCheckStageDiff, { arg a, b, out, scale = 1, t_reset = 0;
         var x = In.ar(a, 10), y = In.ar(b, 10);
         Out.kr(out, [A2K.kr(Peak.ar((x - (y * scale)).abs.reduce(\max), t_reset)), A2K.kr(Peak.ar(y.abs.reduce(\max), t_reset))]);
+    }).add;
+    // the whole fast-modulation bus, block by block, since t_reset: the
+    // largest step of any channel from one block to the next, and the
+    // largest value of any channel
+    SynthDef(\strataCheckBusStep, { arg in, out, t_reset = 0;
+        var x = In.kr(in, state[\fastModBus].numChannels), step = (x - Delay1.kr(x)).abs;
+        Out.kr(out, [Peak.kr(step.reduce(\max), t_reset), Peak.kr(x.abs.reduce(\max), t_reset)]);
     }).add;
     server.sync;
 };
@@ -658,6 +666,69 @@ checkScatter = {
     check.(reached.every(_ != 0) and: { nodes == 0 } and: { after.every(_ == 0) } and: { state[\scatter].isNil },
         "modulation: scatter's end zeroes its channels (% of 35 written before its end; % scatter nodes left, % of 35 channels at 0 after it)".format(
             reached.count(_ != 0), nodes, after.count(_ == 0)));
+    resetModulation.value;
+};
+
+// Scatter's gains glide (#610): a lock (a voice's bit off), an unlock and a
+// destination toggled off and on move a channel by at most about 2 % of
+// scatter's value a block (its gains lagged 0.5 s: 60 dB in 0.5 s, 1.8 % of
+// the way a block at 750 blocks a second, beside the noise's own slope of
+// under 1 % a block at 1 Hz), where an unlagged gain moved it all the way in
+// one block (a lock took voice 1's amp offset from -0.383 to 0 at the next
+// read). Scatter at depth 1 and rate 1 on every voice and destination; each
+// change moves 28 or 30 channels, whose largest value before it (or after
+// it, for the moves up) shows what a snap would have stepped. A locked
+// voice's channels reach 0 within 1.5 s, and scatter's end, released in the
+// middle of a lock's glide, still zeroes every channel (offset node paused)
+checkScatterGlides = {
+    var trackBus = Bus.control(server, 2), track, results = List.new, change, lockedAt, settled, after, nodes;
+    var lockedChannels = { arg values; values.select({ arg value, index; (index div: 5) > 0 }) };
+    var keptChannels = { arg values; values.select({ arg value, index; (index div: 5) == 0 }) };
+    // [label, the mask's new destinations and voices, which channels move,
+    // whether they move down (their value before) or up (their value after)]
+    change = { arg label, destinations, voices, moved, down;
+        var before = readAll.value, step;
+        track.set(\t_reset, 1);
+        server.sync; 0.02.wait;
+        command.(\setScatter, 1.0, 1.0, destinations, voices);
+        server.sync; if (down) { 0.3.wait } { 1.0.wait };
+        step = h.readBus(trackBus);
+        results.add([label, step[0], if (down) { moved.(before).abs.maxItem } { moved.(readAll.value).abs.maxItem }]);
+    };
+    command.(\setScatter, 1.0, 1.0, 31, 127);
+    server.sync; 1.5.wait;
+    track = Synth(\strataCheckBusStep, [\in, state[\fastModBus].index, \out, trackBus.index], engine.processGroup, \addToTail);
+    server.sync; 0.05.wait;
+    // a lock of every voice but the first: their 30 channels go to 0
+    change.("lock", 31, 1, lockedChannels, true);
+    1.2.wait;
+    settled = readAll.value;
+    lockedAt = [lockedChannels.(settled).abs.maxItem, keptChannels.(settled).abs.maxItem];
+    // their unlock: back from 0
+    change.("unlock", 31, 127, lockedChannels, false);
+    // every destination but pitch (position, size, cutoff, amp) off, then
+    // on: 28 channels
+    change.("destinations off", 1, 127, { arg values; values.select({ arg value, index; (index % 5) > 0 }) }, true);
+    change.("destinations on", 31, 127, { arg values; values.select({ arg value, index; (index % 5) > 0 }) }, false);
+    track.free;
+    trackBus.free;
+    check.(results.every({ arg each; (each[1] < 0.05) and: { each[2] > 0.2 } })
+        and: { lockedAt[0] < 1e-3 } and: { lockedAt[1] > 1e-3 },
+        "modulation: scatter's gains glide: a lock, an unlock and a destination toggle move a channel at most 0.05 a block (largest step, and the largest value a snap would have stepped: %; 1.2 s after the lock its channels read at most %, the kept voice's up to %)".format(
+            results.collect({ arg each; "% % of %".format(each[0], each[1].round(0.0001), each[2].round(0.001)) }).join(", "),
+            lockedAt[0].round(1e-6), lockedAt[1].round(0.001)));
+    // released in the middle of a lock's glide: its end zeroes every channel
+    withOffsetsPaused.({
+        command.(\setScatter, 1.0, 1.0, 31, 1);
+        server.sync; 0.1.wait;
+        command.(\setScatter, 0.0, 1.0, 31, 1);
+        server.sync; 0.8.wait;
+        after = readAll.value;
+        nodes = groupNodes.value.count({ arg node; node[\def] == \strataScatter });
+    });
+    check.((nodes == 0) and: { after.every(_ == 0) } and: { state[\scatter].isNil },
+        "modulation: scatter's end zeroes every channel when it is released in the middle of a glide (% scatter nodes left, % of 35 channels at 0)".format(
+            nodes, after.count(_ == 0)));
     resetModulation.value;
 };
 
@@ -1481,6 +1552,7 @@ if (area.isNil or: { state.isNil }) {
     checkShapes.value;
     checkSync.value;
     checkScatter.value;
+    checkScatterGlides.value;
     checkReleases.value;
     checkRegateEnded.value;
     checkPitch.value;
