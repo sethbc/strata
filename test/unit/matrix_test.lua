@@ -124,6 +124,26 @@ local function spying_sends(S, fn, body)
   if not ok then error(problem, 0) end
 end
 
+-- The send budget's window filled on demand: the LFO clock stepped to a
+-- step early in its window (so the next two steps share it), and a hook,
+-- after the matrix's and before the round robin's sends, that spends the
+-- window's messages_per_window while armed. Returns the function that arms
+-- it (true) or disarms it, and the window the next step falls in
+local function full_window(context, S)
+  S.drift_metro:stop()  -- the drift's own sends would share the window's count
+  local sync = S.lib.engine_sync
+  local budget = S.constants.ENGINE_BUDGET
+  repeat lfo_step(context) until util.time() % budget.window_seconds < budget.window_seconds / 4
+  local armed = false
+  S.lib.lfos.on_step(function()
+    if not armed then return end
+    sync.deferrable(function()
+      while sync.budget_state().sent < budget.messages_per_window do sync.send_engine_value("drift_amount", 0.01) end
+    end)
+  end)
+  return function(on) armed = on end, math.floor(util.time() / budget.window_seconds)
+end
+
 test("matrix: an empty or incomplete routing sends nothing", function()
   local context, S, matrix = loaded()
   params:set("macro_1", 1)
@@ -433,6 +453,72 @@ test("matrix: a fast sum that returns to 0 while its send waits sends 0, never t
   assert_true(#fast >= 1, "the waiting send goes out")
   for _, call in ipairs(fast) do assert_equal(call.args[4], 0, "with 0, never the stale 0.5") end
   assert_equal(matrix.offset("v3_grain_pitch"), 0)
+end)
+
+test("matrix: a fast sum back at the delivered value while another waits sends it, never the waiting one", function()
+  local context, S, matrix = loaded()
+  params:set("macro_1", 0.5)
+  route(S, 1, "macro1", "v3_grain_pitch", 100)
+  context.clock.run_for(0.05)
+  local arm, window = full_window(context, S)
+  assert_near(last_fast(context, 2, 0), 0.5, 1e-9, "0.5 delivered")
+  params:set("macro_1", 1)                        -- 1.0 waits in a full window
+  arm(true); context.clear_engine_calls(); lfo_step(context); arm(false)
+  assert_equal(S.lib.engine_sync.budget_state().pending, 1, "1.0 waits")
+  params:set("macro_1", 0.5)                      -- back at the delivered 0.5, the same window
+  lfo_step(context)
+  assert_equal(math.floor(util.time() / S.constants.ENGINE_BUDGET.window_seconds), window, "one window")
+  h.wake(context, "engine_budget_clock")
+  lfo_step(context, 3)
+  for _, call in ipairs(fast_calls(context, 2, 0)) do
+    assert_true(math.abs(call.args[4] - 1) > 1e-9, "the waiting 1.0 never reaches the engine")
+  end
+  assert_near(S.engine_param_values["matrix fast 3 0"], 0.5, 1e-9, "the engine ends on the newest sum")
+end)
+
+test("matrix: a Lua sum back at the delivered value while another waits sends it, never the waiting one", function()
+  local context, S, matrix = loaded()
+  params:set("reverb_mix", 0.3)
+  params:set("macro_1", 0.5)
+  route(S, 1, "macro1", "reverb_mix", 40)         -- 0.3 + 0.2 x the macro
+  context.clock.run_for(0.05)
+  local arm, window = full_window(context, S)
+  assert_near(sent_reverb(context), 0.4, 1e-9, "0.4 delivered")
+  params:set("macro_1", 1)                        -- 0.5 waits in a full window
+  arm(true); context.clear_engine_calls(); lfo_step(context); arm(false)
+  assert_equal(S.lib.engine_sync.budget_state().pending, 1, "0.5 waits")
+  params:set("macro_1", 0.5)                      -- back at the delivered 0.4, the same window
+  lfo_step(context)
+  assert_equal(math.floor(util.time() / S.constants.ENGINE_BUDGET.window_seconds), window, "one window")
+  h.wake(context, "engine_budget_clock")
+  lfo_step(context, 3)
+  for _, call in ipairs(context.calls_named("setReverb")) do
+    assert_true(math.abs(call.args[1] - 0.5) > 1e-9, "the waiting 0.5 never reaches the engine")
+  end
+  assert_near(S.engine_param_values.reverb_mix, 0.4, 1e-9, "the engine ends on the newest value")
+end)
+
+test("matrix: a scene's unknown part prints once a session", function()
+  local context, S, matrix = loaded()
+  local function lines_with(text)
+    local count = 0
+    for _, line in ipairs(context.printed) do
+      if line:find(text, 1, true) then count = count + 1 end
+    end
+    return count
+  end
+  capture_scene(1)
+  S.scenes[1].data.matrix = { [3] = { source = "future_source", dest = "reverb_mix" } }
+  capture_scene(2)
+  S.scenes[2].data.matrix = { [4] = { source = "macro1", dest = "v9_grain_pitch" } }
+  recall_scene(1, 0)
+  recall_scene(1, 0)
+  assert_equal(lines_with("future_source"), 1, "two recalls of one scene: one line")
+  recall_scene(2, 0)
+  assert_equal(lines_with("v9_grain_pitch"), 1, "a second scene's own unknown id: its own line")
+  recall_scene(1, 0); recall_scene(2, 0)
+  assert_equal(lines_with("future_source") + lines_with("v9_grain_pitch"), 2, "and never again")
+  assert_equal(matrix.routing(4).dest, "v9_grain_pitch", "each still kept")
 end)
 
 test("matrix: a voice start or a sync resends no unmoved fast channel", function()
