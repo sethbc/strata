@@ -1649,6 +1649,88 @@ test("stub clock: a resume posted in the step of an earlier resume that cancels 
   clock.cancel(first)
 end)
 
+-- Two coroutines that sync to beat 2 (the first holding the lower event slot):
+-- the first's resume cancels the second, whose resume matron's tick posted
+-- with the first's. Returns their ids and the names of the deliveries that ran
+local function start_same_instant_cancel()
+  local woke, second = {}, nil
+  local first = clock.run(function()
+    while true do
+      clock.sync(1)
+      table.insert(woke, "first")
+      if second then clock.cancel(second); second = nil end
+    end
+  end)
+  second = clock.run(function()
+    while true do clock.sync(1); table.insert(woke, "second") end
+  end)
+  return first, second, woke
+end
+
+local function assert_canceled_resume_raised(context, what)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, what .. ": one error")
+  -- Lua 5.3 (norns'): "bad argument #1 to 'resume' (thread expected)"; LuaJIT says "coroutine expected"
+  assert_true(errors[1]:find("bad argument #1 to '[^']*resume'") ~= nil and errors[1]:find("expected)", 1, true) ~= nil,
+    what .. ": norns' resume of a coroutine it no longer has: " .. errors[1])
+end
+
+-- run_for posts every resume due at an instant before it delivers any, as
+-- matron's tick and advance do (#588), with or without a latency
+test("stub clock: run_for delivers a resume posted at the instant of an earlier resume that cancels its coroutine, and it raises (#588)", function()
+  for _, latency in ipairs({ 0, 0.001 }) do
+    local context = load_strata(); finish_startup(context)  -- beat 1 (0.5 s at 120 BPM)
+    local first, _, woke = start_same_instant_cancel()
+    context.clock.run_for(0.75, latency)  -- beat 2 at 1 s, not beat 3
+    assert_equal(table.concat(woke, " "), "first", "latency " .. latency .. ": the canceled coroutine never ran again")
+    assert_canceled_resume_raised(context, "latency " .. latency)
+    clock.cancel(first)
+  end
+end)
+
+-- advance_until posts every resume due at an instant before it delivers any
+-- (#588): on its way to a later coroutine, and for its own coroutine
+-- canceled after the post
+test("stub clock: advance_until delivers a resume posted at the instant of an earlier resume that cancels its coroutine, and it raises (#588)", function()
+  local context = load_strata(); finish_startup(context)  -- beat 1 (0.5 s at 120 BPM)
+  local first, second, woke = start_same_instant_cancel()
+  local later = clock.run(function() clock.sleep(0.75) end)  -- 1.25 s, after beat 2
+  context.clock.advance_until(later)
+  assert_equal(table.concat(woke, " "), "first", "on the way: the canceled coroutine never ran again")
+  assert_canceled_resume_raised(context, "on the way to a later coroutine")
+  clock.cancel(first)
+
+  context = load_strata(); finish_startup(context)
+  first, second, woke = start_same_instant_cancel()
+  local ok, message = pcall(context.clock.advance_until, second)
+  assert_true(ok, "its own coroutine canceled after its resume was posted is no failure: " .. tostring(message))
+  assert_equal(table.concat(woke, " "), "first", "its own coroutine never ran again")
+  assert_canceled_resume_raised(context, "its own coroutine, canceled after the post")
+  clock.cancel(first)
+end)
+
+-- advance_until stops once its own coroutine's resume is delivered: the
+-- resumes posted at its instant after it stay posted (norns' event queue),
+-- and the next helper call, whichever it is, delivers them first (#588)
+test("stub clock: the resumes posted at advance_until's instant after its own are delivered by the next helper call (#588)", function()
+  for _, next_call in ipairs({ "advance", "run_for", "advance_until" }) do
+    local context = load_strata(); finish_startup(context)  -- beat 1 (0.5 s at 120 BPM)
+    local first, second, woke = start_same_instant_cancel()
+    context.clock.advance_until(first)
+    local what = next_call .. " next"
+    assert_equal(table.concat(woke, " "), "first", what .. ": it stops after its own coroutine")
+    assert_equal(context.clock.threads[second], nil, what .. ": which canceled the second")
+    assert_equal(#context.clock.take_errors(), 0, what .. ": whose resume is posted, not yet delivered")
+    local before = util.time()
+    if next_call == "advance" then context.clock.advance()
+    elseif next_call == "run_for" then context.clock.run_for(0)
+    else context.clock.advance_until(first) end
+    assert_canceled_resume_raised(context, what)
+    if next_call == "run_for" then assert_near(util.time(), before, 1e-12, what .. ": delivered at once") end
+    clock.cancel(first)
+  end
+end)
+
 -- matron's clock_set_source (and crow's input division) reschedule every
 -- waiting sync from the new source's beat (clock_scheduler_reschedule_sync_events:
 -- the next multiple of its beats after the new beat, plus its offset), with
@@ -1706,16 +1788,21 @@ test("stub clock: advance posts every due resume before delivering one, and adva
     "and the reset left its event alone: its next sync counts on from 2, not from the reset's 0")
   -- advance_until's hook runs once the coroutine's resume is posted, before
   -- it is delivered: a reset in it leaves that resume as it was (each now
-  -- waits for beat 3, counted on from beat 2)
+  -- waits for beat 3, counted on from beat 2), and the second's, posted at
+  -- the same instant and delivered by the next helper call (#588), too
   local hooked = 0
   context.clock.advance_until(first, function()
     hooked = hooked + 1
     assert_equal(context.clock.events[first].ready, false, "posted before the hook")
+    assert_equal(context.clock.events[second].ready, false, "the second's resume posted with it")
     context.clock.transport_start()
   end)
   assert_equal(hooked, 1, "the hook ran once")
   assert_equal(woke[#woke].name, "first")
   assert_near(woke[#woke].beat, 3, 1e-9, "delivered with the beat it was posted at")
+  context.clock.run_for(0)
+  assert_equal(woke[#woke].name, "second", "the next call delivers the second")
+  assert_near(woke[#woke].beat, 3, 1e-9, "with the beat it was posted at, before the hook's reset")
   clock.cancel(first); clock.cancel(second)
 end)
 
