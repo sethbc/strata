@@ -197,8 +197,11 @@ var checkAllocRolledBack = {
 // first, so the failing engine registers its own, then a new engine is
 // built, loads slot 1 (0.5 s) and must report it through the registry's
 // bufferState (its function, called here: one slot per call, then the
-// slots' length). Afterward h.engine's polls go back at their indices
-// (h.pollValues reads by index), running as before.
+// slots' length). Afterward h.engine's polls go back, the very objects h.engine
+// holds, at their indices (h.pollValues reads by index), running as before
+// (h.putBackPolls): copies registered in their place were never started, and
+// an engine a later area built (the files area's 60 s save) reported through
+// them, so its reports never arrived (#652).
 var checkRollbackPolls = {
     var names = engine.pollNames.asArray.sort({ arg a, b;
         CronePollRegistry.getPollFromName(a).index < CronePollRegistry.getPollFromName(b).index });
@@ -218,17 +221,18 @@ var checkRollbackPolls = {
     h.freeEngine(fresh);
     server.sync;
     failed[\group].free;
-    // h.engine's polls back, at their indices, running as before
-    names.do({ arg name; CronePollRegistry.remove(name) });
-    held.do({ arg poll; CronePollRegistry.register(poll.name, poll.instVarAt(\function), poll.period, poll.type, poll.periodic) });
-    held.do({ arg poll, index; if (running[index]) { poll.start } });
-    restored = held.every({ arg poll; CronePollRegistry.getPollFromName(poll.name).index == poll.index });
+    // h.engine's polls back: the very objects, at their indices, running as before
+    h.putBackPolls(held.collect({ arg poll, index; [poll, running[index]] }));
+    restored = held.every({ arg poll, index;
+        (CronePollRegistry.getPollFromName(poll.name) === poll) and: { CronePollRegistry.getPollFromIndex(poll.index) === poll }
+            and: { (poll.instVarAt(\isRunning) == true) == running[index] } });
     check.(left.isEmpty, "structure: alloc that raises leaves no poll of its own in norns' poll registry (#499; left: %)".format(left));
     // its own slot 1 after its one load: (1 * 9 + 0) * 1000 + 0.5 s (the dead engine's would read 0)
     check.((slotOne !? { (slotOne - 9000.5).abs < 0.01 }) == true,
         "structure: the engine built after a failed one reports its own slots through bufferState (#499; slot 1 reads %)".format(slotOne));
     check.(restored and: { names.notEmpty } and: { names.asSet == declaredPolls.value },
-        "structure: h.engine's polls are back at their indices (% of the engine's %)".format(names, declaredPolls.value.asArray));
+        "structure: h.engine's polls are back in the registry, the same objects at their indices, running as before (#652; % of the engine's %)".format(
+            names, declaredPolls.value.asArray));
 };
 
 // SynthDefs

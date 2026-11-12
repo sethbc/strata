@@ -22,6 +22,7 @@ Its own SynthDefs, to hear what a bus carries:
 
 Structure:
 - The check routine is at sclang's per-function selector limit: new checks go in top-level functions called from it.
+- After each area it checks that nothing of a voice is left and that norns' poll registry holds `h.engine`'s own polls, running as it left them (it puts back polls an area moved), and clears every slot, so none of the three reaches the next area in the same sclang (#652; `docs/notes/engine/structure.md` says what still carries over).
 - Every server reply it waits for goes through `awaitReply` (5 s, then a FAIL), and the whole check fails after its deadline (`STRATA_ENGINE_CHECK_DEADLINE`, the timeout less 30 s: 1770 s by default, 540 s in CI), so a reply that never comes fails the check instead of hanging it (CI kills the job at 600 s and passes `ENGINE_CHECK_TIMEOUT=570`).
 
 What fails it, besides a failed check: any output line with `ERROR` or `WARNING` at its start, `FAILURE` (the server's report of a failed command), `alloc failed`, `Too many grains` (a grain UGen past `maxGrains`) or `Strata invariant broken`.

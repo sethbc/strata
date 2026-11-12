@@ -638,13 +638,53 @@ var startAllVoices = {
     server.sync;
 };
 
-// After each area: nothing of a voice is left running, every slot is empty
+// Put polls back into norns' CronePollRegistry, the very objects, each under
+// its name and index, and start those marked running (entries: [poll,
+// running] pairs). The registry has no method for it: register always makes
+// a new CronePoll, never started, and an engine built after it
+// (h.startEngine) gets that copy, so its reports never arrive (#652). So
+// this writes the registry's two class variables, polls and pollNames, as
+// register does, after removing what holds the names now.
+var putBackPolls = { arg entries;
+    var slots = CronePollRegistry.classVars, slot = { arg name; slots[CronePollRegistry.classVarNames.indexOf(name)] };
+    var byName = slot.(\polls), byIndex = slot.(\pollNames);
+    entries.do({ arg entry; CronePollRegistry.remove(entry[0].name) });
+    entries.do({ arg entry; byName[entry[0].name] = entry[0]; byIndex[entry[0].index] = entry[0].name });
+    entries.do({ arg entry; if (entry[1]) { entry[0].start } });
+};
+// h.engine's polls as the runner leaves them for the areas: one [poll,
+// running] pair per poll name the engine registered, noted once the engine
+// is built and its polls started (again by replaceEngine). After each area
+// the registry must hold those very objects, running or not as noted (#652)
+var enginePolls = [];
+var noteEnginePolls = {
+    enginePolls = engine.pollNames.asArray.sort.collect({ arg name;
+        var poll = CronePollRegistry.getPollFromName(name);
+        [poll, poll.instVarAt(\isRunning) == true]
+    });
+};
+// the names of h.engine's polls the registry no longer holds as noted
+var pollsMoved = {
+    enginePolls.reject({ arg entry;
+        var poll = entry[0];
+        (CronePollRegistry.getPollFromName(poll.name) === poll) and: { CronePollRegistry.getPollFromIndex(poll.index) === poll }
+            and: { (poll.instVarAt(\isRunning) == true) == entry[1] }
+    }).collect({ arg entry; entry[0].name })
+};
+
+// After each area: nothing of a voice is left running, h.engine's polls are
+// in norns' poll registry as the runner left them (an area that moved them
+// is named, and they are put back, so the next area starts as every area
+// does), every slot is empty
 var finishArea = { arg name, seconds;
     var left = voiceNodesLeft.(engine), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
-    var message = "%: leaves no voice, grain or mod synth running".format(name);
+    var message = "%: leaves no voice, grain or mod synth running".format(name), moved = pollsMoved.value;
     if (left.notEmpty or: { keys.notEmpty }) { message = message ++ " (left: %, tracked: %)".format(left, keys) };
     check.(left.isEmpty and: { keys.isEmpty }, message);
     if (left.notEmpty or: { keys.notEmpty }) { stopAllVoices.value };
+    check.(moved.isEmpty, "%: leaves h.engine's polls in norns' poll registry, the same objects at their indices, running as before%".format(
+        name, if (moved.isEmpty) { "" } { " (moved: %)".format(moved) }));
+    if (moved.notEmpty) { putBackPolls.(enginePolls) };
     engine.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
     server.sync;
     ("area %: % s".format(name, seconds.round(0.1))).postln;
@@ -757,6 +797,7 @@ runChecks = {
         engine.bufferStatePoll.start;
         engine.bufferLoadFailedPoll.start;
         engine.bufferSaveResultPoll.start;
+        noteEnginePolls.value;
 
         // Test files every area may load: stereo, mono, too long, not audio
         File.mkdir(scratchRoot);
@@ -828,6 +869,9 @@ runChecks = {
             probeFree: { arg self, count; probeFree.(count) },
             startEngine: { arg self, settings; startEngine.(settings) },
             freeEngine: { arg self, target; freeEngine.(target) },
+            // put polls taken out of norns' poll registry back, the very
+            // objects ([poll, running] pairs; #652: never register copies)
+            putBackPolls: { arg self, entries; putBackPolls.(entries) },
             // Free h.engine and build its replacement in the same context
             // (settings: as startEngine's; nil builds the default engine),
             // for a check that needs one engine alone on the server (the
@@ -848,6 +892,7 @@ runChecks = {
                 engine.bufferStatePoll.start;
                 engine.bufferLoadFailedPoll.start;
                 engine.bufferSaveResultPoll.start;
+                noteEnginePolls.value;
                 self[\engine] = engine;
                 engine
             },
