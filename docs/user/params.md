@@ -47,7 +47,7 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 
 ## Sequencer (group)
 The pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
-- Chain (off/on, default off), chain from (scene 1-8, default 1), chain scenes (1-8, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, and nothing else
+- Chain (off/on, default off), chain from (scene 1-16, default 1), chain scenes (1-16, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, and nothing else
 - Division reset (trigger): every voice back to step 1 at the next bar
 - Follow transport (off/on, default on): a MIDI clock or Link start and stop start and stop the patterns (SETUP's `transport` row)
 

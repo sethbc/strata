@@ -131,16 +131,18 @@ test("every grid redraw while a step plays shows that step, a started voice's to
   end
 end)
 
--- The sequencer's own work fails (its grid redraw, at the end of a beat's
--- steps): each output's error is its own (protected, design 8.10), so an
--- error of the sequencer itself is what stops the clocks (#243)
-local function failing_grid_redraw(message)
-  local real_grid_redraw, state = grid_redraw, {raised = false}
-  grid_redraw = function(...)
+-- Strata's own voices output is the one output that is never skipped
+-- (ruling 38): an error in it is a bug in Strata, so it stops the patterns
+-- as it did before 3.4 (#243, #382). An error of the sequencer itself does
+-- too. start_voice fails on its first call, from where the test arms it
+local function failing_start_voice(S, message)
+  local engine_sync = S.lib.engine_sync
+  local real_start_voice, state = engine_sync.start_voice, {raised = false}
+  engine_sync.start_voice = function(voice_idx)
     if not state.raised then state.raised = true; error(message) end
-    return real_grid_redraw(...)
+    return real_start_voice(voice_idx)
   end
-  function state.restore() grid_redraw = real_grid_redraw end
+  function state.restore() engine_sync.start_voice = real_start_voice end
   return state
 end
 
@@ -153,13 +155,14 @@ end
 test("an error in a step stops the pattern clock and shows it stopped (#243)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  S.patterns[1][2] = 15
+  S.patterns[1][2] = 15  -- step 2 fails starting voice 1, on the clock's first wake-up
+  if S.voices[1].active then toggle_voice(1) end
+  local failing = failing_start_voice(S, "step failed")
   pattern_clock_start()
-  local failing = failing_grid_redraw("step failed")  -- step 2, on the clock's first wake-up
-  wake(context, "pattern_clock")
-  failing.restore()
+  context.clock.advance_until(S.pattern_clocks[1])  -- voice 1's clock (it stops the transport's)
   local errors = context.clock.take_errors()
-  assert_true(failing.raised, "step 2 redrew the grid")
+  failing.restore()
+  assert_true(failing.raised, "step 2 started voice 1")
   assert_equal(#errors, 1, "one clock error")
   assert_true(errors[1]:find("step failed", 1, true), "the step's error")
   assert_true(errors[1]:find("stack traceback:", 1, true), "with its traceback")
@@ -177,14 +180,15 @@ test("a step's error asks the screen to redraw the stopped pattern", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local UI_PAGES = local_value("UI_PAGES")
-  S.patterns[1][2] = 15
+  S.patterns[1][2] = 15  -- step 2 fails starting voice 1, on the clock's first wake-up
+  if S.voices[1].active then toggle_voice(1) end
+  local failing = failing_start_voice(S, "step failed")
   pattern_clock_start()
   UI_PAGES.screen_dirty = false
-  local failing = failing_grid_redraw("step failed")
-  wake(context, "pattern_clock")
-  failing.restore()
+  context.clock.advance_until(S.pattern_clocks[1])  -- voice 1's clock (it stops the transport's)
   local errors = context.clock.take_errors()
-  assert_true(failing.raised, "step 2 redrew the grid")
+  failing.restore()
+  assert_true(failing.raised, "step 2 started voice 1")
   assert_equal(#errors, 1, "one clock error")
   assert_equal(S.pattern_playing, false, "stopped")
   assert_true(UI_PAGES.screen_dirty, "the stop asks for a redraw")
@@ -193,12 +197,13 @@ end)
 test("an error in the first step leaves no clock recorded (#243)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  S.patterns[1][1] = 15
-  local failing = failing_grid_redraw("first step failed")
+  S.patterns[1][1] = 15  -- step 1 fails starting voice 1
+  if S.voices[1].active then toggle_voice(1) end
+  local failing = failing_start_voice(S, "first step failed")
   -- the stub raises a first step's error to the caller, as norns' clock.run does
   local started, start_error = pcall(pattern_clock_start)
-  failing.restore()
   local errors = context.clock.take_errors()
+  failing.restore()
   assert_true(failing.raised, "the first step ran")
   assert_true((not started and tostring(start_error):find("first step failed", 1, true)) or #errors == 1, "the error reached the caller or the scheduler")
   assert_equal(S.pattern_clock, nil, "no clock id recorded")
@@ -208,6 +213,29 @@ test("an error in the first step leaves no clock recorded (#243)", function()
   pattern_toggle()
   assert_equal(S.pattern_playing, true, "one press plays again")
   pattern_toggle()
+end)
+
+-- An error of the sequencer's own work (here its grid repaint, at the end of
+-- a beat's steps) stops every clock the same way
+test("an error of the sequencer itself stops every clock and is raised again", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.patterns[1][2] = 15
+  pattern_clock_start()
+  local real_grid_redraw, raised = grid_redraw, false
+  grid_redraw = function(...)
+    if not raised then raised = true; error("repaint failed") end
+    return real_grid_redraw(...)
+  end
+  wake(context, "pattern_clock")
+  grid_redraw = real_grid_redraw
+  local errors = context.clock.take_errors()
+  assert_true(raised, "step 2 repainted the grid")
+  assert_equal(#errors, 1, "one clock error")
+  assert_true(errors[1]:find("repaint failed", 1, true), "the error, raised again")
+  assert_equal(S.pattern_playing, false, "shown stopped")
+  assert_equal(S.pattern_clock, nil, "the transport's clock is gone")
+  assert_every_voice_clock_gone(S)
 end)
 
 test("replace_pattern copies sixteen whole levels in range and ignores a bad voice", function()
@@ -345,11 +373,11 @@ test("a step that starts three voices repaints the grid once and shows them runn
   pattern_clock_stop()
 end)
 
--- A step that fails starting its second voice: the voices output's error is
--- printed once and the patterns play on (design 8.10); the first voice it
--- started shows running, the failed one stopped in the engine and on the
--- screen
-test("a step whose second start fails shows the first voice running and the second stopped, and plays on (#527, #382)", function()
+-- A step that fails starting its second voice: the first one it started
+-- shows running, the failed one stopped in the engine and on the screen.
+-- The voices output is never skipped (ruling 38): its error stops the
+-- patterns and is raised again
+test("a step whose second start fails shows the first voice running and the second stopped (#527, #382)", function()
   local context = load_strata({ before_init = function()
     local_value("S").register_grain_restart(function(voice_idx)
       if voice_idx == 4 then error("start failed") end
@@ -359,9 +387,13 @@ test("a step whose second start fails shows the first voice running and the seco
   local S = local_value("S")
   S.patterns[3][1] = 15; S.patterns[4][1] = 15
   context.clear_engine_calls()
-  pattern_clock_start()
-  h.claim_script_errors(context, 1, "step output voices: ", "start failed")
-  assert_equal(S.pattern_playing, true, "the patterns play on")
+  local started, start_error = pcall(pattern_clock_start)
+  local errors = context.clock.take_errors()
+  assert_true((not started and tostring(start_error):find("start failed", 1, true)) or #errors == 1,
+    "the error reached the caller or the scheduler")
+  assert_equal(#context.take_script_errors(), 0, "and was never printed as an output's")
+  assert_equal(S.pattern_playing, false, "the pattern stopped")
+  assert_every_voice_clock_gone(S)
   assert_true(S.voices[3].active, "voice 3 runs")
   assert_equal(S.voice_list.entries[3]:sub(1, 2), "3+", "MAIN's list shows voice 3 running")
   assert_true(not S.voices[4].active, "voice 4 is stopped")
@@ -372,7 +404,6 @@ test("a step whose second start fails shows the first voice running and the seco
     if call.args[1] == 3 and call.name == "voiceOff" then engine_running = false end
   end
   assert_equal(engine_running, false, "the engine's voice 4 is stopped too")
-  pattern_clock_stop()
 end)
 
 -- The clock_source param's options, as norns' clock.add_params has them
@@ -1395,6 +1426,190 @@ test("a swung step's ratchets fit its own length", function()
     if event.step == 2 then table.insert(step_2, event.time - started_at) end
   end
   assert_list_near(step_2, {0.165, 0.2075}, 1e-9, "half of the 0.085 s left, none after 0.25 s")
+end)
+
+-- Review findings (fix round 1) ----------------------------------------
+
+-- AGENTS.md: scaleNote is resent on every change that moves it. A synth
+-- voice's scaleNote is its freq as a note, and a noted step moves the freq
+test("a noted step sends a quantized synth voice's scaleNote, and the voice's own when it ends", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  params:set("scale", 2); params:set("root", 1)  -- C major
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 261.63)                   -- snapped to C
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "notes", {2})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_near(last_sent(context, "setGrainParam", 0, "scaleNote"), 64, 1e-6, "the noted step plays E")
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_near(last_sent(context, "setGrainParam", 0, "scaleNote"), 60, 1e-6, "the next step: the voice's own C")
+  pattern_clock_stop()
+  pattern_clock_start()
+  assert_near(last_sent(context, "setGrainParam", 0, "scaleNote"), 64, 1e-6, "E again")
+  pattern_clock_stop()
+  assert_near(last_sent(context, "setGrainParam", 0, "scaleNote"), 60, 1e-6, "the stop gives the voice its C back")
+end)
+
+-- A step turned off leaves no step to end its locks: the wrap does
+test("turning off a voice's only set step ends its lock and note at the next wrap", function()
+  local context, S = buffer_voice_setup()  -- voice 1 on a buffer at 0.2, voice 2 on its synth
+  local seq, sync = S.lib.sequencer, S.lib.engine_sync
+  S.patterns[1][5] = 15; seq.set_step_attr(1, 5, "pos", 0.6)
+  S.patterns[2][5] = 15; seq.set_step_attr(2, 5, "notes", {2})
+  local freq = params:get("v2_freq")
+  pattern_clock_start()
+  for _ = 1, 4 do context.clock.advance_until(S.pattern_clocks[2]) end  -- (voice 1 plays each step first)
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.6, 1e-9, "step 5 locks voice 1")
+  assert_near(sync.engine_base_value("v2_freq"), freq * 2 ^ (2 / 12), 1e-6, "and transposes voice 2")
+  toggle_pattern_step(1, 5); toggle_pattern_step(2, 5)  -- each voice's only set step, off
+  context.clock.run_for(1.0)
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.6, 1e-9, "before the wrap the lock holds")
+  context.clock.run_for(1.0)  -- past the wrap
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.2, 1e-9, "the wrap ends the lock")
+  assert_near(last_sent(context, "setGrainParam", 0, "bufPos"), 0.2, 1e-9, "and sends the stored position")
+  assert_near(sync.engine_base_value("v2_freq"), freq, 1e-9, "and the note")
+  assert_near(last_sent(context, "setVoiceParam", 1, "freq"), freq, 1e-9, "with the stored freq")
+  assert_near(last_sent(context, "setGrainParam", 1, "scaleNote"), 69 + 12 * math.log(freq / 440) / math.log(2), 1e-6,
+    "and the voice's own scaleNote")
+  pattern_clock_stop()
+end)
+
+-- Ruling 47: the beat count set back by a transport start the patterns do
+-- not follow. Voice 1 at 1/16 and voice 2 at a bar, every step set, step 11
+-- of voice 1 ratcheted; the count goes back 1.3 s after the start, between
+-- two 16ths and during step 11's ratchet
+local function count_reset_setup(context, S, probe_name)
+  local seq = S.lib.sequencer
+  for step = 1, 16 do S.patterns[1][step] = 15; S.patterns[2][step] = 15 end
+  params:set("v2_seq_division", 8)  -- 1 bar
+  seq.set_step_attr(1, 11, "ratchet", 2)
+  local events = record_output(S, probe_name or "probe")
+  pattern_clock_start()
+  context.clock.run_for(1.3)  -- beat 2.6 after the start: step 11 at 2.5, its second hit due at 2.625
+  context.clock.transport_start()
+  return events
+end
+
+-- Over the next 6.5 s: voice 2 moves on once a bar, each time with voice 1
+-- at its step 1 and the transport at its bar; voice 1's steps follow one
+-- another (none twice, none skipped) on the clock's 16ths; the hit pending
+-- at the reset plays once, an eighth of a beat into the new count
+local function assert_count_kept(context, S, events, what)
+  local seq = S.lib.sequencer
+  local last_step, changes = seq.sounding_step(2), 0
+  for _ = 1, 650 do
+    context.clock.run_for(0.01)
+    if seq.sounding_step(2) ~= last_step then
+      changes, last_step = changes + 1, seq.sounding_step(2)
+      assert_equal(seq.sounding_step(1), 1, what .. ": voice 1 is at its step 1 as voice 2 moves on")
+      assert_equal(seq.sounding_step(), 1, what .. ": and the transport at its bar")
+    end
+  end
+  assert_equal(changes, 3, what .. ": voice 2 moves on once a bar")
+  local steps = voice_events(events, 1, true)
+  for index = 2, #steps do
+    assert_equal(steps[index].step, steps[index - 1].step % 16 + 1, what .. ": voice 1's step " .. index)
+  end
+  for index = 12, #steps do
+    local sixteenths = steps[index].beat / 0.25
+    assert_near(sixteenths, math.floor(sixteenths + 0.5), 1e-6, what .. ": on the clock's 16ths, step " .. index)
+  end
+  local pending
+  for _, event in ipairs(voice_events(events, 1)) do
+    if event.step == 11 and event.hit == 2 and not pending then pending = event end
+  end
+  assert_near(pending.beat, 0.125, 1e-6, what .. ": the pending hit waits for its place in the new count")
+  pattern_clock_stop()
+end
+
+test("a reset on the internal clock keeps every voice, the bar count and the ratchets in step", function()
+  local context, S = setup()
+  local events = count_reset_setup(context, S)
+  assert_near(clock.get_beats(), 0, 1e-9, "the clock counts from 0")
+  assert_equal(S.pattern_playing, true, "the patterns play on (#530)")
+  assert_count_kept(context, S, events, "internal")
+end)
+
+test("an external start with follow off keeps every voice, the bar count and the ratchets in step", function()
+  local context, S = setup()
+  params:set("clock_source", CLOCK_SOURCE.midi)
+  params:set("seq_follow_transport", 0)
+  local events = count_reset_setup(context, S)
+  assert_equal(S.pattern_playing, true, "not followed: the patterns play on")
+  assert_count_kept(context, S, events, "MIDI, follow off")
+end)
+
+test("a pattern start after an unfollowed reset counts from the clock again", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local events = count_reset_setup(context, S)
+  context.clock.run_for(0.3)
+  assert_true(seq.count_offset() ~= 0, "the patterns kept their own count")
+  pattern_clock_stop()
+  local beat = clock.get_beats()
+  local bar = (math.floor(beat / 4) + 1) * 4
+  context.clock.run_for((bar - beat) * 0.5)  -- to the clock's next bar
+  clear_list(events)
+  pattern_clock_start()
+  assert_equal(seq.count_offset(), 0, "a start drops the offset")
+  context.clock.run_for(2.0 + 0.01)
+  local bar_steps = voice_events(events, 2)
+  assert_equal(#bar_steps, 2, "voice 2: its step 1 and step 2")
+  assert_near(bar_steps[1].beat, bar, 1e-6, "on the clock's bar")
+  assert_near(bar_steps[2].beat, bar + 4, 1e-6, "and the next")
+  pattern_clock_stop()
+  -- a followed start drops it too
+  count_reset_setup(context, S, "second probe")
+  context.clock.run_for(0.3)
+  params:set("clock_source", CLOCK_SOURCE.midi)
+  context.clock.transport_start()
+  assert_equal(seq.count_offset(), 0, "a followed start drops the offset")
+  pattern_clock_stop()
+end)
+
+test("a gated voice's event falls back to the default gate length", function()
+  local _, S = setup()
+  local events = record_output(S, "probe")
+  params:set("v1_seq_gate", 2)
+  S.patterns[1][1] = 15
+  S.voices[1].extras.seq_gate_length = nil
+  pattern_clock_start(); pattern_clock_stop()
+  assert_near(voice_events(events, 1)[1].gate_beats, 0.125, 1e-9, "0.5 steps of 1/16, the default")
+end)
+
+test("a step's notes go through the scale once per step, whatever its ratchets", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local events = record_output(S, "probe")
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {2}); seq.set_step_attr(1, 1, "ratchet", 4)
+  local calls, real_degree_semitones = 0, seq.degree_semitones
+  seq.degree_semitones = function(...) calls = calls + 1; return real_degree_semitones(...) end
+  pattern_clock_start()
+  context.clock.run_for(0.12)
+  pattern_clock_stop()
+  seq.degree_semitones = real_degree_semitones
+  assert_equal(calls, 1, "one conversion for the step's note")
+  local hits = voice_events(events, 1)
+  assert_equal(#hits, 4, "four hits")
+  for index, event in ipairs(hits) do assert_list_near(event.semitones, {2}, 1e-9, "hit " .. index) end
+end)
+
+test("euclid wraps any whole rotation into the length and clamps the hits", function()
+  local _, S = setup()
+  local seq = S.lib.sequencer
+  params:set("v1_seq_length", 8)
+  seq.euclid(1, 3, 9)
+  local expected = {0, 15, 0, 0, 15, 0, 0, 15}
+  for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "rotation 9 is 1: step " .. step) end
+  assert_equal(S.seq_euclid[1][1], 3); assert_equal(S.seq_euclid[1][2], 1, "the wrapped rotation is kept")
+  seq.euclid(1, 12, -1)
+  for step = 1, 8 do assert_equal(S.patterns[1][step], 15, "12 hits clamp to 8: step " .. step) end
+  assert_equal(S.seq_euclid[1][1], 8, "the clamped hits"); assert_equal(S.seq_euclid[1][2], 7, "-1 is 7")
+  seq.euclid(1, 3, 1.5)
+  assert_equal(S.seq_euclid[1][2], 7, "a rotation that is no whole number does nothing")
 end)
 
 end

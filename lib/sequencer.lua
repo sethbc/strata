@@ -58,6 +58,7 @@ return function(S)
     chromatic_mask = 4095,           -- every pitch class (lib/variation.lua's scale_mask, the scale off)
     tone_tolerance = 0.01,           -- semitones: a pitch this near a tone is on it
     beat_tolerance = 1e-9,           -- beats: two beats this near are one
+    wake_tolerance = 1e-6,           -- beats: a clock woken this near its target is on it, not early
     loop_tolerance = 1e-6,           -- as lib/positions.lua's jump: inside the loop
   }
   M.SEQ = SEQ
@@ -83,16 +84,21 @@ return function(S)
   end
 
   -- The playing state (local; read through the functions below): per voice
-  -- {anchor, tick, beat, due, position, pass_length} and the
-  -- transport's {anchor, tick, beat, due}. A participant's beats are its own
+  -- {anchor, tick, beat, due, position, pass_length, last_sync} and the
+  -- transport's {anchor, tick, beat, due, last_sync}. A participant's beats
   -- (the beat of its tick 0, of the step it played last, of the step it
-  -- waits for), never read back from the clock, so a transport reset that
-  -- is not followed moves none of them apart. play.failed: the outputs
-  -- skipped until the next start; play.started: a voice started since the
-  -- last redraw; play.reset_beat: a division reset's bar; overrides: per
-  -- voice, the param ids its last played step overrides; last_played: per
-  -- voice, that step; gate_sent: per voice, the gateSeconds sent last
-  local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil}
+  -- waits for) are on the sequencer's own count, the clock's beats plus
+  -- play.offset: 0 from every pattern start, and set by a transport start
+  -- the patterns do not follow, which puts the clock's count back while
+  -- they play (ruling 47: keep_count, below), so every clock, the bars and
+  -- the ratchets stay in step through it. last_sync: the clock beat the
+  -- scheduler counts the participant's next sync from. play.failed: the
+  -- outputs skipped until the next start; play.started: a voice started
+  -- since the last redraw; play.reset_beat: a division reset's bar;
+  -- overrides: per voice, the param ids its last played step overrides;
+  -- last_played: per voice, that step; gate_sent: per voice, the
+  -- gateSeconds sent last
+  local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0}
   local overrides, last_played, gate_sent = {}, {}, {}
   -- the chain: the scene loaded last and the beat of the next link
   local chain = {current = nil, next_beat = nil}
@@ -168,6 +174,15 @@ return function(S)
 
   local function valid_place(voice_idx, step)
     return valid_voice(voice_idx) and whole_between(step, 1, PATTERN_LENGTH)
+  end
+
+  -- Whether a voice has a set step (a level above 0) inside its length
+  function M.has_set_step(voice_idx)
+    if not valid_voice(voice_idx) then return false end
+    for step = 1, voice_length(voice_idx) do
+      if S.patterns[voice_idx][step] > 0 then return true end
+    end
+    return false
   end
 
   -- A step attribute (a copy of a notes list), or nil
@@ -249,13 +264,27 @@ return function(S)
 
   -- Overrides (step locks and notes) ---------------------------------------
 
+  -- Set and clear one override. A synth voice's freq is also its grain
+  -- quantize's reference note (scaleNote, lib/variation.lua), which is
+  -- resent on every change that moves it: the step's freq, then the voice's
+  -- own (send_scale_note sends to a running voice only)
+  local function set_override(voice_idx, param_id, value)
+    S.lib.engine_sync.set_base_override(param_id, value)
+    if param_id == voice_param(voice_idx, "freq") then S.lib.variation.send_scale_note(voice_idx, value) end
+  end
+
+  local function clear_override(voice_idx, param_id)
+    S.lib.engine_sync.clear_base_override(param_id)
+    if param_id == voice_param(voice_idx, "freq") then S.lib.variation.send_scale_note(voice_idx) end
+  end
+
   -- End every override a voice's step set: each param goes back to its
   -- stored value at once
   local function end_overrides(voice_idx)
     local held = overrides[voice_idx]
     overrides[voice_idx], last_played[voice_idx] = nil, nil
     if not held then return end
-    for _, param_id in ipairs(sorted_keys(held)) do S.lib.engine_sync.clear_base_override(param_id) end
+    for _, param_id in ipairs(sorted_keys(held)) do clear_override(voice_idx, param_id) end
   end
 
   local function end_all_overrides()
@@ -345,7 +374,6 @@ return function(S)
   -- base overrides; the previous played step's overrides this one lacks end
   local function apply_step(voice_idx, event)
     local locks = event.locks or {}
-    local sync = S.lib.engine_sync
     local wanted, lock_ids = {}, {}  -- param id -> value: the locks, then the note
     for _, key in ipairs(SEQ.lock_keys) do
       if SEQ.lock_params[key] and locks[key] ~= nil then
@@ -368,16 +396,16 @@ return function(S)
       end
     end
     for _, param_id in ipairs(sorted_keys(overrides[voice_idx] or {})) do
-      if wanted[param_id] == nil then sync.clear_base_override(param_id) end
+      if wanted[param_id] == nil then clear_override(voice_idx, param_id) end
     end
     for _, param_id in ipairs(lock_ids) do
-      if param_id ~= note_id then sync.set_base_override(param_id, wanted[param_id]) end
+      if param_id ~= note_id then set_override(voice_idx, param_id, wanted[param_id]) end
     end
     local n = locks.bookmark
     if n and S.lib.bookmarks.is_set(voice_idx, n) and bookmark_in_loop(voice_idx, n) then
       S.lib.bookmarks.recall(voice_idx, n)
     end
-    if note_id then sync.set_base_override(note_id, wanted[note_id]) end
+    if note_id then set_override(voice_idx, note_id, wanted[note_id]) end
     local held = {}
     for param_id in pairs(wanted) do held[param_id] = true end
     overrides[voice_idx] = next(held) ~= nil and held or nil
@@ -404,11 +432,13 @@ return function(S)
     engine.retrigger(voice_idx - 1, event.velocity)
   end
 
-  S.register_step_output({name = "voices", play = voices_play})
+  local voices_output = {name = "voices", play = voices_play}
+  S.register_step_output(voices_output)
 
   -- The outputs (design 8.10) --------------------------------------------
 
   -- An output that failed prints once and is skipped until the next start
+  -- (never the voices output: see play_outputs)
   local function output_failed(output, problem)
     if play.failed[output.name] then return end
     play.failed[output.name] = true
@@ -450,9 +480,18 @@ return function(S)
 
   local function stop_output(output) output.stop() end
 
+  -- Every output in registration order. Strata's own voices output is the
+  -- exception to the protection (ruling 38): an error in it is a bug in
+  -- Strata, so it is called directly and its error reaches the clock's
+  -- guard, which stops the patterns and raises it again (#243, #382), as a
+  -- step's error did before 3.4
   local function play_outputs(event)
     for _, output in ipairs(S.registry.step_outputs) do
-      if not play.failed[output.name] then run_output(play_output, output, event) end
+      if output == voices_output then
+        play_output(output, event)
+      elseif not play.failed[output.name] then
+        run_output(play_output, output, event)
+      end
     end
   end
 
@@ -462,19 +501,27 @@ return function(S)
     end
   end
 
-  -- A hit's event (design 8.10's fields)
-  local function hit_event(voice_idx, step, hit, hits, level)
+  -- The step's notes through the global scale, once per step (each hit's
+  -- event carries a copy), or nil
+  local function step_semitones(voice_idx, attrs)
+    if not attrs.notes then return nil end
+    local semitones = {}
+    for index, degree in ipairs(attrs.notes) do semitones[index] = M.degree_semitones(voice_idx, degree) end
+    return semitones
+  end
+
+  -- A hit's event (design 8.10's fields); semitones: the step's
+  -- (step_semitones)
+  local function hit_event(voice_idx, step, hit, hits, level, semitones)
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local division = division_beats(voice_idx)
     local event = {voice = voice_idx, step = step, hit = hit, hits = hits, first = hit == 1, level = level,
       velocity = level / MAX_STEP_LEVEL, beat = clock.get_beats(), gate_beats = division / hits}
     if gated(voice_idx) then
-      event.gate_beats = (attrs.gate or extras(voice_idx).seq_gate_length) * division / hits
+      local steps = attrs.gate or extras(voice_idx).seq_gate_length or SEQ.gate_length_default
+      event.gate_beats = steps * division / hits
     end
-    if attrs.notes then
-      event.notes, event.semitones = copy_list(attrs.notes), {}
-      for index, degree in ipairs(attrs.notes) do event.semitones[index] = M.degree_semitones(voice_idx, degree) end
-    end
+    if attrs.notes then event.notes, event.semitones = copy_list(attrs.notes), copy_list(semitones or {}) end
     for _, key in ipairs(SEQ.lock_keys) do
       if attrs[key] ~= nil then
         event.locks = event.locks or {}
@@ -486,13 +533,25 @@ return function(S)
 
   -- The clocks (design 8.2, 8.13) ------------------------------------------
 
-  -- Wait for target, on the beat timeline, from the last sync's beat (less
-  -- than a period before it): the offset in (-period, 0] makes the
-  -- scheduler land on the first beat at target modulo period after it
-  local function sync_to(target, period)
-    local offset = target % period
-    if offset > 0 then offset = offset - period end
-    clock.sync(period, offset)
+  -- Wait for target, a beat of the sequencer's count (the clock's beat
+  -- target - play.offset). The scheduler counts a sync from the beat of the
+  -- coroutine's last one (state.last_sync, less than a span before the
+  -- target), and lands on the first multiple of the span after it plus the
+  -- offset: an offset in (-span, 0] makes that the target itself. A wake
+  -- before the target (a transport start the patterns do not follow sets
+  -- every waiting sync to beat 0, so it fires at once) waits again, on the
+  -- count as it is now
+  local function wait_for(state, target, period)
+    while true do
+      local clock_target = target - play.offset
+      local from = math.min(state.last_sync, clock.get_beats())
+      local span = math.max(period, 2 * (clock_target - from))
+      local offset = clock_target % span
+      if offset > 0 then offset = offset - span end
+      state.last_sync = clock_target
+      clock.sync(span, offset)
+      if clock.get_beats() + play.offset >= target - SEQ.wake_tolerance then return end
+    end
   end
 
   -- The beat a voice's tick k falls on: anchor + k x division, every odd
@@ -611,11 +670,16 @@ return function(S)
     at_beat(state.beat)
     local length = voice_length(voice_idx)
     if length ~= state.pass_length and state.position <= length then state.pass_length = length end
-    if state.position > state.pass_length then state.position, state.pass_length = 1, length end
+    if state.position > state.pass_length then
+      state.position, state.pass_length = 1, length
+      -- the wrap: with no set step left inside its length, no step of the
+      -- voice will end its overrides (its only set step was turned off)
+      if overrides[voice_idx] and not M.has_set_step(voice_idx) then end_overrides(voice_idx) end
+    end
     local step = state.position
     S.pattern_sounding_steps[voice_idx], state.position = step, step + 1
     local level = S.patterns[voice_idx][step]
-    local hits, spacing = 0, 0
+    local hits, spacing, semitones = 0, 0, nil
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local prob = attrs.prob or SEQ.max_prob
     if level > 0 and prob > 0 and (prob >= SEQ.max_prob or math.random() * SEQ.max_prob < prob) then
@@ -624,17 +688,17 @@ return function(S)
       local step_beats = division + (state.tick % 2 == 0 and swing or -swing)
       local step_seconds = step_beats * S.lib.params_setup.beat_seconds_now()
       hits = math.min(attrs.ratchet or 1, math.max(1, math.floor(step_seconds / SEQ.min_ratchet_seconds + 1e-9)))
-      spacing = step_beats / hits
+      spacing, semitones = step_beats / hits, step_semitones(voice_idx, attrs)
       local was_active = S.voices[voice_idx].active
-      play_outputs(hit_event(voice_idx, step, 1, hits, level))
+      play_outputs(hit_event(voice_idx, step, 1, hits, level, semitones))
       if S.voices[voice_idx].active and not was_active then play.started = true end
     end
     finish_beat(state.beat)
-    return {step = step, level = level, hits = hits, spacing = spacing, beat = state.beat}
+    return {step = step, level = level, hits = hits, spacing = spacing, beat = state.beat, semitones = semitones}
   end
 
   local function play_voice_hit(voice_idx, plan, hit)
-    play_outputs(hit_event(voice_idx, plan.step, hit, plan.hits, plan.level))
+    play_outputs(hit_event(voice_idx, plan.step, hit, plan.hits, plan.level, plan.semitones))
   end
 
   -- The transport's 16th: a link due, a division reset's bar (every voice
@@ -675,13 +739,13 @@ return function(S)
   local function voice_clock(voice_idx, beat)
     local state = play.voices[voice_idx]
     state.anchor, state.tick, state.beat, state.due = beat, 0, beat, nil
-    state.position, state.pass_length = 1, voice_length(voice_idx)
+    state.position, state.pass_length, state.last_sync = 1, voice_length(voice_idx), clock.get_beats()
     local function forget() S.pattern_clocks[voice_idx] = nil end
     local function begin() return begin_voice_step(voice_idx) end
     local plan = guarded(forget, begin)
     while true do
       for hit = 2, plan.hits do
-        sync_to(plan.beat + (hit - 1) * plan.spacing, plan.spacing)
+        wait_for(state, plan.beat + (hit - 1) * plan.spacing, plan.spacing)
         guarded(forget, function() play_voice_hit(voice_idx, plan, hit) end)
       end
       local next_tick = guarded(forget, function()
@@ -689,7 +753,7 @@ return function(S)
         return {k = k, target = target, period = period}
       end)
       state.due = next_tick.target
-      sync_to(next_tick.target, next_tick.period)
+      wait_for(state, next_tick.target, next_tick.period)
       state.due = nil
       guarded(forget, function()
         local reset, k = play.reset_beat, next_tick.k
@@ -713,13 +777,13 @@ return function(S)
 
   local function transport_clock(beat)
     local state = play.transport
-    state.anchor, state.tick, state.beat, state.due = beat, 0, beat, nil
+    state.anchor, state.tick, state.beat, state.due, state.last_sync = beat, 0, beat, nil, clock.get_beats()
     local function forget() S.pattern_clock = nil end
     guarded(forget, transport_step)
     while true do
       local target = state.anchor + (state.tick + 1) * SEQ.transport_beats
       state.due = target
-      sync_to(target, 2 * SEQ.transport_beats)
+      wait_for(state, target, 2 * SEQ.transport_beats)
       state.due = nil
       state.tick, state.beat = state.tick + 1, target
       guarded(forget, transport_step)
@@ -799,12 +863,16 @@ return function(S)
 
   -- Euclidean fill (design 8.5): the voice's first length steps from
   -- er.gen(hits, length, rotation), hits at MAX_STEP_LEVEL and the rest 0;
-  -- the steps past the length and every attribute are kept. Nothing while a
-  -- scene recall is in progress
+  -- the steps past the length and every attribute are kept. Any whole hits
+  -- and rotation: the hits clamped to 0..length, the rotation wrapped into
+  -- 0..length - 1 (design 8.6), and that pair is S.seq_euclid's. Nothing
+  -- while a scene recall is in progress
   function M.euclid(voice_idx, hits, rotation)
     if not valid_voice(voice_idx) or S.scene_recall_in_progress then return end
+    -- whole and finite (2^53: the largest whole a float holds exactly)
+    if not whole_between(hits, -2 ^ 53, 2 ^ 53) or not whole_between(rotation, -2 ^ 53, 2 ^ 53) then return end
     local length = voice_length(voice_idx)
-    if not whole_between(hits, 0, length) or not whole_between(rotation, -PATTERN_LENGTH, PATTERN_LENGTH) then return end
+    hits, rotation = util.clamp(hits, 0, length), rotation % length
     local fill, steps = er.gen(hits, length, rotation), {}
     for step = 1, PATTERN_LENGTH do
       steps[step] = step <= length and (fill[step] and MAX_STEP_LEVEL or 0) or S.patterns[voice_idx][step]
@@ -831,7 +899,8 @@ return function(S)
   -- output that failed is played again
   function pattern_clock_start()
     cancel_clocks()
-    play.failed, play.started, play.reset_beat = {}, false, nil
+    -- the sequencer's count is the clock's again (ruling 47)
+    play.failed, play.started, play.reset_beat, play.offset = {}, false, nil, 0
     S.pattern_playing = true
     S.pattern_position = 1
     S.pattern_sounding_step = nil
@@ -959,10 +1028,37 @@ return function(S)
     return params:get("seq_follow_transport") == 1 and params:get("clock_source") ~= transport.internal_source
   end
 
+  -- The sequencer's count less the clock's beats: 0 but after a transport
+  -- start the patterns did not follow (ruling 47)
+  function M.count_offset() return play.offset end
+
+  -- A transport start the patterns do not follow (the internal clock's
+  -- reset, or an external start with seq_follow_transport off) has put the
+  -- clock's count back (to 0) and every waiting sync on beat 0, while the
+  -- patterns may play (ruling 47). Unless they are stopped, the sequencer
+  -- keeps one count of its own, the clock's beats plus play.offset, for
+  -- every clock, the transport's 16ths and bars, the chain, the division
+  -- reset and the ratchets, as 3.3's one clock did: the transport's next
+  -- 16th waits for the new count's next 16th, and every voice shifts by the
+  -- same amount (at most one 16th late). So steps that fell together still
+  -- do, 16th steps land on the clock's 16ths, and no step plays twice or is
+  -- skipped; each clock woken early waits again (wait_for). The scheduler
+  -- counts every coroutine's next sync from beat 0
+  local function keep_count()
+    if not S.pattern_playing then return end
+    local sixteenth, state = SEQ.transport_beats, play.transport
+    local next_sixteenth = (math.floor(clock.get_beats() / sixteenth + SEQ.beat_tolerance) + 1) * sixteenth
+    play.offset = state.anchor + (state.tick + 1) * sixteenth - next_sixteenth
+    state.last_sync = 0
+    for voice_idx = 1, NUM_VOICES do play.voices[voice_idx].last_sync = 0 end
+  end
+
   function transport.start()
     if M.follows_transport() then
       pattern_clock_start()
       request_redraw()
+    else
+      keep_count()
     end
     if transport.previous_start then transport.previous_start() end
   end
