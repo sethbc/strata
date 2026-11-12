@@ -202,6 +202,16 @@ return function(S)
     if not ran then error(run_error, 0) end
   end
 
+  -- The value the engine has or will have for the id: the one waiting in
+  -- the budget when there is one, else the one it last received (nil when
+  -- neither). A compare that decides whether to send reads this, never
+  -- S.engine_param_values alone (#591)
+  function M.expected_value(param_id)
+    local waiting = budget.pending[param_id]
+    if waiting ~= nil then return waiting end
+    return S.engine_param_values[param_id]
+  end
+
   -- For tests: this window's sends and the ids waiting
   function M.budget_state()
     local sent = budget.sent
