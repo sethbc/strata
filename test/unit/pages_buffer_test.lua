@@ -256,7 +256,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   assert_equal(#context.calls_named("recordBuffer"), 0, "and does not record")
   assert_equal(hint_text(context), "saving buf 3", "the hint row says the save is under way")
   assert_screen_layout(context, "BUFFER with the saving flash")
-  assert_equal(#page_dots(context), 8, "the hint flash leaves the header alone")
+  assert_equal(#page_dots(context), #h.PAGE_TITLES, "the hint flash leaves the header alone")
   -- the engine reports the file written (bufferSaveResult: (save 1 * 2 + ok 0) * 8 + slot index 2)
   context.set_time(100.2)
   context.polls.fire("bufferSaveResult", (1 * 2 + 0) * 8 + 2); next_frame(context)

@@ -4,16 +4,17 @@ The screen pages, and what the encoders and keys do on every page. Back to the [
 
 ## Screen Pages
 
-The screen has eight pages, in this order (each page's own controls are on its page):
+The screen has nine pages, in this order (each page's own controls are on its page):
 
 1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter. ALT+K2 randomizes the voice when you let go of K2 (again within 5 s to undo), ALT+K3 locks it
 2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo; held half a second, it resets the row to its default), ALT+K3 locks the voice
 3. [SEQ](pages/seq.md) - the pattern sequencer: all seven patterns, transport and tempo. ALT+E2 picks the voice row, ALT+E3 sets the tempo, ALT+K2 randomizes the voice's pattern when you let go of K2 (again within 5 s to undo), ALT+K3 clears it
 4. [FX](pages/fx.md) - master density, tape drift, filter, delay and reverb. ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo)
 5. [LFO](pages/lfo.md) - the six LFOs, three at a time. ALT+E3 jumps a destination group (or refines the rate), ALT+K2 randomizes the LFO's shape, rate and phase when you let go of K2 (again within 5 s to undo; held half a second, it resets the setting to its default), ALT+K3 turns the LFO on or off
-6. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
-7. [SCENES](pages/scenes.md) - the sixteen scenes in two banks, their names and the scene sequencer. ALT+K3 saves the current sound into the slot, ALT+K2 names it
-8. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own
+6. [MOD](pages/mod.md) - the macros and their targets, the morph, scatter, the gesture recorders, the LFOs at a glance and the modulation matrix's sixteen routings. ALT+E2 on a macro shows the next bank, ALT+K2 randomizes scatter or the matrix when you let go of K2 (again within 5 s to undo; held half a second, it clears the recorder or routing under the cursor), ALT+K3 overdubs a playing recorder, turns a routing on or off, or learns a target or destination
+7. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
+8. [SCENES](pages/scenes.md) - the sixteen scenes in two banks, their names and the scene sequencer. ALT+K3 saves the current sound into the slot, ALT+K2 names it
+9. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own
 
 E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP.
 
@@ -25,7 +26,7 @@ Master density is no longer on E1: adjust it on the first row of the FX page, wi
 
 ## The Header and the Hint Row
 
-Every page shows at the top the page name, eight small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S16` scene indicator (brighter while the scene sequencer runs). The scene shows once one has been recalled, not when one is saved. SEQ shows the tempo (`120 bpm`) at all times in place of `[M]` and `REC`/`ARM`. The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
+Every page shows at the top the page name, nine small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S16` scene indicator (brighter while the scene sequencer runs). The scene shows once one has been recalled, not when one is saved. SEQ shows the tempo (`120 bpm`) at all times in place of `[M]` and `REC`/`ARM`. The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
 
 The bottom row shows the page's key hints. A short message (a saved buffer, a failed load, ...) can take it for 1.5 s, on the page that raised it.
 

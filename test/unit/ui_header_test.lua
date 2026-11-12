@@ -82,11 +82,11 @@ test("the header constants are the plan's", function()
   end
 end)
 
-test("the header draws eight page dots with the current one bright", function()
+test("the header draws nine page dots with the current one bright", function()
   local context = load_strata(); finish_startup(context)
   show_page("SEQ")
   local dots = page_dots(context)
-  assert_equal(#dots, 8, "eight page dots")
+  assert_equal(#dots, 9, "nine page dots")
   for index, dot in ipairs(dots) do
     assert_equal(dot.x, 36 + (index - 1) * 4, "dot " .. index .. " x")
     assert_equal(dot.w, 2); assert_equal(dot.h, 2)
@@ -98,7 +98,7 @@ test("the header draws eight page dots with the current one bright", function()
   for page = 1, #PAGE_TITLES do
     show_page(page)
     dots = page_dots(context)
-    assert_equal(#dots, 8, PAGE_TITLES[page] .. ": eight dots")
+    assert_equal(#dots, 9, PAGE_TITLES[page] .. ": nine dots")
     for index, dot in ipairs(dots) do
       assert_equal(dot.level, index == page and 15 or 3, PAGE_TITLES[page] .. ": dot " .. index)
     end
@@ -173,7 +173,7 @@ test("a page's header_status replaces [M], the play mark and REC", function()
   assert_equal(header_text(context, "[M]"), nil, "no [M]")
   assert_equal(header_text(context, "REC"), nil, "no REC")
   assert_equal(play_mark(context), nil, "no play mark while stopped")
-  assert_equal(#page_dots(context), 8, "the dots stay")
+  assert_equal(#page_dots(context), 9, "the dots stay")
   assert_screen_layout(context, "SEQ with a status")
   pattern_toggle(); redraw()
   local mark = play_mark(context)
@@ -217,7 +217,7 @@ test("a header flash replaces dots and indicators for 1.5 s", function()
   assert_equal(S.lib.ui_flash.text("header"), nil, "the flash is over")
   next_frame(context)
   assert_equal(header_text(context, "tempo 121"), nil, "the next frame draws it away")
-  assert_equal(#page_dots(context), 8, "dots back")
+  assert_equal(#page_dots(context), 9, "dots back")
   assert_true(header_text(context, "120 bpm"), "SEQ's status back")
 end)
 
@@ -323,7 +323,7 @@ test("a nil flash text ends the flash instead of showing nil", function()
   assert_equal(header_text(context, "nil"), nil, "never the text nil")
   assert_equal(context.clock.threads[running], nil, "the running flash's clock is canceled")
   assert_equal(S.lib.ui_flash.slots.header.clock, nil, "and none started")
-  assert_equal(#page_dots(context), 8, "the dots show")
+  assert_equal(#page_dots(context), 9, "the dots show")
   show_page("BUFFER"); buffer_page_flash(nil); redraw()
   assert_true(hint_text(context) ~= "nil", "the hint row never shows nil")
 end)
@@ -406,18 +406,26 @@ end)
 
 -- 3.4: the dots move 4 px left (a ninth page comes in 3.4's Wave 2) and the
 -- scene runs to S16, 3 px wider than S8 (design §9.1, Question 16)
-test("eight dots from x 36 clear the play mark; S16 clears REC", function()
+test("nine dots from x 36 clear the play mark; S16 clears REC", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local record = S.registry.pages[S.constants.UI_PAGES.index.SEQ]
   record.header_status = function() return "120 bpm" end
   show_page("SEQ"); pattern_toggle(); redraw()
   local dots = page_dots(context)
-  assert_equal(#dots, 8, "eight dots")
+  assert_equal(#dots, 9, "nine dots, one per page (3.4's MOD the sixth)")
   assert_equal(dots[1].x, 36, "the first at x 36")
+  assert_equal(dots[9].x, 68, "the ninth at x 68")
   local mark = play_mark(context)
   assert_equal(mark.left, 73, "a status's play mark at x 73, the leftmost it goes")
-  assert_true(dots[8].x + dots[8].w < mark.left, "the last dot ends clear of it")
+  assert_true(dots[9].x + dots[9].w < mark.left, "the last dot ends clear of it")
+  -- on every page the dots clear the title, the widest of them
+  for _, name in ipairs(S.constants.UI_PAGES) do
+    show_page(name); redraw()
+    assert_equal(#page_dots(context), 9, name .. " shows nine dots")
+    assert_screen_layout(context, name .. "'s header")
+  end
+  show_page("SEQ"); redraw()
   record.header_status = nil
   S.current_scene = 16; S.buffers[1].recording = true
   show_page("MAIN"); redraw()

@@ -22,11 +22,13 @@ return function(S)
   -- source on y 18, state, [L], [T] and [F] on y 26 (fixed x, so nothing
   -- moves as they come and go; "OFF [L] [T] [F]" fills it to x 127), the three fields on y 34/42/50 (the cursor, the
   -- label, the value right-aligned). The name gives way to the source:
-  -- it is cut to end name_gap px before it
+  -- it is cut to end name_gap px before it. 3.4: the mark (~) follows the
+  -- name while the engine's modulation moves the voice, and the name is cut
+  -- by its width (y 26 is full)
   local LAYOUT = {
     left = 65, right = 127, divider_x = 62, name_y = 18, name_gap = 1,
     state_y = 26, lock_x = 84, trig_x = 99, freeze_x = 113, field_rows = {34, 42, 50}, label_x = 71,
-    bright = 15, dim = 4, trig_level = 8, field_count = 3,
+    bright = 15, dim = 4, trig_level = 8, field_count = 3, modulated_mark = "~",
   }
   M.LAYOUT = LAYOUT
 
@@ -118,16 +120,45 @@ return function(S)
     return entry.label, string.format(entry.format, params:get(id))
   end
 
+  -- Whether the engine's modulation moves the voice (3.4, design §10,
+  -- §10.2): an engine-run LFO that is on at a depth above 0 on one of its
+  -- fast destinations, scatter (S.lib.scatter.affects) or a routing of the
+  -- matrix (S.lib.matrix.affects). The scatter and the matrix are read
+  -- defensively, as the LFO page reads the matrix: a test may load
+  -- without them
+  local function engine_modulated(voice_idx)
+    local lfos = S.lib.lfos
+    for n = 1, S.constants.NUM_LFOS do
+      local fast = lfos.destination(n).fast
+      if fast and fast.voice == voice_idx and lfos.is_on(n) and params:get(lfos.param_id(n, "depth")) > 0 then
+        return true
+      end
+    end
+    for _, module in ipairs({S.lib.scatter, S.lib.matrix}) do
+      if module and module.affects and module.affects(voice_idx) then return true end
+    end
+    return false
+  end
+  M.engine_modulated = engine_modulated
+
   local function draw_details()
     local voice_idx = S.selected_voice
     local v = S.voices[voice_idx]
 
-    -- y 18: the full name and, right-aligned, the source
+    -- y 18: the full name, the mark while the engine modulates the voice,
+    -- and, right-aligned, the source
     local source = voice_source_label(voice_idx)
+    local mark = engine_modulated(voice_idx) and LAYOUT.modulated_mark or nil
     local name_width = LAYOUT.right - screen.text_extents(source) - LAYOUT.name_gap - LAYOUT.left
+      - (mark and screen.text_extents(mark) or 0)
+    local name = S.lib.ui_text.fit_text(string.upper(v.name), name_width)
     screen.level(LAYOUT.bright)
     screen.move(LAYOUT.left, LAYOUT.name_y)
-    screen.text(S.lib.ui_text.fit_text(string.upper(v.name), name_width))
+    screen.text(name)
+    if mark then
+      screen.move(LAYOUT.left + screen.text_extents(name), LAYOUT.name_y)
+      screen.text(mark)
+    end
     screen.level(LAYOUT.dim)
     screen.move(LAYOUT.right, LAYOUT.name_y)
     screen.text_right(source)
@@ -298,6 +329,13 @@ return function(S)
         params:set("v1_mute", 1)
         params:set("v2_solo", 1)
         S.selected_voice = 2
+        update_voice_list()
+      end},
+      -- 3.4's ~ after the longest name, before the widest source: scatter
+      -- moves voice 1 (selected at start), which reads buf 8
+      {name = "~ after the name, scatter on, buf 8", setup = function()
+        params:set("v1_source", S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS)
+        params:set("scatter", 1)
         update_voice_list()
       end},
       -- the widest ALT+K2 hint: K2:cancel K3:unlock

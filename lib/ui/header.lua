@@ -19,7 +19,7 @@ return function(S)
   local HINT_ROW_Y = 62
   local HINT_ROW_WIDTH = 128
 
-  -- The eight page dots, the current page's bright
+  -- The page dots (one per page, NUM_UI_PAGES), the current page's bright
   local function draw_page_dots()
     for page = 1, NUM_UI_PAGES do
       screen.level(page == S.ui_page and HEADER.current_dot_level or HEADER.dot_level)

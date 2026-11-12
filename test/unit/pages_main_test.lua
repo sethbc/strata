@@ -773,4 +773,68 @@ test("MAIN shows [F] after [L] and [T] for a frozen voice", function()
   assert_true(S.lib.freeze ~= nil)
 end)
 
+-- 3.4 (package 2a, design §10, §10.2): "~" after the selected voice's name
+-- on y 18 while the engine's modulation moves it: an engine-run LFO that
+-- is on, scatter, or a routing of the matrix
+test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  select_voice(1)
+  local function name_row()
+    local name, mark
+    for _, entry in ipairs(texts_on_row(context, 18)) do
+      if entry.x == 65 then name = entry end
+      if entry.text == "~" then mark = entry end
+    end
+    return name, mark
+  end
+  local function marked(where)
+    redraw()
+    local name, mark = name_row()
+    if mark then
+      local _, name_right = text_span(name)
+      assert_equal(mark.x, name_right, where .. ": the mark right after the name")
+      assert_screen_layout(context, where)
+    end
+    return mark ~= nil
+  end
+  assert_true(not marked("nothing moves voice 1"), "no mark")
+  -- an engine-run LFO, while it is on
+  local function destination_labeled(label)
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do
+      if destination.label == label then return index end
+    end
+  end
+  params:set("strata_lfo1_dest", destination_labeled("v1 pitch"))
+  params:set("strata_lfo1_depth", 25)
+  assert_true(not marked("an engine LFO that is off"), "off: no mark")
+  params:set("strata_lfo1", 1)
+  assert_true(marked("an engine LFO on v1 pitch"), "an engine LFO on the voice")
+  select_voice(2)
+  assert_true(not marked("voice 2"), "not another voice")
+  select_voice(1)
+  params:set("strata_lfo1_dest", destination_labeled("v1 main"))
+  assert_true(not marked("an LFO in Lua"), "an LFO Lua runs is no engine modulation")
+  params:set("strata_lfo1", 0)
+  -- scatter, on an unlocked voice
+  params:set("scatter", 1)
+  assert_true(marked("scatter"), "scatter moves it")
+  toggle_lock(1)
+  assert_true(not marked("scatter, voice locked"), "scatter leaves a locked voice alone")
+  toggle_lock(1)
+  params:set("scatter", 0)
+  -- a routing of the matrix
+  S.lib.matrix.set_routing(2, "lfo1", "v2_grain_size"); params:set("matrix_2_depth", 30)
+  assert_true(not marked("a routing to voice 2"), "a routing to another voice")
+  S.lib.matrix.set_routing(2, "lfo1", "v1_grain_size")
+  assert_true(marked("a routing to v1 size"), "a routing to the voice")
+  params:set("matrix_2", 0)
+  assert_true(not marked("the routing off"), "an off routing moves nothing")
+  -- the name gives way to the mark: the longest name with the widest source
+  params:set("matrix_2", 1)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS)
+  assert_true(marked("the widest source"), "the mark with buf 8")
+end)
+
 end

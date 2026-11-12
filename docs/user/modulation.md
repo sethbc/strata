@@ -1,6 +1,8 @@
 # Modulation
 
-Cross-modulation between voices, probability-based mutations, the global LFOs, the macros and scatter. Back to the [README](../../README.md).
+Cross-modulation between voices, probability-based mutations, the global LFOs, the macros, the morph, scatter, the gesture recorders and the modulation matrix. Back to the [README](../../README.md).
+
+The [MOD](pages/mod.md) page shows the macros, the morph, scatter, the recorders, the LFOs and the matrix in one list, with their arc rings ([Monome Arc](arc.md)). On [MAIN](pages/main.md), a `~` after the selected voice's name says the engine is moving it: an LFO in the engine, scatter or a routing.
 
 ## Cross-Modulation
 
@@ -47,7 +49,14 @@ Sixteen macros (PARAMETERS > macros, `macro 1` ... `macro 16`) each turn up to e
 - **Scenes and the morph** - a scene stores each macro's value and its targets. A recall, a fade and the morph set the macro's value without moving its targets: the scene holds the targets' own values, so a setting you changed by hand after moving the macro comes back as you left it
 - **An LFO on a macro** (the destinations `macro 1` ... `macro 16`) moves the macro's targets around their values, never the macro or the targets' settings themselves. It leaves a target that is an LFO's rate or depth alone (it would modulate itself); those follow the macro's own value only
 - **Banks** - the macros come in four banks of four (1-4, 5-8, 9-12, 13-16); the MOD page, its arc rings and the grids show one bank at a time, the same one everywhere
+- **On the MOD page** - each macro of the shown bank is a row with its first target and its value; K3 shows its eight targets, where E3 picks each target and its two ends (1 % a step, ALT+E3 0.1 %) and ALT+K3 learns the next setting you touch. The arc's rings on MOD are the shown bank's four macros
 - **Saving** - the targets are saved with each PSET (in a file beside it, `<pset>.macros.data`) and between sessions. A PSET loads each macro's value, its targets and the targets' own values as the PSET saved them, without the macros moving the targets. A PSET saved before 3.4 loads with no targets. A target this version does not know (from another release) is kept and saved again as it was, does nothing, and the console names it as it loads
+
+## Morph
+
+The morph (PARAMETERS > morph) moves the sound between two saved scenes, A and B (`morph A`, `morph B`, any of the sixteen), with one control, `morph`: at 0 % the sound is scene A's, at 100 % scene B's, and in between each continuous setting is that far from A's value to B's. Settings that cannot blend (sources, switches, patterns, the routings) take A's below the middle and B's above it, switching at 52 % on the way up and 48 % on the way down, so a hand resting on the middle doesn't flicker. Unlike a fade it never ends in a recall: the morph writes the settings, which you can save as a new scene, and the header shows no scene meanwhile. It moves up to ten times a second, so it can be swept fast. An empty scene at either end makes the morph do nothing (the header says `S5 empty`).
+
+On the [MOD](pages/mod.md) page, `A` and `B` pick the scenes (with their names) and `morph` sets the position; on SCENES the arc's ring 3 sweeps the morph and ring 4 steps scene B, and on MOD the same with K1 held (rings 1 and 4).
 
 ## Scatter
 
@@ -57,3 +66,25 @@ Scatter (PARAMETERS > scatter) gives every unlocked voice slow, smooth random mo
 - **Rate** - 0.01-1 Hz (default 0.1 Hz): how fast it wanders
 - **Lock** - a locked voice is left alone, as by the drift and the mutations
 - Scatter runs in the engine, smoothly, and sends nothing while it plays. Scenes store its eight settings: the depth and the rate fade, the switches change at the end of a fade
+- **On the MOD page** - its eight settings are rows (K3 or E3 switches one), and a quick ALT+K2 there draws a new depth (0-30 %) and rate (0.02-0.5 Hz), undone by another quick ALT+K2 within 5 seconds. With K1 held, the arc's rings 2 and 3 on MOD are its depth and rate, and on MOD the arc's button turns scatter on and off (on a row whose button does nothing else)
+
+## Gesture Recorders
+
+Four recorders (`G1`-`G4` on the [MOD](pages/mod.md) page) record your hand moves of continuous settings and play them back as a loop:
+- **Record** - press K3 on an empty recorder's row (or the arc's button there): it records from your first move, so a silent lead-in isn't part of the loop. Moves of encoders, arc rings and grid faders are recorded as the values they reach (the macros and the morph included); options, switches, sources, scene recalls, LFOs, the drift and mutations never are
+- **Play, stop** - press again to play the loop (a loop kept to the beat or bar starts on the next one), again to stop it, again to play it again. One recorder records at a time: starting another ends the recording, which then plays
+- **Overdub** - ALT+K3 on a playing recorder adds new moves into the loop as it plays, until you press ALT+K3 again
+- **Clear** - hold ALT+K2 on its row for half a second (the hint says `K2:clear`) and let go
+- **Timing** - E3 on its row sets its quantize: free (as you played it) or kept to the beat or the bar of the norns clock (see [Parameters](params.md))
+- A recorder holds up to 1024 moves or 10 minutes. The row shows `rec 3.2 s` while recording, `play 2 bars` or `play 5.0 s` while playing, `stop 5.0 s` stopped. Its loop's place (0-100 %) is a modulation source the matrix can route
+
+## Modulation Matrix
+
+Sixteen routings (`R1`-`R16` on the [MOD](pages/mod.md) page), each from one modulation source to one setting, with a depth from −100 to +100 %:
+- **Sources** - the six LFOs (`L1`-`L6`, each at its own shape before its depth, so an LFO with no destination of its own makes a good modulator), the sixteen macros (`M1`-`M16`), the four recorders' loop places (`G1`-`G4`) and the input level (`IN`). An LFO swings both ways around the setting; a macro, a recorder and the input only add, from 0
+- **Destinations** - any setting an LFO can move (a voice's main parameter follows its source), never a macro. At 100 % from an LFO a routing swings half the destination's range either side of your value, as the LFO itself would at full depth
+- **Around your setting** - like the LFOs, a routing moves the sound around the value you set and never changes it. Routings, LFOs and an LFO on a macro on the same setting add up before the setting's range limits them, so +100 % and −100 % cancel
+- **In the engine** - a routing to one of a voice's grain pitch, buffer position, grain size, voice filter cutoff or level is added in the engine (the destination shows `~`), at the script's update rate (24 to 48 times a second); for the smoothest fast movement put the LFO on that setting itself
+- **Editing** - K3 on a routing's row shows its source, destination, depth and on/off; E3 changes each, and a routing that gets both a source and a destination at 0 % starts at 25 %, so you hear it. ALT+K3 on its destination learns the next setting you touch. ALT+K3 on a row, or K3 in the routing, turns it on or off; ALT+K2 held clears it. A quick ALT+K2 in the matrix draws a new depth for every routing with a source and a destination (−50 to +50 %), undone by another quick press within 5 seconds
+- **Arc** - with the cursor in the matrix, the rings are the depths of the four routings around it (R1-R4, R5-R8, ...), filled from the top both ways, and the button turns the cursor's routing on or off; in a routing, ring 1 is its depth and rings 2-4 step its source, its destination and the routing shown
+- **Saving** - the depths and on/offs are parameters (PSETs, scenes, MIDI mapping, macros can move a depth); the sources and destinations are saved with each PSET (in a file beside it, `<pset>.matrix.data`), in scenes and between sessions. A routing whose source or destination is from another release is kept, drawn dim and does nothing
