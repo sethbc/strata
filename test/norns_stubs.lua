@@ -1446,7 +1446,8 @@ end
 -- line here (as well as in context.printed); the harness fails a test that
 -- leaves one unclaimed, as it does a clock error, and
 -- context.take_script_errors() claims them (#473)
-local SCRIPT_ERROR_PATTERNS = { "^strata: [^\n]- failed: ", "^scene sequencer: scene %d+ failed: " }
+local SCRIPT_ERROR_PATTERNS = { "^strata: [^\n]- failed: ", "^scene sequencer: scene %d+ failed: ",
+  "^pset hook [^\n]-: " }  -- a 3.4 PSET hook that raised (lib/params_setup.lua)
 stubs.script_errors = {}
 
 function stubs.take_script_errors()

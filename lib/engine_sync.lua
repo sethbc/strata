@@ -164,24 +164,36 @@ return function(S)
     end)
   end
 
-  -- Send a param's value to the engine (one path for every value), within
-  -- the budget
-  local function send_engine_value(param_id, value)
+  -- Send now, whatever S.deferrable_write says: counted, dropping the id's
+  -- pending value (older than this one)
+  local function send_now(param_id, value)
     enter_window(current_window())
-    if S.deferrable_write and budget.sent >= ENGINE_BUDGET.messages_per_window then
-      if budget.pending[param_id] == nil then table.insert(budget.order, param_id) end
-      budget.pending[param_id] = value
-      start_budget_clock()
-      return
-    end
     drop_pending(param_id)
     deliver(param_id, value)
     stop_budget_clock_if_idle()
   end
 
+  -- Send a param's value to the engine (one path for every value), within
+  -- the budget
+  local function send_engine_value(param_id, value)
+    if S.deferrable_write then
+      enter_window(current_window())
+      if budget.sent >= ENGINE_BUDGET.messages_per_window then
+        if budget.pending[param_id] == nil then table.insert(budget.order, param_id) end
+        budget.pending[param_id] = value
+        start_budget_clock()
+        return
+      end
+    end
+    send_now(param_id, value)
+  end
+
   -- Run fn with S.deferrable_write set: its sends may wait for the next
   -- window. The flag comes back as it was, even when fn raises (the error
-  -- is raised again, with its traceback)
+  -- is raised again, with its traceback). fn never yields (no clock.sleep
+  -- or clock.sync inside it): the flag would stay set across the wait, and
+  -- a hand edit made meanwhile would be deferred. A caller that waits
+  -- sleeps outside deferrable and wraps each burst of writes
   function M.deferrable(fn)
     local outer = S.deferrable_write
     S.deferrable_write = true
@@ -232,7 +244,12 @@ return function(S)
     send_engine_value(param_id, with_lfo_offsets(param_id, params:get(param_id)))
   end
 
+  -- The value is a finite number: anything else raises, naming the param
+  -- (a caller clears with clear_base_override)
   function M.set_base_override(param_id, value)
+    if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+      error("set_base_override: " .. tostring(param_id) .. "'s override is a finite number, not " .. tostring(value), 2)
+    end
     base_overrides[param_id] = value
     send_base(param_id)
   end
@@ -286,6 +303,27 @@ return function(S)
       if param_id:sub(1, #prefix) == prefix then drop_pending(param_id) end
     end
     stop_budget_clock_if_idle()
+  end
+
+  -- The end of a voice's sync and start: their own sends carry the stored
+  -- values, so every param of the voice that holds a base override or an
+  -- extra offset is sent again with them (with_lfo_offsets), at once (never
+  -- deferred), in id order. Sends nothing while none does
+  local function resend_modulated_voice_params(voice_idx)
+    local prefix = "v" .. voice_idx .. "_"
+    local ids, listed = {}, {}
+    for _, held in ipairs({base_overrides, extra_offsets}) do
+      for param_id in pairs(held) do
+        if param_id:sub(1, #prefix) == prefix and not listed[param_id] then
+          listed[param_id] = true
+          ids[#ids + 1] = param_id
+        end
+      end
+    end
+    table.sort(ids)
+    for _, param_id in ipairs(ids) do
+      send_now(param_id, with_lfo_offsets(param_id, params:get(param_id)))
+    end
   end
 
   -- Effects chain (filter -> delay -> reverb -> master). Each filter, delay or
@@ -456,6 +494,7 @@ return function(S)
     send_grain_params(voice_idx)
     send_crossmod_and_bend(voice_idx)
     send_registered_voice_values(voice_idx)
+    resend_modulated_voice_params(voice_idx)
   end
 
   -- Start a stopped voice and mark it running, redrawing nothing:
@@ -494,6 +533,8 @@ return function(S)
       error(start_error, 0)
     end
     voice.active = true
+    -- a running voice's senders send: the overridden and offset params last
+    resend_modulated_voice_params(voice_idx)
   end
 
   -- A voiceOff for every running voice (after MIDI is detached, so no note

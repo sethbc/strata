@@ -19,7 +19,7 @@ The fields: `S.key_press_page[n]` (the page key `n` went down on, nil when up), 
 Legal: any of the three per key, with `S.alt_held` either way (K1 may come up before the key). A page change takes a key to up (its marks forgotten) while the physical key is still down, so its release then does nothing. Never an ALT press without a press page.
 
 Transitions, one function each:
-- `key(n, 1)` and `key(n, 0)` in `strata.lua`: up to down (plain or ALT by `S.alt_held`) and back to up; while a modal owner is pushed (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner), both take the key to up and go to the owner's `key(n, z)`.
+- `key(n, 1)` and `key(n, 0)` in `strata.lua`: up to down (plain or ALT by `S.alt_held`) and back to up; while a modal owner is pushed (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner), both take the key to up and go to `S.lib.ui_modal.key(n, z)`: a press to the owner's `key(n, 1)`, a release to its `key(n, 0)` only if it saw the press, so a key that went down on the page releases into nothing.
 - `S.lib.ui_keys.set_ui_page`: every key to up, `S.alt_held` untouched.
 - `forget_held_keys`: every key to up and `S.alt_held` false, running the ALT-release hooks if ALT was held.
 

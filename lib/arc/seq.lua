@@ -54,7 +54,7 @@ return function(S)
       if steps ~= 0 then set_step_level(steps) end
     elseif n == 3 then
       local steps = ring_steps(n, delta)
-      if steps ~= 0 then delta_with_detent("tempo", steps) end
+      if steps ~= 0 then delta_with_detent("tempo", steps, {source = "arc"}) end
     elseif n == 4 then
       local steps = ring_steps(n, delta)
       if steps ~= 0 then S.lib.ui_keys.select_voice_by(steps) end

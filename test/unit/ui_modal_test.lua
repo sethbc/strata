@@ -83,18 +83,35 @@ test("a pushed owner takes E2, E3, K2, K3, the screen and the arc, and E1 does n
   assert_equal(S.ui_page, FX + 1, "and E1 changes the page")
 end)
 
-test("a key that went down on the page releases into the owner and the page never sees it", function()
+test("a key pressed before the owner was pushed releases into nothing", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   show_page("BUFFER")  -- BUFFER's K2 release opens the file selector
   local log = {}
+  local owner = logging_owner(log)
   key(2, 1)
-  S.lib.ui_modal.push(logging_owner(log))
+  S.lib.ui_modal.push(owner)
   key(2, 0)
-  assert_equal(take(log), "key 2 0", "the release reaches the owner")
-  assert_true(not S.BUFFER_PAGE.file_selector_open, "BUFFER's release never runs")
-  assert_equal(S.key_press_page[2], nil, "and the press is forgotten")
-  S.lib.ui_modal.pop(S.lib.ui_modal.top())
+  assert_equal(take(log), "", "the owner never saw the press: its release does not reach it")
+  assert_true(not S.BUFFER_PAGE.file_selector_open, "and BUFFER's release never runs")
+  assert_equal(S.key_press_page[2], nil, "the press is forgotten")
+  -- a press the owner saw releases into it, even after ALT changed
+  key(3, 1); key(1, 1); key(3, 0); key(1, 0)
+  assert_equal(take(log), "key 3 1, key 3 0", "the owner's own press releases into it")
+  -- a press the owner saw, released after it is popped, reaches neither
+  key(3, 1)
+  S.lib.ui_modal.pop(owner)
+  key(3, 0)
+  assert_equal(take(log), "key 3 1", "the popped owner gets no release")
+  -- pushed again: the old press is not its own any more
+  key(2, 1)
+  S.lib.ui_modal.push(owner)
+  S.lib.ui_modal.pop(owner)
+  S.lib.ui_modal.push(owner)
+  key(2, 0)
+  assert_equal(take(log), "", "a press the page took never releases into the owner")
+  assert_true(not S.BUFFER_PAGE.file_selector_open, "nor into the page")
+  S.lib.ui_modal.pop(owner)
 end)
 
 test("pop of an owner that is not pushed does nothing", function()

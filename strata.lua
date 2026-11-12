@@ -211,9 +211,10 @@ end
 -- the key went down on, if it still shows (a key held across a page change
 -- does nothing when it comes up): an ALT press's to alt_key_release, even
 -- if K1 came up first, any other's to key_release (if the record has them).
--- While a modal owner is pushed, K2 and K3 presses and releases go to its
--- key(n, z) instead, and the page forgets the key (a press it saw never
--- releases there)
+-- While a modal owner is pushed, K2 and K3 go to S.lib.ui_modal.key
+-- instead (a press to the owner's key(n, 1), a release to its key(n, 0)
+-- only if it saw the press), and the page forgets the key (a press it saw
+-- releases into nothing)
 function key(n, z)
   if not S.started then return end
   local owner = S.lib.ui_modal.top()
@@ -222,7 +223,7 @@ function key(n, z)
   elseif owner then
     S.key_press_page[n] = nil
     S.key_press_alt[n] = nil
-    if owner.key then owner.key(n, z) end
+    S.lib.ui_modal.key(n, z)
   elseif z == 1 then
     S.key_press_page[n] = S.ui_page
     if S.alt_held then

@@ -826,6 +826,7 @@ test("the PSET hooks run on write, read and delete with the path base and number
   assert_equal(take(), "delete " .. base .. " 01", "the PSET menu's delete names the number")
   assert_equal(io.open(base .. ".pset", "r"), nil, "and the file is gone")
   assert_equal(hook_failures(), 5, "every action prints its failing hook")
+  h.claim_script_errors(context, 5, "pset hook raises: ", "boom")  -- each a script error to the harness
 end)
 
 test("the menu records for 3.4's groups follow lfos in order and add nothing without their modules", function()

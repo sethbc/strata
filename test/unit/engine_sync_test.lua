@@ -574,6 +574,96 @@ test("a voice sync or start drops the voice's pending deferred sends", function(
   assert_equal(#grain_sends(context, 3, "grainSize"), 0, "no later grainSize send for voice 3")
 end)
 
+test("a base override is a finite number; anything else raises naming the param", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  for _, bad in ipairs({ { nil, "nil" }, { "x", "a string" }, { 0 / 0, "NaN" }, { math.huge, "inf" } }) do
+    local ok, err = pcall(sync.set_base_override, "v1_buf_pos", bad[1])
+    assert_true(not ok, bad[2] .. " is refused")
+    assert_true(tostring(err):find("v1_buf_pos", 1, true) ~= nil, "naming the param: " .. tostring(err))
+  end
+  assert_equal(#context.engine_calls, 0, "nothing refused was sent")
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.7, 1e-9, "and no override is set")
+end)
+
+-- The (name, args) of every engine call, one line each
+local function call_lines(calls)
+  local lines = {}
+  for _, call in ipairs(calls) do
+    local args = {}
+    for index, arg in ipairs(call.args) do args[index] = tostring(arg) end
+    lines[#lines + 1] = call.name .. "(" .. table.concat(args, ", ") .. ")"
+  end
+  return table.concat(lines, "\n")
+end
+
+test("a voice sync re-sends the voice's overridden params", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  if not S.voices[2].active then toggle_voice(2) end
+  sync.set_base_override("v1_buf_pos", 0.3)
+  sync.set_base_override("v2_grain_size", 0.2)
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  local sent = grain_sends(context, 1, "bufPos")
+  assert_equal(#sent, 2, "the stored value, then the override")
+  assert_near(sent[1], 0.7, 1e-9, "the sync's own send is the stored value")
+  assert_near(sent[2], 0.3, 1e-9, "the sync ends with the override")
+  assert_equal(context.engine_calls[#context.engine_calls].name, "setGrainParam", "the override's send is the last")
+  for _, call in ipairs(context.engine_calls) do
+    assert_true(call.args[1] ~= 1, "voice 2's params are untouched: " .. call.name)
+  end
+  -- a start too, once the voice runs
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  sent = grain_sends(context, 1, "bufPos")
+  assert_near(sent[#sent], 0.3, 1e-9, "a start ends with the override")
+  assert_true(#context.calls_named("voiceOn") == 1 and S.voices[1].active, "the voice started")
+end)
+
+test("a voice sync re-sends a param that holds an extra offset", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  params:set("v1_grain_size", 0.2)
+  sync.set_extra_offset("probe", "v1_grain_size", 0.1)
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  local sent = grain_sends(context, 1, "grainSize")
+  assert_equal(#sent, 2, "the stored value, then the value with its offset")
+  assert_near(sent[1], 0.2, 1e-9)
+  assert_near(sent[2], 0.3, 1e-9, "the sync ends with the offset added")
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  sent = grain_sends(context, 1, "grainSize")
+  assert_near(sent[#sent], 0.3, 1e-9, "a start ends with it too")
+  sync.set_extra_offset("probe", "v1_grain_size", nil)
+end)
+
+test("a sync with no override or offset sends exactly what it sent before", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  local plain = call_lines(context.engine_calls)
+  assert_equal(#grain_sends(context, 1, "bufPos"), 1, "one bufPos send")
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local plain_start = call_lines(context.engine_calls)
+  -- an override and an offset set and cleared again leave nothing behind
+  sync.set_base_override("v1_buf_pos", 0.3); sync.clear_base_override("v1_buf_pos")
+  sync.set_extra_offset("probe", "v1_grain_size", 0.1); sync.set_extra_offset("probe", "v1_grain_size", nil)
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  assert_equal(call_lines(context.engine_calls), plain, "the same sync")
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(call_lines(context.engine_calls), plain_start, "the same start")
+end)
+
 test("toggle_lock runs the lock hooks with the voice and its new state", function()
   local log = {}
   local context = load_strata({ before_init = function()

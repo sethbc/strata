@@ -859,6 +859,8 @@ test("each 3.4 register function checks its argument and refuses a duplicate", f
   S.register_scene_block(scene_block())
   assert_equal(#S.registry.scene_blocks, 1, "a block is kept")
   assert_true(refused(S.register_scene_block, scene_block()), "a second probe_block")
+  local keyless = scene_block(); keyless.key = nil
+  assert_true(refused(S.register_scene_block, keyless), "a block without a key")
   assert_true(refused(S.register_scene_block, scene_block({ key = 3 })), "a key is a string")
   assert_true(refused(S.register_scene_block, scene_block({ key = "b2", apply = 1 })), "apply is a function")
   assert_true(refused(S.register_scene_block, scene_block({ key = "b2", through_zero = 1 })), "through_zero is a function")
@@ -882,12 +884,15 @@ test("each 3.4 register function checks its argument and refuses a duplicate", f
   -- step outputs, by name; stop and available optional
   S.register_step_output({ name = "probe", play = function() end })
   assert_true(refused(S.register_step_output, { name = "probe", play = function() end }), "a second probe output")
+  assert_true(refused(S.register_step_output, { play = function() end }), "an output without a name")
   assert_true(refused(S.register_step_output, { name = "o2" }), "play is a function")
   assert_true(refused(S.register_step_output, { name = "o3", play = function() end, stop = 1 }), "stop is a function")
   names_field(S.register_step_output, { name = "o4", play = function() end, avail = function() end }, "avail")
   -- mod sources, by key
   S.register_mod_source(mod_source())
   assert_true(refused(S.register_mod_source, mod_source()), "a second probe1")
+  local unkeyed = mod_source(); unkeyed.key = nil
+  assert_true(refused(S.register_mod_source, unkeyed), "a source without a key")
   assert_true(refused(S.register_mod_source, mod_source({ key = "p2", name = "TOOLONG" })), "a name of at most 4")
   assert_true(refused(S.register_mod_source, mod_source({ key = "p3", range = { 1, 1 } })), "range[1] < range[2]")
   assert_true(refused(S.register_mod_source, mod_source({ key = "p4", value = 0 })), "value is a function")
