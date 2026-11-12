@@ -240,15 +240,17 @@ test("an apply sets at most 120 values and a still morph converges", function()
     if b_values[id] ~= value then differing = differing + 1 end
   end
   assert_true(differing > 120, "the scenes differ in more than 120 values (" .. differing .. ")")
+  -- each apply cancels a transition first, then sets its continuous values
   local sizes = {}
-  local real_apply = S.lib.scenes.apply_entries
-  S.lib.scenes.apply_entries = function(entries, opts)
-    if opts and opts.only == "continuous" then table.insert(sizes, #entries) end
-    return real_apply(entries, opts)
+  local real_cancel, real_set = cancel_scene_transition, S.lib.scenes.set_value
+  cancel_scene_transition = function(...) table.insert(sizes, 0); return real_cancel(...) end
+  S.lib.scenes.set_value = function(id, value)
+    sizes[#sizes] = sizes[#sizes] + 1
+    return real_set(id, value)
   end
   params:set("morph", 0.25)
   context.clock.run_for(3)
-  S.lib.scenes.apply_entries = real_apply
+  cancel_scene_transition, S.lib.scenes.set_value = real_cancel, real_set
   assert_true(#sizes >= 2, "more than one apply reaches every value (" .. #sizes .. ")")
   local total = 0
   for index, size in ipairs(sizes) do
@@ -268,21 +270,128 @@ test("an apply sets at most 120 values and a still morph converges", function()
   end
 end)
 
-test("a value that moved less than 1/1000 of its range is not set again", function()
+test("while the morph moves, a value that moved less than 1/1000 of its range waits for the rest", function()
   local context, S = two_scenes()
   settle(context, 0.5)
   assert_near(params:get("reverb_mix"), 0.4, 1e-9, "reverb mix at 0.5")
-  local sizes = {}
-  local real_apply = S.lib.scenes.apply_entries
-  S.lib.scenes.apply_entries = function(entries, opts)
-    if opts and opts.only == "continuous" then table.insert(sizes, #entries) end
-    return real_apply(entries, opts)
+  local set_ids, set_values = {}, {}
+  local real_set = S.lib.scenes.set_value
+  S.lib.scenes.set_value = function(id, value)
+    table.insert(set_ids, id); table.insert(set_values, value)
+    return real_set(id, value)
   end
-  settle(context, 0.5024)                                         -- reverb mix moves 0.00096 of 1
-  assert_equal(#sizes, 0, "a move under 1/1000 of the range sets nothing")
-  settle(context, 0.5026)                                         -- 0.00104 from the last value set
-  assert_equal(#sizes, 1, "a move past it sets the value")
-  S.lib.scenes.apply_entries = real_apply
+  params:set("morph", 0.5024)                                     -- reverb mix's target moves 0.00096 of 1
+  context.clock.run_for(0)                                        -- the apply of the move
+  assert_equal(#set_ids, 0, "a move under 1/1000 of the range sets nothing")
+  context.clock.run_for(0.5)                                      -- the apply at rest
+  assert_equal(table.concat(set_ids, ", "), "reverb_mix", "the apply at rest sets it")
+  assert_near(set_values[1], 0.40096, 1e-12, "to its exact value")
+  params:set("morph", 0.505)
+  context.clock.run_for(0)                                        -- 0.00104 from the last value set
+  assert_equal(#set_ids, 2, "a move past it sets the value at once")
+  assert_near(set_values[2], 0.402, 1e-12, "0.2 + 0.505 x 0.4")
+  context.clock.run_for(0.5)
+  assert_equal(#set_ids, 2, "and the rest has nothing left to set")
+  S.lib.scenes.set_value = real_set
+end)
+
+test("a morph at rest at 0 or 1 holds the scene's exact values", function()
+  local context, S = scrambled_scenes()
+  local a_values = continuous_values(S, 1)
+  recall_scene(2, 0)
+  local b_values = continuous_values(S, 2)
+  recall_scene(1, 0)
+  -- filter freq 300 to 9000 Hz: 1/1000 of its range is 19.98 Hz, and the
+  -- last moves are 17.4 Hz
+  for _, position in ipairs({ 0.5, 0.998 }) do settle(context, position) end
+  params:set("morph", 1)
+  context.clock.run_for(0)
+  assert_near(params:get("filter_freq"), 8982.6, 1e-6, "the move's apply leaves filter freq where 0.998 put it")
+  context.clock.run_for(1)
+  for id, value in pairs(b_values) do
+    assert_near(params:get(id), value, 1e-9 * math.max(1, math.abs(value)), id .. ": B's exact value at rest at 1")
+  end
+  for _, position in ipairs({ 0.5, 0.002 }) do settle(context, position) end
+  params:set("morph", 0)
+  context.clock.run_for(0)
+  assert_near(params:get("filter_freq"), 317.4, 1e-6, "the move's apply leaves filter freq where 0.002 put it")
+  context.clock.run_for(1)
+  for id, value in pairs(a_values) do
+    assert_near(params:get(id), value, 1e-9 * math.max(1, math.abs(value)), id .. ": A's exact value at rest at 0")
+  end
+  assert_equal(S.morph_clock, nil, "then the clock rests")
+end)
+
+test("a quantized voice's freq snaps under a morph as under a transition's step", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_quantize", 1)                                    -- the chromatic scale: semitones
+  params:set("v1_freq", 440); capture_scene(2)
+  params:set("v1_freq", 220); capture_scene(1)
+  settle(context, 0.5)
+  local morphed = params:get("v1_freq")
+  assert_near(morphed, 329.63, 0.01, "330 Hz snaps to E4")
+  recall_scene(1, 0)
+  recall_scene(2, 2)
+  for _ = 2, 10 do wake(context, "scene_transition_clock") end    -- step 10: f = 0.5
+  assert_near(morphed, params:get("v1_freq"), 1e-9, "the transition's step 10 gives the same")
+  cancel_scene_transition()
+end)
+
+test("a voice's loop pair is written together, start before length", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1); capture_scene(2)
+  params:set("v1_loop_start", 0.5); params:set("v1_loop_length", 0.5); capture_scene(1)
+  settle(context, 0.5)
+  assert_near(params:get("v1_loop_start"), 0.25, 1e-9, "0.5: start halfway from 0.5 to 0")
+  assert_near(params:get("v1_loop_length"), 0.75, 1e-9, "and length halfway from 0.5 to 1, not cut to the old start's room")
+  -- start moves 0.0009995 (under 1/1000 of 0-1), length the same (over
+  -- 1/1000 of 0.001-1): the length is due, so the start goes with it
+  params:set("morph", 0.501999)
+  context.clock.run_for(0)
+  assert_near(params:get("v1_loop_start"), 0.2490005, 1e-9, "the start is written with the length")
+  assert_near(params:get("v1_loop_length"), 0.7509995, 1e-9, "the length")
+  context.clock.run_for(0.5)
+  local sum = params:get("v1_loop_start") + params:get("v1_loop_length")
+  assert_true(sum <= 1 + 1e-9, "at rest the loop fits its slot, start + length " .. sum)
+  -- and back toward A, where the start rises while the length falls
+  settle(context, 0.1)
+  assert_near(params:get("v1_loop_start"), 0.45, 1e-9, "0.1: start")
+  assert_near(params:get("v1_loop_length"), 0.55, 1e-9, "0.1: length")
+end)
+
+test("a recall after a pending move wins: the move is dropped", function()
+  local context, S = two_scenes()
+  params:set("morph", 0.31)
+  context.clock.run_for(0)                                        -- applied at once
+  params:set("morph", 0.35)                                       -- while the clock sleeps
+  recall_scene(2, 0)
+  context.clock.run_for(0.5)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "the recalled scene's value stays")
+  assert_equal(S.current_scene, 2, "and its scene stays current")
+  assert_true(S.voices[3].active, "as do its voices")
+  assert_equal(S.morph_clock, nil, "the move was dropped")
+  assert_near(params:get("morph"), 0.35, 1e-9, "the morph stays where it was moved")
+  settle(context, 0.36)
+  assert_near(params:get("reverb_mix"), 0.34, 1e-9, "the next move applies again (0.344, stored to 0.01)")
+  assert_equal(S.current_scene, 0, "no scene is current")
+end)
+
+test("a transition started after a pending move wins: the move is dropped", function()
+  local context, S = two_scenes()
+  params:set("morph", 0.31)
+  context.clock.run_for(0)
+  params:set("morph", 0.35)
+  recall_scene(2, 2)                                              -- a 2 s fade, 20 steps
+  context.clock.run_for(0.15)
+  assert_true(S.scene_transition_active, "the fade runs on")
+  assert_equal(S.current_scene, 2, "toward its scene")
+  context.clock.run_for(2.5)
+  assert_true(not S.scene_transition_active, "it landed")
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "on its scene's value")
+  assert_equal(S.current_scene, 2, "its scene current")
+  assert_equal(S.morph_clock, nil, "and the morph left it alone")
 end)
 
 test("a move cancels a running transition and clears the current scene", function()
