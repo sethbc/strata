@@ -10,8 +10,10 @@
   - LFO: depth 10 ticks per percent, clocked division 20 ticks per division (`"lfo:<ring>"`);
   - VOICE: option and number rows 20 ticks per step (`"voice:<ring>"`); a binary row (a registered param, kind `"binary"`) steps the same way as a two-value option, set with `set_binary_param` (a step up on, a step down off; it is `params:set` plus the MIDI-map feedback norns' `params:delta` sends, #519), and its ring is drawn with `arc_ring_fill` from its value (dark off, whole ring on);
   - SEQ: 10 ticks per step, 10 per level, 10 per BPM, 20 per voice (`"seq:<ring>"`);
+  - SEQ's step editor: ring 4 `prob` `ARC_TICKS_PER_SWEEP / SEQ.max_prob` (10.24) ticks per percent (`"seq_editor:4"`), and with ALT every ring 20 ticks per step (`"seq_editor:alt:<ring>"`); its rings 1-3 are locks, not params, so they move through `S.lib.pages_seq.turn_step` with `delta / ARC_TICKS_PER_SWEEP` of the lock's param's range (the full-turn sweep, from the param's controlspec), never `arc_sweep_param`;
   - SCENES: ring 1 10 ticks per stop (`"scenes:1"`).
-- Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), the depth rings' when the LFO page's window moves, a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes. They never step another param, LFO or step.
+- Carried ticks belong to what they were turned on: LFO ring 4's are forgotten when the selected LFO or its mode changes (`forget_arc_lfo_period_ticks()`), the depth rings' when the LFO page's window moves, a VOICE ring's when the ring's row is another param, SEQ ring 2's when the cursor's voice or step changes, the step editor's when its voice or step changes (and every carry when it opens or closes, `lib/pages/seq.lua`). They never step another param, LFO or step.
+- The step editor's rings (`lib/arc/seq.lua`) are set on its modal owner (`S.lib.pages_seq.step_editor_owner`'s `arc_delta` and `arc_redraw`), never on SEQ's record: `lib/arc/core.lua` sends a pushed owner the turns and the redraw, so the page's rings are not reached while it is open. They edit only through `S.lib.pages_seq.turn_step`, the edit view's own E3 path, so the rings and the encoder agree on `off` and the ranges.
 - VOICE's rings read the cursor only from `S.lib.ui_cursors.sync("voice")` (the cursor module's re-anchoring, which returns `rows, cursor`), in `arc_delta` and `arc_redraw` alike, never `S.cursors.voice` raw (after a source switch the raw cursor can sit past the last row or on a section label) and never through the VOICE page module (a test checks). Tests place the cursor with `S.lib.pages_voice.place_cursor(index)`, the page's name for `S.lib.ui_cursors.place("voice", index)`.
 - Rings past the VOICE group's last row, MAIN's ALT pan ring for Sub and SCENES rings 3-4 are dark (no segment, no LED) and ignore turns.
 - SCENES ring 1 moves the cursor only through `S.lib.pages_scenes.move_cursor(slot)`, the page's own move (E2 uses it too), which disarms a pending overwrite confirmation and clears its prompt. The ring never touches `S.scenes_page` itself.
@@ -38,12 +40,19 @@ VOICE (`arc_voice_delta`/`arc_voice_redraw`):
 - Drawn through `arc_ring_fill_param`: the cursor row's ring at 15, the others at 12; rings past the group's rows dark. A binary row's ring is `arc_ring_fill(port, n, value, level)`: a binary param has no range for `param_fraction`.
 - Registered rows (`S.registry.voice_params`, `docs/notes/lua/ui/field-list-and-cursors.md`) reach the rings through `voice_page_rows`, with nothing to add here.
 
-SEQ (`arc_seq_delta`/`arc_seq_redraw`, `ARC_SEQ`):
+SEQ (`arc_seq_delta`/`arc_seq_redraw`, `ARC_SEQ`), in the pattern view and the edit view alike (the edit view's step is the cursor's):
 - Ring 1: the step cursor, `S.lib.ui_cursors.move("seq_step", steps)` (clamped at 1 and `PATTERN_LENGTH`).
 - Ring 2: the cursor step's level on the selected voice's pattern (`S.patterns[v][step]`, clamped to 0..`MAX_STEP_LEVEL`), written directly as the SEQ page's E3 does, then `grid_redraw()`. The carry is forgotten when the target `"<voice>:<step>"` changes.
 - Ring 3: `tempo` (a number param), `delta_with_detent("tempo", steps)`.
 - Ring 4: the voice row, `S.lib.ui_keys.select_voice_by(steps)` (as ALT+E2 on SEQ and E2 on MAIN: the voice list and an omni pitchbend follow).
 - Rings 1-2 at 15, rings 3-4 at 12. Ring 1 at step 1, ring 2 at level 0 and ring 4 at voice 1 light nothing (fraction 0).
+
+SEQ's step editor (`editor_delta`/`editor_redraw`, `ARC_SEQ.editor_rings`, `ARC_SEQ.editor_alt_rings`; design 8.7), on the editor's voice and step (`S.lib.pages_seq.step_editor()`), over any page:
+- Rings 1-3: the step's locks `pos`, `pitch` and `size`, each `turn_step(voice, step, key, nil, {raw = delta / ARC_TICKS_PER_SWEEP})`: a full turn sweeps the lock's param's range (`v<i>_buf_pos`, `v<i>_grain_pitch`, `v<i>_grain_size`, following its controlspec); from `off` at the param's stored value, past the range's start `off` again. Ticks finer than size's 0.01 step add up (the lock keeps its raw place, `docs/notes/lua/pages/seq.md`).
+- Ring 4: `prob`, whole percents (10.24 ticks each, a full turn for 0-100), from 100 % (`off`); 100 % is stored as nil.
+- With ALT (read at each turn; the owner has no ALT fields): ring 1 `ratchet` (1-4), ring 2 `note` (`notes[1]`, from `off` at 0, below -14 `off`), ring 3 `bookmark` (1..`NUM_BOOKMARKS`; dark and ignored while the voice has no set bookmark, `has_bookmarks`), ring 4 the step's `level`, 20 ticks a step (`ARC_SEQ.editor_ticks`).
+- Drawn: a set lock through `arc_ring_fill` at `param_value_fraction(param, value)`, an off one at the param's `param_fraction` (where a turn starts); prob, ratchet, note, bookmark and level through `arc_ring_fill_position` at their place in their range (prob 0-100, ratchet 1-4, note -14..14, bookmark 1..4, level 0-15), off ones at their start (100 %, one hit, note 0, bookmark 1). Set or level rings at 15 (`ARC_SEQ.editor_set_level`), off ones at 4 (`ARC_SEQ.editor_off_level`).
+- The button does nothing while the editor is open (its owner has no `arc_key`).
 
 FX (`ARC_FX_RINGS`, `{param_id}` per ring):
 - ring 1 `filter_freq`, ring 2 `filter_res`, ring 3 `delay_time`, ring 4 `delay_mix`;
@@ -79,5 +88,5 @@ SETUP: no rings.
   - ring 2 (the main param): 15 active, 4 stopped;
   - rings 3-4 and every ALT ring: 12 active, 3 stopped.
 - Each level table is a named constant of its file (`ARC_MAIN_LEVELS`, `ARC_VOICE`, `ARC_SEQ.levels`, `ARC_SCENES.level`, `ARC_FX_LEVEL`, `ARC_LFO.levels`, `ARC_BUFFER_LEVELS`), and `test/unit/arc_pages_test.lua` (`ring brightness: ...`) pins every state below through `device.segments[ring].level` (#439), plus the menu-close redraw of `reconcile()`.
-- VOICE: the cursor row's ring 15, the others 12. SEQ: rings 1-2 at 15, 3-4 at 12. SCENES at 12.
+- VOICE: the cursor row's ring 15, the others 12. SEQ: rings 1-2 at 15, 3-4 at 12; its step editor's set attributes and the level at 15, the off ones at 4. SCENES at 12.
 - FX rings at 12. BUFFER rings at 15 (buffer source) or 4, ALT ring 4 at 12. LFO depth rings at 15 (running) or 4, ring 4 at 12.

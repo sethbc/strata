@@ -1170,4 +1170,128 @@ test("a whole-step position ring at its first position lights at least one LED",
   assert_true(lit(1) >= 1, "SCENES ring 1 at slot 1")
 end)
 
+---------------------------------------------------------------------------
+-- 3.4 (design 8.6, 8.7; task 2b): SEQ's edit view and the step editor's rings
+
+-- ALT+K2 held past the hold time on SEQ: the edit view opens
+local function open_seq_edit_view(context)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(local_value("S").constants.ALT_HOLD_SECONDS + 0.05)
+  key(2, 0); key(1, 0)
+end
+
+test("the step editor's rings edit pos, pitch, size and prob, and with ALT ratchet, note, bookmark and level", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  S.buffers[1].seconds = 8
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 1)  -- a buffer voice: its bookmarks are set
+  params:set("v2_buf_pos", 0.5); params:set("v2_grain_pitch", 1); params:set("v2_grain_size", 0.2)
+  show_page("SEQ")
+  S.cursors.seq_step = 1
+  local tempo = params:get("tempo")
+  assert_true(S.lib.pages_seq.open_step_editor(2, 7, 1))
+  -- ring 1: pos, from off at the stored 0.5; a full turn is the whole range
+  context.arc.turn(1, 1, 256)
+  assert_near(seq.step_attr(2, 7, "pos"), 0.75, 1e-9, "a quarter turn from the stored 0.5")
+  assert_near(params:get("v2_buf_pos"), 0.5, 1e-9, "the stored position stays")
+  assert_equal(S.cursors.seq_step, 1, "SEQ's ring 1 is not reached")
+  context.arc.turn(1, 1, -2000)
+  assert_near(seq.step_attr(2, 7, "pos"), 0, 1e-9, "down to the range's start")
+  context.arc.turn(1, 1, -1)
+  assert_equal(seq.step_attr(2, 7, "pos"), nil, "a turn below it: off")
+  -- ring 2: pitch (0.25-4): a quarter turn from the stored 1 adds 0.9375
+  context.arc.turn(1, 2, 256)
+  assert_near(seq.step_attr(2, 7, "pitch"), 1.9375, 1e-9)
+  -- ring 3: size (0.01-0.5 in steps of 0.01): a quarter turn from the stored
+  -- 0.2 is 0.3225, 0.32 on the step; single ticks add up to a step
+  context.arc.turn(1, 3, 256)
+  assert_near(seq.step_attr(2, 7, "size"), 0.32, 1e-9)
+  for _ = 1, 21 do context.arc.turn(1, 3, 1) end
+  assert_near(seq.step_attr(2, 7, "size"), 0.33, 1e-9, "21 single ticks add 0.01005: one step, to 0.33")
+  assert_equal(params:get("tempo"), tempo, "SEQ's ring 3 is not reached")
+  -- ring 4: prob in whole percents (a turn for 0-100), from off (100 %)
+  context.arc.turn(1, 4, -205)
+  assert_equal(seq.step_attr(2, 7, "prob"), 80, "205 ticks down: 20 percent")
+  context.arc.turn(1, 4, 1000)
+  assert_equal(seq.step_attr(2, 7, "prob"), nil, "back up to 100 %: it plays always")
+  -- with ALT: ratchet, note, bookmark and level, 20 ticks a step
+  key(1, 1)
+  context.arc.turn(1, 1, 19)
+  assert_equal(seq.step_attr(2, 7, "ratchet"), nil, "19 ticks: no step yet")
+  context.arc.turn(1, 1, 1)
+  assert_equal(seq.step_attr(2, 7, "ratchet"), 2, "20 ticks: two hits")
+  context.arc.turn(1, 2, 60)
+  assert_equal(seq.step_attr(2, 7, "notes")[1], 3, "a note from off starts at 0")
+  context.arc.turn(1, 2, -400)
+  assert_equal(seq.step_attr(2, 7, "notes")[1], -14)
+  context.arc.turn(1, 2, -20)
+  assert_equal(seq.step_attr(2, 7, "notes"), nil, "below -14: off")
+  context.arc.turn(1, 3, 40)
+  assert_equal(seq.step_attr(2, 7, "bookmark"), 2)
+  context.arc.turn(1, 4, 100)
+  assert_equal(S.patterns[2][7], 5, "100 ticks: level 5")
+  assert_equal(S.selected_voice, 1, "SEQ's ring 4 is not reached")
+  key(1, 0)
+  assert_true(S.lib.pages_seq.step_editor_edited(), "a ring's edit is an edit")
+  -- the rings: a set lock bright at param_value_fraction, an off one dim at
+  -- the stored value
+  arc_redraw()
+  assert_near(device.segments[2].to, 0.45 * math.pi * 2, 1e-9, "pitch 1.9375 is 0.45 of 0.25-4")
+  assert_equal(device.segments[2].level, 15, "a set lock is bright")
+  assert_near(device.segments[1].to, 0.5 * math.pi * 2, 1e-9, "pos off: at the stored 0.5")
+  assert_equal(device.segments[1].level, 4, "and dim")
+  key(1, 1); arc_redraw()
+  assert_near(device.segments[3].to, (2 - 1) / (4 - 1) * math.pi * 2, 1e-9, "ALT ring 3: bookmark 2 of 1-4")
+  assert_near(device.segments[4].to, 5 / 15 * math.pi * 2, 1e-9, "ALT ring 4: level 5 of 15")
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
+test("the step editor's bookmark ring is dark and ignored without a set bookmark", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  S.lib.pages_seq.open_step_editor(1, 1, 1)  -- voice 1 plays its synth
+  key(1, 1)
+  context.arc.turn(1, 3, 100)
+  assert_equal(S.lib.sequencer.step_attr(1, 1, "bookmark"), nil, "no bookmark set")
+  arc_redraw()
+  assert_ring_dark(device, 3, "ALT ring 3 without bookmarks")
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
+test("the step editor's carried ticks belong to its step", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  S.lib.pages_seq.open_step_editor(3, 2, 1)
+  key(1, 1)
+  context.arc.turn(1, 4, 15)                          -- ALT ring 4, the level: 15 ticks carried
+  enc(2, 1)                                           -- ALT+E2: step 3
+  context.arc.turn(1, 4, 5)
+  assert_equal(S.patterns[3][3], 0, "step 2's carried ticks never set step 3")
+  assert_equal(S.patterns[3][2], 0)
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
+test("the edit view on SEQ keeps SEQ's rings", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("SEQ")
+  open_seq_edit_view(context)
+  S.cursors.seq_step = 1
+  context.arc.turn(1, 1, 10)
+  assert_equal(S.cursors.seq_step, 2, "ring 1 moves the edited step")
+  context.arc.turn(1, 2, 30)
+  assert_equal(S.patterns[1][2], 3, "ring 2 its level")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "v1 step 2"), "the edit view follows the step")
+end)
+
 end

@@ -228,4 +228,5 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
+  | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.
