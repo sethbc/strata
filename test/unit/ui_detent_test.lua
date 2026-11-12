@@ -272,4 +272,32 @@ test("only the UI core redraws, sets the page, runs alt_key and draws the hint r
   assert_true(scanned > 50, "scanned strata.lua and every lib/ file (" .. scanned .. ")")
   assert_equal(#offenders, 0, table.concat(offenders, "; "))
 end)
+
+-- 3.4's touch hooks (S.register_param_touch): a user edit of a param, after
+-- it sets the param, tells the hooks its id and where it came from
+local function touch_log()
+  local log = {}
+  local_value("S").register_param_touch(function(param_id, source) log[#log + 1] = param_id .. ":" .. source end)
+  return log
+end
+
+test("an encoder edit runs the touch hooks once; a detent the hold swallows runs none", function()
+  local context = load_strata(); finish_startup(context)
+  local log = touch_log()
+  enc_param_delta(3, "reverb_mix", 1)
+  assert_equal(table.concat(log, " "), "reverb_mix:enc", "one touch, from the encoder")
+  delta_with_detent("reverb_mix", 1, {fine = true})
+  assert_equal(table.concat(log, " "), "reverb_mix:enc reverb_mix:enc", "a fine turn is an encoder's too")
+  for index in pairs(log) do log[index] = nil end
+  params:set("v1_pan", 0.02)
+  enc_param_delta(3, "v1_pan", -5)
+  assert_equal(params:get("v1_pan"), 0, "the turn stops at 0")
+  assert_equal(table.concat(log, " "), "v1_pan:enc", "the stop at 0 set the param: one touch")
+  enc_param_delta(3, "v1_pan", -1)
+  assert_equal(params:get("v1_pan"), 0, "the hold swallows the next detent")
+  assert_equal(table.concat(log, " "), "v1_pan:enc", "and runs no hook")
+  params:set("reverb_mix", 0.4)
+  assert_equal(#log, 1, "a plain set is no touch")
+end)
+
 end

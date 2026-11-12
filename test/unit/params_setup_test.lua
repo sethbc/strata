@@ -775,4 +775,92 @@ test("a PSET read while a voice runs sends its crossmod source and custom interv
   assert_equal(params:get("v1_custom_interval_1"), -3)
 end)
 
+-- 3.4's PSET hooks (S.register_pset_hook, design §0.1): the master record
+-- installs norns' three PSET actions, which run every hook with the PSET's
+-- path without .pset and the two-digit number norns passes (nil for a PSET
+-- read or written by path); the read runs after migrate_read_pset
+test("the PSET hooks run on write, read and delete with the path base and number", function()
+  local log = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_pset_hook({ name = "raises", write = function() error("boom") end, read = function() error("boom") end,
+      delete = function() error("boom") end })
+    S.register_pset_hook({ name = "probe",
+      write = function(base, number) log[#log + 1] = "write " .. base .. " " .. tostring(number) end,
+      read = function(base, number, path) log[#log + 1] = "read " .. base .. " " .. tostring(number) .. " " .. path end,
+      delete = function(base, number) log[#log + 1] = "delete " .. base .. " " .. tostring(number) end })
+    S.register_pset_hook({ name = "reads only", read = function() log[#log + 1] = "reads only" end })
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  local real_migrate = S.lib.params_setup.migrate_read_pset
+  S.lib.params_setup.migrate_read_pset = function(...) log[#log + 1] = "migrate"; return real_migrate(...) end
+  local function take()
+    local text = table.concat(log, "\n")
+    for index in pairs(log) do log[index] = nil end
+    return text
+  end
+  local function hook_failures()
+    local count = 0
+    for _, line in ipairs(context.printed) do
+      if line:find("^pset hook raises: ") and line:find("boom", 1, true) then count = count + 1 end
+    end
+    return count
+  end
+  local base = context.data_dir .. "strata/strata-01"
+  params:write(1, "a")
+  assert_equal(take(), "write " .. base .. " 01", "a numbered write: its base and number")
+  assert_equal(hook_failures(), 1, "a hook that raises prints pset hook <name>: and the next still runs")
+  params:read(1)
+  assert_equal(take(), table.concat({ "migrate", "read " .. base .. " 01 " .. base .. ".pset", "reads only" }, "\n"),
+    "a numbered read: after the migration, with the PSET's path")
+  assert_equal(hook_failures(), 2, "the read's failure prints too")
+  local path = context.data_dir .. "y.pset"
+  params:write(path)
+  params:read(path)
+  local by_path = context.data_dir .. "y"
+  assert_equal(take(), table.concat({ "write " .. by_path .. " nil", "migrate", "read " .. by_path .. " nil " .. path,
+    "reads only" }, "\n"), "a PSET written and read by path has no number")
+  params:delete(base .. ".pset", "a", "01")
+  assert_equal(take(), "delete " .. base .. " 01", "the PSET menu's delete names the number")
+  assert_equal(io.open(base .. ".pset", "r"), nil, "and the file is gone")
+  assert_equal(hook_failures(), 5, "every action prints its failing hook")
+end)
+
+test("the menu records for 3.4's groups follow lfos in order and add nothing without their modules", function()
+  local added, called = {}, {}
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    for _, record in ipairs(S.registry.params) do
+      local add = record.add
+      record.add = function()
+        local before = #params.params
+        add()
+        added[record.name] = #params.params - before
+      end
+    end
+  end })
+  local S = local_value("S")
+  local names = {}
+  for _, record in ipairs(S.registry.params) do names[#names + 1] = record.name end
+  local menu = table.concat(names, " ")
+  assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
+    "the seven records follow lfos: " .. menu)
+  for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures", "seq" }) do
+    assert_equal(added[name], 0, name .. " adds nothing without its module")
+  end
+  -- with its module loaded, a record calls the module's add_params
+  local modules = { macros = "macros", morph = "morph", scatter = "scatter", matrix = "matrix",
+    input = "input_level", gestures = "gestures", seq = "sequencer" }
+  load_strata({ before_init = function()
+    local S2 = local_value("S")
+    for record_name, module in pairs(modules) do
+      S2.lib[module] = S2.lib[module] or {}
+      S2.lib[module].add_params = function() called[#called + 1] = record_name end
+    end
+  end })
+  assert_equal(table.concat(called, " "), "macros morph scatter matrix input gestures seq", "each, in menu order")
+end)
+
 end

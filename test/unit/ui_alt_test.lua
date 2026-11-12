@@ -352,4 +352,24 @@ test("a quick ALT+K2 on a second page within 5 s randomizes it (#557)", function
   key(1, 0)
 end)
 
+-- 3.4: a record's optional alt_hold_hint names its held ALT+K2 (SEQ's
+-- K2:edit, MOD's K2:clear) in place of K2:reset
+test("a held ALT+K2 shows the record's alt_hold_hint", function()
+  local context = load_strata(); finish_startup(context)
+  local record = randomizing_fx_record({})
+  record.alt_hold_hint = "edit"
+  key(1, 1); key(2, 1)
+  context.clock.run_for(0.49)
+  redraw(); assert_equal(hint_text(context), "K2:rand", "before the hold time: the quick press's hint")
+  context.clock.run_for(0.01)
+  redraw(); assert_equal(hint_text(context), "K2:edit", "from the hold time: the record's hint")
+  record.alt_hold_hint = function() return "clear" end
+  redraw(); assert_equal(hint_text(context), "K2:clear", "or what its function returns")
+  record.alt_hold_hint = nil
+  redraw(); assert_equal(hint_text(context), "K2:reset", "without the field: K2:reset")
+  record.alt_hold, record.alt_hold_hint = nil, "edit"
+  redraw(); assert_equal(hint_text(context), "K2:cancel", "a record with no alt_hold cancels, whatever its hint")
+  key(2, 0); key(1, 0)
+end)
+
 end

@@ -9,9 +9,13 @@
 -- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
 -- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
 -- (apply_lfo); start_voice for the pattern clock (lib/sequencer.lua).
--- Registers the cleanup step that sends a voiceOff for every running voice
--- (norns has freed the engine by then, so none arrives: the voices stopped
--- with it).
+-- 3.4's hooks are fields too: the base override (set_base_override,
+-- clear_base_override, engine_base_value), extra offsets
+-- (set_extra_offset) and the send budget (deferrable, budget_state;
+-- S.deferrable_write, S.engine_budget_clock). Registers the cleanup step
+-- that sends a voiceOff for every running voice (norns has freed the
+-- engine by then, so none arrives: the voices stopped with it) and the
+-- budget's.
 
 return function(S)
   local M = {}
@@ -49,9 +53,20 @@ return function(S)
     return value
   end
 
+  -- 3.4's modulation state (design §0.1), local to this module and reached
+  -- through the functions below: per param id, the base override a step
+  -- lock or an LFO on a macro holds (nil: the stored value), and the extra
+  -- offsets, per param id {source_key = offset in the param's units}
+  local base_overrides = {}
+  local extra_offsets = {}
+
   -- value plus scaled * half the range of every LFO on param_id (LFOs on one
-  -- destination add up), clamped to the range; value itself when no LFO is on it
+  -- destination add up) and every extra offset on it, clamped once to the
+  -- range; value itself when nothing modulates it. A base override set on
+  -- the param takes value's place (a step lock holds the engine there)
   local function with_lfo_offsets(param_id, value)
+    local override = base_overrides[param_id]
+    if override ~= nil then value = override end
     local offset, modulated = 0, false
     for n = 1, NUM_LFOS do
       if S.lfo_last_dest[n] == param_id then
@@ -59,25 +74,206 @@ return function(S)
         modulated = true
       end
     end
+    local minval, maxval
+    local extras = extra_offsets[param_id]
+    if modulated then
+      minval, maxval = param_range(param_id)
+      offset = offset * 0.5 * (maxval - minval)
+    end
+    if extras then
+      for _, extra in pairs(extras) do offset = offset + extra end
+      if not modulated then minval, maxval = param_range(param_id) end
+      modulated = true
+    end
     if not modulated then return value end
-    local minval, maxval = param_range(param_id)
-    return util.clamp(value + offset * 0.5 * (maxval - minval), minval, maxval)
+    return util.clamp(value + offset, minval, maxval)
   end
 
-  -- Record the value as sent and run the param's engine call
-  local function send_engine_value(param_id, value)
+  -- The send budget (Question 23): every send_engine_value counts against
+  -- the current window, math.floor(util.time() / window_seconds), which
+  -- never goes back. A send made while S.deferrable_write is set (the Lua
+  -- LFOs, morph, gesture playback, the macros: deferrable(fn)) beyond
+  -- messages_per_window waits as its id's pending value, the newest winning,
+  -- and goes first in the next window, in the order the ids first waited:
+  -- from S.engine_budget_clock, which runs only while something waits, or
+  -- from the first send of that window, whichever comes first. Every other
+  -- send goes at once and drops its id's pending value
+  local ENGINE_BUDGET = S.constants.ENGINE_BUDGET
+  S.deferrable_write = false
+  S.engine_budget_clock = nil
+  local budget = {window = -math.huge, sent = 0, pending = {}, order = {}}
+
+  -- Record the value as sent, count it and run the param's engine call
+  local function deliver(param_id, value)
+    budget.sent = budget.sent + 1
     S.engine_param_values[param_id] = value
     local sender = S.engine_senders[param_id]
     if sender then sender(value) end
   end
+
+  local function drop_pending(param_id)
+    if budget.pending[param_id] == nil then return end
+    budget.pending[param_id] = nil
+    for index, waiting in ipairs(budget.order) do
+      if waiting == param_id then table.remove(budget.order, index); break end
+    end
+  end
+
+  -- The clock runs exactly while a value waits: cancel it once none does
+  local function stop_budget_clock_if_idle()
+    if #budget.order == 0 and S.engine_budget_clock then
+      clock.cancel(S.engine_budget_clock)
+      S.engine_budget_clock = nil
+    end
+  end
+
+  -- The waiting values, oldest first, as far as the window's budget goes
+  local function flush_pending()
+    while #budget.order > 0 and budget.sent < ENGINE_BUDGET.messages_per_window do
+      local param_id = table.remove(budget.order, 1)
+      local value = budget.pending[param_id]
+      budget.pending[param_id] = nil
+      deliver(param_id, value)
+    end
+  end
+
+  -- Move to window (never back): a new window's count starts at 0 and its
+  -- first sends are the waiting values
+  local function enter_window(window)
+    if window <= budget.window then return end
+    budget.window = window
+    budget.sent = 0
+    flush_pending()
+  end
+
+  local function current_window()
+    return math.floor(util.time() / ENGINE_BUDGET.window_seconds)
+  end
+
+  -- Start the flush clock if it is not running: it sleeps to the next
+  -- window's start, enters it and sends what waits, until nothing does
+  local function start_budget_clock()
+    if S.engine_budget_clock then return end
+    S.engine_budget_clock = clock.run(function()
+      while #budget.order > 0 do
+        local next_window = math.max(current_window(), budget.window) + 1
+        clock.sleep(math.max(0, next_window * ENGINE_BUDGET.window_seconds - util.time()))
+        enter_window(math.max(current_window(), next_window))
+      end
+      S.engine_budget_clock = nil
+    end)
+  end
+
+  -- Send a param's value to the engine (one path for every value), within
+  -- the budget
+  local function send_engine_value(param_id, value)
+    enter_window(current_window())
+    if S.deferrable_write and budget.sent >= ENGINE_BUDGET.messages_per_window then
+      if budget.pending[param_id] == nil then table.insert(budget.order, param_id) end
+      budget.pending[param_id] = value
+      start_budget_clock()
+      return
+    end
+    drop_pending(param_id)
+    deliver(param_id, value)
+    stop_budget_clock_if_idle()
+  end
+
+  -- Run fn with S.deferrable_write set: its sends may wait for the next
+  -- window. The flag comes back as it was, even when fn raises (the error
+  -- is raised again, with its traceback)
+  function M.deferrable(fn)
+    local outer = S.deferrable_write
+    S.deferrable_write = true
+    local ran, run_error = xpcall(fn, with_traceback)
+    S.deferrable_write = outer
+    if not ran then error(run_error, 0) end
+  end
+
+  -- For tests: this window's sends and the ids waiting
+  function M.budget_state()
+    local sent = budget.sent
+    if current_window() > budget.window then sent = 0 end
+    return {sent = sent, pending = #budget.order}
+  end
+
+  -- Values wait exactly while the flush clock runs
+  S.register_invariant("engine budget", function()
+    local waiting = #budget.order > 0
+    if waiting ~= (S.engine_budget_clock ~= nil) then
+      return #budget.order .. " values wait but the flush clock is " .. tostring(S.engine_budget_clock)
+    end
+    for _, param_id in ipairs(budget.order) do
+      if budget.pending[param_id] == nil then return param_id .. " waits with no value" end
+    end
+  end)
+
+  -- Cancel the flush clock; what waits is never sent (norns has freed the
+  -- engine by then, #461)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.engine_budget, function()
+    budget.pending, budget.order = {}, {}
+    if S.engine_budget_clock then
+      clock.cancel(S.engine_budget_clock)
+      S.engine_budget_clock = nil
+    end
+  end)
 
   -- A param's stored value, as modulated by the LFOs on it. Always sends.
   function send_param_to_engine(param_id, value)
     send_engine_value(param_id, with_lfo_offsets(param_id, value))
   end
 
+  -- The base override (step locks, LFOs on macros): while one is set the
+  -- engine starts from it instead of the stored value, which keeps
+  -- changing underneath (a param action's send is held under it). Setting
+  -- and clearing send at once. Only a hand edit of the param clears it (the
+  -- touch hook below), never the drift, morph, a macro or gesture playback
+  local function send_base(param_id)
+    send_engine_value(param_id, with_lfo_offsets(param_id, params:get(param_id)))
+  end
+
+  function M.set_base_override(param_id, value)
+    base_overrides[param_id] = value
+    send_base(param_id)
+  end
+
+  function M.clear_base_override(param_id)
+    if base_overrides[param_id] == nil then return end
+    base_overrides[param_id] = nil
+    send_base(param_id)
+  end
+
+  -- The value the engine starts from: the override, else the stored value
+  function M.engine_base_value(param_id)
+    local override = base_overrides[param_id]
+    if override ~= nil then return override end
+    return params:get(param_id)
+  end
+
+  S.register_param_touch(function(param_id) M.clear_base_override(param_id) end)
+
+  -- An extra offset on a Lua destination, in the param's units (nil
+  -- clears): summed with the LFOs' in with_lfo_offsets and clamped once
+  -- with them. Sends nothing: the source sends the param when it moves
+  function M.set_extra_offset(source_key, param_id, offset)
+    local extras = extra_offsets[param_id]
+    if offset == nil then
+      if extras then
+        extras[source_key] = nil
+        if next(extras) == nil then extra_offsets[param_id] = nil end
+      end
+      return
+    end
+    if not extras then
+      extras = {}
+      extra_offsets[param_id] = extras
+    end
+    extras[source_key] = offset
+  end
+
   -- sync_voice_values_to_engine sends a voice's stored values: forget what
-  -- was sent for its params before
+  -- was sent for its params before, and every value of theirs still
+  -- waiting for the budget (older than what the sync sends)
   local function forget_sent_voice_values(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
     for param_id in pairs(S.engine_param_values) do
@@ -85,6 +281,11 @@ return function(S)
         S.engine_param_values[param_id] = nil
       end
     end
+    for index = #budget.order, 1, -1 do
+      local param_id = budget.order[index]
+      if param_id:sub(1, #prefix) == prefix then drop_pending(param_id) end
+    end
+    stop_budget_clock_if_idle()
   end
 
   -- Effects chain (filter -> delay -> reverb -> master). Each filter, delay or
@@ -164,9 +365,12 @@ return function(S)
     grid_redraw()
   end
 
+  -- Flip a voice's lock, then run the lock hooks (S.registry.lock_change)
+  -- with the voice and its new state
   function toggle_lock(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     S.frozen[voice_idx] = not S.frozen[voice_idx]
+    for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, S.frozen[voice_idx]) end
     update_voice_list()
     request_redraw()
     grid_redraw()

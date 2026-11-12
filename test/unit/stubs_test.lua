@@ -23,7 +23,12 @@ local function stub_state_source(extra_registry)
     .. " register_source_change = function() end, register_scene_field = function() end,"
     .. " register_grain_restart = function() end, register_alt_release = function() end,"
     .. " register_menu_close = function() end, close_registries = function() end,"
-    .. " register_invariant = function() end } end"
+    .. " register_invariant = function() end,"
+    -- 3.4's (lib/state.lua): the register functions a module calls as it loads
+    .. " register_scene_block = function() end, register_scene_migration = function() end,"
+    .. " register_pset_hook = function() end, register_param_touch = function() end,"
+    .. " register_lock_change = function() end, register_lfo_global_destination = function() end,"
+    .. " register_step_output = function() end, register_mod_source = function() end } end"
 end
 
 test("each load gets its own data directory, even after the same random seed (#50)", function()
@@ -1379,6 +1384,51 @@ test("audio.file_info reads a test sound file and a registered table", function(
   assert_equal(got_channels, 2); assert_equal(got_frames, 480000); assert_equal(got_rate, 48000)
   got_channels, got_frames, got_rate = audio.file_info("/tmp/missing-file.wav")
   assert_equal(got_channels, 0); assert_equal(got_frames, 0); assert_equal(got_rate, 0)
+end)
+
+-- lua/core/paramset.lua's PSET actions: params:write(filename, name) calls
+-- action_write(filename, name, number), read(filename, silent) calls
+-- action_read(filename, silent, number) and delete(filename, name, number)
+-- calls action_delete(filename, name, number). A number is a numbered PSET
+-- in norns.state.data, <shortname>-<NN>.pset; the menu's delete passes the
+-- number itself
+test("stub params:write, read and delete pass norns' PSET number to the actions", function()
+  local context = load_strata()
+  local saved = { params.action_write, params.action_read, params.action_delete }
+  local calls = {}
+  params.action_write = function(...) calls[#calls + 1] = { "write", ... } end
+  params.action_read = function(...) calls[#calls + 1] = { "read", ... } end
+  params.action_delete = function(...) calls[#calls + 1] = { "delete", ... } end
+  local function last(kind, filename, second, number)
+    local call = calls[#calls]
+    assert_equal(call[1], kind, kind)
+    assert_equal(call[2], filename, kind .. " filename")
+    assert_equal(call[3], second, kind .. " second argument")
+    assert_equal(call[4], number, kind .. " number")
+  end
+  assert_equal(norns.state.data, context.data_dir .. "strata/", "norns.state.data is the script's data folder")
+  assert_equal(norns.state.shortname, "strata")
+  local numbered = context.data_dir .. "strata/strata-02.pset"
+  params:write(2, "two")
+  last("write", numbered, "two", "02")
+  local file = assert(io.open(numbered, "r")); file:close()
+  params:read(2)
+  last("read", numbered, nil, "02")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  local path = context.data_dir .. "plain.pset"
+  params:write(path)
+  last("write", path, nil, nil)
+  params:read(path, true)
+  last("read", path, true, nil)
+  local count = #calls
+  params:read(context.data_dir .. "missing.pset")
+  assert_equal(#calls, count, "a missing file runs no read action")
+  params:delete(numbered, "two", "02")
+  last("delete", numbered, "two", "02")
+  assert_equal(io.open(numbered, "r"), nil, "delete removes the file")
+  params:delete(3)
+  last("delete", context.data_dir .. "strata/strata-03.pset", nil, nil)
+  params.action_write, params.action_read, params.action_delete = saved[1], saved[2], saved[3]
 end)
 
 end

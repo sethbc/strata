@@ -1083,4 +1083,14 @@ test("256 page 3: the sequencer key echoes to a MIDI-mapped controller (#538)", 
   assert_equal(cc_echoes(controller, 40), "127,0", "the controller hears both")
 end)
 
+
+test("a grid fader runs the touch hooks once, as the grid", function()
+  local context = load_strata(); finish_startup(context)
+  local log = {}
+  local_value("S").register_param_touch(function(param_id, source) log[#log + 1] = param_id .. ":" .. source end)
+  set_param_from_column("reverb_mix", 8)
+  assert_near(params:get("reverb_mix"), 7 / 15, 0.01, "column 8 sets the param")
+  assert_equal(table.concat(log, " "), "reverb_mix:grid", "one touch, from the grid")
+end)
+
 end

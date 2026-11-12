@@ -601,8 +601,25 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "buffer paths saved", "startup clock",
   "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "scene sequencer", "scene transition",
-  "lfos", "playheads clock", "scan holds", "waveform loop", "buffer start reload", "buffer polls and timers", "record poll",
-  "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+  "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget", "buffer start reload",
+  "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler", "voices off", "grids dark", "arc dark" }
+
+-- 3.4's orders, in CLEANUP_ORDER and START_ORDER ahead of the modules that
+-- register their steps (package 0a): each package moves its names from here
+-- to the step lists as its step lands
+local RESERVED_CLEANUP_ORDERS = { "macros_save", "gestures_save", "matrix_save", "gestures", "quantize", "morph_clock",
+  "macros", "matrix", "scatter" }
+local RESERVED_START_ORDERS = { "input_level", "macros_load", "gestures_load", "matrix_load", "lfo_clock" }
+
+-- No step is registered at a reserved order
+local function assert_reserved_free(steps, orders, reserved)
+  for _, name in ipairs(reserved) do
+    assert_true(orders[name] ~= nil, "the reserved order " .. name .. " is in the table")
+    for _, step in ipairs(steps) do
+      assert_true(step.order ~= orders[name], "a step is registered at the reserved order " .. name)
+    end
+  end
+end
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -625,6 +642,9 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.BUFFER)  -- its input meter polls run
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
   S.lib.positions.hold_scan(1, true)  -- a scan hold for cleanup to end
+  S.lib.engine_sync.deferrable(function()  -- a send past the budget waits: the flush clock runs
+    for _ = 1, S.constants.ENGINE_BUDGET.messages_per_window + 1 do send_param_to_engine("drift_amount", 0) end
+  end)
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -654,7 +674,7 @@ test("cleanup runs every registered step in today's order", function()
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
-    { "playheads clock", S.lib.playheads.clock_id() } }
+    { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock } }
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")
@@ -717,7 +737,8 @@ test("cleanup runs every registered step in today's order", function()
   -- S.constants.CLEANUP_ORDER names each step's order, and no two steps share one
   local orders = 0
   for _ in pairs(S.constants.CLEANUP_ORDER) do orders = orders + 1 end
-  assert_equal(orders, #CLEANUP_STEPS, "CLEANUP_ORDER has one order per step")
+  assert_equal(orders, #CLEANUP_STEPS + #RESERVED_CLEANUP_ORDERS, "CLEANUP_ORDER has one order per step")
+  assert_reserved_free(registered, S.constants.CLEANUP_ORDER, RESERVED_CLEANUP_ORDERS)
   assert_true(not pcall(S.register_cleanup, S.constants.CLEANUP_ORDER.lfos, function() end),
     "a second step at a taken order is refused")
   assert_true(not pcall(S.register_cleanup, nil, function() end), "an order is a number")
@@ -879,7 +900,8 @@ test("init runs every registered start step in today's order", function()
   -- S.constants.START_ORDER names each step's order, and no two steps share one
   local orders = 0
   for _ in pairs(S.constants.START_ORDER) do orders = orders + 1 end
-  assert_equal(orders, #START_STEPS, "START_ORDER has one order per step")
+  assert_equal(orders, #START_STEPS + #RESERVED_START_ORDERS, "START_ORDER has one order per step")
+  assert_reserved_free(S.registry.start, S.constants.START_ORDER, RESERVED_START_ORDERS)
   assert_equal(#S.registry.start, #START_STEPS, "one registered step per order")
   assert_true(not pcall(S.register_start, S.constants.START_ORDER.frame_clock, function() end),
     "a second step at a taken order is refused")

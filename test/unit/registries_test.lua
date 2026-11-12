@@ -826,4 +826,128 @@ test("the 3.3 constants", function()
   assert_equal(constants.SCENE_DATA_VERSION, 5)
 end)
 
+-- 3.4's registries (lib/state.lua, design §0.1): a fresh S from lib/state,
+-- so a record no reader knows yet never reaches the script's init
+local function fresh_state()
+  load_strata()
+  return include("lib/state")()
+end
+
+local function refused(fn, ...) return not pcall(fn, ...) end
+
+-- A complete record of each 3.4 kind, with overrides
+local function scene_block(overrides)
+  local record = { key = "probe_block", default = function() return {} end, capture = function() return {} end,
+    validate = function() return true end, apply = function() end, discrete = true }
+  for field, value in pairs(overrides or {}) do record[field] = value end
+  return record
+end
+local function mod_source(overrides)
+  local record = { key = "probe1", name = "P1", section = "probes", value = function() return 0 end,
+    range = { -1, 1 } }
+  for field, value in pairs(overrides or {}) do record[field] = value end
+  return record
+end
+
+test("each 3.4 register function checks its argument and refuses a duplicate", function()
+  local S = fresh_state()
+  local function names_field(fn, record, field)
+    local ok, err = pcall(fn, record)
+    assert_true(not ok and tostring(err):find(field, 1, true) ~= nil, "names " .. field .. ": " .. tostring(err))
+  end
+  -- scene blocks, by key
+  S.register_scene_block(scene_block())
+  assert_equal(#S.registry.scene_blocks, 1, "a block is kept")
+  assert_true(refused(S.register_scene_block, scene_block()), "a second probe_block")
+  assert_true(refused(S.register_scene_block, scene_block({ key = 3 })), "a key is a string")
+  assert_true(refused(S.register_scene_block, scene_block({ key = "b2", apply = 1 })), "apply is a function")
+  assert_true(refused(S.register_scene_block, scene_block({ key = "b2", through_zero = 1 })), "through_zero is a function")
+  names_field(S.register_scene_block, scene_block({ key = "b2", captur = function() end }), "captur")
+  S.register_scene_block(scene_block({ key = "b3", through_zero = function() return {} end }))
+  -- scene migrations, by name
+  S.register_scene_migration({ name = "probe", before_version = 6, migrate = function() end })
+  assert_true(refused(S.register_scene_migration, { name = "probe", before_version = 6, migrate = function() end }),
+    "a second probe migration")
+  assert_true(refused(S.register_scene_migration, { before_version = 6, migrate = function() end }), "a name")
+  assert_true(refused(S.register_scene_migration, { name = "m2", before_version = 5.5, migrate = function() end }),
+    "a whole version")
+  names_field(S.register_scene_migration, { name = "m3", before_version = 6, migrate = function() end, after = 1 }, "after")
+  -- PSET hooks, by name; each function optional
+  S.register_pset_hook({ name = "probe" })
+  S.register_pset_hook({ name = "probe2", write = function() end, read = function() end, delete = function() end })
+  assert_true(refused(S.register_pset_hook, { name = "probe" }), "a second probe hook")
+  assert_true(refused(S.register_pset_hook, { write = function() end }), "a name")
+  assert_true(refused(S.register_pset_hook, { name = "h3", read = "x" }), "read is a function")
+  names_field(S.register_pset_hook, { name = "h4", saved = function() end }, "saved")
+  -- step outputs, by name; stop and available optional
+  S.register_step_output({ name = "probe", play = function() end })
+  assert_true(refused(S.register_step_output, { name = "probe", play = function() end }), "a second probe output")
+  assert_true(refused(S.register_step_output, { name = "o2" }), "play is a function")
+  assert_true(refused(S.register_step_output, { name = "o3", play = function() end, stop = 1 }), "stop is a function")
+  names_field(S.register_step_output, { name = "o4", play = function() end, avail = function() end }, "avail")
+  -- mod sources, by key
+  S.register_mod_source(mod_source())
+  assert_true(refused(S.register_mod_source, mod_source()), "a second probe1")
+  assert_true(refused(S.register_mod_source, mod_source({ key = "p2", name = "TOOLONG" })), "a name of at most 4")
+  assert_true(refused(S.register_mod_source, mod_source({ key = "p3", range = { 1, 1 } })), "range[1] < range[2]")
+  assert_true(refused(S.register_mod_source, mod_source({ key = "p4", value = 0 })), "value is a function")
+  assert_true(refused(S.register_mod_source, mod_source({ key = "p5", section = "" })), "a section")
+  assert_true(refused(S.register_mod_source, mod_source({ key = "p6", row = { press = 1 } })), "a row's press is a function")
+  names_field(S.register_mod_source, mod_source({ key = "p7", visibl = function() end }), "visibl")
+  names_field(S.register_mod_source, mod_source({ key = "p8", row = { hint = function() end } }), "hint")
+  S.register_mod_source(mod_source({ key = "p9", name = "P9", describe = function() return "" end,
+    visible = function() return true end, row = { enc = function() end, fine_enc = function() end,
+    press = function() end, alt_press = function() end, hints = function() return "" end } }))
+  -- the plain hooks
+  assert_true(refused(S.register_param_touch, 1), "a touch hook is a function")
+  assert_true(refused(S.register_lock_change, "x"), "a lock hook is a function")
+  S.register_param_touch(function() end); S.register_lock_change(function() end)
+  assert_equal(#S.registry.param_touch, 1, "a touch hook is kept")
+  assert_equal(#S.registry.lock_change, 1, "a lock hook is kept")
+  -- a global LFO destination joins the per-voice ones, in registration order
+  S.register_lfo_destination("probe", "probe")
+  S.register_lfo_global_destination("macro 1", "macro_1")
+  local destination = S.registry.lfo_destinations[2]
+  assert_equal(destination.label, "macro 1"); assert_equal(destination.param_id, "macro_1")
+  assert_equal(destination.global, true)
+  assert_true(refused(S.register_lfo_global_destination, "macro 1", "macro_2"), "a second macro 1")
+  assert_true(refused(S.register_lfo_global_destination, "probe", "probe_2"), "a label a per-voice one has")
+  assert_true(refused(S.register_lfo_global_destination, "macro 3", nil), "a param id is a string")
+  assert_equal(#S.registry.lfo_destinations, 2, "nothing refused was added")
+end)
+
+test("scene blocks, scene migrations and PSET hooks close at init; the hooks read at use stay open", function()
+  load_strata()
+  local S = local_value("S")
+  local function names(fn, record, registry)
+    local ok, err = pcall(fn, record)
+    assert_true(not ok and tostring(err):find(registry, 1, true) ~= nil, "names " .. registry .. ": " .. tostring(err))
+  end
+  names(S.register_scene_block, scene_block(), "scene_blocks")
+  names(S.register_scene_migration, { name = "late", before_version = 6, migrate = function() end }, "scene_migrations")
+  names(S.register_pset_hook, { name = "late" }, "pset_hooks")
+  names(function(label) S.register_lfo_global_destination(label, "late") end, "late", "lfo_destinations")
+  local touch, lock, outputs, sources = #S.registry.param_touch, #S.registry.lock_change, #S.registry.step_outputs,
+    #S.registry.mod_sources
+  S.register_param_touch(function() end)
+  S.register_lock_change(function() end)
+  S.register_step_output({ name = "late", play = function() end })
+  S.register_mod_source(mod_source({ key = "late" }))
+  assert_equal(#S.registry.param_touch, touch + 1, "a touch hook after init")
+  assert_equal(#S.registry.lock_change, lock + 1, "a lock hook after init")
+  assert_equal(#S.registry.step_outputs, outputs + 1, "a step output after init")
+  assert_equal(#S.registry.mod_sources, sources + 1, "a mod source after init")
+end)
+
+test("a scene field's set function is kept on its record", function()
+  local S = fresh_state()
+  local function set(value) end
+  S.register_scene_field({ id = "probe_field", default = 0, set = set })
+  S.register_scene_field({ id = "plain_field", default = 1, discrete = true })
+  assert_equal(S.registry.scene_fields[1].set, set, "the record keeps set")
+  assert_equal(S.registry.scene_fields[2].set, nil, "a field without one has none")
+  assert_equal(S.registry.scene_fields[2].discrete, true)
+  assert_true(refused(S.register_scene_field, { id = "bad_set", default = 0, set = 1 }), "set is a function")
+end)
+
 end

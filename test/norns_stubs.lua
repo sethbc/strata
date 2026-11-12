@@ -1321,16 +1321,33 @@ local function make_params(util, controlspec)
     end
   end
 
-  -- lua/core/paramset.lua write/read, for absolute paths only (the stub has
-  -- no norns.state for numbered PSETs). write saves every param but
-  -- separators and triggers as `"id": value`; read sets them in file order,
-  -- each through its own set() (so actions fire on a change unless silent),
-  -- skipping trigger binaries, then calls params.action_read
+  -- lua/core/paramset.lua write/read/delete. A filename is an absolute path
+  -- or a number n, the numbered PSET norns.state.data ..
+  -- norns.state.shortname .. "-<NN>.pset" (NN two digits, the number the
+  -- actions get; nil for a path). write saves every param but separators
+  -- and triggers as `"id": value`, then calls params.action_write(filename,
+  -- name, number); read sets them in file order, each through its own set()
+  -- (so actions fire on a change unless silent), skipping trigger binaries,
+  -- then calls params.action_read(filename, silent, number); delete removes
+  -- the file and calls params.action_delete(filename, name, number), with
+  -- the number its caller passes (the PSET menu passes it; a number
+  -- filename gives none, as on norns). norns makes the data folder as the
+  -- script loads: the stub makes it at a numbered write
   local function quote(text) return '"' .. text:gsub('"', '\\"') .. '"' end
   local function unquote(text) return (text:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')) end
 
+  local function numbered_pset(n)
+    local number = string.format("%02d", n)
+    return norns.state.data .. norns.state.shortname .. "-" .. number .. ".pset", number
+  end
+
   function ParamSet:write(filename, name)
-    assert(type(filename) == "string", "stub params:write supports absolute paths only")
+    local pset_number
+    if type(filename) == "number" then
+      filename, pset_number = numbered_pset(filename)
+      util.make_dir(norns.state.data)
+    end
+    assert(type(filename) == "string", "stub params:write takes a path or a PSET number")
     local file = assert(io.open(filename, "w+"))
     if name then file:write("-- " .. name .. "\n") end
     for _, param in ipairs(self.params) do
@@ -1339,11 +1356,20 @@ local function make_params(util, controlspec)
       end
     end
     file:close()
-    if self.action_write ~= nil then self.action_write(filename, name) end
+    if self.action_write ~= nil then self.action_write(filename, name, pset_number) end
+  end
+
+  function ParamSet:delete(filename, name, pset_number)
+    if type(filename) == "number" then filename = numbered_pset(filename) end
+    assert(type(filename) == "string", "stub params:delete takes a path or a PSET number")
+    os.remove(filename)
+    if self.action_delete ~= nil then self.action_delete(filename, name, pset_number) end
   end
 
   function ParamSet:read(filename, silent)
-    assert(type(filename) == "string", "stub params:read supports absolute paths only")
+    local pset_number
+    if type(filename) == "number" then filename, pset_number = numbered_pset(filename) end
+    assert(type(filename) == "string", "stub params:read takes a path or a PSET number")
     local file = io.open(filename, "r")
     if not file then return end
     file:close()
@@ -1372,7 +1398,7 @@ local function make_params(util, controlspec)
         end
       end
     end
-    if self.action_read ~= nil then self.action_read(filename, silent) end
+    if self.action_read ~= nil then self.action_read(filename, silent, pset_number) end
   end
 
   -- lua/core/paramset.lua: a param with save false is left out of params:write
@@ -2828,7 +2854,10 @@ function stubs.install(options)
   local none = function() end
   local blank = function() context.screen.clear(); context.screen.update() end
   _G.refresh = none
-  _G.norns = { state = {}, platform = 0, none = none, blank = blank, script = { redraw = blank, refresh = none },
+  -- norns.state: the script's data folder and short name, as Script.load
+  -- sets them (lua/core/state.lua), for numbered PSETs (params:write(1))
+  _G.norns = { state = { data = options.data_dir .. "strata/", shortname = "strata" }, platform = 0, none = none,
+    blank = blank, script = { redraw = blank, refresh = none },
     -- lua/core/pmap.lua: pmap.data[param id] = {dev, ch, cc, in_lo, in_hi,
     -- out_lo, out_hi, echo, value}, empty until a test maps a param
     pmap = { data = {}, rev = {} }, enc = context.encoders.api, encoders = { callback = nil },

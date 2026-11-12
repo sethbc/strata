@@ -10,6 +10,10 @@
 - Action sends always go out (no dedupe). Only `apply_lfo` skips sends (`docs/notes/lua/lfos.md`).
 - Every `engine.setGrainSource` goes through `S.lib.engine_sync.send_grain_source(voice_idx)` (a start's first send and the `v<i>_source` action), which remembers the source the engine has per voice. A running voice whose source changed runs the `S.registry.grain_restart` hooks; the same source again, or a stopped voice's change, runs none. A start runs them after `engine.voiceOn`, before the voice-level values and before it marks the voice running (`lib/midi_in.lua`'s hook relies on that).
 - A start redraws nothing itself: `toggle_voice` updates the voice list and redraws the screen and the grid after it, and a pattern step does so once for every voice it starts (#527).
+- **A base override is cleared only by a hand edit of its param** (3.4): the touch hook (`S.register_param_touch`, run by an encoder, arc or grid edit) clears it; the drift, morph, a macro, gesture playback, a mutation and a recall run the param's action, whose send stays under the override. Setting and clearing an override send at once.
+- **Only a deferrable send waits** (3.4): a send waits for the budget only while `S.deferrable_write` is set (`S.lib.engine_sync.deferrable(fn)`, used by the Lua LFOs, the matrix, morph, gesture playback and every macro apply). Hand edits, steps, notes, locks, recalls and voice syncs are never deferred; a send that goes at once drops its id's waiting value, so an older value never follows a newer one.
+- **A voice sync or start drops the voice's waiting values** (`forget_sent_voice_values`): they are older than what the sync sends.
+- **Values wait exactly while `S.engine_budget_clock` runs** (the `engine budget` invariant); cleanup step 127 cancels it.
 
 ## Owns
 
@@ -20,6 +24,7 @@
 - `S.lib.engine_sync.grain_key_message(grain_key, value)`: a registered record's grain key and a stored value as the `setGrainParam` name and value (also used by `add_voice_extra`'s senders);
 - the shared state `S.engine_senders`, `S.engine_param_values`, and the LFO offsets `S.lfo_last_dest` and `S.lfo_scaled` (declared here, before `lib/lfos.lua` is included, because param actions read them);
 - cleanup step 160: `engine.voiceOff` for every running voice. norns frees the engine before it calls `cleanup()` (`Script.clear`), so on the device none of these arrives: the voices have already stopped with the engine, at once, without a release (#461; `docs/notes/lua/state-and-voices.md`, Cleanup). The unit tests' engine is never freed, so they see the calls.
+- 3.4's hooks (package 0a), fields of `S.lib.engine_sync`: `set_base_override(param_id, value)`, `clear_base_override(param_id)`, `engine_base_value(param_id)`, `set_extra_offset(source_key, param_id, offset)`, `deferrable(fn)` and `budget_state()`; the shared state `S.deferrable_write` and `S.engine_budget_clock`; the touch hook that clears an override; the `lock_change` hooks `toggle_lock` runs after the flip (`fn(voice_idx, S.frozen[voice_idx])`); cleanup step 127 and the `engine budget` invariant.
 
 ## Param → engine
 
@@ -30,6 +35,26 @@ Params that go this way: voice synthesis params, grain and buffer params, crossm
 - passes the result to `send_engine_value(id, value)`, which records `S.engine_param_values[id] = value` and runs the sender.
 
 So an edit, a mutation, a scene-fade step or the 10 Hz drift on a modulated param never sends the plain value under a running LFO. That mattered for `bufPos`, which has no lag in the engine: the stored position gave stray grains.
+
+## 3.4's modulation hooks
+
+Three additions, for step locks, LFOs on macros, the matrix and the deferrable writers (design §0.1). Nothing in 3.3's code uses them yet, so the engine gets what it got.
+
+**The base override** (`S.lib.engine_sync.set_base_override(param_id, value)`, `clear_base_override(param_id)`, `engine_base_value(param_id)`):
+- While an override is set, `with_lfo_offsets(param_id, value)` starts from it instead of `value`, so every send of the param (its action's, an LFO step's) carries the override plus the offsets. The stored value keeps changing underneath: a param action stores its value and its send is held under the override.
+- Setting and clearing send at once, through `send_engine_value(id, with_lfo_offsets(id, params:get(id)))`; clearing a param with no override sends nothing.
+- `engine_base_value(id)` is the override, else `params:get(id)`.
+- This module registers a touch hook (`S.register_param_touch`) that clears the touched param's override: an encoder, arc or grid edit ends it. The drift's writes (`set_drifted_param`), morph, macros, gesture playback, mutations and recalls are no touch, so none of them ends a step lock.
+
+**Extra offsets** (`S.lib.engine_sync.set_extra_offset(source_key, param_id, offset)`, nil clears): offsets in the param's own units, one per source key (a mod source's key), summed in `with_lfo_offsets` with the LFOs' offsets (scaled × half the range) and clamped once to the range with them. A param with an extra counts as modulated (its value is clamped even when the extras sum to 0). It sends nothing: the source sends the param when it moves. Lua destinations only: a fast destination's extras join the engine's `setFastOffset` sum.
+
+**The send budget** (Question 23): `send_engine_value` counts every send in the current window, `math.floor(util.time() / ENGINE_BUDGET.window_seconds)` (0.1 s; the window index never goes back):
+- A send made while `S.deferrable_write` is set, once the window has had `ENGINE_BUDGET.messages_per_window` (150) sends, is not sent: it is kept as its id's pending value (a newer one replaces it) and is not recorded in `S.engine_param_values` until it goes.
+- The pending values go first in the next window, in the order their ids first waited, from the first send of that window or from the flush clock (`S.engine_budget_clock`), which sleeps to the next window's start and runs only while something waits. They count against that window; what the budget cannot take waits one more window.
+- `S.lib.engine_sync.deferrable(fn)` runs `fn` with `S.deferrable_write` true and puts the flag back as it was, even if `fn` raises (the error is raised again, with its traceback).
+- A send made outside `deferrable` always goes at once (and counts) and drops its id's pending value. `forget_sent_voice_values(voice_idx)` (a voice sync or start) drops the voice's pending values too, so a waiting value never lands after the sync's newer one.
+- `budget_state()` returns `{sent = <this window's count>, pending = <ids waiting>}`, for tests.
+- Cleanup step 127 cancels the clock and drops what waits.
 
 Commands that carry several params:
 - `engine_param_value(id)` is the last value sent, or `params:get(id)` before any.

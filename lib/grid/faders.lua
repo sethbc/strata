@@ -95,7 +95,7 @@ return function(S)
   -- Grid column x (1-16) sets a param across its range. Control params follow
   -- their controlspec warp; number params (mod sources) and option params
   -- (grain envelope, as an option index) map linearly to integers. A zero
-  -- column sets exactly 0.
+  -- column sets exactly 0. Then the touch hooks run, as "grid" (3.4)
   function set_param_from_column(param_id, x)
     local spec = params:lookup_param(param_id).controlspec
     local value = 0
@@ -109,6 +109,7 @@ return function(S)
       end
     end
     params:set(param_id, value)
+    S.lib.ui_detent.run_touch_hooks(param_id, "grid")
   end
 
   -- Column x on one of the parameter page's faders

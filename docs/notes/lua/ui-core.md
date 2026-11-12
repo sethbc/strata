@@ -24,7 +24,8 @@ The UI core's notes, one file per part:
 - `lib/ui/field_list.lua` (`S.lib.ui_field_list`): stateless helpers for a page that is a list of fields with one cursor (`docs/notes/lua/ui/field-list-and-cursors.md`, Field lists). FX, VOICE, BUFFER and SETUP use it.
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter` and forgets carried arc ticks), `select_voice_by` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `run_release_hooks` and the randomizing pages' shared ALT+K2, `k2_down`, `k2_up`, `k2_held`, `k2_hint` (fields of `S.lib.ui_alt`). See `docs/notes/lua/ui/alt-and-keys.md`.
-- `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); the holds at 0 (local). See `docs/notes/lua/ui/detents-and-fine.md`.
+- `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); `as_turn` and `run_touch_hooks` (fields); the holds at 0 (local). See `docs/notes/lua/ui/detents-and-fine.md`.
+- `lib/ui/modal.lua` (`S.lib.ui_modal`, 3.4): the modal screen owner's stack, `push`, `pop`, `top` (fields), and the `modal owner` invariant. See `docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner.
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
 - `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
 - `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors` and the row cursors' anchors; `move`, `sync`, `place`, `clamp_all` (fields).

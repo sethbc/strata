@@ -62,6 +62,7 @@ The arc follows the screen page (`S.ui_page`):
 - A record without ring handlers ignores turns and leaves the rings off (and `arc_delta` still requests a redraw).
 - A page change (`set_ui_page` in `lib/ui/keys.lua`) forgets every carried tick (`forget_arc_ticks()`), so ticks turned on one page never step a param on another.
 - `enc` calls `request_redraw()`, which marks the arc dirty too, so changing page redraws the rings.
+- While a modal owner is pushed (`S.lib.ui_modal.top()`, 3.4; `docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner), `arc_delta`, `arc_key` and `arc_redraw` go to the owner's `arc_delta(n, d)`, `arc_key(n, z)` (presses and releases) and `arc_redraw(S.arc_device)` instead of the page's, ALT or not; an owner without one ignores that input (no `arc_redraw`: the rings stay off).
 
 `arc_key(n, s)` handles the button (2025 arc models):
 - A press calls the shown page record's `arc_button()` and requests a redraw, on whichever page is up; a release does nothing, and so does a press on a page whose record has no `arc_button`.

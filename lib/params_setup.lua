@@ -212,6 +212,36 @@ return function(S)
     end
   end
 
+  -- The PSET hooks (S.registry.pset_hooks, 3.4): run every hook's function
+  -- for action (write, read or delete) that it has, in registration order,
+  -- with the PSET's path without .pset (path_base) and then the action's own
+  -- arguments; each in its own pcall, so a failing hook prints "pset hook
+  -- <name>: <error>" and the next still runs
+  local function run_pset_hooks(action, filename, ...)
+    local path_base = tostring(filename):gsub("%.pset$", "")
+    for _, hook in ipairs(S.registry.pset_hooks) do
+      local fn = hook[action]
+      if fn then
+        local ran, failure = pcall(fn, path_base, ...)
+        if not ran then print("pset hook " .. hook.name .. ": " .. tostring(failure)) end
+      end
+    end
+  end
+
+  -- norns' three PSET actions (lua/core/paramset.lua), installed by the
+  -- master record: number is what norns passes, the PSET's two-digit
+  -- number ("01") or nil for one read or written by path. A read migrates
+  -- the PSET first (M.migrate_read_pset), then runs the hooks. norns clears
+  -- the three with the script's params, so no cleanup step is needed
+  function pset.install_actions()
+    params.action_read = function(filename, silent, number)
+      M.migrate_read_pset(filename, silent)
+      run_pset_hooks("read", filename, number, filename)
+    end
+    params.action_write = function(filename, name, number) run_pset_hooks("write", filename, number) end
+    params.action_delete = function(filename, name, number) run_pset_hooks("delete", filename, number) end
+  end
+
   -- Run a registered record's add(...) and check it added exactly
   -- record.count params (kind names the registry in the error)
   local function add_counted(kind, record, ...)
@@ -236,12 +266,12 @@ return function(S)
 
     -- The PSET format (#314): saved with every PSET, shown nowhere. A PSET
     -- without it was saved before 3.3; the read hook converts what changed
-    -- meaning since (M.migrate_read_pset). norns clears params.action_read
-    -- with the script's params, so no cleanup step is needed
+    -- meaning since (M.migrate_read_pset), then the PSET hooks run
+    -- (pset.install_actions)
     params:add{type = "number", id = "strata_pset_format", name = "pset format",
       min = 1, max = S.constants.PSET_FORMAT, default = S.constants.PSET_FORMAT}
     params:hide("strata_pset_format")
-    params.action_read = function(filename, silent) M.migrate_read_pset(filename, silent) end
+    pset.install_actions()
 
     -- Master controls
     params:add{
@@ -547,6 +577,19 @@ return function(S)
     -- Global LFOs (their destinations, then the library's own groups)
     add_lfo_params()
   end)
+
+  -- 3.4's groups, in menu order (design §0.1): each record calls its
+  -- module's add_params when that module is loaded and has one, and adds
+  -- nothing otherwise, so no later package edits this file. Read at init,
+  -- so a module included after this one counts
+  for _, group in ipairs({{"macros", "macros"}, {"morph", "morph"}, {"scatter", "scatter"}, {"matrix", "matrix"},
+      {"input", "input_level"}, {"gestures", "gestures"}, {"seq", "sequencer"}}) do
+    local module_name = group[2]
+    register_params(group[1], function()
+      local module = S.lib[module_name]
+      if module and module.add_params then module.add_params() end
+    end)
+  end
 
   register_params("buffers", function()
     -- Sample buffers: recording settings, then file/record/clear/save per
