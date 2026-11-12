@@ -292,11 +292,37 @@
     }
 
     // An engine LFO's node from its place (shape, channel, controls), at the
-    // tail of fastModGroup, watched until it ends. A fresh node: not released
-    startFastLfo { arg lfo, place;
-        var synth = Synth(this.fastLfoDefName(place[\shape]), place[\controls], areaState[\modulation][\fastModGroup], \addToTail);
+    // tail of fastModGroup, watched until it ends. A fresh node: not released.
+    // It starts at phase 0, or at phase when one is given (a restart,
+    // fastLfoEnded: synced in the bundle that makes it, so its first block
+    // reads that phase); either way the place's anchor is that phase, now
+    startFastLfo { arg lfo, place, phase;
+        var defName = this.fastLfoDefName(place[\shape]), group = areaState[\modulation][\fastModGroup], synth;
+        if (phase.isNil) {
+            synth = Synth(defName, place[\controls], group, \addToTail);
+        } {
+            context.server.makeBundle(nil, {
+                synth = Synth(defName, place[\controls], group, \addToTail);
+                this.sendToSynth(synth.setMsg(\syncPhase, phase, \t_sync, 1));
+            });
+        };
         place[\released] = false;
+        this.anchorFastLfo(place, phase ? 0);
         ^this.watchFastLfo(lfo, synth, place[\channel])
+    }
+
+    // An LFO's phase anchor (#611): place[\anchor] = [phase, time, rate],
+    // the phase its node started at or was synced to at time (sclang's
+    // Main.elapsedTime), moving at rate Hz. Set at a node's start, a sync
+    // and every set (at the phase reached, so a new rate counts from then),
+    // so the phase now is known even when the sync went to a node that had
+    // ended (its release over as setFastLfo re-gated it): a node
+    // fastLfoEnded starts again begins there, not at 0
+    fastLfoRate { arg place; ^place[\controls][place[\controls].indexOf(\rate) + 1] }
+    anchorFastLfo { arg place, phase; place[\anchor] = [phase, Main.elapsedTime, this.fastLfoRate(place)] }
+    fastLfoPhaseNow { arg place;
+        var anchor = place[\anchor];
+        ^if (anchor.isNil) { 0 } { (anchor[0] + (anchor[2] * (Main.elapsedTime - anchor[1]))) % 1 }
     }
 
     watchFastLfo { arg lfo, synth, channel;
@@ -307,16 +333,17 @@
 
     // An LFO's node ended. Still its place's and running: its release ended
     // just as setFastLfo re-gated it, so it starts again (an LFO is never
-    // left without its node). Its place's, released: the LFO has none now and
-    // its channel goes to 0. Another's (replaced, or freed for a new node):
-    // its channel goes to 0 unless the LFO's node writes it now. Other
-    // writers on that channel write it again in the next block.
+    // left without its node), at the place's phase now (the last sync or
+    // start, advanced: fastLfoPhaseNow). Its place's, released: the LFO has
+    // none now and its channel goes to 0. Another's (replaced, or freed for
+    // a new node): its channel goes to 0 unless the LFO's node writes it
+    // now. Other writers on that channel write it again in the next block.
     fastLfoEnded { arg lfo, synth;
         var state = areaState[\modulation], channel = state[\nodeChannels].removeAt(synth), place;
         if (state[\stopped]) { ^this };
         place = state[\lfos][lfo];
         if (place.notNil and: { place[\synth] === synth }) {
-            if (place[\running]) { place[\synth] = this.startFastLfo(lfo, place) } {
+            if (place[\running]) { place[\synth] = this.startFastLfo(lfo, place, this.fastLfoPhaseNow(place)) } {
                 state[\lfos][lfo] = nil;
                 channel !? { this.zeroFastModChannels(channel, 1) };
             };
@@ -334,10 +361,12 @@
     // server already, its /n_end not yet in sclang, even after a re-gate,
     // which then reached nothing: a Synth.replace of it would be refused and
     // make no node, and the place would keep a synth that never started. So
-    // its shape change frees it (quietly) and starts a new node, in one bundle
+    // its shape change frees it (quietly) and starts a new node, in one bundle.
+    // A new node starts at phase 0 (Lua syncs it); a set keeps the phase,
+    // re-anchored at the new rate
     setFastLfo { arg lfo, voice, destination, shape, rate, depth, offset;
         var state = areaState[\modulation], place = state[\lfos][lfo], channel = this.fastModChannel(voice, 0, destination);
-        var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old, fresh;
+        var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old, fresh, phase;
         if (state[\stopped]) { ^this };
         if (place.isNil) {
             place = (shape: shape, channel: channel, controls: controls, running: true);
@@ -346,12 +375,15 @@
             ^this
         };
         oldChannel = place[\channel];
+        phase = this.fastLfoPhaseNow(place);
         place[\channel] = channel;
         place[\controls] = controls;
+        this.anchorFastLfo(place, phase);
         if (shape != place[\shape]) {
             place[\shape] = shape;
             old = place[\synth];
             place[\synth] = if (place[\released].not) {
+                this.anchorFastLfo(place, 0);
                 this.watchFastLfo(lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
             } {
                 context.server.makeBundle(nil, {
@@ -381,10 +413,14 @@
         };
     }
 
-    // syncFastLfo: the LFO's phase now (a releasing node too). No-op without
-    // a node
+    // syncFastLfo: the LFO's phase now (a releasing node too), and its
+    // anchor (kept for a restart, even when the node has just ended). No-op
+    // without a node
     syncFastLfo { arg lfo, phase;
-        areaState[\modulation][\lfos][lfo] !? { arg place; this.sendToSynth(place[\synth].setMsg(\syncPhase, phase, \t_sync, 1)) };
+        areaState[\modulation][\lfos][lfo] !? { arg place;
+            this.anchorFastLfo(place, phase);
+            this.sendToSynth(place[\synth].setMsg(\syncPhase, phase, \t_sync, 1));
+        };
     }
 
     // Scatter's gains, a channel's index from fastModBlock(0, 0): depth on
