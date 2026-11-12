@@ -185,9 +185,11 @@ return function(S)
     end
   end
 
-  -- Whether the window has room for a send of messages more
+  -- Whether the window has room for a send of messages more. An empty
+  -- window takes any send, so one larger than a whole window costs that
+  -- window and never blocks the flush
   local function window_has_room(messages)
-    return budget.sent + messages <= ENGINE_BUDGET.messages_per_window
+    return budget.sent == 0 or budget.sent + messages <= ENGINE_BUDGET.messages_per_window
   end
 
   -- The waiting values, oldest first, as far as the window's budget goes
