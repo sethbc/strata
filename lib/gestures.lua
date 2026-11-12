@@ -177,8 +177,10 @@ return function(S)
   -- beats (slept at the tempo read at each event). A pass whose beat count
   -- moved under it (a MIDI Start, PARAMETERS > CLOCK > reset: the count
   -- goes back; matron then wakes a waiting sync at once) ends, and the loop
-  -- starts again on the next multiple of its length on the new count. A
-  -- set that raises ends the coroutine and stops the recorder
+  -- starts again on the next multiple of its length on the new count: at
+  -- once when the beat is on one (a transport start wakes the pass-start
+  -- sync on its beat 0, #624). A set that raises ends the coroutine and
+  -- stops the recorder
   local function play_quantized(recorder, k)
     local unit, tolerance = GESTURES.unit_beats[recorder.quantize], GESTURES.beat_tolerance
     local pattern = recorder.pattern
@@ -215,9 +217,13 @@ return function(S)
         start = on_grid(beat, length, phase)  -- a late wake (a skipped pass) stays on the loop's grid
       end
       if moved then
-        clock.sync(length)
         phase = 0
-        start = on_grid(clock.get_beats(), length, 0)
+        local beat = clock.get_beats()
+        if math.abs(beat - on_grid(beat, length, 0)) > tolerance then
+          clock.sync(length)
+          beat = clock.get_beats()
+        end
+        start = on_grid(beat, length, 0)
       end
     end
   end

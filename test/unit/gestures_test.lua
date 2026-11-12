@@ -274,6 +274,30 @@ test("a quantized loop follows a beat counter that goes back", function()
   assert_true(ok, tostring(problem))
 end)
 
+-- A transport start (a MIDI or Link start, PARAMETERS > CLOCK > reset) puts
+-- the beat at 0 and wakes the pass-start sync at once, on beat 0: the next
+-- pass starts there, never a whole loop later (#624)
+test("a quantized loop waiting for its next pass starts on a transport start's beat 0 (#624)", function()
+  local context, S, gestures = loaded()
+  params:set("gesture_1_quantize", BAR)
+  params:set("reverb_mix", 0.3)
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1.9)  -- one bar: 0.31 at its start
+  assert_equal(S.gestures[1].length_beats, 4)
+  local bar = 4 * math.ceil(clock.get_beats() / 4)
+  run_to_beat(context, bar + 1)
+  assert_near(params:get("reverb_mix"), 0.31, 1e-9, "the pass started on its bar")
+  params:set("reverb_mix", 0.9)                     -- the loop now waits for its next pass
+  context.clock.transport_start()
+  context.clock.run_for(0.01)
+  assert_near(params:get("reverb_mix"), 0.31, 1e-9, "the next pass starts on the new beat 0")
+  assert_equal(S.gestures[1].loop_start, 0, "on beat 0 of the new count")
+  params:set("reverb_mix", 0.9)
+  run_to_beat(context, 3.98)
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing more in its bar")
+  run_to_beat(context, 4.02)
+  assert_near(params:get("reverb_mix"), 0.31, 1e-9, "and the pass after it a bar later")
+end)
+
 test("a failed playback stops its recorder and leaves the others playing", function()
   local context, S, gestures = loaded()
   params:set("gesture_2_quantize", BAR)
