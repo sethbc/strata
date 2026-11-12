@@ -598,6 +598,39 @@ test("a voice sync or start drops the voice's pending deferred sends", function(
   assert_equal(#grain_sends(context, 3, "grainSize"), 0, "no later grainSize send for voice 3")
 end)
 
+-- A waiting value whose sender raises must not kill the flush clock: the
+-- values after it still go, and the next wait gets a clock (#637)
+test("a waiting value whose sender raises is reported once, and the flush goes on", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  local real_sender = S.engine_senders.reverb_size
+  S.engine_senders.reverb_size = function() error("broken sender") end
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function()
+    send_param_to_engine("reverb_size", 0.4)
+    send_param_to_engine("filter_freq", 1500)
+  end)
+  assert_equal(sync.budget_state().pending, 2, "both wait")
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_equal(#context.calls_named("setFilter"), 1, "the value after the broken one still goes")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "and the flush clock has ended")
+  h.claim_script_errors(context, 1, "strata: engine send reverb_size failed: ", "broken sender")
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function()
+    send_param_to_engine("reverb_size", 0.5)
+    send_param_to_engine("filter_freq", 1600)
+  end)
+  assert_true(S.engine_budget_clock ~= nil, "the next wait gets a flush clock")
+  context.clock.run_for(0.1)
+  assert_equal(#context.calls_named("setFilter"), 2, "which sends what waits")
+  assert_equal(#context.take_script_errors(), 0, "a sender's failure is reported once")
+  S.engine_senders.reverb_size = real_sender
+end)
+
 test("a base override is a finite number; anything else raises naming the param", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
