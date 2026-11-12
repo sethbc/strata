@@ -1125,13 +1125,24 @@ test("every CI job has a timeout", function()
       jobs[current].text = (jobs[current].text or "") .. line .. "\n"
     end
   end
-  local expected = { lua = 15, ["engine-shard"] = 15, engine = 5 }
+  -- lua-suite runs one Lua suite a runner (Lua 5.3 and LuaJIT in parallel);
+  -- lua gathers them, as engine gathers the shards
+  local expected = { ["lua-suite"] = 15, lua = 5, ["engine-shard"] = 15, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
     assert_equal(jobs[name].minutes, expected[name], "timeout-minutes of job " .. name)
   end
   for name in pairs(expected) do assert_true(jobs[name] ~= nil, "job " .. name .. " exists") end
+  -- the required check is still one job named lua, which needs both suites
+  -- and passes only when both passed
+  assert_true(workflow:find("\n  lua:\n    name: lua\n    needs: lua%-suite\n    if: always%(%)") ~= nil,
+    "a lua job gathers the suites")
+  assert_true(jobs.lua.text:find('test "${{ needs.lua-suite.result }}" = success', 1, true) ~= nil,
+    "the lua job fails unless every suite passed")
+  assert_true(jobs["lua-suite"].text:find("lua: [lua5.3, luajit]", 1, true) ~= nil, "lua-suite runs Lua 5.3 and LuaJIT")
+  assert_true(jobs["lua-suite"].text:find("${{ matrix.lua }} test/run.lua", 1, true) ~= nil, "each runs the suite")
+  assert_true(jobs["lua-suite"].text:find("lua5.3 test/sync_check.lua", 1, true) ~= nil, "lua-suite runs the sync check")
   -- the shard's timeout covers its engine check plus setup
   local seconds = tonumber(jobs["engine-shard"].text:match("name: Engine check\n%s+run:[^\n]-timeout (%d+) "))
   assert_true(seconds ~= nil, "the engine check step has a timeout in seconds")
