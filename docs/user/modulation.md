@@ -43,11 +43,11 @@ Six LFOs can each modulate one parameter:
 
 Sixteen macros (PARAMETERS > macros, `macro 1` ... `macro 16`) each turn up to eight settings at once with one control:
 - **Targets** - each target moves between two ends of its own as the macro goes from 0 to 100 % (put the first end above the second to turn it around), along the setting's own scale, so a frequency moves in octaves. A target is any setting an LFO can move (a voice's main parameter follows its source, as for an LFO), or an LFO's rate or depth; never another macro or the morph, so a macro can never move itself
-- **Moving a macro** - turn it, map a controller to it in PARAMETERS > MAP, record it with a gesture recorder, or load a PSET. It moves its targets up to 30 times a second, so a fast knob sweep never floods the engine; you see the targets' values change as it moves, and scenes store them
+- **Moving a macro** - turn it, map a controller to it in PARAMETERS > MAP, or record it with a gesture recorder. It moves its targets up to 30 times a second, so a fast knob sweep never floods the engine; you see the targets' values change as it moves, and scenes store them
 - **Scenes and the morph** - a scene stores each macro's value and its targets. A recall, a fade and the morph set the macro's value without moving its targets: the scene holds the targets' own values, so a setting you changed by hand after moving the macro comes back as you left it
 - **An LFO on a macro** (the destinations `macro 1` ... `macro 16`) moves the macro's targets around their values, never the macro or the targets' settings themselves. It leaves a target that is an LFO's rate or depth alone (it would modulate itself); those follow the macro's own value only
 - **Banks** - the macros come in four banks of four (1-4, 5-8, 9-12, 13-16); the MOD page, its arc rings and the grids show one bank at a time, the same one everywhere
-- **Saving** - the targets are saved with each PSET (in a file beside it, `<pset>.macros.data`) and between sessions. A PSET saved before 3.4 loads with no targets. A target this version does not know (from another release) is kept and saved again as it was, does nothing, and the console names it as it loads
+- **Saving** - the targets are saved with each PSET (in a file beside it, `<pset>.macros.data`) and between sessions. A PSET loads each macro's value, its targets and the targets' own values as the PSET saved them, without the macros moving the targets. A PSET saved before 3.4 loads with no targets. A target this version does not know (from another release) is kept and saved again as it was, does nothing, and the console names it as it loads
 
 ## Scatter
 
