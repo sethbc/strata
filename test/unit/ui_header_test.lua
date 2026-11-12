@@ -420,7 +420,7 @@ test("the header shows ARM while a slot is armed and none records", function()
   assert_equal(at_rec_x(), "REC", "REC once a slot records, no ARM")
   record_buffer(2); record_buffer(1)   -- stop both
   context.polls.fire("recordState", (1 * 4 + 3) * 8 + 0)   -- slot 1's armed recording canceled
-  context.polls.fire("bufferState", 1000 + 3)            -- slot 2's take settles
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 0, 3))  -- slot 2's take settles
   redraw()
   assert_equal(at_rec_x(), "", "neither: nothing at x 96")
 end)

@@ -20,14 +20,17 @@ var scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, monoPath = h.monoPath, longPath = h.longPath, textPath = h.textPath;
 var before, scratchFile, file, frames, info, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
 
-// bufferState poll value: ((the slot's loads % 7) * 9 + slot index) * 1000
-// + valid seconds (#578; seconds below 1000, so the thousands name one
-// slot and its load number); stateBase is a slot's thousands on an engine
-// (h.engine unless given) now, which the reports since its last load
-// carry. Checked over the poll's values with Signal arithmetic
-// (h.pollValueNear), never a function per message: the run's messages
-// grow all run long (#131)
-var stateBase = { arg slot, target; target = target ? engine; (((target.bufferLoads[slot] % 7) * 9) + slot) * 1000 };
+// bufferState poll value: ((the slot's loads % bufferStateLoads) *
+// (numBuffers + 1) + slot index) * bufferStateStride + valid seconds
+// (#578; seconds below the stride, so the thousands name one slot and its
+// load number); stateBase is a slot's thousands on an engine (h.engine
+// unless given) now, which the reports since its last load carry. Checked
+// over the poll's values with Signal arithmetic (h.pollValueNear), never a
+// function per message: the run's messages grow all run long (#131)
+var stateBase = { arg slot, target;
+    target = target ? engine;
+    (((target.bufferLoads[slot] % target.bufferStateLoads) * (target.numBuffers + 1)) + slot) * target.bufferStateStride
+};
 var bufferStateSeen = { arg slot, seconds, target; h.pollValueNear(\bufferState, stateBase.(slot, target) + seconds, 0.011) };
 // bufferState poll values received so far
 var bufferStateValues = { h.pollValues(\bufferState) };
@@ -981,7 +984,10 @@ checkLongSlots.value;
 {
     var slot = 6, missing = scratchRoot +/+ "missing.wav", start, values, near, cycle, periodic, top;
     var poll = engine.bufferStatePoll;
-    // the slot's bufferState values received since `start`, consecutive repeats once
+    // the slot's bufferState values received since `start`, consecutive
+    // repeats once. A function per message, which the #131 note above rules
+    // out for the whole run's messages, runs here only over the window
+    // since `start`: a few seconds, a handful of messages
     var slotValues = { arg since;
         var found = List.new(16);
         h.pollMessages.array.copyRange(since, h.pollMessages.size - 1).do({ arg msg;

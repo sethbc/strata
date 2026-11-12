@@ -155,17 +155,17 @@ test("the engine's slot length caps a longer one from the active file", function
   local S = local_value("S")
   params:set("record_duration", 200)
   local CAPPED = "strata: the engine's slots hold 60 s, not the 300 s performance_active.data names; using 60 s"
-  context.polls.fire("bufferState", 8300)    -- the length the file names: nothing changes
+  context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 300))  -- the length the file names: nothing changes
   assert_equal(S.performance.buffer_seconds, 300, "an equal length changes nothing")
-  context.polls.fire("bufferState", 8060)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 60))
   assert_equal(S.performance.buffer_seconds, 60, "capped to the engine's length")
   assert_equal(S.performance.tier, "high", "the tier stays")
   assert_equal(params:lookup_param("record_duration").controlspec.maxval, 60, "the record duration's maximum")
   assert_equal(params:get("record_duration"), 60, "and a longer duration comes down to it")
   assert_equal(count_lines(context, CAPPED), 1, "one console line")
-  context.polls.fire("bufferState", 8060)    -- the periodic repeat
+  context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 60))  -- the periodic repeat
   assert_equal(count_lines(context, CAPPED), 1, "said once")
-  for _, value in ipairs({ 8000, 8017, 8120, 8600 }) do
+  for _, value in ipairs({ context.polls.buffer_state_value(9, 0, 0), context.polls.buffer_state_value(9, 0, 17), context.polls.buffer_state_value(9, 0, 120), context.polls.buffer_state_value(9, 0, 600) }) do
     context.polls.fire("bufferState", value) -- no length, not a tier length, or longer: ignored
   end
   assert_equal(S.performance.buffer_seconds, 60, "only a shorter tier length caps it")
@@ -174,7 +174,7 @@ test("the engine's slot length caps a longer one from the active file", function
   h.write_performance_active({tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60})
   context = load_strata(); h.finish_startup(context)
   params:set("record_duration", 30)
-  context.polls.fire("bufferState", 8060)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 60))
   assert_equal(params:get("record_duration"), 30, "a shorter duration is kept")
 end)
 
@@ -182,13 +182,13 @@ test("bufferState decodes with stride 1000", function()
   h.write_performance_active({tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60})
   local context = load_strata(); h.finish_startup(context)
   local buffers = local_value("S").buffers
-  context.polls.fire("bufferState", 7300)   -- slot 8 holds 300 s
+  context.polls.fire("bufferState", context.polls.buffer_state_value(8, 0, 300))  -- slot 8 holds 300 s
   assert_near(buffers[8].seconds, 300, 1e-9, "slot 8")
-  context.polls.fire("bufferState", 2016.5) -- slot 3 holds 16.5 s
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 16.5)) -- slot 3 holds 16.5 s
   assert_near(buffers[3].seconds, 16.5, 1e-9, "slot 3")
-  context.polls.fire("bufferState", 0)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 0, 0))
   assert_near(buffers[1].seconds, 0, 1e-9, "slot 1")
-  context.polls.fire("bufferState", 8000)   -- slot 9: ignored
+  context.polls.fire("bufferState", context.polls.buffer_state_value(9, 0, 0))  -- slot 9: ignored
   assert_equal(rawget(buffers, 9), nil, "no slot 9")
 end)
 

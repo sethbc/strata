@@ -365,7 +365,7 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   params:set("v4_source", 9); assert_equal(device:get_led(9, 12), 15, "selected empty buffer lit 15")
   -- the recording completes: 15 -> 8
   wake_buffer_clock(context, 6); assert_equal(device:get_led(6, 1), 15, "a take waiting for the engine stays lit")
-  context.polls.fire("bufferState", 5003)  -- the engine reports the take
+  context.polls.fire("bufferState", context.polls.buffer_state_value(6, 0, 3))  -- the engine reports the take
   assert_equal(device:get_led(6, 1), 8, "finished take shown as loaded")
   clear_buffer(2); assert_equal(device:get_led(2, 1), 2, "cleared buffer dim")
   -- a second row-1 press stops early; row 8 and 16 keep their meaning
