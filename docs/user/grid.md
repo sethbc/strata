@@ -36,6 +36,7 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Setting a loop** - on a positions page (or the 8×8's position view), hold one position key and press another of the same voice: the loop runs from the earlier key's start to the later key's end (either order; see [Positions](#positions))
 - **Storing a bookmark** - on a positions page's strip, hold the store key and press bookmark 1-4: the bookmark takes the voice's playhead position
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing is saved, cleared or randomized, a step editor it opened closes, and a grid's scan hold lets go
+- **Changing the page ends what held keys were doing**: a key still held when its grid shows another page does nothing at its hold or its release (a scene save, a clear, a recorder's clear or a solo does not happen, a step does not toggle and its editor closes), and a key held from the page before never acts as the key it comes up on (a recorder or mute key). Another grid's page change leaves this grid's keys alone
 - **On the beat**: with PARAMETERS > sequencer > quantize actions on beat or bar, a freeze key waits for the next beat or bar, as a scene recall does, and the header says so (`v2 frz at beat`)
 
 ## Positions

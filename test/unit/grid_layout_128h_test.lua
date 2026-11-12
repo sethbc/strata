@@ -898,4 +898,21 @@ test("128h: a freeze key waits for the beat and a step key toggles on release", 
   assert_equal(params:get("v3_freeze"), 1, "and freezes voice 3 at it")
 end)
 
+-- Fix round 2: a release acts only for the key pressed in its role: a step
+-- key held into page 3 and let go on recorder 1's cell records nothing
+test("128h: a step key held into page 3 is no recorder key at its release", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 8)
+  context.grid.press(1, 13, 5, 1)  -- page 1: voice 5's step 13
+  tap(context, 1, 7, 8)            -- page 3
+  context.grid.press(1, 13, 5, 0)  -- let go on recorder 1's cell
+  assert_equal(S.lib.gestures.state(1), "empty", "recorder 1 records nothing")
+  assert_equal(patterns[5][13], 0, "and the step is untouched")
+  tap(context, 1, 13, 5)
+  assert_equal(S.lib.gestures.state(1), "recording", "the recorder key's own tap records")
+  S.lib.gestures.clear(1)
+end)
+
 end

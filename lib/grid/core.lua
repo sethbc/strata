@@ -60,13 +60,19 @@ return function(S)
     return S.grid_pages[port] or 1
   end
 
-  -- A page change ends the port's step gestures (3.4, Review Focus 4): a
-  -- step held on the page it leaves toggles nothing at its release, takes
-  -- no level and closes a step editor it opened
+  -- A page change ends what every key held on the port was pressed to do
+  -- (3.4, Review Focus 4, fix round 2): its step gestures end (a step held
+  -- on the page it leaves toggles nothing at its release, takes no level
+  -- and closes a step editor it opened), its pending holds are canceled (a
+  -- scene save, a pattern clear, a recorder's clear, a solo) and its keys'
+  -- roles are forgotten (a recorder or mute key's release does nothing)
   function M.set_page(port, page)
     if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
     if not whole_number_in(page, 1, MAX_GRID_PAGES) then return end
-    if page ~= M.page(port) then M.end_port_step_gestures(port) end
+    if page ~= M.page(port) then
+      M.end_port_step_gestures(port)
+      M.end_port_holds(port)
+    end
     S.grid_pages[port] = page
   end
 
@@ -89,6 +95,10 @@ return function(S)
   local consumed_keys = {}
   local step_keys = {}
   local port_states = {}
+  -- The role a held key was pressed in, when it acts at its release (3.4:
+  -- "gesture <k>", "mute <v>"; press_as, pressed_as): a release acts only
+  -- for the key pressed in that role, never for one pressed on another page
+  local key_roles = {}
 
   -- tables[port][x][y], or nil
   local function key_value(tables, port, x, y)
@@ -191,16 +201,38 @@ return function(S)
     close_step_editor_of(port, x, y)
   end
 
-  -- Forget a port's keys: pending holds (canceled), held, consumed and step
-  -- keys (a step editor one of them opened closes), its layout state and
-  -- its page
-  local function forget_port(port)
-    local key = step_editor.key
-    if key and key.port == port then close_step_editor_of(port, key.x, key.y) end
+  -- Cancel every pending hold of a port and forget its keys' roles: a page
+  -- change (set_page) and forget_port. The keys stay held
+  function M.end_port_holds(port)
     for _, rows in pairs(hold_clocks[port] or {}) do
       for _, clock_id in pairs(rows) do clock.cancel(clock_id) end
     end
     hold_clocks[port] = nil
+    key_roles[port] = nil
+  end
+
+  -- Note that the key at (x, y), held now, was pressed in role (a string:
+  -- "gesture 2", "mute 3"), so its release acts in that role
+  -- (pressed_as). A press, the release, a page change and the port's
+  -- forget_port forget it
+  function M.press_as(port, x, y, role)
+    if M.held(port, x, y) == nil then return end
+    set_key_value(key_roles, port, x, y, role)
+  end
+
+  -- Whether the key at (x, y) is held in role, pressed in it on the page
+  -- the port shows: a release-acting key acts only then
+  function M.pressed_as(port, x, y, role)
+    return role ~= nil and key_value(key_roles, port, x, y) == role
+  end
+
+  -- Forget a port's keys: pending holds (canceled), held, consumed and step
+  -- keys (a step editor one of them opened closes), their roles, its layout
+  -- state and its page
+  local function forget_port(port)
+    local key = step_editor.key
+    if key and key.port == port then close_step_editor_of(port, key.x, key.y) end
+    M.end_port_holds(port)
     S.grid_held[port] = {}
     consumed_keys[port] = nil
     step_keys[port] = nil
@@ -213,6 +245,7 @@ return function(S)
     drop_step_key(port, x, y)
     cancel_hold(port, x, y)
     set_key_value(consumed_keys, port, x, y, nil)
+    set_key_value(key_roles, port, x, y, nil)
     set_key_value(S.grid_held, port, x, y, util.time())
   end
 
@@ -220,6 +253,7 @@ return function(S)
     drop_step_key(port, x, y)
     set_key_value(S.grid_held, port, x, y, nil)
     set_key_value(consumed_keys, port, x, y, nil)
+    set_key_value(key_roles, port, x, y, nil)
   end
 
   -- A step key's release (3.4, design §8.7): the held step it pressed
@@ -370,17 +404,21 @@ return function(S)
   -- (empty -> recording -> playing -> stopped -> playing); the hold
   -- (on_hold) clears the recorder and consumes the key, so its release
   -- does nothing and a clear never plays, records or ends another
-  -- recorder's recording first. Layouts pass the key's release on. A
-  -- release the core never saw pressed, and a recorder outside
-  -- 1..NUM_GESTURES, do nothing
+  -- recorder's recording first. Layouts pass the key's release on. Only a
+  -- key pressed as this recorder's key (press_as, "gesture <k>") acts at
+  -- its release: never one pressed on another page (a step key held into
+  -- the scenes page), nor one the core never saw pressed. A recorder
+  -- outside 1..NUM_GESTURES does nothing
   function M.gesture_key(port, x, y, z, k)
     if not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return end
+    local role = "gesture " .. k
     if z == 1 then
+      M.press_as(port, x, y, role)
       M.on_hold(port, x, y, SHARED_KEYS.gesture_clear_seconds, function()
         S.lib.gestures.clear(k)
         M.consume(port, x, y)
       end)
-    elseif M.held(port, x, y) ~= nil then
+    elseif M.pressed_as(port, x, y, role) then
       S.lib.gestures.press(k)
     end
   end
@@ -796,7 +834,7 @@ return function(S)
           or " is not attached but has a device recorded")
       end
     end
-    for kind, tables in pairs({consumed = consumed_keys, ["hold pending"] = hold_clocks}) do
+    for kind, tables in pairs({consumed = consumed_keys, ["hold pending"] = hold_clocks, ["held in a role"] = key_roles}) do
       for port, columns in pairs(tables) do
         for x, rows in pairs(columns) do
           for y in pairs(rows) do
