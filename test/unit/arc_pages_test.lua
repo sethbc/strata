@@ -1064,7 +1064,7 @@ test("page and arc files keep to their record fields", function()
 end)
 
 -- #439: the LED level of every ring in each state the notes list
-test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO and BUFFER draw the levels the notes give", function()
+test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO, BUFFER and MOD draw the levels the notes give", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)
   local S = local_value("S")
@@ -1123,6 +1123,31 @@ test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO and BUFFER draw the lev
   key(1, 1); arc_redraw()
   assert_levels({4, 4, 4, 12}, "BUFFER ALT synth source")
   key(1, 0)
+  -- MOD (2a): 12, a routing's depth ring 4 while it is off or incomplete
+  params:set("v1_source", 1)
+  show_page("MOD")
+  local pages_mod = S.lib.pages_mod
+  for macro = 1, 4 do params:set("macro_" .. macro, 0.5) end
+  pages_mod.place("bank"); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "MOD's macros")
+  key(1, 1); params:set("morph_b", 3); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "MOD ALT")
+  key(1, 0)
+  for k = 5, 8 do
+    S.lib.matrix.set_routing(k, "lfo1", "reverb_mix"); params:set("matrix_" .. k .. "_depth", 30)
+  end
+  params:set("matrix_6", 0)                                     -- off
+  S.lib.matrix.set_routing(8, "lfo1", "")                       -- incomplete
+  pages_mod.place("routing:5"); arc_redraw()
+  assert_levels({12, 4, 12, 4}, "MOD's routings: R6 off, R8 incomplete")
+  key(3, 1); key(3, 0)                                          -- the routing view of R5
+  S.lib.matrix.set_routing(5, "lfo2", "reverb_mix"); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "MOD's routing view")
+  key(2, 1); key(2, 0)
+  S.lib.macros.set_target(1, 2, "reverb_mix", 0.25, 0.75)
+  pages_mod.place("source:macro1"); key(3, 1); key(3, 0)      -- the target view of M1
+  enc(2, 1); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "MOD's target view")
 end)
 
 -- #439: reconcile's redraw
@@ -1444,6 +1469,21 @@ test("MOD's whole-step rings carry their ticks and forget them on a row, view or
   context.arc.turn(1, 4, 5)
   assert_equal(S.lib.pages_mod.target_row(), 1, "the row ring's carry is gone")
   assert_true(device ~= nil)
+end)
+
+test("MOD's routing ring cancels learn armed for the routing it leaves", function()
+  local context, _, S = mod_with_arc("routing:1")
+  local matrix = S.lib.matrix
+  tap(3); enc(2, 1)                           -- the routing view's dest row
+  key(1, 1); tap(3); key(1, 0)
+  assert_equal(matrix.learning(), 1, "learn armed for R1")
+  context.arc.turn(1, 4, 19)
+  assert_equal(matrix.learning(), 1, "part of a step: still R1, still armed")
+  context.arc.turn(1, 4, 1)
+  assert_equal(S.lib.pages_mod.routing(), 2, "ring 4 shows R2")
+  assert_equal(matrix.learning(), nil, "R1's learn is canceled")
+  delta_with_detent("v2_grain_size", 1, { source = "arc" })
+  assert_equal(matrix.routing(1).dest, "", "a touch then sets nothing")
 end)
 
 test("SCENES ring 3 sweeps morph and ring 4 steps morph_b", function()

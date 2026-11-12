@@ -24,11 +24,12 @@ return function(S)
   -- label, the value right-aligned). The name gives way to the source:
   -- it is cut to end name_gap px before it. 3.4: the mark (~) follows the
   -- name while the engine's modulation moves the voice, and the name is cut
-  -- by its width (y 26 is full)
+  -- by its width and mark_gap more, so the mark ends 2 px before the
+  -- source (y 26 is full)
   local LAYOUT = {
     left = 65, right = 127, divider_x = 62, name_y = 18, name_gap = 1,
     state_y = 26, lock_x = 84, trig_x = 99, freeze_x = 113, field_rows = {34, 42, 50}, label_x = 71,
-    bright = 15, dim = 4, trig_level = 8, field_count = 3, modulated_mark = "~",
+    bright = 15, dim = 4, trig_level = 8, field_count = 3, modulated_mark = "~", mark_gap = 1,
   }
   M.LAYOUT = LAYOUT
 
@@ -121,18 +122,18 @@ return function(S)
   end
 
   -- Whether the engine's modulation moves the voice (3.4, design §10,
-  -- §10.2): an engine-run LFO that is on at a depth above 0 on one of its
-  -- fast destinations, scatter (S.lib.scatter.affects) or a routing of the
-  -- matrix (S.lib.matrix.affects). The scatter and the matrix are read
+  -- §10.2): an LFO the LFO module plays in the engine
+  -- (S.lib.lfos.engine_playing: on, on a fast destination, at a depth above
+  -- 0) on one of the voice's fast destinations, scatter
+  -- (S.lib.scatter.affects) or a routing of the matrix
+  -- (S.lib.matrix.affects). The scatter and the matrix are read
   -- defensively, as the LFO page reads the matrix: a test may load
   -- without them
   local function engine_modulated(voice_idx)
     local lfos = S.lib.lfos
     for n = 1, S.constants.NUM_LFOS do
       local fast = lfos.destination(n).fast
-      if fast and fast.voice == voice_idx and lfos.is_on(n) and params:get(lfos.param_id(n, "depth")) > 0 then
-        return true
-      end
+      if fast and fast.voice == voice_idx and lfos.engine_playing(n) then return true end
     end
     for _, module in ipairs({S.lib.scatter, S.lib.matrix}) do
       if module and module.affects and module.affects(voice_idx) then return true end
@@ -150,7 +151,7 @@ return function(S)
     local source = voice_source_label(voice_idx)
     local mark = engine_modulated(voice_idx) and LAYOUT.modulated_mark or nil
     local name_width = LAYOUT.right - screen.text_extents(source) - LAYOUT.name_gap - LAYOUT.left
-      - (mark and screen.text_extents(mark) or 0)
+      - (mark and (screen.text_extents(mark) + LAYOUT.mark_gap) or 0)
     local name = S.lib.ui_text.fit_text(string.upper(v.name), name_width)
     screen.level(LAYOUT.bright)
     screen.move(LAYOUT.left, LAYOUT.name_y)

@@ -33,9 +33,9 @@ What each row shows:
 - **K3** - On the bank row, the next bank (bank 4 back to 1); on a macro, its targets (below); on scatter's switches, on or off; on a recorder, its next state (record, play, stop, play: [Modulation](../modulation.md#gesture-recorders)); on an LFO, the LFO page with that LFO selected; on a routing, the routing (below)
 - **ALT+E2** on a macro - The same macro of the next bank (turn left for the bank before); the arc's rings and the grids follow
 - **ALT+K3** - On a playing recorder, overdub on or off; on a routing, turn it on or off
-- **ALT+K2** - A quick press randomizes the section under the cursor: scatter's depth (0-30 %) and rate (0.02-0.5 Hz, spread evenly across octaves), or the depth of every routing that has both a source and a destination (−50 to +50 %). It acts when you let go of K2; within 5 seconds a quick ALT+K2 again on the same section undoes it, and changing one of those values ends the undo. The macros, the morph, the recorders and the LFOs are not randomized here (a press there does nothing). Held for half a second (the hint turns to `K2:clear`), it clears the recorder or the routing under the cursor; elsewhere the hint says `K2:cancel` and letting go does nothing
+- **ALT+K2** - In scatter and the matrix, a quick press randomizes the section: scatter's depth (0-30 %) and rate (0.02-0.5 Hz, spread evenly across octaves), or the depth of every routing that has both a source and a destination (−50 to +50 %). It acts when you let go of K2; within 5 seconds a quick ALT+K2 again on the same section undoes it, and changing one of those values ends the undo. Held for half a second it clears the recorder or the routing under the cursor, if it holds anything (the hint turns to `K2:clear`; on a row with nothing to clear it says `K2:cancel`, and letting go does nothing). On a recorder, ALT+K2 held is all it does. The macros, the morph and the LFOs are not randomized here: ALT+K2 does nothing on their rows
 
-The hint row names the row's keys: `K3:targets E3:value` on a macro, `K3:rec E3:quant` on an empty recorder, `K3:lfo E3:depth` on an LFO, `K3:edit E3:depth` on a routing. With K1 held it shows `K2:rand` (or `K2:undo`), `K3:dub` on a playing recorder, `K3:on` or `K3:off` on a routing, `E2:bank` on a macro and `E3:fine` where a value turns finely.
+The hint row names the row's keys: `K3:targets E3:value` on a macro, `K3:rec E3:quant` on an empty recorder, `K3:lfo E3:depth` on an LFO, `K3:edit E3:depth` on a routing. With K1 held it names only what acts on the row: `K2:rand` (or `K2:undo`) in scatter and the matrix, `K2:clear` on a recorder that holds a loop (or a routing that holds anything but nothing to randomize), no K2 where ALT+K2 does nothing (a macro, the morph, an LFO, an empty recorder); then `K3:dub` on a playing recorder, `K3:on` or `K3:off` on a routing, `E2:bank` on a macro and `E3:fine` where a value turns finely.
 
 ## A macro's targets
 
@@ -56,7 +56,7 @@ Each row is a target and the two ends it moves between as the macro goes from 0 
 - **E3** - Change the column: the target, through every setting a macro can move (none first), or an end, 1 % per step (ALT+E3 0.1 %)
 - **ALT+E3** on the target - Jump a group (the globals, voice 1 ... voice 7, the registered settings, the LFOs' rates and depths, the routings' depths)
 - **ALT+K3** - Learn: the next setting you touch with an encoder, an arc ring or a grid fader becomes the row's target, from 0 to 100 % (the header shows `M1 > v3 pitch`, or `not a macro target`). The row shows `learn` while it waits; K2, leaving the page or 10 seconds cancels it
-- **ALT+K2** held half a second - Empty the row
+- **ALT+K2** held half a second - Empty the row (with K1 held, a row with a target shows `K2:clear`; an empty row shows no K2)
 - **K2** - Back to the list
 
 A target from another release is kept and drawn dim, as it was saved.
@@ -75,9 +75,9 @@ K2:back K3:off E3:source
 ```
 
 - **E2** - Select the row
-- **E3** - Change it: the source, through every modulation source in turn (ALT+E3 jumps to the next kind: LFOs, macros, recorders, the input); the destination, through every setting an LFO can move but the macros (ALT+E3 jumps a group); the depth (ALT+E3 in finer steps); on or off. A routing that gets both a source and a destination at a depth of 0 starts at 25 %, so you hear it. The macros offered as sources are the shown bank's
+- **E3** - Change it: the source, through every modulation source in turn (ALT+E3 jumps to the next kind: LFOs, macros, recorders, the input); the destination, through every setting an LFO can move but the macros (ALT+E3 jumps a group); the depth (ALT+E3 in finer steps); on or off. A routing that gets both a source and a destination at a depth of 0 starts at 25 %, so you hear it. All sixteen macros are offered as sources, whatever bank the list shows
 - **K3** - Turn the routing on or off
-- **ALT+K3** on `dest` - Learn: the next setting you touch becomes the destination (the header shows `R3 > v3 pitch`, or `not a destination`); K2, leaving the page or 10 seconds cancels it
+- **ALT+K3** on `dest` - Learn: the next setting you touch becomes the destination (the header shows `R3 > v3 pitch`, or `not a destination`); K2, leaving the page, showing another routing (arc ring 4) or 10 seconds cancels it
 - **ALT+K2** held half a second - Clear the routing
 - **K2** - Back to the list
 

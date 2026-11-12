@@ -1,7 +1,8 @@
 -- lib/mod_sources.lua
 -- The modulation source readers (3.4, design §10.1), S.lib.mod_sources,
 -- over the registry S.registry.mod_sources (S.register_mod_source,
--- lib/state.lua): get(key), list(section), sections(), fraction(key) and
+-- lib/state.lua): get(key), list(section), registered(section) (2a: hidden
+-- sources too), sections(), fraction(key) and
 -- normalized(key). MOD (lib/pages/mod.lua) and the matrix (lib/matrix.lua)
 -- read sources only through here, and fraction and normalized are the only
 -- places a source's value is mapped through its range. The registry is
@@ -30,6 +31,17 @@ return function(S)
     local records = {}
     for _, record in ipairs(S.registry.mod_sources) do
       if (section == nil or record.section == section) and shown(record) then records[#records + 1] = record end
+    end
+    return records
+  end
+
+  -- Every source of a section (every section when it is nil), visible or
+  -- not, in registration order: MOD's routing view offers them all, the
+  -- macros of a bank not shown among them (package 2a, ruling 77)
+  function M.registered(section)
+    local records = {}
+    for _, record in ipairs(S.registry.mod_sources) do
+      if section == nil or record.section == section then records[#records + 1] = record end
     end
     return records
   end

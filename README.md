@@ -63,7 +63,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 
 - [Voices and Granular Processing](docs/user/voices-and-grains.md) - the seven voices and their parameters, grain controls and performance features
 - [Audio Sources and Buffers](docs/user/sources-and-buffers.md) - buffers, live input, recording, files, saving and restoring
-- [Modulation](docs/user/modulation.md) - cross-modulation, mutations and LFOs
+- [Modulation](docs/user/modulation.md) - cross-modulation, mutations, the LFOs, the macros, the morph, scatter, the gesture recorders and the modulation matrix
 - [Global Controls and Effects](docs/user/effects.md) - master density, drift, filter, delay, reverb, tempo
 - [Scenes and Automation](docs/user/scenes.md) - scenes, the scene sequencer and composing with scenes
 - [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division and swing, step probability, ratchets, step locks, notes and gates, Euclidean fill, chaining and following the clock's transport

@@ -266,7 +266,7 @@ test("ALT+K3 in the target view learns the next touched target", function()
   place(S, "source:macro2")
   tap(3); enc(2, 1)  -- row 2
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:rand K3:learn E3:group")
+  assert_equal(hint_text(context), "K3:learn E3:group", "an empty row: nothing for ALT+K2 to do")
   tap(3); key(1, 0)
   local m, k = macros.learning()
   assert_equal(m, 2); assert_equal(k, 2, "learn armed for M2 row 2")
@@ -303,7 +303,7 @@ test("K3 on a gesture row presses its recorder; ALT+K3 toggles overdub; ALT+K2 h
   tap(3)
   assert_equal(gestures.state(1), "playing", "K3 plays")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:rand K3:dub")
+  assert_equal(hint_text(context), "K2:clear K3:dub")
   tap(3)
   assert_true(S.gestures[1].overdubbing, "ALT+K3 overdubs")
   tap(3)
@@ -427,6 +427,69 @@ test("the routing view edits source, destination, depth and on, and learns a des
   assert_equal(routing.source .. "|" .. routing.dest .. "|" .. routing.depth, "||0", "cleared")
 end)
 
+-- Ruling 77: the routing view's sources are every registered source, the
+-- macros of every bank among them, whatever bank the list shows
+test("the routing view offers every source, whatever bank is shown", function()
+  local context, S = loaded()
+  local matrix = S.lib.matrix
+  assert_equal(S.lib.macros.bank(), 1, "bank 1 shown")
+  place(S, "routing:1"); tap(3)
+  -- none, L1-L6, then M1-M16: M9 is 15 steps from none, M16 seven more
+  enc(3, 15)
+  assert_equal(matrix.routing(1).source, "macro9", "E3 reaches M9")
+  redraw()
+  assert_equal(row_text(context, 24, 0), "source  M9")
+  enc(3, 7)
+  assert_equal(matrix.routing(1).source, "macro16", "and M16")
+  -- a routing whose source is M9 steps to its neighbors
+  matrix.set_routing(2, "macro9", "reverb_mix")
+  tap(2); place(S, "routing:2"); tap(3)
+  enc(3, -1)
+  assert_equal(matrix.routing(2).source, "macro8", "M9 steps down to M8")
+  enc(3, 2)
+  assert_equal(matrix.routing(2).source, "macro10", "and up to M10")
+  -- arc ring 2 draws M9 at its own place: 15 of 27 steps (none, 6 LFOs,
+  -- 16 macros, 4 recorders, the input)
+  local device = context.arc.plug(1)
+  matrix.set_routing(2, "macro9", "reverb_mix"); arc_redraw()
+  assert_near(device.segments[2].to, 15 / 27 * math.pi * 2, 1e-9, "ring 2 at M9's place")
+  -- an unknown key shows as stored and steps away from none, as before
+  matrix.set_routing(2, "later_source", "reverb_mix"); redraw()
+  assert_equal(row_text(context, 24, 0), "source  later_source")
+  enc(3, 1)
+  assert_equal(matrix.routing(2).source, "lfo1", "from none to the first source")
+  -- the list still shows the shown bank's macros only
+  tap(2); place(S, "bank")
+  assert_true(list_row(context, "M1") and not list_row(context, "M9"), "the list keeps bank 1")
+end)
+
+-- The rows are built once and kept until what they are built from changes
+-- (a source registered, a source's visibility: the shown bank)
+test("MOD builds its rows once and keeps them until a source or the shown bank changes", function()
+  local context, S = loaded()
+  local real_list = S.lib.mod_sources.list
+  local calls = 0
+  S.lib.mod_sources.list = function(...) calls = calls + 1; return real_list(...) end
+  local record = S.registry.pages[S.constants.UI_PAGES.index.MOD]
+  local function frame()
+    calls = 0
+    record.animates(); redraw()
+    return calls
+  end
+  local sections = 7  -- macros morph scatter gestures lfos matrix audio: one list call each
+  local first = frame()
+  assert_true(first <= sections, "one build at most in a frame: " .. first .. " list calls")
+  assert_equal(frame(), 0, "nothing changed: no build")
+  S.lib.macros.set_bank(2)
+  assert_true(frame() > 0, "a bank change rebuilds")
+  assert_true(list_row(context, "M5") ~= nil, "and shows the new bank")
+  assert_equal(frame(), 0)
+  S.register_mod_source({ key = "probe", name = "PRB", section = "probes", range = { 0, 1 },
+    value = function() return 0 end })
+  assert_true(frame() > 0, "a registration rebuilds")
+  S.lib.mod_sources.list = real_list
+end)
+
 test("ALT+K2 randomizes scatter's depth and rate, and the complete routings' depths, with an undo", function()
   local context, S = loaded()
   math.randomseed(7)
@@ -496,10 +559,8 @@ test("the hint row names each row's keys", function()
   end
   assert_equal(hints_on("bank"), "K3:bank E3:bank")
   assert_equal(hints_on("source:macro1"), "K3:targets E3:value")
-  assert_equal(hints_on("source:macro1", true), "K2:rand E2:bank E3:fine")
   assert_equal(hints_on("morph_a"), "E3:scene")
   assert_equal(hints_on("morph"), "E3:morph")
-  assert_equal(hints_on("morph", true), "K2:rand E3:fine")
   assert_equal(hints_on("scatter"), "K3:on E3:on/off")
   params:set("scatter", 1)
   assert_equal(hints_on("scatter"), "K3:off E3:on/off")
@@ -507,26 +568,56 @@ test("the hint row names each row's keys", function()
   assert_equal(hints_on("scatter_rate"), "E3:rate")
   assert_equal(hints_on("scatter_pitch"), "K3:off E3:on/off", "pitch is on by default")
   assert_equal(hints_on("source:gesture1"), "K3:rec E3:quant")
-  assert_equal(hints_on("source:gesture1", true), "K2:rand", "an empty recorder has no overdub")
   assert_equal(hints_on("source:lfo1"), "K3:lfo E3:depth")
   assert_equal(hints_on("routing:1"), "K3:edit E3:depth")
-  assert_equal(hints_on("routing:1", true), "K2:rand K3:off E3:fine")
   assert_equal(hints_on("source:input"), "E3:gain")
-  -- the gesture row's ALT hints while it plays, and once K2 is held
+  -- with ALT the K2 part says what ALT+K2 does on the row (ruling 76): rand
+  -- where the section randomizes, clear where only the hold acts and would
+  -- clear something, nothing where it does nothing
+  assert_equal(hints_on("scatter", true), "K2:rand", "scatter randomizes")
+  assert_equal(hints_on("scatter_rate", true), "K2:rand E3:fine")
+  assert_equal(hints_on("bank", true), "", "the bank row: no ALT key acts")
+  assert_equal(hints_on("source:macro1", true), "E2:bank E3:fine", "a macro row: no K2 part")
+  assert_equal(hints_on("morph", true), "E3:fine", "morph: no K2 part")
+  assert_equal(hints_on("source:lfo1", true), "E3:fine", "an LFO row: no K2 part")
+  assert_equal(hints_on("source:gesture1", true), "", "an empty recorder: neither clear nor overdub acts")
+  assert_equal(hints_on("routing:1", true), "K3:off E3:fine", "an empty routing, none complete: nothing to randomize or clear")
+  S.lib.matrix.set_routing(1, "lfo1", "reverb_mix")
+  assert_equal(hints_on("routing:2", true), "K2:rand K3:off E3:fine", "a complete routing: the section randomizes")
+  S.lib.matrix.set_routing(1, "lfo1", "")
+  assert_equal(hints_on("routing:1", true), "K2:clear K3:off E3:fine", "an incomplete routing: only the hold clears it")
+  S.lib.matrix.clear(1)
+  -- the gesture row's hints while it plays, and once K2 is held
   place(S, "source:gesture1")
   tap(3); delta_with_detent("reverb_mix", 1); context.clock.run_for(0.5); tap(3)
   assert_equal(hints_on("source:gesture1"), "K3:stop E3:quant")
-  assert_equal(hints_on("source:gesture1", true), "K2:rand K3:dub")
+  assert_equal(hints_on("source:gesture1", true), "K2:clear K3:dub")
   alt_k2_held(context); redraw()
   assert_equal(hint_text(context), "K2:clear K3:dub")
   key(1, 0); redraw()
   assert_equal(hint_text(context), "K2:clear", "K1 let go while K2 is down: K2's hint alone")
   key(2, 0)
-  -- a row with nothing to hold cancels
+  S.lib.gestures.press(1)                     -- stopped: it still holds its loop
+  assert_equal(hints_on("source:gesture1", true), "K2:clear", "a stopped recorder clears, has no overdub")
+  -- a row that randomizes and has nothing to hold cancels; one that does
+  -- nothing shows no K2 part, held or not
+  place(S, "scatter_depth")
+  alt_k2_held(context); redraw()
+  assert_equal(hint_text(context), "K2:cancel E3:fine")
+  key(2, 0); key(1, 0)
   place(S, "source:macro1")
   alt_k2_held(context); redraw()
-  assert_equal(hint_text(context), "K2:cancel E2:bank E3:fine")
+  assert_equal(hint_text(context), "E2:bank E3:fine")
   key(2, 0); key(1, 0)
+  -- the views: a target row with a target clears, an empty one has no K2 part
+  place(S, "source:macro1"); tap(3)
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3:learn E3:group", "an empty target row")
+  key(1, 0)
+  S.lib.macros.set_target(1, 1, "reverb_mix", 0, 1)
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:clear K3:learn E3:group", "a row with a target")
+  key(1, 0)
   assert_screen_layout(context, "the hints")
 end)
 
