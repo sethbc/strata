@@ -517,6 +517,30 @@ test("a deferrable send past the window's budget waits with its newest value", f
   assert_equal(sync.budget_state().sent, 2, "both count against the new window")
 end)
 
+test("expected_value is the waiting value, else the delivered one (#591)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  assert_equal(sync.expected_value("no_such_param"), nil, "nothing sent: nil")
+  send_param_to_engine("filter_freq", 1000)
+  assert_equal(sync.expected_value("filter_freq"), 1000, "sent: the value")
+  if not S.voices[3].active then toggle_voice(3) end
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function()
+    send_param_to_engine("filter_freq", 2000)
+    send_param_to_engine("v3_grain_size", 0.2)
+  end)
+  assert_equal(engine_param_value("filter_freq"), 1000, "the engine still has the old one")
+  assert_equal(sync.expected_value("filter_freq"), 2000, "a value waiting: the waiting one")
+  sync_voice_values_to_engine(3)
+  assert_equal(sync.expected_value("v3_grain_size"), S.engine_param_values.v3_grain_size,
+    "after a voice sync dropped its pending value: what the sync left")
+  assert_true(sync.expected_value("v3_grain_size") ~= 0.2, "not the dropped value")
+  context.clock.run_for(0.1)
+  assert_equal(sync.expected_value("filter_freq"), 2000, "after the flush: the delivered one")
+  assert_equal(engine_param_value("filter_freq"), 2000)
+end)
+
 test("deferrable restores the flag even when its function raises", function()
   local _, S = buffer_voice()
   local ok = pcall(S.lib.engine_sync.deferrable, function()

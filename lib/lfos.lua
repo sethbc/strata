@@ -446,7 +446,7 @@ return function(S)
     S.lfo_last_dest[n] = id
     S.lfo_scaled[n] = st.value * st.depth / 100 + 2 * params:get(param_id(n, "offset")) / 100
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
-    local last_sent = S.engine_param_values[id]
+    local last_sent = S.lib.engine_sync.expected_value(id)
     if last_sent ~= nil and math.abs(destination_position(id, value) - destination_position(id, last_sent))
       < LFO.send_threshold then
       return

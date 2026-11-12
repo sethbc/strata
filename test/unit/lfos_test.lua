@@ -1231,4 +1231,29 @@ test("the LFO clock invariant holds from the start step to cleanup", function()
   assert_equal(check(), nil, "it holds after cleanup")
 end)
 
+test("a Lua-run LFO is compared with the value waiting in the send budget, not the delivered one (#591)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local budget = S.constants.ENGINE_BUDGET
+  hold_lfo(1, "rev mix", 25)
+  lfo_step(context, 2)
+  local high = S.engine_param_values.reverb_mix
+  params:set(lfo_id(1, "phase"), 50); lfo_step(context, 2)
+  local low = S.engine_param_values.reverb_mix
+  assert_true(math.abs(high - low) > 0.05, "the square's two values are far apart")
+  -- a fresh window, so the fill and the two steps below stay inside one
+  context.set_time((math.floor(util.time() / budget.window_seconds) + 1) * budget.window_seconds + 0.001)
+  -- fill the window's budget with counted sends of another param
+  for _ = 1, budget.messages_per_window do S.lib.engine_sync.send_engine_value("reverb_size", 0.5) end
+  context.clear_engine_calls()
+  params:set(lfo_id(1, "phase"), 0); lfo_step(context)
+  assert_equal(S.lib.engine_sync.budget_state().pending, 1, "the high value waits")
+  params:set(lfo_id(1, "phase"), 50); lfo_step(context)   -- back to the delivered value
+  context.clock.run_for(budget.window_seconds * 2)
+  for _, call in ipairs(context.calls_named("setReverb")) do
+    assert_true(math.abs(call.args[1] - high) > 0.01, "the engine never gets the stale high value (" .. call.args[1] .. ")")
+  end
+  assert_near(S.engine_param_values.reverb_mix, low, 1e-9, "the engine ends on the value the LFO wants")
+end)
+
 end
