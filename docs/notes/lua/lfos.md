@@ -4,6 +4,7 @@
 - **The destination decides where an LFO runs** (design 3.4 Question 2): a destination entry whose fixed param is one of the five fast ones (`v<i>_grain_pitch`, `buf_pos`, `grain_size`, `filter_freq`, `amp`: the entry's `fast`) runs in the engine, at any rate; every other one, `v<i> main` included (it can resolve to any param), runs in Lua, at most `LFO.lua_max_hz` (10 Hz).
 - **One clock** (`S.lfo_clock`) steps all six, every `1 / LFO.step_hz` s (48 Hz), in index order, from the start step `lfo_clock` (125) to the cleanup step `lfos` (120); the `lfo clock` invariant checks it, its coroutine included (`clock.threads`: a clock canceled or ended behind the module's back breaks it, as the scene sequencer's does). Only `S.lib.lfos.stop_clock()` (cleanup's, and a test's that wants a quiet scheduler) stops it. Its sleep is outside every deferrable write: each send of a step goes inside `S.lib.engine_sync.deferrable` (the drain), and nothing inside yields.
 - **At most `LFO.sends_per_step` (12) sends a step**, the LFOs' and the matrix's together, in one round robin (`mark_due(key, send)`): keys in the order first marked, a later mark of a key replacing its send, the next step starting where the last stopped. A Lua destination's key is its param id, so two LFOs (or an LFO and the matrix) on one param send once.
+- **A direct destination takes no slot and no budget message** (#636): a param whose engine sender reaches no engine registers with `direct_destination(param_id)` (the macros', `docs/notes/lua/macros.md`). An LFO on it runs `S.engine_senders[id]` itself with `with_lfo_offsets(id, params:get(id))`, once a step after the six LFOs and before the hooks (every LFO on it stepped), when that moved by `LFO.send_threshold` along its range from the value it last handed over, and at once at a restore; never through `mark_due` or `send_engine_value`.
 - **A Lua send is skipped under `LFO.send_threshold`** (1/1000) of the destination's range, measured along its warp (`destination_position`: an exponential range in octaves, #406) with a step-0 copy of its spec, never the param's own spec. Restores are always sent, at once. The compare is with `S.lib.engine_sync.expected_value(id)`, the value the engine has or will have (a value waiting in the send budget counts, #591); a nil expected value always sends, so a voice sync's dropped value is healed.
 - **A control param's action never calls the engine** (AGENTS.md): the rate, depth, offset, phase and mod amounts mark their LFO `edited` (and the phase `sync_due`), and the next step sends them; the on/off, destination, shape, mode, division and mod source actions reconcile the engine at once.
 - **An edit by a deferrable source goes through the round robin and the send budget** (#633): a control param set while `S.deferrable_write` is set (a macro apply, morph, gesture playback, a fade) marks its LFO `deferred` instead of `edited` (a phase edit marks nothing: its param moved from `phase_seen`, below), and the next step marks the LFO's `setFastLfo` (a phase edit: its `syncFastLfo` alone) due in the round robin, inside the 12 a step and counted in `ENGINE_BUDGET`. Only a hand edit goes at once, uncapped.
@@ -26,7 +27,7 @@
 `lib/lfos.lua` (`S.lib.lfos`):
 - `S.LFO_DESTINATIONS`, `S.selected_lfo`, `S.lfo_clock`;
 - the globals `lfo_destination_id`, `restore_lfo_destination`, `add_lfo_params`;
-- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`;
+- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`; `direct_destination(param_id)`; the engine senders `lfo<n> engine` and `lfo<n> sync`;
 - `SCENE_FIELDS`, `transition_stops`, the scene migration `lfos` and the PSET hook `lfos`;
 - the modulation sources `lfo1`..`lfo6`;
 - the start step `lfo_clock`, the cleanup step `lfos` and the invariant `lfo clock`.
@@ -74,6 +75,7 @@ The percents' quantum is one percent a detent. A division of value r is a period
 
 Each step (`step_all`), every 1/48 s:
 - each LFO in index order (`step_lfo`): off, its value is 0. On: a free LFO's position advances by the rate it played since the last step times the time since (`util.time()`, so a late wake-up does not slow it); a clocked LFO's phase is `(beats / period + clocked_offset + phase)` mod 1, with `clocked_offset` integrating only what rate modulation adds, so an unmodulated clocked LFO is exact against the clock. A wrap draws a random shape's next value. Then its value (2u - 1), rate' and depth' (`evaluate`), and its destination: the engine's settings (`reconcile_engine`), or a Lua send (`step_lua`);
+- the direct destinations the LFOs moved (a macro's), each handed over once, contained;
 - the `on_step` hooks (the macros', `docs/notes/lua/macros.md`, and the matrix's), each contained;
 - the drain: at most 12 of the due keys, in the round robin, each inside `deferrable`.
 
@@ -88,7 +90,7 @@ Each step (`step_all`), every 1/48 s:
 
 ## Restores
 
-`restore_lfo_destination(n)`: clears `S.lfo_last_dest[n]`/`S.lfo_scaled[n]` and sends `send_param_to_engine(id, params:get(id))` (the stored value plus any other offset on it). Called by the on/off action (off), the depth action (0), the destination action, a step whose `main` destination re-resolved or turned fast, and cleanup.
+`restore_lfo_destination(n)`: clears `S.lfo_last_dest[n]`/`S.lfo_scaled[n]` and sends `send_param_to_engine(id, params:get(id))` (the stored value plus any other offset on it); a direct destination's sender gets that value itself, at once. Called by the on/off action (off), the depth action (0), the destination action, a step whose `main` destination re-resolved or turned fast, and cleanup.
 
 ## Scenes
 

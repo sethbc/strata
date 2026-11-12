@@ -41,7 +41,7 @@ The matrix steps in the LFO clock, as a hook of `S.lib.lfos.on_step`, after the 
 
 Each routing's read and each destination's update is contained (above); a raising one prints once and the rest of the step goes on. A step with nothing to do returns at once.
 
-`set_fast_extra(source_key, param_id, m)` records the macros' extras (half ranges, by source key `macro<m>`, nil or a value that is not finite clearing it; a param that is no fast destination is ignored). The macros send it through the round robin, so an extra joins the sum at the step after it arrives (one LFO step late, ruling 64: it stands as built).
+`set_fast_extra(source_key, param_id, m)` records the macros' extras (half ranges, by source key `macro<m>`, nil or a value that is not finite clearing it; a param that is no fast destination is ignored). The macros call it at once, never through the round robin (#636: the hand-over reaches no engine), so an extra joins the sum at the matrix's next step: the same step when the LFO step or the macros' hook (both before the matrix's) hands it over.
 
 `uses_source(key)` and `affects(voice)` read the playing routings: a routing that is off, incomplete, at depth 0 or with an unknown part counts for neither. `offset(param_id)` is the matrix's current sum on a param: the extra offset on a Lua destination (in its units), the clamped sum on a fast one (half ranges); 0 when nothing reaches it.
 

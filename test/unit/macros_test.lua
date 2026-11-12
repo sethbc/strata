@@ -368,6 +368,58 @@ test("a target that changes or loads drops the extra an LFO on its macro gave th
   assert_equal(fast[#fast].id, "v2_buf_pos"); assert_equal(fast[#fast].m, nil, "the fast one too")
 end)
 
+-- #636: the bookkeeping of an LFO on a macro reaches no engine, so it takes
+-- no round-robin slot and no budget message: the macro's own value is
+-- worked out once a step, and its fast extras go to the matrix at once
+test("an LFO on a macro with eight fast targets sends all eight every step, and the macro itself goes through no budget (#636)", function()
+  local context, S, macros = loaded()
+  S.drift_metro:stop()
+  local lfos = S.lib.lfos
+  local targets = { "v1_grain_pitch", "v2_grain_pitch", "v3_grain_pitch", "v4_grain_pitch", "v5_grain_pitch",
+    "v6_grain_pitch", "v7_grain_pitch", "v1_grain_size" }
+  for k, id in ipairs(targets) do assert_true(macros.set_target(1, k, id, 0, 1), "row " .. k .. ": " .. id) end
+  params:set("macro_1", 0.5); settle(context)
+  -- LFO 1 up at 10 Hz, depth 50 %, on macro 1: the macro plays 0.25-0.75, a new value every step
+  for index, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "macro 1" then params:set(lfos.param_id(1, "dest"), index) end
+  end
+  params:set(lfos.param_id(1, "shape"), 4)
+  params:set(lfos.param_id(1, "rate"), 10); params:set(lfos.param_id(1, "depth"), 50)
+  params:set(lfos.param_id(1), 1)
+  local function lfo_step() context.clock.advance_until(S.lfo_clock) end
+  for _ = 1, 4 do lfo_step() end
+  local handed = {}
+  local real_send = S.lib.engine_sync.send_engine_value
+  S.lib.engine_sync.send_engine_value = function(id, value)
+    table.insert(handed, id)
+    return real_send(id, value)
+  end
+  local steps = {}
+  local ok, problem = pcall(function()
+    for _ = 1, 12 do
+      handed = {}
+      context.clear_engine_calls()
+      lfo_step()
+      table.insert(steps, { fast = #context.calls_named("setFastOffset"), handed = handed })
+    end
+  end)
+  S.lib.engine_sync.send_engine_value = real_send
+  if not ok then error(problem, 0) end
+  for index, step in ipairs(steps) do
+    assert_equal(step.fast, 8, "step " .. index .. " sends every moved fast target")
+    for _, id in ipairs(step.handed) do
+      assert_true(id ~= "macro_1", "step " .. index .. ": the macro's own value is handed to no budget")
+    end
+    assert_equal(#step.handed, 8, "step " .. index .. ": the budget counts the eight sends that reach the engine")
+  end
+  -- turned off, every target gets its value back
+  params:set(lfos.param_id(1), 0)
+  lfo_step(); lfo_step()
+  for k, id in ipairs(targets) do
+    assert_near(S.lib.matrix.offset(id), 0, 1e-12, "row " .. k .. "'s extra is gone")
+  end
+end)
+
 test("an LFO on a macro skips LFO-param targets", function()
   local context, S, macros = loaded()
   macros.set_target(1, 1, "strata_lfo2_depth", 0, 1)
