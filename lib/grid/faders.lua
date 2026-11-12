@@ -204,31 +204,44 @@ return function(S)
     shown_faders = signature
   end
 
-  -- The 16x8's and 8x16's macro fader page key (3.4, design §4.6, §11):
-  -- each press steps the port's faders page voice faders -> bank 1 -> 2
-  -- -> 3 -> 4 -> voice faders, setting the shown bank (S.lib.macros.set_bank
-  -- flashes and redraws every grid and the arc). Whether a port shows a
-  -- bank is per port (port_state(port).macro_faders, forgotten with its
-  -- grid); the bank itself is the one every surface shows. Its LED: 4 on
-  -- the voice faders, 6, 9, 12 and 15 on banks 1-4
+  -- The 16x8's and 8x16's macro fader page key (3.4, design §4.6, §11;
+  -- ruling 81): from the voice faders a press shows the bank every surface
+  -- shows now (S.lib.macros.bank()), changing nothing elsewhere; each
+  -- further press shows the next bank (after the last comes bank 1,
+  -- through S.lib.macros.set_bank, which flashes and redraws every grid
+  -- and the arc), and the press after the fourth bank shown since entering
+  -- goes back to the voice faders (the bank stays). Per port:
+  -- port_state(port).macro_faders counts the banks the key showed since
+  -- entering (nil on the voice faders), forgotten with its grid; the bank
+  -- itself is the one every surface shows, so a bank set elsewhere shows
+  -- at once. Its LED: 4 on the voice faders, 6, 9, 12 and 15 on banks 1-4
   local MACRO_PAGE = {levels = {4, 6, 9, 12, 15}}
 
   -- Whether the port's faders page shows the shown bank's macros
   function M.shows_macros(port)
-    return S.lib.grid_core.port_state(port).macro_faders == true
+    return S.lib.grid_core.port_state(port).macro_faders ~= nil
   end
 
   function M.macro_page_key(port)
     local state = S.lib.grid_core.port_state(port)
-    local bank = S.lib.macros.bank()
-    if not state.macro_faders then
-      state.macro_faders = true
-      S.lib.macros.set_bank(1)
-    elseif bank < S.lib.macros.MACROS.banks then
-      S.lib.macros.set_bank(bank + 1)
+    local banks = S.lib.macros.MACROS.banks
+    if state.macro_faders == nil then
+      state.macro_faders = 1
+    elseif state.macro_faders < banks then
+      state.macro_faders = state.macro_faders + 1
+      S.lib.macros.set_bank(S.lib.macros.bank() % banks + 1)
     else
       state.macro_faders = nil
     end
+    grid_redraw()
+  end
+
+  -- A fader page key or a voice select key pressed on a 16x8's or 8x16's
+  -- faders page (ruling 82): the port leaves the macros, so its faders
+  -- show the page of the voice the key picked. Other grids keep theirs
+  function M.leave_macros(port)
+    S.lib.grid_core.port_state(port).macro_faders = nil
+    grid_redraw()
   end
 
   function M.macro_page_level(port)

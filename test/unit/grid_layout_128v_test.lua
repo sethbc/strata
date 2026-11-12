@@ -690,45 +690,86 @@ test("128v scenes page: scenes 9-16 on rows 9-16, lengths 9-16 on column 5", fun
   assert_equal(params:get("scene_sequence_length"), 10, "column 5 above row 9 does nothing")
 end)
 
--- 3.4 (design §4.6, §11): the faders page's column 5 row 16 steps the
--- faders voice faders -> bank 1 -> 2 -> 3 -> 4 -> voice faders (LED 4, 6,
--- 9, 12, 15), setting the shown bank; columns 1-4 are then its macros,
--- upright (row 16 is 0, row 1 is 1)
-test("the macro page key cycles voice faders and the four banks, with its LED", function()
+-- 3.4 (design §4.6, §11; ruling 81, #618): the faders page's column 5 row
+-- 16 enters the macros at the bank every surface shows, changing nothing
+-- elsewhere; each further press shows the next bank (after 4 comes 1),
+-- and the press after the fourth bank shown since entering goes back to
+-- the voice faders (LED 4 on the voice faders, 6, 9, 12, 15 on banks
+-- 1-4); columns 1-4 are the shown bank's macros, upright (row 16 is 0,
+-- row 1 is 1)
+test("the macro page key enters at the shown bank and steps through four banks, with its LED", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 8, 16)
   local S = local_value("S")
   local ids = fader_param_ids(1)
   show_grid_page(context, 1, 2)
   assert_equal(device:get_led(5, 16), 4, "voice faders: 4")
+  S.lib.macros.set_bank(4)
+  S.lib.ui_flash.cancel_all()
   tap(context, 1, 5, 16)
-  assert_equal(S.lib.macros.bank(), 1, "bank 1")
-  assert_equal(device:get_led(5, 16), 6, "bank 1: 6")
-  tap(context, 1, 1, 1)
-  assert_near(params:get("macro_1"), 1.0, 1e-9, "(1,1) sets macro_1 to 1")
-  assert_equal(column_levels(device, 1), "15 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8", "as an upright fader")
-  tap(context, 1, 4, 16)
-  assert_near(params:get("macro_4"), 0, 1e-9, "(4,16) sets macro_4 to 0")
-  local expected = {9, 12, 15}
-  for bank = 2, 4 do
-    tap(context, 1, 5, 16)
-    assert_equal(S.lib.macros.bank(), bank, "the next press: bank " .. bank)
-    assert_equal(device:get_led(5, 16), expected[bank - 1], "bank " .. bank .. "'s level")
-  end
+  assert_equal(S.lib.macros.bank(), 4, "entering keeps the shown bank: MOD's is still 4")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "and nothing flashes")
+  assert_equal(device:get_led(5, 16), 15, "bank 4: 15")
   tap(context, 1, 3, 1)
   assert_near(params:get("macro_15"), 1.0, 1e-9, "bank 4: column 3 is macro_15")
+  local banks, levels = {1, 2, 3}, {6, 9, 12}
+  for press = 1, 3 do
+    tap(context, 1, 5, 16)
+    assert_equal(S.lib.macros.bank(), banks[press], "press " .. press .. " after entering: bank " .. banks[press])
+    assert_equal(device:get_led(5, 16), levels[press], "bank " .. banks[press] .. "'s level")
+  end
+  tap(context, 1, 1, 1)
+  assert_near(params:get("macro_9"), 1.0, 1e-9, "bank 3: (1,1) sets macro_9 to 1")
+  assert_equal(column_levels(device, 1), "15 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8", "as an upright fader")
+  tap(context, 1, 4, 16)
+  assert_near(params:get("macro_12"), 0, 1e-9, "(4,16) sets macro_12 to 0")
   tap(context, 1, 5, 16)
-  assert_equal(device:get_led(5, 16), 4, "after bank 4: the voice faders again")
+  assert_equal(device:get_led(5, 16), 4, "after four banks shown: the voice faders again")
+  assert_equal(S.lib.macros.bank(), 3, "which keep the bank")
   tap(context, 1, 1, 1)
   assert_equal(fader_position(ids[1]), 16, "column 1 is the voice's fader 1 again")
   assert_equal(device:get_led(5, 1), 15, "column 5 still picks the fader pages")
   params:set("macro_15", 0)
   tap(context, 1, 5, 16)
-  assert_equal(S.lib.macros.bank(), 1, "from the voice faders, bank 1 again")
+  assert_equal(S.lib.macros.bank(), 3, "from the voice faders, the shown bank again")
   S.lib.macros.set_bank(4)
   params:set("macro_15", 1)
   drift_update()
   assert_equal(device:get_led(3, 1), 15, "a bank shown and a macro set off the grid show within a tick")
+end)
+
+-- Ruling 82 (#619): on the faders page showing a bank, a fader page key
+-- (column 5) or a voice select key (column 8 rows 10-16) leaves the macros
+-- and shows that page of that voice's faders, on that grid only
+test("a fader page or voice key leaves the macros for that voice's faders", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device, other = context.grid.plug(1, 8, 16), context.grid.plug(2, 8, 16)
+  show_grid_page(context, 1, 2); show_grid_page(context, 2, 2)
+  tap(context, 2, 5, 16)  -- grid 2 shows bank 1
+  local function enter_macros()
+    tap(context, 1, 5, 16)
+    assert_equal(device:get_led(5, 16), 6, "grid 1 shows bank 1")
+  end
+  enter_macros()
+  tap(context, 1, 5, 3)
+  assert_equal(local_value("param_page"), 3, "column 5 row 3 picks fader page 3")
+  assert_equal(device:get_led(5, 16), 4, "and leaves the macros")
+  tap(context, 1, 2, 1)
+  assert_equal(fader_position(fader_param_ids(1)[10]), 16, "column 2 is voice 1's fader 10")
+  assert_near(params:get("macro_2"), 0, 1e-9, "not macro_2")
+  assert_equal(other:get_led(5, 16), 6, "grid 2 still shows bank 1")
+  enter_macros()
+  tap(context, 1, 8, 11)
+  assert_equal(S.grid_voice_select, 2, "column 8 row 11 picks voice 2")
+  assert_equal(device:get_led(5, 16), 4, "and leaves the macros")
+  tap(context, 1, 1, 16)
+  assert_equal(fader_position(fader_param_ids(2)[(S.param_page - 1) * 4 + 1]), 1, "column 1 is voice 2's fader")
+  assert_equal(other:get_led(5, 16), 6, "grid 2 still shows bank 1 through it all")
+  -- a key in column 5 past the voice's pages does nothing, and keeps the macros
+  enter_macros()
+  tap(context, 1, 5, fader_page_count(2) + 1)
+  assert_equal(device:get_led(5, 16), 6, "a row with no fader page: still bank 1")
 end)
 
 -- 3.4 (design §11): the scenes page's column 6 is the morph fader (row 16
