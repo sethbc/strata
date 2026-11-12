@@ -443,17 +443,30 @@ local function assert_routing_rows(context, S, rows)
   end
 end
 
--- ruling 88: a through-zero id ramps between groups of the counting corners
--- that hold the same routing: the current corner's group's weighted mean
--- times the group's lead over the largest other group's weight
-test("a routing that differs between corners ramps between the groups that hold it alike", function()
+-- Record what morph writes to R1's depth (before the param's whole step)
+local function depth_writes(S)
+  local log = {}
+  local real_set = S.lib.scenes.set_value
+  S.lib.scenes.set_value = function(id, value)
+    if id == "matrix_1_depth" then log.last = value end
+    return real_set(id, value)
+  end
+  log.stop = function() S.lib.scenes.set_value = real_set end
+  return log
+end
+
+-- ruling 88a: a through-zero id ramps on its corners' lead. G is the
+-- current corner's group (the counting corners that hold the same routing),
+-- m the largest weight in G, w' the largest outside it:
+-- (sum over G of w x v) x max(0, m - w') / m
+test("a routing that differs between corners ramps on the lead of its corners", function()
   -- A: R1 lfo1 > v1 size at 40; B: lfo2 at 60; C and D as A at 40
   local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 }, { "lfo1", 40 } })
   assert_routing_rows(context, S, {
     { 0.25, 0, 20, "lfo1" },     -- 40 x (0.75 - 0.25)
     { 0.5, 0, 0, "lfo1" },       -- a and b tie: 0
     { 0, 0, 40, "lfo1" },        -- at A: A's depth
-    { 0.25, 0.25, 25, "lfo1" },  -- the group A, C, D (0.8125) leads B (0.1875): 40 x 0.625
+    { 0.25, 0.25, 22, "lfo1" },  -- 40 x 0.8125 x (0.5625 - 0.1875) / 0.5625 = 21.67, stored 22
     { 0.6, 0, 12, "lfo2" },      -- past the crossing: B's routing, 60 x (0.6 - 0.4)
     { 1, 0, 60, "lfo2" },
   })
@@ -461,37 +474,27 @@ end)
 
 test("a routing two corners share never ramps between them", function()
   -- the review's probe: A and C share lfo1 > v1 size at 40, B's differs (lfo2
-  -- at 60), D as A
-  local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 }, { "lfo1", 40 } })
+  -- at 60), D empty
+  local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 } })
   assert_routing_rows(context, S, {
-    { 0, 0.25, 40, "lfo1" },     -- the A to C edge: one group, its mean
+    { 0, 0.25, 40, "lfo1" },     -- the A to C edge: one group, the plain weighted mean (m - 0 over m is 1)
     { 0, 0.5, 40, "lfo1" },
     { 0, 0.75, 40, "lfo1" },
     { 0, 1, 40, "lfo1" },
   })
-  -- just inside the edge: A, C and D (0.995) lead B (0.005)
-  local written
-  local real_set = S.lib.scenes.set_value
-  S.lib.scenes.set_value = function(id, value)
-    if id == "matrix_1_depth" then written = value end
-    return real_set(id, value)
+  -- just inside the edge, continuous with its 40 as x goes to 0
+  local log = depth_writes(S)
+  local expected = {
+    { 0.01, 80 * 0.98 / 1.99 },    -- A and C 0.4975 each, B 0.0050: 39.40, never near 0
+    { 0.001, 80 * 0.998 / 1.999 }, -- 39.94
+    { 0, 40 },
+  }
+  for _, row in ipairs(expected) do
+    settle_xy(context, row[1], 0.5)
+    assert_near(log.last, row[2], 1e-9, "(" .. row[1] .. ", 0.5): morph writes R1's depth")
+    assert_equal(S.lib.matrix.routing(1).source, "lfo1", "on the shared routing")
   end
-  settle_xy(context, 0.01, 0.5)
-  S.lib.scenes.set_value = real_set
-  assert_near(written, 39.6, 1e-9, "(0.01, 0.5): morph writes 40 x 0.99, never 0")
-  assert_near(params:get("matrix_1_depth"), 40, 1e-9, "stored to its whole step")
-  assert_equal(S.lib.matrix.routing(1).source, "lfo1", "on the shared routing")
-  -- the ramp follows the current discrete corner's group: with D empty, at
-  -- (0.53, 0.5) B leads A alone (0.3605 to 0.3197), so the corner and the
-  -- routing switch to B's, while A and C together (0.6395) still lead B:
-  -- the depth goes to 0 at the crossing and rises once B's group leads
-  context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 } })
-  assert_routing_rows(context, S, {
-    { 0.3, 0.5, 26, "lfo1" },                         -- 40 x (0.8235 - 0.1765) = 25.9, stored 26
-    { 0.52, 0.5, 12, "lfo1" },                        -- 40 x (0.6486 - 0.3514) = 11.9, stored 12
-    { 0.53, 0.5, 0, "lfo2" },
-    { 0.7, 0.5, 5, "lfo2" },                          -- 60 x (0.5385 - 0.4615) = 4.6, stored 5
-  })
+  log.stop()
   -- A and C sharing the routing at 40 and 20: a straight blend between them
   context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 20 } })
   assert_routing_rows(context, S, {
@@ -499,6 +502,46 @@ test("a routing two corners share never ramps between them", function()
     { 0, 0.5, 30, "lfo1" },
     { 0, 1, 20, "lfo1" },
   })
+end)
+
+-- ruling 88a: across the square the depth moves in small steps; the one
+-- larger step is the hysteresis's at the corner switch, where the new group
+-- starts at its value times its 0.04 lead (as the two-scene morph does at
+-- 52 %). At y 0.5 with D empty, A and C weigh (1 - x) / (2 - x) each and B
+-- x / (2 - x): A and C's depth is 80 (1 - 2x) / (2 - x), 0 from x 0.5
+-- where B's weight passes theirs; B's, once the corner switches at 0.53,
+-- is 60 (2x - 1) / (2 - x)
+test("a shared routing's depth moves in small steps across the square, with no drop at the corner switch", function()
+  local context, S = routing_scenes({ { "lfo1", 40 }, { "lfo2", 60 }, { "lfo1", 40 } })
+  local log = depth_writes(S)
+  local values, sources = {}, {}
+  for step = 0, 100 do
+    settle_xy(context, step / 100, 0.5)
+    -- at x 0 morph writes nothing (A and C agree: ruling 87): the depth is
+    -- scene 1's 40 as recalled
+    values[step], sources[step] = log.last or params:get("matrix_1_depth"), S.lib.matrix.routing(1).source
+  end
+  log.stop()
+  assert_near(values[0], 40, 1e-9, "x 0: A's and C's 40")
+  local switch
+  for step = 1, 100 do
+    if sources[step] ~= sources[step - 1] then
+      assert_true(switch == nil, "the routing switches once")
+      switch = step
+    end
+  end
+  assert_equal(switch, 53, "the corner and the routing switch to B's at x 0.53")
+  assert_equal(sources[100], "lfo2", "to B's routing")
+  assert_near(values[50], 0, 1e-9, "A and C's depth is 0 where B's weight passes theirs (x 0.5)")
+  assert_near(values[switch - 1], 0, 1e-9, "and still 0 just before the switch: no drop")
+  assert_near(values[switch], 60 * 0.06 / 1.47, 1e-9, "B starts at 60 x its 0.0408 lead: 2.45, the hysteresis's step")
+  local largest, at = 0, nil
+  for step = 1, 100 do
+    local change = math.abs(values[step] - values[step - 1])
+    if step ~= switch and change > largest then largest, at = change, step end
+  end
+  assert_near(largest, 60 - 60 * 0.98 / 1.01, 1e-9, "the largest other step: 1.78, B's steepest, x 0.99 to 1")
+  assert_equal(at, 100, "at x 1")
 end)
 
 -- ruling 24: a PSET load sets the new params as it sets the morph, without
