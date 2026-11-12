@@ -323,61 +323,129 @@ local function bar_wait_grid(cols, rows)
   return context, S, device
 end
 
-test("a bookmark key that waits for the bar shows as waiting until it lands (#593)", function()
+-- The 256's LED of voice v's bookmark key n (its strip is on row 8 + v)
+local function key_led(device, voice_idx, n) return device:get_led(n, 8 + voice_idx) end
+
+local function snapshot(device)
+  local cells = {}
+  for x = 1, device.cols do
+    for y = 1, device.rows do cells[#cells + 1] = device:get_led(x, y) end
+  end
+  return table.concat(cells, ",")
+end
+
+-- Tick by tick until `done()`: the key's LED after each tick and the repaints
+-- that tick made (each tick is one clock step of 1 / 15 s)
+local function trace(context, device, voice_idx, n, done)
+  local steps = {}
+  local last, count = key_led(device, voice_idx, n), device.refresh_count
+  for _ = 1, 60 do
+    context.clock.run_for(1 / 15)
+    local led = key_led(device, voice_idx, n)
+    -- a step that ends before the clock's next tick has seen nothing yet
+    if #steps > 0 or led ~= last or device.refresh_count ~= count then
+      steps[#steps + 1] = {led = led, changed = led ~= last, repaints = device.refresh_count - count}
+    end
+    last, count = led, device.refresh_count
+    if done() then break end
+  end
+  -- the tick after the landing repaints it
+  context.clock.run_for(1 / 15)
+  local led = key_led(device, voice_idx, n)
+  steps[#steps + 1] = {led = led, changed = led ~= last, repaints = device.refresh_count - count}
+  return steps
+end
+
+test("a waiting bookmark's key blinks on the grid's LED and repaints once per phase (#593)", function()
   local context, S, device = bar_wait_grid()
   local LEVELS = S.lib.positions.LEVELS
-  local before = device.refresh_count
+  local steady = key_led(device, 1, 2)
+  assert_equal(steady, LEVELS.bookmark, "set, not waiting: the bookmark level")
   S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
-  assert_equal(S.lib.positions.waiting_bookmark(1), 2)
-  local seen = {}
-  for _ = 1, 12 do
-    context.clock.run_for(1 / 15)
-    seen[S.lib.positions.strip_level(1, 2)] = true
+  local steps = trace(context, device, 1, 2, function() return S.lib.positions.waiting_bookmark(1) == nil end)
+  local highs, lows, changes = 0, 0, 0
+  for index, step in ipairs(steps) do
+    local landed = index == #steps
+    assert_equal(step.repaints, step.changed and 1 or 0, "tick " .. index .. ": one repaint exactly when the LED changed")
+    if landed then
+      assert_equal(step.led, LEVELS.recalled, "the recall landed: the recalled level")
+      assert_true(step.changed, "and the landing repainted")
+    else
+      assert_true(step.led == LEVELS.waiting_high or step.led == LEVELS.waiting_low, "waiting: a waiting level, got " .. step.led)
+      if step.led == LEVELS.waiting_high then highs = highs + 1 else lows = lows + 1 end
+      if step.changed then changes = changes + 1 end
+    end
   end
-  assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], "it blinks between the two waiting levels")
-  assert_true(not seen[LEVELS.bookmark] and not seen[LEVELS.recalled], "never at a set or recalled level")
-  assert_equal(S.lib.positions.strip_level(1, 3), LEVELS.bookmark, "another key is unchanged")
-  assert_true(device.refresh_count >= before + 2, "the page repainted when the wait started and as it blinked")
-  context.clock.run_for((4.02 - clock.get_beats()) * clock.get_beat_sec())
-  assert_equal(S.lib.positions.waiting_bookmark(1), nil)
-  assert_equal(S.lib.positions.strip_level(1, 2), LEVELS.recalled, "landed: the recalled level")
-  local landed = device.refresh_count
-  context.clock.run_for(0.2)
-  assert_true(device.refresh_count > landed, "the page repainted for the landing")
-  local after = device.refresh_count
+  assert_true(highs >= LEVELS.waiting_ticks - 1 and lows >= LEVELS.waiting_ticks - 1, "both levels held for a phase")
+  assert_true(changes >= 3, "the wait's start and at least two phase changes repainted, got " .. changes)
   context.clock.run_for(1)
-  assert_equal(device.refresh_count, after, "and nothing repaints after the wait ended")
+  assert_equal(key_led(device, 1, 2), LEVELS.recalled, "and it stays at the recalled level")
 end)
 
-test("the repaint at the end of the wait comes from the signature alone (#593)", function()
-  local context, S, device = bar_wait_grid()
-  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
-  context.clock.run_for(0.5)
-  context.clock.run_for((4.0 - clock.get_beats()) * clock.get_beat_sec() - 0.01)
-  local signature = S.lib.positions.display_signature()
-  context.clock.run_for(0.02 + 1 / 15)
-  assert_true(S.lib.positions.display_signature() ~= signature, "the signature changed when the wait ended")
-end)
-
-test("a second key moves the waiting mark, and every page-5 grid repaints (#593)", function()
+test("a waiting bookmark's blink reaches the position page's grid and leaves another page's LEDs as they were (#593)", function()
   local context, S, device = bar_wait_grid()
   local other = context.grid.plug(2, 16, 16)
-  S.lib.grid_core.set_page(2, 5)
+  S.lib.grid_core.set_page(2, 1)
   context.clock.run_for(0.5)
-  local before, before_other = device.refresh_count, other.refresh_count
+  local before = snapshot(other)
+  local seen = {}
+  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
+  for _ = 1, 15 do
+    context.clock.run_for(1 / 15)
+    seen[key_led(device, 1, 2)] = true
+  end
+  local LEVELS = S.lib.positions.LEVELS
+  assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], "the page-5 grid's key blinks")
+  assert_equal(snapshot(other), before, "the page-1 grid shows what it showed before the wait")
+end)
+
+test("a second key moves the waiting mark on the grid (#593)", function()
+  local context, S, device = bar_wait_grid()
+  local LEVELS = S.lib.positions.LEVELS
   S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
   context.clock.run_for(0.5)
-  assert_true(device.refresh_count > before and other.refresh_count > before_other, "both page-5 grids repaint")
   S.lib.positions.strip_key(1, 1, 4, 1); S.lib.positions.strip_key(1, 1, 4, 0)
-  local LEVELS = S.lib.positions.LEVELS
   local seen2, seen4 = {}, {}
   for _ = 1, 12 do
     context.clock.run_for(1 / 15)
-    seen2[S.lib.positions.strip_level(1, 2)] = true
-    seen4[S.lib.positions.strip_level(1, 4)] = true
+    seen2[key_led(device, 1, 2)] = true
+    seen4[key_led(device, 1, 4)] = true
   end
-  assert_true(not seen2[LEVELS.waiting_high] and not seen2[LEVELS.waiting_low], "key 2 no longer waits")
+  assert_true(not seen2[LEVELS.waiting_high] and not seen2[LEVELS.waiting_low], "key 2 no longer blinks")
+  assert_equal(key_led(device, 1, 2), LEVELS.bookmark)
   assert_true(seen4[LEVELS.waiting_high] and seen4[LEVELS.waiting_low], "key 4 does")
+end)
+
+test("two voices' waiting bookmarks blink, and one landing leaves the other blinking (#593)", function()
+  local context, S, device = bar_wait_grid()
+  local LEVELS = S.lib.positions.LEVELS
+  S.buffers[2].seconds = 16
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 2)
+  params:set("quantize_actions", 2)  -- beat
+  context.clock.run_for((4.02 - clock.get_beats()) * clock.get_beat_sec())
+  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
+  params:set("quantize_actions", 3)  -- bar: voice 2's recall waits longer
+  S.lib.positions.strip_key(1, 2, 3, 1); S.lib.positions.strip_key(1, 2, 3, 0)
+  assert_equal(S.lib.positions.waiting_bookmark(1), 2)
+  assert_equal(S.lib.positions.waiting_bookmark(2), 3)
+  local one, two = {}, {}
+  for _ = 1, 6 do
+    context.clock.run_for(1 / 15)
+    one[key_led(device, 1, 2)] = true
+    two[key_led(device, 2, 3)] = true
+  end
+  assert_true(one[LEVELS.waiting_high] and one[LEVELS.waiting_low], "voice 1's key blinks")
+  assert_true(two[LEVELS.waiting_high] and two[LEVELS.waiting_low], "voice 2's key blinks")
+  context.clock.run_for((5.05 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(S.lib.positions.waiting_bookmark(1), nil, "voice 1's recall landed on the beat")
+  assert_equal(S.lib.positions.waiting_bookmark(2), 3, "voice 2's still waits for the bar")
+  local after = {}
+  for _ = 1, 8 do
+    context.clock.run_for(1 / 15)
+    after[key_led(device, 2, 3)] = true
+  end
+  assert_true(after[LEVELS.waiting_high] and after[LEVELS.waiting_low], "voice 2's key goes on blinking")
+  assert_equal(key_led(device, 1, 2), LEVELS.recalled, "voice 1's key shows its landing")
 end)
 
 test("a wait repaints nothing while no grid shows the position page (#593)", function()
