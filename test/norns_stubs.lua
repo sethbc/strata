@@ -1769,11 +1769,14 @@ local function make_clock(util)
   -- cleared at the step's start, as matron clears it when it posts), so a
   -- reset or a jump made by an earlier resume in the step leaves a later
   -- posted event as it was: its next sync counts on from its own beat.
-  -- Events scheduled during the step wait for the next one; one canceled by
-  -- an earlier one in the step is skipped (norns would resume a coroutine it
-  -- no longer has and report the error). before_delivery (optional) runs
-  -- once the step's events are posted and before the first is delivered, as
-  -- a reset or a jump can fall between a tick's posts and Lua's deliveries
+  -- Events scheduled during the step wait for the next one. before_delivery
+  -- (optional) runs once the step's events are posted and before the first
+  -- is delivered, as a reset, a jump or another event Lua handles first can
+  -- fall between a tick's posts and its deliveries. Every posted event is
+  -- delivered, one whose coroutine was canceled since the post (by the hook
+  -- or by an earlier resume in the step) too, as norns delivers every
+  -- EVENT_CLOCK_RESUME it posted (w_handle_clock_resume): clock.resume finds
+  -- no coroutine and raises, recorded as every resume's error is
   function clock.advance(before_delivery)
     local pending = ready_events()
     local first = pending[1]
@@ -1791,9 +1794,7 @@ local function make_clock(util)
     local tick = { time = step_time, beat = beats_at(step_time) }
     for _, entry in ipairs(due) do entry.event.ready = false end  -- posted
     if before_delivery then before_delivery() end
-    for _, entry in ipairs(due) do
-      if clock.events[entry.id] == entry.event and entry.event.order == entry.order then fire(entry, tick) end
-    end
+    for _, entry in ipairs(due) do fire(entry, tick) end
   end
 
   -- Test helper: run the scheduler, one event at a time in firing order,

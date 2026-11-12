@@ -106,15 +106,19 @@ return function(S)
   -- clock beat the scheduler counts the participant's next sync from, and
   -- generation the play.generation it synced in; sync_time, sync_beat and
   -- sync_beat_seconds: the time, the beat and a beat's length when it
-  -- synced; stale: last_sync may be an old count's (a sleep resets it).
+  -- synced; stale: last_sync may be an old count's (a sleep resets it);
+  -- waiting: "sync" or "sleep" while it waits on one (nil while it runs);
+  -- retired: its clock's id once ended (end_clock).
   -- play.failed: the
   -- outputs skipped until the next start; play.started: a voice started
   -- since the last redraw; play.reset_beat: a division reset's bar;
+  -- play.retired: [id] = true for each clock ended but left to finish at its
+  -- next wake (end_clock);
   -- overrides: per voice, the param ids its last played step overrides;
   -- last_played: per voice, that step; gate_sent: per voice, the
   -- gateSeconds sent last
   local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0,
-    generation = 0}
+    generation = 0, retired = {}}
   local overrides, last_played, gate_sent = {}, {}, {}
   -- the chain: the scene loaded last and the beat of the next link
   local chain = {current = nil, next_beat = nil}
@@ -589,6 +593,14 @@ return function(S)
     return beats - seconds / beat_seconds >= SEQ.late_beats
   end
 
+  -- Whether the participant's clock was ended (state.retired: end_clock,
+  -- below); its id then leaves play.retired, as the coroutine ends
+  local function finished(state)
+    if not state.retired then return false end
+    play.retired[state.retired] = nil
+    return true
+  end
+
   -- Wait for target, a beat of the sequencer's count (the clock's beat
   -- target - play.offset), in hops of at most a 16th (SEQ.hop_beats), so a
   -- jump of the clock's beat reaches every clock within a hop. A hop lands
@@ -619,10 +631,14 @@ return function(S)
   --   script's transport handler), which this clock keeps itself, as the
   --   handler would. It then waits on the count as it is now.
   -- A target the count has already passed returns at once: the caller plays
-  -- at most one step for it (rule 4)
+  -- at most one step for it (rule 4). Returns true, or false when the clock
+  -- was ended (end_clock, below) during its own step or while it waited
+  -- (finished, above): its coroutine then ends at once, doing nothing more.
+  -- state.waiting says what it waits on
   local function wait_for(state, target)
     local hop = SEQ.hop_beats
     while true do
+      if finished(state) then return false end
       local now = clock.get_beats()
       if now < state.last_sync - SEQ.wake_tolerance then
         if play.generation == state.generation then play.keep_count() end
@@ -631,12 +647,15 @@ return function(S)
         state.stale = true
       end
       if state.stale then
+        state.waiting = "sleep"
         clock.sleep(0)
+        state.waiting = nil
+        if finished(state) then return false end
         now = clock.get_beats()
         state.stale, state.last_sync = false, now
       end
       local clock_target = target - play.offset
-      if clock_target <= now + SEQ.flt_epsilon then return end
+      if clock_target <= now + SEQ.flt_epsilon then return true end
       local from = state.last_sync
       local landing, offset = clock_target, 0
       if clock_target - from > hop then
@@ -647,7 +666,10 @@ return function(S)
       end
       state.last_sync, state.generation = landing, play.generation
       state.sync_time, state.sync_beat, state.sync_beat_seconds = util.time(), now, clock.get_beat_sec()
+      state.waiting = "sync"
       local woke = clock.sync(hop, offset) or clock.get_beats()
+      state.waiting = nil
+      if finished(state) then return false end
       if woke >= landing - SEQ.wake_tolerance and woke < landing + SEQ.late_beats then
         if play.generation ~= state.generation then state.stale = true end
         if jumped_forward(state) then
@@ -656,11 +678,42 @@ return function(S)
           if play.generation == state.generation then play.keep_count() end
           state.stale = true
         end
-        if landing == clock_target then return end
+        if landing == clock_target then return true end
       else
         if play.generation == state.generation then play.keep_count() end
         state.stale = true
       end
+    end
+  end
+
+  -- Whether matron may have posted the resume of a participant's clock
+  -- (state: its state) and norns not delivered it yet: while it sleeps (a
+  -- sleep of 0 is due at once), once its sync's beat is near or passed
+  -- (within SEQ.wake_tolerance: a tick's jitter), and whenever the beat is
+  -- below the one it synced at (a reset or a new clock source has moved its
+  -- sync since); and for a clock that runs now (one ending itself), which
+  -- must never cancel itself
+  local function resume_may_be_posted(state)
+    if state.waiting ~= "sync" then return true end
+    local now = clock.get_beats()
+    return now < state.sync_beat or state.last_sync - now <= SEQ.wake_tolerance
+  end
+
+  -- End a participant's clock id (state: its state) without ever canceling
+  -- one whose resume matron may have posted: norns would deliver that resume
+  -- to a coroutine it no longer has, and clock.resume raises (maiden prints
+  -- the error). Such a clock is retired instead (state.retired, and its id
+  -- in play.retired): at its next wake wait_for returns false and its
+  -- coroutine ends, doing nothing more. Any other is canceled at once.
+  -- all_posted: the clock has just put every waiting sync on beat 0 (a
+  -- followed transport start), so every resume is posted within a tick and
+  -- every clock is retired
+  local function end_clock(id, state, all_posted)
+    state.retired = id
+    if all_posted or resume_may_be_posted(state) then
+      play.retired[id] = true
+    else
+      clock.cancel(id)
     end
   end
 
@@ -839,7 +892,7 @@ return function(S)
   end
 
   -- A clock's step through xpcall: an error forgets the clock's own id
-  -- (forget), so the stop never cancels this clock from inside itself,
+  -- (forget), so the stop never ends this clock from inside itself,
   -- shows the patterns stopped (the grid, the header's play mark, SEQ, and
   -- MAIN with the voices a step started) and is raised again (#243)
   local function guarded(forget, fn)
@@ -902,7 +955,7 @@ return function(S)
     while true do
       local hit = 2
       while hit <= plan.hits do
-        wait_for(state, plan.beat + (hit - 1) * plan.spacing)
+        if not wait_for(state, plan.beat + (hit - 1) * plan.spacing) then return end
         hit = guarded(forget, function() return due_hit(voice_idx, plan, hit) end)
         if hit == nil then break end
         guarded(forget, function() play_voice_hit(voice_idx, plan, hit) end)
@@ -913,7 +966,7 @@ return function(S)
         return {k = k, target = target}
       end)
       state.due = next_tick.target
-      wait_for(state, next_tick.target)
+      if not wait_for(state, next_tick.target) then return end
       state.due = nil
       guarded(forget, function()
         take_tick(voice_idx, next_tick.k, next_tick.target)
@@ -923,10 +976,15 @@ return function(S)
     end
   end
 
-  -- Start (or start again) voice_idx's clock at beat, now
+  -- Start (or start again) voice_idx's clock at beat, now: a running one
+  -- is ended (end_clock) and the new one gets a state of its own
   function M.restart_voice(voice_idx, beat)
-    if S.pattern_clocks[voice_idx] then clock.cancel(S.pattern_clocks[voice_idx]) end
+    local running = S.pattern_clocks[voice_idx]
     S.pattern_clocks[voice_idx] = nil
+    if running then
+      end_clock(running, play.voices[voice_idx])
+      play.voices[voice_idx] = {}
+    end
     S.pattern_clocks[voice_idx] = clock.run(voice_clock, voice_idx, beat)
   end
 
@@ -942,7 +1000,7 @@ return function(S)
       local sixteenth = SEQ.transport_beats
       local target = state.anchor + (state.tick + 1) * sixteenth
       state.due = target
-      wait_for(state, target)
+      if not wait_for(state, target) then return end
       state.due = nil
       local tick = state.tick + 1
       while is_due(state.anchor + (tick + 1) * sixteenth) do tick = tick + 1 end
@@ -952,18 +1010,21 @@ return function(S)
     end
   end
 
-  -- Cancel every clock of the patterns (the voices' and the transport's)
-  local function cancel_clocks()
+  -- End every clock of the patterns (the voices' and the transport's:
+  -- end_clock, all_posted as there), each participant on a fresh state
+  local function end_clocks(all_posted)
     for voice_idx = 1, NUM_VOICES do
-      if S.pattern_clocks[voice_idx] then clock.cancel(S.pattern_clocks[voice_idx]) end
+      local running = S.pattern_clocks[voice_idx]
       S.pattern_clocks[voice_idx], S.pattern_sounding_steps[voice_idx] = nil, nil
+      if running then end_clock(running, play.voices[voice_idx], all_posted) end
       play.voices[voice_idx] = {anchor = 0, tick = 0, beat = 0, position = 1, pass_length = PATTERN_LENGTH}
     end
-    if S.pattern_clock then clock.cancel(S.pattern_clock) end
+    local running = S.pattern_clock
     S.pattern_clock = nil
+    if running then end_clock(running, play.transport, all_posted) end
     play.transport = {anchor = 0, tick = 0, beat = 0}
   end
-  cancel_clocks()
+  end_clocks()
 
   -- Pattern edits ---------------------------------------------------------
 
@@ -1058,9 +1119,10 @@ return function(S)
 
   -- Start (or start again) the patterns now: every voice and the transport
   -- at step 1 on this beat, a running chain at its first scene, and every
-  -- output that failed is played again
-  function pattern_clock_start()
-    cancel_clocks()
+  -- output that failed is played again. The clocks that ran end through
+  -- end_clocks(all_posted): true for a followed transport start
+  local function start_patterns(all_posted)
+    end_clocks(all_posted)
     -- the sequencer's count is the clock's again (ruling 47)
     play.failed, play.started, play.reset_beat, play.offset = {}, false, nil, 0
     play.generation = play.generation + 1
@@ -1080,13 +1142,16 @@ return function(S)
     S.pattern_clock = clock.run(transport_clock, beat)
   end
 
-  -- Stop the patterns: every clock canceled, the playheads cleared, every
-  -- override ended and (when they played) every output's stop run
+  function pattern_clock_start() start_patterns(false) end
+
+  -- Stop the patterns: every clock ended (end_clocks), the playheads
+  -- cleared, every override ended and (when they played) every output's
+  -- stop run
   function pattern_clock_stop()
     local was_playing = S.pattern_playing
     S.pattern_playing = false
     S.pattern_sounding_step = nil
-    cancel_clocks()
+    end_clocks(false)
     play.reset_beat, chain.next_beat = nil, nil
     end_all_overrides()
     if was_playing then stop_outputs() end
@@ -1202,13 +1267,15 @@ return function(S)
   -- at once by the reset, waits again on it (wait_for). A clock whose
   -- resume matron posted before the reset was delivered before this handler
   -- (matron posts the start after the reset) and its next sync already
-  -- counts from now (wait_for, ruling 58). No clock is canceled here: matron
-  -- posts the woken clocks' resumes within a millisecond of the reset,
-  -- often before this runs, and norns would deliver each to a coroutine it
-  -- no longer has (clock.resume errors)
+  -- counts from now (wait_for, ruling 58). Nothing here cancels a clock:
+  -- matron posts the woken clocks' resumes within a millisecond of the
+  -- reset, often before this runs, and norns would deliver each to a
+  -- coroutine it no longer has (clock.resume errors). So a followed start
+  -- retires every running clock (end_clock's all_posted), canceling none:
+  -- each ends at its resume, within a tick, and plays nothing more
   function transport.start()
     if M.follows_transport() then
-      pattern_clock_start()
+      start_patterns(true)
       request_redraw()
     else
       play.keep_count()
@@ -1263,9 +1330,14 @@ return function(S)
     return level
   end
 
-  -- Stop the pattern clocks and give the clock its transport handlers back
+  -- Stop the pattern clocks, canceling those the stop or anything earlier
+  -- left to finish at their next wake (end_clock: norns cancels every
+  -- coroutine right after cleanup anyway), and give the clock its
+  -- transport handlers back
   S.register_cleanup(S.constants.CLEANUP_ORDER.pattern_clock, function()
     pattern_clock_stop()
+    for id in pairs(play.retired) do clock.cancel(id) end
+    play.retired = {}
     if clock.transport.start == transport.start then
       clock.transport.start, transport.previous_start = transport.previous_start, nil
     end
@@ -1275,8 +1347,25 @@ return function(S)
   end)
 
   -- The patterns play exactly while their clocks run: the transport's and
-  -- every voice's
+  -- every voice's, each recorded clock a coroutine that runs (in
+  -- clock.threads, as norns keeps them, and not dead) and none of them one
+  -- ended and left to finish (end_clock: play.retired), which runs until
+  -- its next wake, is never recorded and is forgotten when it finishes
+  local function runs(id)
+    local thread = clock.threads[id]
+    return type(thread) == "thread" and coroutine.status(thread) ~= "dead"
+  end
+
+  local function clock_problem(id, name)
+    if id == nil or not clock.threads then return nil end
+    if play.retired[id] then return name .. " " .. id .. " was ended (it only waits to finish) but is recorded" end
+    if not runs(id) then return name .. " " .. id .. " is not running (canceled or ended) but is recorded" end
+  end
+
   S.register_invariant("pattern clock", function()
+    for id in pairs(play.retired) do
+      if clock.threads and not runs(id) then return "clock " .. id .. ", ended and left to finish, has gone but is kept" end
+    end
     if S.pattern_playing ~= (S.pattern_clock ~= nil) then
       return "pattern_playing is " .. tostring(S.pattern_playing) .. " but pattern_clock is " .. tostring(S.pattern_clock)
     end
@@ -1285,7 +1374,10 @@ return function(S)
         return "pattern_playing is " .. tostring(S.pattern_playing) .. " but voice " .. voice_idx .. "'s clock is "
           .. tostring(S.pattern_clocks[voice_idx])
       end
+      local problem = clock_problem(S.pattern_clocks[voice_idx], "voice " .. voice_idx .. "'s clock")
+      if problem then return problem end
     end
+    return clock_problem(S.pattern_clock, "the transport's clock")
   end)
 
   return M

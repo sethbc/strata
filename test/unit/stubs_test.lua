@@ -1570,6 +1570,56 @@ test("stub clock: advance's hook runs between the step's posts and its deliverie
   clock.cancel(first); clock.cancel(second)
 end)
 
+-- A coroutine canceled after its resume was posted (Lua handled another
+-- event first) still gets the resume: norns' clock.resume finds no
+-- coroutine and raises, as lua/core/clock.lua's does
+test("stub clock: a resume posted before advance's hook cancels its coroutine is still delivered, and raises", function()
+  local context = load_strata(); finish_startup(context)
+  local woke = 0
+  local waiting = clock.run(function()
+    while true do clock.sync(1); woke = woke + 1 end
+  end)
+  local canceled = false
+  repeat
+    context.clock.advance(function()
+      if not canceled and not context.clock.events[waiting].ready then
+        canceled = true
+        clock.cancel(waiting)
+      end
+    end)
+  until canceled
+  assert_equal(woke, 0, "the coroutine never ran again")
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "one error")
+  -- Lua 5.3 (norns'): "bad argument #1 to 'resume' (thread expected)"; LuaJIT says "coroutine expected"
+  assert_true(errors[1]:find("bad argument #1 to '[^']*resume'") ~= nil and errors[1]:find("expected)", 1, true) ~= nil,
+    "norns' resume of a coroutine it no longer has: " .. errors[1])
+end)
+
+-- The same for a coroutine an earlier resume in the step cancels: matron's
+-- tick posted both resumes before Lua delivered either
+test("stub clock: a resume posted in the step of an earlier resume that cancels its coroutine is still delivered, and raises", function()
+  local context = load_strata(); finish_startup(context)  -- beat 1
+  local woke, second = {}, nil
+  local first = clock.run(function()
+    while true do
+      clock.sync(1)
+      table.insert(woke, "first")
+      if second then clock.cancel(second); second = nil end
+    end
+  end)
+  second = clock.run(function()
+    while true do clock.sync(1); table.insert(woke, "second") end
+  end)
+  repeat context.clock.advance() until #woke > 0  -- the step at beat 2 posts both, the first's slot first
+  assert_equal(table.concat(woke, " "), "first", "the canceled coroutine never ran again")
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "one error")
+  assert_true(errors[1]:find("bad argument #1 to '[^']*resume'") ~= nil and errors[1]:find("expected)", 1, true) ~= nil,
+    "norns' resume of a coroutine it no longer has: " .. errors[1])
+  clock.cancel(first)
+end)
+
 -- matron's clock_set_source (and crow's input division) reschedule every
 -- waiting sync from the new source's beat (clock_scheduler_reschedule_sync_events:
 -- the next multiple of its beats after the new beat, plus its offset), with
