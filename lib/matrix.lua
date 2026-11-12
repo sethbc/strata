@@ -70,7 +70,6 @@ return function(S)
   S.matrix = {}
   for k = 1, MATRIX_SLOTS do S.matrix[k] = empty_routing() end
   S.matrix_learn_clock = nil  -- learn's timeout, while learn waits
-  S.matrix_save_clock = nil   -- the live file's coalesced write, while it waits
 
   ---------------------------------------------------------------------------
   -- Destinations (design §10.2, Question 33)
@@ -498,73 +497,28 @@ return function(S)
     end
   end
 
-  -- Write the routings to path (none too, so a PSET saved over never keeps
-  -- an older side file). Returns whether it was written
-  local function write_file(path)
-    local written, detail = S.lib.data_files.write(path, {version = MATRIX.data_version, matrix = sparse()})
-    if not written then print("error: matrix not saved to " .. path .. " (" .. tostring(detail) .. ")") end
-    return written
-  end
-
-  -- Load the routings from path: a missing file loads them empty; one that
-  -- cannot be used is set aside (path .. ".bak", ...) with a console line,
-  -- and they load empty. Returns whether path may be written over: false
-  -- only for a file that could not be used and could not be set aside
-  local function read_file(path)
-    local loaded, problem, detail = S.lib.data_files.read(path)
-    local why
-    if loaded == nil and problem ~= "missing" then
-      why = tostring(detail)
-    elseif loaded ~= nil then
-      if type(loaded) ~= "table" or loaded.version ~= MATRIX.data_version then
-        why = "not a version " .. MATRIX.data_version .. " matrix file"
-      else
-        why = block_problem(loaded.matrix)
-      end
-    end
-    local writable = true
-    if why then
-      local backup, failure = S.lib.data_files.set_aside(path, MATRIX.backup_suffix)
-      print("error loading matrix file " .. path .. ": " .. why .. "; "
-        .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
-      loaded = nil
-      writable = backup ~= nil
-    end
-    load_block(loaded and loaded.matrix or nil)
-    report_unknown(path)
-    return writable
-  end
-
-  -- The live file follows the routings once it has been loaded (a start
-  -- step that failed never overwrites it): one write save_delay s after
-  -- the first change of a burst, carrying the newest routings, from
-  -- S.matrix_save_clock; the cleanup step writes at once
-  local live = {dir = _path.data .. "strata/", loaded = false}
-
-  local function write_live()
-    if not live.loaded then return end
-    if util.file_exists(live.dir) == false then util.make_dir(live.dir) end
-    write_file(live.dir .. MATRIX.live_file)
-  end
-
-  local function save_live()
-    if not live.loaded or S.matrix_save_clock then return end
-    S.matrix_save_clock = clock.run(function()
-      clock.sleep(MATRIX.save_delay)
-      S.matrix_save_clock = nil
-      write_live()
-    end)
-  end
-
-  local function cancel_save()
-    if S.matrix_save_clock then
-      clock.cancel(S.matrix_save_clock)
-      S.matrix_save_clock = nil
-    end
-  end
+  -- The files (lib/side_files.lua): the live file data/strata/matrix.data
+  -- and the one beside each PSET, {version, matrix = <sparse>}. A file that
+  -- cannot be used is set aside and loads no routings; an unknown part
+  -- loads, named on the console at each file load. The live file follows
+  -- the routings once the start step loaded it (one that failed is never
+  -- written over): one write save_delay s after the first change of a
+  -- burst, carrying the newest routings, from S.matrix_save_clock; the
+  -- cleanup step writes at once
+  local files = S.lib.side_files.new({
+    name = "matrix", contents = "routings", version = MATRIX.data_version, key = "matrix",
+    live_file = MATRIX.live_file, side_suffix = MATRIX.side_suffix, backup_suffix = MATRIX.backup_suffix,
+    save_delay = MATRIX.save_delay, clock_field = "matrix_save_clock",
+    capture = sparse,
+    validate = block_problem,
+    load = function(block, path)
+      load_block(block)
+      report_unknown(path)
+    end,
+  })
 
   local function routings_changed()
-    save_live()
+    files.save_live()
     request_redraw()
   end
 
@@ -755,32 +709,17 @@ return function(S)
   -- The PSET's side file: written with every PSET save (empty too), read
   -- after every PSET load (the depths and on/off are the PSET's own
   -- params), deleted with the PSET
-  S.register_pset_hook({
-    name = "matrix",
-    write = function(path_base) write_file(path_base .. MATRIX.side_suffix) end,
-    read = function(path_base)
-      read_file(path_base .. MATRIX.side_suffix)
-      routings_changed()
-    end,
-    delete = function(path_base) os.remove(path_base .. MATRIX.side_suffix) end,
-  })
+  S.register_pset_hook(files.pset_hook(nil, routings_changed))
 
   -- The live file: loaded at init, saved at cleanup and as the routings
   -- change, once it was read, missing or set aside. One that could be
   -- neither read nor set aside is never written over (scenes.data's rule):
   -- the routings are not saved in this session, which one line says
   S.register_start(S.constants.START_ORDER.matrix_load, function()
-    local path = live.dir .. MATRIX.live_file
-    live.loaded = read_file(path)
-    if not live.loaded then
-      print("matrix: " .. path .. " could not be read or moved aside; the routings will not be saved this session")
-    end
+    files.load_live()
     request_redraw()
   end)
-  S.register_cleanup(S.constants.CLEANUP_ORDER.matrix_save, function()
-    cancel_save()
-    write_live()
-  end)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.matrix_save, files.save_now)
 
   -- Cleanup, before the LFOs' step: learn is canceled and the matrix's
   -- offsets are forgotten. It sends nothing: norns has freed the engine by

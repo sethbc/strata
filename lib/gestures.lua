@@ -694,76 +694,45 @@ return function(S)
     end
   end
 
-  -- Write every recorder to path (an empty one too, so a PSET saved over
-  -- never keeps an older side file). Returns whether it was written
-  local function write_file(path)
-    local recorders = {}
-    for k = 1, NUM_GESTURES do recorders[k] = stored(k) end
-    local written, detail = S.lib.data_files.write(path, {version = GESTURES.data_version, recorders = recorders})
-    if not written then print("error: gestures not saved to " .. path .. " (" .. tostring(detail) .. ")") end
-    return written
-  end
-
-  -- Load every recorder from path, stopped: a missing file loads them
-  -- empty; one that cannot be used is set aside (path .. ".bak", ...) with
-  -- a console line, and they load empty. Returns whether path may be written
-  -- over: false only for a file that could not be used and could not be set aside
-  local function read_file(path)
-    local loaded, problem, detail = S.lib.data_files.read(path)
-    local why
-    if loaded == nil and problem ~= "missing" then
-      why = tostring(detail)
-    elseif loaded ~= nil then
-      if type(loaded) ~= "table" or loaded.version ~= GESTURES.data_version or type(loaded.recorders) ~= "table" then
-        why = "not a version " .. GESTURES.data_version .. " gestures file"
-      else
-        for k = 1, NUM_GESTURES do
-          why = why or (loaded.recorders[k] ~= nil and record_problem(loaded.recorders[k])) or nil
+  -- The files (lib/side_files.lua): the live file data/strata/gestures.data
+  -- and the one beside each PSET, {version, recorders = {...}}, each
+  -- recorder as stored (an empty one too, so a PSET saved over never keeps
+  -- an older side file). Every file load leaves the recorders stopped, then
+  -- redraws; one that cannot be used (unparsable, another version, a
+  -- malformed recorder) is set aside and they load empty
+  local files = S.lib.side_files.new({
+    name = "gestures", contents = "gestures", version = GESTURES.data_version, key = "recorders",
+    live_file = GESTURES.live_file, side_suffix = GESTURES.side_suffix, backup_suffix = GESTURES.backup_suffix,
+    capture = function()
+      local recorders = {}
+      for k = 1, NUM_GESTURES do recorders[k] = stored(k) end
+      return recorders
+    end,
+    validate = function(recorders)
+      if type(recorders) ~= "table" then return "not a version " .. GESTURES.data_version .. " gestures file" end
+      for k = 1, NUM_GESTURES do
+        if recorders[k] ~= nil then
+          local problem = record_problem(recorders[k])
+          if problem then return problem end
         end
       end
-    end
-    local writable = true
-    if why then
-      local backup, failure = S.lib.data_files.set_aside(path, GESTURES.backup_suffix)
-      print("error loading gestures file " .. path .. ": " .. why .. "; "
-        .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
-      loaded = nil
-      writable = backup ~= nil
-    end
-    for k = 1, NUM_GESTURES do load_record(k, loaded and loaded.recorders[k] or nil) end
-    request_redraw()
-    grid_redraw()
-    return writable
-  end
+      return nil
+    end,
+    load = function(recorders)
+      for k = 1, NUM_GESTURES do load_record(k, recorders and recorders[k] or nil) end
+      request_redraw()
+      grid_redraw()
+    end,
+  })
 
   -- The PSET's side file: written with every PSET save, read after every
   -- PSET load (every recorder stopped first), deleted with the PSET
-  S.register_pset_hook({
-    name = "gestures",
-    write = function(path_base) write_file(path_base .. GESTURES.side_suffix) end,
-    read = function(path_base)
-      stop_all()
-      read_file(path_base .. GESTURES.side_suffix)
-    end,
-    delete = function(path_base) os.remove(path_base .. GESTURES.side_suffix) end,
-  })
+  S.register_pset_hook(files.pset_hook(stop_all))
 
   -- The live file: loaded at init (stopped), saved at cleanup once it was read,
   -- missing or set aside (one that could be neither is never written over)
-  local live_dir = _path.data .. "strata/"
-  local live_loaded = false
-  S.register_start(S.constants.START_ORDER.gestures_load, function()
-    local path = live_dir .. GESTURES.live_file
-    live_loaded = read_file(path)
-    if not live_loaded then
-      print("gestures: " .. path .. " could not be read or moved aside; the gestures will not be saved this session")
-    end
-  end)
-  S.register_cleanup(S.constants.CLEANUP_ORDER.gestures_save, function()
-    if not live_loaded then return end
-    if util.file_exists(live_dir) == false then util.make_dir(live_dir) end
-    write_file(live_dir .. GESTURES.live_file)
-  end)
+  S.register_start(S.constants.START_ORDER.gestures_load, files.load_live)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.gestures_save, files.save_now)
 
   -- Cleanup stops every recorder's metro and clock (and ends a recording),
   -- and cancels every retired clock (norns cancels every coroutine right
