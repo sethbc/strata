@@ -1473,36 +1473,35 @@ test("the stub's MIDI map is norns' pmap, and the menu's CC handler sets a mappe
 end)
 
 -- test/sync_check.lua's PENDING_COMMANDS: a command the engine has before
--- the script calls it (3.4's five, until the Wave 1 package that calls each)
+-- the script calls it (empty since 3.4's five are called). The mechanism on
+-- a two-file fixture with an engine source of its own: the full sources'
+-- check is docs_test.lua's
 test("the sync check accepts a pending command that is not called and fails one that is", function()
   local sync_check = h.sync_check
-  local sources = h.read_lua_sources()
-  local engine_with_ghost = h.engine_sources() .. '\nthis.addCommand(\\checkPendingGhost, "i", { arg msg; });'
-  local pending = {}
-  for _, name in ipairs(sync_check.PENDING_COMMANDS) do table.insert(pending, name) end
-  table.insert(pending, "checkPendingGhost")
-  local ok, problems = sync_check.check_sources(sources, engine_with_ghost, pending)
+  local engine_source = 'this.addCommand(\\checkUsed, "i", { arg msg; });\n'
+    .. 'this.addCommand(\\checkPendingGhost, "i", { arg msg; });'
+  local sources = { { path = "strata.lua", text = "\nengine.checkUsed(1)" }, { path = "lib/x.lua", text = "" } }
+  local pending = { "checkPendingGhost" }
+  local ok, problems = sync_check.check_sources(sources, engine_source, pending)
   assert_true(ok, "a pending command no file calls passes:\n" .. table.concat(problems, "\n"))
   -- once a file calls it, the check fails until its name leaves the list
-  local calling = { { path = "strata.lua", text = "" }, { path = "lib/x.lua", text = "\nengine.checkPendingGhost(1)" } }
-  for _, source in ipairs(sources) do table.insert(calling, source) end
-  ok, problems = sync_check.check_sources(calling, engine_with_ghost, pending)
+  local calling = { sources[1], { path = "lib/x.lua", text = "\nengine.checkPendingGhost(1)" } }
+  ok, problems = sync_check.check_sources(calling, engine_source, pending)
   local report = table.concat(problems, "\n")
   assert_true(not ok and report:find("lib/x.lua:2 engine.checkPendingGhost is called but still pending", 1, true),
     "a called pending command fails the check:\n" .. report)
+  ok, problems = sync_check.check_sources(calling, engine_source, {})
+  assert_true(ok, "off the list, the called command passes:\n" .. table.concat(problems, "\n"))
   -- off the list, the uncalled command is reported as ever
-  ok, problems = sync_check.check_sources(sources, engine_with_ghost, sync_check.PENDING_COMMANDS)
+  ok, problems = sync_check.check_sources(sources, engine_source, {})
   report = table.concat(problems, "\n")
   assert_true(not ok and report:find("\\checkPendingGhost is never called", 1, true), "an uncalled command fails:\n" .. report)
   -- a pending name the engine does not have is a stale entry
-  table.insert(pending, "checkNoSuchCommand")
-  ok, problems = sync_check.check_sources(sources, engine_with_ghost, pending)
+  ok, problems = sync_check.check_sources(sources, engine_source, { "checkPendingGhost", "checkNoSuchCommand" })
   report = table.concat(problems, "\n")
   assert_true(not ok and report:find("checkNoSuchCommand is pending but the engine has no such command", 1, true),
     "a pending name with no addCommand fails:\n" .. report)
-  -- the real list: every name an engine command no script file calls yet
-  ok, problems = sync_check.run(repo_root)
-  assert_true(ok, table.concat(problems, "\n"))
+  -- the real list names engine commands only
   for _, name in ipairs(sync_check.PENDING_COMMANDS) do
     assert_true(signatures[name] ~= nil, "pending " .. name .. " is an engine command")
   end

@@ -88,8 +88,8 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 -- a ring's fill ends just below it (the margin is far below one LED's 2*pi/64)
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
--- The header every page shares (lib/ui/header.lua, y 8): the eight 2x2 px
--- page dots from dots_x, dot_spacing apart (the current page's at
+-- The header every page shares (lib/ui/header.lua, y 8): one 2x2 px page
+-- dot per page (nine) from dots_x, dot_spacing apart (the current page's at
 -- current_dot_level, the rest at dot_level), [M] at mutation_x, the play
 -- mark (a filled 3x5 triangle, top row play_y) at play_x, REC at rec_x and
 -- the scene right-aligned at scene_right. A page's header_status text
@@ -187,23 +187,22 @@ local START_ORDER = {
   drift_metro = 40,      -- lib/mutation.lua: created and started
   mutation_metro = 50,   -- lib/mutation.lua: created; its param starts it
   buffer_polls = 60,     -- lib/buffers.lua: bufferState, bufferLoadFailed and bufferSaveResult
+  input_level = 62,      -- lib/input_level.lua: the input level polls (3.4)
   record_poll = 65,      -- lib/record.lua: the recordState poll
   arc = 70,              -- lib/arc/core.lua
   grids = 80,            -- lib/grid/core.lua
-  midi = 90,             -- lib/midi_in.lua
+  midi = 90,             -- lib/midi_in.lua (and the MIDI map's repair)
   scenes_load = 100,     -- lib/scenes.lua: the registered scene fields, then scenes.data (sets S.scenes_loaded)
+  macros_load = 105,     -- lib/macros.lua: macros.data (3.4)
+  gestures_load = 107,   -- lib/gestures.lua: gestures.data (3.4)
+  matrix_load = 108,     -- lib/matrix.lua: matrix.data (3.4)
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
+  lfo_clock = 125,       -- lib/lfos.lua: the LFO clock (3.4)
   frame_clock = 130,     -- lib/ui/frame.lua
   waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
   playheads = 150,       -- lib/playheads.lua: the playhead clock
   pattern_transport = 160,  -- lib/sequencer.lua: the clock's transport start and stop handlers
-  -- 3.4's, held for the modules that register them (design §12)
-  input_level = 62,      -- lib/input_level.lua: the input level polls
-  macros_load = 105,     -- lib/macros.lua: macros.data
-  gestures_load = 107,   -- lib/gestures.lua: gestures.data
-  matrix_load = 108,     -- lib/matrix.lua: matrix.data
-  lfo_clock = 125,       -- lib/lfos.lua: the LFO clock
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
@@ -235,6 +234,9 @@ local CLEANUP_ORDER = {
   tempo_handler = 10,       -- lib/params_setup.lua: the clock's tempo handler back
   menu_watch = 20,          -- lib/ui/menu_watch.lua: the norns menu's set_mode back
   scenes_save = 30,         -- lib/scenes.lua: scenes.data
+  macros_save = 32,         -- lib/macros.lua: macros.data (3.4)
+  gestures_save = 34,       -- lib/gestures.lua: gestures.data (3.4)
+  matrix_save = 36,         -- lib/matrix.lua: matrix.data (3.4)
   buffer_paths_save = 40,   -- lib/buffers.lua: buffers.data
   startup_clock = 50,       -- strata.lua: init's start-up clock
   frame_clock = 60,         -- lib/ui/frame.lua
@@ -242,8 +244,13 @@ local CLEANUP_ORDER = {
   mutation_metro = 80,      -- lib/mutation.lua (and its param)
   undo_clock = 85,          -- lib/mutation.lua: the randomize undo's expiry clock
   pattern_clock = 90,       -- lib/sequencer.lua
+  gestures = 95,            -- lib/gestures.lua: the recorders' clocks (3.4)
+  quantize = 97,            -- lib/quantize.lua: the waiting actions (3.4)
   scene_sequencer = 100,    -- lib/scenes.lua (and its param)
   scene_transition = 110,   -- lib/scenes.lua
+  morph_clock = 112,        -- lib/morph.lua (3.4)
+  macros = 114,             -- lib/macros.lua: the apply clock (3.4)
+  matrix = 118,             -- lib/matrix.lua: matrix learn's timeout clock (3.4)
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored
   playheads = 122,          -- lib/playheads.lua: the playhead clock
   scrub_glide = 124,        -- lib/positions.lua: the scrub glides and the scan holds
@@ -258,15 +265,6 @@ local CLEANUP_ORDER = {
   voices_off = 160,         -- lib/engine_sync.lua: a voiceOff per running voice (reaches no handler on norns)
   grids_dark = 170,         -- lib/grid/core.lua
   arc_dark = 180,           -- lib/arc/core.lua
-  -- 3.4's, held for the modules that register them (design §12)
-  macros_save = 32,         -- lib/macros.lua: macros.data
-  gestures_save = 34,       -- lib/gestures.lua: gestures.data
-  matrix_save = 36,         -- lib/matrix.lua: matrix.data
-  gestures = 95,            -- lib/gestures.lua: the recorders' clocks
-  quantize = 97,            -- lib/quantize.lua: the waiting actions
-  morph_clock = 112,        -- lib/morph.lua
-  macros = 114,             -- lib/macros.lua: the apply clock
-  matrix = 118,             -- lib/matrix.lua: matrix learn's timeout clock
 }
 
 return {

@@ -921,12 +921,10 @@ test("the PSET hooks run on write, read and delete with the path base and number
   h.claim_script_errors(context, 5, "pset hook raises: ", "boom")  -- each a script error to the harness
 end)
 
-test("the menu records for 3.4's groups follow lfos in order: a landed module adds its group, the rest add nothing", function()
+test("the menu records for 3.4's groups follow lfos in order, each adding its module's group", function()
   local added, called = {}, {}
   load_strata({ before_init = function()
     local S = local_value("S")
-    S.lib.morph = nil  -- a module that exists (1g's), taken away: its record has none to call
-    S.lib.input_level = nil  -- 3.4's modules that have landed are loaded: hide this one
     for _, record in ipairs(S.registry.params) do
       local add = record.add
       record.add = function()
@@ -942,24 +940,22 @@ test("the menu records for 3.4's groups follow lfos in order: a landed module ad
   local menu = table.concat(names, " ")
   assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
     "the seven records follow lfos: " .. menu)
-  -- landed: the gestures' group of eight, the macros' sixteen, scatter's eight and the matrix's 32
-  local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES,
-    macros = 1 + S.constants.NUM_MACROS, scatter = 1 + 8,
-    matrix = 1 + 2 * S.constants.MATRIX_SLOTS }
+  -- each a group and its params: the macros' sixteen, morph's three,
+  -- scatter's eight, the matrix's 32, the input's one, the gestures' eight
+  local groups = { macros = 1 + S.constants.NUM_MACROS, morph = 1 + 3, scatter = 1 + 8,
+    matrix = 1 + 2 * S.constants.MATRIX_SLOTS, input = 1 + 1, gestures = 1 + 2 * S.constants.NUM_GESTURES }
   for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures" }) do
-    assert_equal(added[name], landed[name] or 0, name .. (landed[name] and " adds its group" or " adds nothing without its module"))
+    assert_equal(added[name], groups[name], name .. " adds its group")
   end
-  -- 3.4's 1d: lib/sequencer.lua's group
   assert_equal(added.seq, 1 + S.lib.sequencer.SEQ.group_params + S.lib.quantize.PARAM_COUNT, "seq adds strata_seq")
-  -- with its module loaded, a record calls the module's add_params
+  -- each record calls its module's add_params, in menu order
   local modules = { macros = "macros", morph = "morph", scatter = "scatter", matrix = "matrix",
     input = "input_level", gestures = "gestures", seq = "sequencer" }
   load_strata({ before_init = function()
     local S2 = local_value("S")
     for record_name, module in pairs(modules) do
-      S2.lib[module] = S2.lib[module] or {}
-      local real = S2.lib[module].add_params  -- a landed module's own still adds its params
-      S2.lib[module].add_params = function() called[#called + 1] = record_name; if real then real() end end
+      local real = S2.lib[module].add_params
+      S2.lib[module].add_params = function() called[#called + 1] = record_name; real() end
     end
   end })
   assert_equal(table.concat(called, " "), "macros morph scatter matrix input gestures seq", "each, in menu order")

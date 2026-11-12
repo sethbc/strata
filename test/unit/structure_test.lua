@@ -629,25 +629,6 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
   "voices off", "grids dark", "arc dark" }
 
--- 3.4's orders, in CLEANUP_ORDER and START_ORDER ahead of the modules that
--- register their steps (package 0a): each package moves its names from here
--- to the step lists as its step lands
--- One name per line: Wave 1's packages each remove their own in parallel
-local RESERVED_CLEANUP_ORDERS = {
-}
-local RESERVED_START_ORDERS = {
-}
-
--- No step is registered at a reserved order
-local function assert_reserved_free(steps, orders, reserved)
-  for _, name in ipairs(reserved) do
-    assert_true(orders[name] ~= nil, "the reserved order " .. name .. " is in the table")
-    for _, step in ipairs(steps) do
-      assert_true(step.order ~= orders[name], "a step is registered at the reserved order " .. name)
-    end
-  end
-end
-
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
   local S = local_value("S")
@@ -775,8 +756,8 @@ test("cleanup runs every registered step in today's order", function()
   -- S.constants.CLEANUP_ORDER names each step's order, and no two steps share one
   local orders = 0
   for _ in pairs(S.constants.CLEANUP_ORDER) do orders = orders + 1 end
-  assert_equal(orders, #CLEANUP_STEPS + #RESERVED_CLEANUP_ORDERS, "CLEANUP_ORDER has one order per step")
-  assert_reserved_free(registered, S.constants.CLEANUP_ORDER, RESERVED_CLEANUP_ORDERS)
+  assert_equal(orders, #CLEANUP_STEPS, "CLEANUP_ORDER has one order per step")
+  assert_equal(#registered, #CLEANUP_STEPS, "one registered step per order")
   assert_true(not pcall(S.register_cleanup, S.constants.CLEANUP_ORDER.lfos, function() end),
     "a second step at a taken order is refused")
   assert_true(not pcall(S.register_cleanup, nil, function() end), "an order is a number")
@@ -944,8 +925,7 @@ test("init runs every registered start step in today's order", function()
   -- S.constants.START_ORDER names each step's order, and no two steps share one
   local orders = 0
   for _ in pairs(S.constants.START_ORDER) do orders = orders + 1 end
-  assert_equal(orders, #START_STEPS + #RESERVED_START_ORDERS, "START_ORDER has one order per step")
-  assert_reserved_free(S.registry.start, S.constants.START_ORDER, RESERVED_START_ORDERS)
+  assert_equal(orders, #START_STEPS, "START_ORDER has one order per step")
   assert_equal(#S.registry.start, #START_STEPS, "one registered step per order")
   assert_true(not pcall(S.register_start, S.constants.START_ORDER.frame_clock, function() end),
     "a second step at a taken order is refused")
