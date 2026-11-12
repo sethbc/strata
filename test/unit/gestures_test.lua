@@ -515,6 +515,39 @@ test("a PSET without a side file loads empty", function()
   assert_equal(S.gestures[1].pattern.count, 0)
 end)
 
+test("a live file that can be neither read nor set aside is never written over", function()
+  local first = loaded()
+  cleanup()
+  local live_path = first.data_dir .. "strata/gestures.data"
+  local bad = "return {\n  {1},\n"
+  h.write_text(live_path, bad)
+  local context = load_strata({ data_subdir = first.data_dir:match("([^/]+)/$"), before_init = function()
+    local_value("S").lib.data_files.set_aside = function() return nil, "permission denied" end
+  end })
+  finish_startup(context)
+  local said = false
+  for _, line in ipairs(context.printed) do
+    if line:find("gestures will not be saved", 1, true) then said = true end
+  end
+  assert_true(said, "a console line says so")
+  cleanup()
+  assert_equal(h.file_text(live_path), bad, "not written over at cleanup")
+end)
+
+test("a damaged live file that is set aside loads empty and saves normally", function()
+  local first = loaded()
+  cleanup()
+  local live_path = first.data_dir .. "strata/gestures.data"
+  h.write_text(live_path, "return {\n  {1},\n")
+  local context, S, gestures = loaded({ data_subdir = first.data_dir:match("([^/]+)/$") })
+  assert_true(util.file_exists(live_path .. ".bak"), "kept as a backup")
+  assert_equal(gestures.state(1), "empty", "loaded empty")
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+  cleanup()
+  assert_true(S.lib.data_files.read(live_path) ~= nil, "saved normally afterward")
+  assert_true(h.file_text(live_path) ~= h.file_text(live_path .. ".bak"), "the damaged text is gone")
+end)
+
 test("an unreadable side file is set aside and the PSET still loads", function()
   local bad_bar = { version = 1, recorders = { { quantize = "bar", events = { { id = "reverb_mix", value = 0.5 } },
     beats = { 0 }, length_beats = 6 } } }  -- 6 beats is no whole number of bars
