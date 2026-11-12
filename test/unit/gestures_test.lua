@@ -780,6 +780,28 @@ test("a stop or another recorder's recording that ends an overdub reaches the li
   assert_equal(gestures.state(2), "recording")
 end)
 
+test("an overdub that hits the 1024-event cap ends, and the live file follows (#651)", function()
+  local context, S, gestures = loaded()
+  local live_path = context.data_dir .. "strata/gestures.data"
+  local function events() return #S.lib.data_files.read(live_path).recorders[1].events end
+  params:set("reverb_mix", 0.5)
+  gestures.press(1)
+  for n = 1, 1023 do
+    context.set_time(util.time() + 0.01)
+    hand_edit("reverb_mix", n % 2 == 1 and 1 or -1)
+  end
+  gestures.press(1)                                  -- 1023 events: it plays
+  context.clock.run_for(0.2)
+  assert_equal(events(), 1023, "the recording")
+  gestures.overdub(1)
+  context.set_time(util.time() + 0.01); hand_edit("delay_mix")   -- the 1024th
+  context.set_time(util.time() + 0.01); hand_edit("delay_mix")   -- past the cap: the overdub ends
+  assert_true(not S.gestures[1].overdubbing, "the cap ends the overdub")
+  assert_equal(S.lib.ui_flash.text("header"), "G1 full")
+  context.clock.run_for(0.2)
+  assert_equal(events(), 1024, "the overdub the cap ended")
+end)
+
 test("playback and a stop write nothing to the live file (#651)", function()
   local context, S, gestures = loaded()
   params:set("gesture_2_quantize", BAR)

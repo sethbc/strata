@@ -111,7 +111,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 20 | give the norns menu its own `_menu.set_mode` back (`unwatch_menu_opening`), before anything that can fail | `lib/ui/menu_watch.lua` |
 | 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
 | 32 | save the macros' targets to data/strata/macros.data at once, canceling the write that waits (`S.macro_save_clock`) (`CLEANUP_ORDER.macros_save`; skipped if their start step never ran) (3.4) | `lib/macros.lua` |
-| 34 | save the gesture recorders to data/strata/gestures.data (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
+| 34 | save the gesture recorders to data/strata/gestures.data at once, canceling the write that waits (`S.gesture_save_clock`) (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
 | 36 | save the matrix's routings to data/strata/matrix.data at once, canceling the write that waits (`S.matrix_save_clock`) (`CLEANUP_ORDER.matrix_save`; skipped if its start step never ran) (3.4) | `lib/matrix.lua` |
 | 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |
