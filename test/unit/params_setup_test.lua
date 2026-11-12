@@ -682,13 +682,14 @@ test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now
   h.write_text(old_path, old_text .. '"strata_pset_format": 1\n')
   params:read(old_path)
   assert_near(params:get("v5_res"), 0.8, 1e-9, "a format 1 PSET is mirrored")
-  -- an old PSET that does not set the res leaves it as it is
+  -- an old PSET that does not set the res loads its default (#628), never
+  -- mirrored (1.1 - 0.8 would be 0.3)
   local no_res_path = context.data_dir .. "no_res.pset"
   h.write_text(no_res_path, (old_text:gsub('"v5_res": [^\n]*\n', "")))
   params:set("v5_res", 0.5)
   local said = mirror_lines()
   params:read(no_res_path)
-  assert_near(params:get("v5_res"), 0.5, 1e-9, "a res the file does not set is not mirrored")
+  assert_near(params:get("v5_res"), 0.8, 1e-9, "a res the file does not set loads its default, not mirrored")
   assert_equal(mirror_lines(), said, "and the console says nothing of a mirror")
   params:read(old_path)
   -- saved again, it is a PSET of today's format: never mirrored back
@@ -772,6 +773,98 @@ test("a PSET read while a voice runs sends its crossmod source and custom interv
   assert_equal(S.voices[1].extras.custom_interval_1, -3)
   assert_equal(params:get("v1_mod_source_1"), 0, "and the params are whole once the read is done")
   assert_equal(params:get("v1_custom_interval_1"), -3)
+end)
+
+-- #628: a PSET saved by 3.3 has no line for any param 3.4 added. pset_3_3
+-- turns a PSET written now into the one 3.3 wrote for the same session: it
+-- drops the lines of 3.4's params (ONLY_3_4, and every strata_lfo param but
+-- LFO 1-3's destination) and adds 3.3's LFO library lines at v3.3.2's
+-- defaults, with LFO 1 on at depth 40. The ids it leaves are exactly those
+-- of a PSET written by v3.3.2's own code (494 lines, checked when this test
+-- was written)
+local ONLY_3_4 = { "^gesture_%d+_quantize$", "^input_follow_gain$", "^macro_%d+$", "^matrix_%d+$", "^matrix_%d+_depth$",
+  "^morph$", "^morph_a$", "^morph_b$", "^quantize_actions$", "^scatter", "^seq_", "^strata_gestures$", "^strata_input$",
+  "^strata_lfo_%d+$", "^strata_macros$", "^strata_matrix$", "^strata_morph$", "^strata_scatter$", "^strata_seq$",
+  "^v%d+_mute$", "^v%d+_solo$", "^v%d+_seq_" }
+
+local function saved_by_3_3(id)
+  for _, pattern in ipairs(ONLY_3_4) do if id:match(pattern) then return false end end
+  local lfo, rest = id:match("^strata_lfo(%d+)(.*)$")
+  if lfo then return rest == "_dest" and tonumber(lfo) <= 3 end
+  return true
+end
+
+local function pset_3_3(text)
+  local lines, dropped = {}, {}
+  for line in text:gmatch("[^\n]*\n") do
+    local id = line:match('^"(.-)"')
+    if id and not saved_by_3_3(id) then
+      for index, pattern in ipairs(ONLY_3_4) do if id:match(pattern) then dropped[index] = true end end
+    else
+      lines[#lines + 1] = line
+    end
+  end
+  for index, pattern in ipairs(ONLY_3_4) do assert_true(dropped[index], pattern .. " names a param of this session") end
+  lines[#lines + 1] = '"strata_lfos": 3\n'
+  for n = 1, 3 do
+    local on, depth = n == 1 and 2 or 1, n == 1 and 40 or 25
+    for _, entry in ipairs({ { "lfo_group_", 15 }, { "lfo_", on }, { "lfo_shape_", 1 }, { "lfo_depth_", depth },
+        { "lfo_phase_", 0 }, { "lfo_offset_", 0 }, { "lfo_scaled_", "" }, { "lfo_raw_", "" }, { "lfo_min_", "-1.0" },
+        { "lfo_max_", "1.0" }, { "lfo_baseline_", 2 }, { "lfo_mode_", 2 }, { "lfo_clocked_", 13 }, { "lfo_free_", "4.0" },
+        { "lfo_reset_target_", 1 } }) do
+      lines[#lines + 1] = '"' .. entry[1] .. n .. '": ' .. entry[2] .. "\n"
+    end
+  end
+  return table.concat(lines)
+end
+
+-- The reviewer's session: 3.4 params a 3.3 PSET cannot hold, away from their
+-- defaults, with voices 1-4 running
+local SESSION_3_4 = { v2_mute = 1, v3_solo = 1, scatter = 1, scatter_depth = 50, v1_seq_gate = 2, v1_seq_swing = 66,
+  morph = 0.5, macro_1 = 0.7 }
+local DEFAULTS_3_4 = { v2_mute = 0, v3_solo = 0, scatter = 0, scatter_depth = 10, v1_seq_gate = 1, v1_seq_swing = 50,
+  morph = 0, macro_1 = 0 }
+
+test("a PSET saved by 3.3 sets every param it cannot hold to its default; one saved now loads as written (#628)", function()
+  local context = load_strata({ data_subdir = "pset_3_3" }); finish_startup(context)
+  local S = local_value("S")
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  for voice_idx = 1, 4 do
+    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  local new_path, old_path = context.data_dir .. "new.pset", context.data_dir .. "old.pset"
+  params:write(new_path, "new")
+  h.write_text(old_path, pset_3_3(h.file_text(new_path)))
+  local function set_session() for id, value in pairs(SESSION_3_4) do params:set(id, value) end end
+  set_session()
+  assert_true(S.lib.voice_mix.silenced(1) and S.lib.voice_mix.silenced(2) and S.lib.voice_mix.silenced(4))
+  context.clear_engine_calls()
+  params:read(old_path)
+  for id, value in pairs(DEFAULTS_3_4) do assert_near(params:get(id), value, 1e-9, id .. " back to its default") end
+  for voice_idx = 1, 4 do assert_true(not S.lib.voice_mix.silenced(voice_idx), "voice " .. voice_idx .. " plays") end
+  local muted = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "voiceMute" then muted[call.args[1] + 1] = call.args[3] end
+  end
+  for _, voice_idx in ipairs({ 1, 2, 4 }) do assert_equal(muted[voice_idx], 0, "voice " .. voice_idx .. " unmuted") end
+  -- the LFOs' own hook still imports 3.3's LFO 1, after the defaults
+  assert_equal(params:get("strata_lfo1"), 1, "LFO 1 imported on")
+  assert_equal(params:get("strata_lfo1_depth"), 40, "at the PSET's depth")
+  assert_equal(params:get("strata_pset_format"), 2, "the format param at today's format")
+  -- a silent read sets them silently
+  set_session()
+  context.clear_engine_calls()
+  params:read(old_path, true)
+  for id, value in pairs(DEFAULTS_3_4) do assert_near(params:get(id), value, 1e-9, id .. " silently to its default") end
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    assert_true(call.args[2] ~= "voiceMute", "a silent read sends no mute")
+  end
+  -- a PSET saved now names every param: it loads as written, defaults left alone
+  set_session()
+  params:write(new_path, "new")
+  for id, value in pairs(DEFAULTS_3_4) do params:set(id, value) end
+  params:read(new_path)
+  for id, value in pairs(SESSION_3_4) do assert_near(params:get(id), value, 1e-9, id .. " as the PSET saved it") end
 end)
 
 -- 3.4's PSET hooks (S.register_pset_hook, design §0.1): the master record
