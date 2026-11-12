@@ -182,6 +182,24 @@ return function(S)
     recalled[voice_idx] = {bookmark = n, source = S.voices[voice_idx].source}
   end
 
+  -- A user's bookmark recall (a grid's strip key, BUFFER's bm field; 3.4,
+  -- design §8.9): at the next beat or bar quantize_actions names (key
+  -- bookmark<v>), at once while it is off. waiting_bookmark(v) is the
+  -- bookmark that waits, while that recall is the one that waits
+  local waiting_recalls = {}  -- per voice, {n, token} of the last recall that waited
+  function M.recall_bookmark_quantized(voice_idx, n)
+    if not buffer_voice(voice_idx) or not valid_bookmark(n) then return end
+    local _, token = S.lib.quantize.schedule("bookmark" .. voice_idx, function() M.recall_bookmark(voice_idx, n) end,
+      "v" .. voice_idx .. " bm " .. n)
+    waiting_recalls[voice_idx] = token and {n = n, token = token} or nil
+  end
+
+  function M.waiting_bookmark(voice_idx)
+    local recall = valid_voice(voice_idx) and waiting_recalls[voice_idx]
+    if recall and S.lib.quantize.waiting("bookmark" .. voice_idx, recall.token) then return recall.n end
+    return nil
+  end
+
   -- Bookmark n becomes the voice's playhead, or, stopped, its buf_pos mapped
   -- into its loop
   function M.store_bookmark(voice_idx, n)
@@ -405,7 +423,7 @@ return function(S)
           M.store_bookmark(voice_idx, key)
           record.pressed[voice_idx] = key
         else
-          S.lib.quantize.schedule("bookmark" .. voice_idx, function() M.recall_bookmark(voice_idx, key) end, "v" .. voice_idx .. " bm " .. key)
+          M.recall_bookmark_quantized(voice_idx, key)
         end
       elseif records[port] then
         -- on the layouts that select a grid voice the release ends the key
