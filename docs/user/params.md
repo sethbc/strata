@@ -31,7 +31,9 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - The targets are not parameters: they are saved with each PSET (in a file beside it, `<pset>.macros.data`), in scenes and between sessions. A scene recall, a fade and the morph set a macro's value without moving its targets, since the scene holds their own values
 
 ## Morph (group)
-- Morph (0-100 %, default 0): the position between two saved scenes, 0 % scene A's sound and 100 % scene B's. Morph A and morph B (scene 1-16, defaults 1 and 2) pick the scenes. None of the three is stored in a scene. See [Modulation](modulation.md#morph)
+- Morph (0-100 %, default 0): the position between two saved scenes, 0 % scene A's sound and 100 % scene B's. Morph A and morph B (scene 1-16, defaults 1 and 2) pick the scenes. See [Modulation](modulation.md#morph)
+- Morph y (0-100 %, default 0), morph C and morph D (scene 1-16, defaults 3 and 4): the XY morph's second axis and its two other scenes, C above A and D above B. At morph y 0 % the morph is the one between A and B
+- None of the six is stored in a scene; a PSET stores them, and loads the position without applying it
 
 ## Scatter (group)
 - Scatter (off by default), depth (0-100 %, default 10 %), rate (0.01-1 Hz, default 0.1 Hz), and the settings it moves: pitch and position (on by default), size, cutoff and amp (off). See [Modulation](modulation.md#scatter)
@@ -155,4 +157,4 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq gate release | 0.005-4 s | 0.1 | |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
 
-None of the extras (history to seq swing) is randomized, mutated or on the grid's fader pages.
+None of the extras (history to seq swing) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
