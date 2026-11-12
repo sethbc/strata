@@ -45,6 +45,12 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 ## Sequencer (group)
 - Quantize actions (off, beat, bar; default off): with beat or bar, a grid's position and bookmark keys and BUFFER's bookmark field (`bm`) wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`). A second press before then replaces the first. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes
 
+## Sequencer (group)
+The pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
+- Chain (off/on, default off), chain from (scene 1-8, default 1), chain scenes (1-8, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, and nothing else
+- Division reset (trigger): every voice back to step 1 at the next bar
+- Follow transport (off/on, default on): a MIDI clock or Link start and stop start and stop the patterns (SETUP's `transport` row)
+
 ## Buffers (group)
 - Record duration (0.5 s to the buffer length: 16 s, or up to 300 s on the high tier; default 8) and record level (0-2, default 1)
 - For each buffer 1-8:
@@ -137,5 +143,11 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | mute | off/on | off | Silences the voice without stopping it; scenes keep it ([Mute and solo](voices-and-grains.md#mute-and-solo)) |
 | solo | off/on | off | Silences every voice that is not soloed; scenes never keep it |
 | bookmark 1-4 | 0-1 | 0, 0.25, 0.5, 0.75 | Buffer voices: saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs ([voices and grains](voices-and-grains.md#bookmarks)) |
+| seq length | 1-16 | 16 | The voice's pattern: how many steps it plays, how long each is, its gate and swing ([Sequencer](sequencer.md)) |
+| seq division | 1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2, 1 bar | 1/16 | |
+| seq gate | off, on | off | On: the voice is heard only while a step's gate is open |
+| seq gate length | 0.05-16 st | 0.5 | In steps |
+| seq gate release | 0.005-4 s | 0.1 | |
+| seq swing | 50-75 | 50 | Percent: 50 is straight |
 
-None of the extras (history to bookmark 4) is randomized, mutated or on the grid's fader pages.
+None of the extras (history to seq swing) is randomized, mutated or on the grid's fader pages.

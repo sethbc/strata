@@ -174,8 +174,13 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   local S = local_value("S")
   assert_equal(device:get_led(1, 8), 4, "stopped: column 1 dim")
   toggle_pattern_step(2, 4)
+  -- the transport's 16th and every voice's step (3.4: each row's playhead is its voice's)
+  local function sounding(step)
+    S.pattern_sounding_step = step
+    for voice_idx = 1, S.constants.NUM_VOICES do S.pattern_sounding_steps[voice_idx] = step end
+  end
   S.pattern_playing = true
-  S.pattern_sounding_step = 4
+  sounding(4)
   grid_redraw()
   assert_equal(device:get_led(1, 8), 15, "the shown half plays: column 1 at 15")
   assert_equal(device:get_led(4, 2), 15, "the playhead on an active step")
@@ -183,12 +188,12 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   assert_equal(device:get_led(5, 1), 0, "no playhead past it")
   -- the other half plays: column 1 blinks 12 / 3 with the beat (four steps)
   local levels = {}
-  for sounding = 9, 16 do
-    S.pattern_sounding_step = sounding
+  for step = 9, 16 do
+    sounding(step)
     grid_redraw()
     levels[#levels + 1] = device:get_led(1, 8)
     for x = 1, 8 do
-      assert_true(device:get_led(x, 1) ~= 4, "no playhead in the shown half at step " .. sounding)
+      assert_true(device:get_led(x, 1) ~= 4, "no playhead in the shown half at step " .. step)
     end
   end
   assert_equal(table.concat(levels, " "), "12 12 12 12 3 3 3 3", "column 1 blinks with the beat")
@@ -196,14 +201,14 @@ test("64 lights the shown half's playhead and blinks column 1 when the other hal
   S.pattern_playing = false
   switch_half(context, 1)
   S.pattern_playing = true
-  S.pattern_sounding_step = 12
+  sounding(12)
   grid_redraw()
   assert_equal(device:get_led(4, 1), 4, "half 2: step 12's playhead in column 4")
   assert_equal(device:get_led(1, 8), 15)
-  S.pattern_sounding_step = 3
+  sounding(3)
   grid_redraw()
   assert_equal(device:get_led(1, 8), 12, "half 1 plays: column 1 blinks (beat 1 lit)")
-  S.pattern_sounding_step = 6
+  sounding(6)
   grid_redraw()
   assert_equal(device:get_led(1, 8), 3, "beat 2 dim")
   S.pattern_playing = false

@@ -712,6 +712,7 @@ test("cleanup runs every registered step in today's order", function()
     { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
     { "lfos", S.lfo_clock } }
+  for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
     assert_true(entry[2] ~= nil, entry[1] .. ": its clock runs before cleanup")

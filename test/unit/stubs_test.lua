@@ -1478,4 +1478,59 @@ test("the sync check accepts a pending command that is not called and fails one 
   end
 end)
 
+-- matron's clock_start_from_source (clock.cc): the source's beat is 0, every
+-- waiting sync's beat is reset to 0 (clock_scheduler_reset_sync_events, so it
+-- fires on the next tick and counts on from 0), then norns calls
+-- clock.transport.start; a stop calls clock.transport.stop
+test("stub clock: transport_start resets the beat and the waiting syncs, then calls the transport's start", function()
+  local context = load_strata(); finish_startup(context)
+  local seen = {}
+  clock.transport.start = function() table.insert(seen, {name = "start", beat = clock.get_beats()}) end
+  clock.transport.stop = function() table.insert(seen, {name = "stop", beat = clock.get_beats()}) end
+  local wakes = {}
+  local syncing = clock.run(function()
+    while true do table.insert(wakes, {beat = clock.sync(1), time = util.time()}) end
+  end)
+  context.clock.run_for(0.75)  -- beat 2.5, waiting for beat 3
+  assert_near(clock.get_beats(), 2.5, 1e-9, "on beat 2.5")
+  assert_equal(#wakes, 1, "woke at beat 2")
+  local reset_at = util.time()
+  context.clock.transport_start()
+  assert_near(clock.get_beats(), 0, 1e-9, "the beat is 0")
+  assert_equal(#seen, 1, "the start handler ran once")
+  assert_equal(seen[1].name, "start")
+  assert_near(seen[1].beat, 0, 1e-9, "after the reset")
+  context.clock.run_for(0)
+  assert_equal(#wakes, 2, "the waiting sync fired on the next tick")
+  assert_near(wakes[2].time, reset_at, 1e-9, "at once")
+  context.clock.run_for(0.5)
+  assert_equal(#wakes, 3, "then on the new beat 1")
+  assert_near(wakes[3].time, reset_at + 0.5, 1e-9, "half a second on")
+  context.clock.transport_stop()
+  assert_equal(seen[2].name, "stop", "a stop calls the stop handler")
+  clock.cancel(syncing)
+  -- with no handlers set, neither helper raises
+  clock.transport.start, clock.transport.stop = nil, nil
+  context.clock.transport_start()
+  context.clock.transport_stop()
+end)
+
+-- norns' lib/er.lua, required as "er": the bucket method, w shifting right
+test("stub er.gen is norns' lib/er.lua", function()
+  load_strata()
+  local er = require("er")
+  local function pattern(k, n, w)
+    local marks = {}
+    for index, hit in ipairs(er.gen(k, n, w)) do marks[index] = hit and "x" or "." end
+    return table.concat(marks)
+  end
+  assert_equal(pattern(3, 8, 0), "x..x..x.", "three in eight")
+  assert_equal(pattern(3, 8, 1), ".x..x..x", "shifted one step")
+  assert_equal(pattern(5, 8, 0), "x.x.xx.x", "five in eight")
+  assert_equal(pattern(0, 4, 0), "....", "no hits")
+  assert_equal(pattern(4, 4, 0), "xxxx", "every step")
+  assert_equal(pattern(3, 8, nil), "x..x..x.", "no shift given")
+  assert_equal(pattern(2, 5, -1), "..x.x", "a negative shift wraps")
+end)
+
 end

@@ -849,13 +849,14 @@ test("the menu records for 3.4's groups follow lfos in order: a landed module ad
   local menu = table.concat(names, " ")
   assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
     "the seven records follow lfos: " .. menu)
-  -- landed: the gestures' group of eight, strata_seq with quantize_actions alone (no sequencer params yet),
-  -- the macros' sixteen and scatter's eight
-  local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES, seq = 1 + S.lib.quantize.PARAM_COUNT,
+  -- landed: the gestures' group of eight, the macros' sixteen and scatter's eight
+  local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES,
     macros = 1 + S.constants.NUM_MACROS, scatter = 1 + 8 }
-  for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures", "seq" }) do
+  for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures" }) do
     assert_equal(added[name], landed[name] or 0, name .. (landed[name] and " adds its group" or " adds nothing without its module"))
   end
+  -- 3.4's 1d: lib/sequencer.lua's group
+  assert_equal(added.seq, 1 + S.lib.sequencer.SEQ.group_params + S.lib.quantize.PARAM_COUNT, "seq adds strata_seq")
   -- with its module loaded, a record calls the module's add_params
   local modules = { macros = "macros", morph = "morph", scatter = "scatter", matrix = "matrix",
     input = "input_level", gestures = "gestures", seq = "sequencer" }
