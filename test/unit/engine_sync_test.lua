@@ -586,11 +586,15 @@ test("a voice sync or start drops the voice's pending deferred sends", function(
   context.clock.run_for(0.1)
   assert_equal(#grain_sends(context, 3, "grainSize"), 0, "no later grainSize send for voice 3")
   assert_equal(#context.calls_named("setFilter"), 1, "another id's value still goes")
-  -- a start drops them too
-  toggle_voice(3)
+  -- a start drops them too: a value that waited while the voice ran, the
+  -- voice stopped and started again before it went (a stopped voice's
+  -- send never waits, #642)
   mid_window(context)
   spend_budget(S)
   sync.deferrable(function() send_param_to_engine("v3_grain_size", 0.3) end)
+  assert_equal(sync.budget_state().pending, 1, "the running voice's send waits")
+  toggle_voice(3)
+  assert_equal(sync.budget_state().pending, 1, "a stop leaves it waiting")
   sync.start_voice(3)
   assert_equal(sync.budget_state().pending, 0, "the start dropped it")
   context.clear_engine_calls()
@@ -629,6 +633,170 @@ test("a waiting value whose sender raises is reported once, and the flush goes o
   assert_equal(#context.calls_named("setFilter"), 2, "which sends what waits")
   assert_equal(#context.take_script_errors(), 0, "a sender's failure is reported once")
   S.engine_senders.reverb_size = real_sender
+end)
+
+-- #642: a stopped voice's param sender reaches no engine (it sends only
+-- while the voice runs), so a send to it neither counts against the
+-- budget nor waits in it; its value is still recorded, as before
+
+local function stop_voice(voice_idx)
+  if local_value("S").voices[voice_idx].active then toggle_voice(voice_idx) end
+end
+
+test("a send to a stopped voice's param counts nothing and calls nothing; a running voice's counts (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  stop_voice(2)
+  mid_window(context)
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine("v2_grain_spread", 0.4) end)
+  send_param_to_engine("v2_grain_spread", 0.45)
+  assert_equal(sync.budget_state().sent, 0, "neither send counts, deferrable or not")
+  assert_equal(#context.engine_calls, 0, "and neither calls the engine")
+  assert_equal(sync.expected_value("v2_grain_spread"), 0.45, "the value is recorded, as before")
+  -- running: one count per send, as before
+  toggle_voice(2)
+  context.clear_engine_calls()
+  local before = sync.budget_state().sent
+  sync.deferrable(function() send_param_to_engine("v2_grain_spread", 0.5) end)
+  send_param_to_engine("v2_grain_spread", 0.55)
+  assert_equal(sync.budget_state().sent, before + 2, "a running voice's sends count one each")
+  local spread = grain_sends(context, 2, "posSpread")
+  assert_equal(#spread, 2, "and reach the engine")
+  assert_near(spread[2], 0.55, 1e-9)
+end)
+
+test("a stopped voice's send counts when its sender reaches the engine: the mute, a sender put in its place (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  stop_voice(2)
+  mid_window(context)
+  context.clear_engine_calls()
+  params:set("v2_mute", 1)
+  assert_equal(sync.budget_state().sent, 1, "the mute reaches a stopped voice's stage, so it counts")
+  assert_equal(last_grain_send(context, 2, "voiceMute"), 1, "and it is sent")
+  params:set("v2_mute", 0)
+  local real_sender = S.engine_senders.v2_grain_spread
+  local got = {}
+  S.engine_senders.v2_grain_spread = function(value) got[#got + 1] = value end
+  local before = sync.budget_state().sent
+  send_param_to_engine("v2_grain_spread", 0.4)
+  assert_equal(got[1], 0.4, "a sender put over the voice's gated one runs")
+  assert_equal(sync.budget_state().sent, before + 1, "and its send counts")
+  S.engine_senders.v2_grain_spread = real_sender
+end)
+
+test("a Lua-run LFO on a stopped voice's param spends no budget; on a running voice's it does (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  stop_voice(2)
+  params:set("v2_grain_density", 20)
+  local destination
+  for index, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "v2 dens" then destination = index end
+  end
+  local square
+  for index, option in ipairs(params:lookup_param("strata_lfo1_shape").options) do
+    if option == "square" then square = index end
+  end
+  -- LFO 1 held at its top (value +1) on voice 2's density, at depth 50
+  params:set("strata_lfo1_dest", destination)
+  params:set("strata_lfo1_shape", square)
+  params:set("strata_lfo1_rate", 0.003)
+  params:set("strata_lfo1_phase", 0)
+  params:set("strata_lfo1_depth", 50)
+  mid_window(context)
+  context.clear_engine_calls()
+  params:set("strata_lfo1", 1)
+  local before = sync.budget_state().sent
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(sync.budget_state().sent, before, "the stopped voice's LFO send counts nothing")
+  assert_equal(#grain_sends(context, 2, "grainDensity"), 0, "and reaches no engine")
+  -- 20 + 0.5 x half of 1-100
+  assert_near(sync.expected_value("v2_grain_density"), 44.75, 1e-9, "the modulated value is recorded")
+  -- the start forgets what was recorded, so the next step sends again
+  toggle_voice(2)
+  context.clear_engine_calls()
+  before = sync.budget_state().sent
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(sync.budget_state().sent, before + 1, "the running voice's LFO send counts one")
+  local density = grain_sends(context, 2, "grainDensity")
+  assert_equal(#density, 1, "and reaches the engine")
+  assert_near(density[1], 44.75 * params:get("master_density"), 1e-9)
+  params:set("strata_lfo1", 0)
+end)
+
+test("a window full of a stopped voice's sends leaves room for a running voice's (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  stop_voice(2)
+  mid_window(context)
+  context.clear_engine_calls()
+  sync.deferrable(function()
+    for k = 1, S.constants.ENGINE_BUDGET.messages_per_window do
+      send_param_to_engine("v2_grain_spread", k / 1000)
+    end
+    send_param_to_engine("v1_grain_spread", 0.3)
+  end)
+  local spread = grain_sends(context, 1, "posSpread")
+  assert_equal(#spread, 1, "the running voice's send goes in the same window")
+  assert_near(spread[1], 0.3, 1e-9)
+  assert_equal(sync.budget_state().sent, 1, "it is the one send counted")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "and no flush clock runs")
+  assert_equal(#grain_sends(context, 2, "posSpread"), 0, "the stopped voice got nothing")
+  assert_near(sync.expected_value("v2_grain_spread"), 0.15, 1e-9, "its newest value is recorded")
+end)
+
+test("past the budget a stopped voice's send never waits, and its start plays the stored value (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  stop_voice(2)
+  params:set("v2_grain_spread", 0.6)
+  mid_window(context)
+  spend_budget(S)
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine("v2_grain_spread", 0.4) end)
+  assert_equal(sync.budget_state().pending, 0, "it does not wait")
+  assert_equal(S.engine_budget_clock, nil, "and starts no flush clock")
+  assert_equal(sync.budget_state().sent, 150, "nor counts")
+  assert_equal(#context.engine_calls, 0, "nor reaches the engine")
+  assert_equal(sync.expected_value("v2_grain_spread"), 0.4, "its value is recorded at once")
+  toggle_voice(2)
+  local spread = grain_sends(context, 2, "posSpread")
+  assert_equal(#spread, 1, "the start sends one position spread")
+  assert_near(spread[1], 0.6, 1e-9, "the stored one")
+  context.clear_engine_calls()
+  context.clock.run_for(0.2)
+  assert_equal(#grain_sends(context, 2, "posSpread"), 0, "nothing older follows into the started voice")
+end)
+
+test("a value that waited for a voice stopped since reaches no engine and counts nothing (#642)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  if not S.voices[2].active then toggle_voice(2) end
+  params:set("v2_grain_spread", 0.6)
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("v2_grain_spread", 0.4) end)
+  assert_equal(sync.budget_state().pending, 1, "the running voice's send waits")
+  toggle_voice(2)  -- stopped before it goes
+  context.clear_engine_calls()
+  context.set_time(util.time() + 0.1)  -- the next window, before the clock wakes
+  send_param_to_engine("reverb_mix", 0.3)
+  assert_equal(sync.budget_state().pending, 0, "the waiting value went first")
+  assert_equal(#grain_sends(context, 2, "posSpread"), 0, "to no engine")
+  assert_equal(#context.engine_calls, 1, "only the new send reaches the engine")
+  assert_equal(sync.budget_state().sent, 1, "and only it counts")
+  assert_equal(S.engine_budget_clock, nil, "the flush clock is canceled")
+  -- a later start plays the stored value, never the one that waited
+  toggle_voice(2)
+  local spread = grain_sends(context, 2, "posSpread")
+  assert_equal(#spread, 1, "the start sends one position spread")
+  assert_near(spread[1], 0.6, 1e-9, "the stored one")
+  context.clear_engine_calls()
+  context.clock.run_for(0.2)
+  assert_equal(#grain_sends(context, 2, "posSpread"), 0, "and nothing follows it")
 end)
 
 test("a base override is a finite number; anything else raises naming the param", function()
