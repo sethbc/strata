@@ -18,11 +18,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  lua:
-    name: lua
-    # Covers the apt install and both suites (a few minutes); the default is 360
+  # The behavior tests run once per interpreter, each on its own runner, so
+  # the job takes about as long as the slower suite instead of both in turn
+  # (at 3.4.0, about 5 and 4.5 minutes; together they took 9.5 of the 15)
+  lua-suite:
+    name: lua (${{ matrix.lua }})
+    # Covers the apt install and one suite (about 5 minutes); the default is 360
     timeout-minutes: 15
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
+      matrix:
+        lua: [lua5.3, luajit]
     steps:
       # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`
       # names the newest release, its tag's commit goes here with the version in the comment (#533)
@@ -30,20 +38,35 @@ jobs:
         with:
           persist-credentials: false
 
-      # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
+      # Both on each runner, as the one job before had them (Lua 5.3's
+      # global-reference checks need its luac5.3; LuaJIT skips them)
       - name: Install Lua 5.3 and LuaJIT
         run: |
           sudo apt-get update
           sudo apt-get install -y lua5.3 luajit
 
-      - name: Behavior tests (Lua 5.3)
-        run: lua5.3 test/run.lua
-
-      - name: Behavior tests (LuaJIT)
-        run: luajit test/run.lua
+      - name: Behavior tests
+        run: ${{ matrix.lua }} test/run.lua
 
       - name: Lua / engine command sync check
+        if: matrix.lua == 'lua5.3'
         run: lua5.3 test/sync_check.lua
+
+  # The required status check: passes only when both suites passed (a
+  # failed, canceled or skipped one fails it), so branch protection keeps
+  # requiring one job named lua
+  lua:
+    name: lua
+    needs: lua-suite
+    if: always()
+    # Only reads the suites' result; the default is 360
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Both Lua suites passed
+        run: |
+          echo "lua suites: ${{ needs.lua-suite.result }}"
+          test "${{ needs.lua-suite.result }}" = success
 
   # The engine check's areas run in parallel shards, each on its own runner
   # with its own sclang and scsynth, so the job takes about as long as its
@@ -51,15 +74,18 @@ jobs:
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
-  # Area times on SuperCollider 3.13 at 3.3.0 (s, the mean of four full runs in Docker; 3.14.1's are within 2 s):
-  # record 110, lifecycle 106, buffers 99, effects 87, mix 69, rings 69, memory 67, voices 66,
-  # freeze 63, loops 54, variation 52, files 29, grains 23, waveform 23, positions 8, structure 4, performance 3:
-  # 932 s in all, and at most about 152 s a shard (voices, freeze and grains), far under each
-  # shard's 570 s. 3.4's modulation area (about 78 s since package 1a) shares memory's shard: the pair
-  # takes about 153 s, and eight runs of it on 3.13 passed with no crash (#131).
+  # Area times on SuperCollider 3.13 at 3.4.0 (s, the mean of four full runs in Docker; 3.14.1's are within 1.5 s):
+  # record 113, lifecycle 106, buffers 99, modulation 88, effects 87, memory 75, rings 69, mix 69,
+  # voices 66, freeze 63, loops 54, variation 52, files 29, grains 23, waveform 22, positions 8,
+  # structure 4, performance 3: 1030 s in all, and at most about 153 s a shard (effects and
+  # voices; 163 s for memory and modulation before this split), far under each shard's 570 s.
+  # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
+  # files fails when structure ran before it in its sclang without the areas between them
+  # of a full run (its 60 s save report never arrives), so the two share no shard.
   # waveform (a 300 s high engine, where #211's collector failure shows) shares
   # its shard only with record, which builds no high engine (buffers, effects, files, freeze,
-  # memory and performance do); four full runs on 3.13 at 3.3.0 passed with the pair.
+  # memory, performance and waveform do). In four full runs on 3.13 at 3.4.0 with this split,
+  # every shard it changed passed all four times (record,waveform is as before).
   engine-shard:
     name: engine (${{ matrix.areas }})
     # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
@@ -70,15 +96,15 @@ jobs:
       fail-fast: false
       # memory shares its shard with no area that builds a high tier engine:
       # sharing one with freeze (both build them), it was where sclang's
-      # garbage collector crashed (#131); modulation builds a standard engine only
+      # garbage collector crashed (#131); rings builds a standard engine only
       matrix:
         areas:
-          - buffers,variation
+          - buffers,loops
           - lifecycle,files,positions
-          - effects,loops
-          - mix,rings,structure,performance
-          - voices,freeze,grains
-          - memory,modulation
+          - effects,voices
+          - mix,variation,grains,structure,performance
+          - modulation,freeze
+          - memory,rings
           - record,waveform
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
