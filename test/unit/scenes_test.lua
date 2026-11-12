@@ -1295,7 +1295,7 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 5, "scenes are saved as version 5")
+  assert_equal(saved.version, 6, "scenes are saved as version 6")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
 
@@ -1524,7 +1524,7 @@ test("LFO offsets in scenes: save and load, migration of older scenes, validatio
   assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
 end)
 
-test("scenes save as version 5 and a version 4 file loads unchanged but for the pulse res, mirrored (#314)", function()
+test("scenes save as version 6 and a version 4 file loads unchanged but for the pulse res, mirrored (#314)", function()
   local context = load_strata(); finish_startup(context)
   scramble_state(5)
   capture_scene(2)
@@ -1532,7 +1532,7 @@ test("scenes save as version 5 and a version 4 file loads unchanged but for the 
   save_scenes_to_disk()
   local path = context.data_dir .. "strata/scenes.data"
   local saved = context.tab.load(path)
-  assert_equal(saved.version, 5, "scenes are saved as version 5")
+  assert_equal(saved.version, 6, "scenes are saved as version 6")
   saved.version = 4
   context = load_strata({ data_subdir = "v4" })
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
@@ -1605,7 +1605,7 @@ test("a scene saved before format 5 loads the pulse voice's res mirrored, once (
   end
   assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "the engine plays res 0.8 (sent: " .. tostring(sent) .. ")")
   assert_true(save_scenes_to_disk(), "the migrated file saves")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 5, "as format 5")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 6, "as format 6")
   assert_true(util.file_exists(dir .. "scenes.data.v4"), "the format 4 file is kept as scenes.data.v4")
   load_scenes_from_disk()
   assert_near(S.scenes[1].data.voices[pulse].params.res, 0.8, 1e-9, "a format 5 file read back is not mirrored again")
@@ -1668,7 +1668,7 @@ test("a full set of format copies never blocks a scene save", function()
   assert_true(S.scenes[1].populated, "the format 4 file loads")
   capture_scene(2)
   assert_true(save_scenes_to_disk(), "the save goes ahead")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 5, "scenes.data is written, as format 5")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 6, "scenes.data is written, as format 6")
   assert_true(S.lib.data_files.read(dir .. "scenes.data").scenes[2].populated, "with this session's scenes")
   for number = 1, 9 do
     assert_equal(h.file_text(copies[number]), "copy " .. number, "copy " .. number .. " is kept as it was")
@@ -1684,7 +1684,7 @@ test("S.lib.scenes.save captures and flashes; capture_scene stays silent", funct
   assert_true(S.scenes[3].populated, "captured")
   assert_equal(S.lib.ui_flash.text("header"), "saved S3")
   assert_true(not S.lib.scenes.save(0), "slot 0 is refused")
-  assert_true(not S.lib.scenes.save(9), "slot 9 is refused")
+  assert_true(not S.lib.scenes.save(17), "slot 17 is refused")
   load_strata()
   S = local_value("S")
   capture_scene(3)
@@ -1852,7 +1852,7 @@ test("an older format's scenes.data is kept as scenes.data.v<n> when it is first
   assert_equal(printed_count(context, "kept as " .. dir .. "scenes.data.v3"), 1,
     "the copy is named once, when it is made")
   assert_equal(file_text(dir .. "scenes.data.v3"), original, "the older file's bytes are kept")
-  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 5, "the file is this format now")
+  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 6, "the file is this format now")
   load_strata({ data_subdir = "scene_old" }); local_value("S").lib.scenes.save(2); cleanup()
   assert_true(not util.file_exists(dir .. "scenes.data.v3.2"), "no second copy")
   assert_equal(file_text(dir .. "scenes.data.v3"), original)
@@ -2622,11 +2622,9 @@ test("apply_entries with only = discrete sets no continuous param", function()
   assert_true(not S.voices[5].active, "and starts no voice")
 end)
 
--- A scene block record (0a's S.register_scene_block does not exist on this
--- branch: the record goes straight into the registry, as 0a's will)
+-- A scene block record, registered before init (the registry closes there)
 local function add_scene_block(S, record)
-  S.registry.scene_blocks = S.registry.scene_blocks or {}
-  table.insert(S.registry.scene_blocks, record)
+  S.register_scene_block(record)
 end
 
 test("a registered block is captured, migrated, validated and applied first", function()
@@ -2710,13 +2708,12 @@ test("registered migrations run by before_version, then registration, before the
   local ran = {}
   load_strata({ before_init = function()
     local S = local_value("S")
-    S.registry.scene_migrations = S.registry.scene_migrations or {}
     for _, record in ipairs({ { name = "m6a", before_version = 6 }, { name = "m5", before_version = 5 },
       { name = "m6b", before_version = 6 }, { name = "m3", before_version = 3 } }) do
       record.migrate = function(scene)
         table.insert(ran, record.name .. (scene.data.reverb_size == nil and " unfilled" or " filled"))
       end
-      table.insert(S.registry.scene_migrations, record)
+      S.register_scene_migration(record)
     end
   end })
   local S = local_value("S")
@@ -2766,8 +2763,7 @@ test("a field's set function replaces params:set in a recall, a transition step 
       params:add_control("probe_level", "probe level", controlspec.new(0, 1, "lin", 0, 0.5))
       params:set_action("probe_level", function() actions = actions + 1 end)
     end })
-    -- 0a's register_scene_field takes set; on this branch the record goes straight in
-    table.insert(S.registry.scene_fields, { id = "probe_level", default = 0.5, discrete = false,
+    S.register_scene_field({ id = "probe_level", default = 0.5,
       set = function(value) table.insert(sets, value) end })
   end })
   finish_startup(context)
@@ -2794,16 +2790,23 @@ test("a field's set function replaces params:set in a recall, a transition step 
   assert_equal(actions, 0, "never params:set")
 end)
 
-test("an old default slot name loads empty", function()
+-- 3.3 (format 5 and older) named every slot "scene <i>"; from format 6 a
+-- name is the player's, so only an older file's own default loads empty
+test("an old default slot name loads empty, from a file older than format 6", function()
   local context = load_strata({ data_subdir = "scene_names" })
   local S = local_value("S")
   for slot = 1, S.constants.NUM_SCENES do
     assert_equal(S.scenes[slot].name, "", "slot " .. slot .. " starts with an empty name")
   end
   capture_scene(3); capture_scene(4); capture_scene(5)
-  S.scenes[3].name, S.scenes[4].name, S.scenes[5].name = "scene 3", "dusk", "scene 3"
-  S.scenes[6].name = "scene 6"                                    -- an empty slot as 3.3 wrote it
-  assert_true(save_scenes_to_disk(), "saved")
+  local eight = {}
+  for slot = 1, 8 do eight[slot] = deep_copy(S.scenes[slot]) end
+  eight[3].name, eight[4].name, eight[5].name = "scene 3", "dusk", "scene 3"
+  eight[6].name = "scene 6"                                       -- an empty slot as 3.3 wrote it
+  eight[7].name = nil                                             -- a slot written with no name at all
+  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+  assert_true(S.lib.data_files.write(context.data_dir .. "strata/scenes.data", { version = 5, scenes = eight }),
+    "a format 5 file written")
   context = load_strata({ data_subdir = "scene_names" })
   S = local_value("S")
   assert_true(S.scenes[3].populated, "the file loaded")
@@ -2811,7 +2814,130 @@ test("an old default slot name loads empty", function()
   assert_equal(S.scenes[4].name, "dusk", "a name of the player's stays")
   assert_equal(S.scenes[5].name, "scene 3", "another slot's default is a name of the player's")
   assert_equal(S.scenes[6].name, "", "an empty slot's old default loads empty")
-  assert_equal(S.scenes[7].name, "", "an empty slot is named empty")
+  assert_equal(S.scenes[7].name, "", "a slot with no name loads named empty")
+  assert_equal(S.scenes[8].name, "", "an empty slot is named empty")
+  -- a format 6 file holds the player's names: "scene 3" in slot 3 stays
+  S.lib.scenes.set_name(3, "scene 3")
+  assert_true(save_scenes_to_disk(), "saved as format 6")
+  load_strata({ data_subdir = "scene_names" })
+  S = local_value("S")
+  assert_equal(S.scenes[3].name, "scene 3", "a current file's name stays, whatever it reads")
+end)
+
+test("16 slots; a format 5 file loads into slots 1-8 and leaves 9-16 empty", function()
+  local context = load_strata({ data_subdir = "format5_sixteen" })
+  local S = local_value("S")
+  assert_equal(S.constants.NUM_SCENES, 16, "sixteen slots")
+  assert_equal(#S.scenes, 16, "S.scenes holds them")
+  assert_equal(S.constants.SCENE_DATA_VERSION, 6, "the file format is 6")
+  capture_scene(1); capture_scene(8)
+  local eight = {}
+  for slot = 1, 8 do eight[slot] = deep_copy(S.scenes[slot]) end
+  eight[8].name = "dusk"
+  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+  assert_true(S.lib.data_files.write(context.data_dir .. "strata/scenes.data", { version = 5, scenes = eight }),
+    "a format 5 file of eight slots written")
+  load_strata({ data_subdir = "format5_sixteen" })
+  S = local_value("S")
+  assert_equal(#S.scenes, 16, "sixteen slots after the load")
+  assert_true(S.scenes[1].populated and S.scenes[8].populated, "slots 1 and 8 hold the file's scenes")
+  assert_equal(S.scenes[8].name, "dusk", "with their names")
+  for slot = 9, 16 do
+    assert_true(S.scenes[slot].populated == false, "slot " .. slot .. " is empty")
+    assert_equal(S.scenes[slot].name, "", "slot " .. slot .. " has no name")
+  end
+  assert_equal(S.scene_file.version, 5, "the file is known as format 5")
+  capture_scene(12)
+  assert_true(save_scenes_to_disk(), "saved")
+  local written = S.lib.data_files.read(context.data_dir .. "strata/scenes.data")
+  assert_equal(written.version, 6, "the save writes format 6")
+  assert_true(written.scenes[12].populated, "with slot 12")
+  assert_true(S.lib.data_files.read(context.data_dir .. "strata/scenes.data.v5") ~= nil,
+    "and keeps the format 5 file as scenes.data.v5")
+end)
+
+test("validate_scene checks the name", function()
+  load_strata()
+  local S = local_value("S")
+  capture_scene(1)
+  local good = deep_copy(S.scenes[1])
+  for _, case in ipairs({
+    { name = string.rep("a", 13), valid = false, what = "13 characters" },
+    { name = "dusk\tfall", valid = false, what = "a tab" },
+    { name = "a\1", valid = false, what = "a control character" },
+    { name = "caf\195\169", valid = false, what = "a letter outside ASCII" },
+    { name = 5, valid = false, what = "a number" },
+    { name = nil, valid = false, what = "no name" },
+    { name = "", valid = true, what = "an empty name" },
+    { name = "dusk", valid = true, what = "dusk" },
+    { name = "~ 12 chars! ", valid = true, what = "twelve printable characters" },
+  }) do
+    local candidate = deep_copy(good)
+    candidate.name = case.name
+    assert_equal(validate_scene(candidate), case.valid, "a populated slot: " .. case.what)
+    local empty = { name = case.name, populated = false, data = {} }
+    assert_equal(validate_scene(empty), case.valid, "an empty slot: " .. case.what)
+  end
+end)
+
+test("a capture keeps the slot's name, and set_name cuts to 12 characters", function()
+  local context = load_strata({ data_subdir = "scene_set_name" })
+  local S = local_value("S")
+  local scenes = S.lib.scenes
+  assert_true(scenes.set_name(2, "dusk"), "set_name names a slot")
+  capture_scene(2)
+  assert_equal(scenes.name(2), "dusk", "a capture keeps the slot's name")
+  assert_true(S.scenes[2].populated, "and captures")
+  local before = scenes.revision(2)
+  scenes.set_name(2, "abcdefghijklmnop")
+  assert_equal(scenes.name(2), "abcdefghijkl", "cut to 12 characters")
+  assert_true(scenes.revision(2) > before, "a name raises the slot's revision")
+  scenes.set_name(3, "a\tb\1c\195\169d")
+  assert_equal(scenes.name(3), "abcd", "printable ASCII only")
+  assert_true(validate_scene(S.scenes[3]), "so the slot validates")
+  assert_equal(scenes.set_name(0, "x"), false, "slot 0 is no slot")
+  assert_equal(scenes.set_name(S.constants.NUM_SCENES + 1, "x"), false, "nor is slot 17")
+  assert_equal(scenes.set_name(4, 7), false, "a name is a string")
+  assert_equal(scenes.name(4), "", "and slot 4 keeps its name")
+  -- a name is written at once, as a save is
+  load_strata({ data_subdir = "scene_set_name" })
+  assert_equal(local_value("S").lib.scenes.name(2), "abcdefghijkl", "the name is on disk")
+  assert_equal(local_value("S").lib.scenes.name(3), "abcd", "an empty slot's name too")
+  assert_true(context ~= nil, "loaded")
+end)
+
+test("bank_of and name", function()
+  load_strata()
+  local scenes = local_value("S").lib.scenes
+  assert_equal(scenes.bank_of(1), 1, "slot 1 is bank 1")
+  assert_equal(scenes.bank_of(8), 1, "slot 8 is bank 1")
+  assert_equal(scenes.bank_of(9), 2, "slot 9 is bank 2")
+  assert_equal(scenes.bank_of(16), 2, "slot 16 is bank 2")
+  assert_equal(scenes.bank_of(0), nil, "slot 0 is in no bank")
+  assert_equal(scenes.bank_of(17), nil, "nor is slot 17")
+  assert_equal(scenes.bank_of(2.5), nil, "nor a fraction")
+  assert_equal(scenes.name(3), "", "a slot starts with no name")
+  scenes.set_name(3, "dusk")
+  assert_equal(scenes.name(3), "dusk", "name(3) after set_name(3, \"dusk\")")
+  assert_equal(scenes.name(17), "", "a number that is no slot has no name")
+end)
+
+test("the scene sequencer runs over up to 16 scenes", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("scene_sequence_length", 20)
+  assert_equal(params:get("scene_sequence_length"), 16, "the length goes up to 16")
+  capture_scene(9); capture_scene(16)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(S.current_scene, 9, "the empty slots 1-8 are skipped: scene 9 first")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 16, "scene 16 is next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(S.current_scene, 16, "then scene 16")
+  context.clock.run_for(4, 0.001)
+  assert_equal(S.current_scene, 9, "then back to scene 9")
+  params:set("scene_sequencer_enabled", 0)
 end)
 
 test("revision rises on a capture and on a load", function()
@@ -2845,8 +2971,7 @@ test("a recall's lock states run the lock hooks for the voices whose lock change
   local calls = {}
   local context = load_strata({ before_init = function()
     local S = local_value("S")
-    S.registry.lock_change = S.registry.lock_change or {}
-    table.insert(S.registry.lock_change, function(voice_idx, locked)
+    S.register_lock_change(function(voice_idx, locked)
       table.insert(calls, voice_idx .. (locked and " locked" or " unlocked")
         .. (local_value("S").frozen[voice_idx] == locked and "" or " (before the state)"))
     end)

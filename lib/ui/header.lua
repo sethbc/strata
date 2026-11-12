@@ -93,15 +93,15 @@ return function(S)
         if S.pattern_playing then draw_play_mark(HEADER.status_play_x) end
         screen.level(10)
         screen.move(HEADER.status_x, HEADER_Y)
-        -- it ends where a flash would, before a right-aligned S8
+        -- it ends where a flash would, where a right-aligned S16 begins
         screen.text(S.lib.ui_text.fit_text(tostring(status), HEADER.flash_x + HEADER.flash_width - HEADER.status_x))
       else
         draw_indicators()
       end
     end
 
-    -- Scene indicator (right-aligned to the screen edge); the scene a fade
-    -- goes to blinks, dark at 2 (#254)
+    -- Scene indicator S1-S16 (right-aligned to the screen edge); the scene
+    -- a fade goes to blinks, dark at 2 (#254)
     if S.current_scene > 0 then
       screen.move(HEADER.scene_right, HEADER_Y)
       local scene_level = S.scene_sequencer_enabled and 10 or 6

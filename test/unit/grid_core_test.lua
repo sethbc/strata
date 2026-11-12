@@ -737,7 +737,7 @@ test("scene_recall_level: 8 saved, 2 empty, 10 the running sequencer's next slot
   assert_equal(recall_levels(core, 5), "8 15 10 2 2", "17 s: scene 2, scene 3 next")
   params:set("scene_sequencer_enabled", 0)
   assert_equal(recall_levels(core, 5), "8 15 8 2 2", "a stopped sequencer lights no next scene")
-  for _, slot in ipairs({0, 9, 1.5}) do
+  for _, slot in ipairs({0, 17, 1.5}) do
     assert_equal(core.scene_recall_level(slot), 0, "slot " .. slot .. " is no scene")
     assert_equal(core.scene_fade_level(slot), 0)
   end

@@ -29,13 +29,16 @@ return function(S)
     -- column 7 rows 10-16: voices 1-7's lock keys (the core's lock_level)
     lock_column = 7,
     lock_first_row = 10,
-    -- scenes page
+    -- scenes page: scene y (1-16) on row y of columns 1-3; the sequence
+    -- lengths a bank per column, rows 9-16: column 4 lengths 1-8, column 5
+    -- 9-16
     scene_recall_column = 1,
     scene_fade_column = 2,
     scene_save_column = 3,
     scene_sequencer_column = 4,
     scene_sequencer_row = 1,
-    scene_length_first_row = 9,    -- rows 9-16: lengths 1-8
+    scene_length_columns = {[4] = 1, [5] = 2},  -- column -> its bank
+    scene_length_first_row = 9,
     -- sources page: rows 1-10 the source options, row 12 record, row 13
     -- clear, row 14 each voice's freeze key (S.lib.freeze)
     record_row = 12,
@@ -73,21 +76,29 @@ return function(S)
     end
   end
 
+  -- The scenes page's sequence length key at (x, y): the length it sets,
+  -- or nil
+  local function scene_length_at(x, y)
+    local bank = LAYOUT_128V.scene_length_columns[x]
+    local index = y - LAYOUT_128V.scene_length_first_row + 1
+    if not bank or index < 1 or index > S.constants.SCENE_BANK_SIZE then return nil end
+    return (bank - 1) * S.constants.SCENE_BANK_SIZE + index
+  end
+
+  -- A recall goes through the quantizer (design §8.9)
   local function grid_key_128v_scenes(port, x, y, z)
     if x == LAYOUT_128V.scene_recall_column and y <= NUM_SCENES then
-      recall_scene(y, 0)
+      S.lib.quantize.schedule("scene", function() recall_scene(y, 0) end, "S" .. y)
     elseif x == LAYOUT_128V.scene_fade_column and y <= NUM_SCENES then
-      recall_scene(y, params:get("scene_transition_time"))
+      local transition_time = params:get("scene_transition_time")
+      S.lib.quantize.schedule("scene", function() recall_scene(y, transition_time) end, "S" .. y)
     elseif x == LAYOUT_128V.scene_save_column and y <= NUM_SCENES then
       grid_core.scene_save_key(port, x, y, z, y)
-    elseif x == LAYOUT_128V.scene_sequencer_column then
-      local length = y - LAYOUT_128V.scene_length_first_row + 1
-      if y == LAYOUT_128V.scene_sequencer_row then
-        local enabled = params:get("scene_sequencer_enabled")
-        set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
-      elseif length >= 1 and length <= NUM_SCENES then
-        params:set("scene_sequence_length", length)
-      end
+    elseif x == LAYOUT_128V.scene_sequencer_column and y == LAYOUT_128V.scene_sequencer_row then
+      local enabled = params:get("scene_sequencer_enabled")
+      set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
+    elseif scene_length_at(x, y) then
+      params:set("scene_sequence_length", scene_length_at(x, y))
     end
   end
 
@@ -193,9 +204,12 @@ return function(S)
     end
     local sequencer_column = LAYOUT_128V.scene_sequencer_column
     grid_device:led(sequencer_column, LAYOUT_128V.scene_sequencer_row, S.scene_sequencer_enabled and 15 or 4)
-    local length = params:get("scene_sequence_length")
-    for i = 1, NUM_SCENES do
-      grid_device:led(sequencer_column, LAYOUT_128V.scene_length_first_row + i - 1, i <= length and 8 or 2)
+    local seq_length = params:get("scene_sequence_length")
+    for x, bank in pairs(LAYOUT_128V.scene_length_columns) do
+      for index = 1, S.constants.SCENE_BANK_SIZE do
+        local length = (bank - 1) * S.constants.SCENE_BANK_SIZE + index
+        grid_device:led(x, LAYOUT_128V.scene_length_first_row + index - 1, length <= seq_length and 8 or 2)
+      end
     end
   end
 

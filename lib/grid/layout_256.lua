@@ -48,7 +48,19 @@ return function(S)
     pattern_hold_seconds = S.constants.GRID_HOLD.scene_save_seconds,
     pattern_key_level = 2,
     pattern_pending_level = 15,  -- while the hold is pending
+    -- page 3: rows 1-3 columns 1-16 are scenes 1-16; the sequence lengths
+    -- are a bank per row, columns 3-10: row 5 lengths 1-8, row 6 9-16
+    length_rows = {[5] = 1, [6] = 2},  -- row -> its bank
+    length_first_column = 3,
   }
+
+  -- Page 3's sequence length key at (x, y): the length it sets, or nil
+  local function scene_length_at(x, y)
+    local bank = LAYOUT_256.length_rows[y]
+    local index = x - LAYOUT_256.length_first_column + 1
+    if not bank or index < 1 or index > S.constants.SCENE_BANK_SIZE then return nil end
+    return (bank - 1) * S.constants.SCENE_BANK_SIZE + index
+  end
 
   -- Row 15's key at column x: once held LAYOUT_256.pattern_hold_seconds
   -- (through on_hold: a release, the grid's removal or cleanup cancels it),
@@ -107,27 +119,26 @@ return function(S)
     end
 
     if page == PAGES.scenes then
-      -- Scene page: the scene keys on rows 1-5; rows 8 and 16 work as on
-      -- page 1 (#442)
+      -- Scene page: the scene keys on rows 1-6 (scene x on columns 1-16);
+      -- rows 8 and 16 work as on page 1 (#442). A recall goes through the
+      -- quantizer (design §8.9)
       if y == 1 and x <= NUM_SCENES then
         -- Row 1: Scene recall (instant)
-        recall_scene(x, 0)
+        S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)
       elseif y == 2 and x <= NUM_SCENES then
         -- Row 2: Scene recall (with transition)
-        recall_scene(x, params:get("scene_transition_time"))
+        local transition_time = params:get("scene_transition_time")
+        S.lib.quantize.schedule("scene", function() recall_scene(x, transition_time) end, "S" .. x)
       elseif y == 3 and x <= NUM_SCENES then
         -- Row 3: Scene save, once held
         grid_core.scene_save_key(port, x, y, z, x)
-      elseif y == 5 then
-        -- Row 5: Scene sequencer controls
-        if x == 1 then
-          -- Toggle sequencer
-          local enabled = params:get("scene_sequencer_enabled")
-          set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
-        elseif x >= 3 and x <= 2 + NUM_SCENES then
-          -- Set sequence length
-          params:set("scene_sequence_length", x - 2)
-        end
+      elseif y == 5 and x == 1 then
+        -- Row 5, column 1: toggle the scene sequencer
+        local enabled = params:get("scene_sequencer_enabled")
+        set_binary_param("scene_sequencer_enabled", enabled == 1 and 0 or 1)  -- echoes to a MIDI map (#538)
+      elseif scene_length_at(x, y) then
+        -- Rows 5-6, columns 3-10: the sequence length (1-8, 9-16)
+        params:set("scene_sequence_length", scene_length_at(x, y))
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
@@ -273,10 +284,13 @@ return function(S)
       -- Row 5: Scene sequencer controls
       grid_device:led(1, 5, S.scene_sequencer_enabled and 15 or 4)  -- Sequencer on/off
 
-      -- Sequence length indicators
+      -- Sequence length indicators: rows 5-6, columns 3-10
       local seq_length = params:get("scene_sequence_length")
-      for i = 1, NUM_SCENES do
-        grid_device:led(i + 2, 5, i <= seq_length and 8 or 2)
+      for y, bank in pairs(LAYOUT_256.length_rows) do
+        for index = 1, S.constants.SCENE_BANK_SIZE do
+          local length = (bank - 1) * S.constants.SCENE_BANK_SIZE + index
+          grid_device:led(LAYOUT_256.length_first_column + index - 1, y, length <= seq_length and 8 or 2)
+        end
       end
 
       grid_redraw_256_transport(port, grid_device)

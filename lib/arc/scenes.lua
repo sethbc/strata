@@ -1,6 +1,6 @@
 -- lib/arc/scenes.lua
 -- The SCENES page's arc rings: ring 1 the scene cursor (S.cursors.scene)
--- over the same stops as E2 (the eight slots, then the SCENES_FIELDS),
+-- over the same 20 stops as E2 (the sixteen slots, then the SCENES_FIELDS),
 -- ARC_SCENES.ticks_per_stop ticks a stop carried under "scenes:1", moved
 -- through S.lib.pages_scenes.move_cursor as E2 moves it; ring 2
 -- the transition time; rings 3-4 dark (3.4's morph will take ring 3). Sets

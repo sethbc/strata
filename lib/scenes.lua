@@ -1,5 +1,6 @@
 -- lib/scenes.lua
--- The scene system: the eight slots (S.scenes) and the loaded one
+-- The scene system: the sixteen slots (S.scenes, two banks of eight, each
+-- with the player's name: bank_of, name, set_name) and the loaded one
 -- (S.current_scene), capture and recall (instant, or a smooth transition
 -- on S.scene_transition_clock), the scene sequencer
 -- (S.scene_sequencer_clock), migration of older scene formats, validation,
@@ -212,14 +213,13 @@ return function(S)
     end
   end
 
-  -- The registered scene blocks (S.registry.scene_blocks, 3.4's 0a: {key,
-  -- default = fn(), capture = fn(), validate = fn(value), apply =
-  -- fn(value), discrete = true, through_zero = fn(from_value, to_value)}),
-  -- read at each use, after init; a block is data[key] of a scene. apply
-  -- gets a copy of it; validate and through_zero get the stored value and
-  -- must not modify it
+  -- The registered scene blocks (S.registry.scene_blocks: {key, default =
+  -- fn(), capture = fn(), validate = fn(value), apply = fn(value), discrete
+  -- = true, through_zero = fn(from_value, to_value)}), read at each use,
+  -- after init; a block is data[key] of a scene. apply gets a copy of it;
+  -- validate and through_zero get the stored value and must not modify it
   local function scene_blocks()
-    return S.registry.scene_blocks or {}
+    return S.registry.scene_blocks
   end
 
   -- a finite number: NaN, inf and -inf are refused (the data files' reader
@@ -256,6 +256,28 @@ return function(S)
   -- may too
   M.WHOLE_NUMBERS_FORMAT = 5
 
+  -- The first scene format whose slot names are the player's (3.4): 3.3
+  -- and older named every slot "scene <i>", so only in a file older than
+  -- this does a slot's own old default read as no name
+  M.NAMES_FORMAT = 6
+
+  -- A slot name as validate_scene allows it: a string of at most
+  -- SCENE_NAME_MAX printable ASCII characters ("" for none)
+  local function is_scene_name(value)
+    return type(value) == "string" and #value <= S.constants.SCENE_NAME_MAX and not value:find("[^\32-\126]")
+  end
+
+  -- A loaded slot's name (format 6): a slot written with none gets "",
+  -- and in a file older than M.NAMES_FORMAT a slot's own old default
+  -- ("scene <i>" in slot i) reads as none; another slot's default stays (a
+  -- name the player could have given). Anything else is left for
+  -- validate_scene
+  local function migrate_slot_name(scene, slot, from_version)
+    if type(scene) ~= "table" then return end
+    if scene.name == nil then scene.name = "" end
+    if from_version < M.NAMES_FORMAT and scene.name == "scene " .. slot then scene.name = "" end
+  end
+
   -- Round, in a scene older than M.WHOLE_NUMBERS_FORMAT, every number
   -- validate_scene wants whole (#554 does the same for a PSET's number
   -- params): the option and registered discrete globals, and per voice the
@@ -288,13 +310,13 @@ return function(S)
     end
   end
 
-  -- The registered migrations (S.registry.scene_migrations, 3.4's 0a:
-  -- {name, before_version, migrate = fn(scene)}) a scene of from_version
-  -- needs: those whose before_version is above it, by before_version, then
-  -- in registration order
+  -- The registered migrations (S.registry.scene_migrations: {name,
+  -- before_version, migrate = fn(scene)}) a scene of from_version needs:
+  -- those whose before_version is above it, by before_version, then in
+  -- registration order
   local function due_migrations(from_version)
     local due = {}
-    for index, record in ipairs(S.registry.scene_migrations or {}) do
+    for index, record in ipairs(S.registry.scene_migrations) do
       if record.before_version > from_version then table.insert(due, {record = record, index = index}) end
     end
     table.sort(due, function(a, b)
@@ -570,7 +592,7 @@ return function(S)
       local was_locked = S.frozen[voice_idx]
       S.frozen[voice_idx] = entry.value
       if (not was_locked) ~= (not entry.value) then
-        for _, hook in ipairs(S.registry.lock_change or {}) do hook(voice_idx, entry.value) end
+        for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, entry.value) end
       end
     elseif entry.key == "pattern" then
       S.lib.sequencer.replace_pattern(voice_idx, entry.value)
@@ -1089,9 +1111,11 @@ return function(S)
       scene_table = loaded
     end
 
-    -- Fill fields added since the file's format, then validate the result
+    -- Fill fields added since the file's format (a file older than format
+    -- 6 holds eight slots: 9-16 load empty), then validate the result
     if type(scene_table) == "table" then
       for i = 1, NUM_SCENES do
+        migrate_slot_name(scene_table[i], i, file_version)
         migrate_scene(scene_table[i], file_version)
       end
     end
@@ -1101,13 +1125,10 @@ return function(S)
       return preserve_unloadable_scene_file()
     end
 
-    -- Make sure every slot exists, filling gaps with empty scenes. 3.3
-    -- named every slot "scene <i>": a slot's own old default loads as no
-    -- name (another slot's is a name the player gave it)
+    -- Make sure every slot exists, filling gaps with empty scenes
     local loaded_scenes = {}
     for i = 1, NUM_SCENES do
       loaded_scenes[i] = scene_table[i] or empty_scene()
-      if loaded_scenes[i].name == "scene " .. i then loaded_scenes[i].name = "" end
     end
     -- a running transition ends by applying its slot: after the load that
     -- would be the file's data for the slot, or nothing if it is now empty
@@ -1173,9 +1194,11 @@ return function(S)
     return load_scenes_from_disk()
   end
 
-  -- Check that one scene slot holds everything recall_scene_instant reads
+  -- Check that one scene slot holds everything recall_scene_instant reads,
+  -- and a name (every slot, empty or not)
   function validate_scene(scene)
     if type(scene) ~= "table" then return false end
+    if not is_scene_name(scene.name) then return false end
     if type(scene.populated) ~= "boolean" then return false end
     if not scene.populated then return true end
 
@@ -1351,6 +1374,36 @@ return function(S)
     capture_scene(scene_num)
     header_flash(M.autosave() and ("saved S" .. scene_num) or ("S" .. scene_num .. " not on disk"))
     grid_redraw()
+    request_redraw()
+    return true
+  end
+
+  -- The bank a slot is in (a bank is only a view of SCENE_BANK_SIZE slots,
+  -- design Question 15): 1 for slots 1-8, 2 for 9-16; nil for a number
+  -- that is no slot
+  function M.bank_of(slot)
+    if not is_integer_between(slot, 1, NUM_SCENES) then return nil end
+    return math.ceil(slot / S.constants.SCENE_BANK_SIZE)
+  end
+
+  -- A slot's name: "" for none, and for a number that is no slot
+  function M.name(slot)
+    if not is_integer_between(slot, 1, NUM_SCENES) then return "" end
+    return S.scenes[slot].name
+  end
+
+  -- Name a slot, empty or not (the name stays with the slot; a capture
+  -- keeps it): text's printable ASCII characters, cut to SCENE_NAME_MAX. A
+  -- changed name raises the slot's revision and is written at once, as a
+  -- save is (autosave, #327). False for a number that is no slot or a text
+  -- that is no string (nothing changes), else true
+  function M.set_name(slot, text)
+    if not is_integer_between(slot, 1, NUM_SCENES) or type(text) ~= "string" then return false end
+    local name = text:gsub("[^\32-\126]", ""):sub(1, S.constants.SCENE_NAME_MAX)
+    if name == S.scenes[slot].name then return true end
+    S.scenes[slot].name = name
+    raise_revision(slot)
+    M.autosave()
     request_redraw()
     return true
   end

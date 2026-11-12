@@ -23,7 +23,7 @@ local function start_layout_flash(S, kind)
   if kind == "header flash" then
     header_flash("v1 grain density 12.5 Hz, a header flash long enough to be cut")
   elseif kind == "hints flash" then
-    S.lib.ui_flash.start("hints", "K3 again: overwrite S8")  -- the longest planned
+    S.lib.ui_flash.start("hints", "K3 again: overwrite S16")  -- the longest planned
   end
 end
 

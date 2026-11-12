@@ -649,9 +649,9 @@ local function hint_text(context)
   end
 end
 
--- The header's page dots (lib/ui/header.lua): eight 2x2 rects from x 40,
+-- The header's page dots (lib/ui/header.lua): eight 2x2 rects from x 36,
 -- 4 px apart
-local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 40, 4, 2
+local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 36, 4, 2
 
 local HEADER_FLASH_X = 40
 

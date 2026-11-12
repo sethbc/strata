@@ -747,4 +747,50 @@ test("128h page 3: the sequencer key echoes to a MIDI-mapped controller (#538)",
   assert_equal(cc_echoes(controller, 41), "127,0", "the controller hears both")
 end)
 
+-- The levels of a row, columns 1-16, as one string
+local function row_levels(device, y)
+  local levels = {}
+  for x = 1, 16 do levels[x] = device:get_led(x, y) end
+  return table.concat(levels, " ")
+end
+
+-- 3.4 (design §11): page 3's columns 9-16 are scenes 9-16 and row 4's
+-- columns 9-16 the lengths 9-16
+test("128h page 3: scenes 9-16 on columns 9-16, lengths 9-16 on row 4", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 8)
+  local S = local_value("S")
+  local core = grid_core()
+  tap(context, 1, 7, 8)  -- page 3
+  context.grid.press(1, 11, 3, 1)
+  context.clock.run_for(0.51)
+  context.grid.press(1, 11, 3, 0)
+  assert_true(S.scenes[11].populated, "(11,3) held 0.5 s saves scene 11")
+  capture_scene(16); grid_redraw()
+  for i = 9, 16 do
+    assert_equal(device:get_led(i, 1), core.scene_recall_level(i), "recall key " .. i)
+    assert_equal(device:get_led(i, 2), core.scene_fade_level(i), "fade key " .. i)
+    assert_equal(device:get_led(i, 3), core.scene_save_level(1, i, 3), "save key " .. i)
+  end
+  assert_equal(device:get_led(11, 2), 6, "populated scene 11's fade key at 6")
+  local scheduled = {}
+  local real_schedule = S.lib.quantize.schedule
+  S.lib.quantize.schedule = function(action_key, fn, label)
+    table.insert(scheduled, action_key .. " " .. label); fn(); return true
+  end
+  tap(context, 1, 16, 1)
+  assert_equal(S.current_scene, 16, "(16,1) recalls scene 16 at once")
+  params:set("scene_transition_time", 2)
+  tap(context, 1, 11, 2)
+  assert_true(S.scene_transition_active and S.SCENE_TRANSITION.target == 11, "(11,2) fades to scene 11")
+  S.lib.quantize.schedule = real_schedule
+  assert_equal(table.concat(scheduled, ","), "scene S16,scene S11", "both recalls go through the quantizer")
+  context.clock.run_for(2.5)
+  tap(context, 1, 16, 4); assert_equal(params:get("scene_sequence_length"), 16, "(16,4) length 16")
+  tap(context, 1, 9, 4); assert_equal(params:get("scene_sequence_length"), 9, "(9,4) length 9")
+  tap(context, 1, 8, 4); assert_equal(params:get("scene_sequence_length"), 8, "(8,4) still length 8")
+  tap(context, 1, 13, 4)
+  assert_equal(row_levels(device, 4), "8 8 8 8 8 8 8 8 8 8 8 8 8 2 2 2", "row 4: lengths 1-13 within it")
+end)
+
 end
