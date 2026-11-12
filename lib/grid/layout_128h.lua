@@ -47,6 +47,13 @@ return function(S)
     -- sources key (page 4's own, column 8 of row 8) pressed on page 4 goes
     -- there and back, and lights position_page_level there
     position_page_level = 10,
+    -- 3.4 (design §11): page 2's macro fader page key (rows 1-4 then show
+    -- the shown bank's macros); page 3's recorders 1-4 on row 5 columns
+    -- 13-16 and the morph fader on row 6
+    macro_page_column = 16,
+    recorder_row = 5,
+    recorder_first_column = 13,
+    morph_row = 6,
   }
   M.LAYOUT = LAYOUT_128H
   local SLOT_ROWS = math.ceil(NUM_BUFFERS / LAYOUT_128H.slot_columns)
@@ -74,10 +81,17 @@ return function(S)
     return column, row
   end
 
-  -- Page 2, rows 1-7
-  local function fader_page_key(x, y)
+  -- Page 2, rows 1-7: rows 1-4 the voice's faders, or the shown bank's
+  -- macros while the port shows a bank (3.4)
+  local function fader_page_key(port, x, y)
     if y >= 1 and y <= FADER_ROWS then
-      set_fader_param(S.grid_voice_select, (S.param_page - 1) * FADER_ROWS + y, x)
+      if S.lib.grid_faders.shows_macros(port) then
+        set_param_from_column(S.lib.grid_faders.shown_macro_ids()[y], x)
+      else
+        set_fader_param(S.grid_voice_select, (S.param_page - 1) * FADER_ROWS + y, x)
+      end
+    elseif y == LAYOUT_128H.fader_page_row and x == LAYOUT_128H.macro_page_column then
+      S.lib.grid_faders.macro_page_key(port)
     elseif y == LAYOUT_128H.fader_page_row then
       if x <= fader_page_count(S.grid_voice_select) then S.param_page = x end
     elseif y == LAYOUT_128H.voice_select_row then
@@ -106,15 +120,25 @@ return function(S)
     if slot then
       if records then grid_core.record_key(slot) else grid_core.clear_key(slot) end
     elseif y >= 1 and y <= NUM_VOICES and x == LAYOUT_128H.freeze_column then
-      S.lib.freeze.toggle(y)
+      S.lib.freeze.toggle_quantized(y)  -- at the next beat or bar under quantize_actions
     elseif y >= 1 and y <= NUM_VOICES and x <= #SOURCE_OPTIONS then
       grid_core.source_key(y, x)
     end
   end
 
-  -- Page 3, rows 1-5: scene x (1-16) on column x of rows 1-3, length x on
-  -- row 4. A recall goes through the quantizer (design §8.9)
+  -- Page 3, rows 1-6: scene x (1-16) on column x of rows 1-3, length x on
+  -- row 4, the sequencer on row 5 column 1; 3.4's recorders on row 5
+  -- columns 13-16 and the morph fader on row 6. A recall goes through the
+  -- quantizer (design §8.9)
   local function scene_page_key(port, x, y, z)
+    local recorder = x - LAYOUT_128H.recorder_first_column + 1
+    if y == LAYOUT_128H.recorder_row and recorder >= 1 then
+      grid_core.gesture_key(port, x, y, z, recorder)
+      return
+    elseif y == LAYOUT_128H.morph_row then
+      set_param_from_column("morph", x)
+      return
+    end
     if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
       S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)
@@ -177,7 +201,7 @@ return function(S)
     if page == PAGES.positions then
       if y <= NUM_VOICES then S.lib.positions.grid_key(port, y, x, PAGES.position_cells, z) end
     elseif page == PAGES.faders then
-      fader_page_key(x, y)
+      fader_page_key(port, x, y)
     elseif page == PAGES.scenes then
       scene_page_key(port, x, y, z)
     elseif page == PAGES.sources then
@@ -196,16 +220,23 @@ return function(S)
   -- Page 2: faders on rows 1-4 (a bar at 8 up to the value at 15), the
   -- fader pages on row 5, voice select on row 6, lock on row 7, at the
   -- core's levels (fader_page_level, LEVELS' pick pair, lock_level)
-  local function redraw_fader_page(grid_device)
-    local ids = fader_param_ids(S.grid_voice_select)
+  local function redraw_fader_page(port, grid_device)
     local levels = grid_core.LEVELS
-    for row = 1, FADER_ROWS do
-      local param_id = ids[(S.param_page - 1) * FADER_ROWS + row]
-      if param_id then grid_redraw_fader_row(grid_device, row, param_id) end
+    if S.lib.grid_faders.shows_macros(port) then
+      for row, param_id in ipairs(S.lib.grid_faders.shown_macro_ids()) do
+        grid_redraw_fader_row(grid_device, row, param_id)
+      end
+    else
+      local ids = fader_param_ids(S.grid_voice_select)
+      for row = 1, FADER_ROWS do
+        local param_id = ids[(S.param_page - 1) * FADER_ROWS + row]
+        if param_id then grid_redraw_fader_row(grid_device, row, param_id) end
+      end
     end
     for fader_page = 1, fader_page_count(S.grid_voice_select) do
       grid_device:led(fader_page, LAYOUT_128H.fader_page_row, S.lib.grid_faders.fader_page_level(fader_page))
     end
+    grid_device:led(LAYOUT_128H.macro_page_column, LAYOUT_128H.fader_page_row, S.lib.grid_faders.macro_page_level(port))
     for i = 1, NUM_VOICES do
       grid_device:led(i, LAYOUT_128H.voice_select_row, i == S.grid_voice_select and levels.picked or levels.unpicked)
       grid_device:led(i, LAYOUT_128H.lock_row, grid_core.lock_level(i))
@@ -230,6 +261,12 @@ return function(S)
 
     -- Row 5: Scene sequencer on/off
     grid_device:led(1, 5, S.scene_sequencer_enabled and 15 or 4)
+
+    -- 3.4: the recorders on row 5 columns 13-16, the morph fader on row 6
+    for k = 1, S.constants.NUM_GESTURES do
+      grid_device:led(LAYOUT_128H.recorder_first_column + k - 1, LAYOUT_128H.recorder_row, grid_core.gesture_level(k))
+    end
+    grid_redraw_fader_row(grid_device, LAYOUT_128H.morph_row, "morph")
   end
 
   -- Page 4: each voice's source (selected 15, empty buffers 2, others 4),
@@ -299,7 +336,7 @@ return function(S)
   function grid_redraw_128h(port, grid_device)
     local page = grid_core.page(port)
     if page == PAGES.faders then
-      redraw_fader_page(grid_device)
+      redraw_fader_page(port, grid_device)
     elseif page == PAGES.scenes then
       redraw_scene_page(port, grid_device)
     elseif page == PAGES.sources then
@@ -321,9 +358,15 @@ return function(S)
   -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
   -- strip_page: the page its strip is on (the playhead clock repaints it
   -- as it does the position page)
+  -- shows_modulation: page 2 on a bank (the macros) and page 3 (the
+  -- morph), which the drift tick follows (grid_core.any_modulation_shown)
   S.registry.grid_layouts["128h"] = {
     key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true,
     strip_page = PAGES.sources,
+    shows_modulation = function(port)
+      local page = grid_core.page(port)
+      return page == PAGES.scenes or (page == PAGES.faders and S.lib.grid_faders.shows_macros(port))
+    end,
   }
 
   return M

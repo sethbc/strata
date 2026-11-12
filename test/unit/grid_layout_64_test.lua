@@ -40,6 +40,38 @@ local function key_count(keys)
   return count
 end
 
+-- 2b's step editor (S.lib.pages_seq), as a double until it lands: the four
+-- functions the grid calls, shaped as 2b gives them (open_step_editor(voice,
+-- step, port) returns true, close_step_editor(port), step_editor() returns
+-- {voice, step, port} or nil, step_editor_edited() a boolean). Open pushes
+-- a modal owner and close pops it, as the real editor does; editor.calls
+-- records each call. Install it after load_strata, in every test that holds
+-- a step key 0.3 s
+local function step_editor_double()
+  local S = local_value("S")
+  local editor = {open = nil, edited = false, calls = {}}
+  local owner = {draw = function() end}
+  local seq = S.lib.pages_seq
+  function seq.open_step_editor(voice, step, port)
+    table.insert(editor.calls, "open " .. voice .. " " .. step .. " " .. port)
+    if editor.open then S.lib.ui_modal.pop(owner) end
+    editor.open, editor.edited = {voice = voice, step = step, port = port}, false
+    S.lib.ui_modal.push(owner)
+    return true
+  end
+  function seq.close_step_editor(port)
+    table.insert(editor.calls, "close " .. port)
+    if editor.open and editor.open.port == port then
+      editor.open = nil
+      S.lib.ui_modal.pop(owner)
+    end
+  end
+  function seq.step_editor() return editor.open end
+  function seq.step_editor_edited() return editor.edited end
+  return editor
+end
+
+
 test("every 64 grid key runs without error", function()
   local context = load_strata()
   local device = context.grid.plug(1, 8, 8)
@@ -452,6 +484,7 @@ test("64: a hold in the step views keeps working and never reaches positions", f
   local context, S = positions_grid()
   local calls = 0
   local original = S.lib.positions.strip_key
+  local editor = step_editor_double()
   S.lib.positions.strip_key = function() calls = calls + 1 end
   context.grid.press(1, 3, 2, 1)
   context.clock.run_for(0.6)
@@ -459,19 +492,23 @@ test("64: a hold in the step views keeps working and never reaches positions", f
   context.grid.press(1, 6, 3, 1); context.clock.run_for(0.6); context.grid.press(1, 6, 3, 0)
   S.lib.positions.strip_key = original
   assert_equal(calls, 0, "no strip call from the step views")
+  assert_equal(table.concat(editor.calls, ","), "open 2 3 1,close 1,open 3 6 1,close 1", "each hold opened the step editor")
 end)
 
 test("switching halves ends a held step gesture", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   context.grid.plug(1, 8, 8)
+  step_editor_double()
   context.grid.press(1, 3, 1, 1)  -- half 1: voice 1 step 3 held
-  assert_equal(patterns[1][3], 15, "step 3 toggles on at press")
+  assert_equal(patterns[1][3], 0, "step 3 toggles at its release, not its press")
   context.grid.press(1, 1, 8, 1); context.clock.run_for(0.6); context.grid.press(1, 1, 8, 0)
   assert_equal(shown_half(1), 2, "the hold showed steps 9-16")
-  context.grid.press(1, 8, 1, 1)
+  tap(context, 1, 8, 1)
   assert_equal(patterns[1][16], 15, "column 8 now toggles step 16")
-  assert_equal(patterns[1][3], 15, "the hidden held step takes no level")
+  assert_equal(patterns[1][3], 0, "the hidden held step takes no level")
+  context.grid.press(1, 3, 1, 0)
+  assert_equal(patterns[1][3] + patterns[1][11], 0, "and its release toggles nothing, in either half")
 end)
 
 test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN raise nothing)", function()
@@ -494,6 +531,53 @@ test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN
   context.grid.press(1, 4, 1, 1)
   assert_equal(patterns[1][3], 8, "port 1's held step still takes the level (4 * 15 / 8 = 7.5 -> 8)")
   assert_equal(patterns[1][4], 0, "the level key does not toggle")
+end)
+
+-- 3.4 (design §8.7, §11): a held step opens the step editor in the steps
+-- views, for the step of the half shown; the positions view never does
+test("a held step opens the step editor in the steps views", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local editor = step_editor_double()
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 8, 8)
+  context.grid.press(1, 3, 2, 1); context.clock.run_for(0.35)
+  assert_equal(table.concat(editor.calls, ","), "open 2 3 1", "steps 1-8: voice 2's step 3")
+  context.grid.press(1, 3, 2, 0)
+  assert_equal(editor.open, nil, "the release closes it")
+  assert_equal(patterns[2][3], 0, "and toggles nothing")
+  switch_half(context, 1)
+  context.grid.press(1, 3, 2, 1); context.clock.run_for(0.35)
+  assert_equal(editor.calls[#editor.calls], "open 2 11 1", "steps 9-16: voice 2's step 11")
+  assert_true(S.lib.ui_modal.top() ~= nil, "the editor has the screen")
+  -- the half switch ends the held step: the editor closes, nothing toggles
+  switch_half(context, 1)
+  assert_equal(grid_core().page(1), 5, "the hold went on to the positions view")
+  assert_equal(editor.open, nil, "the editor closed with the half")
+  assert_equal(S.lib.ui_modal.top(), nil)
+  context.grid.press(1, 3, 2, 0)
+  assert_equal(patterns[2][11], 0, "its release toggles nothing")
+  local opened = #editor.calls
+  context.grid.press(1, 3, 1, 1); context.clock.run_for(0.35); context.grid.press(1, 3, 1, 0)
+  assert_equal(#editor.calls, opened, "the positions view opens no editor")
+  -- a tap still toggles, on its release
+  switch_half(context, 1)
+  context.grid.press(1, 5, 4, 1)
+  assert_equal(patterns[4][5], 0, "a press leaves voice 4's step 5")
+  context.grid.press(1, 5, 4, 0)
+  assert_equal(patterns[4][5], 15, "its release toggles it")
+end)
+
+-- (mute) design §8.14: a silenced running voice's key lights at 6
+test("a silenced voice's key lights at 6 on every layout", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 8, 8)
+  toggle_voice(3)
+  assert_equal(device:get_led(4, 8), 12, "voice 3 running: 12")
+  params:set("v3_mute", 1)
+  assert_equal(device:get_led(4, 8), 6, "voice 3 muted: 6")
+  params:set("v3_mute", 0); params:set("v4_solo", 1)
+  assert_equal(device:get_led(4, 8), 6, "silenced by voice 4's solo: 6")
 end)
 
 end

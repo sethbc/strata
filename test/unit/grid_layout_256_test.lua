@@ -535,7 +535,7 @@ test("a paste ends the step-level gesture of the voice it lands on", function()
   patterns[1][5], patterns[1][6] = 3, 0
   local copied = copy_of(patterns[1])
   tap(context, 9, 16)  -- copy voice 1
-  context.grid.press(1, 5, 3, 1)  -- hold voice 3 step 5 (toggles it on)
+  context.grid.press(1, 5, 3, 1)  -- hold voice 3 step 5 (it toggles at its release)
   context.grid.press(2, 6, 3, 1)  -- and step 6 on the 16x8
   context.grid.press(1, 6, 2, 1)  -- hold voice 2 step 6: no paste lands there
   tap(context, 11, 16)  -- paste onto voice 3
@@ -543,12 +543,14 @@ test("a paste ends the step-level gesture of the voice it lands on", function()
   -- a second key on voice 3's row toggles its own step, as with nothing held
   context.grid.press(1, 12, 3, 1)
   assert_equal(patterns[3][5], copied[5], "the held step keeps the pasted level")
-  assert_equal(patterns[3][12], 15, "the new key toggles step 12")
   context.grid.press(1, 12, 3, 0); context.grid.press(1, 5, 3, 0)
+  assert_equal(patterns[3][12], 15, "the new key toggles step 12")
+  assert_equal(patterns[3][5], copied[5], "the held step's release toggles nothing")
   context.grid.press(2, 14, 3, 1)
   assert_equal(patterns[3][6], copied[6], "the 16x8's held step keeps the pasted level")
-  assert_equal(patterns[3][14], 15, "and its new key toggles step 14")
   context.grid.press(2, 14, 3, 0); context.grid.press(2, 6, 3, 0)
+  assert_equal(patterns[3][14], 15, "and its new key toggles step 14")
+  assert_equal(patterns[3][6], copied[6], "and its held step's release toggles nothing")
   -- the other voice's gesture still works
   context.grid.press(1, 16, 2, 1)
   assert_equal(patterns[2][6], 15, "voice 2's held step takes column 16's level")
@@ -1137,6 +1139,218 @@ test("256 page 3: scenes 9-16 on columns 9-16, lengths 9-16 on row 6", function(
   assert_equal(row_levels(device, 6), "0 0 8 8 8 8 2 2 2 2 0 0 0 0 0 0", "row 6: 9-12 within it, 13-16 beyond")
   tap(context, 11, 6); tap(context, 2, 6)
   assert_equal(params:get("scene_sequence_length"), 12, "row 6 past columns 3-10 does nothing")
+end)
+
+-- 3.4 (design §11): page 1's row 9 holds the gesture recorders (columns
+-- 1-4: a press is gestures.press, a 0.5 s hold clears; LEDs empty 2,
+-- stopped 5, playing 10, recording 15) and the macro bank keys (columns
+-- 13-16: shown 15, a bank with targets 6, empty 2)
+test("page 1's row 9 presses and clears the recorders and picks the macro bank", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  local gestures = S.lib.gestures
+  assert_equal(row_levels(device, 9):sub(1, 7), "2 2 2 2", "four empty recorders at 2")
+  context.grid.press(1, 2, 9, 1)
+  assert_equal(gestures.state(2), "recording", "a press starts recorder 2 at once")
+  assert_equal(device:get_led(2, 9), 15, "recording: 15")
+  context.grid.press(1, 2, 9, 0)
+  tap(context, 8, 10)  -- a macro fader: an event for the recording
+  tap(context, 2, 9)
+  assert_equal(gestures.state(2), "playing", "a press plays what it recorded")
+  assert_equal(device:get_led(2, 9), 10, "playing: 10")
+  tap(context, 2, 9)
+  assert_equal(gestures.state(2), "stopped")
+  assert_equal(device:get_led(2, 9), 5, "stopped: 5")
+  context.grid.press(1, 2, 9, 1)
+  context.clock.run_for(0.51)
+  assert_equal(gestures.state(2), "empty", "held 0.5 s: recorder 2 cleared")
+  assert_equal(device:get_led(2, 9), 2)
+  context.grid.press(1, 2, 9, 0)
+  assert_equal(gestures.state(2), "empty", "the release after the clear does nothing")
+  context.grid.press(1, 4, 9, 1); context.clock.run_for(0.3); context.grid.press(1, 4, 9, 0)
+  context.clock.run_for(0.5)
+  assert_equal(gestures.state(4), "recording", "a release before 0.5 s clears nothing")
+  gestures.clear(4)
+  -- the bank keys
+  assert_equal(row_levels(device, 9):sub(-8), "15 2 2 2", "bank 1 shown, banks 2-4 without targets")
+  S.lib.macros.set_target(5, 1, S.lib.macros.target_ids()[1], 0, 1)
+  grid_redraw()
+  assert_equal(device:get_led(14, 9), 6, "bank 2 has a target: 6")
+  tap(context, 15, 9)
+  assert_equal(S.lib.macros.bank(), 3, "(15,9) shows bank 3")
+  assert_equal(S.lib.ui_flash.text("header"), "macros 9-12", "with set_bank's flash")
+  assert_equal(row_levels(device, 9):sub(-8), "2 6 15 2", "bank 3 shown, bank 2's targets, banks 1 and 4 empty")
+  for x = 5, 12 do assert_equal(device:get_led(x, 9) > 0, x <= 11, "column " .. x .. (x <= 11 and " lit" or " dark")) end
+end)
+
+-- (mute) design §8.14: row 9 columns 5-11 are voices 1-7's mute keys: a
+-- release within 0.5 s toggles the mute, a 0.5 s hold the solo, both
+-- through set_binary_param; LEDs muted 2, soloed 15, otherwise 8
+test("page 1's row 9 columns 5-11 mute a voice on a tap and solo it on a hold", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  assert_equal(row_levels(device, 9):sub(9, 21), "8 8 8 8 8 8 8", "voices 1-7 neither muted nor soloed: 8")
+  context.grid.press(1, 5, 9, 1)
+  assert_equal(params:get("v1_mute"), 0, "a press alone mutes nothing")
+  context.clock.run_for(0.4)
+  context.grid.press(1, 5, 9, 0)
+  assert_equal(params:get("v1_mute"), 1, "a release within 0.5 s mutes voice 1")
+  assert_equal(params:get("v1_solo"), 0, "and solos nothing")
+  assert_equal(device:get_led(5, 9), 2, "muted: 2")
+  tap(context, 5, 9)
+  assert_equal(params:get("v1_mute"), 0, "a second tap unmutes")
+  assert_equal(device:get_led(5, 9), 8)
+  context.grid.press(1, 7, 9, 1)
+  context.clock.run_for(0.51)
+  assert_equal(params:get("v3_solo"), 1, "held 0.5 s: voice 3 soloed")
+  assert_equal(device:get_led(7, 9), 15, "soloed: 15")
+  context.grid.press(1, 7, 9, 0)
+  assert_equal(params:get("v3_mute"), 0, "the hold's release mutes nothing")
+  assert_equal(device:get_led(5, 9), 8, "voice 1, silenced by the solo but not muted: 8")
+  assert_true(S.lib.voice_mix.silenced(1), "voice 1 is silenced")
+  tap(context, 7, 9)
+  assert_equal(params:get("v3_mute"), 1, "a tap mutes a soloed voice")
+  assert_equal(device:get_led(7, 9), 2, "muted and soloed: muted, 2")
+  tap(context, 7, 9)
+  context.grid.press(1, 7, 9, 1); context.clock.run_for(0.51); context.grid.press(1, 7, 9, 0)
+  assert_equal(params:get("v3_solo"), 0, "a second hold unsolos")
+  -- a controller mapped to v7_mute hears the tap (#538)
+  local controller = context.midi.plug(1)
+  norns.pmap.data["v7_mute"] = {dev = 1, cc = 30, ch = 1, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1, echo = true, value = 0}
+  tap(context, 11, 9)
+  assert_equal(params:get("v7_mute"), 1, "column 11 mutes voice 7")
+  assert_equal(cc_echoes(controller, 30), "127", "through set_binary_param")
+  norns.pmap.data["v7_mute"] = nil
+end)
+
+-- (mute) design §8.14: a silenced running voice's key lights at 6
+-- (running 12, stopped 2), through the core's voice_level
+test("a silenced voice's key lights at 6 on every layout", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  toggle_voice(3); toggle_voice(5)  -- voices 4, 6 and 7 stay stopped
+  assert_equal(device:get_led(11, 14), 12, "voice 3 running: 12")
+  params:set("v3_mute", 1)
+  assert_equal(device:get_led(11, 14), 6, "voice 3 muted: 6")
+  params:set("v3_mute", 0)
+  params:set("v5_solo", 1)
+  assert_equal(device:get_led(11, 14), 6, "voice 3 silenced by voice 5's solo: 6")
+  assert_equal(device:get_led(13, 14), 12, "the soloed voice 5: 12")
+  assert_equal(device:get_led(12, 14), 2, "voice 4, stopped and silenced: 2")
+  params:set("v5_solo", 0)
+  assert_equal(device:get_led(11, 14), 12, "the solo lifted: voice 3 at 12 again")
+end)
+
+-- 3.4 (design §4.6, §11): rows 10-13 are the shown bank's four macros,
+-- faders as the others (set_param_from_column, LEDs as the fader rows')
+test("rows 10-13 write the shown bank's macros and follow a bank change", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  local touches = {}
+  S.register_param_touch(function(param_id, source) touches[#touches + 1] = param_id .. ":" .. source end)
+  tap(context, 16, 10)
+  assert_near(params:get("macro_1"), 1.0, 1e-9, "bank 1: (16,10) sets macro_1 to 1")
+  assert_equal(table.concat(touches, " "), "macro_1:grid", "as a grid touch")
+  tap(context, 8, 13)
+  assert_near(params:get("macro_4"), 7 / 15, 1e-9, "row 13 is macro_4")
+  assert_equal(row_levels(device, 10), "8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 15", "macro_1's fader at its value")
+  assert_equal(row_levels(device, 13), "8 8 8 8 8 8 8 15 0 0 0 0 0 0 0 0", "macro_4's")
+  S.lib.macros.set_bank(4)
+  assert_equal(row_levels(device, 10), "15 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0", "bank 4: row 10 shows macro_13")
+  tap(context, 16, 10)
+  assert_near(params:get("macro_13"), 1.0, 1e-9, "after set_bank(4) the same key sets macro_13")
+  assert_near(params:get("macro_1"), 1.0, 1e-9, "macro_1 keeps its value")
+  -- a macro set off the grid shows at the next tick
+  params:set("macro_14", 1)
+  drift_update()
+  assert_equal(device:get_led(16, 11), 15, "macro_14 set elsewhere: its fader follows within a tick")
+  local before = device.refresh_count
+  for _ = 1, 10 do drift_update() end
+  assert_equal(device.refresh_count - before, 0, "ten idle ticks repaint nothing")
+  -- page 2 keeps its voice faders on rows 9-12 and its page keys on row 13
+  tap(context, 14, 8)
+  tap(context, 16, 10)
+  assert_near(params:get("macro_13"), 1.0, 1e-9, "page 2's row 10 is not a macro")
+  assert_equal(device:get_led(1, 13), 15, "page 2's row 13 shows fader page 1")
+end)
+
+-- 3.4 (design §5, §11): page 3's row 4 columns 1-4 the recorders again,
+-- row 7 the morph fader, row 9 picks morph_a and row 10 morph_b (chosen
+-- 15, populated 6, empty 2)
+test("page 3's morph fader and its A and B rows", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  capture_scene(3); capture_scene(16)
+  tap(context, 15, 8)  -- page 3
+  tap(context, 16, 7)
+  assert_near(params:get("morph"), 1.0, 1e-9, "(16,7) moves the morph to 1")
+  assert_equal(device:get_led(16, 7), 15)
+  tap(context, 1, 7)
+  assert_near(params:get("morph"), 0, 1e-9, "(1,7) to 0")
+  assert_equal(row_levels(device, 9), "15 2 6 2 2 2 2 2 2 2 2 2 2 2 2 6", "row 9: A is scene 1; 3 and 16 populated")
+  assert_equal(row_levels(device, 10), "2 15 6 2 2 2 2 2 2 2 2 2 2 2 2 6", "row 10: B is scene 2")
+  tap(context, 3, 9)
+  assert_equal(params:get("morph_a"), 3, "(3,9) picks scene 3 as A")
+  tap(context, 16, 10)
+  assert_equal(params:get("morph_b"), 16, "(16,10) picks scene 16 as B")
+  assert_equal(row_levels(device, 9), "2 2 15 2 2 2 2 2 2 2 2 2 2 2 2 6")
+  assert_equal(row_levels(device, 10), "2 2 6 2 2 2 2 2 2 2 2 2 2 2 2 15")
+  -- picked off the grid (MOD, PARAMETERS, a PSET): shown at the next tick
+  params:set("morph_b", 9)
+  drift_update()
+  assert_equal(device:get_led(9, 10), 15, "morph_b set elsewhere shows within a tick")
+  params:set("morph", 0.5)
+  drift_update()
+  assert_equal(device:get_led(9, 7), 15, "and the morph's position")
+  -- row 4's recorders
+  tap(context, 3, 4)
+  assert_equal(S.lib.gestures.state(3), "recording", "(3,4) presses recorder 3")
+  assert_equal(device:get_led(3, 4), 15)
+  context.grid.press(1, 3, 4, 1); context.clock.run_for(0.51); context.grid.press(1, 3, 4, 0)
+  assert_equal(S.lib.gestures.state(3), "empty", "held 0.5 s: cleared")
+  assert_equal(device:get_led(3, 4), 2)
+  -- rows 1-3, 5 and 6 keep their scenes, sequencer and lengths
+  assert_equal(device:get_led(3, 1), 8, "row 1 still recalls")
+  assert_equal(device:get_led(1, 5), 4, "row 5's sequencer key")
+end)
+
+-- design §8.9: every freeze key toggles through S.lib.freeze.toggle_quantized
+test("the 256's freeze keys wait for the beat while quantize_actions is on", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 16)
+  local S = S_table()
+  params:set("quantize_actions", 2)  -- beat
+  context.clock.run_for(0.25)  -- half a beat in, at 120 BPM
+  tap(context, 16, 8)  -- page 4
+  tap(context, 12, 10)
+  assert_equal(params:get("v2_freeze"), 0, "page 4's freeze key waits")
+  assert_equal(S.lib.ui_flash.text("header"), "v2 frz at beat", "and says so")
+  context.grid.press(1, 8, 16, 1); tap(context, 5, 16); context.grid.press(1, 8, 16, 0)
+  assert_equal(params:get("v5_freeze"), 0, "row 16's freeze key waits too")
+  context.clock.run_for(0.3)
+  assert_equal(params:get("v2_freeze"), 1, "at the beat: voice 2 frozen")
+  assert_equal(params:get("v5_freeze"), 1, "and voice 5")
+  assert_equal(device:get_led(12, 10), 15)
+end)
+
+-- design §8.7 and §11: every key 3.3 gave a meaning keeps it; the step
+-- keys' toggle moved to their release (pages 1 and 2)
+test("the 256's step keys toggle on release on pages 1 and 2", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  for _, page_key in ipairs({13, 14}) do
+    tap(context, page_key, 8)
+    context.grid.press(1, 6, 7, 1)
+    assert_equal(patterns[7][6], 0, "page " .. (page_key - 12) .. ": the press leaves voice 7's step 6")
+    context.grid.press(1, 6, 7, 0)
+    assert_equal(patterns[7][6], 15, "page " .. (page_key - 12) .. ": the release toggles it")
+    patterns[7][6] = 0
+  end
 end)
 
 end

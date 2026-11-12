@@ -5,9 +5,12 @@
 -- Rows 8 and 16 work on every page. Row 15 (pages 1 and 2) clears or
 -- randomizes a pattern once held. Row 16 columns 9-15 copy and paste
 -- patterns through a clipboard kept per port
--- (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze): page 4's
--- column 12 on each voice's source row, and row 16 columns 1-7 while column
--- 8 of row 16 is held. The functions stay global.
+-- (grid_core.port_state(port).clipboard). Freeze (S.lib.freeze.toggle_quantized):
+-- page 4's column 12 on each voice's source row, and row 16 columns 1-7
+-- while column 8 of row 16 is held. 3.4: page 1's row 9 holds the gesture
+-- recorders, the mute keys and the macro bank keys, rows 10-13 the shown
+-- bank's macros; page 3's rows 4, 7, 9 and 10 the recorders, the morph and
+-- its scenes A and B. The functions stay global.
 
 return function(S)
   local M = {}
@@ -52,7 +55,134 @@ return function(S)
     -- are a bank per row, columns 3-10: row 5 lengths 1-8, row 6 9-16
     length_rows = {[5] = 1, [6] = 2},  -- row -> its bank
     length_first_column = 3,
+    -- 3.4, page 1 (design §11, §8.14): row 9 columns 1-4 the gesture
+    -- recorders, 5-11 voices 1-7's mute keys (a tap mutes, a hold solos),
+    -- 13-16 the macro banks; rows 10-13 the shown bank's macro faders
+    modulation_row = 9,
+    mute_first_column = 5,
+    solo_hold_seconds = S.constants.GRID_HOLD.scene_save_seconds,
+    mute_levels = {muted = 2, soloed = 15, other = 8},
+    bank_first_column = 13,
+    bank_levels = {shown = 15, targets = 6, empty = 2},
+    macro_first_row = 10,
+    -- 3.4, page 3: row 4 columns 1-4 the recorders again, row 7 the morph
+    -- fader, row 9 picks morph_a and row 10 morph_b (scene x on column x)
+    recorder_row = 4,
+    morph_row = 7,
+    morph_scene_rows = {[9] = "morph_a", [10] = "morph_b"},
+    morph_scene_levels = {chosen = 15, populated = 6, empty = 2},
   }
+
+  -- Page 1's row 9 at column x: the recorder, the mute key's voice or the
+  -- bank it holds (one of the three), or nothing
+  local function modulation_key_at(x)
+    local voice_idx = x - LAYOUT_256.mute_first_column + 1
+    local bank = x - LAYOUT_256.bank_first_column + 1
+    if x >= 1 and x <= S.constants.NUM_GESTURES then return {recorder = x} end
+    if voice_idx >= 1 and voice_idx <= NUM_VOICES then return {voice = voice_idx} end
+    if bank >= 1 and bank <= S.lib.macros.MACROS.banks then return {bank = bank} end
+    return nil
+  end
+
+  local function mute_id(voice_idx) return "v" .. voice_idx .. "_mute" end
+  local function solo_id(voice_idx) return "v" .. voice_idx .. "_solo" end
+
+  -- A mute key: a press arms the solo hold (the hold toggles v<i>_solo and
+  -- consumes the key); a release within it toggles v<i>_mute, both through
+  -- set_binary_param, so a mapped controller follows (#538). A release the
+  -- core never saw pressed does nothing
+  local function mute_key(port, x, y, z, voice_idx)
+    if z == 1 then
+      grid_core.on_hold(port, x, y, LAYOUT_256.solo_hold_seconds, function()
+        set_binary_param(solo_id(voice_idx), params:get(solo_id(voice_idx)) == 1 and 0 or 1)
+        grid_core.consume(port, x, y)
+      end)
+    elseif grid_core.held(port, x, y) ~= nil then
+      set_binary_param(mute_id(voice_idx), params:get(mute_id(voice_idx)) == 1 and 0 or 1)
+    end
+  end
+
+  -- Muted 2, soloed (and heard: S.lib.voice_mix.soloed) 15, otherwise 8
+  local function mute_level(voice_idx)
+    local levels = LAYOUT_256.mute_levels
+    if params:get(mute_id(voice_idx)) == 1 then return levels.muted end
+    return S.lib.voice_mix.soloed(voice_idx) and levels.soloed or levels.other
+  end
+
+  -- Shown 15, a bank with targets 6, empty 2
+  local function bank_level(bank)
+    local levels = LAYOUT_256.bank_levels
+    if bank == S.lib.macros.bank() then return levels.shown end
+    return S.lib.macros.bank_has_targets(bank) and levels.targets or levels.empty
+  end
+
+  -- Page 1, rows 9-13 (presses and releases): row 9's recorders, mute and
+  -- bank keys, then the shown bank's macro faders on rows 10-13
+  local function modulation_key(port, x, y, z)
+    if y == LAYOUT_256.modulation_row then
+      local key = modulation_key_at(x)
+      if not key then return end
+      if key.recorder then
+        grid_core.gesture_key(port, x, y, z, key.recorder)
+      elseif key.voice then
+        mute_key(port, x, y, z, key.voice)
+      elseif z == 1 then
+        S.lib.macros.set_bank(key.bank)
+      end
+      return
+    end
+    local param_id = S.lib.grid_faders.shown_macro_ids()[y - LAYOUT_256.macro_first_row + 1]
+    if param_id and z == 1 then set_param_from_column(param_id, x) end
+  end
+
+  local function redraw_modulation(grid_device)
+    local y = LAYOUT_256.modulation_row
+    for k = 1, S.constants.NUM_GESTURES do grid_device:led(k, y, grid_core.gesture_level(k)) end
+    for voice_idx = 1, NUM_VOICES do
+      grid_device:led(LAYOUT_256.mute_first_column + voice_idx - 1, y, mute_level(voice_idx))
+    end
+    for bank = 1, S.lib.macros.MACROS.banks do
+      grid_device:led(LAYOUT_256.bank_first_column + bank - 1, y, bank_level(bank))
+    end
+    for index, param_id in ipairs(S.lib.grid_faders.shown_macro_ids()) do
+      grid_redraw_fader_row(grid_device, LAYOUT_256.macro_first_row + index - 1, param_id)
+    end
+  end
+
+  -- Whether page 3's row y holds 3.4's keys (morph_key)
+  local function morph_row(y)
+    return y == LAYOUT_256.recorder_row or y == LAYOUT_256.morph_row or LAYOUT_256.morph_scene_rows[y] ~= nil
+  end
+
+  -- Page 3's morph keys (presses): the recorders on row 4 columns 1-4, the
+  -- morph fader on row 7, A and B on rows 9 and 10 (scene x on column x)
+  local function morph_key(port, x, y, z)
+    local scene_param = LAYOUT_256.morph_scene_rows[y]
+    if y == LAYOUT_256.recorder_row then
+      grid_core.gesture_key(port, x, y, z, x)
+    elseif y == LAYOUT_256.morph_row then
+      set_param_from_column("morph", x)
+    elseif scene_param and x <= NUM_SCENES then
+      params:set(scene_param, x)
+    end
+  end
+
+  -- A scene's key on row 9 or 10: chosen 15, populated 6, empty 2
+  local function morph_scene_level(scene_param, slot)
+    local levels = LAYOUT_256.morph_scene_levels
+    if params:get(scene_param) == slot then return levels.chosen end
+    return S.scenes[slot].populated and levels.populated or levels.empty
+  end
+
+  local function redraw_morph(grid_device)
+    for k = 1, S.constants.NUM_GESTURES do
+      grid_device:led(k, LAYOUT_256.recorder_row, grid_core.gesture_level(k))
+    end
+    grid_redraw_fader_row(grid_device, LAYOUT_256.morph_row, "morph")
+    for y, scene_param in pairs(LAYOUT_256.morph_scene_rows) do
+      for slot = 1, NUM_SCENES do grid_device:led(slot, y, morph_scene_level(scene_param, slot)) end
+    end
+  end
 
   -- Page 3's sequence length key at (x, y): the length it sets, or nil
   local function scene_length_at(x, y)
@@ -106,6 +236,13 @@ return function(S)
       end
       return
     end
+    local modulation_rows = y >= LAYOUT_256.modulation_row and y < LAYOUT_256.macro_first_row + GRID_LAYOUT.fader_rows
+    if page == PAGES.patterns and modulation_rows then
+      -- Page 1, rows 9-13 (3.4): the recorders, mute, bank and macro keys
+      -- (presses and releases: a mute key acts at its release)
+      modulation_key(port, x, y, z)
+      return
+    end
     if z == 0 then return end  -- presses only
     if y == 8 and x == LAYOUT_256.positions_key_column then
       grid_core.set_page(port, PAGES.positions)
@@ -139,6 +276,9 @@ return function(S)
       elseif scene_length_at(x, y) then
         -- Rows 5-6, columns 3-10: the sequence length (1-8, 9-16)
         params:set("scene_sequence_length", scene_length_at(x, y))
+      elseif morph_row(y) then
+        -- Rows 4, 7, 9 and 10 (3.4): the recorders, the morph, A and B
+        morph_key(port, x, y, z)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then
@@ -158,7 +298,7 @@ return function(S)
         set_param_from_column(fx_param_id, x)
       elseif source_voice >= 1 and source_voice <= NUM_VOICES then
         if x == LAYOUT_256.freeze_column then
-          S.lib.freeze.toggle(source_voice)
+          S.lib.freeze.toggle_quantized(source_voice)  -- at the next beat or bar under quantize_actions
         else
           grid_core.source_key(source_voice, x)
         end
@@ -247,7 +387,7 @@ return function(S)
   -- copy/paste (9-15), clear the clipboard (16)
   function grid_key_256_lock(port, x)
     if x <= NUM_VOICES then
-      if freeze_held(port) then S.lib.freeze.toggle(x) else toggle_lock(x) end
+      if freeze_held(port) then S.lib.freeze.toggle_quantized(x) else toggle_lock(x) end
     elseif x == LAYOUT_256.clear_column then
       grid_core.port_state(port).clipboard = nil
     elseif x >= LAYOUT_256.copy_first_column then
@@ -293,6 +433,9 @@ return function(S)
         end
       end
 
+      -- Rows 4, 7, 9 and 10 (3.4): the recorders, the morph, A and B
+      redraw_morph(grid_device)
+
       grid_redraw_256_transport(port, grid_device)
       grid_redraw_256_lock(port, grid_device)
     elseif page == PAGES.sources then
@@ -317,9 +460,13 @@ return function(S)
 
       grid_redraw_256_transport(port, grid_device)
 
-      -- Rows 9-13 (parameter page): faders and fader page selection
+      -- Rows 9-13: on the parameter page the faders and fader page
+      -- selection; on page 1 (3.4) the recorders, mute and bank keys and
+      -- the shown bank's macros
       if page == PAGES.faders then
         grid_redraw_faders(grid_device)
+      elseif page == PAGES.patterns then
+        redraw_modulation(grid_device)
       end
 
       -- Row 14: the grid voice's pick keys and each voice's on/off key
@@ -413,8 +560,16 @@ return function(S)
   end
 
   -- fx_faders_page: the page with the FX faders (rows 3-7 of page 4), so FX
-  -- changes redraw the grids only while a 256 shows it (grid_core.any_fx_faders)
-  S.registry.grid_layouts["256"] = {key = grid_key_256, redraw = grid_redraw_256, fx_faders_page = PAGES.sources}
+  -- changes redraw the grids only while a 256 shows it (grid_core.any_fx_faders);
+  -- shows_modulation: pages 1 (the macro faders) and 3 (the morph), which
+  -- the drift tick follows (grid_core.any_modulation_shown)
+  S.registry.grid_layouts["256"] = {
+    key = grid_key_256, redraw = grid_redraw_256, fx_faders_page = PAGES.sources,
+    shows_modulation = function(port)
+      local page = grid_core.page(port)
+      return page == PAGES.patterns or page == PAGES.scenes
+    end,
+  }
 
   return M
 end
